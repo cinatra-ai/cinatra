@@ -532,6 +532,8 @@ function mapExtensionGetWire(
     installCount: normDetailCount(wire.install_count),
     permalink: normDetailString(wire.permalink),
     iconUrl: safeDetailHttpUrl(wire.icon_url?.url),
+    compatibleUpTo:
+      normDetailString(wire.compatible_up_to) ?? normDetailString(wire.compatibleUpTo),
     ratingSummary: mapDetailRatingSummary(wire.rating_summary),
     reviews: mapDetailReviews(wire.reviews),
     vendor: mapDetailVendor(wire.vendor),

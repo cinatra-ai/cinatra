@@ -69,6 +69,9 @@
   /* Extension detail-modal hero title (design spec §V: Archivo italic 800
      23px ink) consumed via the `text-modal-title` utility. */
   --modal-title-size: 23px;
+  /* §V reviews rating-summary average numeral (Archivo italic 800 40px ink,
+     line-height 1) consumed via the `text-rating-average` utility. */
+  --rating-average-size: 40px;
   /* Mono kicker / uppercase-label letter-spacing lanes. */
   --kicker-tracking: 0.18em;
   --kicker-tracking-wide: 0.2em;
@@ -540,7 +543,8 @@
 
 
   /* Type / tracking / badge scale — utilities `text-page-title-{sm,md,lg}`,
-     `text-listing-title`, `text-modal-title`, `text-badge-xs`, `text-badge-2xs`,
+     `text-listing-title`, `text-modal-title`, `text-rating-average`,
+     `text-badge-xs`, `text-badge-2xs`,
      `tracking-title-tight`, `tracking-kicker`, `tracking-kicker-wide`,
      `tracking-page-label`. Sizes carry their paired line-height /
      letter-spacing, so consumers drop the bracket literals entirely. */
@@ -558,6 +562,8 @@
   --text-listing-title--letter-spacing: var(--listing-title-tracking);
   --text-modal-title: var(--modal-title-size);
   --text-modal-title--line-height: var(--page-title-line-height);
+  --text-rating-average: var(--rating-average-size);
+  --text-rating-average--line-height: 1;
   --text-badge-xs: var(--badge-text-xs);
   --text-badge-2xs: var(--badge-text-2xs);
   --text-badge-2xs--letter-spacing: var(--badge-tracking);

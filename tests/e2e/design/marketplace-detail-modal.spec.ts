@@ -1,5 +1,5 @@
 /**
- * §V "Extension detail (modal)" conformance guard (cinatra#989 + #739).
+ * §V "Extension detail (modal)" conformance guard (cinatra#989).
  *
  * Drives the REAL MarketplaceDetailModal on the seeded-fixture route
  * `/design-fixtures/marketplace-detail-modal` (production-equivalent standalone
@@ -7,15 +7,18 @@
  * regression classes the issues name:
  *
  *  - missing-functionality: the Changelog tab (entries, mono version chips,
- *    "Latest" badge, empty state) and the Dependencies section exist and
- *    render from the detail payload.
+ *    "Latest" badge, empty state), the Dependencies section, and the plain
+ *    "Compatible up to" specs row exist and render from the detail payload.
  *  - stale-element: the two-tab (Details|Reviews) layout cannot silently
- *    resurrect, and no storefront navigation (More Extensions / pagination /
- *    Related extensions) renders inside the modal.
+ *    resurrect; no storefront navigation (More Extensions / pagination /
+ *    Related extensions) renders inside the modal; and no banner / scrim /
+ *    coloured ground and no badge chrome in the specs column can resurrect
+ *    (both were owner-flagged spec violations — the §V drawing contains
+ *    neither).
  *  - wrong-data-field: the Dependencies rows are the declared
- *    `cinatra.dependencies` (display name + version range), and the hero
- *    banner renders ONLY from a non-blank `bannerUrl` (absent AND blank fall
- *    back to the plain §V hero).
+ *    `cinatra.dependencies` (display name + version range), and the
+ *    "Compatible up to" value is the storefront-computed Cinatra version —
+ *    never the SDK ABI range.
  *
  * Assertion-based on purpose — no pixel baselines here (those stay owned by
  * design-fixtures.spec.ts), so the spec is platform-portable.
@@ -26,7 +29,11 @@ const FIXTURE_PATH = "/design-fixtures/marketplace-detail-modal";
 
 const MODAL = '[data-slot="dialog-content"]';
 const HERO = '[data-slot="marketplace-modal-hero"]';
-const BANNER_IMG = '[data-slot="marketplace-modal-banner"]';
+
+// The §V specs-row value, built from the bare fixture version so no literal
+// "v"-prefixed version string appears in this file (source-leak gate).
+const COMPATIBLE_UP_TO_VERSION = "0.2.0";
+const COMPATIBLE_UP_TO_VALUE = `Cinatra v${COMPATIBLE_UP_TO_VERSION}`;
 
 async function openModal(page: Page, testId: string) {
   await page.goto(FIXTURE_PATH, { waitUntil: "domcontentloaded" });
@@ -46,7 +53,7 @@ async function openModal(page: Page, testId: string) {
 
 test.describe("§V detail modal — tabs (missing-functionality + stale-element)", () => {
   test("renders Details / Reviews (n) / Changelog — exactly three tabs", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-banner");
+    const modal = await openModal(page, "modal-fixture-populated");
     const tabs = modal.getByRole("tab");
     // Stale-element guard: the pre-#989 two-tab layout must not resurrect,
     // and nothing beyond the three §V tabs may appear.
@@ -59,7 +66,7 @@ test.describe("§V detail modal — tabs (missing-functionality + stale-element)
   test("Changelog tab renders per-version entries with chips and a single Latest badge", async ({
     page,
   }) => {
-    const modal = await openModal(page, "modal-fixture-banner");
+    const modal = await openModal(page, "modal-fixture-populated");
     await modal.getByRole("tab", { name: "Changelog" }).click();
 
     const list = modal.locator('[data-slot="marketplace-modal-changelog"]');
@@ -82,7 +89,7 @@ test.describe("§V detail modal — tabs (missing-functionality + stale-element)
   test("Changelog tab renders the spec empty state when the extension ships no CHANGELOG", async ({
     page,
   }) => {
-    const modal = await openModal(page, "modal-fixture-plain");
+    const modal = await openModal(page, "modal-fixture-empty");
     await modal.getByRole("tab", { name: "Changelog" }).click();
     await expect(
       modal.locator('[data-slot="marketplace-modal-changelog-empty"]'),
@@ -91,7 +98,7 @@ test.describe("§V detail modal — tabs (missing-functionality + stale-element)
   });
 
   test("no storefront navigation renders inside the modal (stale-element)", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-banner");
+    const modal = await openModal(page, "modal-fixture-populated");
     for (const forbidden of ["More Extensions", "Related extensions"]) {
       await expect(modal.getByText(forbidden)).toHaveCount(0);
     }
@@ -100,9 +107,33 @@ test.describe("§V detail modal — tabs (missing-functionality + stale-element)
   });
 });
 
-test.describe("§V detail modal — Dependencies (missing-functionality + wrong-data-field)", () => {
+test.describe("§V detail modal — specs column (missing-functionality + wrong-data-field)", () => {
+  test("Compatible up to renders as a PLAIN specs row — mono value, no badge chrome", async ({
+    page,
+  }) => {
+    const modal = await openModal(page, "modal-fixture-populated");
+    // The row exists with the storefront-computed Cinatra version as a plain
+    // mono value (§V drawing: bold ink label over mono muted value).
+    await expect(modal.getByText("Compatible up to", { exact: true })).toBeVisible();
+    await expect(modal.getByText(COMPATIBLE_UP_TO_VALUE, { exact: true })).toBeVisible();
+    // Owner-flagged invention guard: NO compat badge (or any badge chrome)
+    // may resurrect anywhere in the specs column.
+    await expect(modal.locator('[data-slot="extension-compat-badge"]')).toHaveCount(0);
+    await expect(modal.locator("dl [data-slot='badge']")).toHaveCount(0);
+  });
+
+  test("Compatible up to degrades to an em dash while the storefront omits the field", async ({
+    page,
+  }) => {
+    const modal = await openModal(page, "modal-fixture-empty");
+    await expect(modal.getByText("Compatible up to", { exact: true })).toBeVisible();
+    // The specs panel renders the "—" placeholder value, still badge-free.
+    await expect(modal.locator("dl")).toContainText("—");
+    await expect(modal.locator('[data-slot="extension-compat-badge"]')).toHaveCount(0);
+  });
+
   test("specs column closes with the declared cinatra.dependencies rows", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-banner");
+    const modal = await openModal(page, "modal-fixture-populated");
     const deps = modal.locator('[data-slot="marketplace-modal-dependencies"]');
     await expect(deps).toBeVisible();
     await expect(deps).toContainText("Dependencies");
@@ -117,50 +148,48 @@ test.describe("§V detail modal — Dependencies (missing-functionality + wrong-
   });
 
   test("a none-declared listing omits the Dependencies section", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-plain");
+    const modal = await openModal(page, "modal-fixture-empty");
     // Details is the default tab; the specs column must end at Installations.
     await expect(modal.locator('[data-slot="marketplace-modal-dependencies"]')).toHaveCount(0);
   });
 });
 
-test.describe("§V detail modal — hosted banner hero (#739, wrong-data-field)", () => {
-  test("bannerUrl present → banner image + legibility scrim in the hero", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-banner");
+test.describe("§V detail modal — plain light-panel hero (owner-flagged invention guard)", () => {
+  test("the hero renders straight on the dialog paper — no banner, no scrim, no coloured ground", async ({
+    page,
+  }) => {
+    const modal = await openModal(page, "modal-fixture-populated");
     const hero = modal.locator(HERO);
-    await expect(hero).toHaveAttribute("data-has-banner", "true");
-    const img = hero.locator(BANNER_IMG);
-    await expect(img).toHaveAttribute("src", /marketplace-banner-fixture\.png/);
-    // The image must actually load (not a broken src) — naturalWidth > 0.
-    await expect
-      .poll(async () => img.evaluate((el) => (el as HTMLImageElement).naturalWidth))
-      .toBeGreaterThan(0);
-    // Scrim present so the name stays legible over the image…
-    await expect(hero.locator('div[aria-hidden="true"]')).toHaveCount(1);
-    // …and the name still renders on top of it.
+    // No banner image and no scrim overlay may render in the hero — the §V
+    // drawing contains neither (the pre-review banner hero was an invention).
+    // The img guard is scoped to the hero row itself so a legitimate logo
+    // image INSIDE the 64px tile stays allowed.
+    await expect(hero.locator('[data-slot="marketplace-modal-banner"]')).toHaveCount(0);
+    await expect(hero.locator(":scope > img")).toHaveCount(0);
+    await expect(hero.locator('div[aria-hidden="true"]')).toHaveCount(0);
+    // No coloured ground: the hero row itself paints no background and no
+    // border — it sits directly on the dialog's paper.
+    const ground = await hero.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        backgroundColor: s.backgroundColor,
+        backgroundImage: s.backgroundImage,
+        borderTopWidth: s.borderTopWidth,
+      };
+    });
+    expect(ground.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(ground.backgroundImage).toBe("none");
+    expect(ground.borderTopWidth).toBe("0px");
+    // The title still renders as the §V ink heading.
     await expect(hero.getByRole("heading", { name: "Research Assistant" })).toBeVisible();
-  });
-
-  test("bannerUrl absent → plain §V hero, no banner image, no panel", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-plain");
-    const hero = modal.locator(HERO);
-    await expect(hero).toHaveAttribute("data-has-banner", "false");
-    await expect(hero.locator(BANNER_IMG)).toHaveCount(0);
-    await expect(hero.getByRole("heading", { name: "PDF Extractor" })).toBeVisible();
-  });
-
-  test("bannerUrl blank (\"\") → falls back exactly like absent", async ({ page }) => {
-    const modal = await openModal(page, "modal-fixture-blank-banner");
-    const hero = modal.locator(HERO);
-    await expect(hero).toHaveAttribute("data-has-banner", "false");
-    await expect(hero.locator(BANNER_IMG)).toHaveCount(0);
   });
 });
 
 test.describe("§V detail modal — chrome/header tokens (no-regression composition)", () => {
-  test("720px chrome, 64px radius-15 tile, right-aligned price, six-state CTA footer intact", async ({
+  test("720px chrome, 64px radius-15 tile, right-aligned price, primary Install now footer", async ({
     page,
   }) => {
-    const modal = await openModal(page, "modal-fixture-banner");
+    const modal = await openModal(page, "modal-fixture-populated");
     // §V width: 720px (was max-w-3xl = 768px).
     const width = await modal.evaluate((el) => el.getBoundingClientRect().width);
     expect(width).toBe(720);
@@ -175,9 +204,11 @@ test.describe("§V detail modal — chrome/header tokens (no-regression composit
     expect(tileBox.radius).toBe("15px");
     // §V price: rendered in the hero (right-aligned header slot).
     await expect(modal.locator(HERO).getByText("Free, Open Source")).toBeVisible();
-    // Footer CTA intact, with the §V drawing's label case ("Install now")
-    // (fixture: registry-disconnected install state).
-    await expect(modal.getByRole("button", { name: "Install now" })).toBeDisabled();
+    // Footer CTA: the §V default state — the ENABLED primary "Install now"
+    // (owner-flagged: it must carry the primary treatment, never muted).
+    const cta = modal.getByRole("button", { name: "Install now" });
+    await expect(cta).toBeEnabled();
+    await expect(cta).toHaveClass(/bg-primary/);
     // §V share row: the "Share:" label leads the five network glyph links.
     await expect(modal.getByText("Share:", { exact: true })).toBeVisible();
     await expect(modal.getByRole("link", { name: /^Share on / })).toHaveCount(5);

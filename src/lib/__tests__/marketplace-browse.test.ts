@@ -225,7 +225,7 @@ describe("loadPublicMarketplaceDetail", () => {
     expect(res.detail.iconUrl).toBe("https://cdn.example/i.png");
   });
 
-  it("projects bannerUrl/changelog/dependencies (§V modal fields, issues 989 + 739)", async () => {
+  it("projects compatibleUpTo/changelog/dependencies (§V modal fields, cinatra#989)", async () => {
     publicDetailMock.mockResolvedValue({
       packageName: "@vendor/weather-agent",
       name: "@vendor/weather-agent",
@@ -234,7 +234,9 @@ describe("loadPublicMarketplaceDetail", () => {
       displayName: "Weather Agent",
       kindLabel: "Agent",
       latestVersion: "3.1.0",
-      bannerUrl: "https://cdn.example/banner.png",
+      // "v"-prefixed on the wire; the projection stores the bare version
+      // (the "Cinatra v" prefix is presentation, applied at the render).
+      compatibleUpTo: ["v", "0.2.0"].join(""),
       changelog: [
         { version: "3.1.0", date: "2026-06-20", notes: ["Hourly forecasts."] },
       ],
@@ -254,7 +256,7 @@ describe("loadPublicMarketplaceDetail", () => {
     const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.detail.bannerUrl).toBe("https://cdn.example/banner.png");
+    expect(res.detail.compatibleUpTo).toBe("0.2.0");
     expect(res.detail.changelog).toEqual([
       { version: "3.1.0", date: "2026-06-20", notes: ["Hourly forecasts."] },
     ]);
@@ -268,7 +270,7 @@ describe("loadPublicMarketplaceDetail", () => {
     ]);
   });
 
-  it("degrades absent §V fields safely: no banner, empty changelog, no dependencies (today's storefront payload)", async () => {
+  it("degrades absent §V fields safely: no compatibleUpTo, empty changelog, no dependencies (today's storefront payload)", async () => {
     // The live storefront detail endpoint serves none of these fields yet
     // (marketplace#190 workstream C) — the projection must yield the spec
     // empty states, never crash and never fabricate content.
@@ -288,12 +290,16 @@ describe("loadPublicMarketplaceDetail", () => {
     const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.detail.bannerUrl).toBeNull();
+    expect(res.detail.compatibleUpTo).toBeNull();
     expect(res.detail.changelog).toEqual([]);
     expect(res.detail.dependencies).toEqual([]);
   });
 
-  it("scheme-guards the banner: a non-http(s) bannerUrl is dropped to null (never reaches the hero <img src>)", async () => {
+  it("never projects a banner: a wire bannerUrl does not reach the client-safe view (the §V modal has no banner surface)", async () => {
+    // Owner-flagged invention guard (PR #995 review): the §V drawing has no
+    // banner / coloured ground in the modal. `bannerUrl` stays an unused wire
+    // field (the full-page route header keeps its own path); the modal's
+    // client-safe projection must not carry it at all.
     publicDetailMock.mockResolvedValue({
       packageName: "@vendor/weather-agent",
       name: "@vendor/weather-agent",
@@ -302,7 +308,7 @@ describe("loadPublicMarketplaceDetail", () => {
       displayName: "Weather Agent",
       kindLabel: "Agent",
       latestVersion: "3.1.0",
-      bannerUrl: "javascript:alert(1)",
+      bannerUrl: "https://cdn.example/banner.png",
       ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
       reviews: [],
       vendor: null,
@@ -311,7 +317,7 @@ describe("loadPublicMarketplaceDetail", () => {
     const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.detail.bannerUrl).toBeNull();
+    expect("bannerUrl" in res.detail).toBe(false);
   });
 
   it("wrong-data-field guard: a raw cinatra.dependencies map projects as kindless rows (only this field is ever read — a packument npm-deps block has no wire field)", async () => {

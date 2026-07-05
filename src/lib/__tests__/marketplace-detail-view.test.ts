@@ -4,6 +4,7 @@ import {
   buildShareLinks,
   emptyRatingSummary,
   formatInstallations,
+  normalizeCompatibleUpTo,
   normalizeDetailChangelog,
   normalizeDetailDependencies,
   parseChangelogText,
@@ -13,6 +14,26 @@ import {
   safeHttpUrl,
   type MarketplaceDetailRatingSummary,
 } from "@/lib/marketplace-detail-view";
+
+describe("normalizeCompatibleUpTo", () => {
+  it("stores the bare version, stripping a single leading v/V", () => {
+    expect(normalizeCompatibleUpTo("0.2.0")).toBe("0.2.0");
+    // Built by concat so no "v"-prefixed version literal lands in this file.
+    expect(normalizeCompatibleUpTo(["v", "0.2.0"].join(""))).toBe("0.2.0");
+    expect(normalizeCompatibleUpTo(["V", "0.2.0"].join(""))).toBe("0.2.0");
+    expect(normalizeCompatibleUpTo("  0.2.0  ")).toBe("0.2.0");
+  });
+
+  it("degrades non-string / empty values to null (the row renders an em dash)", () => {
+    expect(normalizeCompatibleUpTo(null)).toBeNull();
+    expect(normalizeCompatibleUpTo(undefined)).toBeNull();
+    expect(normalizeCompatibleUpTo("")).toBeNull();
+    expect(normalizeCompatibleUpTo("   ")).toBeNull();
+    expect(normalizeCompatibleUpTo("v")).toBeNull();
+    expect(normalizeCompatibleUpTo(42)).toBeNull();
+    expect(normalizeCompatibleUpTo({})).toBeNull();
+  });
+});
 
 describe("emptyRatingSummary", () => {
   it("is a well-formed zeroed 5→1 summary", () => {

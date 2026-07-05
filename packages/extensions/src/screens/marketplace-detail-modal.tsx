@@ -4,13 +4,14 @@
 // MarketplaceDetailModal — the in-app extension-detail modal.
 //
 // Clicking "More details" on a browse card opens this dialog instead of
-// navigating. Its body embeds the marketplace listing detail (banner-capable
-// hero + Details / Reviews / Changelog tabs + share row, per design spec §V)
-// stripped of storefront chrome; the footer carries the per-instance install
-// CTA (the six visual states of the design spec §IV, assembled from the
-// existing pieces). The marketplace detail is fetched on-demand via an
-// admin-gated server action (the marketplace MCP client stays server-only),
-// projected into the client-safe MarketplaceDetailView.
+// navigating. Its body embeds the marketplace listing detail (the plain §V
+// light-panel hero + Details / Reviews / Changelog tabs + share row, per
+// design spec §V — the drawing has NO banner or coloured ground anywhere in
+// the modal) stripped of storefront chrome; the footer carries the
+// per-instance install CTA (the six visual states of the design spec §IV,
+// assembled from the existing pieces). The marketplace detail is fetched
+// on-demand via an admin-gated server action (the marketplace MCP client
+// stays server-only), projected into the client-safe MarketplaceDetailView.
 //
 // The full-page detail route is intentionally KEPT — it remains the deep-link
 // target of the agent/instance page header and the registry catalog. This modal
@@ -40,7 +41,6 @@ import {
   type ExtensionEmblemKind,
 } from "@/components/extension-kind-emblem";
 import { ACCENT_PALETTE, deriveExtensionAccent } from "@/lib/extension-accent";
-import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import {
   MarketplaceReadmeMarkdownBody,
@@ -161,7 +161,11 @@ export function MarketplaceDetailModal({
         {/* Slim header — close only (§V: a 28px muted ✕ hit target). */}
         <div className="flex shrink-0 items-center justify-end border-b border-line px-4 py-3">
           <DialogClose
-            className="grid size-7 place-items-center rounded-[7px] text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:outline-hidden"
+            // §V close ✕: rests at the full `--muted` tone (the drawing has no
+            // dimmed-at-rest treatment); hover lifts to ink. focus-VISIBLE ring
+            // only — Radix autofocuses the close on open, and a `focus:` ring
+            // would paint chrome the drawing does not have on every open.
+            className="grid size-7 place-items-center rounded-[7px] text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus:outline-hidden"
             aria-label="Close"
           >
             <XIcon className="size-4" />
@@ -242,7 +246,10 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
   // (iconUrl / vendorLogoUrl) come from the browse card model and are NOT
   // scheme-checked — guard the resolved URL so only an http(s) src reaches <img>.
   const iconUrl = safeHttpUrl(detail.iconUrl ?? card.iconUrl ?? card.vendorLogoUrl);
-  const reviewCount = detail.reviews.length;
+  // §V: the tab count is the extension's TOTAL review count (the drawing
+  // shows "Reviews (128)" over a sample of rows) — the same source as the
+  // "{n} reviews for {name}" heading, never the fetched-row count.
+  const reviewCount = detail.ratingSummary.total;
   const shareLinks = buildShareLinks(detail.permalink);
 
   return (
@@ -309,12 +316,11 @@ const MODAL_TAB_CLASS =
 
 /**
  * The modal hero: icon tile + title + "{Type} by {Vendor}" + right-aligned
- * price (§V header tokens). When the listing carries a hosted `bannerUrl`, the
- * hero row renders over the banner image with the MarketplaceDetailHeader
- * treatment — the accent colour stays the ground (graceful while the image
- * loads), a `foreground`-token scrim keeps the name legible, and the text
- * flips to the contrasting `background` token (#739). Absent/blank banner →
- * the plain §V hero, nothing extra.
+ * price (§V header tokens), rendered directly on the dialog's paper. The §V
+ * drawing shows NO banner, scrim, or coloured ground anywhere in the modal —
+ * the hero is exactly this light panel (the hosted-banner idea came from a
+ * wrong reopen premise on #739 and is not in the spec; `bannerUrl` stays an
+ * unused wire field until the design ever specs a banner surface).
  */
 function ModalHero({
   card,
@@ -325,53 +331,17 @@ function ModalHero({
   detail: MarketplaceDetailView;
   iconUrl: string | null;
 }) {
-  // Same trim-guard as MarketplaceDetailHeader; the http(s) scheme guard
-  // already ran in the server projection (toDetailView → safeHttpUrl).
-  const banner =
-    typeof detail.bannerUrl === "string" && detail.bannerUrl.trim() !== ""
-      ? detail.bannerUrl.trim()
-      : null;
   const accent = deriveExtensionAccent(card.packageName);
-  const { bg, fg } = ACCENT_PALETTE[accent];
+  const { bg } = ACCENT_PALETTE[accent];
 
   return (
-    <div
-      data-slot="marketplace-modal-hero"
-      data-has-banner={banner ? "true" : "false"}
-      className={cn(
-        "flex items-start gap-4",
-        banner && "relative overflow-hidden rounded-card border border-line p-5",
-      )}
-      // The accent colour is always the ground behind a banner image while it
-      // loads (a failed/slow image never leaves a bare panel) — the same
-      // fallback contract as MarketplaceDetailHeader.
-      style={banner ? { background: bg, color: fg } : undefined}
-    >
-      {banner && (
-        <>
-          {/* Hosted banner image — sanitized hosted raster per the marketplace
-              contract (never a raw SVG blob). Decorative: the h2 carries the
-              accessible name. */}
-          {/* eslint-disable-next-line @next/next/no-img-element -- sanitized hosted raster URL from the marketplace detail payload. */}
-          <img
-            data-slot="marketplace-modal-banner"
-            src={banner}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover"
-            loading="lazy"
-            decoding="async"
-          />
-          {/* Scrim so the tile + name + byline + price stay legible over an
-              arbitrary banner image. Semantic `foreground` token — tracks the
-              theme, no raw palette. */}
-          <div aria-hidden="true" className="absolute inset-0 bg-foreground/55" />
-        </>
-      )}
+    // §V hero row: 18px gap, top-aligned, straight on the dialog paper.
+    <div data-slot="marketplace-modal-hero" className="flex items-start gap-4.5">
       {/* §V logo tile: 64×64, radius 15, white surface, hairline + soft
           shadow, the 34px kind emblem in the extension's stable accent. */}
       <div
         data-slot="marketplace-modal-tile"
-        className="relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-[15px] border border-line bg-surface-strong shadow-sm"
+        className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-[15px] border border-line bg-surface-strong shadow-sm"
         style={iconUrl ? undefined : { color: bg }}
       >
         {iconUrl ? (
@@ -381,40 +351,21 @@ function ModalHero({
           extensionKindEmblem(card.kindSlug, "size-8.5")
         )}
       </div>
-      <div className="relative flex min-w-0 flex-1 flex-col gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
         {/* §V title: Archivo (display) italic 800 23px ink — the named
-            `text-modal-title` token (globals.css @theme). Plain string concat,
-            NOT cn(): the app tailwind-merge classifies unknown custom `text-*`
-            utilities as colors and would strip the size token when the
-            banner's `text-background` follows in the same merge. */}
-        <h2
-          className={
-            "font-display text-modal-title font-extrabold italic " +
-            (banner ? "text-background" : "text-foreground")
-          }
-        >
+            `text-modal-title` token (globals.css @theme). */}
+        <h2 className="font-display text-modal-title font-extrabold italic text-foreground">
           {detail.displayName}
         </h2>
         {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
-            vendor as a semibold primary link (no underline) out to its
-            marketplace store. Over a banner everything flips to `background`. */}
-        <p
-          className={cn(
-            "flex items-center gap-1.25 text-sm text-muted-foreground",
-            banner && "text-background/85",
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className={cn("shrink-0", banner && "text-background")}
-            style={banner ? undefined : { color: bg }}
-          >
+            vendor as a semibold primary link (no underline at rest) out to
+            its marketplace store. */}
+        <p className="flex items-center gap-1.25 text-sm text-muted-foreground">
+          <span aria-hidden="true" className="shrink-0" style={{ color: bg }}>
             {extensionKindEmblem(card.kindSlug, "size-3.5")}
           </span>
           <span className="min-w-0 truncate">
-            <span className={banner ? "text-background" : "text-foreground"}>
-              {detail.kindLabel}
-            </span>
+            <span className="text-foreground">{detail.kindLabel}</span>
             {detail.vendor ? (
               <>
                 {" by "}
@@ -423,17 +374,12 @@ function ModalHero({
                     href={detail.vendor.storeUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={cn(
-                      "font-semibold text-primary hover:underline hover:underline-offset-2",
-                      banner && "text-background hover:text-background/80",
-                    )}
+                    className="font-semibold text-primary hover:underline hover:underline-offset-2"
                   >
                     {detail.vendor.name || detail.vendor.slug}
                   </Link>
                 ) : (
-                  <span
-                    className={cn("font-semibold text-foreground", banner && "text-background")}
-                  >
+                  <span className="font-semibold text-foreground">
                     {detail.vendor.name || detail.vendor.slug}
                   </span>
                 )}
@@ -444,14 +390,7 @@ function ModalHero({
       </div>
       {/* §V price: right-aligned in the header, sans 700 15px ink. */}
       {detail.cost && (
-        <div
-          className={cn(
-            "relative shrink-0 pt-1 text-sm font-bold text-foreground",
-            banner && "text-background",
-          )}
-        >
-          {detail.cost}
-        </div>
+        <div className="shrink-0 pt-1 text-sm font-bold text-foreground">{detail.cost}</div>
       )}
     </div>
   );
@@ -482,15 +421,17 @@ function DetailsTab({ detail }: { detail: MarketplaceDetailView }) {
       {/* §V specs column: a bordered `--surface` panel, hairline-divided rows
           of bold ink labels over mono muted values, closing with the
           Dependencies list when the extension declares any. */}
-      <dl className="w-full shrink-0 self-start rounded-md border border-line bg-surface px-3.5 py-1 md:w-[210px]">
+      <dl className="w-full shrink-0 self-start rounded-[8px] border border-line bg-surface px-3.5 py-1 md:w-[210px]">
         <SpecRow label="Version" value={detail.latestVersion ?? "—"} divider />
         <SpecRow label="Last updated" value={lastUpdated ?? "—"} divider />
-        <div className="border-b border-line py-2.75">
-          <dt className="text-sm font-bold text-foreground">Compatible up to</dt>
-          <dd className="mt-1">
-            <ExtensionCompatBadge sdkAbiRange={detail.sdkAbiRange} />
-          </dd>
-        </div>
+        {/* §V: "Compatible up to" is a PLAIN specs row — bold ink label over
+            a mono muted "Cinatra v{version}" value, identical anatomy to
+            every other row. No badge chrome anywhere in the specs column. */}
+        <SpecRow
+          label="Compatible up to"
+          value={detail.compatibleUpTo ? `Cinatra v${detail.compatibleUpTo}` : "—"}
+          divider
+        />
         <SpecRow label="Installations" value={installs ?? "—"} />
         {detail.dependencies.length > 0 && (
           <DependenciesSection dependencies={detail.dependencies} />
@@ -604,12 +545,12 @@ function ChangelogEntryRow({
     // Dividers go BETWEEN entries — the last entry drops its bottom border.
     <section className={cn("py-4", !isLast && "border-b border-line")}>
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="rounded-sm bg-surface-muted px-2.25 py-0.5 font-mono text-sm font-bold text-foreground">
+        <span className="rounded-[6px] bg-surface-muted px-2.25 py-0.5 font-mono text-sm font-bold text-foreground">
           {entry.version}
         </span>
         {date && <span className="font-mono text-badge-xs text-muted-foreground">{date}</span>}
         {isLatest && (
-          <span className="rounded-sm border border-success px-1.5 py-px font-mono text-badge-2xs font-bold text-success uppercase">
+          <span className="rounded-[5px] border border-success px-1.5 py-px font-mono text-badge-2xs font-bold text-success uppercase">
             Latest
           </span>
         )}
@@ -637,7 +578,8 @@ function SpecRow({ label, value, divider }: { label: string; value: string; divi
   return (
     <div className={cn("py-2.75", divider && "border-b border-line")}>
       <dt className="text-sm font-bold text-foreground">{label}</dt>
-      <dd className="mt-0.5 font-mono text-xs text-muted-foreground">{value}</dd>
+      {/* §V: 3px between label and value. */}
+      <dd className="mt-0.75 font-mono text-xs text-muted-foreground">{value}</dd>
     </div>
   );
 }
@@ -650,8 +592,9 @@ function ReviewsTab({ detail }: { detail: MarketplaceDetailView }) {
   return (
     <div className="flex flex-col gap-7.5 md:flex-row md:items-start">
       <div className="min-w-0 flex-1">
-        {/* §V reviews heading: "{n} reviews for {name}", 16px bold ink. */}
-        <h3 className="text-base font-bold text-foreground">
+        {/* §V reviews heading: "{n} reviews for {name}", 16px bold ink, 4px
+            below before the first review row. */}
+        <h3 className="mb-1 text-base font-bold text-foreground">
           {total} {total === 1 ? "review" : "reviews"} for {detail.displayName}
         </h3>
         {reviews.length === 0 ? (
@@ -669,11 +612,13 @@ function ReviewsTab({ detail }: { detail: MarketplaceDetailView }) {
       <div className="w-full shrink-0 md:w-[210px]">
         <h3 className="mb-3.5 text-base font-bold text-foreground">Rating summary</h3>
         <div className="flex items-center gap-4">
-          <span className="font-display text-4xl leading-none font-extrabold italic text-foreground">
+          {/* §V average numeral: Archivo italic 800 40px ink at line-height 1
+              — the named `text-rating-average` token (globals.css @theme). */}
+          <span className="font-display text-rating-average font-extrabold italic text-foreground">
             {ratingSummary.average.toFixed(1)}
           </span>
           <span>
-            <StarRow filled={Math.round(ratingSummary.average)} size="size-3.75" />
+            <AverageStarRow average={ratingSummary.average} />
             <span className="mt-1.5 block font-mono text-xs text-muted-foreground">
               {total} {total === 1 ? "review" : "reviews"}
             </span>
@@ -740,6 +685,39 @@ function ReviewItem({ review, isLast }: { review: MarketplaceDetailReview; isLas
   );
 }
 
+/**
+ * §V rating-summary average stars — a fractional amber fill over the muted
+ * base row (the drawing overlays the filled stars clipped to `average/5`,
+ * e.g. a 4.7 average fills 94%), never a rounded whole-star count.
+ */
+function AverageStarRow({ average }: { average: number }) {
+  const pct = Math.max(0, Math.min(100, (average / 5) * 100));
+  return (
+    <span
+      className="relative inline-flex"
+      aria-label={`Rated ${average.toFixed(1)} out of 5`}
+    >
+      {/* §V star rows sit at a 1px gap. */}
+      <span aria-hidden="true" className="flex w-max items-center gap-px">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <Star key={i} className="size-3.75 fill-current text-rating-star-muted" />
+        ))}
+      </span>
+      <span
+        aria-hidden="true"
+        className="absolute top-0 left-0 h-full overflow-hidden"
+        style={{ width: `${pct}%` }}
+      >
+        <span className="flex w-max items-center gap-px">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Star key={i} className="size-3.75 fill-current text-rating-star" />
+          ))}
+        </span>
+      </span>
+    </span>
+  );
+}
+
 /** §V star row — amber filled stars on the warm-grey empty tone. */
 function StarRow({
   filled,
@@ -753,7 +731,8 @@ function StarRow({
   const n = Math.max(0, Math.min(5, Math.round(filled)));
   return (
     <span
-      className={cn("inline-flex items-center gap-0.5", className)}
+      // §V star rows sit at a 1px gap.
+      className={cn("inline-flex items-center gap-px", className)}
       aria-label={`Rated ${n} out of 5`}
     >
       {[1, 2, 3, 4, 5].map((i) => (
@@ -798,7 +777,9 @@ function ModalFooterCta({
 
   if (state.kind === "installed") {
     return (
-      <Button size="sm" variant="secondary" disabled>
+      // §V "Installed" state: the secondary pill at 90% — a settled state,
+      // not the 50% disabled dimming.
+      <Button size="sm" variant="secondary" disabled className="disabled:opacity-90">
         Installed
       </Button>
     );

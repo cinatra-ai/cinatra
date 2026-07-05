@@ -126,12 +126,60 @@ export function MarketplaceReadmeMarkdownSection({
 }
 
 /**
- * The BARE README body — the same sanitized render + scoped typography as
+ * §V modal README typography — the design spec's `.cin-ext-readme` rules
+ * mapped onto the app token scale, applied POST-demotion (README headings
+ * arrive demoted one level, so the drawing's `h2`/`h3` rules land on our
+ * `h3`/`h4`):
+ *
+ *   - lead headings 19px→`text-lg` bold ink (drawing h2: 19px/700, mb 10px);
+ *   - sub headings 14px→`text-sm` bold ink (drawing h3: 14px/700, mt 22px);
+ *   - body/list text 13.5px→`text-sm` MUTED at 1.6 line-height (the drawing
+ *     renders the README prose muted, not ink);
+ *   - fenced code on `--surface-muted`, radius 7, 11px/13px padding,
+ *     pre-wrapped, 12px mono ink.
+ *
+ * Deliberately NOT the full-page {@link MARKETPLACE_README_BODY_CLASS}
+ * (larger editorial rhythm, ink body) — the modal drawing sets its own,
+ * smaller rhythm.
+ */
+export const MARKETPLACE_MODAL_README_BODY_CLASS = [
+  "min-w-0 text-sm leading-relaxed text-muted-foreground",
+  "[&>*:first-child]:mt-0",
+  // Post-demotion heading scale per the §V `.cin-ext-readme` drawing rules.
+  "[&_h3]:mt-5.5 [&_h3]:mb-2.5 [&_h3]:text-lg [&_h3]:font-bold [&_h3]:text-foreground",
+  "[&_h4]:mt-5.5 [&_h4]:mb-2 [&_h4]:text-sm [&_h4]:font-bold [&_h4]:text-foreground",
+  "[&_h5]:mt-4 [&_h5]:mb-1.5 [&_h5]:text-sm [&_h5]:font-semibold [&_h5]:text-foreground",
+  "[&_h6]:mt-4 [&_h6]:mb-1.5 [&_h6]:text-sm [&_h6]:font-medium [&_h6]:text-muted-foreground",
+  // Prose rhythm (drawing: p margin 0 0 12px).
+  "[&_p]:my-3",
+  "[&_a]:underline [&_a]:underline-offset-2",
+  // Lists (drawing: 18px indent, 5px item rhythm).
+  "[&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-4.5",
+  "[&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-4.5",
+  "[&_li]:my-1.25",
+  // Inline code chips (unchanged shared treatment).
+  "[&_code]:rounded-sm [&_code]:bg-surface-muted [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em]",
+  // Fenced code blocks per the drawing: surface-muted, radius 7, 11px/13px
+  // padding, soft-wrapped (never a horizontal scroll inside the modal).
+  "[&_pre]:my-3 [&_pre]:rounded-[7px] [&_pre]:bg-surface-muted [&_pre]:px-3.25 [&_pre]:py-2.75 [&_pre]:whitespace-pre-wrap [&_pre]:wrap-anywhere",
+  "[&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-xs [&_pre_code]:text-foreground",
+  // Quotes, rules, media, tables (shared safe defaults).
+  "[&_blockquote]:my-4 [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground",
+  "[&_hr]:my-6 [&_hr]:border-line",
+  "[&_img]:my-4 [&_img]:max-w-full [&_img]:rounded-md",
+  "[&_table]:my-4 [&_table]:w-full [&_table]:text-left",
+  "[&_th]:border-b [&_th]:border-line [&_th]:px-2 [&_th]:py-1.5 [&_th]:font-semibold",
+  "[&_td]:border-b [&_td]:border-line [&_td]:px-2 [&_td]:py-1.5",
+].join(" ");
+
+/**
+ * The BARE README body — the same sanitized render as
  * {@link MarketplaceReadmeMarkdownSection}, without the soft-panel
- * "Description" section chrome. The §V extension-detail MODAL embeds the
- * README directly on the dialog's paper surface (the drawing shows no panel
- * and no "Description" heading — the README's own headings lead), while the
- * full-page route keeps the panelled section above.
+ * "Description" section chrome and with the §V modal typography
+ * ({@link MARKETPLACE_MODAL_README_BODY_CLASS}). The §V extension-detail
+ * MODAL embeds the README directly on the dialog's paper surface (the
+ * drawing shows no panel and no "Description" heading — the README's own
+ * headings lead), while the full-page route keeps the panelled section above.
  */
 export function MarketplaceReadmeMarkdownBody({
   markdown,
@@ -145,7 +193,7 @@ export function MarketplaceReadmeMarkdownBody({
   return (
     <div
       data-slot="extension-readme"
-      className={MARKETPLACE_README_BODY_CLASS}
+      className={MARKETPLACE_MODAL_README_BODY_CLASS}
       // Sanitized by renderReadmeMarkdown above — see the component doc.
       dangerouslySetInnerHTML={{ __html: html }}
     />

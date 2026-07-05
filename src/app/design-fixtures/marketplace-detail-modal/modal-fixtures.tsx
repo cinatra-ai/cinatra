@@ -1,22 +1,24 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Seeded fixtures for the §V extension-detail modal (cinatra#989 + #739).
+// Seeded fixtures for the §V extension-detail modal (cinatra#989).
 //
 // Renders the REAL MarketplaceDetailModal with an injected loader that
 // resolves a deterministic MarketplaceDetailView — no storefront round-trip,
-// no registry, no DB. Three instances cover the §V evidence matrix:
+// no registry, no DB. Two instances cover the §V evidence matrix:
 //
-//   1. banner-present  — hosted banner hero (scrim + accent ground), a
-//      multi-version changelog with the "Latest" badge, declared
-//      `cinatra.dependencies`, two reviews.
-//   2. banner-absent   — plain §V hero fallback, "No changelog available"
-//      empty state, none-declared dependencies (section omitted).
-//   3. banner-blank    — bannerUrl === "" must behave exactly like absent.
+//   1. populated — README + full specs column (incl. the plain "Compatible
+//      up to" row), a multi-version changelog with the "Latest" badge,
+//      declared `cinatra.dependencies`, two reviews.
+//   2. empty     — the graceful states: description fallback, "—" spec
+//      values, "No changelog available", none-declared dependencies
+//      (section omitted), zero reviews.
 //
-// The banner asset is a committed raster under /public (the marketplace
-// contract never serves raw SVG banners); the fixture bypasses the server
-// projection, so it exercises the modal's own trim-guard + fallback path.
+// Per the §V drawing the modal hero is the plain light panel on the dialog
+// paper — NO banner, scrim, or coloured ground renders anywhere in the modal
+// (the client-safe MarketplaceDetailView carries no banner field at all).
+// The footer CTA renders the ENABLED primary "Install now" — the §V default
+// state drawing.
 // ---------------------------------------------------------------------------
 
 // Deep module import ON PURPOSE: the screens barrel re-exports the
@@ -32,8 +34,6 @@ import type {
 } from "@/lib/marketplace-detail-view";
 import { emptyRatingSummary } from "@/lib/marketplace-detail-view";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
-const BANNER_FIXTURE_URL = "/design-fixtures/marketplace-banner-fixture.png";
 
 const RESEARCH_ASSISTANT_README = [
   "## Research Assistant",
@@ -55,8 +55,16 @@ const RESEARCH_ASSISTANT_README = [
   "```",
 ].join("\n");
 
-/** Fixture 1 — banner present, changelog + dependencies populated. */
-const BANNER_DETAIL: MarketplaceDetailView = {
+// The §V drawing's specs-column value ("Compatible up to · Cinatra v{version}"),
+// stored bare — the "Cinatra v" prefix is presentation, applied at render.
+const COMPATIBLE_UP_TO_FIXTURE = "0.2.0";
+
+// NB: every fixture packageName is FICTIONAL — naming a real extension here
+// would hardcode an extension-instance reference into core (the
+// core-extension-instance-coupling-ban gate rejects it).
+
+/** Fixture 1 — fully populated: specs, changelog, dependencies, reviews. */
+const POPULATED_DETAIL: MarketplaceDetailView = {
   packageName: "@cinatra-ai/research-assistant-agent",
   displayName: "Research Assistant",
   kindLabel: "Agent",
@@ -71,7 +79,7 @@ const BANNER_DETAIL: MarketplaceDetailView = {
   longDescription: null,
   description: "Gathers sources, summarises, and cites answers grounded in your team's own documents.",
   iconUrl: null,
-  bannerUrl: BANNER_FIXTURE_URL,
+  compatibleUpTo: COMPATIBLE_UP_TO_FIXTURE,
   changelog: [
     {
       version: "0.4.2",
@@ -137,8 +145,8 @@ const BANNER_DETAIL: MarketplaceDetailView = {
   },
 };
 
-/** Fixture 2 — banner absent; changelog + dependencies empty states. */
-const PLAIN_DETAIL: MarketplaceDetailView = {
+/** Fixture 2 — the graceful empty states throughout. */
+const EMPTY_DETAIL: MarketplaceDetailView = {
   packageName: "@cinatra-ai/pdf-extractor",
   displayName: "PDF Extractor",
   kindLabel: "Skill",
@@ -154,7 +162,7 @@ const PLAIN_DETAIL: MarketplaceDetailView = {
   description:
     "Pulls structured tables, key/value fields and line items out of any PDF, scanned document or image.",
   iconUrl: null,
-  bannerUrl: null,
+  compatibleUpTo: null,
   changelog: [],
   dependencies: [],
   ratingSummary: emptyRatingSummary(),
@@ -164,20 +172,6 @@ const PLAIN_DETAIL: MarketplaceDetailView = {
     slug: "foundry",
     storeUrl: "https://marketplace.cinatra.ai/store/foundry",
   },
-};
-
-/** Fixture 3 — bannerUrl BLANK ("") must fall back exactly like absent. */
-// NB: every fixture packageName is FICTIONAL — naming a real extension here
-// would hardcode an extension-instance reference into core (the
-// core-extension-instance-coupling-ban gate rejects it).
-const BLANK_BANNER_DETAIL: MarketplaceDetailView = {
-  ...PLAIN_DETAIL,
-  packageName: "@cinatra-ai/meeting-recap-agent",
-  displayName: "Meeting Recap Agent",
-  kindLabel: "Agent",
-  description:
-    "Summarises meeting recordings into shareable recaps with action items.",
-  bannerUrl: "",
 };
 
 function cardFor(detail: MarketplaceDetailView, kindSlug: MarketplaceCardData["kindSlug"]): MarketplaceCardData {
@@ -202,9 +196,10 @@ function cardFor(detail: MarketplaceDetailView, kindSlug: MarketplaceCardData["k
   };
 }
 
-// Deterministic, side-effect-free stand-ins for the bound server actions —
-// the fixture footer renders the disabled "Install Now" state (no registry).
-const CTA: MarketplaceCardCta = { state: "install", disabled: true };
+// Deterministic, side-effect-free stand-ins for the bound server actions.
+// The CTA is the ENABLED install state so the footer renders the §V drawing's
+// default: the primary (indigo) "Install now", right-aligned at natural width.
+const CTA: MarketplaceCardCta = { state: "install", disabled: false };
 const noopAction = async () => {};
 
 const FIXTURES: Array<{
@@ -214,22 +209,16 @@ const FIXTURES: Array<{
   kindSlug: MarketplaceCardData["kindSlug"];
 }> = [
   {
-    testId: "modal-fixture-banner",
-    label: "Banner present — changelog + dependencies populated",
-    detail: BANNER_DETAIL,
+    testId: "modal-fixture-populated",
+    label: "Populated — specs, changelog, dependencies, reviews",
+    detail: POPULATED_DETAIL,
     kindSlug: "agent",
   },
   {
-    testId: "modal-fixture-plain",
-    label: "Banner absent — empty changelog, none-declared dependencies",
-    detail: PLAIN_DETAIL,
+    testId: "modal-fixture-empty",
+    label: "Empty states — no changelog, none-declared dependencies, no reviews",
+    detail: EMPTY_DETAIL,
     kindSlug: "skill",
-  },
-  {
-    testId: "modal-fixture-blank-banner",
-    label: "Banner blank (\"\") — must fall back like absent",
-    detail: BLANK_BANNER_DETAIL,
-    kindSlug: "agent",
   },
 ];
 

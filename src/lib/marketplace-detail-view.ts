@@ -86,12 +86,15 @@ export interface MarketplaceDetailView {
   description: string | null;
   iconUrl: string | null;
   /**
-   * Sanitised http(s) hosted detail-banner URL, or null. When present the
-   * modal hero renders the banner (accent ground + legibility scrim, the
-   * MarketplaceDetailHeader treatment); when null it falls back to the plain
-   * §V hero (#739).
+   * The storefront-computed "Compatible up to" Cinatra version (bare, no "v"
+   * prefix — e.g. "0.2.0"), or null while the storefront detail endpoint does
+   * not serve the field yet (marketplace#190 workstream C). Rendered as the
+   * §V plain specs row "Compatible up to · Cinatra v{version}"; null → "—".
+   * NOTE: deliberately NOT derived from `sdkAbiRange` — that is the SDK ABI
+   * version space (e.g. "^2"), not the Cinatra product version the spec row
+   * names.
    */
-  bannerUrl: string | null;
+  compatibleUpTo: string | null;
   /**
    * §V Changelog-tab entries (newest first). [] renders the spec's
    * "No changelog available" empty state — the storefront detail endpoint
@@ -126,6 +129,18 @@ const ZERO_COUNTS: MarketplaceDetailRatingSummary["counts"] = {
 /** A well-formed zeroed rating summary (never a missing field). */
 export function emptyRatingSummary(): MarketplaceDetailRatingSummary {
   return { average: 0, total: 0, counts: { ...ZERO_COUNTS } };
+}
+
+/**
+ * Normalize the wire "Compatible up to" Cinatra version to a bare version
+ * string: trims, strips a single leading "v"/"V", and degrades anything
+ * non-string/empty to null (the row renders "—"). Presentation (the
+ * "Cinatra v" prefix) is applied at the render, never stored.
+ */
+export function normalizeCompatibleUpTo(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().replace(/^[vV]/, "");
+  return trimmed === "" ? null : trimmed;
 }
 
 /**

@@ -143,6 +143,15 @@ export interface ExtensionDetail extends ExtensionCard {
   permalink?: string | null;
   /** Sanitized square-icon URL for the modal hero tile, or null. */
   iconUrl?: string | null;
+  /**
+   * The storefront-computed "Compatible up to" Cinatra version for the §V
+   * specs row (à la the WordPress "Tested up to" plugin header) — a bare or
+   * "v"-prefixed version string. OPTIONAL/null — absent until the storefront
+   * detail endpoint ships the field (marketplace#190 workstream C); the row
+   * then renders "—". NOT the SDK ABI range (`sdkAbiRange`), which lives in a
+   * different version space.
+   */
+  compatibleUpTo?: string | null;
   /** Aggregate rating summary (average, total, per-star 5→1 counts). */
   ratingSummary?: MarketplaceRatingSummary | null;
   /** APPROVED public reviews (author, verified-owner, date, rating, text). */
@@ -283,6 +292,12 @@ export interface MarketplaceExtensionGetWire {
   permalink?: string | null;
   /** Sanitized square-icon descriptor {url,width,height}, or null. */
   icon_url?: { url?: string | null; width?: number; height?: number } | null;
+  /**
+   * Storefront-computed "Compatible up to" Cinatra version (marketplace#190
+   * workstream C); bare or "v"-prefixed. Optional — older builds omit it.
+   */
+  compatible_up_to?: string | null;
+  compatibleUpTo?: string | null;
   rating_summary?: {
     average?: number | null;
     total?: number | null;
