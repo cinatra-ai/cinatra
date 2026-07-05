@@ -89,7 +89,10 @@ export function InstalledStatusIndicator({
       data-slot="installed-status-indicator"
       data-status={status}
       className={cn(
-        "inline-flex items-center gap-1.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.1em]",
+        // §VI status label = the canonical badge-2xs kicker style (9.5px mono,
+        // uppercase, the design-system badge letter-spacing) — named tokens per
+        // the ui-design-system gate; no arbitrary text-[]/tracking-[].
+        "inline-flex items-center gap-1.5 font-mono text-badge-2xs font-bold uppercase",
         archived ? "text-muted-foreground" : "text-success",
       )}
       title={
@@ -144,7 +147,7 @@ export function InstalledExtensionCard({
 
       {/* MIDDLE — byline, description, version + status. */}
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
-        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           {kindIcon && (
             <span
               aria-hidden
