@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug } from "lucide-react";
+import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug, X } from "lucide-react";
 import { ConnectorBadge } from "./connector-badge";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
@@ -250,29 +250,22 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
 
   return (
     <>
-      {/* Toolbar layout: search · connection-state Select · scope-filter
-          Select · flex-1 spacer · sort dropdown. The Toolbar replaces the
-          section rule under PageHeader (PageHeader divider stays default
-          because the connectors page does not need a banner). */}
+      {/* Toolbar layout (cinatra#1014, design system §VII "Connectors"):
+          connection-state ToggleGroup LEADS · search · scope-filter Select ·
+          + Connector (hairline dividers before AND after it) · flex-1 spacer ·
+          sort dropdown anchored far right. The Toolbar replaces the section
+          rule under PageHeader (PageHeader divider stays default because the
+          connectors page does not need a banner). */}
       <Toolbar aria-label="Connectors filters">
         <ToolbarGroup>
-          <Input
-            placeholder="Filter connectors..."
-            className="h-8 w-[180px] lg:w-[260px]"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </ToolbarGroup>
-        <ToolbarSeparator />
-        <ToolbarGroup>
-          {/* Design-system Toggle / Toggle-group spec (#604): one outer hairline
-              border with hairline dividers between segments, no gaps, 7px radius.
-              The default toggle variant already carries the on-state — indigo
-              soft-tint fill + indigo content (`data-[state=on]:bg-primary/10
-              data-[state=on]:text-primary`); the rest segments are transparent
-              with slate (`text-muted-foreground`) content. We avoid the generic
-              `outline` variant (grey accent fill on a grey ground) and instead
-              compose the spec from tokens here. */}
+          {/* Design-system Toggle / Toggle-group spec (#604, refined #1014):
+              one outer hairline border with hairline dividers between
+              segments, no gaps, 7px radius. Each segment carries its OWN
+              semantic status colour at all times — never grey (§VII): the
+              idle state is a muted tint of that colour and the selected
+              state is the SOLID colour with a white icon + label (replacing
+              the prior indigo/primary soft-tint selection). Labels stay
+              `font-medium` (not bold) in both states. */}
           <ToggleGroup
             type="single"
             size="sm"
@@ -288,19 +281,44 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
                 semantics (`connected` vs `!connected`) are unchanged. */}
             <ToggleGroupItem
               value="connected"
-              className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+              className="rounded-none bg-success/10 text-success hover:bg-success/15 data-[state=on]:bg-success data-[state=on]:text-success-foreground data-[state=on]:hover:bg-success"
             >
               <PlugZap data-icon="inline-start" aria-hidden="true" />
               Connected
             </ToggleGroupItem>
             <ToggleGroupItem
               value="available"
-              className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+              className="rounded-none bg-destructive/10 text-destructive hover:bg-destructive/15 data-[state=on]:bg-destructive data-[state=on]:text-destructive-foreground data-[state=on]:hover:bg-destructive"
             >
               <Unplug data-icon="inline-start" aria-hidden="true" />
               Disconnected
             </ToggleGroupItem>
           </ToggleGroup>
+        </ToolbarGroup>
+        <ToolbarSeparator />
+        <ToolbarGroup>
+          {/* Search field (§VII): renamed placeholder + a small ✕ that clears
+              the query, shown only while the field holds text. */}
+          <div className="relative">
+            <Input
+              placeholder="Search connectors"
+              className="h-8 w-[180px] pr-7 lg:w-[260px]"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => setSearchTerm("")}
+                aria-label="Clear search"
+                className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+              >
+                <X aria-hidden="true" />
+              </Button>
+            ) : null}
+          </div>
         </ToolbarGroup>
         <ToolbarSeparator />
         <ToolbarGroup>
@@ -310,11 +328,32 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
             scopes={scopes}
           />
         </ToolbarGroup>
+        <ToolbarSeparator />
+        {/* "+ Connector" action (#681): jump to the marketplace pre-filtered
+            to connectors. `?tab=connector` is honoured by the marketplace
+            client (extensions-marketplace-client: searchParams.get("tab") →
+            the "connector" tab). §VII moves it next to the scope dropdown,
+            with a hairline divider on both sides. */}
+        <ToolbarGroup>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/configuration/marketplace?tab=connector">
+              <Plus data-icon="inline-start" aria-hidden="true" />
+              Connector
+            </Link>
+          </Button>
+        </ToolbarGroup>
+        <ToolbarSeparator />
         <div aria-hidden className="flex-1" />
+        {/* Sort control anchors the FAR right of the toolbar (§VII). */}
         <ToolbarGroup>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="text-muted-foreground">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-muted-foreground"
+                aria-label="Sort connectors"
+              >
                 <SlidersHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -331,18 +370,6 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </ToolbarGroup>
-        {/* Trailing "+ Connector" action (#681): jump to the marketplace
-            pre-filtered to connectors. `?tab=connector` is honoured by the
-            marketplace client (extensions-marketplace-client: searchParams
-            .get("tab") → the "connector" tab). */}
-        <ToolbarGroup>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/configuration/marketplace?tab=connector">
-              <Plus data-icon="inline-start" aria-hidden="true" />
-              Connector
-            </Link>
-          </Button>
         </ToolbarGroup>
       </Toolbar>
 

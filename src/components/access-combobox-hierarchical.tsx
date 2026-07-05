@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -239,12 +239,28 @@ export function AccessComboboxHierarchical({
       >
         <Command shouldFilter={false} className="bg-surface-strong">
           <div className="p-2 border-b border-line">
-            <Input
-              placeholder="Search…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="bg-surface-strong h-8"
-            />
+            {/* §VII: a small ✕ clears the flyout search once it holds a query
+                (cinatra#1014), mirroring the toolbar search's clear affordance. */}
+            <div className="relative">
+              <Input
+                placeholder="Search…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="bg-surface-strong h-8 pr-7"
+              />
+              {search ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear search"
+                  className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+                >
+                  <X aria-hidden="true" />
+                </Button>
+              ) : null}
+            </div>
           </div>
           <CommandList className="max-h-72 bg-surface-strong">
             <CommandEmpty>No matches.</CommandEmpty>
