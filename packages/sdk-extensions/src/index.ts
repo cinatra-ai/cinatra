@@ -218,6 +218,15 @@ export type {
 } from "./external-mcp-toolbox-contract";
 export { parseDevFixtures, DevFixtureValidationError, DEV_FIXTURE_SURFACES } from "./dev-fixtures";
 export type { DevFixture, DevFixtureFile, DevFixtureSetting, DevFixtureObject } from "./dev-fixtures";
+// Connector-owned dev-mode provisioning hook contract (cinatra#976, #978 W-D;
+// type-only — extensions `import type` these, the host types its shell).
+export type {
+  ExtensionDevSetupStatus,
+  ExtensionDevSetupCapabilityPort,
+  ExtensionDevSetupHelpers,
+  ExtensionDevSetupContext,
+  ExtensionDevSetupHook,
+} from "./dev-setup-contract";
 export {
   CONNECTOR_ACCESS_SCOPES,
   CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,

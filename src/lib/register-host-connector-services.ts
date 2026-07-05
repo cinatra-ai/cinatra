@@ -140,10 +140,12 @@ import {
   getWordPressAPIStatus,
   listPublishedWordPressPosts,
   listWordPressWebhookSubscriptions,
+  persistLocalDevWordPressInstanceUnvalidated,
   readWordPressInstanceById,
   readWordPressPost,
   readWordPressPostStatus,
   registerWordPressWebhookSubscription,
+  saveWordPressInstance,
   saveWordPressInstanceFromNangoConnection,
   updateWordPressDraftMeta,
   updateWordPressPost,
@@ -182,6 +184,7 @@ import { getConfiguredYouTubeAccessToken } from "@/lib/youtube-api";
 // are published as the `wordpress-mcp` / `drupal-mcp` per-concern services so
 // the connectors' `mcp-toolbox` modules carry no `@/` edge.
 import {
+  invalidateWordPressMcpProbeCache,
   isPrivateUrl,
   probeWordPressInstanceMcpAdapter,
   resolveWordPressMcpEndpoint,
@@ -196,7 +199,9 @@ import {
 } from "@/lib/wordpress-widget-auth";
 import {
   getDrupalMcpInstanceStatuses,
+  invalidateDrupalMcpProbeCache,
   probeDrupalMcp,
+  probeDrupalMcpWithBearer,
   resolveDrupalMcpServerUrl,
 } from "@/lib/drupal-mcp-connection";
 // Drupal instance-admin surface (cinatra#172 Stage H2): the connector settings
@@ -207,6 +212,7 @@ import {
   deleteDrupalInstance,
   getDrupalAPISettings,
   getDrupalAPIStatus,
+  persistLocalDevDrupalInstanceUnvalidated,
   saveDrupalInstance,
 } from "@/lib/drupal-api";
 // Widget auth-config storage for the drupal assistant widget (cinatra#172
@@ -215,6 +221,27 @@ import {
   generateDrupalWidgetAuthConfig,
   readDrupalWidgetAuthConfig,
 } from "@/lib/drupal-widget-auth";
+
+/**
+ * TRUST BOUNDARY (cinatra#976, epic #978 W-D): hard-gates the `devXxx`
+ * dev-setup affordances on `HostDrupalMcpService` / `HostWordPressMcpService`
+ * to the strict development runtime — exact-equality (NOT the default-
+ * development `isAppDevelopmentMode`), mirroring the identical gate the
+ * relocated `dev-auto-setup.ts` block enforced before the cinatra#976 move.
+ * Every `devXxx` member throws when this is false; they are never a
+ * production affordance. (The unvalidated-persist writers additionally
+ * refuse a non-loopback `siteUrl` INSIDE `persistLocalDev*Unvalidated`
+ * itself — a second, independent gate.)
+ */
+function isStrictDevelopmentRuntime(): boolean {
+  return process.env.CINATRA_RUNTIME_MODE === "development" && process.env.NODE_ENV !== "production";
+}
+
+function assertStrictDevelopmentRuntime(member: string): void {
+  if (!isStrictDevelopmentRuntime()) {
+    throw new Error(`${member} is a dev-only affordance (CINATRA_RUNTIME_MODE!=="development")`);
+  }
+}
 
 let _registered = false;
 
@@ -456,6 +483,22 @@ export function registerHostConnectorServices(): void {
     saveInstance: saveDrupalInstance,
     deleteInstance: deleteDrupalInstance,
     getInstanceStatuses: getDrupalMcpInstanceStatuses,
+    // --- dev-setup affordances (cinatra#976, #978 W-D) ---------------------
+    // Thin dev-gated wrappers over the SAME core functions the host's
+    // (now-relocated) dev-auto-setup block called directly. W-C (#975) later
+    // inverts these into the connector with the rest of the service impl.
+    devPersistLocalInstanceUnvalidated: async (input) => {
+      assertStrictDevelopmentRuntime("drupal-mcp.devPersistLocalInstanceUnvalidated");
+      return persistLocalDevDrupalInstanceUnvalidated(input);
+    },
+    devProbeWithBearer: async (siteUrl, bearer) => {
+      assertStrictDevelopmentRuntime("drupal-mcp.devProbeWithBearer");
+      return probeDrupalMcpWithBearer(siteUrl, bearer);
+    },
+    devInvalidateProbeCache: (siteUrl) => {
+      assertStrictDevelopmentRuntime("drupal-mcp.devInvalidateProbeCache");
+      invalidateDrupalMcpProbeCache(siteUrl);
+    },
   } satisfies HostDrupalMcpService);
 
   // Widget auth-config storage for the drupal assistant widget (cinatra#172
@@ -496,6 +539,22 @@ export function registerHostConnectorServices(): void {
       list: listWordPressWebhookSubscriptions,
       register: registerWordPressWebhookSubscription,
       remove: deleteWordPressWebhookSubscription,
+    },
+    // --- dev-setup affordances (cinatra#976, #978 W-D) ---------------------
+    // Thin dev-gated wrappers over the SAME core functions the host's
+    // (now-relocated) dev-auto-setup block called directly. W-C (#975) later
+    // inverts these into the connector with the rest of the service impl.
+    devSaveInstance: async (input) => {
+      assertStrictDevelopmentRuntime("wordpress-mcp.devSaveInstance");
+      return saveWordPressInstance(input);
+    },
+    devPersistLocalInstanceUnvalidated: async (input) => {
+      assertStrictDevelopmentRuntime("wordpress-mcp.devPersistLocalInstanceUnvalidated");
+      return persistLocalDevWordPressInstanceUnvalidated(input);
+    },
+    devInvalidateProbeCache: (siteUrl) => {
+      assertStrictDevelopmentRuntime("wordpress-mcp.devInvalidateProbeCache");
+      invalidateWordPressMcpProbeCache(siteUrl);
     },
   } satisfies HostWordPressMcpService);
 

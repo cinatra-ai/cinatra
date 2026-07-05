@@ -40,7 +40,10 @@ const PINNED: Record<string, { count: number; status: string; note?: string }> =
     note: "contract member declarations, not calls",
   },
   "src/lib/nango-system.ts": { count: 3, status: "primitive-surface" },
-  "src/lib/dev-auto-setup.ts": { count: 4, status: "dev-only" },
+  // dev-auto-setup.ts's raw-reader calls RELOCATED to the owning connector
+  // repos behind the cinatra.devSetup hook (cinatra#976, epic #978 W-D) —
+  // pin retired (0 calls remain; the connectors' reads hold the first-party
+  // `nango-system` capability, the W3/W4 fleet wave per the module doc above).
   "src/lib/registry-credentials.ts": {
     count: 2,
     status: "system-credential",

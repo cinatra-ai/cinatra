@@ -1665,6 +1665,61 @@ export async function buildManifest() {
     streamSlugOwners.set(s.streamSlug, s.packageName);
   }
 
+  // cinatra.devSetup (cinatra#976, epic #978 wave W-D): a connector OPTS IN to
+  // the connector-owned dev-mode provisioning hook by declaring a SINGLE
+  // package-relative module subpath (not an array — one hook per package).
+  // The host's dev-only orchestration shell (`src/lib/dev-auto-setup.ts`)
+  // iterates this generated map and invokes each `runDevSetup(ctx)` idempotently
+  // on every dev boot; a module-resolution OR invocation failure never blocks
+  // boot (the shell wraps every entry in its own soft-fail try/catch). FAIL
+  // CLOSED at GENERATION nonetheless (a broken declaration should never emit
+  // silently): the subpath must resolve to a real file, be importable (tsconfig
+  // path alias or package.json exports entry), and export a named
+  // `runDevSetup` function — mirrors the streams/webhooks resolvability checks.
+  const devSetupHooks = records
+    .filter((r) => r.kind === "connector")
+    .flatMap((r) => {
+      const decl = readCinatraManifest(r.sourceDir).devSetup;
+      if (decl === undefined) return [];
+      if (typeof decl !== "string" || !WEBHOOK_HANDLER_SUBPATH_RE.test(decl)) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} cinatra.devSetup: must be a package-relative subpath ` +
+            `(e.g. "./src/dev-setup"), got ${JSON.stringify(decl)}`,
+        );
+      }
+      const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"));
+      const handlerRel = decl.replace(/^\.\//, "");
+      const handlerPath = join(r.sourceDir, handlerRel);
+      const candidates = [handlerPath, `${handlerPath}.ts`, `${handlerPath}.tsx`];
+      const resolved = candidates.find((p) => fileExists(p));
+      if (!resolved) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} cinatra.devSetup "${decl}" does not resolve to a file ` +
+            `(looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+        );
+      }
+      const importSubpath = handlerRel.replace(/\.(ts|tsx)$/, "");
+      const specifier = `${r.packageName}/${importSubpath}`;
+      const exportsKey = `./${importSubpath}`;
+      const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+      if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} cinatra.devSetup subpath "${specifier}" is not resolvable ` +
+            `(no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+            `the generated literal import would fail at runtime`,
+        );
+      }
+      const handlerSource = readFileSync(join(REPO_ROOT, resolved), "utf8");
+      if (!webhookHandlerExportsFactory(handlerSource, "runDevSetup")) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} cinatra.devSetup: module "${resolved}" exports no ` +
+            `"runDevSetup" function (the declared hook module must export it by name)`,
+        );
+      }
+      return [{ packageName: r.packageName, specifier, resolution: r.resolution }];
+    })
+    .sort((a, b) => a.packageName.localeCompare(b.packageName));
+
   // Chat-widget modules: an extension OPTS IN to the chat widget/wizard surface
   // by shipping src/widgets/index.ts (WidgetDefinition[] + components). It MUST
   // then also ship src/widgets/manifest.ts (the pure-data WidgetManifest, no
@@ -1776,6 +1831,7 @@ export async function buildManifest() {
     widgetStreamAgents,
     webhookHooks,
     streamDeclarations,
+    devSetupHooks,
     chatWidgetModules,
     agentFieldRendererBindings,
     agentRoleBindings,
@@ -2189,6 +2245,42 @@ function emitStreamsServer(streamDeclarations) {
   );
 }
 
+// packageName → connector-owned dev-setup hook entry (cinatra#976, epic #978
+// wave W-D). Consumed ONLY by `src/lib/dev-auto-setup.ts`'s dev-only
+// orchestration shell — never by a production request path. The shell
+// iterates this map, dynamic-imports each `load()`, and invokes the module's
+// `runDevSetup(ctx)` inside its OWN soft-fail try/catch, so a resolution OR
+// invocation failure here never blocks `pnpm dev` boot. Every entry is
+// deliberately `guardedOptional` regardless of the record's own resolution
+// classification — a dev-only fixture hook must never be treated as
+// boot-required.
+function emitDevSetupServer(devSetupHooks) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = devSetupHooks
+    .map((h) => {
+      const spec = h.specifier;
+      const load = `guardedExtensionImport(${JSON.stringify(spec)}, () => import(${JSON.stringify(spec)}))`;
+      return `  ${JSON.stringify(h.packageName)}: { resolution: "guardedOptional", load: ${load}, packageName: ${JSON.stringify(h.packageName)} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(body) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// packageName → connector-owned dev-setup hook. dev-only; always\n` +
+    `// guardedOptional (see the module-head note above) — the host's\n` +
+    `// dev-auto-setup shell invokes each \`runDevSetup(ctx)\` idempotently and\n` +
+    `// soft-fails around every entry.\n` +
+    `export type GeneratedDevSetupEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `  packageName: string;\n` +
+    `};\n\n` +
+    `export const GENERATED_DEV_SETUP_HOOKS: Record<string, GeneratedDevSetupEntry> = {\n` +
+    `${body}\n};\n`
+  );
+}
+
 // Slug-only public-path list for the generic stream route (cinatra#344). SEPARATE
 // generated file with ZERO imports and no package identifiers (proxy-bundle-safe
 // like the widget paths file). This is the auth-exemption SOURCE for the generic
@@ -2347,6 +2439,7 @@ function emitGuardedOptionalLoadersTest({
   widgetStreamAgents,
   webhookHooks,
   streamDeclarations,
+  devSetupHooks,
   chatWidgetModules,
   connectorSetupPages,
   connectorSettingsPages,
@@ -2366,6 +2459,9 @@ function emitGuardedOptionalLoadersTest({
   for (const w of widgetStreamAgents) expected.push(["GENERATED_WIDGET_STREAM_AGENTS", w.agentSlug, w.resolution]);
   for (const h of webhookHooks) expected.push(["GENERATED_WEBHOOK_HANDLERS", h.scope, h.resolution]);
   for (const s of streamDeclarations) expected.push(["GENERATED_STREAM_DECLARATIONS", s.streamSlug, s.resolution]);
+  // devSetup entries are ALWAYS guardedOptional (see emitDevSetupServer's
+  // module-head note) regardless of the record's own resolution.
+  for (const h of devSetupHooks) expected.push(["GENERATED_DEV_SETUP_HOOKS", h.packageName, "guardedOptional"]);
   for (const p of chatWidgetModules) {
     expected.push(["GENERATED_CHAT_WIDGET_MODULES", p.packageName, p.resolution]);
     expected.push(["GENERATED_CHAT_WIDGET_MANIFEST_MODULES", p.packageName, p.resolution]);
@@ -2399,6 +2495,7 @@ function emitGuardedOptionalLoadersTest({
     `} from "../extensions.server";\n` +
     `import { GENERATED_WEBHOOK_HANDLERS } from "../webhooks.server";\n` +
     `import { GENERATED_STREAM_DECLARATIONS } from "../streams.server";\n` +
+    `import { GENERATED_DEV_SETUP_HOOKS } from "../dev-setup.server";\n` +
     `import {\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
@@ -2413,6 +2510,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
     `  GENERATED_WEBHOOK_HANDLERS,\n` +
     `  GENERATED_STREAM_DECLARATIONS,\n` +
+    `  GENERATED_DEV_SETUP_HOOKS,\n` +
     `  GENERATED_CHAT_WIDGET_MODULES,\n` +
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
@@ -2676,6 +2774,7 @@ const OUT_WEBHOOK_PATHS = generatedOutPath("webhook-public-paths.ts");
 const OUT_WEBHOOK_META = generatedOutPath("webhook-registry-meta.ts");
 const OUT_STREAMS_SERVER = generatedOutPath("streams.server.ts");
 const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
+const OUT_DEV_SETUP_SERVER = generatedOutPath("dev-setup.server.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 const OUT_ARTIFACT_FLOOR = generatedOutPath("artifact-floor.ts");
@@ -2705,6 +2804,7 @@ async function main() {
     widgetStreamAgents,
     webhookHooks,
     streamDeclarations,
+    devSetupHooks,
     chatWidgetModules,
     agentFieldRendererBindings,
     agentRoleBindings,
@@ -2721,6 +2821,7 @@ async function main() {
     [OUT_WEBHOOK_META, emitWebhookRegistryMeta(webhookHooks)],
     [OUT_STREAMS_SERVER, emitStreamsServer(streamDeclarations)],
     [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
+    [OUT_DEV_SETUP_SERVER, emitDevSetupServer(devSetupHooks)],
     [
       OUT_GUARDED_TEST,
       emitGuardedOptionalLoadersTest({
@@ -2732,6 +2833,7 @@ async function main() {
         widgetStreamAgents,
         webhookHooks,
         streamDeclarations,
+        devSetupHooks,
         chatWidgetModules,
         connectorSetupPages,
         connectorSettingsPages,

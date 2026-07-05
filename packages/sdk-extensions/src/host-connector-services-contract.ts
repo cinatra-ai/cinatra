@@ -225,6 +225,28 @@ export type HostDrupalMcpService = {
       isPrivate: boolean;
     }>
   >;
+  // --- dev-setup affordances (cinatra#976, #978 W-D) ------------------------
+  // OPTIONAL, additive members backing the connector-owned `cinatra.devSetup`
+  // hook ONLY. TRUST BOUNDARY: the host impls are HARD-GATED to the strict
+  // development runtime (`CINATRA_RUNTIME_MODE === "development"` and not a
+  // production NODE_ENV) — outside it they throw — and the unvalidated persist
+  // additionally refuses non-loopback site URLs. They are never a production
+  // affordance; W-C (#975) inverts them into the connector with the rest of
+  // the service impl.
+  /** DEV-ONLY WRITER — persist a complete local-dev instance row WITHOUT
+   * network validation (best-effort Nango import; loopback siteUrl only). */
+  devPersistLocalInstanceUnvalidated?(input: {
+    id?: string;
+    name: string;
+    siteUrl: string;
+  }): Promise<{ id: string }>;
+  /** DEV-ONLY — cache-bypassing `/_mcp_tools` probe with an explicit Bearer. */
+  devProbeWithBearer?(
+    siteUrl: string,
+    bearer: string,
+  ): Promise<"registered" | "not_installed" | "auth_error" | "unreachable">;
+  /** DEV-ONLY — evict the URL-keyed MCP probe cache after a verified rotate. */
+  devInvalidateProbeCache?(siteUrl: string): void;
 };
 
 /** Widget AUTH-CONFIG storage for the Drupal assistant widget
@@ -358,6 +380,32 @@ export type HostWordPressMcpService = {
       subscriptionId: string,
     ): Promise<void>;
   };
+  // --- dev-setup affordances (cinatra#976, #978 W-D) ------------------------
+  // OPTIONAL, additive members backing the connector-owned `cinatra.devSetup`
+  // hook ONLY. TRUST BOUNDARY: the host impls are HARD-GATED to the strict
+  // development runtime (`CINATRA_RUNTIME_MODE === "development"` and not a
+  // production NODE_ENV) — outside it they throw — and the unvalidated persist
+  // additionally refuses non-loopback site URLs. They are never a production
+  // affordance; W-C (#975) inverts them into the connector with the rest of
+  // the service impl.
+  /** DEV-ONLY WRITER — network-validated instance save (validates the Basic
+   * credential against WP REST, persists the row, best-effort Nango sync). */
+  devSaveInstance?(input: {
+    id?: string;
+    siteUrl: string;
+    username: string;
+    applicationPassword: string;
+  }): Promise<{ id: string; connectionId?: string | null }>;
+  /** DEV-ONLY WRITER — persist a complete local-dev instance row WITHOUT
+   * network validation (best-effort Nango import; loopback siteUrl only). */
+  devPersistLocalInstanceUnvalidated?(input: {
+    id?: string;
+    siteUrl: string;
+    username: string;
+    applicationPassword: string;
+  }): Promise<{ id: string; connectionId?: string | null }>;
+  /** DEV-ONLY — evict the URL-keyed MCP probe cache after a verified rotate. */
+  devInvalidateProbeCache?(siteUrl: string): void;
 };
 
 /** WordPress post/media CONTENT surface (`@/lib/wordpress-api` stays
@@ -817,6 +865,15 @@ export type HostExternalMcpRegistryService = {
    * is unconfigured, the row has no connection, or resolution fails —
    * callers treat null as "no auth header"). */
   resolveBearer(server: ExternalMcpServerRowShape): Promise<string | null>;
+  /**
+   * The shared Nango providerConfigKey the registry's `resolveBearer` reads
+   * connections under (host mechanism constant). OPTIONAL + additive
+   * (cinatra#976): a `cinatra.devSetup` hook that imports a freshly minted
+   * bearer into Nango must import it under THIS key or the row's bearer
+   * resolution cannot see it — published as data so the connector never
+   * hardcodes the host constant.
+   */
+  nangoProviderConfigKey?: string;
 };
 
 /** Auth headers for the in-app MCP self-client. */

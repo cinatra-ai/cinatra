@@ -40,6 +40,8 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       // Agent UI bindings + role bindings (cinatra#151 Stage 5).
       "src/lib/generated/agent-bindings.ts",
       "src/lib/generated/connector-setup-pages.ts",
+      // Connector-owned dev-mode provisioning hook (cinatra#976, epic #978 W-D).
+      "src/lib/generated/dev-setup.server.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
       // Neutral stream primitives capability (cinatra#344): the host-owned

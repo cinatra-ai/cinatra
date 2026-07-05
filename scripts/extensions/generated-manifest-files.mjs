@@ -54,6 +54,12 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // extension declares cinatra.streams.
   "src/lib/generated/streams.server.ts",
   "src/lib/generated/stream-public-paths.ts",
+  // Connector-owned dev-mode provisioning hook (cinatra#976, epic #978 wave
+  // W-D): dev-setup.server.ts carries the packageName -> runDevSetup dispatch
+  // map for the host's dev-only orchestration shell
+  // (src/lib/dev-auto-setup.ts). Every entry is guardedOptional — a dev
+  // fixture hook never blocks `pnpm dev` boot.
+  "src/lib/generated/dev-setup.server.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing
   // it here adds no exemption surface — it puts the file under the same

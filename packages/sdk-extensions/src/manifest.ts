@@ -121,6 +121,19 @@ export type CinatraManifest = {
    */
   devFixtures?: string;
   /**
+   * Package-relative MODULE path (recommended `./src/dev-setup`) of the
+   * connector-owned IMPERATIVE dev-mode provisioning hook (cinatra#976, #978
+   * W-D) — the code sibling of the declarative `devFixtures`. The module must
+   * export a named `runDevSetup` function (`ExtensionDevSetupHook`, see
+   * `./dev-setup-contract`). The manifest generator validates the declaration
+   * fail-closed and emits a dedicated generated loader registry
+   * (`src/lib/generated/dev-setup.server.ts` — deliberately NOT a
+   * `NormalizedExtensionRecord` field, mirroring `cinatra.webhooks`); the
+   * host's dev-only auto-setup shell invokes each hook idempotently on dev
+   * boots.
+   */
+  devSetup?: string;
+  /**
    * Self-declared connector vendor identity (#12). A `kind:"connector"`
    * extension declares its OWN vendor key + name here — the SDK owns no vendor
    * roster (open marketplace). The marketplace publish gate (separate repo)
