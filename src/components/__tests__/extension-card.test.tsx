@@ -17,7 +17,7 @@ describe("ExtensionCard listing banner (§IV, shell mode, variant=listing)", () 
   const shellProps = {
     variant: "listing" as const,
     name: "Research Assistant",
-    accentColor: "indigo" as const,
+    accentColor: "plum" as const,
     emblem: <SquareEmblem />,
     description: "Gathers sources and cites answers.",
   };
@@ -76,7 +76,7 @@ describe("ExtensionCard shell mode default (variant=chip) — non-marketplace li
     const html = renderToStaticMarkup(
       <ExtensionCard
         name="Outbound Agent"
-        accentColor="indigo"
+        accentColor="plum"
         emblem={<SquareEmblem />}
         description="Runs outbound email."
         indicator={{ label: "Daily 9am" }}
