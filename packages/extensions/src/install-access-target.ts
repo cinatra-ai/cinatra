@@ -15,9 +15,10 @@
 //    "project" owner level. The chosen audience is carried by the ACCESS
 //    POLICY visibility tiers, which enforceExtensionAccess already evaluates
 //    ("team:<id>" / "project:<id>" / workspace).
-//  - organization target → per-kind default policy (workspace for these
-//    kinds): return undefined so setExtensionInstallAccess applies
-//    defaultAccessPolicyForKind — the one-click parity default.
+//  - organization target → the kind's install default: return undefined so
+//    setExtensionInstallAccess applies it — workspace for artifact/workflow,
+//    and for a CONNECTOR the policy derived from its own cinatra/config.json
+//    declaration cached on the canonical row (cinatra#955).
 //  - team / project target → all three visibility fields scoped to the
 //    target; sharing disabled (matches the per-kind defaults).
 // ---------------------------------------------------------------------------
@@ -61,7 +62,9 @@ export const InstallAccessTargetSchema: z.ZodType<InstallAccessTarget> =
 /**
  * Map the validated target to the install-time access policy.
  * Returns undefined for the organization target so the caller lets
- * setExtensionInstallAccess apply the per-kind default (workspace).
+ * setExtensionInstallAccess apply the kind's install default (workspace for
+ * artifact/workflow; the cached cinatra/config.json declaration for a
+ * connector — cinatra#955).
  */
 export function accessTargetToInstallPolicy(
   target: InstallAccessTarget,

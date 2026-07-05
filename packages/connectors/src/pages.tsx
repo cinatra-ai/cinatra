@@ -34,6 +34,7 @@ import {
   listRuntimeOnlyConnectorCards,
 } from "@/lib/installed-connectors.server";
 import { isConnectorVisibleToActor } from "@/lib/connector-policy";
+import { connectorCatalogDefaultVisibility } from "@/lib/connector-access-config-host";
 
 import {
   resolveReadinessFailSoft,
@@ -46,11 +47,10 @@ type ConnectorsPageProps = {
 
 // cinatra#953 (W3): the scope filter matches REAL granted connections — the
 // actor-visible `nango_connection` identity rows and their per-connection
-// grant rows — via `buildConnectionScopeEntries`. The former SCOPE_BY_SLUG
-// pseudo-scope map (a hardcoded personal/organization tag per slug) is
-// deleted: Team/Project/Org selections now genuinely narrow to connections
-// granted to that concrete locus, and Personal shows the actor's own
-// connections.
+// grant rows — via `buildConnectionScopeEntries` (the former hardcoded
+// per-slug pseudo-scope map is deleted): Team/Project/Org selections
+// genuinely narrow to connections granted to that concrete locus, and
+// Personal shows the actor's own connections.
 
 export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   const session = await requireAuthSession();
@@ -101,8 +101,9 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   // read (the actor's org's rows + the actor's OWN rows — foreign null-org
   // rows are excluded fail-closed) + one batched grant read, folded into
   // per-connector NormalizedResourceScope entries. Each card also keeps its
-  // catalog visibility-tier axis (admin-only cards match the Admin filter) —
-  // that legacy `defaultVisibility` axis is the W5 closing wave's concern.
+  // visibility-tier axis (admin-only cards match the Admin filter), derived
+  // from the connector's shipped cinatra/config.json (cinatra#955 — the
+  // legacy hand-catalog tier is deleted).
   const connectionRows = actorUserId
     ? await listNangoConnectionsForScopeFilter(activeOrgId, actorUserId)
     : [];
@@ -115,12 +116,9 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
     connectionPolicies,
     actorUserId,
   );
-  function connectorScopeEntries(
-    packageId: string,
-    defaultVisibility: "admin" | "workspace",
-  ): NormalizedResourceScope[] {
+  function connectorScopeEntries(packageId: string): NormalizedResourceScope[] {
     const entries = scopeEntriesByPackage.get(packageId) ?? [];
-    return defaultVisibility === "admin"
+    return connectorCatalogDefaultVisibility(packageId) === "admin"
       ? [...entries, { locus: "workspace", adminOnly: true }]
       : entries;
   }
@@ -149,7 +147,7 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
     .filter(
       (entry) =>
         effectiveScope === DEFAULT_SCOPE_TOKEN ||
-        connectorScopeEntries(entry.packageId, entry.defaultVisibility).some(
+        connectorScopeEntries(entry.packageId).some(
           (scopeEntry) => scopeSelectionMatches(effectiveScope, scopeEntry),
         ),
     );

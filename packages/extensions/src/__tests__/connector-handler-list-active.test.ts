@@ -6,8 +6,8 @@
 // active-gate `manifests` (run through the shared owner-scope helper) are the
 // sole authority for which descriptors this actor may discover. A descriptor
 // surfaces only when its `packageId` is BOTH lifecycle-live AND owner-visible.
-// The descriptor's `defaultVisibility` is NOT enforced here (connector-policy
-// owns the read/use/manage gate downstream).
+// The connector's config-declared access tier is NOT enforced here
+// (connector-policy owns the read/use/manage gate downstream).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -22,12 +22,11 @@ import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog";
 
 const actor = { userId: "u1", actorType: "human", source: "ui" } as never;
 
-function descriptor(packageId: string, defaultVisibility: "admin" | "workspace" = "workspace") {
+function descriptor(packageId: string) {
   return {
     packageId,
     slug: packageId.split("/")[1] ?? packageId,
     displayName: packageId,
-    defaultVisibility,
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   };
@@ -119,9 +118,9 @@ describe("connector handler listActive (IoC reader facet)", () => {
     expect(result.map((d) => d.packageId)).toEqual(["@cinatra-ai/openai-connector"]);
   });
 
-  it("does NOT enforce the descriptor's defaultVisibility (admin descriptors still surface when live + owner-visible)", async () => {
+  it("does NOT enforce the config-declared access tier (admin-tier connectors still surface when live + owner-visible)", async () => {
     vi.mocked(listConnectorDescriptors).mockReturnValue([
-      descriptor("@cinatra-ai/github-connector", "admin"),
+      descriptor("@cinatra-ai/github-connector"),
     ] as never);
     const result = (await handler.listActive!({
       actor,

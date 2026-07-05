@@ -20,6 +20,10 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import type { ExtensionOwnerContext } from "@cinatra-ai/extensions/enforce-extension-access";
+import {
+  isResolvedConnectorAccessDeclaration,
+  type ResolvedConnectorAccessDeclaration,
+} from "@cinatra-ai/sdk-extensions/access-config";
 
 export type CanonicalConnectorAccess = {
   resourceId: string;
@@ -27,6 +31,13 @@ export type CanonicalConnectorAccess = {
   policy: AgentAuthPolicy | null;
   coOwnerUserIds: string[];
   installedByUserId: string | null;
+  /**
+   * The W1-cached `cinatra/config.json` declaration on the registration row
+   * (cinatra#955): `null` only for a row persisted before the reader ran.
+   * A PRESENT-but-corrupt cached value fails the whole read CLOSED
+   * (`{status:"error"}`) — it must never silently resolve to a default.
+   */
+  accessDeclaration: ResolvedConnectorAccessDeclaration | null;
 };
 
 /**
@@ -59,7 +70,7 @@ export function resolveConnectorCanonicalAccessSync(
       connectionString,
       queries: [
         {
-          text: `SELECT id, owner_level, owner_id, organization_id
+          text: `SELECT id, owner_level, owner_id, organization_id, access_declaration
                  FROM "${schemaQ}"."installed_extension"
                  WHERE organization_id = $1 AND owner_level = 'organization'
                    AND owner_id = $1 AND package_name = $2 AND kind = 'connector'
@@ -69,9 +80,32 @@ export function resolveConnectorCanonicalAccessSync(
       ],
     });
     const row = installed?.rows?.[0] as
-      | { id: string; owner_level: string; owner_id: string | null; organization_id: string | null }
+      | {
+          id: string;
+          owner_level: string;
+          owner_id: string | null;
+          organization_id: string | null;
+          access_declaration: unknown;
+        }
       | undefined;
     if (!row) return { status: "absent" };
+
+    // Cached declaration (cinatra#955): null = pre-reader row (the caller may
+    // use the shipped catalog default); a present but structurally INVALID
+    // value is a corrupt cache -> fail the read CLOSED (same posture as the
+    // connection use-gate corrupt-cache handling), never a looser fallback.
+    let declarationRaw: unknown = row.access_declaration ?? null;
+    if (typeof declarationRaw === "string") {
+      try {
+        declarationRaw = JSON.parse(declarationRaw);
+      } catch {
+        return { status: "error" };
+      }
+    }
+    if (declarationRaw !== null && !isResolvedConnectorAccessDeclaration(declarationRaw)) {
+      return { status: "error" };
+    }
+    const accessDeclaration = declarationRaw as ResolvedConnectorAccessDeclaration | null;
 
     const resourceId = row.id;
     const [policyRes, coOwnerRes] = runPostgresQueriesSync({
@@ -117,6 +151,7 @@ export function resolveConnectorCanonicalAccessSync(
         policy,
         coOwnerUserIds,
         installedByUserId: policyRow?.installed_by_user_id ?? null,
+        accessDeclaration,
       },
     };
   } catch {

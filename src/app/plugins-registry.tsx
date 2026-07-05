@@ -67,7 +67,7 @@ export async function getAPIPluginPage(slug: string): Promise<APIPluginPageCompo
       // are OWNED by the google-oauth-connector, whose setup-page renders
       // through the GENERIC connector dispatch route — it builds the grant-aware
       // host ctx and applies the connector-policy `read` gate for render
-      // (google-oauth is defaultVisibility:"admin"); the credential WRITE is
+      // (google-oauth declares default:"admin" in cinatra/config.json); the credential WRITE is
       // separately `manage`-gated (requireExtensionAction first-statement in the
       // connector's save action) and the client SECRET is write-only (never sent
       // to the browser). This legacy /configuration/llm mount rendered the host

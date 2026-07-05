@@ -1,8 +1,9 @@
 /**
  * Security regression: the gmail + google-calendar server actions live in their
  * connectors and MUST gate on requireExtensionAction(pkg, "read") as the
- * FIRST executable statement. Both connectors are defaultVisibility "workspace"
- * and the setup page gates on enforceConnectorPolicy(..., "read"), so these
+ * FIRST executable statement. Both connectors declare a user-scope default in
+ * cinatra/config.json (workspace tier — cinatra#955) and the setup page gates
+ * on enforceConnectorPolicy(..., "read"), so these
  * user-scoped self-service mutations (refresh MY send-as aliases / save MY
  * appointment schedule) must NOT require admin. "read" admits any workspace
  * member; each action self-scopes to the session user id. "read" is the
