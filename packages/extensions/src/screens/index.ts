@@ -1,4 +1,9 @@
 export { RegistryCatalogScreen } from "./registry-catalog-screen";
+export { MarketplaceDetailModal } from "./marketplace-detail-modal";
+export type {
+  MarketplaceDetailModalProps,
+  MarketplaceDetailModalInitialLoad,
+} from "./marketplace-detail-modal";
 export { ExtensionsMarketplaceScreen } from "./extensions-marketplace-screen";
 export { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
 export { RegistryUninstallForm } from "./registry-uninstall-form";

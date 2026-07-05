@@ -18,7 +18,7 @@
 // is the browse-card "More details" experience only.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
@@ -61,6 +61,7 @@ import {
   type MarketplaceDetailReview,
 } from "@/lib/marketplace-detail-view";
 import { getPublicMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
+import { isRedirectError } from "./is-redirect-error";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import {
   buildMarketplaceFailureCopy,
@@ -72,6 +73,17 @@ import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy"
 type BoundLifecycleAction = () => Promise<MarketplaceInstallActionResult | void>;
 
 type LoadStatus = "idle" | "loading" | "loaded" | "notfound" | "error";
+
+/**
+ * Fixture/test seam (cinatra#948): a pinned load state so the static
+ * `/design-fixtures` render (no DB, no session) can show the loaded and
+ * `notfound` bodies without driving the admin-gated server action. When set,
+ * the modal NEVER fetches — the pinned state is the state.
+ */
+export type MarketplaceDetailModalInitialLoad =
+  | { status: "loaded"; detail: MarketplaceDetailView }
+  | { status: "notfound" }
+  | { status: "error" };
 
 export interface MarketplaceDetailModalProps {
   card: MarketplaceCardData;
@@ -87,6 +99,15 @@ export interface MarketplaceDetailModalProps {
    * production callers never pass it.
    */
   loadDetail?: (packageName: string) => Promise<MarketplaceDetailLoadResult>;
+  /**
+   * Entry-point trigger override (cinatra#948): the Installed extensions page
+   * renders the §VI link-style "More details"; the browse card keeps the
+   * default outline button when this is not passed. Must be a single element
+   * (Radix `asChild`).
+   */
+  trigger?: ReactElement;
+  /** See {@link MarketplaceDetailModalInitialLoad}. */
+  initialLoad?: MarketplaceDetailModalInitialLoad;
 }
 
 export function MarketplaceDetailModal({
@@ -96,10 +117,14 @@ export function MarketplaceDetailModal({
   updateAction,
   restoreAction,
   loadDetail = getPublicMarketplaceDetailAction,
+  trigger,
+  initialLoad,
 }: MarketplaceDetailModalProps) {
   const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<LoadStatus>("idle");
-  const [detail, setDetail] = useState<MarketplaceDetailView | null>(null);
+  const [status, setStatus] = useState<LoadStatus>(initialLoad?.status ?? "idle");
+  const [detail, setDetail] = useState<MarketplaceDetailView | null>(
+    initialLoad?.status === "loaded" ? initialLoad.detail : null,
+  );
 
   const load = useCallback(async () => {
     setStatus("loading");
@@ -111,31 +136,42 @@ export function MarketplaceDetailModal({
       } else {
         setStatus(result.reason === "not_found" ? "notfound" : "error");
       }
-    } catch {
+    } catch (error) {
+      // Auth redirect sentinel (the detail action is admin-gated; the
+      // Installed page is session-gated, cinatra#948) — re-throw so Next.js
+      // navigates to /not-authorized instead of masking authorization as a
+      // retryable "Couldn't load details".
+      if (isRedirectError(error)) throw error;
       // A server-action rejection is masked in production — never crash the
       // browse route; render the retryable error state instead.
       setStatus("error");
     }
   }, [card.packageName, loadDetail]);
 
+  // A pinned fixture state never fetches (there is no session/DB behind the
+  // static fixtures route; the admin-gated action would redirect).
+  const pinned = initialLoad != null;
+
   const onOpenChange = useCallback(
     (next: boolean) => {
       setOpen(next);
       // Fetch on first open (and never again once loaded — reviews/specs are a
       // point-in-time read). Retry re-drives load() from the error state.
-      if (next && status !== "loaded" && status !== "loading") {
+      if (next && !pinned && status !== "loaded" && status !== "loading") {
         void load();
       }
     },
-    [status, load],
+    [pinned, status, load],
   );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="flex-1">
-          More details
-        </Button>
+        {trigger ?? (
+          <Button size="sm" variant="outline" className="flex-1">
+            More details
+          </Button>
+        )}
       </DialogTrigger>
       {/* Overlay stops below the navbar (top-16). Portalled so it escapes any
           transformed card ancestor and dims the whole viewport below the nav. */}
@@ -185,7 +221,8 @@ export function MarketplaceDetailModal({
             <ModalMessage
               title="Couldn't load details"
               body="Something went wrong loading this extension. Please try again."
-              onRetry={() => void load()}
+              // A pinned fixture error state has nothing to retry against.
+              onRetry={pinned ? undefined : () => void load()}
             />
           ) : detail ? (
             <ModalBody card={card} detail={detail} />

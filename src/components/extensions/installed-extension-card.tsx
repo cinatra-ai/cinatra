@@ -43,8 +43,18 @@ export type InstalledExtensionCardProps = {
   description?: string | null;
   /** Already-formatted version text (the v-prefixed formatting is the caller's). */
   version?: string | null;
-  /** Lifecycle status indicator (+ any visibility/risk badges) beside the version. */
+  /**
+   * Lifecycle status indicator beside the version — the §VI spec line carries
+   * ONLY the mono version + this indicator (cinatra#948 reopen, gap 3).
+   */
   status?: ReactNode;
+  /**
+   * Operational chips (visibility / required / risk …) — deliberately OFF the
+   * §VI spec version line, rendered as a subdued row beneath it. A documented
+   * operational-necessity addition to the drawing (the reopen keeps the chips
+   * but moves them out of the spec line).
+   */
+  chips?: ReactNode;
   /** Right-panel actions, top to bottom (Settings, More details, management). */
   actions?: ReactNode;
   /**
@@ -68,6 +78,7 @@ export function InstalledExtensionCard({
   description,
   version,
   status,
+  chips,
   actions,
   archived = false,
   className,
@@ -136,6 +147,7 @@ export function InstalledExtensionCard({
           </p>
         )}
         <div
+          data-slot="installed-extension-spec-line"
           className={cn(
             "flex flex-wrap items-center gap-x-3 gap-y-1.5",
             archived && "opacity-70",
@@ -146,6 +158,17 @@ export function InstalledExtensionCard({
           )}
           {status}
         </div>
+        {chips && (
+          <div
+            data-slot="installed-extension-operational-chips"
+            className={cn(
+              "flex flex-wrap items-center gap-x-1.5 gap-y-1.5",
+              archived && "opacity-70",
+            )}
+          >
+            {chips}
+          </div>
+        )}
       </div>
 
       {/* RIGHT — hairline-divided actions panel; archived cards mute it so the

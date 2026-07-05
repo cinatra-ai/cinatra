@@ -12,6 +12,7 @@ import { CorePrimitives } from "./fixtures-core";
 import { ComplexPrimitives } from "./fixtures-complex";
 import { SidebarFixture } from "./sidebar-fixture";
 import { LinerNotesFixture } from "./liner-notes-fixture";
+import { InstalledExtensionsFixture } from "./installed-extensions-fixture";
 
 export const metadata: Metadata = {
   title: "Design Fixtures — Cinatra",
@@ -89,6 +90,15 @@ export default function DesignFixturesPage() {
           </CardHeader>
           <CardContent>
             <LinerNotesFixture />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Installed extensions (§VI) — seeded card + modal fixtures</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <InstalledExtensionsFixture />
           </CardContent>
         </Card>
       </PageContent>
