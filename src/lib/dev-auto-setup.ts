@@ -269,16 +269,26 @@ const DRUPAL_REMOTE_KEY_LABEL = "cinatra-dev";
 /**
  * Extract the Bearer remote key from `drush mcp-tools:remote-key-create` output.
  *
- * The command prints the key (often with surrounding log lines). We take the
- * last non-empty trimmed line and accept it only if it is a single opaque token
- * of plausible length. The validation regex is intentionally LINEAR (anchored
- * both ends, one character class, no nested quantifier) — `js/polynomial-redos`
- * safe. Returns null when no token-shaped line is present (caller soft-skips —
- * a failed mint must NEVER overwrite a working key).
+ * mcp_tools (>= 1.0.0-beta14) prints the key on an explicit `API Key: <token>`
+ * line and ENDS the output with a human notice ("Store this API key now; it
+ * cannot be shown again.") — so the labeled line is matched first. Older /
+ * porcelain-style outputs that end with a bare token line are still accepted
+ * as a fallback: the last non-empty trimmed line, only if it is a single
+ * opaque token of plausible length. Both validation regexes are intentionally
+ * LINEAR (anchored both ends, one character class, no nested quantifier) —
+ * `js/polynomial-redos` safe. Returns null when neither shape is present
+ * (caller soft-skips — a failed mint must NEVER overwrite a working key).
  *
  * SECRET BOUNDARY: the returned value is the Bearer; callers must never log it.
  */
 export function parseDrupalRemoteKey(out: string): string | null {
+  // Labeled form first: `API Key: <token>` on its own line (current mcp_tools;
+  // its trailing human notice would otherwise defeat the trailing-token parse).
+  // Whitespace is HORIZONTAL-only ([ \t], not \s): under /m a `^\s*` could
+  // consume newlines and backtrack across line starts on newline-heavy input
+  // (superlinear); anchored horizontal runs keep the scan linear per line.
+  const labeled = out.match(/^[ \t]*API Key:[ \t]*([A-Za-z0-9._=+/-]{16,512})[ \t]*$/m);
+  if (labeled) return labeled[1];
   const lines = out.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
@@ -1803,7 +1813,10 @@ function isStrictDevelopmentRuntime(): boolean {
 // production secret) the Playwright suite reads from the handoff file below to
 // drive the hosted-login popup. Min length 12 (matches the auth policy floor).
 const DEV_UAT_USER = {
-  email: "cinatra-uat@localhost",
+  // Dot-domain literal: better-auth's (zod) email schema rejects no-dot
+  // domains like `@localhost`, which would make this seed fail on every
+  // fresh DB. RFC 2606 reserves example.com; no mail is ever sent to it.
+  email: "cinatra-uat@example.com",
   name: "Cinatra UAT",
   // Assembled from fragments so no secret-scanner flags a literal credential.
   password: ["cinatra", "uat", "dev", "12345"].join("-"),
