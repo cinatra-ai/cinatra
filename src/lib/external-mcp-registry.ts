@@ -7,7 +7,7 @@ import {
   ensurePostgresSchema,
   postgresSchema,
 } from "@/lib/database";
-import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
+import { isPrivateUrl } from "@/lib/url-policy";
 import {
   getNangoCredentials,
   isNangoConfigured,
