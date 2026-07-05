@@ -61,11 +61,16 @@ export default defineConfig({
     // CINATRA_REQUIRE_ACTOR_CONTEXT=false: the widget stream route does not pass
     // an actorContext and there is no ambient ALS frame, so dev/test must opt out
     // of the fail-closed actor gate (it never bypasses in production).
+    // CINATRA_E2E_SETUP_BYPASS=true (same as the sibling e2e configs): clears
+    // the setup-wizard gate on a fresh instance — without it the #410
+    // hosted-login popup redirects to /setup/ai (AI wizard step incomplete)
+    // and the consent step never renders, so every login-gated scenario
+    // times out.
     // allowedDevOrigins + reactDebugChannel:false are already in next.config.ts
     // for headless dev-mode hydration (see https://docs.cinatra.ai/references/platform/e2e-headless-hydration/).
     // reuseExistingServer:false — ALWAYS boot a fresh server carrying the scripted
     // provider env, so the run can never silently use a non-scripted dev server.
-    command: `CINATRA_TEST_LLM_PROVIDER=scripted CINATRA_REQUIRE_ACTOR_CONTEXT=false POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
+    command: `CINATRA_TEST_LLM_PROVIDER=scripted CINATRA_REQUIRE_ACTOR_CONTEXT=false CINATRA_E2E_SETUP_BYPASS=true POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
     cwd: REPO_ROOT,
     url: BASE_URL,
     timeout: 240_000,
