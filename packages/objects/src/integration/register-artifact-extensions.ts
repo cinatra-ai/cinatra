@@ -2,6 +2,7 @@ import "server-only";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import { objectTypeRegistry } from "../registry";
 import type { SemanticArtifactManifest } from "../types";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
@@ -32,12 +33,11 @@ import {
 // The bridge ingests the semantic artifact manifest. Canonical schema/parser
 // lives in ../semantic-manifest; artifact-handler.ts keeps a byte-mirrored copy
 // (objects↔extensions cycle forbids sharing — same lock-step constraint).
-// `dependencies` (cross-kind ExtensionDependency[], extension-deps gate) and
-// `roles` (cinatra#151 Stage 5 role bindings, validated fail-closed by the
-// agent-bindings generator) are permitted CROSS-KIND metadata on any
-// extension manifest — not agent-package drift; keep in lock-step with
-// artifact-handler.ts ALLOWED_CINATRA_KEYS.
-const ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact", "dependencies", "roles"]);
+// The cinatra-key allowlist itself is NO LONGER duplicated here: both this
+// file and artifact-handler.ts import `ARTIFACT_ALLOWED_CINATRA_KEYS` from
+// `@cinatra-ai/sdk-extensions/artifact-contract` (a leaf package outside the
+// objects↔extensions cycle, cinatra#979) instead of each keeping their own
+// literal.
 
 function registerOneArtifactDir(dir: string): boolean {
   const pkgPath = path.join(dir, "package.json");
