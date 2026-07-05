@@ -11,7 +11,6 @@ import { NewComponentPlaceholders } from "./new-component-placeholders";
 import { CorePrimitives } from "./fixtures-core";
 import { ComplexPrimitives } from "./fixtures-complex";
 import { SidebarFixture } from "./sidebar-fixture";
-import { MarketplaceListingFixture } from "./marketplace-listing-fixture";
 import { LinerNotesFixture } from "./liner-notes-fixture";
 
 export const metadata: Metadata = {
@@ -54,15 +53,6 @@ export default function DesignFixturesPage() {
           </CardHeader>
           <CardContent>
             <NewComponentPlaceholders />
-          </CardContent>
-        </Card>
-
-        <Card className="border-line bg-surface backdrop-blur-none">
-          <CardHeader>
-            <CardTitle>Marketplace listing cards (§IV) — seeded six-state fixtures</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <MarketplaceListingFixture />
           </CardContent>
         </Card>
 

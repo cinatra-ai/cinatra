@@ -31,10 +31,8 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 //      right-aligned.
 //
 // PURE presentation: the interactive controls (the six-state install CTA and
-// the "More details" modal trigger) are supplied by the caller as slots, so
-// this exact component renders both the live marketplace screen (server-bound
-// forms) and the static design fixture (inert lookalikes) — one source of
-// truth for the card anatomy, provable on a production build without a DB.
+// the "More details" modal trigger) are supplied by the caller as slots —
+// one source of truth for the card anatomy.
 // ---------------------------------------------------------------------------
 
 /** First non-null link of the icon fallback chain: icon → vendor logo. */
@@ -179,9 +177,8 @@ export type MarketplaceListingCardProps = {
   accentColor: ExtensionAccent;
   /**
    * The six-state install CTA control (Install now / Installed / Update now /
-   * Restore / Installing… / greyed Incompatible) — supplied by the caller: the
-   * live screen binds server-action forms, the design fixture passes inert
-   * lookalikes.
+   * Restore / Installing… / greyed Incompatible) — supplied by the caller; the
+   * live screen binds server-action forms.
    */
   ctaControl: ReactNode;
   /** The centred underlined "More details" control (modal trigger). */

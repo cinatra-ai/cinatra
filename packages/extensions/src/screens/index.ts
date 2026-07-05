@@ -16,4 +16,3 @@ export type {
   MarketplaceCommerceBadge,
   MarketplaceCardCta,
 } from "./marketplace-card-model";
-export { MarketplaceListingCard } from "./marketplace-listing-card";
