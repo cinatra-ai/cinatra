@@ -22,7 +22,7 @@ import { POLICY_VERSION } from "@/lib/authz/actor-context";
 vi.mock("@cinatra-ai/connectors-catalog/descriptors.mjs", () => ({
   getConnectorDescriptorByPackageId: (pkg: string) =>
     pkg === "@test/catalog-connector"
-      ? { packageId: pkg, slug: "catalog", defaultVisibility: "admin" }
+      ? { packageId: pkg, slug: "catalog" }
       : undefined,
   CONNECTOR_DESCRIPTORS: [],
   listConnectorDescriptors: () => [],

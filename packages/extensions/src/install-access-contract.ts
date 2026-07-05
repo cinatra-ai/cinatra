@@ -16,20 +16,37 @@ import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
 import type { ExtensionKind } from "./permissions-kind-hooks";
 import { writeExtensionInstallAccessAtomic } from "./permissions-store";
+import {
+  connectorAccessDeclarationTier,
+  isResolvedConnectorAccessDeclaration,
+} from "./canonical-types";
 
 // ---------------------------------------------------------------------------
 // Per-kind install-time defaults.
 //
-// connector / artifact / workflow default to "workspace" (every same-org
-// member may use; the installer can tighten to "admin" at install). The
-// agent / skill kinds keep an "owner"-scoped default — their existing install
-// flows pass an explicit policy, this default is only the fail-safe.
+// artifact / workflow default to "workspace" (every same-org member may use;
+// the installer can tighten to "admin" at install). The agent / skill kinds
+// keep an "owner"-scoped default — their existing install flows pass an
+// explicit policy, this default is only the fail-safe.
+//
+// The CONNECTOR kind has NO static default (cinatra#955 closing wave — the
+// legacy `connector → WORKSPACE_DEFAULT` entry is deleted): a connector's
+// install-time access derives from its own shipped `cinatra/config.json`
+// declaration, cached on the canonical registration row by the install
+// pipeline / boot registration BEFORE this contract runs.
 // ---------------------------------------------------------------------------
 
 const WORKSPACE_DEFAULT: AgentAuthPolicy = Object.freeze({
   runListVisibility: "workspace",
   runDataVisibility: "workspace",
   runExecuteVisibility: "workspace",
+  allowRunSharing: false,
+}) as AgentAuthPolicy;
+
+const ADMIN_DEFAULT: AgentAuthPolicy = Object.freeze({
+  runListVisibility: "admin",
+  runDataVisibility: "admin",
+  runExecuteVisibility: "admin",
   allowRunSharing: false,
 }) as AgentAuthPolicy;
 
@@ -40,12 +57,14 @@ const OWNER_DEFAULT: AgentAuthPolicy = Object.freeze({
   allowRunSharing: false,
 }) as AgentAuthPolicy;
 
-const KIND_DEFAULT_ACCESS_POLICY: Record<ExtensionKind, AgentAuthPolicy> = {
+const KIND_DEFAULT_ACCESS_POLICY: Record<
+  Exclude<ExtensionKind, "connector">,
+  AgentAuthPolicy
+> = {
   agent_run: OWNER_DEFAULT,
   agent_template: OWNER_DEFAULT,
   skill_package: OWNER_DEFAULT,
   skill: OWNER_DEFAULT,
-  connector: WORKSPACE_DEFAULT,
   artifact: WORKSPACE_DEFAULT,
   workflow: WORKSPACE_DEFAULT,
   // A connection is owner-bound (cinatra#950): creating one NEVER auto-shares —
@@ -55,14 +74,59 @@ const KIND_DEFAULT_ACCESS_POLICY: Record<ExtensionKind, AgentAuthPolicy> = {
 };
 
 export function defaultAccessPolicyForKind(kind: ExtensionKind): AgentAuthPolicy {
+  if (kind === "connector") {
+    // Fail-closed: there is no static connector default (cinatra#955). The
+    // connector install default derives from the package's cached
+    // cinatra/config.json declaration — setExtensionInstallAccess resolves it
+    // from the canonical row; nothing else may invent a connector policy.
+    throw new Error(
+      "[install-access-contract] the connector kind has no static access default " +
+        "(cinatra#955) — its install policy derives from the cinatra/config.json " +
+        "declaration cached on the canonical registration row.",
+    );
+  }
   return KIND_DEFAULT_ACCESS_POLICY[kind];
+}
+
+/**
+ * Resolve the connector install-time default policy from the canonical row's
+ * cached `cinatra/config.json` declaration (cinatra#955): the declaration's
+ * 2-tier projection (`admin` scope → admin-only; every other scope →
+ * workspace). FAIL-CLOSED: a connector row without a structurally valid
+ * cached declaration throws — the caller must not fall back to a static
+ * default that no longer exists.
+ */
+async function connectorInstallPolicyFromDeclaration(
+  resourceId: string,
+): Promise<AgentAuthPolicy> {
+  const { readInstalledExtensionById } = await import("./canonical-store");
+  const row = await readInstalledExtensionById(resourceId);
+  if (!row || row.kind !== "connector") {
+    throw new Error(
+      `[install-access-contract] no canonical connector row for resource ${resourceId} — ` +
+        "cannot derive the install-time access policy (cinatra#955).",
+    );
+  }
+  const declaration = row.accessDeclaration ?? null;
+  if (declaration === null || !isResolvedConnectorAccessDeclaration(declaration)) {
+    throw new Error(
+      `[install-access-contract] connector ${row.packageName} has no valid cached ` +
+        "access declaration on its registration row — cannot derive the install-time " +
+        "access policy (cinatra#955; the install pipeline caches it before access setup).",
+    );
+  }
+  return connectorAccessDeclarationTier(declaration) === "admin"
+    ? ADMIN_DEFAULT
+    : WORKSPACE_DEFAULT;
 }
 
 export type ExtensionInstallAccessInput = {
   kind: ExtensionKind;
   /** Canonical resource_id (installed_extension.id for connector/artifact/workflow). */
   resourceId: string;
-  /** Explicit access policy; falls back to the per-kind default when omitted. */
+  /** Explicit access policy. When omitted: connector derives from the cached
+   *  cinatra/config.json declaration (cinatra#955); other kinds fall back to
+   *  the per-kind default. */
   policy?: AgentAuthPolicy;
   /** Additional co-owner user ids to seed at install. */
   coOwnerUserIds?: string[];
@@ -93,7 +157,14 @@ export type ExtensionInstallAccessInput = {
 export async function setExtensionInstallAccess(
   input: ExtensionInstallAccessInput,
 ): Promise<void> {
-  const requested = input.policy ?? defaultAccessPolicyForKind(input.kind);
+  const requested =
+    input.policy ??
+    (input.kind === "connector"
+      ? // cinatra#955: the connector default derives from the package's OWN
+        // cinatra/config.json declaration (cached on the canonical row by the
+        // install pipeline / boot registration before access setup runs).
+        await connectorInstallPolicyFromDeclaration(input.resourceId)
+      : defaultAccessPolicyForKind(input.kind));
   // Validate up front — reject a malformed policy rather than persisting an
   // unknown visibility value that enforceExtensionAccess would later deny.
   const { AgentAuthPolicySchema } = await import("@cinatra-ai/agents/auth-policy");

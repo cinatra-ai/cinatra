@@ -10,14 +10,15 @@ import { describe, it, expect } from "vitest";
 
 import {
   CONNECTOR_ACCESS_DECLARATION_SCOPES,
+  connectorAccessDeclarationTier,
   isResolvedConnectorAccessDeclaration as mirrorGuard,
 } from "../canonical-types";
 import {
   CONNECTOR_ACCESS_SCOPES,
   CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,
+  connectorAccessVisibilityTier,
   isResolvedConnectorAccessDeclaration as sdkGuard,
   parseConnectorAccessConfig,
-  resolveAbsentConnectorAccessConfig,
 } from "@cinatra-ai/sdk-extensions/access-config";
 
 describe("access-declaration mirror parity (canonical-types ↔ sdk access-config)", () => {
@@ -37,11 +38,28 @@ describe("access-declaration mirror parity (canonical-types ↔ sdk access-confi
         expect(sdkGuard(roundTripped)).toBe(true);
       }
     }
-    const absent = resolveAbsentConnectorAccessConfig({
-      packageName: "@cinatra-ai/openai-connector",
-      surface: "install",
-    });
-    expect(mirrorGuard(JSON.parse(JSON.stringify(absent)))).toBe(true);
+    // A row cached BEFORE the cinatra#955 cutover carries source:"absent" —
+    // the absence rule now refuses instead of resolving, so pin the persisted
+    // legacy shape literally: both guards must keep accepting it.
+    const preCutoverAbsent = {
+      formatVersion: CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,
+      mode: "only",
+      scope: "admin",
+      source: "absent",
+    };
+    expect(mirrorGuard(JSON.parse(JSON.stringify(preCutoverAbsent)))).toBe(true);
+    expect(sdkGuard(JSON.parse(JSON.stringify(preCutoverAbsent)))).toBe(true);
+  });
+
+  it("the 2-tier projections agree across the full scope vocabulary (cinatra#955)", () => {
+    for (const scope of CONNECTOR_ACCESS_SCOPES) {
+      expect(connectorAccessDeclarationTier({ scope })).toBe(
+        connectorAccessVisibilityTier({ scope }),
+      );
+    }
+    expect(connectorAccessDeclarationTier({ scope: "admin" })).toBe("admin");
+    expect(connectorAccessDeclarationTier({ scope: "workspace" })).toBe("workspace");
+    expect(connectorAccessDeclarationTier({ scope: "user" })).toBe("workspace");
   });
 
   it("both guards reject the same malformed shapes", () => {

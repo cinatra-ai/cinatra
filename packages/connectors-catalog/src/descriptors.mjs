@@ -27,7 +27,6 @@
  * @property {string} packageId - npm package id (e.g. `@cinatra-ai/openai-connector`)
  * @property {string} slug - URL slug under `/connectors/cinatra-ai/<slug>/` (matches extension directory name)
  * @property {string} displayName - user-facing label on the /connectors card
- * @property {"admin" | "workspace"} defaultVisibility - default visibility tier seeded by the dev fixture
  * @property {string[]} mcpPrimitivePrefixes - prefix list used by the connectorDependencies backfill (e.g. `["apollo_"]`)
  * @property {string} setupSubroute - dispatch sub-route segment (always `"setup"`; reserved for future use)
  */
@@ -51,21 +50,18 @@ const RAW_DESCRIPTORS = [
   {
     slug: "openai-connector",
     displayName: "OpenAI",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["openai_"],
     setupSubroute: "setup",
   },
   {
     slug: "anthropic-connector",
     displayName: "Anthropic",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["anthropic_"],
     setupSubroute: "setup",
   },
   {
     slug: "gemini-connector",
     displayName: "Gemini",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["gemini_"],
     setupSubroute: "setup",
   },
@@ -74,63 +70,54 @@ const RAW_DESCRIPTORS = [
     // and any MCP-compatible client that connects to Cinatra via OAuth.
     slug: "mcp-client-connector",
     displayName: "MCP Clients",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   },
   {
     slug: "gmail-connector",
     displayName: "Gmail",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: ["gmail_"],
     setupSubroute: "setup",
   },
   {
     slug: "google-calendar-connector",
     displayName: "Google Calendar",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: ["google_calendar_", "appointment_schedule_"],
     setupSubroute: "setup",
   },
   {
     slug: "apollo-connector",
     displayName: "Apollo",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: ["apollo_"],
     setupSubroute: "setup",
   },
   {
     slug: "apify-connector",
     displayName: "Apify",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: ["apify_"],
     setupSubroute: "setup",
   },
   {
     slug: "linkedin-connector",
     displayName: "LinkedIn",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: ["linkedin_"],
     setupSubroute: "setup",
   },
   {
     slug: "youtube-connector",
     displayName: "YouTube",
-    defaultVisibility: "workspace",
     mcpPrimitivePrefixes: ["youtube_"],
     setupSubroute: "setup",
   },
   {
     slug: "wordpress-mcp-connector",
     displayName: "WordPress MCP",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["wordpress_"],
     setupSubroute: "setup",
   },
   {
     slug: "drupal-mcp-connector",
     displayName: "Drupal MCP",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["drupal_"],
     setupSubroute: "setup",
   },
@@ -139,42 +126,36 @@ const RAW_DESCRIPTORS = [
     // retired /configuration/assistants/wordpress-widget admin page).
     slug: "wordpress-assistant-connector",
     displayName: "WordPress Assistant",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   },
   {
     slug: "drupal-assistant-connector",
     displayName: "Drupal Assistant",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   },
   {
     slug: "tailscale-connector",
     displayName: "Tailscale",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["tailscale_"],
     setupSubroute: "setup",
   },
   {
     slug: "github-connector",
     displayName: "GitHub",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["github_"],
     setupSubroute: "setup",
   },
   {
     slug: "a2a-server-connector",
     displayName: "A2A Servers",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["a2a_"],
     setupSubroute: "setup",
   },
   {
     slug: "google-oauth-connector",
     displayName: "Google",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["google_oauth_"],
     setupSubroute: "setup",
   },
@@ -186,7 +167,6 @@ const RAW_DESCRIPTORS = [
   {
     slug: "linkedin-oauth-connector",
     displayName: "LinkedIn OAuth",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   },
@@ -196,7 +176,6 @@ const RAW_DESCRIPTORS = [
   {
     slug: "twenty-connector",
     displayName: "Twenty CRM",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["crm_", "twenty_"],
     setupSubroute: "setup",
   },
@@ -208,7 +187,6 @@ const RAW_DESCRIPTORS = [
   {
     slug: "plane-connector",
     displayName: "Plane",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["plane_"],
     setupSubroute: "setup",
   },
@@ -220,7 +198,6 @@ const RAW_DESCRIPTORS = [
   {
     slug: "mcp-server-connector",
     displayName: "MCP Servers",
-    defaultVisibility: "admin",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   },

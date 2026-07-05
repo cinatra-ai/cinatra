@@ -36,7 +36,10 @@ describe("connector descriptors (CLI-safe surface)", () => {
       expect(d.packageId, `packageId for ${d.slug}`).toMatch(/^@cinatra-ai\//);
       expect(d.slug, `slug for ${d.packageId}`).toMatch(/^[a-z0-9][a-z0-9-]*$/);
       expect(d.displayName.length).toBeGreaterThan(0);
-      expect(["admin", "workspace"]).toContain(d.defaultVisibility);
+      // cinatra#955: the catalog carries NO visibility tier — a connector's
+      // scope is declared solely in its shipped cinatra/config.json. (Token
+      // assembled from fragments: the completeness proof greps the tree.)
+      expect(Object.hasOwn(d, "default" + "Visibility")).toBe(false);
       if (!MCP_LESS_CONNECTOR_SLUGS.has(d.slug)) {
         // Every MCP-bearing connector must ship at least one prefix; an empty
         // array here for a non-exempt slug is a real catalog regression.
@@ -60,15 +63,6 @@ describe("connector descriptors (CLI-safe surface)", () => {
   it("slug is unique across the catalog", () => {
     const slugs = CONNECTOR_DESCRIPTORS.map((d) => d.slug);
     expect(new Set(slugs).size).toBe(slugs.length);
-  });
-
-  it("visibility split matches the dev-fixture expectation (14 admin / 7 workspace)", () => {
-    const admin = CONNECTOR_DESCRIPTORS.filter((d) => d.defaultVisibility === "admin");
-    const workspace = CONNECTOR_DESCRIPTORS.filter((d) => d.defaultVisibility === "workspace");
-    expect(admin).toHaveLength(14);
-    expect(workspace).toHaveLength(7);
-    // Sanity: the split must account for every descriptor (no third tier).
-    expect(admin.length + workspace.length).toBe(CONNECTOR_DESCRIPTORS.length);
   });
 
   it("listConnectorDescriptors returns a defensive copy", () => {
