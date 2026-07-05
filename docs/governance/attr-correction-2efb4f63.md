@@ -13,8 +13,8 @@ PR #1000 (item 7 of #988) reconciles `EXTENSION_ACCENTS` — in both
 design spec's seven categorical accent hexes, and pairs it with the
 `migrations/core/core__0016_accent-palette-spec-categorical.mjs` DB `CHECK`
 migration (plus its `migrations/manifest.json` entry) that remaps persisted
-`accent_color` values on both surfaces and swaps the constraint. It closes
-#988 and was merged to `main` as squash commit
+`accent_color` values on both surfaces and swaps the constraint. It closes `#988`
+and was merged to `main` as squash commit
 `2efb4f639b205142a747bfe9009b4415de58664b`.
 
 Because the change touches `migrations/**`, it matches the `**/migrations/**`
@@ -33,7 +33,7 @@ The PR-head working commit (`aafd7229f0768789ca670566fbf489a85f9c2cd2`,
 core__0016 CHECK/remap migration (#988 item 7)") carried both material
 contributors in the gate's accepted form:
 
-```
+```text
 Assisted-by: Claude Code (claude-fable-5)
 Assisted-by: Codex CLI (gpt-5.5)
 ```
@@ -43,7 +43,7 @@ shape, the remap/CHECK ordering, and the live-Postgres verification
 sequence). But the GitHub squash-merge synthesis for #1000 carried forward
 only the first `Assisted-by` line — the merge commit's trailer block reads:
 
-```
+```text
 Assisted-by: Claude Code (claude-fable-5)
 Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 ```
@@ -74,7 +74,7 @@ working commit — and the actual authorship of the diff — already recorded.
 The verification record `2efb4f639b205142a747bfe9009b4415de58664b` should
 have carried is:
 
-```
+```text
 Assisted-by: Claude Code (claude-fable-5)
 Assisted-by: Codex CLI (gpt-5.5)
 Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
