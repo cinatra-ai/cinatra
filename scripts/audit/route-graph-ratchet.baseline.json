@@ -2,9 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 132,
-    "/api/mcp": 1326,
-    "/chat": 1364,
-    "/api/a2a": 1332,
-    "/api/llm-bridge": 1336
+    "/api/mcp": 1327,
+    "/chat": 1365,
+    "/api/a2a": 1333,
+    "/api/llm-bridge": 1337
+  },
+  "absorbs": {
+    "/api/mcp": {
+      "from": 1326,
+      "to": 1327,
+      "reason": "cinatra#967 (W3 residue of #952/#953): new shared src/lib/instance-connection-actor.ts module (owner-aware identity seeding + actor threading for the wordpress/drupal/linkedin instance-connector flows) is reachable from this route via wordpress-api.ts/drupal-api.ts/drupal-mcp-connection.ts/linkedin-api.ts",
+      "pr": 1013
+    },
+    "/chat": {
+      "from": 1364,
+      "to": 1365,
+      "reason": "cinatra#967 (W3 residue of #952/#953): new shared src/lib/instance-connection-actor.ts module (owner-aware identity seeding + actor threading for the wordpress/drupal/linkedin instance-connector flows) is reachable from this route via wordpress-api.ts/drupal-api.ts/drupal-mcp-connection.ts/linkedin-api.ts",
+      "pr": 1013
+    },
+    "/api/a2a": {
+      "from": 1332,
+      "to": 1333,
+      "reason": "cinatra#967 (W3 residue of #952/#953): new shared src/lib/instance-connection-actor.ts module (owner-aware identity seeding + actor threading for the wordpress/drupal/linkedin instance-connector flows) is reachable from this route via wordpress-api.ts/drupal-api.ts/drupal-mcp-connection.ts/linkedin-api.ts",
+      "pr": 1013
+    },
+    "/api/llm-bridge": {
+      "from": 1336,
+      "to": 1337,
+      "reason": "cinatra#967 (W3 residue of #952/#953): new shared src/lib/instance-connection-actor.ts module (owner-aware identity seeding + actor threading for the wordpress/drupal/linkedin instance-connector flows) is reachable from this route via wordpress-api.ts/drupal-api.ts/drupal-mcp-connection.ts/linkedin-api.ts",
+      "pr": 1013
+    }
   }
 }
