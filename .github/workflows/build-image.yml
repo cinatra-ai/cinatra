@@ -909,6 +909,26 @@ jobs:
       - name: Core -> extension instance-coupling gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs scripts/audit/__tests__/strip-comments.test.mjs scripts/audit/__tests__/extension-reference-classification.test.mjs
 
+      # Vendor-token core gate (cinatra#973 — epic #978: core owns integration
+      # MECHANISM, never vendor CODE). The lexeme gates above pin extension
+      # PACKAGE references; this one catches core code that names the VENDOR
+      # directly (the PR #969 gap): a vendor-named file, directory/route
+      # segment, or import specifier under src/ + packages/, outside the
+      # sanctioned surfaces enumerated in scripts/audit/extension-coupling-gates.md.
+      # SHRINK-ONLY ratchet: the committed baseline is today's residual floor;
+      # a NEW occurrence fails immediately, a removed one must ratchet the
+      # baseline down (stale entries fail), --write-baseline refuses growth.
+      - name: Vendor-token core gate (shrink-only ratchet)
+        env:
+          # Monotonic guard: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the other
+          # ratchet gates use.
+          VENDOR_TOKEN_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/vendor-token-core-gate.mjs
+
+      - name: Vendor-token core gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/vendor-token-core-gate.test.mjs
+
       # Identity-surface coupling gate (identity-surface ruling).
       # The pinned-empty coupling gates pin a LEXEME (package name / path), not
       # extension IDENTITY. This stateless gate blocks the two DANGEROUS
