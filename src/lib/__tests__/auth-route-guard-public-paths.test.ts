@@ -155,12 +155,19 @@ describe("auth-route-guard - cinatra#407 hosted /widget-auth surface", () => {
 describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
   // The WP plugin / Drupal module extraction narrowed the public WordPress
   // surface from the broad legacy `/api/wordpress-widget` prefix to the precise
-  // `/api/wordpress/bundle.js` bundle path. Broadening it back to `/api/wordpress`
-  // would expose EVERY WordPress API route unauthenticated. These regressions are a
-  // source edit, so a source-text pin (matching this file's style) is the right guard.
+  // `/api/wordpress/bundle.js` bundle path; cinatra#977 then DELETED the dead
+  // pre-Option-A bundle routes together with that exemption (the vendored
+  // plugin/module widget copies are the only shipped widget source — see
+  // docs/widget-source-of-truth.md). No `/api/wordpress` public entry of ANY
+  // width may come back: the precise one would exempt a nonexistent route, a
+  // broad prefix would expose EVERY WordPress API route unauthenticated. These
+  // regressions are a source edit, so a source-text pin (matching this file's
+  // style) is the right guard.
 
-  it("exposes the PRECISE WordPress bundle path, never a broad /api/wordpress prefix", () => {
-    expect(guardSource).toMatch(/"\/api\/wordpress\/bundle\.js"/);
+  it("keeps the retired bundle.js exemption removed and never exempts an /api/wordpress prefix", () => {
+    // The dead widget-bundle route was removed (cinatra#411 disposition,
+    // executed by cinatra#977) — its public-path exemption must stay gone.
+    expect(guardSource).not.toMatch(/"\/api\/wordpress\/bundle\.js"/);
     // The broad prefix entry must NOT exist (would make all WP API routes public).
     expect(guardSource).not.toMatch(/"\/api\/wordpress"/);
   });
@@ -168,14 +175,6 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
   it("drops the pre-rename `*-widget` public prefixes", () => {
     expect(guardSource).not.toMatch(/"\/api\/wordpress-widget"/);
     expect(guardSource).not.toMatch(/"\/api\/drupal-widget"/);
-  });
-
-  it("keeps the 'do NOT broaden' guard comment on the WordPress bundle entry", () => {
-    const line = guardSource
-      .split("\n")
-      .find((l) => l.includes('"/api/wordpress/bundle.js"'));
-    expect(line).toBeDefined();
-    expect((line ?? "").toLowerCase()).toMatch(/do not broaden/);
   });
 
   // Helper: extract the array entries of a single generated `export const NAME`

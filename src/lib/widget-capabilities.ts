@@ -36,8 +36,8 @@ import {
 // SECURITY: the endpoint is AUTH-FREE and MUST leak NOTHING instance-specific —
 // no instance data, no auth config keys, no package names, no installed-extension
 // internals. The shape below is intentionally all static contract constants
-// plus the slug echoed from the path (`bundle.js` is already public, so this
-// leaks no more). The SSE frame list is the FROZEN wire format.
+// plus the slug echoed from the path (the caller supplied that slug, so the
+// echo leaks nothing). The SSE frame list is the FROZEN wire format.
 // ---------------------------------------------------------------------------
 
 export type WidgetCapabilityFlags = {
