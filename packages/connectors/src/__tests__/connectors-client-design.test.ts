@@ -216,9 +216,9 @@ describe("ConnectorsClient design-system contract", () => {
       expect(sepAfterIdx).toBeLessThan(spacerIdx);
     });
 
-    it("also flanks the flex-1 spacer with a hairline ToolbarSeparator before the sort control (matches the design repo's §VII reference markup)", () => {
-      // design/specs/app.html's §VII example divides EVERY toolbar gap,
-      // including both sides of the spacer — not just around +Connector.
+    it("also flanks the flex-1 spacer with a hairline ToolbarSeparator before the sort control (§VII)", () => {
+      // §VII divides EVERY toolbar gap, including both sides of the spacer —
+      // not just around +Connector.
       const spacerIdx = SRC.indexOf('<div aria-hidden className="flex-1" />');
       const sortIdx = SRC.indexOf("<SlidersHorizontal");
       const sepAfterSpacerIdx = SRC.indexOf("<ToolbarSeparator />", spacerIdx);
