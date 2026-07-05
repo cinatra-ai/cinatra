@@ -1480,6 +1480,9 @@ importers:
       '@cinatra-ai/registries':
         specifier: workspace:*
         version: link:../registries
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../sdk-extensions
       '@cinatra-ai/sdk-ui':
         specifier: workspace:*
         version: link:../sdk-ui
@@ -1702,6 +1705,9 @@ importers:
       '@cinatra-ai/registries':
         specifier: workspace:*
         version: link:../registries
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../sdk-extensions
       '@cinatra-ai/workflows':
         specifier: workspace:*
         version: link:../workflows
@@ -1883,6 +1889,9 @@ importers:
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../sdk-extensions
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)

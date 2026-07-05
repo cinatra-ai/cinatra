@@ -1,36 +1,36 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 132,
-    "/api/mcp": 1329,
-    "/chat": 1367,
-    "/api/a2a": 1335,
-    "/api/llm-bridge": 1339
+    "/api/mcp": 1330,
+    "/chat": 1368,
+    "/api/a2a": 1336,
+    "/api/llm-bridge": 1340
   },
   "absorbs": {
     "/api/mcp": {
       "from": 1328,
-      "to": 1329,
-      "reason": "cinatra#981 \u2014 the new host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory) is one new first-party module reachable from extension-host-context.ts, on this route's graph.",
-      "pr": 1010
+      "to": 1330,
+      "reason": "cinatra#981 + cinatra#979 (combined PR #1020): two new first-party leaf modules stack on this route post-#1018 (which already raised the ceiling by +1 to 1328). (1) #981/#1010 adds the host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory), reachable from extension-host-context.ts on this route; (2) #979/#1011 canonicalizes ARTIFACT_ALLOWED_CINATRA_KEYS so packages/agents/src/mcp/handlers.ts imports the canonical set from @cinatra-ai/sdk-extensions/artifact-contract (+1 reachable leaf artifact-contract.ts). Combined absorbed raise 1328->1330.",
+      "pr": 1020
     },
     "/chat": {
       "from": 1366,
-      "to": 1367,
-      "reason": "cinatra#981 \u2014 the new host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory) is one new first-party module reachable from extension-host-context.ts, on this route's graph.",
-      "pr": 1010
+      "to": 1368,
+      "reason": "cinatra#981 + cinatra#979 (combined PR #1020): two new first-party leaf modules stack on this route post-#1018 (which already raised the ceiling by +1 to 1366). (1) #981/#1010 adds the host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory), reachable from extension-host-context.ts on this route; (2) #979/#1011 canonicalizes ARTIFACT_ALLOWED_CINATRA_KEYS so packages/agents/src/mcp/handlers.ts imports the canonical set from @cinatra-ai/sdk-extensions/artifact-contract (+1 reachable leaf artifact-contract.ts). Combined absorbed raise 1366->1368.",
+      "pr": 1020
     },
     "/api/a2a": {
       "from": 1334,
-      "to": 1335,
-      "reason": "cinatra#981 \u2014 the new host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory) is one new first-party module reachable from extension-host-context.ts, on this route's graph.",
-      "pr": 1010
+      "to": 1336,
+      "reason": "cinatra#981 + cinatra#979 (combined PR #1020): two new first-party leaf modules stack on this route post-#1018 (which already raised the ceiling by +1 to 1334). (1) #981/#1010 adds the host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory), reachable from extension-host-context.ts on this route; (2) #979/#1011 canonicalizes ARTIFACT_ALLOWED_CINATRA_KEYS so packages/agents/src/mcp/handlers.ts imports the canonical set from @cinatra-ai/sdk-extensions/artifact-contract (+1 reachable leaf artifact-contract.ts). Combined absorbed raise 1334->1336.",
+      "pr": 1020
     },
     "/api/llm-bridge": {
       "from": 1338,
-      "to": 1339,
-      "reason": "cinatra#981 \u2014 the new host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory) is one new first-party module reachable from extension-host-context.ts, on this route's graph.",
-      "pr": 1010
+      "to": 1340,
+      "reason": "cinatra#981 + cinatra#979 (combined PR #1020): two new first-party leaf modules stack on this route post-#1018 (which already raised the ceiling by +1 to 1338). (1) #981/#1010 adds the host-owned src/lib/extension-log-capture.ts module (backing HostLoggerPort.capture/captureDirectory), reachable from extension-host-context.ts on this route; (2) #979/#1011 canonicalizes ARTIFACT_ALLOWED_CINATRA_KEYS so packages/agents/src/mcp/handlers.ts imports the canonical set from @cinatra-ai/sdk-extensions/artifact-contract (+1 reachable leaf artifact-contract.ts). Combined absorbed raise 1338->1340.",
+      "pr": 1020
     }
   }
 }
