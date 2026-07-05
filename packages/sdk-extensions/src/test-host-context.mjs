@@ -323,6 +323,7 @@ export function createTestHostContext(opts = {}) {
     jobsEnqueued: [],
     notificationsEmitted: [],
     telemetryEmitted: [],
+    capturesWritten: [],
   };
 
   // Live in-memory fixture stores. Seeds are namespaced by the raw key the
@@ -377,6 +378,14 @@ export function createTestHostContext(opts = {}) {
     info: noop,
     warn: noop,
     error: noop,
+    // cinatra#981 — host-owned capture: records to `recorder.capturesWritten`
+    // (assert on it the same way as `recorder.notificationsEmitted` etc.)
+    // rather than touching the real filesystem in the author test harness.
+    capture: async (channel, entry) => {
+      recorder.capturesWritten.push({ channel, entry });
+    },
+    captureDirectory: (channel) =>
+      `test-harness/capture/${sanitizeAtom(packageName)}/${sanitizeAtom(channel)}`,
   };
 
   const runtime = {
@@ -660,5 +669,6 @@ export function summarizeRecorder(recorder) {
   }
   if (recorder.notificationsEmitted.length) lines.push(`notifications emitted: ${recorder.notificationsEmitted.length}`);
   if (recorder.telemetryEmitted.length) lines.push(`telemetry events: ${recorder.telemetryEmitted.length}`);
+  if (recorder.capturesWritten.length) lines.push(`log captures written: ${recorder.capturesWritten.length}`);
   return lines;
 }

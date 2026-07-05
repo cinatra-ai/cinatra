@@ -12,15 +12,16 @@ privileged host capability through the injected `ctx` ports — never via a
 
 - **`register(ctx)` host-port surface** (`ExtensionHostContext`) — the privileged
   ports the host injects at activation: `db`, `settings`, `secrets`, `nango`,
-  `authSession`, `mcp`, `objects`, `jobs`, `notifications`, `ui`, `logger`,
-  `runtime`, `capabilities`, and `telemetry`.
+  `authSession`, `mcp`, `objects`, `jobs`, `notifications`, `ui`, `logger`
+  (including the host-owned request/response `capture`), `runtime`,
+  `capabilities`, and `telemetry`.
 - **Manifest + dependency contracts** — the `cinatra.*` package-manifest shape,
   the dependency-graph types, and the package-export contract.
 - **Loader / registry types** — the shared activation driver and ABI-range check.
 
 ## ABI version
 
-The SDK ABI is **`2.2.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
+The SDK ABI is **`2.3.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
 [`src/register.ts`](src/register.ts) — the authoritative source of truth, also
 mirrored as `cinatra.sdkAbiVersion` in this package's `package.json`). A CI gate
 asserts this README, the `register.ts` constant, and the `package.json` field
@@ -51,6 +52,9 @@ The ABI is semantic-versioned independently of the npm package version (see
 - **`2.1.0`** — added optional `mcp.getPublicBaseUrl`.
 - **`2.2.0`** — added optional `nango` render-time getters: `getStatus`,
   `getFrontendConfig`, `getPrimarySavedConnection(s)`, `listConnectionRecords`.
+- **`2.3.0`** — added optional `logger.capture`/`logger.captureDirectory` —
+  host-owned request/response log capture (replaces extension-side `node:fs`
+  logging, cinatra#981).
 
 ### ABI-evolution policy
 
@@ -150,8 +154,9 @@ Pick the *loosest* range that still guarantees the surface you use:
 - Need an **optional** method added in a MINOR? Either **feature-detect** it
   (`if (ctx.mcp.getPublicBaseUrl) …`) and keep `^2`, or declare the floor that
   guarantees it: `>=2.1.0` for `mcp.getPublicBaseUrl`, `>=2.2.0` for the `nango`
-  render-time getters. Feature-detection keeps your extension installable on
-  older hosts; a hard floor refuses activation there instead.
+  render-time getters, `>=2.3.0` for `logger.capture`/`logger.captureDirectory`.
+  Feature-detection keeps your extension installable on older hosts; a hard
+  floor refuses activation there instead.
 - Avoid exact (`2.2.0`) and tilde-minor (`~2.2`) pins unless you genuinely
   cannot tolerate a forward MINOR — they reject a perfectly compatible newer
   host.
