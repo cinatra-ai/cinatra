@@ -167,7 +167,9 @@ export function createConnectorExtensionHandler(
      *   - has `cinatra.kind === "connector"` in package.json
      *   - package name matches the generic-vendor pattern
      *     `@<vendor>/<slug>-connector`
-     *   - `cinatra.visibility` (when set) is "admin" or "workspace"
+     *   - `cinatra.visibility` is ABSENT (cinatra#955: the manifest
+     *     visibility axis is deleted for kind=connector — scope is declared
+     *     in `cinatra/config.json` only; presence is a validation error)
      *
      * Vendor-agnosticism note: this handler, and the catalog-descriptor /
      * connector-policy-preflight / publish-purge validation surfaces it
@@ -193,8 +195,9 @@ export function createConnectorExtensionHandler(
         // Generic-vendor regex with a strict policy boundary: any
         // `@<vendor>/<slug>-connector` package is admissible, but the
         // boundary (kind:"connector" + package-name-to-realpath match under
-        // extensions/<vendor>/<slug>-connector + default admin visibility
-        // + static loader entries only) is enforced unchanged. Generic
+        // extensions/<vendor>/<slug>-connector + the cinatra/config.json
+        // access declaration + static loader entries only) is enforced
+        // unchanged. Generic
         // vendor scopes widen the namespace, while this boundary prevents
         // the widening from becoming a permissive wildcard.
         errors.push(
@@ -208,13 +211,15 @@ export function createConnectorExtensionHandler(
           `package.json must declare \`cinatra.kind: "connector"\` (got ${JSON.stringify(kind)})`,
         );
       }
-      // `cinatra.visibility` is optional; when absent the policy default is
-      // "admin" (applied at registration time, not a validate-time error).
-      // When set, it must be a known value.
-      const visibility = s.cinatra?.visibility;
-      if (visibility !== undefined && visibility !== "admin" && visibility !== "workspace") {
+      // cinatra#955 (closing wave): the manifest `cinatra.visibility` axis is
+      // DELETED for kind=connector — a connector declares its scope in
+      // `cinatra/config.json` (the single source). Its PRESENCE, with any
+      // value, is a validation error so the legacy axis cannot creep back.
+      if (typeof s.cinatra === "object" && s.cinatra !== null && "visibility" in s.cinatra) {
         errors.push(
-          `package.json \`cinatra.visibility\` (when set) must be "admin" or "workspace" (got ${JSON.stringify(visibility)})`,
+          "package.json `cinatra.visibility` is not accepted for kind=connector " +
+            "(deleted by the connector-scoping closing wave, cinatra#955) — declare " +
+            "the scope in cinatra/config.json instead",
         );
       }
       return { valid: errors.length === 0, errors: errors.length ? errors : undefined };
@@ -228,8 +233,9 @@ export function createConnectorExtensionHandler(
     // surfaces only when its `packageId` is BOTH lifecycle-live AND owner-visible.
     //
     // This is lifecycle discovery, not the read/use/manage gate. The
-    // descriptor's `defaultVisibility` (admin | workspace) is deliberately NOT
-    // enforced here — connector-policy owns that downstream decision.
+    // connector's declared access tier (from cinatra/config.json) is
+    // deliberately NOT enforced here — connector-policy owns that downstream
+    // decision.
     async listActive({ scope, manifests }) {
       const live = visibleManifestPackageNames(manifests, scope);
       return listConnectorDescriptors().filter((d) => live.has(d.packageId));
@@ -261,21 +267,6 @@ export function createConnectorExtensionHandler(
  */
 export const GENERIC_VENDOR_CONNECTOR_NAME_RE =
   /^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*-connector$/;
-
-/**
- * defaultConnectorVisibility resolves the policy default for
- * `cinatra.visibility` when the package.json omits the field.
- *
- * Used by registration-time policy enforcement (NOT by validate() - a
- * missing visibility is not a spec error; it's a defaulting decision).
- */
-export function defaultConnectorVisibility(spec: {
-  cinatra?: { visibility?: unknown };
-}): "admin" | "workspace" {
-  const v = spec.cinatra?.visibility;
-  if (v === "workspace") return "workspace";
-  return "admin";
-}
 
 /**
  * Package-name-to-realpath match.

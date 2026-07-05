@@ -38,7 +38,12 @@ import {
 } from "@/lib/nango-system";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { setExtensionInstallAccess } from "@cinatra-ai/extensions/install-access-contract";
-import { installExtensionManifest } from "@cinatra-ai/extensions/lifecycle-primitive";
+import {
+  installExtensionManifest,
+  recordExtensionAccessDeclaration,
+} from "@cinatra-ai/extensions/lifecycle-primitive";
+import { connectorAccessVisibilityTier } from "@cinatra-ai/sdk-extensions/access-config";
+import { readConnectorAccessDeclarationFromStore } from "@/lib/connector-access-config-host";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { randomUUID } from "node:crypto";
@@ -269,16 +274,26 @@ const DRUPAL_REMOTE_KEY_LABEL = "cinatra-dev";
 /**
  * Extract the Bearer remote key from `drush mcp-tools:remote-key-create` output.
  *
- * The command prints the key (often with surrounding log lines). We take the
- * last non-empty trimmed line and accept it only if it is a single opaque token
- * of plausible length. The validation regex is intentionally LINEAR (anchored
- * both ends, one character class, no nested quantifier) — `js/polynomial-redos`
- * safe. Returns null when no token-shaped line is present (caller soft-skips —
- * a failed mint must NEVER overwrite a working key).
+ * mcp_tools (>= 1.0.0-beta14) prints the key on an explicit `API Key: <token>`
+ * line and ENDS the output with a human notice ("Store this API key now; it
+ * cannot be shown again.") — so the labeled line is matched first. Older /
+ * porcelain-style outputs that end with a bare token line are still accepted
+ * as a fallback: the last non-empty trimmed line, only if it is a single
+ * opaque token of plausible length. Both validation regexes are intentionally
+ * LINEAR (anchored both ends, one character class, no nested quantifier) —
+ * `js/polynomial-redos` safe. Returns null when neither shape is present
+ * (caller soft-skips — a failed mint must NEVER overwrite a working key).
  *
  * SECRET BOUNDARY: the returned value is the Bearer; callers must never log it.
  */
 export function parseDrupalRemoteKey(out: string): string | null {
+  // Labeled form first: `API Key: <token>` on its own line (current mcp_tools;
+  // its trailing human notice would otherwise defeat the trailing-token parse).
+  // Whitespace is HORIZONTAL-only ([ \t], not \s): under /m a `^\s*` could
+  // consume newlines and backtrack across line starts on newline-heavy input
+  // (superlinear); anchored horizontal runs keep the scan linear per line.
+  const labeled = out.match(/^[ \t]*API Key:[ \t]*([A-Za-z0-9._=+/-]{16,512})[ \t]*$/m);
+  if (labeled) return labeled[1];
   const lines = out.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
@@ -1641,11 +1656,18 @@ export async function autoSetupLocalPlane(): Promise<Status> {
 // On first user registration (or first runDevAutoSetup invocation in dev
 // mode), find the earliest-created user, look up their primary org, and seed
 // the UNIFORM polymorphic access rows per connector descriptor: one org-owned
-// `installed_extension` (kind='connector') + one `extension_access_policy`
-// using each descriptor's default visibility. This replaces the legacy
-// `connector_access_policy` seed (writes to that table are now blocked). Re-runs
-// are idempotent — installed_extension is ensured on identity and the policy
-// upsert preserves a row's installer; existing canonical rows are left intact.
+// `installed_extension` (kind='connector') + one `extension_access_policy`.
+// The seed policy derives from each connector's OWN materialized
+// `cinatra/config.json` (extensions/<vendor>/<slug>/ in dev), read through the
+// SAME host reader + SDK validator the prod install pipeline uses
+// (cinatra#955 — the hand-catalog visibility-tier chain is deleted).
+// Ordering is fail-closed: the declaration is read BEFORE the row is ensured,
+// and it is CACHED on the row (org-owned rows shadow the static registration
+// rows in the connection use-gate's declaration resolution) — a connector
+// whose config cannot be read is skipped loudly, leaving no fresh row that
+// could resolve through a default. Re-runs are idempotent — installed_extension
+// is ensured on identity and the policy upsert preserves a row's installer;
+// existing canonical rows are left intact.
 // ---------------------------------------------------------------------------
 
 function policyForVisibility(visibility: "admin" | "workspace") {
@@ -1711,7 +1733,38 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
       })[0]?.rows as { id: string }[] | undefined
     )?.[0]?.id;
 
+  let failed = 0;
   for (const d of descriptors) {
+    // FIRST (cinatra#955, fail-closed ordering): resolve the connector's
+    // access declaration from its materialized dev package dir through the
+    // prod host reader (`readConnectorAccessDeclarationFromStore` — the single
+    // SDK validator; absence/corruption THROWS). A connector whose declaration
+    // cannot be read is skipped BEFORE any row is created.
+    const vendor = d.packageId.startsWith("@")
+      ? d.packageId.slice(1).split("/")[0]
+      : d.packageId.split("/")[0];
+    const storeDir = path.join(process.cwd(), "extensions", vendor, d.slug);
+    let declaration;
+    try {
+      declaration = await readConnectorAccessDeclarationFromStore(storeDir);
+    } catch (err) {
+      failed += 1;
+      console.error(
+        `[dev-auto-setup] connector fixture seed SKIPPED for ${d.packageId} — ` +
+          `could not resolve cinatra/config.json from ${storeDir}:`,
+        err instanceof Error ? err.message : err,
+      );
+      continue;
+    }
+    if (!declaration) {
+      failed += 1;
+      console.error(
+        `[dev-auto-setup] connector fixture seed SKIPPED for ${d.packageId} — ` +
+          `${storeDir} does not materialize a kind:"connector" package`,
+      );
+      continue;
+    }
+
     // Ensure the org-owned connector installed_extension row. Route the WRITE
     // through the canonical lifecycle primitive (installExtensionManifest) — NOT
     // raw SQL — so the canonical-gate-reach invariant holds and the manifest
@@ -1748,6 +1801,29 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
     }
     if (!installedExtensionId) continue;
 
+    // Cache the declaration on the seeded row: the org-owned row SHADOWS the
+    // static registration row in the connection use-gate's declaration
+    // resolution, so a null cache here would erase the `only` ceiling in dev.
+    // Declarations are not user-edited — an idempotent rewrite is safe (and
+    // re-run every dev boot, so a transient failure self-heals). On failure,
+    // FAIL CLOSED for this connector: skip the policy seed too (codex
+    // diff-round finding 2) — the card then gates on the shipped catalog
+    // default until the next boot recaches.
+    try {
+      await recordExtensionAccessDeclaration(installedExtensionId, declaration, {
+        actor: { source: "scheduler" },
+        reason: "dev connector fixture seed — cache cinatra/config.json declaration (cinatra#955)",
+      });
+    } catch (err) {
+      failed += 1;
+      console.error(
+        `[dev-auto-setup] could not cache the access declaration for ${d.packageId} — ` +
+          "skipping its policy seed (fail-closed):",
+        err instanceof Error ? err.message : err,
+      );
+      continue;
+    }
+
     // Only seed when NO access policy exists yet — never clobber a policy edited
     // in the UI after the first seed (setExtensionInstallAccess is ON CONFLICT
     // DO UPDATE, so an unconditional call would overwrite manual edits).
@@ -1766,11 +1842,22 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
     await setExtensionInstallAccess({
       kind: "connector",
       resourceId: installedExtensionId,
-      policy: policyForVisibility(d.defaultVisibility),
+      policy: policyForVisibility(connectorAccessVisibilityTier(declaration)),
       installedByUserId: ownerUserId,
     });
   }
 
+  if (failed > 0) {
+    // Fail-closed status: a skipped connector means its cinatra/config.json
+    // could not be resolved — surface it as an error so the dev boot log is
+    // loud (the skipped connector got NO fresh row and NO policy row).
+    return {
+      status: "error",
+      reason:
+        `${failed}/${descriptors.length} connector fixture seeds SKIPPED on unreadable ` +
+        `cinatra/config.json (${created} new rows created before/among the failures)`,
+    };
+  }
   return {
     status: created > 0 ? "created" : "already-wired",
     siteUrl: `org:${orgId}`,
@@ -1803,7 +1890,10 @@ function isStrictDevelopmentRuntime(): boolean {
 // production secret) the Playwright suite reads from the handoff file below to
 // drive the hosted-login popup. Min length 12 (matches the auth policy floor).
 const DEV_UAT_USER = {
-  email: "cinatra-uat@localhost",
+  // Dot-domain literal: better-auth's (zod) email schema rejects no-dot
+  // domains like `@localhost`, which would make this seed fail on every
+  // fresh DB. RFC 2606 reserves example.com; no mail is ever sent to it.
+  email: "cinatra-uat@example.com",
   name: "Cinatra UAT",
   // Assembled from fragments so no secret-scanner flags a literal credential.
   password: ["cinatra", "uat", "dev", "12345"].join("-"),

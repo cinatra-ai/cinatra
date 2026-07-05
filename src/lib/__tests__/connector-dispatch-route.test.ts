@@ -13,12 +13,27 @@ import {
 // DB in this unit test the canonical read would fail closed
 // (deny). Mock the resolver to "absent" to simulate the realistic pre-migration
 // state (canonical tables present, no connector rows yet) so these invariants
-// exercise the legacy descriptor-default fallback split they were written for.
+// exercise the catalog-default fallback split — since cinatra#955 that default
+// derives from each connector's SHIPPED cinatra/config.json (the generated
+// manifest pass-through), so the expectation below recomputes the tier from
+// the same shipped bytes through the SDK validator.
 vi.mock("@/lib/connector-access-resolver", () => ({
   resolveConnectorCanonicalAccessSync: () => ({ status: "absent" }),
 }));
 
 import { enforceConnectorPolicy } from "@/lib/connector-policy";
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import { parseConnectorAccessConfig } from "@cinatra-ai/sdk-extensions/access-config";
+
+// Independent recomputation of the 2-tier default from the shipped config —
+// absent/undeclared resolves "admin" (fail-closed), matching the host helper.
+function expectedTier(packageId: string): "admin" | "workspace" {
+  const raw = STATIC_EXTENSION_MANIFEST[packageId]?.accessConfig ?? null;
+  if (raw === null) return "admin";
+  return parseConnectorAccessConfig(raw, { packageName: packageId }).scope === "admin"
+    ? "admin"
+    : "workspace";
+}
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
@@ -84,14 +99,14 @@ describe("connector policy stub invariants", () => {
         "read",
       ).allowed;
       expect(allowed, `member visibility for ${d.slug}`).toBe(
-        d.defaultVisibility === "workspace",
+        expectedTier(d.packageId) === "workspace",
       );
     }
   });
 
   it("manage mode is admin-only even for workspace-visibility connectors", () => {
     const workspaceConnector = CONNECTOR_DESCRIPTORS.find(
-      (d) => d.defaultVisibility === "workspace",
+      (d) => expectedTier(d.packageId) === "workspace",
     );
     expect(workspaceConnector).toBeDefined();
     if (!workspaceConnector) return;

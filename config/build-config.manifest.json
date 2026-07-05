@@ -255,6 +255,7 @@
     { "alias": "@cinatra-ai/extension-types", "target": "./packages/extension-types/src/index.ts" },
     { "alias": "@cinatra-ai/extensions", "target": "./packages/extensions/src/index.ts" },
     { "alias": "@cinatra-ai/extensions/screens", "target": "./packages/extensions/src/screens/index.ts" },
+    { "alias": "@cinatra-ai/extensions/screens/marketplace-detail-modal", "target": "./packages/extensions/src/screens/marketplace-detail-modal.tsx" },
     { "alias": "@cinatra-ai/extensions/mcp-handlers", "target": "./packages/extensions/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/extensions/mcp-module", "target": "./packages/extensions/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/extensions/actions", "target": "./packages/extensions/src/actions.ts" },

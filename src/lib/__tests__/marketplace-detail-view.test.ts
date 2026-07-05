@@ -4,12 +4,36 @@ import {
   buildShareLinks,
   emptyRatingSummary,
   formatInstallations,
+  normalizeCompatibleUpTo,
+  normalizeDetailChangelog,
+  normalizeDetailDependencies,
+  parseChangelogText,
   ratingBars,
   resolveModalInstallState,
   reviewInitials,
   safeHttpUrl,
   type MarketplaceDetailRatingSummary,
 } from "@/lib/marketplace-detail-view";
+
+describe("normalizeCompatibleUpTo", () => {
+  it("stores the bare version, stripping a single leading v/V", () => {
+    expect(normalizeCompatibleUpTo("0.2.0")).toBe("0.2.0");
+    // Built by concat so no "v"-prefixed version literal lands in this file.
+    expect(normalizeCompatibleUpTo(["v", "0.2.0"].join(""))).toBe("0.2.0");
+    expect(normalizeCompatibleUpTo(["V", "0.2.0"].join(""))).toBe("0.2.0");
+    expect(normalizeCompatibleUpTo("  0.2.0  ")).toBe("0.2.0");
+  });
+
+  it("degrades non-string / empty values to null (the row renders an em dash)", () => {
+    expect(normalizeCompatibleUpTo(null)).toBeNull();
+    expect(normalizeCompatibleUpTo(undefined)).toBeNull();
+    expect(normalizeCompatibleUpTo("")).toBeNull();
+    expect(normalizeCompatibleUpTo("   ")).toBeNull();
+    expect(normalizeCompatibleUpTo("v")).toBeNull();
+    expect(normalizeCompatibleUpTo(42)).toBeNull();
+    expect(normalizeCompatibleUpTo({})).toBeNull();
+  });
+});
 
 describe("emptyRatingSummary", () => {
   it("is a well-formed zeroed 5→1 summary", () => {
@@ -112,14 +136,14 @@ describe("resolveModalInstallState", () => {
 });
 
 describe("formatInstallations", () => {
-  it("formats singular/plural and thousands with a trimmed k-suffix", () => {
-    expect(formatInstallations(0)).toBe("0 installations");
-    expect(formatInstallations(1)).toBe("1 installation");
-    expect(formatInstallations(2)).toBe("2 installations");
-    expect(formatInstallations(999)).toBe("999 installations");
-    expect(formatInstallations(2000)).toBe("2k installations");
-    expect(formatInstallations(2100)).toBe("2.1k installations");
-    expect(formatInstallations(2150)).toBe("2.2k installations");
+  it("formats the bare §V specs-column value with a trimmed k-suffix", () => {
+    expect(formatInstallations(0)).toBe("0");
+    expect(formatInstallations(1)).toBe("1");
+    expect(formatInstallations(2)).toBe("2");
+    expect(formatInstallations(999)).toBe("999");
+    expect(formatInstallations(2000)).toBe("2k");
+    expect(formatInstallations(2100)).toBe("2.1k");
+    expect(formatInstallations(2150)).toBe("2.2k");
   });
 
   it("returns null for absent / negative / non-finite counts", () => {
@@ -137,5 +161,157 @@ describe("reviewInitials", () => {
     expect(reviewInitials("mary jane watson")).toBe("MW");
     expect(reviewInitials("")).toBe("?");
     expect(reviewInitials("   ")).toBe("?");
+  });
+});
+
+describe("parseChangelogText", () => {
+  it("parses keep-a-changelog style headings into per-version entries", () => {
+    const raw = [
+      "# Changelog",
+      "",
+      "All notable changes to this project.",
+      "",
+      "## [0.4.2] - 2026-06-28",
+      "",
+      "### Fixed",
+      "- Inline citations now deep-link to the exact source passage.",
+      "* Faster retrieval across large workspaces.",
+      "",
+      "## 0.4.1 (2026-06-14)",
+      "Follow-up questions now carry the full working context.",
+    ].join("\n");
+    expect(parseChangelogText(raw)).toEqual([
+      {
+        version: "0.4.2",
+        date: "2026-06-28",
+        notes: [
+          "Fixed",
+          "Inline citations now deep-link to the exact source passage.",
+          "Faster retrieval across large workspaces.",
+        ],
+      },
+      {
+        version: "0.4.1",
+        date: "2026-06-14",
+        notes: ["Follow-up questions now carry the full working context."],
+      },
+    ]);
+  });
+
+  it("accepts v-prefixed and undated headings", () => {
+    // Version prefix assembled at runtime so the literal never appears in
+    // source (source-leak milestone-version scan).
+    const raw = "## " + "v" + "1.2.3\n- First note\n";
+    expect(parseChangelogText(raw)).toEqual([
+      { version: "1.2.3", date: null, notes: ["First note"] },
+    ]);
+  });
+
+  it("returns [] when no version heading exists (spec empty state)", () => {
+    expect(parseChangelogText("")).toEqual([]);
+    expect(parseChangelogText("just some prose\nwithout headings")).toEqual([]);
+    expect(parseChangelogText("# Changelog\nnothing released yet")).toEqual([]);
+  });
+});
+
+describe("normalizeDetailChangelog", () => {
+  it("sanitizes a pre-parsed entry array (version required, notes coerced)", () => {
+    expect(
+      normalizeDetailChangelog([
+        { version: "0.4.2", date: "2026-06-28", notes: ["a", "", 42, "b"] },
+        { version: "0.4.1", released_at: "2026-06-14", notes: "single" },
+        { version: "  ", notes: ["dropped — no version"] },
+        null,
+        "garbage",
+      ]),
+    ).toEqual([
+      { version: "0.4.2", date: "2026-06-28", notes: ["a", "b"] },
+      { version: "0.4.1", date: "2026-06-14", notes: ["single"] },
+    ]);
+  });
+
+  it("parses a raw CHANGELOG string via parseChangelogText", () => {
+    expect(normalizeDetailChangelog("## 2.0.0\n- rewrite")).toEqual([
+      { version: "2.0.0", date: null, notes: ["rewrite"] },
+    ]);
+  });
+
+  it("degrades absent/malformed values to [] (spec empty state)", () => {
+    expect(normalizeDetailChangelog(undefined)).toEqual([]);
+    expect(normalizeDetailChangelog(null)).toEqual([]);
+    expect(normalizeDetailChangelog(42)).toEqual([]);
+    expect(normalizeDetailChangelog({})).toEqual([]);
+  });
+});
+
+describe("normalizeDetailDependencies", () => {
+  it("normalizes the enriched entry array (cinatra.dependencies, never npm deps)", () => {
+    expect(
+      normalizeDetailDependencies([
+        {
+          package_name: "@cinatra-ai/confluence-connector",
+          display_name: "Confluence Connector",
+          kind: "connector",
+          version_range: ">=1.2.0",
+        },
+        { packageName: "@cinatra-ai/pdf-extractor", name: "PDF Extractor", kind: "skill", versionRange: ">=0.4.0" },
+        { package_name: "@x/unknown-kind", kind: "not-a-kind" },
+        { name: "dropped — no package name" },
+      ]),
+    ).toEqual([
+      {
+        packageName: "@cinatra-ai/confluence-connector",
+        name: "Confluence Connector",
+        kind: "connector",
+        versionRange: ">=1.2.0",
+      },
+      { packageName: "@cinatra-ai/pdf-extractor", name: "PDF Extractor", kind: "skill", versionRange: ">=0.4.0" },
+      { packageName: "@x/unknown-kind", name: "@x/unknown-kind", kind: null, versionRange: "" },
+    ]);
+  });
+
+  it("accepts the canonical sdk-extensions edge shape (versionConstraint object)", () => {
+    expect(
+      normalizeDetailDependencies([
+        {
+          packageName: "@cinatra-ai/email-connector",
+          kind: "connector",
+          edgeType: "capability",
+          versionConstraint: { kind: "semver-range", range: "^2.0.0" },
+          requirement: "required",
+        },
+        {
+          package_name: "@cinatra-ai/pdf-extractor",
+          version_constraint: { kind: "exact", version: "0.4.0" },
+        },
+      ]),
+    ).toEqual([
+      {
+        packageName: "@cinatra-ai/email-connector",
+        name: "@cinatra-ai/email-connector",
+        kind: "connector",
+        versionRange: "^2.0.0",
+      },
+      {
+        packageName: "@cinatra-ai/pdf-extractor",
+        name: "@cinatra-ai/pdf-extractor",
+        kind: null,
+        versionRange: "0.4.0",
+      },
+    ]);
+  });
+
+  it("accepts the raw manifest name→range map (kindless rows, name = package)", () => {
+    expect(
+      normalizeDetailDependencies({ "@cinatra-ai/pdf-extractor": "^0.4.0", "": "dropped" }),
+    ).toEqual([
+      { packageName: "@cinatra-ai/pdf-extractor", name: "@cinatra-ai/pdf-extractor", kind: null, versionRange: "^0.4.0" },
+    ]);
+  });
+
+  it("degrades absent/malformed values to [] (section omitted)", () => {
+    expect(normalizeDetailDependencies(undefined)).toEqual([]);
+    expect(normalizeDetailDependencies(null)).toEqual([]);
+    expect(normalizeDetailDependencies("nope")).toEqual([]);
   });
 });

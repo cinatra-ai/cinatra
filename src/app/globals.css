@@ -66,6 +66,12 @@
   --listing-title-size: 18px;
   --listing-title-line-height: 1.12;
   --listing-title-tracking: -0.012em;
+  /* Extension detail-modal hero title (design spec §V: Archivo italic 800
+     23px ink) consumed via the `text-modal-title` utility. */
+  --modal-title-size: 23px;
+  /* §V reviews rating-summary average numeral (Archivo italic 800 40px ink,
+     line-height 1) consumed via the `text-rating-average` utility. */
+  --rating-average-size: 40px;
   /* Mono kicker / uppercase-label letter-spacing lanes. */
   --kicker-tracking: 0.18em;
   --kicker-tracking-wide: 0.2em;
@@ -100,6 +106,13 @@
      semantics are not hijacked by brand chrome. Consumed through the @theme
      inline binding below as `text-brand-mustard`. */
   --brand-mustard: #c79545;
+  /* Marketplace review stars (design spec §V reviews drawing): the storefront
+     rating amber + its empty-star warm grey. Deliberately OUTSIDE the status
+     palette — star ratings mirror the public storefront's commerce chrome,
+     not app status semantics. Consumed via `text-rating-star` /
+     `bg-rating-star` / `text-rating-star-muted` through @theme inline. */
+  --rating-star: #f5a623;
+  --rating-star-muted: #d0cbbd;
   --border: var(--line);
   /* Input chrome carries the strong navy line, not the low-alpha hairline.
      Cascades through every shadcn primitive that uses `border-input`
@@ -475,6 +488,11 @@
      border-brand-mustard. Separate from --warning so page-title display and
      wordmark do not collide with status semantics. */
   --color-brand-mustard: var(--brand-mustard);
+  /* Marketplace review-star utilities (design spec §V): text-rating-star /
+     bg-rating-star (filled + histogram fill) and text-rating-star-muted
+     (empty star). */
+  --color-rating-star: var(--rating-star);
+  --color-rating-star-muted: var(--rating-star-muted);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -525,7 +543,8 @@
 
 
   /* Type / tracking / badge scale — utilities `text-page-title-{sm,md,lg}`,
-     `text-listing-title`, `text-badge-xs`, `text-badge-2xs`,
+     `text-listing-title`, `text-modal-title`, `text-rating-average`,
+     `text-badge-xs`, `text-badge-2xs`,
      `tracking-title-tight`, `tracking-kicker`, `tracking-kicker-wide`,
      `tracking-page-label`. Sizes carry their paired line-height /
      letter-spacing, so consumers drop the bracket literals entirely. */
@@ -541,6 +560,10 @@
   --text-listing-title: var(--listing-title-size);
   --text-listing-title--line-height: var(--listing-title-line-height);
   --text-listing-title--letter-spacing: var(--listing-title-tracking);
+  --text-modal-title: var(--modal-title-size);
+  --text-modal-title--line-height: var(--page-title-line-height);
+  --text-rating-average: var(--rating-average-size);
+  --text-rating-average--line-height: 1;
   --text-badge-xs: var(--badge-text-xs);
   --text-badge-2xs: var(--badge-text-2xs);
   --text-badge-2xs--letter-spacing: var(--badge-tracking);

@@ -24,7 +24,9 @@
 
 import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { toast } from "@/lib/cinatra-toast";
 import { isRedirectError } from "./is-redirect-error";
 import type {
@@ -107,8 +109,26 @@ export function MarketplaceInstallSubmit({
 }: MarketplaceInstallSubmitProps) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" size="sm" variant={variant} disabled={pending} className={className}>
-      {pending ? pendingLabel : children}
+    // The button is disabled ONLY while pending, so the §V/§IV "Installing…"
+    // 70% opacity applies exactly to the busy state (default disabled is 50%).
+    <Button
+      type="submit"
+      size="sm"
+      variant={variant}
+      disabled={pending}
+      className={cn("disabled:opacity-70", className)}
+    >
+      {pending ? (
+        // The design spec's "Installing…" state (§IV card CTA + the §V
+        // "Modal footer — install states" drawing) pairs the busy label with
+        // a small spinner inside the button.
+        <>
+          <Loader2 className="animate-spin" aria-hidden="true" />
+          {pendingLabel}
+        </>
+      ) : (
+        children
+      )}
     </Button>
   );
 }

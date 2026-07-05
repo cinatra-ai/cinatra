@@ -2,7 +2,7 @@
 // /connectors scope-filter entries from REAL granted connections
 // (cinatra#953 W3).
 //
-// Replaces the deleted SCOPE_BY_SLUG pseudo-scope map: a connector card's
+// Replaces the deleted hardcoded per-slug pseudo-scope map: a connector card's
 // filterable scopes are now derived from the actor-visible `nango_connection`
 // identity rows and their per-connection grant rows (polymorphic
 // `extension_access_policy`, kind `connection`). PURE — the page loads the

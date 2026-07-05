@@ -12,10 +12,11 @@ before authoring any widget change — in particular the #410 login UI.
   - `cinatra-ai/drupal-module/js/cinatra-widget.js`
 - **Author in the WordPress copy first, then hand-mirror to the Drupal copy.**
 - The two host routes
-  `cinatra-ai/cinatra/src/app/api/{wordpress,drupal}/bundle.js/route.ts` are
-  **DEPRECATED / dead** (pre-Option-A). They are NOT the source of truth, are NOT
-  in the sync graph, and are scheduled for removal post-epic. **Never author new
-  widget behavior there.**
+  `cinatra-ai/cinatra/src/app/api/{wordpress,drupal}/bundle.js/route.ts` were
+  the **DEPRECATED / dead** pre-Option-A artifact; they were **REMOVED**
+  (cinatra#977, executing the cinatra#411 disposition) together with the
+  `/api/wordpress/bundle.js` public-path exemption. They must never come back —
+  **never author widget behavior into a host route.**
 - A change reaches an **already-installed site only via a CMS PACKAGE RELEASE**
   (WordPress.org plugin release + Drupal.org module release + the site admin
   taking the update). There is **no live push** of widget JS from a Cinatra
@@ -54,9 +55,9 @@ Every install runs the LOCAL vendored copy, never the route:
   (`js/cinatra-widget.js`); `WidgetGateTest` **asserts** the rendered page
   `responseNotContains('/api/drupal/bundle.js')` — contractually never remote.
 
-The Cinatra app does **not** self-embed the route either. **Nothing executes the
-routes.** They are the pre-Option-A artifact the epic deliberately moved away
-from.
+The Cinatra app did **not** self-embed the route either. **Nothing executed the
+routes.** They were the pre-Option-A artifact the epic deliberately moved away
+from — deleted by cinatra#977 (see "Route disposition" below).
 
 There is **no single shared module** the two vendored copies derive from. They
 are vanilla-JS IIFEs with per-CMS broker idioms (`CinatraConfig.tokenEndpoint`
@@ -130,18 +131,17 @@ path; the login UI would never ship to any install. After #410 lands, the parity
 gate's "login-required panel gate present" invariant becomes active in both
 repos.
 
-## Route disposition (cinatra#411)
+## Route disposition (cinatra#411 → executed by cinatra#977)
 
-- **NOW:** both `src/app/api/{wordpress,drupal}/bundle.js/route.ts` are
-  **deprecated in place** — a banner comment + a single static
-  (non-secret) GET server-log line. **No behavior or auth change**; the raw
-  `Authorization: Bearer <apiKey>` path is left frozen on purpose (touching a
-  dead route's auth is needless risk and would mis-signal that it is still a live
-  login surface).
-- **AFTER the epic** (the vendored copies carry the new login + dual-token flow
-  and installs are updated): both route files **and** the
-  `/api/wordpress/bundle.js` entry in `src/lib/auth-route-guard.ts` (plus the
-  matching public-path test assertion) are **removed in a dedicated cleanup PR
-  with sign-off** (wp#4 acceptance: never a silent delete). Removal is deferred
-  only to avoid coupling route-deletion into the security epic; it is not
-  optional long-term.
+- **Phase 1 (done):** both `src/app/api/{wordpress,drupal}/bundle.js/route.ts`
+  were **deprecated in place** — a banner comment + a single static
+  (non-secret) GET server-log line, no behavior or auth change (touching a
+  dead route's auth would have been needless risk and would mis-signal that it
+  was still a live login surface).
+- **Phase 2 (done — cinatra#977, boundary epic cinatra#978 wave W-E):** both
+  route files **and** the `/api/wordpress/bundle.js` entry in
+  `src/lib/auth-route-guard.ts` (plus the matching public-path test assertion,
+  now inverted to pin the exemption REMOVED) were **removed in a dedicated
+  reviewed cleanup PR** (wp#4 acceptance: never a silent delete). The
+  plugin/module parity gates (invariant 5 above) keep any install from ever
+  referencing the retired paths.
