@@ -28,10 +28,7 @@ import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
-import {
-  createMcpRuntimeServer,
-  type McpRuntimeToolServer,
-} from "./runtime-server";
+import { createMcpRuntimeServer, type McpRuntimeToolServer } from "./runtime-server";
 import { mcpRequestContextStorage, type DelegatedMcpActor } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
