@@ -92,6 +92,41 @@ EOF
   fi
 }
 
+ensure_content_types() {
+  # Drupal 11.4's Standard install profile no longer ships the article/page
+  # node types, but the dev fixtures (docker/drupal/seed-content.php) and the
+  # wp-drupal UAT seed article/page nodes — and rendering a node whose bundle
+  # is missing 500s in core's node preprocess. Create the types (with the
+  # standard body field) when absent. Idempotent: existing types (including
+  # ones from an older volume or a config:import) are left untouched.
+  log "Ensuring article/page content types exist..."
+  drush --root="$WEB_ROOT" php:eval '
+    // Drupal 11.4 Standard also no longer ships the node `body` FIELD STORAGE
+    // (it came with the removed default types) — node_add_body_field() dies
+    // with "Attempt to create a field without a field_name" without it.
+    if (\Drupal\field\Entity\FieldStorageConfig::loadByName("node", "body") === NULL) {
+      \Drupal\field\Entity\FieldStorageConfig::create([
+        "field_name" => "body",
+        "entity_type" => "node",
+        "type" => "text_with_summary",
+      ])->save();
+      fwrite(STDERR, "[cinatra-drupal] created missing node body field storage\n");
+    }
+    foreach (["article" => "Article", "page" => "Basic page"] as $type => $name) {
+      $node_type = \Drupal\node\Entity\NodeType::load($type);
+      if ($node_type === NULL) {
+        $node_type = \Drupal\node\Entity\NodeType::create(["type" => $type, "name" => $name]);
+        $node_type->save();
+        fwrite(STDERR, "[cinatra-drupal] created missing content type: {$type}\n");
+      }
+      // Idempotent in core (returns the existing field when present), and
+      // called unconditionally so a partially-created type self-heals its
+      // missing body field on the next boot.
+      node_add_body_field($node_type);
+    }
+  ' || log "WARNING: content-type ensure failed (seeded fixture nodes may not render)"
+}
+
 install_german() {
   if ! drush --root="$WEB_ROOT" pm:list --status=enabled --field=name 2>/dev/null | grep -qx "language"; then
     log "Installing language + locale modules..."
@@ -224,6 +259,7 @@ bootstrap() {
   wait_for_db || return 0
   install_drupal_if_needed
   write_settings_local
+  ensure_content_types
   install_paragraphs
   install_mcp_tools
   apply_mcp_tools_patches

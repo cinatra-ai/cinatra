@@ -116,10 +116,14 @@ async function completeRequiredLogin(page: Page): Promise<void> {
 
   // The browser context carries the dev user's Cinatra session, so the hosted
   // page renders the consent step (member of the txn's org). Click "Continue".
-  await popup.waitForSelector(`text=Continue`, { timeout: 30_000 });
+  // Target the BUTTON role explicitly: the consent page's H1 is "Continue to
+  // the assistant", which a `text=Continue` substring match hits first in DOM
+  // order — clicking the heading leaves the popup open forever.
+  const continueBtn = popup.getByRole("button", { name: "Continue" });
+  await continueBtn.waitFor({ state: "visible", timeout: 30_000 });
   await Promise.all([
     popup.waitForEvent("close", { timeout: 30_000 }),
-    popup.click(`text=Continue`),
+    continueBtn.click(),
   ]);
 }
 
