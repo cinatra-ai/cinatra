@@ -1,22 +1,26 @@
 /**
- * Extension accent palette — six colours shared by `<ExtensionCard>` and the
- * persisted Avatar accent. Mirrored from the cinatra-app's
- * `src/lib/extension-accent.ts`; this is the sdk-ui-side copy so consumers
- * outside the cinatra-app (e.g. the Cinatra Marketplace public app) can
- * render extensions with the same accent semantics.
+ * Extension accent palette — the seven categorical accent colours shared by
+ * `<ExtensionCard>` and the persisted Avatar accent. Mirrored from the
+ * cinatra-app's `src/lib/extension-accent.ts`; this is the sdk-ui-side copy
+ * so consumers outside the cinatra-app (e.g. the Cinatra Marketplace public
+ * app) can render extensions with the same accent semantics.
  *
- * Hex values match the spec §IV accent palette exactly. Keep this file in
- * sync with the cinatra-app copy and with the DB CHECK constraints on
- * `public."user".accent_color` and `cinatra.extension_accent_color`.
+ * Hex values match the pinned spec's categorical accent tokens exactly
+ * (`--burgundy/--red/--green/--rust/--olive/--plum/--clay`, docs@b35fdf4
+ * design-system.html `:root` L31–37 — cinatra#988 item 7 reconciliation).
+ * Keep this file in sync with the cinatra-app copy and with the DB CHECK
+ * constraints on `public."user".accent_color` and
+ * `cinatra.extension_accent_color`.
  */
 
 export const EXTENSION_ACCENTS = [
   "red",
   "burgundy",
-  "indigo",
   "green",
-  "mustard",
-  "slate",
+  "rust",
+  "olive",
+  "plum",
+  "clay",
 ] as const;
 
 export type ExtensionAccent = (typeof EXTENSION_ACCENTS)[number];
@@ -31,10 +35,11 @@ export type AccentTone = {
 export const ACCENT_PALETTE: Record<ExtensionAccent, AccentTone> = {
   red: { bg: "#a6384f", fg: "#f1f1ed" },
   burgundy: { bg: "#7a2e3a", fg: "#f1f1ed" },
-  indigo: { bg: "#364e81", fg: "#f1f1ed" },
   green: { bg: "#3f6e6b", fg: "#f1f1ed" },
-  mustard: { bg: "#c79545", fg: "#15213a" },
-  slate: { bg: "#5a6477", fg: "#f1f1ed" },
+  rust: { bg: "#b0613a", fg: "#f1f1ed" },
+  olive: { bg: "#6c6a3a", fg: "#f1f1ed" },
+  plum: { bg: "#574a68", fg: "#f1f1ed" },
+  clay: { bg: "#a86b72", fg: "#f1f1ed" },
 };
 
 /**
