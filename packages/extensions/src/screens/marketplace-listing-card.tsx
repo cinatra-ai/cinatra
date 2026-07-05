@@ -140,7 +140,7 @@ function PublisherLine({
       className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-muted-foreground"
     >
       <span className="shrink-0" style={{ color: bg }} aria-hidden="true">
-        {extensionKindEmblem(card.kindSlug, "size-3.5")}
+        {extensionKindEmblem(card.kindSlug, "size-[13px]")}
       </span>
       <span className="overflow-hidden text-ellipsis">
         <span className="text-foreground">{card.kindLabel}</span>
@@ -159,11 +159,16 @@ function PublisherLine({
         )}
       </span>
       {card.vendor && (
-        <CircleCheck
+        // The circled-check VERIFIED mark — the pinned spec drawing (§IV L468)
+        // renders the check alone, with no visible "VERIFIED" copy; the
+        // accessible name + native tooltip carry the meaning.
+        <span
           data-slot="extension-card-verified"
-          aria-label="Verified vendor"
-          className="size-3 shrink-0 text-primary"
-        />
+          className="inline-flex shrink-0"
+          title="Verified vendor"
+        >
+          <CircleCheck aria-label="Verified vendor" className="size-3 text-primary" />
+        </span>
       )}
     </div>
   );

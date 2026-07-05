@@ -113,12 +113,12 @@ describe("resolveModalInstallState", () => {
   it("passes a pre-resolved six-state incompatible CTA through unchanged (cinatra#988)", () => {
     // The card resolver (resolveMarketplaceCardCta) now folds the ABI verdict
     // in itself; the modal must honour it regardless of the compat argument.
-    expect(resolveModalInstallState({ state: "incompatible" }, "incompatible")).toEqual({
-      kind: "incompatible",
-    });
-    expect(resolveModalInstallState({ state: "incompatible" }, "compatible")).toEqual({
-      kind: "incompatible",
-    });
+    expect(
+      resolveModalInstallState({ state: "incompatible", blockedAction: "install" }, "incompatible"),
+    ).toEqual({ kind: "incompatible" });
+    expect(
+      resolveModalInstallState({ state: "incompatible", blockedAction: "update" }, "compatible"),
+    ).toEqual({ kind: "incompatible" });
   });
 });
 

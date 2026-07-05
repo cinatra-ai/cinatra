@@ -272,13 +272,14 @@ export type MarketplaceCardCta =
   | { state: "install"; disabled: boolean }
   | { state: "update"; disabled: boolean }
   | { state: "installed" }
-  | { state: "incompatible" };
+  | { state: "incompatible"; blockedAction: "install" | "update" };
 
 /**
  * Resolve the six-state CTA for a card (design spec §IV: Install now /
  * Installed / Update now / Restore / Installing… / Incompatible).
- * - archived → Restore (DB-only reactivation; no tarball fetch, so neither
- *   registry state nor ABI compat gates it).
+ * - archived → Restore (DB-only reactivation of the already-installed
+ *   version; no new package is fetched/activated, so neither registry state
+ *   nor the CATALOG version's ABI compat gates it).
  * - not installed + a DECLARED ABI this host does not satisfy → Incompatible
  *   (the activation gate would refuse the install, so the CTA must never be
  *   softer than that gate: a greyed-out, unactionable Install). The verdict
@@ -286,10 +287,14 @@ export type MarketplaceCardCta =
  *   stays installable, exactly like the lenient install gate.
  * - not installed → Install (disabled when the registry is disconnected — the
  *   tarball comes from the registry, so a live CTA must be able to install).
- * - installed + a SEMVER-newer catalog version → Update (same registry
- *   gating; an already-installed extension keeps its normal state — installing
- *   is not the current action, mirroring `resolveModalInstallState`).
- * - installed + current/newer → Installed.
+ * - installed + a SEMVER-newer catalog version whose DECLARED ABI this host
+ *   does not satisfy → Incompatible with `blockedAction: "update"` (updating
+ *   would fetch + activate the incompatible catalog version — the same gate
+ *   refusal as install, so the Update greys out too). The installed version
+ *   keeps running; only the catalog action is blocked.
+ * - installed + a SEMVER-newer compatible catalog version → Update (registry
+ *   gating as for install).
+ * - installed + current/newer → Installed (no action to gate).
  * Update detection uses `comparePluginVersions` (semver), so a prerelease never
  * triggers a spurious "Update now". The sixth visual state, Installing…, is
  * the pending label of the install form's submit (useFormStatus), layered on
@@ -306,11 +311,14 @@ export function resolveMarketplaceCardCta(
   }
   if (installedInfo === undefined) {
     if (compatState === "incompatible") {
-      return { state: "incompatible" };
+      return { state: "incompatible", blockedAction: "install" };
     }
     return { state: "install", disabled: !registryConnected };
   }
   if (comparePluginVersions(installedInfo.version, card.packageVersion) === "update-available") {
+    if (compatState === "incompatible") {
+      return { state: "incompatible", blockedAction: "update" };
+    }
     return { state: "update", disabled: !registryConnected };
   }
   return { state: "installed" };

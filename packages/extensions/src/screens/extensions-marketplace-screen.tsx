@@ -149,9 +149,12 @@ export async function ExtensionsMarketplaceScreen({
         </MarketplaceInstallForm>
       ) : cta.state === "incompatible" ? (
         // The greyed six-state "Incompatible" CTA (spec §IV): the declared ABI
-        // range is unsatisfiable on this host, so the install gate would refuse
-        // it — grey the Install out (opacity .4, not-allowed cursor, spec
-        // title) instead of offering an install that cannot succeed. The
+        // range of the CATALOG version is unsatisfiable on this host, so the
+        // install/update gate would refuse it — grey the action out (opacity
+        // .4, not-allowed cursor, spec title) instead of offering an action
+        // that cannot succeed. The label names the blocked action (Install
+        // now for a not-installed listing, Update now for an installed-older
+        // one whose newer catalog version is incompatible). The
         // pointer-events override keeps the native title tooltip reachable on
         // a disabled button. The red-triangle Incompatible badge renders in
         // the footer meta (ExtensionCompatBadge).
@@ -161,7 +164,7 @@ export async function ExtensionsMarketplaceScreen({
           className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
           title="Requires a newer Cinatra version"
         >
-          Install now
+          {cta.blockedAction === "update" ? "Update now" : "Install now"}
         </Button>
       ) : cta.state === "install" ? (
         // Install fetches the tarball from the registry — a live CTA only

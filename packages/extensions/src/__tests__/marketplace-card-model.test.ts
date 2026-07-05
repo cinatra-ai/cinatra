@@ -191,24 +191,32 @@ describe("resolveMarketplaceCardCta (six-state, cinatra#988)", () => {
     expect(resolveMarketplaceCardCta(card, undefined, true, "unknown")).toEqual({ state: "install", disabled: false });
   });
 
-  it("not installed + incompatible ABI → incompatible (never softer than the install gate)", () => {
+  it("not installed + incompatible ABI → incompatible install (never softer than the install gate)", () => {
     expect(resolveMarketplaceCardCta(card, undefined, true, "incompatible")).toEqual({
       state: "incompatible",
+      blockedAction: "install",
     });
     // Registry state cannot soften/override the ABI refusal.
     expect(resolveMarketplaceCardCta(card, undefined, false, "incompatible")).toEqual({
       state: "incompatible",
+      blockedAction: "install",
     });
   });
 
-  it("incompatible only overrides the NOT-installed state — installed/update/restore keep their action", () => {
-    // Installing is not the current action for these, mirroring resolveModalInstallState.
+  it("installed older + incompatible NEWER catalog version → incompatible update (the update gate refusal)", () => {
+    // Updating would fetch + activate the incompatible catalog version, so an
+    // enabled Update would be softer than the gate — grey it out too.
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true, "incompatible")).toEqual({
+      state: "incompatible",
+      blockedAction: "update",
+    });
+  });
+
+  it("incompatible never gates actionless/DB-only states — restore + installed keep their state", () => {
+    // Restore reactivates the already-installed version (no catalog fetch);
+    // Installed has no action to gate.
     expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, true, "incompatible")).toEqual({
       state: "restore",
-    });
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true, "incompatible")).toEqual({
-      state: "update",
-      disabled: false,
     });
     expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true, "incompatible")).toEqual({
       state: "installed",

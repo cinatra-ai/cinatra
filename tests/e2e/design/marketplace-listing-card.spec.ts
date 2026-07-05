@@ -29,6 +29,21 @@ const FIXTURE_PATH = "/design-fixtures/marketplace";
 const PRIMARY_ACTION_RGB = "rgb(54, 78, 129)"; // --primary / indigo #364e81
 const MUTED_SLATE_RGB = "rgb(90, 100, 119)"; // slate #5a6477
 
+// The seven categorical banner accents the pinned spec §IV sanctions
+// (docs@b35fdf4 :root L31–37), as computed-style rgb() strings. Until the
+// accent-palette reconciliation PR lands only a subset exists in
+// EXTENSION_ACCENTS; a banner ground OUTSIDE this set is a wrong-token
+// regression either way.
+const SPEC_CATEGORICAL_RGB = new Set([
+  "rgb(122, 46, 58)", // --burgundy #7a2e3a
+  "rgb(166, 56, 79)", // --red      #a6384f
+  "rgb(63, 110, 107)", // --green   #3f6e6b
+  "rgb(176, 97, 58)", // --rust     #b0613a
+  "rgb(108, 106, 58)", // --olive   #6c6a3a
+  "rgb(87, 74, 104)", // --plum     #574a68
+  "rgb(168, 107, 114)", // --clay   #a86b72
+]);
+
 test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(FIXTURE_PATH, { waitUntil: "domcontentloaded" });
@@ -97,7 +112,7 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
     await expect(prices.filter({ hasText: "$12" })).toHaveCount(1);
   });
 
-  test("no banner ground renders the primary action colour or muted slate (wrong-token class)", async ({
+  test("banner grounds draw ONLY from the §IV categorical accents — never the primary action colour or muted slate (wrong-token class)", async ({
     page,
   }) => {
     const banners = page.locator('[data-slot="extension-card-banner"]');
@@ -105,6 +120,7 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
       const bg = await banner.evaluate((el) => getComputedStyle(el).backgroundColor);
       expect(bg).not.toBe(PRIMARY_ACTION_RGB);
       expect(bg).not.toBe(MUTED_SLATE_RGB);
+      expect(SPEC_CATEGORICAL_RGB.has(bg), `banner ground ${bg} is not a §IV categorical accent`).toBe(true);
     }
   });
 

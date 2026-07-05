@@ -127,7 +127,7 @@ export type ModalCardCta =
   | { state: "install"; disabled: boolean }
   | { state: "update"; disabled: boolean }
   | { state: "installed" }
-  | { state: "incompatible" };
+  | { state: "incompatible"; blockedAction: "install" | "update" };
 
 export function resolveModalInstallState(
   cta: ModalCardCta,
