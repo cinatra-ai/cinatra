@@ -40,7 +40,7 @@ import {
  * Usage:
  *   <ExtensionCard
  *     name="Email Outreach Agent"
- *     accentColor="indigo"
+ *     accentColor="plum"
  *     emblem={<BotIcon />}
  *     indicator={{ label: "Daily 9am", dotColour: "var(--success)" }}
  *   />

@@ -168,6 +168,16 @@
         "external_mcp_servers",
         "metadata"
       ]
+    },
+    {
+      "seq": "0016",
+      "file": "core/core__0016_accent-palette-spec-categorical.mjs",
+      "summary": "Reconcile the persisted accent palette to the pinned design spec's categorical set (cinatra-ai/cinatra#988 item 7, the high-risk half of the SIV listing-card conformance; companion UI PR carries items 1-6+8). EXTENSION_ACCENTS moves from the pre-reconciliation six (red/burgundy/indigo/green/mustard/slate) to the spec's seven categoricals (red/burgundy/green/rust/olive/plum/clay, docs@b35fdf4 design-system.html :root L31-37): indigo (the primary ACTION colour) and slate (the muted text colour) were never sanctioned banner grounds, mustard is not in the categorical set. Two persisted surfaces are reconciled independently, each in a fully guarded DO block (some lineages never provisioned these structures - a missing table/column is a clean no-op): public.\"user\".accent_color (Avatar accent, user_accent_color_check) and <app schema>.extension_accent_color.accent_color (ExtensionCard accent). Order per surface: (1) drop every existing CHECK over the column FIRST, with names looked up from pg_constraint (never assumed) - the remapped values are outside the old union, (2) remap retired persisted values hue-nearest (indigo->plum, slate->plum, mustard->rust), (3) add the spec-set CHECK (NULL stays allowed - unset means derive). down() restores the six-colour CHECK after remapping the four new values back into the old union (rust->mustard, olive->green, plum->indigo, clay->red); the remap is documented LOSSY both ways - a palette retirement, not a rename. Idempotent: every step re-checks the live catalog, so re-runs and never-provisioned schemas are no-ops. Fresh installs ledger-fake the chain; the bootstrap DDL carries no accent structures, so there is no fresh-shape CREATE text to update.",
+      "destructive": true,
+      "tables": [
+        "public.\"user\"",
+        "extension_accent_color"
+      ]
     }
   ]
 }

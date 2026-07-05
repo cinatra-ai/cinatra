@@ -489,7 +489,7 @@ DO $$ BEGIN
 END $$;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_accent_color_check' AND connamespace = 'public'::regnamespace) THEN
-    ALTER TABLE public."user" ADD CONSTRAINT "user_accent_color_check" CHECK (((accent_color IS NULL) OR (accent_color = ANY (ARRAY['red'::text, 'burgundy'::text, 'indigo'::text, 'green'::text, 'mustard'::text, 'slate'::text]))));
+    ALTER TABLE public."user" ADD CONSTRAINT "user_accent_color_check" CHECK (((accent_color IS NULL) OR (accent_color = ANY (ARRAY['red'::text, 'burgundy'::text, 'green'::text, 'rust'::text, 'olive'::text, 'plum'::text, 'clay'::text]))));
   END IF;
 END $$;
 DO $$ BEGIN

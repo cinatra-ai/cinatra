@@ -1,7 +1,7 @@
 /**
  * Drift guard for the extension accent palette.
  *
- * The six accent hex codes appear in two places (the runtime palette in
+ * The seven accent hex codes appear in two places (the runtime palette in
  * `src/lib/extension-accent.ts` and the DB CHECK constraint defined in
  * the accent-color migration script). If anyone changes the palette
  * without updating both, this test catches the runtime side and the
@@ -20,25 +20,28 @@ import {
 } from "@/lib/extension-accent";
 
 describe("extension-accent palette drift guard", () => {
-  it("EXTENSION_ACCENTS lists exactly the six spec colours", () => {
+  it("EXTENSION_ACCENTS lists exactly the seven spec categorical colours", () => {
     expect([...EXTENSION_ACCENTS]).toEqual([
       "red",
       "burgundy",
-      "indigo",
       "green",
-      "mustard",
-      "slate",
+      "rust",
+      "olive",
+      "plum",
+      "clay",
     ]);
   });
 
-  it("ACCENT_PALETTE hex codes match the spec §IV palette", () => {
+  it("ACCENT_PALETTE hex codes match the pinned spec categorical tokens", () => {
+    // docs@b35fdf4 design-system.html `:root` L31–37.
     expect(ACCENT_PALETTE).toEqual({
       red: { bg: "#a6384f", fg: "#f1f1ed" },
       burgundy: { bg: "#7a2e3a", fg: "#f1f1ed" },
-      indigo: { bg: "#364e81", fg: "#f1f1ed" },
       green: { bg: "#3f6e6b", fg: "#f1f1ed" },
-      mustard: { bg: "#c79545", fg: "#15213a" },
-      slate: { bg: "#5a6477", fg: "#f1f1ed" },
+      rust: { bg: "#b0613a", fg: "#f1f1ed" },
+      olive: { bg: "#6c6a3a", fg: "#f1f1ed" },
+      plum: { bg: "#574a68", fg: "#f1f1ed" },
+      clay: { bg: "#a86b72", fg: "#f1f1ed" },
     });
   });
 
@@ -55,8 +58,13 @@ describe("extension-accent palette drift guard", () => {
   });
 
   it("asExtensionAccent narrows valid strings and rejects invalid ones", () => {
-    expect(asExtensionAccent("indigo")).toBe("indigo");
-    expect(asExtensionAccent("mustard")).toBe("mustard");
+    expect(asExtensionAccent("rust")).toBe("rust");
+    expect(asExtensionAccent("plum")).toBe("plum");
+    // The three retired pre-reconciliation accents are no longer valid —
+    // core__0016 remaps persisted rows (indigo/slate → plum, mustard → rust).
+    expect(asExtensionAccent("indigo")).toBeNull();
+    expect(asExtensionAccent("mustard")).toBeNull();
+    expect(asExtensionAccent("slate")).toBeNull();
     expect(asExtensionAccent("not-a-real-accent")).toBeNull();
     expect(asExtensionAccent(null)).toBeNull();
     expect(asExtensionAccent(undefined)).toBeNull();
