@@ -2,9 +2,11 @@ import { Settings } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import {
+  InstalledExtensionCard,
+  InstalledStatusIndicator,
+} from "@/components/extensions/installed-extension-card";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
-import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { VisibilityBadge } from "@/components/visibility-badge";
 import { MarketplaceDetailModal } from "@cinatra-ai/extensions/screens";
 import type { MarketplaceCardData } from "@cinatra-ai/extensions/screens";
@@ -85,6 +87,34 @@ const LISTED_DETAIL: MarketplaceDetailView = {
     "Gathers sources, summarises, and cites answers grounded in your team's own documents.",
   description: "Gathers sources, summarises, and cites answers across your team's docs.",
   iconUrl: null,
+  // §V detail fields added by PR #995 (Changelog tab, Dependencies section,
+  // "Compatible up to" spec row) — seeded so the Installed-page More-details
+  // trigger opens the NOW-MERGED §V modal with those sections populated (proof
+  // the wiring targets the corrected modal, not a stale pre-#995 one).
+  compatibleUpTo: "0.1.7",
+  changelog: [
+    {
+      version: "0.4.2",
+      date: "2026-06-28",
+      notes: [
+        "Grounded citations now link back to the source passage.",
+        "Faster multi-document summarisation.",
+      ],
+    },
+    {
+      version: "0.4.1",
+      date: "2026-05-15",
+      notes: ["Initial public release."],
+    },
+  ],
+  dependencies: [
+    {
+      packageName: "@cinatra-fixtures/pdf-extractor-skill",
+      name: "PDF Extractor",
+      kind: "skill",
+      versionRange: "^1.2.0",
+    },
+  ],
   ratingSummary: emptyRatingSummary(),
   reviews: [],
   vendor: { name: "Cinatra", slug: "cinatra", storeUrl: null },
@@ -182,7 +212,7 @@ export function InstalledExtensionsFixture() {
         vendor="Cinatra"
         description={listedCard.description}
         version={`v${listedCard.packageVersion}`}
-        status={<LifecycleBadge status="active" />}
+        status={<InstalledStatusIndicator status="active" />}
         chips={
           <>
             <VisibilityBadge visibility="public" />
@@ -210,7 +240,7 @@ export function InstalledExtensionsFixture() {
         vendor={null}
         description={unlistedCard.description}
         version={`v${unlistedCard.packageVersion}`}
-        status={<LifecycleBadge status="active" />}
+        status={<InstalledStatusIndicator status="active" />}
         chips={
           <>
             <Badge variant="secondary" title="Required in production">
@@ -237,7 +267,7 @@ export function InstalledExtensionsFixture() {
         vendor={null}
         description={unscopedCard.description}
         version={`v${unscopedCard.packageVersion}`}
-        status={<LifecycleBadge status="active" />}
+        status={<InstalledStatusIndicator status="active" />}
         actions={fixtureModal({ card: unscopedCard, initialLoad: { status: "notfound" } })}
       />
 
@@ -251,7 +281,7 @@ export function InstalledExtensionsFixture() {
         vendor="Meridian Labs"
         description={archivedCard.description}
         version={`v${archivedCard.packageVersion}`}
-        status={<LifecycleBadge status="archived" />}
+        status={<InstalledStatusIndicator status="archived" />}
         archived
         actions={fixtureModal({ card: archivedCard, initialLoad: { status: "notfound" } })}
       />

@@ -67,6 +67,43 @@ export type InstalledExtensionCardProps = {
   className?: string;
 };
 
+/**
+ * §VI "Installed extensions" status indicator (published design system §VI
+ * drawing + prose L902: "the pinned `--font-mono` version with its
+ * Active/Archived status DOT"). A bare 7px dot + a mono, uppercase,
+ * letter-spaced label — NOT the §VII `StatusPill` (whose own contract is
+ * "an icon on the left — never a bare dot", the opposite treatment). Active
+ * and `locked` (a system extension is live) read green; archived reads muted.
+ * This is the §VI-specific indicator the drawing calls for; the general
+ * `LifecycleBadge`/`StatusPill` stays the §VII list/table renderer.
+ */
+export function InstalledStatusIndicator({
+  status,
+}: {
+  status: "active" | "locked" | "archived";
+}) {
+  const archived = status === "archived";
+  const label = archived ? "Archived" : status === "locked" ? "Locked" : "Active";
+  return (
+    <span
+      data-slot="installed-status-indicator"
+      data-status={status}
+      className={cn(
+        "inline-flex items-center gap-1.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.1em]",
+        archived ? "text-muted-foreground" : "text-success",
+      )}
+      title={
+        status === "locked"
+          ? "System extension — always active; cannot be archived or uninstalled."
+          : undefined
+      }
+    >
+      <span aria-hidden className="size-[7px] shrink-0 rounded-full bg-current" />
+      {label}
+    </span>
+  );
+}
+
 export function InstalledExtensionCard({
   name,
   accentColor,
@@ -107,7 +144,7 @@ export function InstalledExtensionCard({
 
       {/* MIDDLE — byline, description, version + status. */}
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
           {kindIcon && (
             <span
               aria-hidden
@@ -149,7 +186,8 @@ export function InstalledExtensionCard({
         <div
           data-slot="installed-extension-spec-line"
           className={cn(
-            "flex flex-wrap items-center gap-x-3 gap-y-1.5",
+            // §VI version row: mono version + status dot, 14px apart (drawing).
+            "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
             archived && "opacity-70",
           )}
         >

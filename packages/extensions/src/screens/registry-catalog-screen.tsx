@@ -72,7 +72,6 @@ import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { extensionHasBeenUsedBatch } from "@cinatra-ai/extensions";
 import { RegistryUninstallForm } from "./registry-uninstall-form";
 import type { DestinationVariant } from "./registry-uninstall-form";
-import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { RiskBadge } from "@/components/risk-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -84,7 +83,10 @@ import {
 import { ExtensionsTabSelect } from "@/components/extensions/extensions-tab-select";
 import { InstallBatchPanel } from "@/components/extensions/install-batch-panel";
 import { InstallBatchLiveRefresh } from "@/components/extensions/install-batch-live-refresh";
-import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import {
+  InstalledExtensionCard,
+  InstalledStatusIndicator,
+} from "@/components/extensions/installed-extension-card";
 import {
   extensionKindEmblem,
   type ExtensionEmblemKind,
@@ -622,12 +624,12 @@ export async function RegistryCatalogScreen({
   // Card renderers
   // -------------------------------------------------------------------------
 
-  // §VI spec version line: ONLY the mono version + the lifecycle status
-  // indicator (cinatra#948 reopen, gap 3). The lifecycle pill carries the
-  // row's TRUE status (cinatra#957): active → green check "Active"; locked →
-  // live/green styling with the distinct "Locked" label + tooltip; archived →
-  // muted grey cross.
-  const renderStatus = (row: InstalledCardRow) => <LifecycleBadge status={row.status} />;
+  // §VI spec version line: ONLY the mono version + the status DOT (cinatra#948
+  // reopen, gap 3; §VI drawing + prose L902 — a bare dot + mono label, not the
+  // §VII StatusPill). The dot carries the row's TRUE status (cinatra#957):
+  // active → green dot "Active"; locked → green dot with the distinct "Locked"
+  // label + tooltip (a system extension is live); archived → muted dot.
+  const renderStatus = (row: InstalledCardRow) => <InstalledStatusIndicator status={row.status} />;
 
   // Operational chips (Required / visibility / risk) — kept, but OFF the §VI
   // spec version line, as their own subdued row (the reopen's "relocate out of

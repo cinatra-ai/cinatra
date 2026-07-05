@@ -52,6 +52,12 @@ test.describe("§VI Installed extensions (cinatra#948)", () => {
     await expect(dialog).toBeVisible();
     // Two headings match: the sr-only DialogTitle + the visible hero title.
     await expect(dialog.getByRole("heading", { name: "Research Assistant" }).last()).toBeVisible();
+    // The wired modal is the NOW-MERGED §V modal (PR #995), not a stale
+    // pre-#995 one: its Changelog tab, "Compatible up to" spec row and
+    // Dependencies section (all #995 additions) render from the pinned detail.
+    await expect(dialog.getByRole("tab", { name: "Changelog" })).toBeVisible();
+    await expect(dialog.getByText("Compatible up to")).toBeVisible();
+    await expect(dialog.getByText("PDF Extractor")).toBeVisible();
     expect(page.url()).toBe(urlBefore);
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
@@ -122,9 +128,13 @@ test.describe("§VI Installed extensions (cinatra#948)", () => {
     for (const card of await cards.all()) {
       const specLine = card.locator('[data-slot="installed-extension-spec-line"]');
       await expect(specLine).toHaveCount(1);
-      // Exactly the mono version + ONE lifecycle badge — nothing else.
+      // Exactly the mono version + ONE §VI status dot — nothing else. §VI wants
+      // a bare dot + mono label (drawing/prose L902), not the §VII StatusPill.
       await expect(specLine.locator(":scope > *")).toHaveCount(2);
-      await expect(specLine.locator('[data-slot="lifecycle-badge"]')).toHaveCount(1);
+      await expect(specLine.locator('[data-slot="installed-status-indicator"]')).toHaveCount(1);
+      // The §VII pill/lifecycle-badge treatment must not resurrect on the §VI line.
+      await expect(specLine.locator('[data-slot="lifecycle-badge"]')).toHaveCount(0);
+      await expect(specLine.locator('[data-slot="status-pill"]')).toHaveCount(0);
       // Operational chips never render inside the spec line.
       await expect(specLine.locator('[data-slot="visibility-badge"]')).toHaveCount(0);
     }
@@ -133,6 +143,33 @@ test.describe("§VI Installed extensions (cinatra#948)", () => {
     const chipRows = fixture.locator('[data-slot="installed-extension-operational-chips"]');
     await expect(chipRows.first()).toBeVisible();
     await expect(chipRows.first().locator('[data-slot="visibility-badge"]')).toHaveCount(1);
+  });
+
+  test("status is the §VI bare dot + mono label, not the §VII StatusPill (wrong-treatment class)", async ({
+    page,
+  }) => {
+    const fixture = page.getByTestId("installed-extensions-fixture");
+    const cards = fixture.locator('[data-slot="installed-extension-card"]');
+
+    // Every card carries exactly one §VI status dot; none carries a §VII pill.
+    const dots = fixture.locator('[data-slot="installed-status-indicator"]');
+    await expect(dots).toHaveCount(4);
+    await expect(fixture.locator('[data-slot="status-pill"]')).toHaveCount(0);
+    await expect(fixture.locator('[data-slot="lifecycle-badge"]')).toHaveCount(0);
+
+    // Active card: green "Active" dot (the success token, not a check-icon pill).
+    const activeDot = cards.nth(0).locator('[data-slot="installed-status-indicator"]');
+    await expect(activeDot).toHaveAttribute("data-status", "active");
+    await expect(activeDot).toContainText("Active");
+    await expect(activeDot).not.toContainText("Approved");
+    // No SVG icon inside the dot indicator (the §VII pill renders a check/cross).
+    await expect(activeDot.locator("svg")).toHaveCount(0);
+
+    // Archived card: muted "Archived" dot (drawing shows a muted DOT, not a cross).
+    const archivedDot = cards.nth(3).locator('[data-slot="installed-status-indicator"]');
+    await expect(archivedDot).toHaveAttribute("data-status", "archived");
+    await expect(archivedDot).toContainText("Archived");
+    await expect(archivedDot.locator("svg")).toHaveCount(0);
   });
 
   test("close-proof screenshots — cards + unlisted-package modal state", async ({ page }, testInfo) => {
