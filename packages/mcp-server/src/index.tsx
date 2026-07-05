@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReactNode } from "react";
+import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -1577,7 +1578,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
           <Card className="border-line bg-surface backdrop-blur-none">
             <CardContent className="p-6">
             <div className="mb-6">
-              <p className="section-kicker">MCP Account</p>
+              <Kicker>MCP Account</Kicker>
               <h1 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">Account settings</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 Manage the sign-in details and active sessions used for MCP access.

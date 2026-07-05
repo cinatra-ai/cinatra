@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AppDialog } from "@/components/app-dialog";
@@ -327,7 +328,7 @@ function LlmAccessSection(props: {
     <Card className="border-line bg-surface backdrop-blur-none">
       <CardContent className="p-6">
       <div className="max-w-2xl">
-        <p className="section-kicker">LLM API Access</p>
+        <Kicker>LLM API Access</Kicker>
         <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">Grant AI providers access</h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Allow connected LLM providers to use the Cinatra MCP server as a tool. Each provider gets a dedicated OAuth client that is passed automatically when making LLM calls.
@@ -486,7 +487,7 @@ export function McpClientsDashboard(props: {
       <Card className="border-line bg-surface backdrop-blur-none">
         <CardContent className="p-6">
         <div className="max-w-2xl">
-          <p className="section-kicker">OAuth Clients</p>
+          <Kicker>OAuth Clients</Kicker>
           <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">MCP applications</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             Create clients for MCP-compatible applications (such as Claude) that users authorize to access their account.
@@ -713,7 +714,7 @@ export function McpClientDetailManager(props: {
         <CardContent className="p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <p className="section-kicker">OAuth Client</p>
+            <Kicker>OAuth Client</Kicker>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">{clientHeadline}</h1>
             <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{client.client_id}</p>
           </div>
