@@ -156,8 +156,8 @@ function fixtureModal(input: {
       initialLoad={input.initialLoad}
       manageActions={input.manageActions}
       // §VI drawing: the active row's underlined indigo `.btn.link`; the
-      // archived row's muted, non-underlined `.btn.ghost` (design repo
-      // specs/app.html §VI example markup, both rows).
+      // archived row's muted, non-underlined `.btn.ghost` (the published
+      // design system's §VI example markup, both rows).
       trigger={
         input.isArchived ? (
           <Button variant="ghost" size="sm" className="text-muted-foreground">

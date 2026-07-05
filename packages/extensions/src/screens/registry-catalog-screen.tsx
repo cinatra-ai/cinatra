@@ -626,7 +626,7 @@ export async function RegistryCatalogScreen({
   // -------------------------------------------------------------------------
 
   // §VI spec version line: ONLY the mono version + the lifecycle indicator
-  // (cinatra#948 reopen, gap 3; §VI drawing, refreshed by design#26 —
+  // (cinatra#948 reopen, gap 3; §VI drawing, refreshed 2026-07-05 —
   // green-check Active / grey-cross Archived + mono label, not the §VII
   // StatusPill). The indicator carries the row's TRUE status (cinatra#957):
   // active → green check "Active"; locked → green check with the distinct
@@ -726,7 +726,7 @@ export async function RegistryCatalogScreen({
         })}
         manageActions={opts.manageActions}
         // §VI actions panel: More details renders as each state's drawing
-        // treatment (design repo `specs/app.html` §VI example markup, both
+        // treatment (the published design system's §VI example markup, both
         // rows) — the active row's underlined indigo `.btn.link`; the
         // archived row's muted, non-underlined `.btn.ghost`. Neither is the
         // browse card's outline default.
@@ -820,8 +820,8 @@ export async function RegistryCatalogScreen({
       <>
         {row.settingsHref && (
           // §VI drawing: the active row's Settings is `.btn.primary`; the
-          // archived row's is the muted `.btn.secondary` (design repo
-          // specs/app.html §VI example markup, both rows) — codex-converge
+          // archived row's is the muted `.btn.secondary` (the published
+          // design system's §VI example markup, both rows) — codex-converge
           // finding, adopted.
           <Button
             asChild

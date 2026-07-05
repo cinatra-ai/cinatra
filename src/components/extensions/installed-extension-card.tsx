@@ -79,16 +79,15 @@ export type InstalledExtensionCardProps = {
 
 /**
  * §VI "Installed extensions" status indicator (published design system §VI
- * drawing, refreshed by `cinatra-ai/design#26` / paired docs mirror
- * `cinatra-ai/docs#86`, 2026-07-05: "green-check Active / grey-cross
+ * drawing, refreshed 2026-07-05: "green-check Active / grey-cross
  * Archived"). A check icon (green) for Active/Locked, a cross icon (muted)
  * for Archived, beside the mono, uppercase, letter-spaced label. The earlier
  * "bare dot" reading of this indicator (this branch's prior commits) cited a
- * now-superseded pin (`docs@b35fdf4`, 2026-07-03) — the design repo's
- * `specs/app.html` §VI example markup, current as of design#26, renders an
- * explicit check/cross `<svg>`, not a bare dot. Active and `locked` (a system
- * extension is live) read green; archived reads muted. The general
- * `LifecycleBadge`/`StatusPill` stays the §VII list/table renderer.
+ * now-superseded revision of the published reference — the current §VI
+ * example markup renders an explicit check/cross `<svg>`, not a bare dot.
+ * Active and `locked` (a system extension is live) read green; archived
+ * reads muted. The general `LifecycleBadge`/`StatusPill` stays the §VII
+ * list/table renderer.
  */
 export function InstalledStatusIndicator({
   status,

@@ -148,10 +148,10 @@ test.describe("§VI Installed extensions (cinatra#948)", () => {
   test("status is the §VI green-check/grey-cross indicator + mono label, not the §VII StatusPill (wrong-treatment class)", async ({
     page,
   }) => {
-    // design#26 / paired docs mirror docs#86 (2026-07-05) refreshed the §VI
-    // drawing's status example to an explicit check/cross icon ("green-check
-    // Active / grey-cross Archived"), superseding this branch's earlier "bare
-    // dot" reading of a now-stale pin (docs@b35fdf4, 2026-07-03).
+    // The published design system was refreshed 2026-07-05 to an explicit
+    // check/cross status icon ("green-check Active / grey-cross Archived"),
+    // superseding this branch's earlier "bare dot" reading of a now-stale
+    // revision of the reference.
     const fixture = page.getByTestId("installed-extensions-fixture");
     const cards = fixture.locator('[data-slot="installed-extension-card"]');
 
@@ -196,8 +196,8 @@ test.describe("§VI Installed extensions (cinatra#948)", () => {
     await expect(activeMoreDetails).toHaveCSS("text-decoration-line", "underline");
 
     // Archived card 4: Settings = the muted `btn.secondary`; More details =
-    // the muted, non-underlined `btn.ghost` (design repo specs/app.html §VI
-    // example markup, archived row).
+    // the muted, non-underlined `btn.ghost` (the published design system's
+    // §VI example markup, archived row).
     const archivedCard = cards.nth(3);
     const archivedSettings = archivedCard.getByRole("button", { name: "Settings" });
     await expect(archivedSettings).toHaveAttribute("data-variant", "secondary");
