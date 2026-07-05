@@ -435,31 +435,15 @@ export async function saveWordPressInstanceAction(formData: FormData) {
 }
 
 // `deleteWordPressInstanceAction` lives in the wordpress connector
-// (manage-gated) — the legacy host page imports it directly from
+// (manage-gated) — the dispatch-route settings page imports it from
 // @cinatra-ai/wordpress-mcp-connector/setup-actions. There is no hub forwarder.
-
-// Focused server action for the WordPress connection-UI blog-connector selector.
-// Does not require the application password because a connector-only change must
-// not force a credential re-entry and network revalidation. Writes the JSON-blob
-// binding directly.
-const wordpressBlogConnectorSchema = z.object({
-  instanceId: z.string().min(1),
-  blogConnectorId: z.string().optional(),
-});
-
-export async function setWordPressBlogConnectorAction(formData: FormData) {
-  // WordPress connector_config is operator/workspace-level config, not per-user.
-  // Admin-gate the binding mutation, consistent with the other connector-config
-  // mutation actions in this file.
-  await requireAdminSession();
-  const parsed = wordpressBlogConnectorSchema.parse({
-    instanceId: formData.get("instanceId"),
-    blogConnectorId: (formData.get("blogConnectorId") as string | null) ?? undefined,
-  });
-  const { setWordPressInstanceBlogConnector } = await import("@/lib/wordpress-api");
-  setWordPressInstanceBlogConnector(parsed.instanceId, parsed.blogConnectorId ?? "");
-  redirect("/connectors/wordpress");
-}
+//
+// The legacy per-instance blog-connector selector action
+// (`setWordPressBlogConnectorAction`) was evicted with the vendor-literal
+// /connectors/wordpress page (cinatra#977) — its only form lived there. The
+// binding itself persists (`saveWordPressInstance` inherits it; the write
+// helper stays in @/lib/wordpress-api); a connector-owned selector home is
+// blog-domain residue tracked on the boundary epic (cinatra#978 / #975).
 
 // ---------------------------------------------------------------------------
 // External MCP servers

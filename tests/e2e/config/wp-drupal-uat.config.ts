@@ -6,9 +6,11 @@
  * backend with only the LLM provider swapped for the deterministic scripted
  * provider (CINATRA_TEST_LLM_PROVIDER=scripted — no live keys, no network).
  *
- * baseURL is the cinatra dev server (serves /api/{wordpress,drupal}/bundle.js +
- * the agent stream); the specs navigate to the CMS admin URLs where the bundle
- * mounts. global-setup seeds one WP page + one Drupal node (idempotent).
+ * baseURL is the cinatra dev server (serves the agent stream + token/capability
+ * routes; the widget JS itself is the VENDORED plugin/module copy — the dead
+ * bundle.js routes were removed, cinatra#977); the specs navigate to the CMS
+ * admin URLs where the bundle mounts. global-setup seeds one WP page + one
+ * Drupal node (idempotent).
  *
  * PREREQUISITES (see tests/e2e/wp-drupal-uat/README.md):
  *   - docker WP + Drupal up and wired to this cinatra instance (`cinatra setup dev`

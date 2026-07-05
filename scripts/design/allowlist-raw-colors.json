@@ -22,8 +22,6 @@
     "src/components/scope-badge.test.tsx",
     "src/components/visibility-badge.tsx",
     "src/components/ui/sonner.test.tsx",
-    "src/app/api/drupal/bundle.js/route.ts",
-    "src/app/api/wordpress/bundle.js/route.ts",
     "src/lib/drizzle-store.ts"
   ],
   "values": [

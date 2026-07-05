@@ -122,9 +122,9 @@ const ALLOWLISTED_FILES = new Set([
   // The Drupal module's settings page lives at the STANDARD Drupal admin path
   // `/admin/config/services/cinatra` (a Drupal CMS route, not a Cinatra Next.js
   // UI route — the gate's docblock already notes Drupal `/admin/...` is
-  // unrelated). These files reference that Drupal route in the widget bundle
-  // href, the CMS-integration docs, and the WP/Drupal UAT harness.
-  "src/app/api/drupal/bundle.js/route.ts",
+  // unrelated). These files reference that Drupal route in the CMS-integration
+  // docs and the WP/Drupal UAT harness. (The dead drupal bundle.js route that
+  // also carried the href was removed — cinatra#977.)
   "docs/developer/integrating-with-a-cms.md",
   "docs/user/cinatra-in-your-cms.md",
   "tests/e2e/wp-drupal-uat/drupal/drupal-uat.spec.ts",
