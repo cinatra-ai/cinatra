@@ -401,7 +401,13 @@ export async function loadRuntimePackageExtensions(
       }
       return import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(realAbs).href);
     },
-    makeContext: (packageName, grantedPorts) => createExtensionHostContext(packageName, grantedPorts),
+    // `record.envOverrides` is the RAW `cinatra.envOverrides` pass-through
+    // (cinatra#982); `resolution` is deliberately omitted for a materialized
+    // package-store record (a marketplace install is never the host-locked
+    // `"required"` systemExtensions set — see `PackageStoreRecord` in
+    // `@cinatra-ai/sdk-extensions`), so only NAMESPACED env keys validate here.
+    makeContext: (packageName, grantedPorts, record) =>
+      createExtensionHostContext(packageName, grantedPorts, { envOverrides: record.envOverrides }),
     verifyIntegrity: (rec) => {
       const anchor = anchorByName.get(rec.packageName);
       return verifyMaterializedPackageIntegrity(

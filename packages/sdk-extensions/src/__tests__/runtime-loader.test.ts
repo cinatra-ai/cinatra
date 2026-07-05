@@ -399,7 +399,7 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
     });
     expect(res.some((r) => r.packageName === "@x/srv" && r.status === "registered")).toBe(true);
     expect(registered).toEqual(["@x/srv"]);
-    expect(makeContext).toHaveBeenCalledWith("@x/srv", ["capabilities"]);
+    expect(makeContext).toHaveBeenCalledWith("@x/srv", ["capabilities"], records[0]);
   });
 
   it("skips a package with no serverEntry, and ABI-refuses an incompatible range BEFORE import", async () => {

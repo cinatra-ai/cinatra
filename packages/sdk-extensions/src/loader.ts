@@ -19,6 +19,21 @@ export type LoaderRecord = {
   serverEntry: string | null;
   sdkAbiRange?: string;
   requestedHostPorts?: HostPortName[];
+  /**
+   * RAW `cinatra.envOverrides` pass-through (cinatra#982), or absent when the
+   * package declares none. Threaded to `makeContext` UNVALIDATED — the host ctx
+   * factory validates it (namespaced-vs-legacy security guard) before wiring
+   * the settings/secrets ports.
+   */
+  envOverrides?: Record<string, string> | null;
+  /**
+   * Generator-owned presence classification (`"required"` = the host-locked
+   * `systemExtensions` set; see `./manifest`). Absent/unknown MUST be treated
+   * as NOT required by any consumer (fail-closed for the legacy-env-name
+   * grandfathering guard) — only the static-bundle loader (which sources this
+   * from the generated manifest) ever sets it to `"required"`.
+   */
+  resolution?: "required" | "guardedOptional";
 };
 
 export type LoaderDeps = {
@@ -26,8 +41,13 @@ export type LoaderDeps = {
   importServerEntry: (packageName: string) => Promise<unknown> | undefined;
   /** Build the (least-privilege) host ctx for a package, given the ports it
    * declared in `requestedHostPorts` (passed straight through so the host factory
-   * is grant-aware without the loader maintaining a side-map). */
-  makeContext: (packageName: string, grantedPorts: readonly HostPortName[]) => ExtensionHostContext;
+   * is grant-aware without the loader maintaining a side-map) and the full
+   * record (so the factory can read `envOverrides`/`resolution`). */
+  makeContext: (
+    packageName: string,
+    grantedPorts: readonly HostPortName[],
+    record: LoaderRecord,
+  ) => ExtensionHostContext;
   /** The host's ABI-compat verdict for a record (semver, host-computed). */
   abiCompatible: (record: LoaderRecord) => boolean;
   /** Installed package set for `config.resolve`; defaults to all record names. */
@@ -78,7 +98,7 @@ export async function runStaticBundleActivation(
       results.push({ packageName: rec.packageName, status: "skipped", reason: "no-server-entry" });
       continue;
     }
-    const ctx = deps.makeContext(rec.packageName, rec.requestedHostPorts ?? []);
+    const ctx = deps.makeContext(rec.packageName, rec.requestedHostPorts ?? [], rec);
     // ABI already gated above (before import); pass `true` as defense-in-depth.
     const r = await activateExtensionModule(mod, ctx, { abiCompatible: true, installedPackages });
     results.push(r);

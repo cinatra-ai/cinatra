@@ -1301,6 +1301,12 @@ export async function buildManifest() {
       // through the SDK validator and caches the outcome on the registration
       // record — the generated manifest carries DATA, never a verdict.
       accessConfig: x.kind === "connector" ? readConnectorAccessConfigRaw(x.dir) : null,
+      // RAW `cinatra.envOverrides` pass-through (cinatra#982): a manifest-
+      // declared map from a process-env VAR NAME to the settings/secrets KEY it
+      // overrides. Carried through UNVALIDATED (same pattern as accessConfig) —
+      // the host validates it fail-closed (namespaced-vs-legacy security guard,
+      // keyed on `resolution` above) at ctx-build time.
+      envOverrides: isObj(cin.envOverrides) ? cin.envOverrides : null,
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
@@ -1849,6 +1855,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             vendor: r.vendor,
             resolution: r.resolution,
             accessConfig: r.accessConfig,
+            envOverrides: r.envOverrides,
           },
         )},`,
     )

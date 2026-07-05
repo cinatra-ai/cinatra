@@ -83,6 +83,11 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
     serverEntry: r.serverEntry,
     requestedHostPorts: r.requestedHostPorts,
     sdkAbiRange: r.sdkAbiRange ?? undefined,
+    // cinatra#982: threaded UNVALIDATED through to `makeContext` below, which
+    // validates it (namespaced-vs-legacy security guard) before wiring the
+    // settings/secrets ports.
+    envOverrides: r.envOverrides ?? undefined,
+    resolution: r.resolution,
   }));
 
   // Manifest-completeness first: ensure every bundled serverEntry package has
@@ -146,7 +151,14 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
     },
     // grantedPorts is passed straight through by the loader from each record's
     // requestedHostPorts — no side-map needed. Each ctx exposes only those ports.
-    makeContext: (packageName, grantedPorts) => createExtensionHostContext(packageName, grantedPorts),
+    // `record` carries the manifest-declared env-override input (cinatra#982),
+    // validated inside `createExtensionHostContext` before the settings/secrets
+    // ports are wired.
+    makeContext: (packageName, grantedPorts, record) =>
+      createExtensionHostContext(packageName, grantedPorts, {
+        envOverrides: record.envOverrides,
+        resolution: record.resolution,
+      }),
     // ABI verdict: does the frozen host SDK ABI satisfy the record's declared
     // sdkAbiRange? Unpinned ranges permit; a declared-but-incompatible range
     // (or a host below the range floor) is refused before any extension code runs.

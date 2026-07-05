@@ -28,10 +28,17 @@ import type {
   HostPortName,
   HostUsageEvent,
 } from "@cinatra-ai/sdk-extensions";
+// (no separate EnvOverrideMap import needed — the port factories consume the
+// plain per-port `Record<string,string>` shape `splitEnvOverridesByPort` returns)
 // The per-port ABI tier table — the canonical source for the fail-loud
 // "not-implemented" branch below (a granted `reserved`-tier port is
 // wired-but-unavailable until a future MINOR flips its tier to `stable`).
 import { HOST_PORT_TIER } from "@cinatra-ai/sdk-extensions";
+// Manifest-declared env-override layer (cinatra#982): validates the RAW
+// `cinatra.envOverrides` pass-through carried on the loader record (the
+// namespaced-vs-legacy security guard) and splits it into per-port
+// (settings/secrets) reverse lookup maps the port factories below consume.
+import { validateEnvOverrides, splitEnvOverridesByPort } from "@cinatra-ai/sdk-extensions";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
 import { registerExtensionMcpTool } from "@/lib/extension-mcp-registry";
 import { deleteConnectorConfig, readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
@@ -327,10 +334,33 @@ async function settingsKey(packageName: string, key: string): Promise<string> {
   return `ext:${packageName}:${orgId}:${key}`;
 }
 
-function makeSettings(packageName: string): ExtensionHostContext["settings"] {
+/**
+ * Env-first-else-DB precedence for a settings/secrets `get` (cinatra#982). When
+ * `key` has a validated env-override mapping AND the env var is actually SET
+ * (non-blank after trim), the env value wins and the DB is never consulted —
+ * this is what lets a `get()` succeed with NO resolvable org/actor (boot-time /
+ * webhook-time reads for a required systemExtension), matching nango's
+ * pre-existing `?.trim() || stored` precedence exactly (a `KEY=` empty-string
+ * env line is treated as unset, falling through to the DB). Returns `undefined`
+ * (not a value) when there is no override or the env var is unset/blank, so the
+ * caller falls through to its normal DB read.
+ */
+function readEnvOverride(envByKey: Record<string, string>, key: string): string | undefined {
+  const envVar = envByKey[key];
+  if (!envVar) return undefined;
+  return process.env[envVar]?.trim() || undefined;
+}
+
+function makeSettings(
+  packageName: string,
+  envByKey: Record<string, string> = {},
+): ExtensionHostContext["settings"] {
   return {
-    get: async <T = unknown>(key: string) =>
-      readConnectorConfigFromDatabase<T | null>(await settingsKey(packageName, key), null),
+    get: async <T = unknown>(key: string) => {
+      const envValue = readEnvOverride(envByKey, key);
+      if (envValue !== undefined) return envValue as unknown as T;
+      return readConnectorConfigFromDatabase<T | null>(await settingsKey(packageName, key), null);
+    },
     set: async <T = unknown>(key: string, value: T) => {
       const orgId = await requireExtensionOrganizationId(packageName);
       writeConnectorConfigToDatabase(`ext:${packageName}:${orgId}:${key}`, value);
@@ -363,9 +393,14 @@ async function secretMeta(packageName: string, key: string): Promise<{ storeKey:
   return { storeKey, aad: storeKey };
 }
 
-function makeSecrets(packageName: string): ExtensionHostContext["secrets"] {
+function makeSecrets(
+  packageName: string,
+  envByKey: Record<string, string> = {},
+): ExtensionHostContext["secrets"] {
   return {
     get: async (key: string) => {
+      const envValue = readEnvOverride(envByKey, key);
+      if (envValue !== undefined) return envValue;
       const { storeKey, aad } = await secretMeta(packageName, key);
       const stored = readConnectorConfigFromDatabase<{ ciphertext: string; iv: string } | null>(storeKey, null);
       if (!stored) return null;
@@ -627,17 +662,44 @@ function unavailablePort(
 }
 
 /**
+ * The manifest-declared env-override input a caller MAY pass to
+ * `createExtensionHostContext` (cinatra#982) — the RAW `cinatra.envOverrides`
+ * pass-through plus the `resolution` classification needed to decide legacy
+ * (non-namespaced) env-name eligibility. Both optional; an omitted/empty input
+ * yields NO env overrides (behavior-preserving default).
+ */
+export type ExtensionEnvOverrideInput = {
+  envOverrides?: Record<string, string> | null;
+  resolution?: "required" | "guardedOptional";
+};
+
+/**
  * Build the host ctx for one extension, GRANT-AWARE: a privileged port is the
  * real wired impl only when the extension granted it via `requestedHostPorts`;
  * ungranted privileged ports are fail-loud. Ambient ports (`logger`/`runtime`)
  * are always real. Org/actor-scoped ports resolve the trusted context PER CALL.
+ *
+ * `envInput` (cinatra#982) carries the extension's manifest-declared
+ * `cinatra.envOverrides` + its generator-owned `resolution`. Validated here
+ * (namespaced-vs-legacy security guard) BEFORE the settings/secrets ports are
+ * built — a rejected entry is logged via the extension's own logger and never
+ * activates a mapping.
  */
 export function createExtensionHostContext(
   packageName: string,
   grantedPorts: readonly HostPortName[] = [],
+  envInput: ExtensionEnvOverrideInput = {},
 ): ExtensionHostContext {
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
   const logger = makeLogger(packageName);
+
+  const envValidation = validateEnvOverrides(packageName, envInput.envOverrides ?? null, {
+    allowLegacyNames: envInput.resolution === "required",
+  });
+  for (const rejection of envValidation.rejected) {
+    logger.warn(`cinatra.envOverrides["${rejection.envKey}"] rejected: ${rejection.reason}`);
+  }
+  const envByPort = splitEnvOverridesByPort(envValidation.overrides);
 
   // A privileged port is the real wired impl only when GRANTED and its ABI tier
   // is `stable`. Three states (see the ABI-evolution port-tiering policy):
@@ -668,8 +730,8 @@ export function createExtensionHostContext(
         `[ExtensionHostContext] ${packageName}: reserved port "db" has no wired impl — flip HOST_PORT_TIER.db to "stable" when wiring it.`,
       );
     }),
-    settings: gated("settings", () => makeSettings(packageName)),
-    secrets: gated("secrets", () => makeSecrets(packageName)),
+    settings: gated("settings", () => makeSettings(packageName, envByPort.settings)),
+    secrets: gated("secrets", () => makeSecrets(packageName, envByPort.secrets)),
     nango: gated("nango", () => makeNango()),
     authSession: gated("authSession", () => makeAuthSession(packageName)),
     mcp: gated("mcp", () => makeMcp(packageName)),
@@ -703,6 +765,7 @@ export function createExtensionHostContext(
 export function createExtensionProbeHostContext(
   packageName: string,
   grantedPorts: readonly HostPortName[] = [],
+  envInput: ExtensionEnvOverrideInput = {},
 ): {
   ctx: ExtensionHostContext;
   recorder: {
@@ -714,7 +777,7 @@ export function createExtensionProbeHostContext(
     uiActions: unknown[];
   };
 } {
-  const real = createExtensionHostContext(packageName, grantedPorts);
+  const real = createExtensionHostContext(packageName, grantedPorts, envInput);
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
 
   const recorder = {
