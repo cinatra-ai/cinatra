@@ -205,6 +205,20 @@ export function isResolvedConnectorAccessDeclaration(
   );
 }
 
+/**
+ * 2-tier projection of a resolved declaration onto the connector-card
+ * visibility axis (cinatra#955): the `admin` scope stays admin-only; every
+ * non-admin scope projects to the `workspace` tier. STRUCTURAL MIRROR of the
+ * SDK's `connectorAccessVisibilityTier` (this package deliberately imports no
+ * SDK module at runtime) — the access-declaration-mirror test pins the two in
+ * agreement across the full scope vocabulary.
+ */
+export function connectorAccessDeclarationTier(
+  declaration: Pick<ResolvedConnectorAccessDeclaration, "scope">,
+): "admin" | "workspace" {
+  return declaration.scope === "admin" ? "admin" : "workspace";
+}
+
 export type InstalledExtension = {
   id: string;
   packageName: string;

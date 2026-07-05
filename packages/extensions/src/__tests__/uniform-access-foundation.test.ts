@@ -36,14 +36,23 @@ describe("ExtensionKind union", () => {
 });
 
 describe("install-time defaults", () => {
-  it("connector / artifact / workflow default to workspace visibility", () => {
-    for (const k of ["connector", "artifact", "workflow"] as ExtensionKind[]) {
+  it("artifact / workflow default to workspace visibility", () => {
+    for (const k of ["artifact", "workflow"] as ExtensionKind[]) {
       const p = defaultAccessPolicyForKind(k);
       expect(p.runListVisibility).toBe("workspace");
       expect(p.runDataVisibility).toBe("workspace");
       expect(p.runExecuteVisibility).toBe("workspace");
       expect(p.allowRunSharing).toBe(false);
     }
+  });
+
+  it("the connector kind has NO static default — it derives from cinatra/config.json (cinatra#955)", () => {
+    expect(() => defaultAccessPolicyForKind("connector")).toThrow(
+      /no static access default/,
+    );
+    expect(() => defaultAccessPolicyForKind("connector")).toThrow(
+      /cinatra\/config\.json declaration/,
+    );
   });
 
   it("agent / skill kinds default to owner visibility (fail-safe)", () => {

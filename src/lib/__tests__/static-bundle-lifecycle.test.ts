@@ -45,6 +45,9 @@ vi.mock("@/lib/generated/extensions.server", () => ({
       serverEntry: "./register",
       requestedHostPorts: [],
       sdkAbiRange: null,
+      // cinatra#955: bundled connectors SHIP cinatra/config.json — the raw
+      // pass-through is the normal case; its absence is a refusal (tested below).
+      accessConfig: { formatVersion: 1, access: { scope: { default: "workspace" } } },
       dependencies: [
         {
           packageName: "@cinatra-ai/dep-connector",
@@ -499,13 +502,15 @@ describe("ensureStaticBundleLifecycleAnchors — bundled digest identity (cinatr
 // ---------------------------------------------------------------------------
 // cinatra#951 — connector access-declaration caching at boot registration.
 // The seeder resolves each connector record's raw `accessConfig` through the
-// SDK validator (absence rule at install surface) and caches the outcome on
-// the registration record via recordExtensionAccessDeclaration — drift-gated
-// (no per-boot write churn), loud + anchor-preserving on failure.
+// SDK validator and caches the outcome on the registration record via
+// recordExtensionAccessDeclaration — drift-gated (no per-boot write churn),
+// loud + anchor-preserving on failure. Since cinatra#955 a record WITHOUT an
+// accessConfig pass-through REFUSES (accessDeclarationFailed) instead of
+// resolving an absence default.
 // ---------------------------------------------------------------------------
 describe("ensureStaticBundleLifecycleAnchors — access-declaration caching (cinatra#951)", () => {
   const PKG = "@cinatra-ai/bundled-connector";
-  const ABSENT_RESOLVED = { formatVersion: 1, mode: "default", scope: "admin", source: "absent" };
+  const DECLARED_RESOLVED = { formatVersion: 1, mode: "default", scope: "workspace", source: "declared" };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -521,27 +526,27 @@ describe("ensureStaticBundleLifecycleAnchors — access-declaration caching (cin
     vi.unstubAllEnvs();
   });
 
-  it("fresh seed caches the ABSENCE-rule declaration (no accessConfig on the record)", async () => {
+  it("fresh seed caches the DECLARED declaration from the record's accessConfig pass-through", async () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([]);
     const result = await runSeeder();
     expect(result.accessDeclarationFailed).toEqual([]);
     const call = recordExtensionAccessDeclaration.mock.calls.find((c) => c[1] !== null);
     expect(call).toBeTruthy();
-    expect(call![1]).toEqual(ABSENT_RESOLVED);
+    expect(call![1]).toEqual(DECLARED_RESOLVED);
     expect((call![2] as { actor: { source: string } }).actor.source).toBe("static-bundle-lifecycle");
   });
 
   it("LIVE anchor whose cached declaration already matches → NO write (drift-gated)", async () => {
     const anchored = {
       ...anchorRow("active"),
-      accessDeclaration: ABSENT_RESOLVED,
+      accessDeclaration: DECLARED_RESOLVED,
     } as InstalledExtension;
     readInstalledExtensionsByPackageName.mockResolvedValue([anchored]);
     await runSeeder();
     expect(recordExtensionAccessDeclaration).not.toHaveBeenCalled();
   });
 
-  it("LIVE anchor with a DRIFTED cached declaration → re-cached", async () => {
+  it("LIVE anchor with a DRIFTED cached declaration → re-cached to the declared value", async () => {
     const anchored = {
       ...anchorRow("active"),
       accessDeclaration: { formatVersion: 1, mode: "default", scope: "user", source: "declared" },
@@ -550,9 +555,32 @@ describe("ensureStaticBundleLifecycleAnchors — access-declaration caching (cin
     await runSeeder();
     expect(recordExtensionAccessDeclaration).toHaveBeenCalledWith(
       "iext_anchor",
-      ABSENT_RESOLVED,
+      DECLARED_RESOLVED,
       expect.anything(),
     );
+  });
+
+  it("a record WITHOUT accessConfig REFUSES (cinatra#955): accessDeclarationFailed, cache untouched, anchor preserved", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Strip the fixture's shipped accessConfig for THIS test only (the mocked
+    // records array is module-shared — restore in finally).
+    const generated = await import("@/lib/generated/extensions.server");
+    const rec = generated.STATIC_EXTENSION_RECORDS.find(
+      (r: { packageName: string }) => r.packageName === PKG,
+    ) as { accessConfig?: unknown };
+    const savedAccessConfig = rec.accessConfig;
+    rec.accessConfig = undefined;
+    try {
+      readInstalledExtensionsByPackageName.mockResolvedValue([anchorRow("active")]);
+      const result = await runSeeder();
+      expect(result.accessDeclarationFailed).toEqual([PKG]);
+      expect(result.failed).toEqual([]);
+      expect(recordExtensionAccessDeclaration).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      rec.accessConfig = savedAccessConfig;
+      errorSpy.mockRestore();
+    }
   });
 
   it("cache-write failure → accessDeclarationFailed[] (loud, anchor unaffected)", async () => {
@@ -573,7 +601,7 @@ describe("ensureStaticBundleLifecycleAnchors — access-declaration caching (cin
     readInstalledExtensionsByPackageName.mockResolvedValue([]);
     await runSeeder();
     for (const call of recordExtensionAccessDeclaration.mock.calls) {
-      expect(call[1]).toEqual(ABSENT_RESOLVED);
+      expect(call[1]).toEqual(DECLARED_RESOLVED);
     }
   });
 });

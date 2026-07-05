@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   createConnectorExtensionHandler,
   GENERIC_VENDOR_CONNECTOR_NAME_RE,
-  defaultConnectorVisibility,
   checkConnectorRealpathMatch,
 } from "../connector-handler";
 
@@ -14,7 +13,7 @@ import {
 //   1. generic-vendor regex (accepts @example-vendor, @cinatra-ai, @acme...)
 //   2. kind:"connector" semantic gate rejects -agent/-skill/-artifact
 //   3. package-name↔realpath match + symlink-escape rejection
-//   4. default visibility = "admin" unless explicitly set
+//   4. the deleted manifest visibility axis stays deleted (cinatra#955)
 
 const baseHandler = createConnectorExtensionHandler();
 if (!baseHandler.validate) {
@@ -83,36 +82,25 @@ describe("validate() kind gate rejects non-connector packages", () => {
     }
   });
 
-  it("rejects an unknown cinatra.visibility value", async () => {
-    const result = await validate({
-      name: "@example-vendor/blog-connector",
-      cinatra: { kind: "connector", visibility: "public" },
-    });
-    expect(result.valid).toBe(false);
-    expect(result.errors?.some((e) => e.includes("cinatra.visibility"))).toBe(true);
-  });
-
-  it("accepts an explicit admin/workspace visibility", async () => {
-    for (const visibility of ["admin", "workspace"]) {
+  it("rejects cinatra.visibility on PRESENCE — any value, incl. the formerly-legal ones (cinatra#955)", async () => {
+    for (const visibility of ["public", "admin", "workspace", null]) {
       const result = await validate({
         name: "@example-vendor/blog-connector",
         cinatra: { kind: "connector", visibility },
       });
-      expect(result.valid).toBe(true);
+      expect(result.valid).toBe(false);
+      expect(
+        result.errors?.some((e) => e.includes("cinatra.visibility") && e.includes("cinatra/config.json")),
+      ).toBe(true);
     }
   });
-});
 
-describe("defaultConnectorVisibility", () => {
-  it("defaults to admin when visibility is unset", () => {
-    expect(defaultConnectorVisibility({})).toBe("admin");
-    expect(defaultConnectorVisibility({ cinatra: {} })).toBe("admin");
-  });
-  it("honors an explicit workspace visibility", () => {
-    expect(defaultConnectorVisibility({ cinatra: { visibility: "workspace" } })).toBe("workspace");
-  });
-  it("falls back to admin for any non-workspace value", () => {
-    expect(defaultConnectorVisibility({ cinatra: { visibility: "garbage" } })).toBe("admin");
+  it("accepts a connector manifest WITHOUT cinatra.visibility (the only shape post-cutover)", async () => {
+    const result = await validate({
+      name: "@example-vendor/blog-connector",
+      cinatra: { kind: "connector" },
+    });
+    expect(result.valid).toBe(true);
   });
 });
 

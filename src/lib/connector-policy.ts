@@ -12,6 +12,11 @@ import {
   type ExtensionAccessOp,
 } from "@cinatra-ai/extensions/enforce-extension-access";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import { connectorAccessVisibilityTier } from "@cinatra-ai/sdk-extensions/access-config";
+import {
+  connectorCatalogAccessDeclaration,
+  connectorCatalogDefaultVisibility,
+} from "@/lib/connector-access-config-host";
 
 // `enforceConnectorPolicy(packageId, actor, mode)`.
 //
@@ -80,7 +85,9 @@ function resolveEffectiveVisibility(
       // looser visibility.
     }
   }
-  return descriptor.defaultVisibility;
+  // cinatra#955: the catalog default derives from the connector's SHIPPED
+  // cinatra/config.json (generated-manifest pass-through), not a hand catalog.
+  return connectorCatalogDefaultVisibility(packageId);
 }
 
 export function enforceConnectorPolicy(
@@ -96,7 +103,7 @@ export function enforceConnectorPolicy(
     return {
       allowed: false,
       reason: "no_actor",
-      visibility: descriptor.defaultVisibility,
+      visibility: connectorCatalogDefaultVisibility(packageId),
     };
   }
 
@@ -107,11 +114,34 @@ export function enforceConnectorPolicy(
     // Fail closed on a canonical read error — do NOT fall back to the possibly
     // looser legacy/catalog default (that could grant access a tighter
     // canonical policy denies).
-    return { allowed: false, reason: "access_read_error", visibility: descriptor.defaultVisibility };
+    return {
+      allowed: false,
+      reason: "access_read_error",
+      visibility: connectorCatalogDefaultVisibility(packageId),
+    };
   }
   if (canonical.status === "found") {
     const { access } = canonical;
-    const effectivePolicy = access.policy ?? policyFromVisibility(descriptor.defaultVisibility);
+    // cinatra#955: the declared `only:"admin"` ceiling is SERVER-ENFORCED on
+    // the connector package surface — a stored policy row cannot loosen an
+    // exclusive admin declaration (the SDK contract: `only` is "the only scope
+    // that may ever have access"). The full ceiling algebra exists for
+    // CONNECTIONS (the W2 use-gate clamp); the package surface is 2-tier, so
+    // the admin ceiling is the entire enforceable vocabulary here.
+    if (
+      access.accessDeclaration?.mode === "only" &&
+      access.accessDeclaration.scope === "admin" &&
+      !isOrgAdmin(actor)
+    ) {
+      return { allowed: false, reason: "admin_only_connector", visibility: "admin" };
+    }
+    // Policy-row fallback: the row's cached cinatra/config.json declaration
+    // (2-tier projection), then the shipped catalog default for pre-reader
+    // rows — never a hand-maintained catalog value (deleted, cinatra#955).
+    const fallbackVisibility = access.accessDeclaration
+      ? connectorAccessVisibilityTier(access.accessDeclaration)
+      : connectorCatalogDefaultVisibility(packageId);
+    const effectivePolicy = access.policy ?? policyFromVisibility(fallbackVisibility);
     const visibility = visibilityFromPolicy(effectivePolicy);
     // Connector `manage` stays ADMIN-ONLY (preserve the legacy rule): the
     // uniform `manage` op also admits installer/co-owners, which would broaden
@@ -144,9 +174,20 @@ export function enforceConnectorPolicy(
       "[connector-policy] using legacy connector_access_policy fallback — run the connector migration to move off it.",
     );
   }
+  // cinatra#955: the shipped `only:"admin"` declaration is server-enforced on
+  // the LEGACY fallback path too — a legacy `connector_access_policy` row
+  // cannot loosen an exclusive admin declaration (codex diff-round finding 1).
+  const catalogDeclaration = connectorCatalogAccessDeclaration(packageId);
+  if (
+    catalogDeclaration?.mode === "only" &&
+    catalogDeclaration.scope === "admin" &&
+    !isOrgAdmin(actor)
+  ) {
+    return { allowed: false, reason: "admin_only_connector", visibility: "admin" };
+  }
   const visibility =
     resolveEffectiveVisibility(packageId, actor.organizationId) ??
-    descriptor.defaultVisibility;
+    connectorCatalogDefaultVisibility(packageId);
 
   if (mode === "manage") {
     return isOrgAdmin(actor)

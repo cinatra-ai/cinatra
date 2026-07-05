@@ -17,12 +17,11 @@
  *       "cinatra" — a shipped config missing from the packlist would be
  *       silently dropped from the published tarball (worse than absence).
  *
- *   ABSENT `cinatra/config.json` (staged, cinatra#951):
- *     - default: WARN (fleet completeness) — the pinned extension SHAs
- *       predate the W1 stub sweep, so absence cannot hard-fail until the W4
- *       fleet configs + lock bumps land;
- *     - `--require-present`: hard-fail on absence (the closing-wave flip,
- *       cinatra#955) — incl. the protected-slug absence case.
+ *   ABSENT `cinatra/config.json` (HARD-FAIL — the cinatra#955 closing-wave
+ *   flip): every synced `kind:"connector"` package MUST ship the config. The
+ *   W1 staging WARN existed only until the W4 fleet configs + lock bumps
+ *   landed (they did — 29/29 pinned finals ship a declared config); absence
+ *   is now a finding, incl. the protected-slug absence case.
  *
  * The validation rules MIRROR `parseConnectorAccessConfig` in
  * `packages/sdk-extensions/src/access-config.ts` (the single authoritative
@@ -141,9 +140,7 @@ function listConnectorPackages(root) {
 }
 
 function main() {
-  const requirePresent = process.argv.includes("--require-present");
   const findings = [];
-  const warnings = [];
 
   for (const { dir, rel, pkg } of listConnectorPackages(EXTENSIONS_ROOT)) {
     const name = pkg.name ?? rel;
@@ -151,13 +148,12 @@ function main() {
     const present = existsSync(configPath);
 
     if (!present) {
+      // HARD-FAIL on absence (cinatra#955 closing wave): the W1 staged WARN is
+      // deleted — the fleet ships configs, so a config-less connector is a
+      // regression, not a known gap.
       const slug = accessSlugFromPackageName(name);
       const note = PROTECTED_SLUGS[slug] ? " (PROTECTED slug — must declare only:\"admin\")" : "";
-      if (requirePresent) {
-        findings.push(`${rel}: cinatra/config.json is MISSING for kind=connector${note}`);
-      } else {
-        warnings.push(`${rel}: cinatra/config.json not yet shipped${note} — the W1 stub sweep / W4 fleet configs close this`);
-      }
+      findings.push(`${rel}: cinatra/config.json is MISSING for kind=connector${note}`);
       continue;
     }
 
@@ -180,7 +176,6 @@ function main() {
     }
   }
 
-  for (const w of warnings) console.warn(`[connector-access-config-gate] WARN ${w}`);
   if (findings.length > 0) {
     for (const f of findings) console.error(`[connector-access-config-gate] FAIL ${f}`);
     console.error(`[connector-access-config-gate] ${findings.length} finding(s).`);

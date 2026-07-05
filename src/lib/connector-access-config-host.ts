@@ -28,10 +28,12 @@ import "server-only";
 
 import {
   ConnectorAccessConfigError,
+  connectorAccessVisibilityTier,
   parseConnectorAccessConfig,
   resolveAbsentConnectorAccessConfig,
   type ResolvedConnectorAccessDeclaration,
 } from "@cinatra-ai/sdk-extensions/access-config";
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 
 export type { ResolvedConnectorAccessDeclaration };
 
@@ -228,4 +230,54 @@ export async function readConnectorAccessDeclarationFromStore(
     );
   }
   return parseConnectorAccessConfig(parsed, { packageName });
+}
+
+// ---------------------------------------------------------------------------
+// Catalog default (cinatra#955 — the hand-catalog visibility-tier chain is
+// deleted). For a BUNDLED catalog connector, the shipped-image truth of its
+// default access tier is the generated manifest's raw `accessConfig`
+// pass-through (the same bytes the image ships), resolved through the single
+// SDK validator and projected onto the 2-tier connector-card axis.
+// ---------------------------------------------------------------------------
+
+const catalogDeclarationCache = new Map<string, ResolvedConnectorAccessDeclaration | null>();
+
+/**
+ * The SHIPPED declaration of a bundled catalog connector (via the generated
+ * manifest's raw `accessConfig` pass-through), parsed through the single SDK
+ * validator. `null` for an unknown package, a non-connector kind, or an
+ * absent/unparseable shipped config — the CI connector-access-config-gate
+ * makes those states unmergeable, so `null` only guards a torn image (callers
+ * treat it fail-closed).
+ */
+export function connectorCatalogAccessDeclaration(
+  packageId: string,
+): ResolvedConnectorAccessDeclaration | null {
+  if (catalogDeclarationCache.has(packageId)) {
+    return catalogDeclarationCache.get(packageId) ?? null;
+  }
+  let declaration: ResolvedConnectorAccessDeclaration | null = null;
+  const record = STATIC_EXTENSION_MANIFEST[packageId];
+  const raw = record?.kind === "connector" ? (record.accessConfig ?? null) : null;
+  if (raw !== null) {
+    try {
+      declaration = parseConnectorAccessConfig(raw, { packageName: packageId });
+    } catch {
+      declaration = null;
+    }
+  }
+  catalogDeclarationCache.set(packageId, declaration);
+  return declaration;
+}
+
+/**
+ * The 2-tier default visibility of a bundled catalog connector, derived from
+ * its shipped `cinatra/config.json`. FAIL-CLOSED: no resolvable declaration →
+ * "admin" (the strictest tier).
+ */
+export function connectorCatalogDefaultVisibility(
+  packageId: string,
+): "admin" | "workspace" {
+  const declaration = connectorCatalogAccessDeclaration(packageId);
+  return declaration ? connectorAccessVisibilityTier(declaration) : "admin";
 }
