@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Report on merge-queue candidates too (engineering#484). A required status
+  # check whose producing workflow omits merge_group never reports on a queue
+  # candidate, so the entry hangs forever on the missing check and the queue
+  # stalls. Coverage is enforced by scripts/audit/merge-group-coverage-gate.mjs.
+  merge_group:
 
 permissions:
   contents: read

@@ -25,6 +25,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Report on merge-queue candidates too (engineering#484): `CRM migration gates`
+  # is a branch-protection required check, so its workflow must trigger on
+  # merge_group or a queue entry hangs forever on the missing check and the
+  # queue stalls. Coverage is enforced by
+  # scripts/audit/merge-group-coverage-gate.mjs.
+  merge_group:
   workflow_dispatch:
 
 permissions:

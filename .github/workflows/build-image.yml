@@ -773,6 +773,19 @@ jobs:
       - name: Perpetual system loops gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/perpetual-system-loops-gate.test.mjs
 
+      # merge_group coverage guard (engineering#484): every branch-protection
+      # required status context must be produced by a workflow that also
+      # triggers on `merge_group`, or a merge-queue candidate hangs forever on
+      # the missing check. This job (`Perpetual system loops invariants`) is
+      # itself a required check that already triggers on merge_group (see the
+      # workflow-level `on:` above), so it is a safe home for the guard — it
+      # adds no NEW required context.
+      - name: merge_group coverage gate
+        run: node scripts/audit/merge-group-coverage-gate.mjs
+
+      - name: merge_group coverage gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/merge-group-coverage-gate.test.mjs
+
       - name: Identity copy gate (no GTM-only platform framing)
         run: node scripts/audit/identity-copy-gate.mjs
 
