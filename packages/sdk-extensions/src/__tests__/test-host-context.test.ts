@@ -200,6 +200,18 @@ describe("createTestHostContext — author-facing local test harness", () => {
       expect(recorder.capabilityProviders).toHaveLength(1);
     });
 
+    it("logger.capture is ambient (no grant needed) and records to recorder.capturesWritten (cinatra#981)", async () => {
+      const { ctx, recorder } = createTestHostContext({ packageName: "@x/y-connector" });
+      expect(typeof ctx.logger.captureDirectory).toBe("function");
+      await ctx.logger.capture!("llm-api", { label: "call-1", kind: "request", body: { ok: true } });
+      expect(recorder.capturesWritten).toHaveLength(1);
+      expect(recorder.capturesWritten[0]).toEqual({
+        channel: "llm-api",
+        entry: { label: "call-1", kind: "request", body: { ok: true } },
+      });
+      expect(ctx.logger.captureDirectory!("llm-api")).toContain("y-connector");
+    });
+
     it("objects.registerType keeps the faithful descriptor guard", () => {
       const { ctx } = createTestHostContext({ packageName: "@x/y-connector", grants: ["objects"] });
       // @ts-expect-error non-object descriptor

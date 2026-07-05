@@ -388,6 +388,39 @@ export type HostLoggerPort = {
   info(msg: string, fields?: Record<string, unknown>): void;
   warn(msg: string, fields?: Record<string, unknown>): void;
   error(msg: string, fields?: Record<string, unknown>): void;
+  /**
+   * Structured request/response capture (cinatra#981, part of the #978
+   * core/extension boundary epic). Persists `entry` as a timestamped JSON file
+   * under a HOST-OWNED, per-extension capture directory
+   * (`captureDirectory(channel)`), applying the host's bounded rotation/
+   * retention policy — replacing the pre-#981 pattern of a connector reaching
+   * for `node:fs` directly to write its own request/response logs (banned in
+   * extension source by the extension-side conformance gate, cinatra#979).
+   *
+   * ADDITIVE, OPTIONAL port method (minimum-minor SDK ABI evolution — see
+   * `register.ts`'s ABI history comment): no new port, no ABI major. Ambient
+   * like the rest of `ctx.logger` (never gated by `requestedHostPorts`) —
+   * `capture()` is storage/rotation ONLY. What gets captured, when capture is
+   * enabled (e.g. production default-OFF, or an opt-in-everywhere PII gate),
+   * and any field-level redaction (e.g. stripping an Authorization header)
+   * stay EXTENSION-owned domain policy; the extension must gate the call site
+   * itself and pass an already-redacted `entry.body`.
+   *
+   * `channel` names a capture stream scoped to this extension (an extension
+   * may own more than one) and is sanitized host-side before touching the
+   * filesystem — never trust it as a raw path segment. Rotation/retention
+   * failures are swallowed (best-effort housekeeping, mirroring the pre-#981
+   * connector-side `enforceLogRetention` semantics); a genuine write failure
+   * (disk full, permissions) propagates like any other fallible host call.
+   */
+  capture?(channel: string, entry: { label: string; kind: string; body: unknown }): Promise<void>;
+  /**
+   * The resolved on-disk directory `capture(channel, ...)` entries land in —
+   * a read-only display value for the extension's own settings/telemetry
+   * surface (e.g. `LlmProviderSurface.directory`). The extension has no direct
+   * filesystem access to this path; `capture()` is the only write path.
+   */
+  captureDirectory?(channel: string): string;
 };
 
 /** Runtime mode / environment flags (the `@/lib/runtime-mode` surface). */

@@ -107,7 +107,7 @@ describe("@cinatra-ai/sdk-extensions public surface fence", () => {
     expect(publicRoot.HOST_PORT_NAMES).toBeTruthy();
     expect(typeof publicRoot.defineExtension).toBe("function");
     expect(typeof publicRoot.isSdkAbiRangeSatisfied).toBe("function");
-    expect(publicRoot.SDK_EXTENSIONS_ABI_VERSION).toBe("2.2.0");
+    expect(publicRoot.SDK_EXTENSIONS_ABI_VERSION).toBe("2.3.0");
   });
 
   it("KEEPS the ABI-evolution policy metadata reachable on the root (HOST_PORT_TIER et al.)", () => {
