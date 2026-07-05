@@ -212,6 +212,23 @@ export type {
   CinatraManifest,
   NormalizedExtensionRecord,
 } from "./manifest";
+// Manifest-declared env-override layer (cinatra#982) — pure validation; see
+// `./env-overrides` for the security-guard doctrine.
+export {
+  parseEnvOverrideTarget,
+  envNamespaceForPackage,
+  envNamespacePrefixForPackage,
+  isNamespacedEnvKey,
+  validateEnvOverrides,
+  splitEnvOverridesByPort,
+} from "./env-overrides";
+export type {
+  EnvOverridePort,
+  EnvOverrideTarget,
+  EnvOverrideMap,
+  EnvOverrideRejection,
+  EnvOverrideValidation,
+} from "./env-overrides";
 export type {
   ExtensionExternalMcpTool,
   ExtensionExternalMcpToolbox,
