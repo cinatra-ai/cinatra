@@ -62,36 +62,72 @@ export function parseEnvOverrideTarget(raw: string): EnvOverrideTarget | null {
 }
 
 /**
- * The namespace segment a package's env vars must be prefixed with:
- * `CINATRA_EXT_<NAMESPACE>_`. Derived from the FULL package name — scope
- * INCLUDED (e.g. `@acme/acme-crm` -> `ACME_ACME_CRM`) — uppercased with every
- * non-alphanumeric run collapsed to a single underscore.
+ * INJECTIVE, `__`-free encoding of the FULL package name (scope INCLUDED) into
+ * the env-namespace segment used in `CINATRA_EXT_<NAMESPACE>__<KEY>`. Each
+ * source character maps to a fixed token: an alphanumeric passes through
+ * (uppercased), and each of the four package-name separators becomes `_` + a
+ * distinct MARKER LETTER:
+ *   `-` -> `_H`   `_` -> `_U`   `.` -> `_D`   `/` -> `_S`
+ * (the leading `@` scope sigil is dropped first).
  *
- * Deliberately NOT derived from just the last path segment: two DIFFERENT
- * scopes can publish a same-named package slug (`@trusted/foo-bar` and
- * `@attacker/foo_bar` both normalize their slug to `FOO_BAR`), which would let
- * one extension's manifest claim a namespaced env key that collides with
- * another's — defeating the "no arbitrary env" guard via a scope-squatted
- * slug. Including the scope makes the derived namespace as unique as the
- * (marketplace-unique) package name itself, so no separate registry lookup is
- * needed here.
+ * Two properties make this a sound per-extension isolation boundary — the two a
+ * naive "collapse every non-alphanumeric run to a single `_`" derivation LACKS:
+ *
+ *  1. INJECTIVE. A collapsing derivation is lossy: `-`, `_`, `.`, and the scope
+ *     separator `/` all fold to `_`, so DIFFERENT packages — including packages
+ *     in DIFFERENT (independently-owned) scopes — collide. `@acme-foo/bar`,
+ *     `@acme/foo-bar`, and `@acme/foo_bar` all collapse to `ACME_FOO_BAR`,
+ *     letting an extension in one scope claim an env key namespaced to another.
+ *     Distinct tokens per separator make the encoding reversible ⇒ injective ⇒
+ *     no two distinct package names share a namespace (`ACME_HFOO_SBAR` /
+ *     `ACME_SFOO_HBAR` / `ACME_SFOO_UBAR` — all distinct).
+ *
+ *  2. `__`-FREE. Every `_` this emits is immediately followed by a marker
+ *     LETTER (never another `_`), and a valid npm name neither starts/ends with
+ *     a separator nor is empty — so the output never contains a double
+ *     underscore. That is what lets the KEY be delimited by `__` (below)
+ *     WITHOUT a shorter package's namespace being a string-prefix of a longer
+ *     one's (the prefix-escalation `@acme/foo` -> `@acme/foo-bar` hole).
+ *
+ * Marketplace package names are validated `[a-z0-9._/-]` (+ scope), so the
+ * fallback below is unreachable for a real record; it stays injective-safe and
+ * `__`-free defensively (marker letter, never a trailing `_`).
  */
+const NS_SEPARATOR_MARKERS: Readonly<Record<string, string>> = {
+  "-": "_H",
+  _: "_U",
+  ".": "_D",
+  "/": "_S",
+};
+
 export function envNamespaceForPackage(packageName: string): string {
-  return packageName
-    .replace(/^@/, "") // drop the leading scope sigil so it doesn't produce a stray leading "_"
-    .replace(/[^a-zA-Z0-9]+/g, "_")
-    .toUpperCase();
+  let out = "";
+  for (const ch of packageName.replace(/^@/, "")) {
+    if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9")) {
+      out += ch.toUpperCase();
+    } else {
+      out += NS_SEPARATOR_MARKERS[ch] ?? `_Q${ch.codePointAt(0)!.toString(16).toUpperCase()}Q`;
+    }
+  }
+  return out;
 }
 
-/** The required prefix a namespaced env var must start with for `packageName`. */
+/**
+ * The required prefix a namespaced env var must start with for `packageName`.
+ * The `__` (DOUBLE underscore) terminator is load-bearing: combined with the
+ * `__`-free namespace above it guarantees no package's prefix is a string
+ * prefix of another's namespaced key (see `envNamespaceForPackage`).
+ */
 export function envNamespacePrefixForPackage(packageName: string): string {
-  return `CINATRA_EXT_${envNamespaceForPackage(packageName)}_`;
+  return `CINATRA_EXT_${envNamespaceForPackage(packageName)}__`;
 }
 
 /** True iff `envKey` is namespaced to `packageName` (the always-allowed form,
- * regardless of trust/resolution tier). */
+ * regardless of trust/resolution tier). Requires a NON-EMPTY key after the
+ * `__` terminator (the prefix alone, with no key, is not a valid claim). */
 export function isNamespacedEnvKey(packageName: string, envKey: string): boolean {
-  return envKey.startsWith(envNamespacePrefixForPackage(packageName));
+  const prefix = envNamespacePrefixForPackage(packageName);
+  return envKey.length > prefix.length && envKey.startsWith(prefix);
 }
 
 /**

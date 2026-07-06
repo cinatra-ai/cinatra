@@ -25,27 +25,58 @@ describe("parseEnvOverrideTarget", () => {
 });
 
 describe("envNamespaceForPackage / isNamespacedEnvKey", () => {
-  it("derives the namespace from the FULL package name (scope included), uppercased + normalized", () => {
-    expect(envNamespaceForPackage("@cinatra-ai/nango-connector")).toBe("CINATRA_AI_NANGO_CONNECTOR");
-    expect(envNamespaceForPackage("@acme/acme-crm")).toBe("ACME_ACME_CRM");
+  it("derives the namespace from the FULL package name (scope included) via an INJECTIVE, `__`-free encoding (each separator -> `_`+marker)", () => {
+    // `-`->`_H`, `_`->`_U`, `.`->`_D`, `/`->`_S`; alnum passes through uppercased.
+    expect(envNamespaceForPackage("@cinatra-ai/nango-connector")).toBe("CINATRA_HAI_SNANGO_HCONNECTOR");
+    expect(envNamespaceForPackage("@acme/acme-crm")).toBe("ACME_SACME_HCRM");
     expect(envNamespaceForPackage("simple")).toBe("SIMPLE");
+    // no `__` is ever produced (the property the `__` key-terminator relies on).
+    for (const p of ["@cinatra-ai/nango-connector", "@acme/acme-crm", "@a/b.c_d-e"]) {
+      expect(envNamespaceForPackage(p)).not.toContain("__");
+    }
   });
 
   it("REGRESSION (codex round-0): different scopes whose SLUG normalizes the same do NOT collide — the scope is part of the namespace", () => {
-    // @trusted/foo-bar and @attacker/foo_bar both slug-normalize to "FOO_BAR" —
-    // if the namespace were derived from the slug alone, @attacker could claim
-    // an env key namespaced to @trusted. Including the scope defeats this.
     expect(envNamespaceForPackage("@trusted/foo-bar")).not.toBe(envNamespaceForPackage("@attacker/foo_bar"));
-    expect(envNamespaceForPackage("@trusted/foo-bar")).toBe("TRUSTED_FOO_BAR");
-    expect(envNamespaceForPackage("@attacker/foo_bar")).toBe("ATTACKER_FOO_BAR");
+    expect(envNamespaceForPackage("@trusted/foo-bar")).toBe("TRUSTED_SFOO_HBAR");
+    expect(envNamespaceForPackage("@attacker/foo_bar")).toBe("ATTACKER_SFOO_UBAR");
+  });
+
+  it("REGRESSION (codex round-1): CROSS-scope collisions via `/`<->`-`<->`_` ambiguity are eliminated — the encoding is injective", () => {
+    // A lossy "collapse every run to `_`" derivation maps all three of these
+    // DISTINCT (independently-ownable) package names to the SAME `ACME_FOO_BAR`,
+    // letting an extension in one scope claim an env key namespaced to another.
+    const a = envNamespaceForPackage("@acme-foo/bar"); // scope `@acme-foo`
+    const b = envNamespaceForPackage("@acme/foo-bar"); // scope `@acme`
+    const c = envNamespaceForPackage("@acme/foo_bar"); // scope `@acme`
+    expect(new Set([a, b, c]).size).toBe(3);
+    expect([a, b, c]).toEqual(["ACME_HFOO_SBAR", "ACME_SFOO_HBAR", "ACME_SFOO_UBAR"]);
+  });
+
+  it("REGRESSION (codex round-1): PREFIX escalation is eliminated — a shorter package name cannot claim a longer one's namespaced key", () => {
+    // `@acme/foo`'s namespace (`ACME_SFOO`) is a STRING-prefix of
+    // `@acme/foo-bar`'s (`ACME_SFOO_HBAR`). With a single-`_` terminator the
+    // shorter package's prefix would `startsWith`-match the longer's keys; the
+    // `__` terminator + `__`-free namespaces prevent it.
+    const longKey = "CINATRA_EXT_ACME_SFOO_HBAR__SECRET"; // belongs to @acme/foo-bar
+    expect(isNamespacedEnvKey("@acme/foo-bar", longKey)).toBe(true);
+    expect(isNamespacedEnvKey("@acme/foo", longKey)).toBe(false);
   });
 
   it("computes the required prefix and validates membership", () => {
-    expect(envNamespacePrefixForPackage("@cinatra-ai/nango-connector")).toBe("CINATRA_EXT_CINATRA_AI_NANGO_CONNECTOR_");
-    expect(isNamespacedEnvKey("@cinatra-ai/nango-connector", "CINATRA_EXT_CINATRA_AI_NANGO_CONNECTOR_API_KEY")).toBe(true);
+    expect(envNamespacePrefixForPackage("@cinatra-ai/nango-connector")).toBe(
+      "CINATRA_EXT_CINATRA_HAI_SNANGO_HCONNECTOR__",
+    );
+    expect(
+      isNamespacedEnvKey("@cinatra-ai/nango-connector", "CINATRA_EXT_CINATRA_HAI_SNANGO_HCONNECTOR__API_KEY"),
+    ).toBe(true);
     expect(isNamespacedEnvKey("@cinatra-ai/nango-connector", "NANGO_SECRET_KEY")).toBe(false);
+    // The bare prefix with no key after the `__` terminator is not a valid claim.
+    expect(
+      isNamespacedEnvKey("@cinatra-ai/nango-connector", "CINATRA_EXT_CINATRA_HAI_SNANGO_HCONNECTOR__"),
+    ).toBe(false);
     // A different extension cannot claim another's namespace.
-    expect(isNamespacedEnvKey("@acme/acme-crm", "CINATRA_EXT_CINATRA_AI_NANGO_CONNECTOR_API_KEY")).toBe(false);
+    expect(isNamespacedEnvKey("@acme/acme-crm", "CINATRA_EXT_CINATRA_HAI_SNANGO_HCONNECTOR__API_KEY")).toBe(false);
   });
 });
 
@@ -53,12 +84,12 @@ describe("validateEnvOverrides — the security guard", () => {
   const PKG = "@cinatra-ai/nango-connector";
 
   it("namespaced keys are honored regardless of allowLegacyNames", () => {
-    const raw = { CINATRA_EXT_CINATRA_AI_NANGO_CONNECTOR_API_KEY: "secrets:apiKey" };
+    const raw = { CINATRA_EXT_CINATRA_HAI_SNANGO_HCONNECTOR__API_KEY: "secrets:apiKey" };
     for (const allowLegacyNames of [true, false]) {
       const { overrides, rejected } = validateEnvOverrides(PKG, raw, { allowLegacyNames });
       expect(rejected).toEqual([]);
       expect(overrides).toEqual({
-        CINATRA_EXT_CINATRA_AI_NANGO_CONNECTOR_API_KEY: { port: "secrets", key: "apiKey" },
+        CINATRA_EXT_CINATRA_HAI_SNANGO_HCONNECTOR__API_KEY: { port: "secrets", key: "apiKey" },
       });
     }
   });

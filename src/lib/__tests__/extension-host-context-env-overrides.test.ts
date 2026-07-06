@@ -69,7 +69,7 @@ const GUARDED_PKG = "@cinatra-ai/some-marketplace-connector";
 const ENV_VARS = [
   "NANGO_SECRET_KEY",
   "NANGO_SERVER_URL",
-  "CINATRA_EXT_CINATRA_AI_SOME_MARKETPLACE_CONNECTOR_ENDPOINT",
+  "CINATRA_EXT_CINATRA_HAI_SSOME_HMARKETPLACE_HCONNECTOR__ENDPOINT",
 ] as const;
 
 function snapshotEnv() {
@@ -155,13 +155,15 @@ describe("extension host context — manifest-declared env-override precedence (
   it("a namespaced env name (CINATRA_EXT_<PKG>_*) is honored for a guardedOptional (marketplace) extension", async () => {
     orgRef.current = "orgA";
     const ctx = createExtensionHostContext(GUARDED_PKG, ["settings"], {
-      // Namespace is derived from the FULL package name (scope included) —
-      // "@cinatra-ai/some-marketplace-connector" -> "CINATRA_AI_SOME_MARKETPLACE_CONNECTOR".
-      envOverrides: { CINATRA_EXT_CINATRA_AI_SOME_MARKETPLACE_CONNECTOR_ENDPOINT: "settings:endpoint" },
+      // Namespace is the INJECTIVE encoding of the FULL package name (scope
+      // included) — "@cinatra-ai/some-marketplace-connector" ->
+      // "CINATRA_HAI_SSOME_HMARKETPLACE_HCONNECTOR" (`-`->`_H`, `/`->`_S`), with
+      // a `__` terminator before the key.
+      envOverrides: { CINATRA_EXT_CINATRA_HAI_SSOME_HMARKETPLACE_HCONNECTOR__ENDPOINT: "settings:endpoint" },
       resolution: "guardedOptional",
     });
     await ctx.settings.set("endpoint", "https://db.example.com");
-    process.env.CINATRA_EXT_CINATRA_AI_SOME_MARKETPLACE_CONNECTOR_ENDPOINT = "https://env.example.com";
+    process.env.CINATRA_EXT_CINATRA_HAI_SSOME_HMARKETPLACE_HCONNECTOR__ENDPOINT = "https://env.example.com";
     expect(await ctx.settings.get("endpoint")).toBe("https://env.example.com");
   });
 
