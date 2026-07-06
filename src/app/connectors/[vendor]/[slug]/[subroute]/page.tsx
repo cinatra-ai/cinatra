@@ -301,10 +301,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     );
   }
   const SetupPage = mod.default;
-  const ctx = createExtensionHostContext(
-    packageId,
-    manifest?.requestedHostPorts ?? [],
-  );
+  // cinatra#982: thread the manifest-declared env-override input so a setup page
+  // reading ctx.settings/ctx.secrets sees the SAME env-first-else-DB precedence
+  // real activation does (keeps the render path from diverging from activation).
+  const ctx = createExtensionHostContext(packageId, manifest?.requestedHostPorts ?? [], {
+    envOverrides: manifest?.envOverrides,
+    resolution: manifest?.resolution,
+  });
   // The bundled-react setup page renders its OWN chrome (its own
   // PageHeader / `<main>`), so the host cannot inject into its actions slot the
   // way the schema-config branches do. Instead the host floats the SAME

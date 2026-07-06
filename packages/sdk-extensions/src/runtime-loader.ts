@@ -268,6 +268,15 @@ export function recordFromManifest(
   // fail-closed downstream, never silently "no migrations".
   const invalidMigrationsDirDeclared = cinatra.migrationsDir !== undefined && migrationsDir === undefined;
   const legacyMigrationsDeclared = cinatra.migrations !== undefined;
+  // RAW pass-through (cinatra#982), validated host-side (./env-overrides) at
+  // ctx-build time — never trusted here. `resolution` is deliberately NOT set
+  // on a store record: a marketplace/materialized-store install is never the
+  // host-locked `"required"` systemExtensions set, so it can never be eligible
+  // for legacy (non-namespaced) env-name grandfathering (fail-closed default).
+  const envOverrides =
+    cinatra.envOverrides && typeof cinatra.envOverrides === "object" && !Array.isArray(cinatra.envOverrides)
+      ? (cinatra.envOverrides as Record<string, string>)
+      : undefined;
   return {
     packageName: name,
     serverEntry,
@@ -282,6 +291,7 @@ export function recordFromManifest(
     ...(migrationsDir ? { migrationsDir } : {}),
     ...(invalidMigrationsDirDeclared ? { invalidMigrationsDirDeclared } : {}),
     ...(legacyMigrationsDeclared ? { legacyMigrationsDeclared } : {}),
+    ...(envOverrides ? { envOverrides } : {}),
   };
 }
 

@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 132,
-    "/api/mcp": 1331,
-    "/chat": 1369,
-    "/api/a2a": 1337,
-    "/api/llm-bridge": 1341
+    "/api/mcp": 1332,
+    "/chat": 1370,
+    "/api/a2a": 1338,
+    "/api/llm-bridge": 1342
   },
   "absorbs": {
     "/api/mcp": {
-      "from": 1330,
-      "to": 1331,
-      "reason": "cinatra#976 (epic #978 wave W-D, PR #1024): the connector-owned devSetup hook SDK contract adds one new first-party leaf module packages/sdk-extensions/src/dev-setup.ts, value-reachable from the @cinatra-ai/sdk-extensions index barrel on this route (the index re-exports the isExtensionDevSetupModule guard; the type-only re-exports are erased). Measured delta +1 (barrel-reaching route). Absorbed raise 1330->1331; supersedes the #1020 record retired by this re-raise.",
-      "pr": 1024
+      "from": 1331,
+      "to": 1332,
+      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1331->1332.",
+      "pr": 1027
     },
     "/chat": {
-      "from": 1368,
-      "to": 1369,
-      "reason": "cinatra#976 (epic #978 wave W-D, PR #1024): the connector-owned devSetup hook SDK contract adds one new first-party leaf module packages/sdk-extensions/src/dev-setup.ts, value-reachable from the @cinatra-ai/sdk-extensions index barrel on this route (the index re-exports the isExtensionDevSetupModule guard; the type-only re-exports are erased). Measured delta +1 (barrel-reaching route). Absorbed raise 1368->1369; supersedes the #1020 record retired by this re-raise.",
-      "pr": 1024
+      "from": 1369,
+      "to": 1370,
+      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1369->1370.",
+      "pr": 1027
     },
     "/api/a2a": {
-      "from": 1336,
-      "to": 1337,
-      "reason": "cinatra#976 (epic #978 wave W-D, PR #1024): the connector-owned devSetup hook SDK contract adds one new first-party leaf module packages/sdk-extensions/src/dev-setup.ts, value-reachable from the @cinatra-ai/sdk-extensions index barrel on this route (the index re-exports the isExtensionDevSetupModule guard; the type-only re-exports are erased). Measured delta +1 (barrel-reaching route). Absorbed raise 1336->1337; supersedes the #1020 record retired by this re-raise.",
-      "pr": 1024
+      "from": 1337,
+      "to": 1338,
+      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1337->1338.",
+      "pr": 1027
     },
     "/api/llm-bridge": {
-      "from": 1340,
-      "to": 1341,
-      "reason": "cinatra#976 (epic #978 wave W-D, PR #1024): the connector-owned devSetup hook SDK contract adds one new first-party leaf module packages/sdk-extensions/src/dev-setup.ts, value-reachable from the @cinatra-ai/sdk-extensions index barrel on this route (the index re-exports the isExtensionDevSetupModule guard; the type-only re-exports are erased). Measured delta +1 (barrel-reaching route). Absorbed raise 1340->1341; supersedes the #1020 record retired by this re-raise.",
-      "pr": 1024
+      "from": 1341,
+      "to": 1342,
+      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1341->1342.",
+      "pr": 1027
     }
   }
 }

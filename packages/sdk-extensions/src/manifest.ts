@@ -155,6 +155,24 @@ export type CinatraManifest = {
    */
   providesExternalMcpToolbox?: boolean;
 
+  /**
+   * Manifest-declared env-override layer (cinatra#982): a map from a
+   * process-environment variable NAME the host process reads to the
+   * settings/secrets KEY it overrides — e.g.
+   * `{"NANGO_SERVER_URL": "settings:serverUrl", "NANGO_SECRET_KEY": "secrets:secretKey"}`.
+   * The HOST's `settings`/`secrets` port implementation serves this key
+   * env-first-else-DB. Core stays vendor-free: the env-var NAMES live here, in
+   * the extension's own manifest, never in core.
+   *
+   * SECURITY GUARD (validated host-side by `./env-overrides`, never trusted
+   * unvalidated): a marketplace extension may claim only a NAMESPACED env key
+   * (`CINATRA_EXT_<PKG>_*`, derived from its own package name); a legacy
+   * (non-namespaced) name is honored only for a `resolution: "required"`
+   * system extension. Carried UNVALIDATED as DATA on the generated record —
+   * see `NormalizedExtensionRecord.envOverrides`.
+   */
+  envOverrides?: Record<string, string>;
+
   // ---- dependency graph (canonical) ----
   /** Canonical cross-kind dependency edges. */
   dependencies?: ExtensionDependency[];
@@ -271,6 +289,15 @@ export type NormalizedExtensionRecord = {
    * must never trust this field without that validation.
    */
   accessConfig?: Record<string, unknown> | null;
+  /**
+   * RAW `cinatra.envOverrides` pass-through (cinatra#982), or `null` when the
+   * package declares none. OPTIONAL on the type (strictly additive); the
+   * manifest generator emits it on EVERY record. Carried UNVALIDATED as data —
+   * the host validates it fail-closed (namespaced-vs-legacy security guard,
+   * keyed on `resolution`) via `./env-overrides` at ctx-build time; a consumer
+   * must never trust this field without that validation.
+   */
+  envOverrides?: Record<string, string> | null;
 };
 
 export function isUiSurfaceKind(value: unknown): value is UiSurfaceKind {

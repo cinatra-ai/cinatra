@@ -263,9 +263,16 @@ export async function verifyDigestImportsAndRegisters(
     // from the new digest's approved grant.
     try {
       const { createExtensionProbeHostContext } = await import("@/lib/extension-host-context");
+      // Thread the new digest's manifest-declared env-override input through
+      // (cinatra#982) — the probe must see the SAME settings/secrets behavior
+      // the real activation would, so a register() that reads an env-backed
+      // config value doesn't falsely fail this pre-verify (codex round-0
+      // finding: omitting this here diverges from the real activation path in
+      // runtime-package-loader.ts, which does pass it).
       const { ctx } = createExtensionProbeHostContext(
         packageName,
         trusted.approvedPorts as import("@cinatra-ai/sdk-extensions").HostPortName[],
+        { envOverrides: rec.envOverrides },
       );
       await server.register(ctx);
     } catch (err) {
@@ -626,7 +633,10 @@ async function teardownPartialNewRegistration(
       const mod = await importStoreModule(rec);
       if (mod) {
         const { createExtensionHostContext } = await import("@/lib/extension-host-context");
-        const ctx = createExtensionHostContext(rec.packageName, grantedPorts);
+        // cinatra#982: thread the manifest-declared env-override input through
+        // so a destroy() hook reading settings/secrets sees the same
+        // env-first-else-DB precedence real activation would.
+        const ctx = createExtensionHostContext(rec.packageName, grantedPorts, { envOverrides: rec.envOverrides });
         await destroyExtensionModule(mod, ctx);
       }
     }
@@ -1057,7 +1067,9 @@ async function teardownSupersededDigests(
         // an empty grant set), so a destroy hook that releases a resource through
         // an approved host port (settings/secrets/jobs/…) gets the real wired impl
         // instead of a NOT-GRANTED fail-loud Proxy.
-        const ctx = createExtensionHostContext(rec.packageName, destroyPorts);
+        // cinatra#982: thread the manifest-declared env-override input through
+        // (same reasoning as the partial-new teardown above).
+        const ctx = createExtensionHostContext(rec.packageName, destroyPorts, { envOverrides: rec.envOverrides });
         const res = await destroyExtensionModule(mod, ctx);
         if (res.status === "failed") {
           console.warn(

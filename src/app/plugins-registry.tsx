@@ -110,10 +110,15 @@ export async function getAPIPluginPage(slug: string): Promise<APIPluginPageCompo
         if (!decision.allowed) {
           notFound();
         }
-        const ctx = createExtensionHostContext(
-          packageId,
-          STATIC_EXTENSION_MANIFEST[packageId]?.requestedHostPorts ?? [],
-        );
+        const rec = STATIC_EXTENSION_MANIFEST[packageId];
+        // cinatra#982: thread the manifest-declared env-override input so a
+        // settings page reading ctx.settings/ctx.secrets sees the SAME
+        // env-first-else-DB precedence real activation does (otherwise the
+        // render path silently diverges from the activation path).
+        const ctx = createExtensionHostContext(packageId, rec?.requestedHostPorts ?? [], {
+          envOverrides: rec?.envOverrides,
+          resolution: rec?.resolution,
+        });
         return mod.YouTubeSettingsPage({ searchParams: props.searchParams, ctx });
       };
     }
