@@ -75,11 +75,9 @@ import {
   type HostMcpPaginationService,
   type HostContentEditorDispatchService,
   type HostDrupalMcpService,
-  type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostWordPressContentService,
   type HostInstanceWriteAuthorityService,
-  type HostWordPressWidgetAuthService,
   type WordPressInstanceRowShape,
   type HostExternalMcpRegistryService,
   type HostGitHubConnectionService,
@@ -193,13 +191,13 @@ import {
 // Private-URL policy is a NEUTRAL mechanism (cinatra#975) — sourced from the
 // vendor-agnostic `@/lib/url-policy` module, not the wordpress vendor file.
 import { isPrivateUrl } from "@/lib/url-policy";
-// Widget auth-config storage for the wordpress assistant widget (cinatra#172
-// Stage H3): published as the `wordpress-widget-auth` per-concern service
-// (the webhook HMAC verification stays host-only).
-import {
-  generateWidgetAuthConfig as generateWordPressWidgetAuthConfig,
-  readWidgetAuthConfig as readWordPressWidgetAuthConfig,
-} from "@/lib/wordpress-widget-auth";
+// The widget auth-config stores INVERTED out of core (cinatra#975 Wave 2, epic
+// #978): the wordpress-mcp / drupal-mcp connectors now OWN their widget-auth
+// store and REGISTER it as the `@cinatra-ai/host:{wordpress,drupal}-widget-auth`
+// capability from their own `register(ctx)` (persisting through the host
+// `connector-config` capability). The host no longer implements or publishes
+// them — core consumers resolve the connector-registered capability lazily
+// (`@/lib/widget-auth-provider`, fail-loud degradation).
 import {
   getDrupalMcpInstanceStatuses,
   probeDrupalMcp,
@@ -218,12 +216,6 @@ import {
   saveDrupalInstance,
   persistLocalDevDrupalInstanceUnvalidated,
 } from "@/lib/drupal-api";
-// Widget auth-config storage for the drupal assistant widget (cinatra#172
-// Stage H2): published as the `drupal-widget-auth` per-concern service.
-import {
-  generateDrupalWidgetAuthConfig,
-  readDrupalWidgetAuthConfig,
-} from "@/lib/drupal-widget-auth";
 
 let _registered = false;
 
@@ -497,13 +489,10 @@ export function registerHostConnectorServices(): void {
     devInvalidateProbeCache: invalidateDrupalMcpProbeCache,
   } satisfies HostDrupalMcpService);
 
-  // Widget auth-config storage for the drupal assistant widget (cinatra#172
-  // Stage H2): `generate` MINTS+PERSISTS a fresh key (manage-gated in the
-  // connector); `read` backs the settings page render.
-  register(svc.drupalWidgetAuth, {
-    read: readDrupalWidgetAuthConfig,
-    generate: generateDrupalWidgetAuthConfig,
-  } satisfies HostDrupalWidgetAuthService);
+  // The drupal widget auth-config store INVERTED to the drupal-mcp-connector
+  // (cinatra#975 Wave 2): it now registers `@cinatra-ai/host:drupal-widget-auth`
+  // from its own `register(ctx)` (persisting through the host connector-config
+  // capability), so the host publishes nothing here.
 
   register(svc.wordpressMcp, {
     listInstances: () => getWordPressAPISettings().instances,
@@ -621,13 +610,12 @@ export function registerHostConnectorServices(): void {
   // id and the instance reader host-side — neither is ever caller-supplied.
   register(svc.instanceWriteAuthority, createInstanceWriteAuthorityService() satisfies HostInstanceWriteAuthorityService);
 
-  // Widget auth-config storage for the wordpress assistant widget (cinatra#172
-  // Stage H3): `generate` MINTS+PERSISTS a fresh key + webhook secret
-  // (manage-gated in the connector); `read` backs the settings page render.
-  register(svc.wordpressWidgetAuth, {
-    read: readWordPressWidgetAuthConfig,
-    generate: generateWordPressWidgetAuthConfig,
-  } satisfies HostWordPressWidgetAuthService);
+  // The wordpress widget auth-config store INVERTED to the
+  // wordpress-mcp-connector (cinatra#975 Wave 2): it now registers
+  // `@cinatra-ai/host:wordpress-widget-auth` from its own `register(ctx)`
+  // (persisting through the host connector-config capability), so the host
+  // publishes nothing here. The webhook HMAC verification is a generic
+  // mechanism kept host-side (@cinatra-ai/webhooks verifyLegacyHmac).
 
   register(svc.runtimeMode, {
     isDevelopment: isAppDevelopmentMode,

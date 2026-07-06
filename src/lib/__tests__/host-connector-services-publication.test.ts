@@ -330,17 +330,10 @@ vi.mock("@/lib/wordpress-mcp-connection", () => ({
 vi.mock("@/lib/url-policy", () => ({
   isPrivateUrl: () => false,
 }));
-const wpWidgetAuthCalls: Record<string, number> = { read: 0, generate: 0 };
-vi.mock("@/lib/wordpress-widget-auth", () => ({
-  readWidgetAuthConfig: () => {
-    wpWidgetAuthCalls.read += 1;
-    return { apiKey: "wpk-existing", webhookSecret: "s-existing", generatedAt: "2026-01-01T00:00:00Z" };
-  },
-  generateWidgetAuthConfig: () => {
-    wpWidgetAuthCalls.generate += 1;
-    return { apiKey: "wpk-fresh", webhookSecret: "s-fresh", generatedAt: "2026-01-02T00:00:00Z" };
-  },
-}));
+// The widget-auth stores INVERTED to their owning connectors (cinatra#975 Wave
+// 2): the host no longer imports/publishes them, so there is nothing to mock or
+// assert here — the connectors register the capability from their own
+// register(ctx) and core resolves it lazily (widget-auth-provider.test.ts).
 vi.mock("@/lib/drupal-mcp-connection", () => ({
   probeDrupalMcp: async () => ({}),
   probeDrupalMcpWithBearer: async () => "registered",
@@ -363,28 +356,14 @@ vi.mock("@/lib/drupal-api", () => ({
     drupalApiCalls.delete.push(args);
   },
 }));
-const widgetAuthCalls: Record<string, number> = { read: 0, generate: 0 };
-vi.mock("@/lib/drupal-widget-auth", () => ({
-  readDrupalWidgetAuthConfig: () => {
-    widgetAuthCalls.read += 1;
-    return { apiKey: "k-existing", generatedAt: "2026-01-01T00:00:00Z" };
-  },
-  generateDrupalWidgetAuthConfig: () => {
-    widgetAuthCalls.generate += 1;
-    return { apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" };
-  },
-}));
-
 import {
   type HostConnectorConfigService,
   type NangoConnectionMaterializer,
   type HostMcpPaginationService,
   type HostDrupalMcpService,
-  type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostWordPressContentService,
   type HostInstanceWriteAuthorityService,
-  type HostWordPressWidgetAuthService,
   type HostExternalMcpRegistryService,
   type HostGitHubConnectionService,
   type HostLinkedInConnectionService,
@@ -578,18 +557,9 @@ describe("drupal instance-admin + widget-auth services (cinatra#172 Stage H2)", 
     ]);
   });
 
-  it("publishes @cinatra-ai/host:drupal-widget-auth with read + generate (writer) members", () => {
-    const widgetAuth = resolveSingle<HostDrupalWidgetAuthService>(
-      HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalWidgetAuth,
-    );
-    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalWidgetAuth).toBe(
-      "@cinatra-ai/host:drupal-widget-auth",
-    );
-    expect(widgetAuth.read()).toEqual({ apiKey: "k-existing", generatedAt: "2026-01-01T00:00:00Z" });
-    expect(widgetAuth.generate()).toEqual({ apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" });
-    expect(widgetAuthCalls.read).toBe(1);
-    expect(widgetAuthCalls.generate).toBe(1);
-  });
+  // The drupal widget-auth store INVERTED to the drupal-mcp-connector
+  // (cinatra#975 Wave 2): the host publishes no `drupal-widget-auth` service —
+  // the connector registers the capability from its own register(ctx).
 });
 
 describe("wordpress connection-admin + content + widget-auth services (cinatra#172 Stage H3)", () => {
@@ -738,26 +708,9 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     expect(forwarded.id).toBe("wp-2");
   });
 
-  it("publishes @cinatra-ai/host:wordpress-widget-auth with read + generate (writer) members", () => {
-    const widgetAuth = resolveSingle<HostWordPressWidgetAuthService>(
-      HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth,
-    );
-    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth).toBe(
-      "@cinatra-ai/host:wordpress-widget-auth",
-    );
-    expect(widgetAuth.read()).toEqual({
-      apiKey: "wpk-existing",
-      webhookSecret: "s-existing",
-      generatedAt: "2026-01-01T00:00:00Z",
-    });
-    expect(widgetAuth.generate()).toEqual({
-      apiKey: "wpk-fresh",
-      webhookSecret: "s-fresh",
-      generatedAt: "2026-01-02T00:00:00Z",
-    });
-    expect(wpWidgetAuthCalls.read).toBe(1);
-    expect(wpWidgetAuthCalls.generate).toBe(1);
-  });
+  // The wordpress widget-auth store INVERTED to the wordpress-mcp-connector
+  // (cinatra#975 Wave 2): the host publishes no `wordpress-widget-auth`
+  // service — the connector registers the capability from its own register(ctx).
 });
 
 describe("per-user/per-instance write authority service (cinatra#409)", () => {
