@@ -323,10 +323,11 @@ async function discoverDevSetupExtensions(): Promise<DeclaringDevSetupExtension[
  * connector is a materialized workspace package with generated tsconfig aliases
  * — the specifier `@scope/name/src/dev-setup` resolves through the alias/exports
  * chain exactly like the connector's other subpaths (`/register`, `/mcp-module`).
- * A computed specifier is deliberate: the shell names NO connector, and the
- * devSetup path is discovered from the materialized manifest, not a generated
- * static import map (mirroring the `devFixtures` sibling; touching the generated
- * emit would risk the drift gate + needs materialized extensions).
+ * The specifier is computed at runtime: the shell hardcodes no connector name,
+ * and the devSetup path is read from the materialized manifest rather than a
+ * generated static import map (the same discovery the `devFixtures` sibling
+ * uses; the generated records omit this path, so it is resolved from the
+ * materialized extensions checkout).
  */
 function devSetupImportSpecifier(ext: DeclaringDevSetupExtension): string {
   // Linear trailing-slash trim (never the banned ReDoS `/\/+$/`); the leading
