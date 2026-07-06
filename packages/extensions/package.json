@@ -38,6 +38,10 @@
     "./license-detection": "./src/license-detection.ts",
     "./screens": "./src/screens/index.ts",
     "./screens/marketplace-detail-modal": "./src/screens/marketplace-detail-modal.tsx",
+    "./screens/marketplace-listing-card": "./src/screens/marketplace-listing-card.tsx",
+    "./screens/marketplace-install-form": "./src/screens/marketplace-install-form.tsx",
+    "./screens/marketplace-card-model": "./src/screens/marketplace-card-model.ts",
+    "./screens/marketplace-failure-copy": "./src/screens/marketplace-failure-copy.ts",
     "./mcp-module": "./src/mcp/module.ts",
     "./components/publish-destination-picker": "./src/components/publish-destination-picker.tsx",
     "./components/license-warning-dialog": "./src/components/license-warning-dialog.tsx"

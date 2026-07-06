@@ -117,6 +117,13 @@ export function MarketplaceInstallSubmit({
       size="sm"
       variant={variant}
       disabled={pending}
+      // Conformance contract (cinatra#985): stable hook for the pending-aware
+      // CTA submit; `data-pending` marks the §IV "Installing…" loading state
+      // (tests/e2e/design/conformance/testid-contract.json). NOT data-slot:
+      // the Button primitive owns data-slot="button" and a prop spread would
+      // silently override it.
+      data-testid="extension-card-cta-submit"
+      data-pending={pending ? "" : undefined}
       className={cn("disabled:opacity-70", className)}
     >
       {pending ? (

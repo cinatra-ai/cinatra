@@ -85,6 +85,22 @@ export default defineConfig({
   projects: [
     {
       name: "design-fixtures-chromium",
+      // Pixel-diff + axe + the assertion-based fixture specs. The
+      // conformance dir belongs to the functional-acceptance project below.
+      testIgnore: "**/conformance/**",
+      use: {
+        ...desktopChrome,
+        viewport: { width: 1280, height: 900 },
+      },
+    },
+    {
+      // Manifest-driven functional-acceptance conformance gate (cinatra#985):
+      // consumes the pinned conformance manifests and asserts fields/actions/
+      // state variants of the covered surfaces on /design-fixtures/conformance.
+      // Assertion-based (no pixel baselines) — pixel-diff + axe above stay
+      // supporting evidence, never the sole gate.
+      name: "design-conformance-functional",
+      testMatch: "**/conformance/**/*.spec.ts",
       use: {
         ...desktopChrome,
         viewport: { width: 1280, height: 900 },

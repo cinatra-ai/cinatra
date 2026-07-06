@@ -1,13 +1,23 @@
-# Design-system pixel-diff + axe-core verify.
+# Design-system verify: manifest-driven functional acceptance (the hard gate)
+# + pixel-diff + axe-core (supporting evidence).
 #
-# Path-gated: only runs when a change touches a design-system surface that
-# could affect `/design-fixtures` pixels or accessibility.
+# Path-gated: only runs when a change touches a design-system surface, a
+# covered conformance surface, or the manifest-consumption/pin files.
 #
-# The `/design-fixtures` route is STATIC (no DB queries), so this
-# workflow does NOT spin up Postgres or run `cinatra setup branch`;
-# `pnpm dev` is enough.
+# Functional acceptance (cinatra#985, design-conformance L2b): the
+# design-conformance-functional Playwright project consumes the PINNED
+# conformance manifests (tests/e2e/design/conformance/spec-pins.json —
+# generated from the annotated design specs, published under
+# docs.cinatra.ai/references/design/conformance/) and asserts fields/actions/
+# state variants of every covered surface on /design-fixtures/conformance.
+# An unmapped manifest surface is RED unless allowlisted; the allowlist is
+# SHRINK-ONLY (ratchet step below). A covered surface losing its stable
+# data-testid contract attribute is RED (testid step below).
 #
-# Threshold: maxDiffPixelRatio 0.005 + maxDiffPixels 800 (configured
+# The fixture routes are STATIC (no DB queries), so this workflow does NOT
+# spin up Postgres or run `cinatra setup branch`.
+#
+# Pixel threshold: maxDiffPixelRatio 0.005 + maxDiffPixels 800 (configured
 # in tests/e2e/config/design.config.ts). axe-core gate: zero serious/critical
 # violations on `/design-fixtures` only, not site-wide.
 #
@@ -32,6 +42,21 @@ on:
       - "src/lib/status-adapter.ts"
       - "src/app/globals.css"
       - "src/app/design-fixtures/**"
+      # Conformance-covered real surfaces + manifest consumption (cinatra#985):
+      # the listing-card/CTA screens family, the compat verdict feeding the
+      # six-state CTA, the banner icon fallback, and the deep-export map the
+      # harness imports through. The manifest pins, allowlist, contract and
+      # suite all live under tests/e2e/design/** (already matched below).
+      - "packages/extensions/src/screens/**"
+      - "packages/extensions/package.json"
+      # Pure semver helper feeding resolveMarketplaceCardCta's update
+      # detection (the update -> installed-latest conformance behavior).
+      - "packages/registries/src/version-compare.ts"
+      - "src/lib/extension-compat-badge.ts"
+      # Route-guard allowlist carrying the fixture routes' CI reachability.
+      - "src/lib/auth-route-guard.ts"
+      - "src/components/extension-card-icon-image.tsx"
+      - "src/components/extension-kind-emblem.tsx"
       - "scripts/design/**"
       - "tests/e2e/config/design.config.ts"
       - "tests/e2e/config/base.ts"
@@ -130,6 +155,23 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Conformance stable-id contract (cinatra#985): pin integrity of the
+      # committed manifests + every covered surface still carries its stable
+      # data-testid attributes. Dependency-free node script — runs before the
+      # expensive install/build so a contract break fails in seconds.
+      - name: conformance testid contract
+        run: node scripts/design/check-conformance-testids.mjs
+
+      # Coverage ratchet (cinatra#985): the not-yet-covered allowlist is
+      # SHRINK-ONLY vs the PR base — an added (or re-added) surface is a red.
+      # The refspec materializes refs/remotes/origin/<base> explicitly (a bare
+      # `git fetch origin <branch>` may only populate FETCH_HEAD on the shallow
+      # CI checkout); the script FAILS CLOSED when the base ref is missing.
+      - name: conformance coverage ratchet (shrink-only)
+        run: |
+          git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+          node scripts/design/check-conformance-ratchet.mjs "origin/$GITHUB_BASE_REF"
+
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -206,14 +248,18 @@ jobs:
           done
           echo "::error::standalone server did not serve /design-fixtures in time"; tail -80 /tmp/design-server.log; exit 1
 
-      - name: run /design-fixtures pixel-diff + axe
-        # E2E_REUSE_SERVER=1 → tests/e2e/config/design.config.ts disables its own
-        # webServer and reuses the standalone server above. Wrapped in `timeout`
-        # (above the Playwright budget) so a hung run is killed, not left to the
-        # job cap.
+      - name: run functional acceptance + pixel-diff + axe
+        # Runs BOTH Playwright projects of tests/e2e/config/design.config.ts:
+        # design-conformance-functional (the manifest-driven hard gate,
+        # cinatra#985) and design-fixtures-chromium (pixel-diff + axe —
+        # supporting evidence, never the sole gate). E2E_REUSE_SERVER=1 →
+        # the config disables its own webServer and reuses the standalone
+        # server above. Wrapped in `timeout` (above the Playwright budget) so
+        # a hung run is killed, not left to the job cap; 1200s covers the
+        # added conformance project on the shared boot.
         env:
           E2E_REUSE_SERVER: "1"
-        run: timeout --kill-after=60 900 pnpm test:e2e:design
+        run: timeout --kill-after=60 1200 pnpm test:e2e:design
 
       - name: Dump standalone server log on failure
         # Next.js omits server-component error messages from the CLIENT response

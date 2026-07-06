@@ -1,0 +1,60 @@
+{
+  "$comment": "The stable data-testid / stable-attribute contract for design-conformance surfaces (cinatra#985). Each covered manifest surface maps to the REAL component file(s) that implement it and the attribute literals that MUST be present in that source (scripts/design/check-conformance-testids.mjs turns a missing id into a CI red). Renaming any of these attributes is a BREAKING change to the functional-acceptance suite by design — update the contract, the drivers (contract.ts), and the harness in the same PR. Selector notes document how the suite locates each surface at runtime; harness instrumentation attributes (data-surface-id, data-installed-version) live on the conformance fixture route, everything else on real component code.",
+  "surfaces": {
+    "status-pills": {
+      "manifest": "app",
+      "selector": "[data-slot=\"status-pill\"][data-status]",
+      "requires": [
+        {
+          "file": "src/components/ui/status-pill.tsx",
+          "literals": ["data-slot=\"status-pill\"", "data-status={status}"]
+        }
+      ]
+    },
+    "button-variants": {
+      "manifest": "app",
+      "selector": "[data-slot=\"button\"][data-variant]",
+      "requires": [
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\"", "data-variant={variant}"]
+        }
+      ]
+    },
+    "extension-listing-card-available": { "$ref": "extension-listing-card" },
+    "extension-listing-card-installed": { "$ref": "extension-listing-card" },
+    "extension-listing-card-update": { "$ref": "extension-listing-card" },
+    "extension-listing-card-restore": { "$ref": "extension-listing-card" },
+    "extension-listing-card-installing": { "$ref": "extension-listing-card" },
+    "extension-listing-card-incompatible": { "$ref": "extension-listing-card" }
+  },
+  "shared": {
+    "extension-listing-card": {
+      "manifest": "app-extensions",
+      "selector": "[data-testid=\"extension-listing-card\"] (root, carries data-kind); name field: [data-slot=\"extension-card-name\"]; CTA: [data-testid=\"extension-card-cta\"][data-cta-state]",
+      "requires": [
+        {
+          "file": "packages/extensions/src/screens/marketplace-listing-card.tsx",
+          "literals": [
+            "data-testid=\"extension-listing-card\"",
+            "data-kind={card.kindSlug}",
+            "data-testid=\"extension-card-cta\"",
+            "data-cta-state={ctaState}"
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/extensions-marketplace-screen.tsx",
+          "literals": ["ctaState={cta.state}"]
+        },
+        {
+          "file": "src/components/extension-card.tsx",
+          "literals": ["data-slot=\"extension-card-name\""]
+        },
+        {
+          "file": "packages/extensions/src/screens/marketplace-install-form.tsx",
+          "literals": ["data-testid=\"extension-card-cta-submit\"", "data-pending={pending ? \"\" : undefined}"]
+        }
+      ]
+    }
+  }
+}
