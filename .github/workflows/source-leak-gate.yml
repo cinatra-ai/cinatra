@@ -2,6 +2,13 @@ name: source-leak-gate
 
 on:
   pull_request:
+  # merge_group (engineering#484): post this required context on GitHub
+  # merge-queue candidates so a queue entry never hangs on the missing check.
+  # The pinned engine (ci@4582648, a descendant of ci#59 @c3bc633) resolves the
+  # incremental diff base from merge_group.base_sha via the shared
+  # resolve-diff-base.sh resolver, preserving the ratchet-line semantics a PR
+  # gets. Inert until a merge queue is enabled (engineering#485).
+  merge_group:
   push:
     branches: [main]
 

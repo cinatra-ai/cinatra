@@ -29,6 +29,19 @@ name: truthful-attribution-gate
 
 on:
   pull_request:
+  # merge_group (engineering#484): post this required context on GitHub
+  # merge-queue candidates so a queue entry never hangs on "Expected — Waiting"
+  # (same forward-safe rationale as build-image.yml). Inert until a merge queue
+  # is enabled (engineering#485) — no merge_group event fires without one.
+  # HONEST LIMIT at the current pin (ci@0d42bca): the reusable engine workflow
+  # has only `pull_request` and `push` arms, so on a merge_group event both
+  # gate steps skip and the context concludes green WITHOUT re-verifying the
+  # synthetic candidate. The fail-closed post-merge push arm still validates
+  # every landed squash record, and the engine's content/diff staleness binding
+  # (ci#60) already recognizes merge_group synthetic commits — but BEFORE a
+  # Path-A queue enablement the ci engine needs a real merge_group pre-merge
+  # arm and this pin must advance to it.
+  merge_group:
   push:
     branches: [main]
 

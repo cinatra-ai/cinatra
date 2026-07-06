@@ -25,6 +25,12 @@ name: ui-design-system-gate
 
 on:
   pull_request:
+  # merge_group (engineering#484): post this required context on GitHub
+  # merge-queue candidates so a queue entry never hangs on the missing check.
+  # The pinned reusable gate is event-agnostic (it checks out the candidate and
+  # lints it — no per-event branching), so only this caller trigger is needed.
+  # Inert until a merge queue is enabled (engineering#485).
+  merge_group:
   push:
     branches: [main]
 
