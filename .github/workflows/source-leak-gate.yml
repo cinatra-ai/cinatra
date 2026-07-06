@@ -14,7 +14,7 @@ jobs:
     # cinatra-ai/ci commit. gate-suite.json requiredContexts[].pinned tracks this
     # uses:@ SHA (the gate verifies referenced_workflows[] exactly) — bump them
     # together.
-    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@45826486a3965bc8ebd6203a26330ad0dc1ae511 # v0.1.2-next.4582648
+    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@0d42bca62a57daf2067c19f6fb500583ac3b6acd # v0.1.2-next.4582648
     with:
       profile: ts-monorepo
       ratchet_mode: line
