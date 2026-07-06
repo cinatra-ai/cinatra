@@ -1,13 +1,14 @@
 import "server-only";
 
+// The WordPress client is CONNECTOR-owned since cinatra#975 Wave 3 — the
+// publish flow resolves the relocated instance-admin + content clients lazily
+// and FAILS LOUD (descriptive error through the existing publish failure
+// path) when the owning connector is absent.
 import {
-  createWordPressDraft,
-  readLatestPublishedWordPressPost,
-  readWordPressInstanceById,
-  updateWordPressDraftMeta,
-  type WordPressWritablePostPayload,
-  uploadWordPressMedia,
-} from "@/lib/wordpress-api";
+  requireWordPressContentClient,
+  requireWordPressInstanceAdmin,
+  type WordPressWritableDraftPayload,
+} from "@/lib/connector-client-providers";
 // The WordPress draft-write is fully routed through the
 // @cinatra-ai/blog-connector facade. The create payload (+ optional
 // site-specific `postMeta`) is built by the resolved connector:
@@ -41,13 +42,15 @@ export async function publishBlogPostDraftToWordPress(input: {
   imageRepresentationRevisionId?: string;
   onProgress?: (message: string, instanceName?: string) => Promise<void> | void;
 }) {
-  const instance = readWordPressInstanceById(input.wordpressInstanceId);
+  const wordpressAdmin = requireWordPressInstanceAdmin();
+  const wordpressContent = requireWordPressContentClient();
+  const instance = wordpressAdmin.readInstanceById(input.wordpressInstanceId);
   if (!instance) {
     throw new Error("Selected WordPress instance not found.");
   }
 
   await input.onProgress?.("Loading the latest published WordPress post JSON.", instance.name);
-  const latestPublishedPost = await readLatestPublishedWordPressPost(instance);
+  const latestPublishedPost = await wordpressAdmin.readLatestPublishedWordPressPost(instance);
 
   let featuredMediaId: number | undefined;
   let featuredMediaUrl: string | undefined;
@@ -59,7 +62,7 @@ export async function publishBlogPostDraftToWordPress(input: {
     });
     if (bytes) {
       await input.onProgress?.("Uploading image as the featured image in WordPress.", instance.name);
-      const uploadedMedia = await uploadWordPressMedia({
+      const uploadedMedia = await wordpressContent.uploadMedia({
         instance,
         imageBase64: bytes.imageBase64,
         imageMimeType: bytes.imageMimeType,
@@ -89,7 +92,7 @@ export async function publishBlogPostDraftToWordPress(input: {
   );
 
   await input.onProgress?.("Creating the draft in WordPress.", instance.name);
-  const createdDraft = await createWordPressDraft({
+  const createdDraft = await wordpressContent.createDraft({
     instance,
     payload: {
       ...builtDraft.createPayload,
@@ -99,7 +102,7 @@ export async function publishBlogPostDraftToWordPress(input: {
         ("featured_media" in builtDraft.createPayload
           ? builtDraft.createPayload.featured_media
           : undefined),
-    } satisfies WordPressWritablePostPayload,
+    } satisfies WordPressWritableDraftPayload,
   });
 
   // The resolved connector returns `postMeta` ONLY when it has site-
@@ -108,7 +111,7 @@ export async function publishBlogPostDraftToWordPress(input: {
   // is skipped entirely.
   if (builtDraft.postMeta) {
     await input.onProgress?.("Applying the connector-supplied post meta to the draft.", instance.name);
-    await updateWordPressDraftMeta({
+    await wordpressContent.updateDraftMeta({
       instance,
       wordpressPostId: createdDraft.wordpressPostId,
       meta: builtDraft.postMeta,

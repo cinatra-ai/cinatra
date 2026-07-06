@@ -50,7 +50,14 @@ import { requireBlogSystem } from "@/lib/blog-system-provider";
 // publishing flows need the body string.
 import { readBlogPostBodyArtifactBytes } from "@/lib/blog-post-artifact-materializer";
 import { readBlogIdeaArtifactBytes } from "@/lib/blog-idea-artifact-materializer";
-import { deleteWordPressPost, readWordPressInstanceById, readWordPressPostStatus } from "@/lib/wordpress-api";
+// The WordPress client is CONNECTOR-owned since cinatra#975 Wave 3 — the
+// draft status/delete flows resolve the relocated client lazily and FAIL LOUD
+// (descriptive error through the existing failure paths) when the owning
+// connector is absent.
+import {
+  requireWordPressContentClient,
+  requireWordPressInstanceAdmin,
+} from "@/lib/connector-client-providers";
 import {
   BACKGROUND_JOB_NAMES,
   cancelBackgroundJob,
@@ -531,12 +538,12 @@ export async function refreshWordPressDraftStatus(input: {
     throw new Error("WordPress draft reference not found.");
   }
 
-  const instance = readWordPressInstanceById(draft.wordpressInstanceId);
+  const instance = requireWordPressInstanceAdmin().readInstanceById(draft.wordpressInstanceId);
   if (!instance) {
     throw new Error("Connected WordPress website not found.");
   }
 
-  const status = await readWordPressPostStatus({
+  const status = await requireWordPressContentClient().readPostStatus({
     instance,
     wordpressPostId: draft.wordpressPostId,
   });
@@ -571,11 +578,11 @@ export async function deleteWordPressDraft(input: {
   }
 
   if (input.deleteInWordPress) {
-    const instance = readWordPressInstanceById(draft.wordpressInstanceId);
+    const instance = requireWordPressInstanceAdmin().readInstanceById(draft.wordpressInstanceId);
     if (!instance) {
       throw new Error("Connected WordPress website not found.");
     }
-    await deleteWordPressPost({
+    await requireWordPressContentClient().deletePost({
       instance,
       wordpressPostId: draft.wordpressPostId,
     });

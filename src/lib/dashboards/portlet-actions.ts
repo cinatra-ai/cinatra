@@ -25,7 +25,11 @@ import { isBackgroundJobActive } from "@/lib/background-jobs";
 import { createDeterministicAgentsClient } from "@cinatra-ai/agents/mcp-client";
 import { createDeterministicWorkflowsClient } from "@cinatra-ai/workflows/mcp-client";
 import { buildWorkflowHandlerDeps } from "@/lib/workflow-host-deps";
-import { listWordPressInstances } from "@/lib/wordpress-api";
+// The WordPress instance store is CONNECTOR-owned since cinatra#975 Wave 3 —
+// the typed-picker options loader resolves the relocated client lazily and
+// degrades to NO options when the owning connector is absent (there is no
+// instance store to list).
+import { resolveWordPressInstanceAdmin } from "@/lib/connector-client-providers";
 import {
   BINARY_GENERATION_PRIMITIVE_PAIRS,
   BINARY_REF_SWAP_PRIMITIVES,
@@ -366,7 +370,7 @@ export type PortletPickerOption = { id: string; label: string };
 export async function loadWordpressInstanceOptions(): Promise<PortletPickerOption[]> {
   const actor = await resolvePortletPrimitiveActor();
   if (!actor.orgId) return [];
-  const instances = await listWordPressInstances();
+  const instances = (await resolveWordPressInstanceAdmin()?.listWordPressInstances()) ?? [];
   return instances.map((i) => ({ id: i.id, label: i.name }));
 }
 

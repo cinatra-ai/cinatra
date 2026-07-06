@@ -90,8 +90,15 @@ import { requireConnectorAuthority } from "@/lib/connector-authority";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { logAuditEvent } from "@/lib/authz/audit";
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { readWordPressInstanceById } from "@/lib/wordpress-api";
-import { getDrupalAPISettings } from "@/lib/drupal-api";
+// The wordpress/drupal instance stores are CONNECTOR-owned since cinatra#975
+// Wave 3: the per-instance org-binding readers below resolve the relocated
+// clients lazily. FAIL-CLOSED: an absent owning connector resolves NO row
+// (null), which this authority already DENIES — a write can never proceed
+// against an unreadable instance store.
+import {
+  resolveDrupalInstanceAdmin,
+  resolveWordPressInstanceAdmin,
+} from "@/lib/connector-client-providers";
 import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 
 /**
@@ -162,12 +169,14 @@ const CONNECTOR_KIND_TO_INSTANCE_ORG_RESOLVER: Record<
   (instanceId: string) => InstanceOrgBinding | null
 > = {
   wordpress: (instanceId) => {
-    const row = readWordPressInstanceById(instanceId);
+    const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
     if (!row) return null;
     return { orgId: typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null };
   },
   drupal: (instanceId) => {
-    const row = getDrupalAPISettings().instances.find((i) => i.id === instanceId);
+    const row = resolveDrupalInstanceAdmin()
+      ?.listInstances()
+      .find((i) => i.id === instanceId);
     if (!row) return null;
     return { orgId: typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null };
   },

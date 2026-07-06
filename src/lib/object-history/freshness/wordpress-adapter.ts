@@ -16,16 +16,20 @@ import {
   type FreshnessState,
 } from "./contract";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
+// The WordPress client is CONNECTOR-owned since cinatra#975 Wave 3 — the
+// instance lookup resolves the relocated client lazily. Degradation: an
+// absent connector folds through the existing lookup-failure path to an
+// "unknown" freshness verdict (never a crash of the freshness sweep).
 import {
-  type WordPressInstanceSettings,
-  readWordPressInstanceById,
-} from "@/lib/wordpress-api";
+  requireWordPressInstanceAdmin,
+  type WordPressInstanceRow,
+} from "@/lib/connector-client-providers";
 
 // Direct WP REST call. We don't reuse readWordPressPost because it doesn't
 // surface modified_gmt and throws on 404 — for freshness we want a soft
 // 404→missing.
 async function fetchPostStatus(
-  instance: WordPressInstanceSettings,
+  instance: WordPressInstanceRow,
   remoteId: string,
   postType: string,
 ): Promise<
@@ -75,9 +79,9 @@ async function fetchPostStatus(
 }
 
 async function resolveAuthHeader(
-  instance: WordPressInstanceSettings,
+  instance: WordPressInstanceRow,
 ): Promise<string> {
-  // Use the same Basic-auth scheme as wordpress-api.ts. For brevity we
+  // Use the same Basic-auth scheme as the relocated WordPress client. For brevity we
   // build it here; if instance.appPassword is unavailable we throw which
   // surfaces as "unknown" in the freshness verdict (caught by the adapter).
   const user = String((instance as Record<string, unknown>).username ?? "admin");
@@ -122,11 +126,9 @@ export const wordpressFreshnessAdapter: FreshnessAdapter = {
         reason: "remoteRevisionRef missing extra.instanceId",
       };
     }
-    let instance: WordPressInstanceSettings | null = null;
+    let instance: WordPressInstanceRow | null = null;
     try {
-      instance = (await readWordPressInstanceById(instanceId)) as
-        | WordPressInstanceSettings
-        | null;
+      instance = requireWordPressInstanceAdmin().readInstanceById(instanceId);
     } catch (_e) {
       return {
         state: "unknown",

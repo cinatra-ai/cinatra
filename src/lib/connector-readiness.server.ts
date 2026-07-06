@@ -19,8 +19,14 @@ import {
   getPrimarySavedNangoConnections,
   listSavedNangoConnections,
 } from "@/lib/nango-system";
-import { getWordPressAPISettings } from "@/lib/wordpress-api";
-import { getDrupalAPISettings } from "@/lib/drupal-api";
+// The wordpress/drupal instance stores are CONNECTOR-owned since cinatra#975
+// Wave 3 — the readiness probes resolve the relocated clients lazily and
+// degrade to not-connected (0 instances) when the owning connector is absent,
+// the same posture as the manifest-resolved module probes below.
+import {
+  resolveDrupalInstanceAdmin,
+  resolveWordPressInstanceAdmin,
+} from "@/lib/connector-client-providers";
 import { countExternalMcpOAuthClients } from "@/lib/better-auth-oauth-client";
 import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
 import { loadConnectorModule } from "@/lib/connector-modules.server";
@@ -109,8 +115,9 @@ const BUILT_IN_PROBES: Record<string, ConnectorReadinessProbe> = {
   "linkedin-connector": async (ctx) => connectedWhen(Boolean(userConnections(ctx)?.linkedin)),
   "youtube-connector": async (ctx) => connectedWhen(Boolean(userConnections(ctx)?.youtube)),
   "wordpress-mcp-connector": async () =>
-    countReadiness(getWordPressAPISettings().instances.length),
-  "drupal-mcp-connector": async () => countReadiness(getDrupalAPISettings().instances.length),
+    countReadiness(resolveWordPressInstanceAdmin()?.getAPISettings().instances.length ?? 0),
+  "drupal-mcp-connector": async () =>
+    countReadiness(resolveDrupalInstanceAdmin()?.listInstances().length ?? 0),
   "a2a-server-connector": async () => countReadiness(listSavedNangoConnections("a2aServer").length),
   "google-oauth-connector": async () =>
     connectedWhen((await getGoogleOAuthStatus()).status === "connected"),

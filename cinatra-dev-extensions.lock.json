@@ -1,5 +1,5 @@
 {
-  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR — see docs/extension-clone-pinning.md.",
+  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR \u2014 see docs/extension-clone-pinning.md.",
   "schemaVersion": 1,
   "packages": [
     {
@@ -145,7 +145,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "74fb48644a6f2d2203be149df2f97c0d43ce7abd"
+      "resolvedSha": "d81a0cce4c99e43b47c0cd0011566ed618caf949"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",
@@ -200,7 +200,7 @@
     {
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
-      "resolvedSha": "8144461f34b7910933c6a5ba1370aa3e9adbc7a0"
+      "resolvedSha": "9fee2b3cdc344b9875378a9e9c831ec0d3916f8c"
     },
     {
       "packageName": "@cinatra-ai/gmail-connector",
@@ -220,7 +220,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-connector",
       "repo": "cinatra-ai/linkedin-connector",
-      "resolvedSha": "3ce1d9c0a308c03f36287ff286332823d40995bf"
+      "resolvedSha": "0d6fb500e850ea87bf290756c9ef5555f0c84d46"
     },
     {
       "packageName": "@cinatra-ai/linkedin-oauth-connector",
@@ -360,12 +360,12 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "a54004460845843bda2a63782bfccee84d19f66f"
+      "resolvedSha": "d15af3c4328b467b0f7cccecb5f1a2b2339f20e4"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",
       "repo": "cinatra-ai/youtube-connector",
-      "resolvedSha": "28ea800c469ead1777ed9abe2071dadbc4027904"
+      "resolvedSha": "df188d63b7141f35f88ba8c451b93ac3e41d67a1"
     }
   ]
 }

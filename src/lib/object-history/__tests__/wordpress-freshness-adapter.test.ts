@@ -5,11 +5,15 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/wordpress-api", () => ({
-  readWordPressInstanceById: vi.fn(),
+// The WordPress client is CONNECTOR-owned (cinatra#975 Wave 3): the adapter
+// resolves the relocated client lazily inside its try/catch, so an absent
+// connector folds to the "unknown" verdict.
+const readWordPressInstanceById = vi.fn();
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireWordPressInstanceAdmin: () => ({
+    readInstanceById: (id: string) => readWordPressInstanceById(id),
+  }),
 }));
-
-import { readWordPressInstanceById } from "@/lib/wordpress-api";
 import { wordpressFreshnessAdapter } from "../freshness/wordpress-adapter";
 
 const FAKE_INSTANCE = {
@@ -22,7 +26,7 @@ const FAKE_INSTANCE = {
 describe("wordpressFreshnessAdapter", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(readWordPressInstanceById).mockResolvedValue(FAKE_INSTANCE as never);
+    readWordPressInstanceById.mockReturnValue(FAKE_INSTANCE as never);
   });
 
   it("returns 'unsupported' when no remoteRevisionRef is supplied", async () => {

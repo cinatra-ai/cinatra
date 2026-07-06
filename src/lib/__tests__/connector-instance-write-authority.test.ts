@@ -64,11 +64,12 @@ import * as authorityModule from "@/lib/connector-authority";
 // the module's OWN un-mocked logic — these mocks only supply the row.
 const wpRows: Record<string, { id: string; orgId?: string } | null> = {};
 const drupalRows: Array<{ id: string; orgId?: string }> = [];
-vi.mock("@/lib/wordpress-api", () => ({
-  readWordPressInstanceById: (id: string) => wpRows[id] ?? null,
-}));
-vi.mock("@/lib/drupal-api", () => ({
-  getDrupalAPISettings: () => ({ instances: drupalRows }),
+const readWordPressInstanceByIdMock = vi.fn((id: string) => wpRows[id] ?? null);
+vi.mock("@/lib/connector-client-providers", () => ({
+  resolveWordPressInstanceAdmin: () => ({
+    readInstanceById: (id: string) => readWordPressInstanceByIdMock(id),
+  }),
+  resolveDrupalInstanceAdmin: () => ({ listInstances: () => drupalRows }),
 }));
 
 // Mock the membership resolver (cinatra#406). The platform-admin fail-closed
@@ -595,13 +596,11 @@ describe("connector-instance write authority (cinatra#409)", () => {
 
   it("FAILS CLOSED with an audited instance_resolution_error when the instance reader THROWS", async () => {
     trusted(actor({ organizationId: "org-1" }));
-    // Make the WP reader throw for this id.
-    const wpApi = await import("@/lib/wordpress-api");
-    const readSpy = vi
-      .spyOn(wpApi, "readWordPressInstanceById")
-      .mockImplementation(() => {
-        throw new Error("reader exploded");
-      });
+    // Make the WP reader throw for this id (one call — the deny happens
+    // before any retry could re-read).
+    readWordPressInstanceByIdMock.mockImplementationOnce(() => {
+      throw new Error("reader exploded");
+    });
     await expect(
       wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
     ).rejects.toMatchObject({ reason: "instance_resolution_error" });
@@ -612,7 +611,6 @@ describe("connector-instance write authority (cinatra#409)", () => {
         metadata: expect.objectContaining({ reason: "instance_resolution_error" }),
       }),
     );
-    readSpy.mockRestore();
   });
 
   it("FAILS CLOSED with an audited connector_authority_error when the package authority THROWS", async () => {

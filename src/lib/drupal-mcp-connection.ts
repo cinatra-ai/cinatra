@@ -8,7 +8,11 @@ import "server-only";
 // service published by src/lib/register-host-connector-services.ts).
 // This file keeps the host-owned probe used by the connector settings pages.
 
-import { getDrupalAPISettings } from "@/lib/drupal-api";
+// The Drupal instance store is CONNECTOR-owned since cinatra#975 Wave 3 —
+// the status sweep resolves the relocated client lazily and degrades to an
+// EMPTY sweep (no instances) when the owning connector is absent (nothing to
+// probe for a store that does not exist).
+import { resolveDrupalInstanceAdmin } from "@/lib/connector-client-providers";
 import { isPrivateUrl } from "@/lib/url-policy";
 import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
 import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
@@ -122,7 +126,7 @@ export type DrupalMcpInstanceStatus = {
 };
 
 export async function getDrupalMcpInstanceStatuses(): Promise<DrupalMcpInstanceStatus[]> {
-  const { instances } = getDrupalAPISettings();
+  const instances = resolveDrupalInstanceAdmin()?.listInstances() ?? [];
   const out: DrupalMcpInstanceStatus[] = [];
   for (const instance of instances) {
     const isPrivate = isPrivateUrl(instance.siteUrl);

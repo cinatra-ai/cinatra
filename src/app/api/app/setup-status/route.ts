@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
 import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
-import { getLinkedInAPIStatus } from "@/lib/linkedin-api";
+// The wordpress/linkedin/youtube status reads resolve the CONNECTOR-owned
+// relocated clients lazily (cinatra#975 Wave 3 — the vendor clients are gone
+// from core). Tested degradation: an absent connector reports not_connected
+// (all-APIs-ready stays false) instead of breaking the route — the same
+// posture as the manifest-resolved module reads below.
+import {
+  resolveLinkedInConnectionClient,
+  resolveWordPressInstanceAdmin,
+  resolveYouTubeConnectionClient,
+} from "@/lib/connector-client-providers";
 import { readOpenAIConnection, type OpenAIConnection } from "@/lib/openai-connection-store";
-import { getWordPressAPIStatus } from "@/lib/wordpress-api";
-import { getYouTubeAPIStatus } from "@/lib/youtube-api";
 import { isSetupWizardComplete } from "@/lib/setup-wizard";
 // Connector status reads resolve through the generated extension manifest —
 // this route names no connector package. The structural types below are the
@@ -32,9 +39,14 @@ export async function GET() {
     getGoogleOAuthStatus(),
     loadConnectorModule<ApolloConnectorModule>("apollo-connector"),
     loadConnectorModule<OpenAIConnectorModule>("openai-connector"),
-    Promise.resolve(getYouTubeAPIStatus()),
-    Promise.resolve(getWordPressAPIStatus()),
-    getLinkedInAPIStatus(),
+    Promise.resolve(
+      resolveYouTubeConnectionClient()?.getStatus() ?? { status: "not_connected" as const },
+    ),
+    Promise.resolve(
+      resolveWordPressInstanceAdmin()?.getAPIStatus() ?? { status: "not_connected" as const },
+    ),
+    resolveLinkedInConnectionClient()?.getStatus() ??
+      Promise.resolve({ status: "not_connected" as const }),
     isSetupWizardComplete(),
   ]);
   const apolloStatus = apolloModule?.getApolloAPIStatus() ?? { status: "not_connected" };
