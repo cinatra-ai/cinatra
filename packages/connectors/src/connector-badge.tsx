@@ -13,21 +13,32 @@ import { Badge } from "@/components/ui/badge";
 // component, so the card badge and the setup-page badge stay byte-identical
 // (visual parity is structural, not copy-paste).
 //
-// Connection state is shown as a state-coloured BACKGROUND badge (#682), built
-// from the design-system `Badge` (variant tokens, contrast-checked: the
-// `bg-success/10 text-success` / `bg-destructive/10 text-destructive` treatment
-// is the same one used across the app), wrapping the #605 plug icon:
-//   connected    → green-background badge: "connected plug" (PlugZap) in the
-//                  design success / sea-green token, keeping the connector's
+// Connection state is shown as a SOLID state-coloured chip (cinatra#1014,
+// design system §VII "Connectors"), built from the design-system `Badge`
+// `success` / `destructive` variants with a SOLID override: `bg-success` /
+// `bg-destructive` (replacing the variant's default soft `/10` tint) plus the
+// matching white `-foreground` text/icon token — via `className`, so the
+// shared `ui/badge.tsx` primitive (vendored verbatim into five extension
+// repos — drupal-assistant-connector, tailscale-connector,
+// wordpress-mcp-connector, drupal-mcp-connector, wordpress-assistant-connector
+// — see scripts/extensions/vendor-extension-primitives.mjs) is untouched.
+// `dark:bg-success` / `dark:bg-destructive` explicitly override the variant's
+// own `dark:bg-success/20` soft tint (tailwind-merge drops the conflicting
+// class; the `--success`/`--destructive` CSS custom properties themselves
+// already resolve to the correct light/dark shade, so no other dark:
+// override is needed), wrapping the #605 plug icon:
+//   connected    → filled green chip: "connected plug" (PlugZap, white) in the
+//                  design success token, keeping the connector's
 //                  `connectedLabel` count alongside it when one is provided.
-//   disconnected → red-background badge: "unplug" (Unplug) in the failed / red
-//                  token.
+//   disconnected → filled red chip: "unplug" (Unplug, white) in the
+//                  destructive token.
+// (#1014 replaces the prior soft-tint treatment on THIS badge only.)
 export function ConnectorBadge({ connected, label }: { connected: boolean; label?: string }) {
   if (connected) {
     return (
       <Badge
         variant="success"
-        className="font-semibold"
+        className="bg-success text-success-foreground dark:bg-success font-semibold"
         aria-label={label ? `Connected (${label})` : "Connected"}
       >
         <PlugZap data-icon="inline-start" aria-hidden="true" />
@@ -36,7 +47,11 @@ export function ConnectorBadge({ connected, label }: { connected: boolean; label
     );
   }
   return (
-    <Badge variant="destructive" aria-label="Not connected">
+    <Badge
+      variant="destructive"
+      className="bg-destructive text-destructive-foreground dark:bg-destructive"
+      aria-label="Not connected"
+    >
       <Unplug data-icon="inline-start" aria-hidden="true" />
     </Badge>
   );

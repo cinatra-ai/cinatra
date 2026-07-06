@@ -134,7 +134,16 @@ function ToolbarSeparator({ className }: { className?: string }) {
         // design-system.html §Toolbar example: each cell pads its
         // contents 7px, so the visible gap between any button or
         // search pill and the separator is 7px on each side.
-        "mx-[7px] w-px shrink-0 self-center bg-line-strong/20",
+        //
+        // Light mode keeps the navy hairline from design-system §Toolbar
+        // (the mock draws the separator at rgba(21,33,58,.22) — this
+        // `--line-strong` at 20% alpha). But `--line-strong` is a solid
+        // navy with NO `.dark` override, so in dark mode that navy hairline
+        // paints navy-on-dark-toolbar and disappears (cinatra#1014 dark-mode
+        // report). Dark mode reverts to `--line`, the same subtle white-alpha
+        // hairline the toolbar's search / filter / scope borders use — the
+        // design system's "dark controls keep the softer border" rule.
+        "mx-[7px] w-px shrink-0 self-center bg-line-strong/20 dark:bg-line",
         TOOLBAR_SEPARATOR_HEIGHT[level],
         className
       )}

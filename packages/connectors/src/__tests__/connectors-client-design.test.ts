@@ -7,20 +7,27 @@
  *
  *   #604  the Connected/Disconnected toggle uses the design-system toggle-group
  *         spec — single outer hairline border + hairline dividers, no gaps,
- *         7px radius, slate (muted-foreground) rest content — NOT the generic
- *         shadcn `outline` variant (grey accent fill on a grey ground).
+ *         7px radius — NOT the generic shadcn `outline` variant (grey accent
+ *         fill on a grey ground).
  *   #605  connection state renders as a plug icon (green PlugZap when connected,
  *         red Unplug when not) instead of a text StatusPill, keeping the
  *         connectedLabel count alongside the green plug when one is provided.
  *   #606  the Cinatra mark in connector cards renders in brand mustard
  *         (text-brand-mustard) rather than the default ink foreground.
- *   #681  the toolbar carries a trailing "+ Connector" button linking to the
+ *   #681  the toolbar carries a "+ Connector" button linking to the
  *         marketplace pre-filtered to connectors (?tab=connector).
  *   #682  the per-card connection-state indicator is a state-coloured BACKGROUND
  *         badge (design-system Badge `success`/`destructive` variants) wrapping
  *         the #605 plug icon (+ count).
  *   #683  the toggle items lead with the card plug glyphs and the second item
  *         reads "Disconnected" (the persisted `available` value is unchanged).
+ *   #1014 (design system §VII "Connectors") the toolbar reorders to filter →
+ *         search → scope → +Connector (hairline dividers on both sides) →
+ *         spacer → sort (far right); the search placeholder renames to
+ *         "Search connectors" and gains a ✕ clear button; each segmented-toggle
+ *         item carries its OWN semantic status colour at all times (soft tint
+ *         idle, solid + white text/icon selected) instead of the previous grey
+ *         idle / indigo-primary selected treatment.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -64,8 +71,11 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).toContain("[&>*:not(:first-child)]:border-l");
     });
 
-    it("renders rest segments in slate (muted-foreground)", () => {
-      expect(SRC).toContain("text-muted-foreground");
+    it("cinatra#1014: no longer renders rest (idle) segments in slate — each keeps its own status colour", () => {
+      const groupStart = SRC.indexOf("<ToggleGroup");
+      const groupEnd = SRC.indexOf("</ToggleGroup>") + "</ToggleGroup>".length;
+      const toggleBlock = SRC.slice(groupStart, groupEnd);
+      expect(toggleBlock).not.toContain("text-muted-foreground");
     });
   });
 
@@ -81,17 +91,20 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).toContain("Unplug");
     });
 
-    it("renders the connected plug in a success-variant badge", () => {
-      // The connected branch is a <Badge variant="success"> wrapping <PlugZap>
-      // (the success variant carries bg-success/10 text-success; see #682). The
-      // badge now lives in the shared connector-badge.tsx.
+    it("renders the connected plug in a SOLID success-variant badge (cinatra#1014)", () => {
+      // The connected branch is a <Badge variant="success"> wrapping <PlugZap>,
+      // with a className override (bg-success/text-success-foreground) making
+      // it a filled solid chip rather than the variant's default soft tint
+      // (see #682 / #1014). The badge now lives in the shared connector-badge.tsx.
       expect(BADGE_SRC).toMatch(/variant="success"[\s\S]*?<PlugZap\b/);
+      expect(BADGE_SRC).toContain("bg-success text-success-foreground");
     });
 
-    it("renders the disconnected plug in a destructive-variant badge", () => {
+    it("renders the disconnected plug in a SOLID destructive-variant badge (cinatra#1014)", () => {
       // The disconnected branch is a <Badge variant="destructive"> wrapping
-      // <Unplug> (bg-destructive/10 text-destructive; see #682).
+      // <Unplug>, overridden to a filled bg-destructive + white text chip.
       expect(BADGE_SRC).toMatch(/variant="destructive"[\s\S]*?<Unplug\b/);
+      expect(BADGE_SRC).toContain("bg-destructive text-destructive-foreground");
     });
 
     it("keeps the connectedLabel count alongside the connected plug", () => {
@@ -128,14 +141,16 @@ describe("ConnectorsClient design-system contract", () => {
       expect(BADGE_SRC).toMatch(/<Badge\b/);
     });
 
-    it("renders the connected state as a green/success-background badge", () => {
-      // The success variant resolves to bg-success/10 text-success — a
-      // state-coloured background, not a bare text-only indicator.
-      expect(BADGE_SRC).toMatch(/<Badge[^>]*variant="success"/);
+    it("renders the connected state as a SOLID green/success-background badge (cinatra#1014)", () => {
+      // The className override resolves to a FILLED bg-success + white
+      // text-success-foreground — not the variant's default soft bg-success/10
+      // tint (the shared badge.tsx primitive itself is untouched — it is
+      // vendored into 5 extension repos).
+      expect(BADGE_SRC).toMatch(/<Badge[^>]*variant="success"[^>]*bg-success text-success-foreground/);
     });
 
-    it("renders the disconnected state as a red/destructive-background badge", () => {
-      expect(BADGE_SRC).toMatch(/<Badge[^>]*variant="destructive"/);
+    it("renders the disconnected state as a SOLID red/destructive-background badge (cinatra#1014)", () => {
+      expect(BADGE_SRC).toMatch(/<Badge[^>]*variant="destructive"[^>]*bg-destructive text-destructive-foreground/);
     });
   });
 
@@ -158,7 +173,7 @@ describe("ConnectorsClient design-system contract", () => {
     });
   });
 
-  describe("#681 toolbar carries a trailing + Connector action", () => {
+  describe("#681 toolbar carries a + Connector action", () => {
     it("renders a Button-as-Link to the connector-filtered marketplace", () => {
       expect(SRC).toContain('from "next/link"');
       expect(SRC).toMatch(/<Link href="\/configuration\/marketplace\?tab=connector"/);
@@ -166,6 +181,81 @@ describe("ConnectorsClient design-system contract", () => {
 
     it("labels the action 'Connector' with a leading Plus icon", () => {
       expect(SRC).toMatch(/<Plus[\s\S]*?Connector/);
+    });
+  });
+
+  describe("cinatra#1014 — toolbar reorder + search rename/clear + segmented-toggle colours (design system §VII)", () => {
+    it("orders the toolbar: filter leads → search → scope → +Connector → spacer → sort (far right)", () => {
+      const toggleIdx = SRC.indexOf("<ToggleGroup");
+      const searchIdx = SRC.indexOf('placeholder="Search connectors"');
+      const scopeIdx = SRC.indexOf("<ScopeFilterCombobox");
+      const connectorIdx = SRC.indexOf('href="/configuration/marketplace?tab=connector"');
+      const spacerIdx = SRC.indexOf('<div aria-hidden className="flex-1" />');
+      const sortIdx = SRC.indexOf("<SlidersHorizontal");
+
+      for (const idx of [toggleIdx, searchIdx, scopeIdx, connectorIdx, spacerIdx, sortIdx]) {
+        expect(idx).toBeGreaterThan(-1);
+      }
+      expect(toggleIdx).toBeLessThan(searchIdx);
+      expect(searchIdx).toBeLessThan(scopeIdx);
+      expect(scopeIdx).toBeLessThan(connectorIdx);
+      expect(connectorIdx).toBeLessThan(spacerIdx);
+      expect(spacerIdx).toBeLessThan(sortIdx);
+    });
+
+    it("flanks the + Connector action with a hairline ToolbarSeparator on both sides", () => {
+      const scopeIdx = SRC.indexOf("<ScopeFilterCombobox");
+      const sepBeforeIdx = SRC.indexOf("<ToolbarSeparator />", scopeIdx);
+      const connectorIdx = SRC.indexOf('href="/configuration/marketplace?tab=connector"');
+      const sepAfterIdx = SRC.indexOf("<ToolbarSeparator />", connectorIdx);
+      const spacerIdx = SRC.indexOf('<div aria-hidden className="flex-1" />');
+
+      expect(sepBeforeIdx).toBeGreaterThan(scopeIdx);
+      expect(sepBeforeIdx).toBeLessThan(connectorIdx);
+      expect(sepAfterIdx).toBeGreaterThan(connectorIdx);
+      expect(sepAfterIdx).toBeLessThan(spacerIdx);
+    });
+
+    it("also flanks the flex-1 spacer with a hairline ToolbarSeparator before the sort control (§VII)", () => {
+      // §VII divides EVERY toolbar gap, including both sides of the spacer —
+      // not just around +Connector.
+      const spacerIdx = SRC.indexOf('<div aria-hidden className="flex-1" />');
+      const sortIdx = SRC.indexOf("<SlidersHorizontal");
+      const sepAfterSpacerIdx = SRC.indexOf("<ToolbarSeparator />", spacerIdx);
+
+      expect(sepAfterSpacerIdx).toBeGreaterThan(spacerIdx);
+      expect(sepAfterSpacerIdx).toBeLessThan(sortIdx);
+    });
+
+    it("renames the search placeholder to 'Search connectors'", () => {
+      expect(SRC).toContain('placeholder="Search connectors"');
+      expect(SRC).not.toContain("Filter connectors...");
+    });
+
+    it("shows a ✕ clear button on the toolbar search only while it holds a query", () => {
+      expect(SRC).toMatch(/searchTerm \? \(/);
+      expect(SRC).toMatch(/onClick=\{\(\) => setSearchTerm\(""\)\}/);
+      expect(SRC).toContain('aria-label="Clear search"');
+    });
+
+    it("gives each segmented-toggle item its own semantic status colour at idle (soft tint), never grey", () => {
+      const groupStart = SRC.indexOf("<ToggleGroup");
+      const groupEnd = SRC.indexOf("</ToggleGroup>") + "</ToggleGroup>".length;
+      const toggleBlock = SRC.slice(groupStart, groupEnd);
+      // `(?!-)` after the token guards against a regression that dropped the
+      // idle `text-success`/`text-destructive` class and left only the
+      // selected `-foreground` variant — `-` alone satisfies a bare `\b`.
+      expect(toggleBlock).toMatch(/value="connected"[\s\S]*?bg-success\/10[\s\S]*?text-success(?!-)\b/);
+      expect(toggleBlock).toMatch(/value="available"[\s\S]*?bg-destructive\/10[\s\S]*?text-destructive(?!-)\b/);
+    });
+
+    it("uses the SOLID status colour + white text/icon on the selected segment, not primary/indigo", () => {
+      expect(SRC).toContain("data-[state=on]:bg-success");
+      expect(SRC).toContain("data-[state=on]:text-success-foreground");
+      expect(SRC).toContain("data-[state=on]:bg-destructive");
+      expect(SRC).toContain("data-[state=on]:text-destructive-foreground");
+      expect(SRC).not.toMatch(/data-\[state=on\]:bg-primary\b/);
+      expect(SRC).not.toMatch(/data-\[state=on\]:text-primary\b/);
     });
   });
 });
