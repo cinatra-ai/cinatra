@@ -56,10 +56,17 @@ const {
   };
 });
 
-vi.mock("@/lib/github-api", () => ({
-  getGitHubAccessToken: getGitHubAccessTokenMock,
-  getGitHubAPIStatus: vi.fn(),
-  getGitHubOAuthSettings: getGitHubOAuthSettingsMock,
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireGitHubConnectionClient: () => ({
+    getAccessToken: getGitHubAccessTokenMock,
+    getStatus: vi.fn(),
+    getOAuthSettings: getGitHubOAuthSettingsMock,
+  }),
+  resolveGitHubConnectionClient: () => ({
+    getAccessToken: getGitHubAccessTokenMock,
+    getStatus: vi.fn(),
+    getOAuthSettings: getGitHubOAuthSettingsMock,
+  }),
 }));
 
 vi.mock("octokit", () => ({

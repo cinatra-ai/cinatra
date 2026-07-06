@@ -302,35 +302,44 @@ function structuralGuard<T>(...members: string[]): (impl: unknown) => impl is T 
 
 // Structural guards: a capability impl is `unknown` by contract (the registry
 // stores `unknown`; the runtime trust boundary is HERE, not the compile type).
-// Each checks the load-bearing contract member(s) plus one ADDITIVE relocated
-// member, so a stale pre-Wave-3 registration (contract members only) is
-// rejected rather than failing at call time deep in a consumer.
+// Each checks EVERY member the core consumers / host delegations call (codex
+// Wave-3 eviction round-1 finding 3: a guard weaker than its consumers lets a
+// malformed or stale pre-Wave-3 registration pass resolution and TypeError
+// later deep in a consumer instead of failing closed at the boundary).
 function isWordPressInstanceAdminClient(impl: unknown): impl is WordPressInstanceAdminClient {
   if (
     !hasFunctionMembers(impl, [
+      "listInstances",
+      "getAPIStatus",
       "getAPISettings",
       "readInstanceById",
+      "deleteInstance",
+      "validateWordPressInstanceConnection",
       "saveWordPressInstance",
       "saveWordPressInstanceFromNangoConnection",
+      "persistLocalDevWordPressInstanceUnvalidated",
+      "setWordPressInstanceBlogConnector",
+      "saveWordPressLoggingSettings",
       "getWordPressLoggingSettings",
+      "listWordPressInstances",
+      "readLatestPublishedWordPressPost",
     ])
   ) {
     return false;
   }
   const subs = (impl as { webhookSubscriptions?: unknown }).webhookSubscriptions;
-  return (
-    typeof subs === "object" &&
-    subs !== null &&
-    typeof (subs as Record<string, unknown>).list === "function"
-  );
+  return hasFunctionMembers(subs, ["list", "register", "remove"]);
 }
 
 const isWordPressContentClient = structuralGuard<HostWordPressContentService>(
   "createDraft",
+  "readPost",
   "readPostStatus",
+  "listPublishedPosts",
   "deletePost",
   "uploadMedia",
   "updateDraftMeta",
+  "updatePost",
 );
 
 const isDrupalInstanceAdminClient = structuralGuard<DrupalInstanceAdminClient>(
@@ -338,11 +347,14 @@ const isDrupalInstanceAdminClient = structuralGuard<DrupalInstanceAdminClient>(
   "getAPIStatus",
   "saveInstance",
   "deleteInstance",
+  "devPersistLocalInstanceUnvalidated",
 );
 
 const isLinkedInConnectionClient = structuralGuard<LinkedInConnectionClient>(
   "getStatus",
+  "getSettings",
   "listAccounts",
+  "listDestinations",
   "publishPost",
   "saveAccountFromNangoConnection",
   "getLoggingSettings",
@@ -352,7 +364,10 @@ const isGitHubConnectionClient = structuralGuard<GitHubConnectionClient>(
   "getStatus",
   "getOAuthSettings",
   "listRepositories",
+  "saveOAuthSettings",
+  "saveRepositorySelection",
   "getAccessToken",
+  "getAccessTokenForAuthorizedConnection",
   "savePersonalAccessToken",
 );
 

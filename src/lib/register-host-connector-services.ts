@@ -93,6 +93,7 @@ import {
   type HostWordPressMcpService,
   type HostInstanceWriteAuthorityService,
   type HostExternalMcpRegistryService,
+  type HostYouTubeConnectionService,
   type HostInstanceConnectionGateService,
   type HostRuntimeModeService,
   type HostNotificationsService,
@@ -146,16 +147,18 @@ import {
 // The host resolves the connector-owned client LAZILY per call through the
 // catalog-owner-pinned `@/lib/connector-client-providers` resolvers
 // (fail-loud) — it re-publishes the client-backed members on the ids it still
-// owns (wordpress-mcp / drupal-mcp, which carry HOST-side non-members) by
-// DELEGATION, and no longer publishes the ids whose full surface the
+// owns (wordpress-mcp / drupal-mcp, which carry HOST-side non-members, and the
+// null-degrading youtube-connection mint whose consumer is another extension)
+// by DELEGATION, and no longer publishes the ids whose full surface the
 // connectors now own (wordpress-content / github-connection /
-// linkedin-connection / youtube-connection).
+// linkedin-connection).
 import {
   requireDrupalInstanceAdmin,
   requireLinkedInConnectionClient,
   requireWordPressInstanceAdmin,
   resolveDrupalInstanceAdmin,
   resolveWordPressInstanceAdmin,
+  resolveYouTubeConnectionClient,
 } from "@/lib/connector-client-providers";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
@@ -663,16 +666,30 @@ export function registerHostConnectorServices(): void {
   // (cinatra#151 Stage 3) — no static registrar call survives here.
 
   // Transport-tail connection services (cinatra#172 Stage H4 →
-  // cinatra#975 Wave 3): the `github-connection` / `linkedin-connection` /
-  // `youtube-connection` ids are NO LONGER host-published. Each owning
-  // connector registers its relocated client (the full former host member
-  // set: the SDK contract members with the identical token/PAT-stripping
-  // posture, PLUS the additive core-call-site members) from its own
-  // `register(ctx)`; the consuming deps slots (github's own, media-feeds'
-  // youtube adapter) resolve `[0]` and now find the connector-owned provider,
-  // and the linkedin connector binds its deps directly to its own client.
-  // Core resolves the connector-owned providers through
-  // `@/lib/connector-client-providers` (owner-pinned, fail-loud degradation).
+  // cinatra#975 Wave 3): the `github-connection` / `linkedin-connection` ids
+  // are NO LONGER host-published. Each owning connector registers its
+  // relocated client (the full former host member set: the SDK contract
+  // members with the identical token/PAT-stripping posture, PLUS the additive
+  // core-call-site members) from its own `register(ctx)`; the github
+  // connector's own deps slot resolves `[0]` and now finds the
+  // connector-owned provider, and the linkedin connector binds its deps
+  // directly to its own client. Core resolves the connector-owned providers
+  // through `@/lib/connector-client-providers` (owner-pinned, fail-loud
+  // degradation).
+
+  // `youtube-connection` KEEPS a host-published provider — a thin DELEGATION
+  // to the connector-owned relocated client — because its consumer is a
+  // DIFFERENT extension (the media-feeds connector's `[0]` deps adapter, with
+  // no manifest dependency edge on the youtube connector). An absent youtube
+  // connector degrades the mint to `null` — the SAME "no usable credential"
+  // contract the former in-core client returned when Nango/the connection was
+  // unconfigured — so `media_feed_youtube_list` keeps its token-missing
+  // domain error instead of a host-service wiring throw (codex Wave-3
+  // eviction round-1 finding 1).
+  register(svc.youtubeConnection, {
+    getConfiguredAccessToken: async () =>
+      (await resolveYouTubeConnectionClient()?.getConfiguredAccessToken()) ?? null,
+  } satisfies HostYouTubeConnectionService);
 
   // Per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
   // #978): the gate decision, audit rows, actor construction and identity-row

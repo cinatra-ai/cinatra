@@ -124,7 +124,11 @@ async function LibraryTabContent() {
 
   const nangoFrontendConfig = getNangoFrontendConfig();
   const connectionServiceReady = getNangoStatus().status === "connected";
-  const savedConnection = getPrimarySavedNangoConnection("github");
+  // The connected-branch render is gated on the CONNECTOR being present too
+  // (codex Wave-3 eviction round-1 finding 2): a saved Nango connection with
+  // the github connector absent must degrade to the not-connected state — the
+  // connector-backed repo picker/status/writers cannot serve it.
+  const savedConnection = githubClient ? getPrimarySavedNangoConnection("github") : null;
   const repositories =
     savedConnection && githubClient ? await githubClient.listRepositories().catch(() => []) : [];
 

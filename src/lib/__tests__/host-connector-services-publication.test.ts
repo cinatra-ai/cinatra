@@ -203,6 +203,19 @@ const linkedinConnectorClient = {
   },
   getLoggingSettings: () => ({ enabled: true, directory: "/data/logs/li" }),
 };
+const youtubeApiCalls: Record<string, number> = { getConfiguredAccessToken: 0 };
+// The relocated youtube client the youtube-connector registers under
+// `@cinatra-ai/host:youtube-connection` (cinatra#975 Wave 3) — the host KEEPS
+// a thin null-degrading delegation on this id (its consumer is the
+// media-feeds connector, a different extension with no dependency edge).
+const youtubeConnectorClient = {
+  getConfiguredAccessToken: async () => {
+    youtubeApiCalls.getConfiguredAccessToken += 1;
+    return "yt-access-token";
+  },
+  getStatus: () => ({ status: "connected", detail: "Connected." }),
+  clearSettings: async () => {},
+};
 vi.mock("@/lib/wordpress-mcp-connection", () => ({
   probeWordPressInstanceMcpAdapter: async () => ({}),
   invalidateWordPressMcpProbeCache: () => {},
@@ -326,6 +339,7 @@ import {
 const WORDPRESS_CONNECTOR_PKG = "@cinatra-ai/wordpress-mcp-connector";
 const DRUPAL_CONNECTOR_PKG = "@cinatra-ai/drupal-mcp-connector";
 const LINKEDIN_CONNECTOR_PKG = "@cinatra-ai/linkedin-connector";
+const YOUTUBE_CONNECTOR_PKG = "@cinatra-ai/youtube-connector";
 
 /** Register the fake CONNECTOR-owned relocated clients the host publication
  * delegates to (cinatra#975 Wave 3) under their owning package names. */
@@ -341,6 +355,10 @@ function registerConnectorClients() {
   registerCapabilityProvider("@cinatra-ai/host:linkedin-connection", {
     packageName: LINKEDIN_CONNECTOR_PKG,
     impl: linkedinConnectorClient,
+  });
+  registerCapabilityProvider("@cinatra-ai/host:youtube-connection", {
+    packageName: YOUTUBE_CONNECTOR_PKG,
+    impl: youtubeConnectorClient,
   });
 }
 
@@ -887,28 +905,24 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     expect(target.name).toBe("target");
   });
 
-  it("the github/linkedin/youtube connection ids are NO LONGER host-published — each owning connector registers its relocated client (cinatra#975 Wave 3)", () => {
+  it("the github/linkedin connection ids are NO LONGER host-published — each owning connector registers its relocated client (cinatra#975 Wave 3)", () => {
     // The ids stay minted in the SDK contract (the connectors register under
     // them; consumers resolve them), but the HOST provider is retired: the
-    // relocated clients (github-connector#36 / linkedin-connector#42 /
-    // youtube-connector#36) carry the full former member sets — the SDK
-    // contract members with the identical token/PAT-stripping posture, PLUS
-    // the additive core-call-site members — pinned by each connector's own
-    // suite. Core resolves them owner-pinned through
-    // @/lib/connector-client-providers (tested degradation there).
+    // relocated clients (github-connector#36 / linkedin-connector#42) carry
+    // the full former member sets — the SDK contract members with the
+    // identical token/PAT-stripping posture, PLUS the additive core-call-site
+    // members — pinned by each connector's own suite. Core resolves them
+    // owner-pinned through @/lib/connector-client-providers (tested
+    // degradation there).
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection).toBe(
       "@cinatra-ai/host:github-connection",
     );
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection).toBe(
       "@cinatra-ai/host:linkedin-connection",
     );
-    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection).toBe(
-      "@cinatra-ai/host:youtube-connection",
-    );
     for (const id of [
       HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection,
       HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection,
-      HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection,
     ]) {
       const hostProviders = resolveCapabilityProviders(id).filter(
         (p) => p.packageName === "@cinatra-ai/host",
@@ -921,6 +935,30 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
       HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection,
     );
     expect(linkedinProviders.map((p) => p.packageName)).toEqual([LINKEDIN_CONNECTOR_PKG]);
+  });
+
+  it("youtube-connection KEEPS a host-published NULL-DEGRADING delegation (its consumer is another extension — codex Wave-3 round-1 finding 1)", async () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection).toBe(
+      "@cinatra-ai/host:youtube-connection",
+    );
+    const youtube = resolveSingle<{ getConfiguredAccessToken(): Promise<string | null> }>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection,
+    );
+    // Delegates to the connector-owned relocated client when present…
+    const before = youtubeApiCalls.getConfiguredAccessToken;
+    await expect(youtube.getConfiguredAccessToken()).resolves.toBe("yt-access-token");
+    expect(youtubeApiCalls.getConfiguredAccessToken).toBe(before + 1);
+    // …and degrades to null (the former "no usable credential" contract) when
+    // the youtube connector is absent — media_feed_youtube_list keeps its
+    // token-missing domain error instead of a wiring throw.
+    invalidateProvidersForPackage(YOUTUBE_CONNECTOR_PKG);
+    try {
+      await expect(youtube.getConfiguredAccessToken()).resolves.toBeNull();
+    } finally {
+      registerConnectorClients();
+    }
+    // Single reader by design — no writer members on the host delegation.
+    expect(Object.keys(youtube)).toEqual(["getConfiguredAccessToken"]);
   });
 
   it("publishes @cinatra-ai/host:instance-connection-gate delegating to the host seam (#975 Wave 3 prerequisite)", async () => {
