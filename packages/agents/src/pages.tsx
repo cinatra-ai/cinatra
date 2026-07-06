@@ -293,9 +293,14 @@ export async function NewAgentPage() {
         host: t.connectorSlug,
         runHref: `/agents/${encodeURIComponent(t.connectorSlug)}/${encodeURIComponent(t.remoteAgentId)}/new`,
         // External A2A agents have no marketplace listing → no More-details.
+        packageName: null,
         detailHref: null,
       };
     }
+    // detailHref (and thus the §V modal + its loader key packageName) exists
+    // ONLY for a scoped listing — agentDetailHref returns null for unscoped /
+    // legacy packages, so those render Run only, in lockstep with A2A above.
+    const detailHref = t.packageName ? agentDetailHref(t.packageName) : null;
     return {
       key: `local:${t.id}`,
       name: t.name,
@@ -304,7 +309,8 @@ export async function NewAgentPage() {
       skills: ioSkills,
       host: "local",
       runHref: t.packageName ? buildAgentWorkspacePath(t.packageName) : "#",
-      detailHref: t.packageName ? agentDetailHref(t.packageName) : null,
+      packageName: detailHref ? (t.packageName ?? null) : null,
+      detailHref,
     };
   });
 

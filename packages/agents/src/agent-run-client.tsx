@@ -16,11 +16,25 @@
 // description clamped to 2 lines instead of 3, and the right panel dropping to
 // the primary action Run (a solid, fill-current play icon in place of the
 // settings gear) PLUS "More details". Run stays a filled button; More details
-// takes the design's `btn link` treatment (Button variant="link"), never a
-// second filled button — mirroring how the §VI installed-extensions card
-// (registry-catalog-screen.tsx) wires its own "More details" as a Link to the
-// agent's full-page marketplace detail (the §V detail surface). External A2A /
-// unscoped agents carry no listing → detailHref is null → no More-details link.
+// takes the design's `btn link` treatment, never a second filled button.
+//
+// "More details" opens the §V detail modal IN PLACE (owner ruling, 2026-07-06:
+// design#25 §VIII) — the SAME <MarketplaceDetailModal> the §VI installed-
+// extensions card (registry-catalog-screen.tsx) uses, details-only (no footer
+// CTA — an agent picker never installs/uninstalls from this surface). The
+// `linkTrigger` renders "More details" as the §VI link-styled anchor whose
+// `href` is the agent's full-page marketplace detail (a no-JS progressive-
+// enhancement fallback); JS intercepts the click to open the modal.
+//
+// ACCESS CONSISTENCY (the owner's core point): the modal loads its content via
+// `getAgentMarketplaceDetailAction`, gated at requireAuthSession() — the SAME
+// member floor as /agents itself — NOT the admin-gated
+// `getPublicMarketplaceDetailAction` the browse/installed surfaces use. So a
+// member who can already see the agent card can open its More-details modal
+// (no /not-authorized bounce); the data is the truly-public storefront listing.
+//
+// External A2A / unscoped agents carry no listing → packageName + detailHref
+// are null → no More-details rendered at all (Run only).
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
@@ -33,6 +47,7 @@ import {
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
 import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 
@@ -46,11 +61,18 @@ export type AgentRunRowModel = {
   host: "local" | string;
   runHref: string;
   /**
+   * The scoped npm package name of the agent's marketplace listing — the
+   * loader key for the §V detail modal (design#25 §VIII). null for external
+   * A2A agents (no listing) and unscoped/legacy packages, in lockstep with
+   * `detailHref` (both null together → no More-details action).
+   */
+  packageName: string | null;
+  /**
    * "More details" target (design#25 §VIII): the agent's marketplace listing
-   * detail route (/configuration/marketplace/<scope>/<name>), mirroring the
-   * §VI installed-extensions card's own detailHref wiring. null for external
-   * A2A agents (no listing) and unscoped/legacy packages — those render no
-   * More-details action.
+   * detail route (/configuration/marketplace/<scope>/<name>). Used as the §V
+   * modal's no-JS `linkTrigger` fallback href; JS opens the modal in place.
+   * null for external A2A agents and unscoped/legacy packages — those render
+   * no More-details action.
    */
   detailHref: string | null;
 };
@@ -113,16 +135,24 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
                       Run
                     </Link>
                   </Button>
-                  {/* design#25 §VIII: "More details" opens the §V detail
-                      surface. Mirrors the §VI installed-extensions card
-                      (registry-catalog-screen.tsx) — a Link to the agent's
-                      full-page marketplace detail — in the design's `btn link`
-                      treatment (variant="link"), not a second filled button.
-                      Omitted when there is no listing to open. */}
-                  {row.detailHref && (
-                    <Button asChild variant="link" size="sm">
-                      <Link href={row.detailHref}>More details</Link>
-                    </Button>
+                  {/* design#25 §VIII (owner ruling, 2026-07-06): "More details"
+                      opens the §V detail modal IN PLACE — the same
+                      <MarketplaceDetailModal> the §VI installed-extensions card
+                      uses, DETAILS-ONLY (no footer props → no install CTA). The
+                      `linkTrigger` renders the §VI link-styled "More details"
+                      anchor; its `href` is the full-page detail (no-JS
+                      fallback), JS intercepts the click to open the modal. The
+                      loader is the MEMBER-gated getAgentMarketplaceDetailAction
+                      (same access as /agents), not the admin-gated browse
+                      action. Rendered only for a scoped listing; A2A / unscoped
+                      agents (packageName + detailHref null) show Run only. */}
+                  {row.detailHref && row.packageName && (
+                    <AgentDetailModal
+                      name={row.name}
+                      description={row.description}
+                      packageName={row.packageName}
+                      detailHref={row.detailHref}
+                    />
                   )}
                 </>
               }
