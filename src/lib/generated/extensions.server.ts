@@ -270,3 +270,15 @@ export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, GeneratedExt
   "@cinatra-ai/apollo-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apollo-connector/widgets/manifest", () => import("@cinatra-ai/apollo-connector/widgets/manifest")) },
   "@cinatra-ai/crm-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/crm-connector/widgets/manifest", () => import("@cinatra-ai/crm-connector/widgets/manifest")) },
 };
+
+// packageName → { resolution, loader } of the connector's cinatra.devSetup
+// module (dev-only `runDevSetup` hook). Literal specifiers only
+// (Turbopack-safe) — a runtime-computed specifier throws "expression is too
+// dynamic" under Turbopack, silently skipping every fixture hook
+// (cinatra#976/#1029). Consumed by src/lib/dev-auto-setup.ts.
+export const GENERATED_DEV_SETUP_MODULES: Record<string, GeneratedExtensionLoaderEntry> = {
+  "@cinatra-ai/drupal-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/src/dev-setup", () => import("@cinatra-ai/drupal-mcp-connector/src/dev-setup")) },
+  "@cinatra-ai/plane-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/plane-connector/src/dev-setup", () => import("@cinatra-ai/plane-connector/src/dev-setup")) },
+  "@cinatra-ai/twenty-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/twenty-connector/src/dev-setup", () => import("@cinatra-ai/twenty-connector/src/dev-setup")) },
+  "@cinatra-ai/wordpress-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/src/dev-setup", () => import("@cinatra-ai/wordpress-mcp-connector/src/dev-setup")) },
+};

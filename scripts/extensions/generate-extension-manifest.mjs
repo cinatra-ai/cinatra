@@ -1502,6 +1502,59 @@ export async function buildManifest() {
     widgetSlugOwners.set(w.agentSlug, w.packageName);
   }
 
+  // devSetup hooks (`cinatra.devSetup`, cinatra#976/#1029): a connector OPTS IN
+  // by declaring a package-relative subpath (e.g. "./src/dev-setup") exporting
+  // `runDevSetup`. The dev-only host auto-setup shell (src/lib/dev-auto-setup.ts)
+  // resolves the hook from the generated GENERATED_DEV_SETUP_MODULES map — a
+  // LITERAL dynamic `import("<pkg>/<subpath>")`, so Turbopack can statically
+  // bundle it. A runtime-COMPUTED specifier throws "Cannot find module … as
+  // expression is too dynamic" under Turbopack (the default `pnpm dev` path)
+  // for EVERY connector, silently skipping all fixtures — the exact regression
+  // this map exists to prevent. Keyed by packageName (the host driver holds the
+  // package name from its on-disk discovery). The subpath MUST be resolvable
+  // (tsconfig path alias or package.json exports) or the literal import fails
+  // at runtime — asserted here, at generation.
+  const devSetupModules = records
+    .filter((r) => r.kind === "connector")
+    .map((r) => {
+      const devSetup = readCinatraManifest(r.sourceDir).devSetup;
+      if (typeof devSetup !== "string" || devSetup.length === 0) return null;
+      if (!devSetup.startsWith("./")) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} cinatra.devSetup must be a package-relative subpath starting with "./" (got ${JSON.stringify(devSetup)})`,
+        );
+      }
+      // Strip ONLY the leading "./"; preserve nested segments. Reject an
+      // absolute path, a parent-escape ("..") or a trailing slash — a
+      // malformed subpath would silently mis-resolve the literal import.
+      const sub = devSetup.slice(2);
+      if (sub.length === 0 || sub.startsWith("/") || sub.includes("..") || sub.endsWith("/")) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} has a malformed cinatra.devSetup (${JSON.stringify(devSetup)})`,
+        );
+      }
+      const subpath = `${r.packageName}/${sub}`;
+      const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"));
+      const hasExportsEntry = isObj(pkgJson.exports) && `./${sub}` in pkgJson.exports;
+      if (!tsconfigText.includes(JSON.stringify(subpath)) && !hasExportsEntry) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} declares cinatra.devSetup but "${subpath}" is not ` +
+            `resolvable (no tsconfig.json path alias and no package.json exports["./${sub}"]) — ` +
+            `the generated literal import would fail at runtime`,
+        );
+      }
+      return { packageName: r.packageName, subpath, resolution: r.resolution };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.packageName.localeCompare(b.packageName));
+  const devSetupOwners = new Set();
+  for (const d of devSetupModules) {
+    if (devSetupOwners.has(d.packageName)) {
+      throw new Error(`[extension-manifest] duplicate cinatra.devSetup declaration for ${d.packageName}`);
+    }
+    devSetupOwners.add(d.packageName);
+  }
+
   // Inbound webhooks (`cinatra.webhooks`, cinatra#340): a connector OPTS IN by
   // declaring its hooks. Each hook becomes a generated registry entry keyed
   // "<vendor>/<slug>/<hook>" — the host's generic /webhook route resolves it
@@ -1780,6 +1833,7 @@ export async function buildManifest() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
+    devSetupModules,
     webhookHooks,
     streamDeclarations,
     chatWidgetModules,
@@ -1828,7 +1882,7 @@ function guardImportFor(body) {
     : "";
 }
 
-function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules) {  const script = "scripts/extensions/generate-extension-manifest.mjs";
+function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules, devSetupModules) {  const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
       (r) =>
@@ -1949,6 +2003,13 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     .join("\n");
   const chatWidgetManifests = chatWidgetModules
     .map((p) => `  ${JSON.stringify(p.packageName)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/widgets/manifest`)},`)    .join("\n");
+  // devSetup loader map: packageName → literal dynamic import of the connector's
+  // `cinatra.devSetup` module. Same literal-specifier rule as the other maps —
+  // a runtime-computed specifier is UNBUNDLEABLE under Turbopack. Consumed by
+  // src/lib/dev-auto-setup.ts (dev-only auto-setup shell).
+  const devSetupMods = devSetupModules
+    .map((p) => `  ${JSON.stringify(p.packageName)}: ${emitLoaderEntry(p.resolution, p.subpath)},`)
+    .join("\n");
   const loaderBodies = [
     serverEntries,
     entryModules,
@@ -1958,6 +2019,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     widgetAgents,
     chatWidgets,
     chatWidgetManifests,
+    devSetupMods,
   ].join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
@@ -2047,7 +2109,14 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `// bundle, including route handlers (the chat runner's wizard-manifest\n` +
     `// registry). Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
     `export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, GeneratedExtensionLoaderEntry> = {\n` +
-    `${chatWidgetManifests}\n};\n`
+    `${chatWidgetManifests}\n};\n\n` +
+    `// packageName → { resolution, loader } of the connector's cinatra.devSetup\n` +
+    `// module (dev-only \`runDevSetup\` hook). Literal specifiers only\n` +
+    `// (Turbopack-safe) — a runtime-computed specifier throws "expression is too\n` +
+    `// dynamic" under Turbopack, silently skipping every fixture hook\n` +
+    `// (cinatra#976/#1029). Consumed by src/lib/dev-auto-setup.ts.\n` +
+    `export const GENERATED_DEV_SETUP_MODULES: Record<string, GeneratedExtensionLoaderEntry> = {\n` +
+    `${devSetupMods}\n};\n`
   );
 }
 
@@ -2352,6 +2421,7 @@ function emitGuardedOptionalLoadersTest({
   connectorPrimitiveHandlers,
   externalMcpToolboxes,
   widgetStreamAgents,
+  devSetupModules,
   webhookHooks,
   streamDeclarations,
   chatWidgetModules,
@@ -2371,6 +2441,7 @@ function emitGuardedOptionalLoadersTest({
   for (const p of connectorPrimitiveHandlers) expected.push(["GENERATED_CONNECTOR_PRIMITIVE_HANDLERS", p.slug, p.resolution]);
   for (const p of externalMcpToolboxes) expected.push(["GENERATED_EXTERNAL_MCP_TOOLBOXES", p.slug, p.resolution]);
   for (const w of widgetStreamAgents) expected.push(["GENERATED_WIDGET_STREAM_AGENTS", w.agentSlug, w.resolution]);
+  for (const d of devSetupModules) expected.push(["GENERATED_DEV_SETUP_MODULES", d.packageName, d.resolution]);
   for (const h of webhookHooks) expected.push(["GENERATED_WEBHOOK_HANDLERS", h.scope, h.resolution]);
   for (const s of streamDeclarations) expected.push(["GENERATED_STREAM_DECLARATIONS", s.streamSlug, s.resolution]);
   for (const p of chatWidgetModules) {
@@ -2403,6 +2474,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
     `  GENERATED_CHAT_WIDGET_MODULES,\n` +
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
+    `  GENERATED_DEV_SETUP_MODULES,\n` +
     `} from "../extensions.server";\n` +
     `import { GENERATED_WEBHOOK_HANDLERS } from "../webhooks.server";\n` +
     `import { GENERATED_STREAM_DECLARATIONS } from "../streams.server";\n` +
@@ -2418,6 +2490,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CONNECTOR_PRIMITIVE_HANDLERS,\n` +
     `  GENERATED_EXTERNAL_MCP_TOOLBOXES,\n` +
     `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
+    `  GENERATED_DEV_SETUP_MODULES,\n` +
     `  GENERATED_WEBHOOK_HANDLERS,\n` +
     `  GENERATED_STREAM_DECLARATIONS,\n` +
     `  GENERATED_CHAT_WIDGET_MODULES,\n` +
@@ -2710,6 +2783,7 @@ async function main() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
+    devSetupModules,
     webhookHooks,
     streamDeclarations,
     chatWidgetModules,
@@ -2718,7 +2792,7 @@ async function main() {
     artifactFloorClaimant,
   } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages, connectorSkillsSettingsTabs)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules, devSetupModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages, connectorSkillsSettingsTabs)],
     [OUT_CLIENT, emitClient()],
     [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings)],
     [OUT_ARTIFACT_FLOOR, emitArtifactFloor(artifactFloorClaimant)],
@@ -2737,6 +2811,7 @@ async function main() {
         connectorPrimitiveHandlers,
         externalMcpToolboxes,
         widgetStreamAgents,
+        devSetupModules,
         webhookHooks,
         streamDeclarations,
         chatWidgetModules,

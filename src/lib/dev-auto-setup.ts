@@ -46,6 +46,8 @@ import type {
   ExtensionDevSetupStatus,
 } from "@cinatra-ai/sdk-extensions";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
+import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { setExtensionInstallAccess } from "@cinatra-ai/extensions/install-access-contract";
 import {
@@ -317,26 +319,6 @@ async function discoverDevSetupExtensions(): Promise<DeclaringDevSetupExtension[
 }
 
 /**
- * Resolve the import specifier for a connector's devSetup module. The
- * package-relative `cinatra.devSetup` (e.g. `./src/dev-setup`) is exposed as an
- * `exports`-map subpath on the connector package, so in dev — where each
- * connector is a materialized workspace package with generated tsconfig aliases
- * — the specifier `@scope/name/src/dev-setup` resolves through the alias/exports
- * chain exactly like the connector's other subpaths (`/register`, `/mcp-module`).
- * The specifier is computed at runtime: the shell hardcodes no connector name,
- * and the devSetup path is read from the materialized manifest rather than a
- * generated static import map (the same discovery the `devFixtures` sibling
- * uses; the generated records omit this path, so it is resolved from the
- * materialized extensions checkout).
- */
-function devSetupImportSpecifier(ext: DeclaringDevSetupExtension): string {
-  // Linear trailing-slash trim (never the banned ReDoS `/\/+$/`); the leading
-  // `./` is a fixed two-char strip.
-  const sub = trimTrailingSlashes(ext.devSetupPath.replace(/^\.\//, ""));
-  return `${ext.packageName}/${sub}`;
-}
-
-/**
  * Build the dev-only `ExtensionDevSetupContext` the host shell hands to a
  * connector's `runDevSetup`. `capabilities` wraps the host's real per-process
  * capability registry (so a hook resolves `@cinatra-ai/host:*` services + the
@@ -364,33 +346,68 @@ type DevSetupHookResult = { packageName: string; status: ExtensionDevSetupStatus
 
 /**
  * Discover + invoke every connector `cinatra.devSetup` hook idempotently.
- * Soft-fail per connector: an import failure, a missing/malformed hook, or a
- * throwing `runDevSetup` is captured as an `error`/`skipped` status and never
- * blocks the other hooks or dev boot.
+ * Soft-fail per connector: a missing generated loader, an import failure, a
+ * missing/malformed hook, or a throwing `runDevSetup` is captured as an
+ * `error`/`skipped` status and never blocks the other hooks or dev boot.
+ *
+ * The hook module is resolved from the generated `GENERATED_DEV_SETUP_MODULES`
+ * map — one LITERAL `import("<pkg>/src/dev-setup")` per declaring connector,
+ * emitted by scripts/extensions/generate-extension-manifest.mjs. This is the
+ * ONLY Turbopack-analyzable shape: a runtime-COMPUTED specifier throws "Cannot
+ * find module … as expression is too dynamic" under Turbopack (the default
+ * `pnpm dev` path), which silently skipped EVERY hook + fixture before this fix
+ * (cinatra#976/#1029). On-disk discovery still drives WHICH connectors run (so
+ * prod, with no `extensions/` checkout, stays a clean no-op).
+ *
+ * EVERY failure branch logs LOUDLY (console.error, names the connector) so a
+ * future regression can never fail silently again.
  */
 async function runDevSetupHooks(): Promise<DevSetupHookResult[]> {
   const declaring = await discoverDevSetupExtensions();
   const results: DevSetupHookResult[] = [];
   for (const ext of declaring) {
-    const specifier = devSetupImportSpecifier(ext);
+    const entry = GENERATED_DEV_SETUP_MODULES[ext.packageName];
+    if (!entry) {
+      // A connector declares `cinatra.devSetup` on disk but the generated map
+      // has no loader for it — a stale/out-of-date generated tree. LOUD: this
+      // is exactly the silent-skip class the static map was built to kill.
+      // Regenerate: node scripts/extensions/generate-extension-manifest.mjs
+      const reason = `no generated devSetup loader for ${ext.packageName} — GENERATED_DEV_SETUP_MODULES is stale; regenerate the extension manifest`;
+      console.error(`[dev-auto-setup:${ext.packageName}] ✗ ${reason}`);
+      const status: ExtensionDevSetupStatus = { status: "error", reason };
+      results.push({ packageName: ext.packageName, status });
+      logDevSetupStatus(ext.packageName, status);
+      continue;
+    }
     let mod: unknown;
     try {
-      mod = await import(/* @vite-ignore */ specifier);
+      mod = await entry.load();
     } catch (err) {
-      results.push({
-        packageName: ext.packageName,
-        status: {
-          status: "error",
-          reason: `devSetup import failed (${specifier}): ${err instanceof Error ? err.message : String(err)}`,
-        },
-      });
+      const reason = `devSetup import failed (${ext.packageName}): ${err instanceof Error ? err.message : String(err)}`;
+      console.error(`[dev-auto-setup:${ext.packageName}] ✗ ${reason}`);
+      const status: ExtensionDevSetupStatus = { status: "error", reason };
+      results.push({ packageName: ext.packageName, status });
+      logDevSetupStatus(ext.packageName, status);
+      continue;
+    }
+    if (isDegradedExtensionLoad(mod)) {
+      // The guardedOptional loader resolved the standardized degraded result —
+      // the connector's devSetup module is absent post-build. For an on-disk
+      // dev connector this is an integrity mismatch, NOT an expected no-op:
+      // record an error + log loudly (never silently skip the fixture).
+      const reason = `devSetup module absent for on-disk connector ${ext.packageName} (${mod.reason})`;
+      console.error(`[dev-auto-setup:${ext.packageName}] ✗ ${reason}`);
+      const status: ExtensionDevSetupStatus = { status: "error", reason };
+      results.push({ packageName: ext.packageName, status });
+      logDevSetupStatus(ext.packageName, status);
       continue;
     }
     if (!isExtensionDevSetupModule(mod)) {
-      results.push({
-        packageName: ext.packageName,
-        status: { status: "skipped", reason: `devSetup module has no runDevSetup entry (${specifier})` },
-      });
+      const reason = `devSetup module has no runDevSetup entry (${ext.packageName})`;
+      console.error(`[dev-auto-setup:${ext.packageName}] ✗ ${reason}`);
+      const status: ExtensionDevSetupStatus = { status: "skipped", reason };
+      results.push({ packageName: ext.packageName, status });
+      logDevSetupStatus(ext.packageName, status);
       continue;
     }
     let status: ExtensionDevSetupStatus;
