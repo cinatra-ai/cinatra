@@ -1,15 +1,8 @@
 import { Archive, Package, Settings, Upload } from "lucide-react";
-import { VisibilityBadge } from "@/components/visibility-badge";
-import { ExtensionRowActions } from "./extension-row-actions";
 import Link from "next/link";
-import {
-  requireAuthSession,
-  buildCanDoOptsFromSession,
-  isPlatformAdmin,
-} from "@/lib/auth-session";
+import { requireAuthSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { getEffectiveViewerScope } from "@/lib/marketplace-credentials";
-import { canDo } from "@/lib/authz";
 // Side-effect import: registers the per-kind ExtensionTypeHandlers into
 // extensionRegistry so the runtime-discovery dispatcher can resolve them in
 // this RSC path. Mirrors src/lib/mcp-server.ts. Without it the dispatcher
@@ -35,33 +28,28 @@ import {
 } from "../runtime-discovery-host";
 import { listInstalledExtensions } from "../canonical-store";
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
-import { lifecycleBadgesFor, sourceVersion } from "../lifecycle-ui";
+import { sourceVersion } from "../lifecycle-ui";
 import {
   manifestVisibleToScope,
   visibleManifestPackageNames,
 } from "@cinatra-ai/extension-types";
 import type { ExtensionDiscoveryScope } from "@cinatra-ai/extension-types";
 import type { AgentTemplateRecord } from "@cinatra-ai/agents";
-import {
-  updateExtensionPackageFormAction,
-  uninstallExtensionPackageFormAction,
-  restoreExtensionPackageFormAction,
-  reinstallLatestFormAction,
-} from "../actions";
-import {
-  comparePluginVersions,
-  getPublishedExtensionSummary,
-  listExtensionPackages,
-} from "@cinatra-ai/registries";
+// "More details" opens the §V detail modal in place (cinatra#948 reopen, §VI
+// L902) — the full-page marketplace route is no longer this page's target, so
+// an installed-but-unlisted or unscoped package can never dead-end on a 404
+// (the modal renders its own graceful `notfound` state instead).
+import { MarketplaceDetailModal } from "./marketplace-detail-modal";
+import type { MarketplaceCardData } from "./marketplace-card-model";
+import { marketplaceDetailHref } from "./marketplace-card-model";
+import { resolveInstalledVendorName } from "./installed-vendor";
+// Generated static extension manifest: the `cinatra.vendor` self-declared
+// vendor identity (verified at the marketplace publish gate) is the primary
+// §VI byline vendor source for bundled/synced extensions.
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import { listExtensionPackages } from "@cinatra-ai/registries";
 import type { AgentPackageSummary } from "@cinatra-ai/registries";
-import { resolveRiskLevelsByPackageName } from "./registry-risk";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
-import { extensionHasBeenUsedBatch } from "@cinatra-ai/extensions";
-import { RegistryUninstallForm } from "./registry-uninstall-form";
-import type { DestinationVariant } from "./registry-uninstall-form";
-import { LifecycleBadge } from "@/components/lifecycle-badge";
-import { RiskBadge } from "@/components/risk-badge";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Toolbar,
@@ -71,7 +59,10 @@ import {
 import { ExtensionsTabSelect } from "@/components/extensions/extensions-tab-select";
 import { InstallBatchPanel } from "@/components/extensions/install-batch-panel";
 import { InstallBatchLiveRefresh } from "@/components/extensions/install-batch-live-refresh";
-import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import {
+  InstalledExtensionCard,
+  InstalledStatusIndicator,
+} from "@/components/extensions/installed-extension-card";
 import {
   extensionKindEmblem,
   type ExtensionEmblemKind,
@@ -151,29 +142,67 @@ type InstalledCardRow = {
   /** Effective display status. Missing canonical row ⇒ grandfathered active. */
   status: "active" | "locked" | "archived";
   requiredInProd: boolean;
-  /** Per-extension configuration surface (connectors only today). */
-  settingsHref: string | null;
-  detailHref: string | null;
+  /**
+   * The card's Settings destination — a real, non-404 management/config route
+   * for EVERY kind (owner ruling, 2026-07-05: every card shows Settings). See
+   * {@link settingsHrefFor}.
+   */
+  settingsHref: string;
   visibility: "public" | "private";
 };
+
+/**
+ * Every §VI card carries a Settings button (owner ruling, 2026-07-05: exactly
+ * Settings + More details on every card, every kind). Its destination is the
+ * kind's most appropriate REAL, non-404 management/config surface:
+ *   - connector → the per-connector setup page (getConnectorSetupHref) — the
+ *     one genuinely per-package config surface; falls back to the Connectors
+ *     index for a runtime-only connector with no build-time catalog descriptor;
+ *   - skill    → the Skills configuration page (a real per-kind settings
+ *     surface: repo / PAT / data-path / matches);
+ *   - agent    → the Agents dashboard (the app's canonical Agents page — agents
+ *     have no per-PACKAGE config route; the per-agent routes require a live
+ *     instance id, not a package name);
+ *   - artifact → the Artifacts dashboard (canonical Artifacts page — no
+ *     per-package artifact config surface exists today);
+ *   - workflow → the Extensions manager itself (workflows have NO dedicated
+ *     page — the /workflows index was removed in cinatra#609 and the only
+ *     workflow route is the per-run /workflows/[id]; the installed-extensions
+ *     page is the closest real management surface).
+ * agent / artifact / workflow (and the connector fallback) are kind-level, not
+ * per-package — a known follow-up gap; none link to a 404.
+ */
+const KIND_SETTINGS_FALLBACK: Record<ExtensionKind, string> = {
+  connector: "/connectors",
+  skill: "/configuration/skills",
+  agent: "/agents",
+  artifact: "/artifacts",
+  workflow: "/configuration/extensions",
+};
+
+function settingsHrefFor(kind: ExtensionKind, connectorSlug?: string | null): string {
+  if (kind === "connector" && connectorSlug) {
+    return getConnectorSetupHref(connectorSlug) ?? KIND_SETTINGS_FALLBACK.connector;
+  }
+  return KIND_SETTINGS_FALLBACK[kind];
+}
 
 /** `kind::packageName` — the per-package identity the card list collapses to. */
 function rowKey(kind: string, packageName: string): string {
   return `${kind}::${packageName}`;
 }
 
-function detailHrefFor(packageName: string): string | null {
-  const scopedMatch = /^@([^/]+)\/(.+)$/.exec(packageName);
-  return scopedMatch
-    ? `/configuration/marketplace/${scopedMatch[1]}/${scopedMatch[2]}`
-    : null;
-}
-
-/** Vendor byline: registry `author`, else the npm scope segment. */
+/**
+ * Vendor byline (§VI "{Type} by {Vendor}", cinatra#948 reopen gap 3): the
+ * manifest-declared `cinatra.vendor` name, else the registry `author`, else
+ * null (the byline drops the "by"). The raw npm scope segment NEVER renders
+ * as the vendor.
+ */
 function vendorFor(summary: AgentPackageSummary | undefined, packageName: string): string | null {
-  if (summary?.author) return summary.author;
-  const scopedMatch = /^@([^/]+)\//.exec(packageName);
-  return scopedMatch ? scopedMatch[1] : null;
+  return resolveInstalledVendorName({
+    manifestVendorName: STATIC_EXTENSION_MANIFEST[packageName]?.vendor?.name ?? null,
+    author: summary?.author ?? null,
+  });
 }
 
 /** Raw installed semver from canonical source provenance (registry installs). */
@@ -290,11 +319,10 @@ function collapseKindRows(input: {
           ? `v${summary.packageVersion}`
           : null;
 
-    let settingsHref: string | null = null;
-    if (kind === "connector") {
-      const c = descriptor as ConnectorDescriptorLike;
-      settingsHref = c.slug ? getConnectorSetupHref(c.slug) : null;
-    }
+    const settingsHref = settingsHrefFor(
+      kind,
+      kind === "connector" ? (descriptor as ConnectorDescriptorLike).slug : null,
+    );
 
     const origin = summary?.origin ?? null;
     byPackage.set(packageName, {
@@ -309,7 +337,6 @@ function collapseKindRows(input: {
       status,
       requiredInProd: canonical?.requiredInProd ?? false,
       settingsHref,
-      detailHref: detailHrefFor(packageName),
       visibility:
         nativeVisibility ?? (origin?.visibility === "private" ? "private" : "public"),
     });
@@ -364,11 +391,11 @@ function runtimeOnlyConnectorRows(input: {
       requiredInProd: canonical?.requiredInProd ?? false,
       // The connector dispatch route resolves runtime-only connectors at
       // /connectors/<vendor>/<slug>/<subroute> with the standard setup
-      // subroute (see src/app/connectors/[vendor]/[slug]/[subroute]).
+      // subroute (see src/app/connectors/[vendor]/[slug]/[subroute]); an
+      // unscoped runtime connector falls back to the Connectors index.
       settingsHref: scopedMatch
         ? `/connectors/${scopedMatch[1]}/${scopedMatch[2]}/setup`
-        : null,
-      detailHref: detailHrefFor(packageName),
+        : KIND_SETTINGS_FALLBACK.connector,
       visibility: summary?.origin?.visibility === "private" ? "private" : "public",
     });
   }
@@ -393,15 +420,6 @@ export async function RegistryCatalogScreen({
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const session = await requireAuthSession();
-  // Compute the admin flag once so ExtensionRowActions (Promote/Demote) is
-  // only rendered for admins. Non-admin clicks would bounce off requireAdminSession()
-  // in the action, but hiding the menu avoids the confusing UX.
-  const isAdmin = isPlatformAdmin(session);
-  // Compute role-aware booleans once per render so the per-card button matrix
-  // matches the server-action gate (defense-in-depth).
-  const opts = await buildCanDoOptsFromSession(session);
-  const canUpdate = canDo(session, "registry.update", undefined, opts);
-  const canUninstall = canDo(session, "registry.uninstall", undefined, opts);
 
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
 
@@ -591,156 +609,89 @@ export async function RegistryCatalogScreen({
     }),
   ]);
 
-  // Single batch SQL query replaces N per-row extensionHasBeenUsed calls —
-  // drives the uninstall dialog's archive-vs-remove destination copy.
-  const usedExtensions = await extensionHasBeenUsedBatch(
-    activeRows.map((r) => r.packageName),
-  );
-
-  // Risk data for BOTH tabs. Fast path: the `available` registry page
-  // (riskLevel rides on every summary). Backfill: names that page missed
-  // (q filter / row cap / viewer scope) resolve through a packument-only
-  // read. Rows absent from the map render no risk badge — see
-  // registry-risk.ts for the full contract.
-  const riskLevelByPackageName = await resolveRiskLevelsByPackageName({
-    summaries: available,
-    packageNames: [...activeRows, ...archivedRows].map((r) => r.packageName),
-    readPublishedSummary: (packageName) =>
-      getPublishedExtensionSummary({ packageName }, verdaccioConfig),
-  });
-
   // -------------------------------------------------------------------------
   // Card renderers
   // -------------------------------------------------------------------------
 
-  const renderStatus = (row: InstalledCardRow) => {
-    // The lifecycle pill carries the row's TRUE status (cinatra#957):
-    // active → green check "Active"; locked → live/green styling with the
-    // distinct "Locked" label + tooltip (LifecycleBadge's locked mapping);
-    // archived → muted grey cross. The separate warning "Locked" badge is
-    // therefore redundant — only the "Required" annotation remains.
-    const badges = row.canonical
-      ? lifecycleBadgesFor(row.canonical).filter((b) => b.key === "required")
-      : [];
-    const riskLevel = riskLevelByPackageName.get(row.packageName);
-    return (
-      <>
-        <LifecycleBadge status={row.status} />
-        {badges.map((b) => (
-          <Badge key={b.key} variant={b.variant} title={b.title}>
-            {b.label}
-          </Badge>
-        ))}
-        <VisibilityBadge visibility={row.visibility} />
-        {riskLevel && <RiskBadge riskLevel={riskLevel} />}
-      </>
-    );
-  };
+  // §VI spec version line: ONLY the mono version + the lifecycle indicator
+  // (cinatra#948 reopen, gap 3; §VI drawing, refreshed 2026-07-05 —
+  // green-check Active / grey-cross Archived + mono label, not the §VII
+  // StatusPill). The indicator carries the row's TRUE status (cinatra#957):
+  // active → green check "Active"; locked → green check with the distinct
+  // "Locked" label + tooltip (a system extension is live); archived → muted
+  // cross. This is the card's ONLY status affordance — the owner ruling
+  // (2026-07-05) removed every non-spec chip (Required / visibility / risk)
+  // from the card entirely.
+  const renderStatus = (row: InstalledCardRow) => <InstalledStatusIndicator status={row.status} />;
 
-  const renderActiveActions = (row: InstalledCardRow) => {
-    // Locked / required-in-prod extensions cannot be uninstalled or updated
-    // from this surface (the dispatcher rejects the transition) — suppress the
-    // predictably-failing affordances instead of rendering them.
-    const locked = row.status === "locked" || row.requiredInProd;
-    const registryEntry = availableByName.get(row.packageName);
-    const updateState = comparePluginVersions(
-      row.rawVersion ?? undefined,
-      registryEntry?.packageVersion ?? row.rawVersion ?? "",
-    );
-    const hasUpdate = updateState === "update-available";
-    const destinationVariant: DestinationVariant = usedExtensions.has(row.packageName)
-      ? "archive"
-      : "remove";
-    const uninstallAction = uninstallExtensionPackageFormAction.bind(null, {
+  // ---------------------------------------------------------------------------
+  // "More details" → the §V detail modal, in place (cinatra#948 reopen, §VI
+  // L902). Rendered for EVERY row — scoped, unscoped, and installed-but-
+  // unlisted packages alike: the modal fetches the public listing on open and
+  // renders its own graceful "Extension unavailable" notfound state for the
+  // class that used to 404 on the full-page route. For an installed extension
+  // the modal is DETAILS-ONLY (owner ruling, 2026-07-05): no footer CTA and no
+  // manage actions — this page passes only the card shell + the §VI link
+  // trigger, so the modal renders no footer bar at all. The modal component
+  // itself belongs to the §V lane (PR #995 / #989); this page only consumes
+  // its public entry points.
+  // ---------------------------------------------------------------------------
+  const renderDetailModal = (row: InstalledCardRow, isArchived: boolean) => {
+    // Reuses the browse-card wire shape; storefront-owned fields (rating,
+    // badge, freshness, assets) stay null — the modal hydrates them from the
+    // fetched detail, so the card shell only carries install identity + the
+    // already-hydrated display fields (the human-readable displayName the
+    // modal title renders, never the package slug).
+    const modalCard: MarketplaceCardData = {
       packageName: row.packageName,
       packageVersion: row.rawVersion ?? "",
-    }) as unknown as (formData?: FormData) => void | Promise<void>;
-
+      displayName: row.displayName,
+      description: row.description,
+      kindSlug: row.kind,
+      kindLabel: KIND_LABEL[row.kind],
+      badge: null,
+      freshnessAt: null,
+      rating: null,
+      detailHref: marketplaceDetailHref(row.packageName),
+      installCount: null,
+      iconUrl: null,
+      vendorLogoUrl: null,
+      sdkAbiRange: null,
+    };
     return (
-      <>
-        {row.settingsHref && (
-          <Button asChild size="sm">
-            <Link href={row.settingsHref}>
-              <Settings data-icon="inline-start" />
-              Settings
-            </Link>
-          </Button>
-        )}
-        {row.detailHref && (
-          <Button asChild variant="ghost" size="sm">
-            <Link href={row.detailHref}>More details</Link>
-          </Button>
-        )}
-        {hasUpdate && canUpdate && !locked && (
-          <form
-            action={async () => {
-              "use server";
-              // Plain server-action form (no toast surface on this management
-              // screen): discard the #685 classified-failure return so the
-              // action stays () => void. Success still redirect()s as before.
-              await updateExtensionPackageFormAction({
-                packageName: row.packageName,
-                packageVersion: registryEntry?.packageVersion ?? row.rawVersion ?? "",
-              });
-            }}
-          >
-            <Button type="submit" variant="outline" size="sm" className="w-full">
-              Update
-            </Button>
-          </form>
-        )}
-        {canUninstall && !locked && (
-          <RegistryUninstallForm
-            action={uninstallAction}
-            packageTitle={row.displayName}
-            destinationVariant={destinationVariant}
-            variant="outline"
-            size="sm"
-            className="w-full hover:text-destructive"
-          />
-        )}
-        {/* Overflow menu with Promote / Demote actions. Only rendered for
-            admins, and ONLY for agent rows — promote/demote resolves
-            agent-template origin data, so it stays scoped to the kind it
-            supported on the old table (other kinds would get a
-            predictably-broken action). */}
-        {isAdmin && row.kind === "agent" && (
-          <ExtensionRowActions
-            packageName={row.packageName}
-            packageVersion={row.rawVersion ?? ""}
-            visibility={row.visibility}
-          />
-        )}
-      </>
+      <MarketplaceDetailModal
+        card={modalCard}
+        // §VI actions panel: More details is a real <a> (never a button) — the
+        // active row's underlined indigo `.btn.link`; the archived row's
+        // muted, non-underlined `.btn.ghost`. No footer props are passed, so
+        // the modal is details-only with no footer bar.
+        linkTrigger={{
+          variant: isArchived ? "ghost" : "link",
+          href: modalCard.detailHref,
+        }}
+      />
     );
   };
 
-  const renderArchivedActions = (row: InstalledCardRow) => (
+  // §VI card actions — EXACTLY Settings + More details, ALWAYS both, for every
+  // kind and both active/archived rows (owner ruling, 2026-07-05). Settings is
+  // a button (primary on active, muted `secondary` on archived) linking to the
+  // kind's real management/config surface (see `settingsHrefFor`); More
+  // details is the link-styled anchor that opens the §V modal in place.
+  const renderCardActions = (row: InstalledCardRow, isArchived: boolean) => (
     <>
-      {row.detailHref && (
-        <Button asChild variant="ghost" size="sm">
-          <Link href={row.detailHref}>More details</Link>
-        </Button>
-      )}
-      <form
-        action={async () => {
-          "use server";
-          // Discard the #685 classified-failure return so the action stays
-          // () => void on this plain-form management screen.
-          await restoreExtensionPackageFormAction({
-            packageName: row.packageName,
-          });
-        }}
+      <Button
+        asChild
+        size="sm"
+        variant={isArchived ? "secondary" : "default"}
+        className={isArchived ? "text-muted-foreground" : undefined}
       >
-        <Button type="submit" variant="outline" size="sm" className="w-full">
-          {row.rawVersion ? `Restore (${row.rawVersion} pinned)` : "Restore"}
-        </Button>
-      </form>
-      <form action={reinstallLatestFormAction.bind(null, { packageName: row.packageName })}>
-        <Button type="submit" variant="outline" size="sm" className="w-full">
-          Reinstall latest
-        </Button>
-      </form>
+        <Link href={row.settingsHref}>
+          <Settings data-icon="inline-start" />
+          Settings
+        </Link>
+      </Button>
+      {renderDetailModal(row, isArchived)}
     </>
   );
 
@@ -756,7 +707,7 @@ export async function RegistryCatalogScreen({
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}
-      actions={isArchived ? renderArchivedActions(row) : renderActiveActions(row)}
+      actions={renderCardActions(row, isArchived)}
       // Archived extensions render the fully-greyed §VI card (cinatra#957):
       // category ground → light grey, muted logo tile, all text/status/actions
       // muted. Active cards keep their category colour.
