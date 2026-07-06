@@ -54,7 +54,7 @@ describe("agent_list (MCP discovery) filters by the runtime-lifecycle gate", () 
   });
 });
 
-describe("NewAgentPage (the /agents/run picker) intersects against the runtime-lifecycle gate", () => {
+describe("NewAgentPage (the /agents All-Agents picker) intersects against the runtime-lifecycle gate", () => {
   const pages = read("pages.tsx");
 
   it("calls resolveRunnableAgentPackageNames over the local (non-external) templates", () => {

@@ -61,6 +61,13 @@ export type InstalledExtensionCardProps = {
    */
   actions?: ReactNode;
   /**
+   * Description clamp — §VI (Installed extensions) is 3 lines; the derived
+   * §VII "Agent card (All Agents)" (cinatra#1007 / design#25) clamps to 2
+   * lines since it carries no version/status row to share the middle panel
+   * with. Defaults to 3 so every existing §VI caller is unaffected.
+   */
+  descriptionLineClamp?: 2 | 3;
+  /**
    * Archived / fully-greyed §VI treatment (cinatra#957): the accent ground
    * desaturates to light grey, the logo tile inks muted, and every text /
    * status / action zone renders muted grey. Active cards keep their
@@ -127,6 +134,7 @@ export function InstalledExtensionCard({
   actions,
   archived = false,
   className,
+  descriptionLineClamp = 3,
 }: InstalledExtensionCardProps) {
   const { bg } = ACCENT_PALETTE[accentColor];
   return (
@@ -187,23 +195,34 @@ export function InstalledExtensionCard({
           </span>
         </div>
         {description && (
-          <p className="line-clamp-3 text-sm leading-relaxed text-muted-foreground">
+          <p
+            className={cn(
+              "text-sm leading-relaxed text-muted-foreground",
+              descriptionLineClamp === 2 ? "line-clamp-2" : "line-clamp-3",
+            )}
+          >
             {description}
           </p>
         )}
-        <div
-          data-slot="installed-extension-spec-line"
-          className={cn(
-            // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
-            "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
-            archived && "opacity-70",
-          )}
-        >
-          {version && (
-            <span className="font-mono text-xs text-muted-foreground">{version}</span>
-          )}
-          {status}
-        </div>
+        {/* §VII "Agent card (All Agents)" (cinatra#1007) passes neither version
+            nor status → the whole spec line is omitted (no empty middle-panel
+            row). §VI callers always pass at least the lifecycle indicator, so
+            the row renders exactly as before. */}
+        {(version || status) && (
+          <div
+            data-slot="installed-extension-spec-line"
+            className={cn(
+              // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
+              "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
+              archived && "opacity-70",
+            )}
+          >
+            {version && (
+              <span className="font-mono text-xs text-muted-foreground">{version}</span>
+            )}
+            {status}
+          </div>
+        )}
       </div>
 
       {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly

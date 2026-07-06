@@ -70,7 +70,7 @@ export const CHAT_MCP_FIXTURES: ReadonlyArray<ChatMcpFixture> = [
     agentFixture: fixtureFor("@cinatra-ai/trigger-agent"),
     runTimeoutMs: 1_200_000,
   },
-  // -- Non-HITL agents (Track B only — no /agents/run surface) --
+  // -- Non-HITL agents (Track B only — no /agents run-agent surface) --
   //
   // These complete without pausing for HITL. The chat path passes the
   // necessary inputs via the cinatra_<slug> tool call (or via agent_run

@@ -1,5 +1,9 @@
 /**
- * Preflight for the `/agents/run` UAT harness.
+ * Preflight for the `/agents` (All Agents run-agent picker) UAT harness.
+ *
+ * cinatra#1007 moved the picker from `/agents/run` to the bare `/agents`
+ * (the "All Agents" tab, now the default) — `/agents/run` is removed, not
+ * redirected.
  *
  * Runs FIRST (Playwright project dependency) — if this fails, no
  * agent test runs.
@@ -51,8 +55,8 @@ const WAYFLOW_HEALTH_URL =
   process.env.E2E_WAYFLOW_HEALTH_URL ?? "http://localhost:3010/.health";
 
 test.describe("preflight", () => {
-  test("/agents/run renders the canonical 16-agent visible set", async ({ page }) => {
-    await page.goto("/agents/run");
+  test("/agents renders the canonical 16-agent visible set", async ({ page }) => {
+    await page.goto("/agents");
 
     // Confirm the page mounted.
     await expect(page.getByRole("heading", { name: /Run agent|Run an agent/i }).first())
@@ -80,7 +84,7 @@ test.describe("preflight", () => {
       throw new Error(
         [
           `Preflight FAIL: missing ${missing.length} of ${EXPECTED_VISIBLE_PACKAGE_SET.size} ` +
-            `canonical visible agents from /agents/run.`,
+            `canonical visible agents from /agents.`,
           `Missing: ${missing.join(", ")}`,
           `Most common cause: the harness is pointed at a feature branch's scoped ` +
             `schema, not the canonical \`cinatra\` schema on port 3000. Verify ` +
@@ -89,7 +93,7 @@ test.describe("preflight", () => {
       );
     }
 
-    expect(missing, "no canonical packages missing from /agents/run").toEqual([]);
+    expect(missing, "no canonical packages missing from /agents").toEqual([]);
   });
 
   test("WayFlow container is healthy", async ({ request }) => {
@@ -99,7 +103,7 @@ test.describe("preflight", () => {
     // failed agents is acceptable — we just need WayFlow to be reachable
     // and responding. (A long-standing agent-creation-finalizer mount
     // failure was removed, but future agents may surface their own; the
-    // visible-set check below is the floor that matters for /agents/run UAT.)
+    // visible-set check below is the floor that matters for /agents UAT.)
     const res = await request.get(WAYFLOW_HEALTH_URL, { timeout: 10_000 });
     expect(res.ok(), `WayFlow .health returned ${res.status()}`).toBeTruthy();
     const body = (await res.json()) as {

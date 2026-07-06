@@ -319,7 +319,7 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
 
     async install(ref: PackageRef, actor: Actor) {
       // Pass status:"active" so freshly installed extensions
-      // appear in /agents/run (which filters by status IN ('active','published')).
+      // appear in /agents (which filters by status IN ('active','published')).
       // installAgentPackageWithDependencies defaults to "draft", which would
       // exclude new installs from all readInstalledAgentTemplates queries.
       const result = await installAndRegisterSkills(ref, actor, "active");

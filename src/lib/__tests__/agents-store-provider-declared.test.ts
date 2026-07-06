@@ -214,7 +214,7 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     // operator's OWN vendor segment (instanceNamespace), e.g.
     // `<installRoot>/marcushorndt-local/<slug>/cinatra/oas.json`. Before the
     // fix the picker only scanned `cinatra-ai`, so this agent never appeared
-    // in `/agents/run`.
+    // in `/agents`.
     readInstanceIdentityMock.mockReturnValue(
       makeInstanceIdentity("marcushorndt-local", "Marcus Local"),
     );

@@ -1,11 +1,15 @@
 /**
- * /agents dashboard live-verify smoke.
+ * /agents/executions dashboard live-verify smoke.
+ *
+ * cinatra#1007 moved this dashboard from the bare `/agents` to
+ * `/agents/executions` (the "Executions" tab) — `/agents` now serves the
+ * "All Agents" run-agent picker instead (no redirect from the old route).
  *
  * What it asserts (the minimum bar that would have caught the four
  * runtime regressions in the dashboard mount path):
  *
  *   1. `/sign-in` is reachable (sanity — auth route compiles).
- *   2. After authenticated navigation, `/agents` is served (no 500).
+ *   2. After authenticated navigation, `/agents/executions` is served (no 500).
  *   3. The Cinatra page chrome renders (heading "Agents").
  *   4. Both portlets mount with the seeded titles.
  *   5. `GET /api/dashboards/cubejs-api/v1/meta` returns 200.
@@ -26,7 +30,7 @@ const consoleAll: Array<{ type: string; text: string }> = [];
 const pageErrors: string[] = [];
 const networkResponses: Array<{ url: string; status: number }> = [];
 
-test.describe("/agents live-verify", () => {
+test.describe("/agents/executions live-verify", () => {
   test.beforeEach(async ({ page }) => {
     consoleAll.length = 0;
     pageErrors.length = 0;
@@ -53,7 +57,7 @@ test.describe("/agents live-verify", () => {
       if (
         url.includes("/api/dashboards/") ||
         url.includes("/api/auth/") ||
-        url.endsWith("/agents") ||
+        url.endsWith("/agents/executions") ||
         url.endsWith("/sign-in") ||
         url.endsWith("/setup") ||
         url.endsWith("/setup/name")
@@ -79,14 +83,14 @@ test.describe("/agents live-verify", () => {
         .innerHTML()
         .catch(() => "(body unreadable)");
       console.log(
-        `\n=== /agents BODY snapshot on failure (first 5000 chars) ===\n${bodyHtml.slice(0, 5000)}\n=== end body ===\n`,
+        `\n=== /agents/executions BODY snapshot on failure (first 5000 chars) ===\n${bodyHtml.slice(0, 5000)}\n=== end body ===\n`,
       );
     } catch (err) {
-      console.log(`/agents body snapshot capture failed: ${err}`);
+      console.log(`/agents/executions body snapshot capture failed: ${err}`);
     }
     // Dump full browser console — every type, every message. Truncate
     // each message at 500 chars to bound noise.
-    console.log(`\n=== /agents browser console on failure (${consoleAll.length} msgs) ===`);
+    console.log(`\n=== /agents/executions browser console on failure (${consoleAll.length} msgs) ===`);
     for (const m of consoleAll) {
       console.log(`  [${m.type}] ${m.text.slice(0, 500)}`);
     }
@@ -94,7 +98,7 @@ test.describe("/agents live-verify", () => {
     // Dump uncaught page errors — the most likely culprit when portlets
     // render but data hooks don't fire (a React render crash).
     if (pageErrors.length > 0) {
-      console.log(`\n=== /agents page errors on failure (${pageErrors.length}) ===`);
+      console.log(`\n=== /agents/executions page errors on failure (${pageErrors.length}) ===`);
       for (const e of pageErrors) {
         console.log(`  ${e.slice(0, 1000)}`);
       }
@@ -102,7 +106,7 @@ test.describe("/agents live-verify", () => {
     }
     // Dump the dashboards/auth network log so we can see whether the DC
     // client actually fired /v1/load (or /v1/meta etc).
-    console.log(`\n=== /agents network responses (dashboards/auth only, ${networkResponses.length}) ===`);
+    console.log(`\n=== /agents/executions network responses (dashboards/auth only, ${networkResponses.length}) ===`);
     for (const r of networkResponses) {
       console.log(`  ${r.status} ${r.url}`);
     }
@@ -138,8 +142,8 @@ test.describe("/agents live-verify", () => {
     );
 
     // 1 + 2: route resolution.
-    await page.goto("/agents");
-    await expect(page).toHaveURL(/\/agents$/);
+    await page.goto("/agents/executions");
+    await expect(page).toHaveURL(/\/agents\/executions$/);
 
     // React-hydration gate (#82). The portlet titles (step 4), the chart
     // SVG (7) and the table rows (8) only exist after DC mounts client-side
@@ -202,12 +206,12 @@ test.describe("/agents live-verify", () => {
 
   test("/batch endpoint is reachable when multi-query path is hit", async ({ page }) => {
     // Sanity check that the /batch endpoint compiles even though the
-    // seeded /agents portlets never trigger it. If a future change
+    // seeded /agents/executions portlets never trigger it. If a future change
     // accidentally breaks /batch, single-query mounts still work but
     // useMultiCubeLoadQuery falls back here. Hit it directly via fetch.
     // No hydration gate here (#82): page.evaluate(fetch) only needs the
     // document/cookie context, not React's synthetic event handlers.
-    await page.goto("/agents");
+    await page.goto("/agents/executions");
     const resp = await page.evaluate(async () => {
       const r = await fetch("/api/dashboards/cubejs-api/v1/batch", {
         method: "POST",
