@@ -1,5 +1,5 @@
 /**
- * Auth setup for the `/agents/run` UAT harness.
+ * Auth setup for the `/agents` (All Agents run-agent picker) UAT harness.
  *
  * Steps:
  *   1. Idempotent sign-up via Better Auth.

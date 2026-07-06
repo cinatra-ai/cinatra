@@ -461,7 +461,7 @@ const PROVIDER_DEFAULT_VENDOR_SEGMENT = "cinatra-ai";
  *
  * cinatra#538: without the operator segment an approved/published user agent
  * (e.g. `@marcushorndt-local/...`, materialized under
- * `<installRoot>/marcushorndt-local/...`) never surfaced in `/agents/run`.
+ * `<installRoot>/marcushorndt-local/...`) never surfaced in `/agents`.
  *
  * Source of truth: the operator's instance identity (`instanceNamespace`,
  * which `readInstanceIdentity` already normalizes from the legacy `vendorName`
@@ -495,7 +495,7 @@ function safeProviderVendorSegments(): string[] {
 // same-slug agent under the operator vendor and under first-party "cinatra-ai"
 // BOTH surface as distinct packageIds — instead of the operator dir shadowing
 // the first-party one (the previous "operator-first, return on first hit"
-// behavior hid a same-slug first-party agent from /agents/run).
+// behavior hid a same-slug first-party agent from /agents).
 function resolveProviderAgentJsonPathUnderVendor(
   installRoot: string,
   vendor: string,
@@ -562,7 +562,7 @@ export function readProviderDeclaredAgents(
   // BOTH surface as distinct packageIds — the operator dir no longer shadows a
   // same-slug first-party agent. Without enumerating the operator vendor dir at
   // all, an approved user agent materialized under
-  // `<installRoot>/<operator-vendor>/...` never surfaced in `/agents/run`.
+  // `<installRoot>/<operator-vendor>/...` never surfaced in `/agents`.
   const candidates: Array<{ oasSourcePath: string; siblingPkgPaths: string[] }> = [];
   const vendorSegments = safeProviderVendorSegments();
 

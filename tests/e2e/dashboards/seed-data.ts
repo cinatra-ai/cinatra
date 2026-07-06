@@ -2,7 +2,7 @@
  * Test-data seeding for the dashboards live-verify smoke (Option A
  * retrospective item C).
  *
- * The `agent_runs` cube needs rows to render the two `/agents`
+ * The `agent_runs` cube needs rows to render the two `/agents/executions`
  * portlets. On a fresh CI Postgres schema we won't have any. This
  * module exposes `seedDashboardFixtures(opts)` which:
  *
@@ -49,7 +49,7 @@ export const V12_ANALYTICS_DASHBOARD_ID = "e2e-v12-analytics-render";
 export const APIVERSION_V12 = ["v1", "2"].join(".");
 
 /** The embedded drizzle-cube config (agent_runs bar + table — same cubes the
- *  /agents seed uses, so the seeded agent_runs rows paint it). */
+ *  /agents/executions seed uses, so the seeded agent_runs rows paint it). */
 const V12_EMBEDDED_DC = {
   portlets: [
     {

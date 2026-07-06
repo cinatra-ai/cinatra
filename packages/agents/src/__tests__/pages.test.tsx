@@ -111,13 +111,33 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).not.toMatch(/Open registry/);
   });
 
-  // Icon pinning — Bot only (not Ai which doesn't exist in lucide-react).
-  // Bot + card rendering live in agent-run-client.tsx (cinatra#814 extraction).
-  it("uses Bot icon from lucide-react for the Run button", () => {
+  // Icon pinning (cinatra#1007 / design#25 §VII): the Run button uses the
+  // lucide `Play` icon, not the robot icon — the emblem/kind icon (the
+  // §VI-derived card's coloured logo tile + byline glyph) still resolves to
+  // the "agent" kind emblem (Bot) via the shared extensionKindEmblem helper.
+  // Card rendering lives in agent-run-client.tsx (cinatra#814 extraction).
+  it("uses the Play icon (not the robot icon) on the Run button", () => {
     const client = readClientSource();
     expect(existsSync(agentRunClientPath)).toBe(true);
-    expect(client).toMatch(/import\s+\{[^}]*\bBot\b[^}]*\}\s+from\s+"lucide-react"/);
-    expect(client).toMatch(/<Bot\s/);
+    expect(client).toMatch(/import\s+\{[^}]*\bPlay\b[^}]*\}\s+from\s+"lucide-react"/);
+    expect(client).toMatch(/<Play\s/);
+  });
+
+  it("resolves the card emblem + byline kind-icon via the shared extensionKindEmblem(\"agent\") helper", () => {
+    const client = readClientSource();
+    expect(client).toMatch(/extensionKindEmblem\("agent"\)/);
+    expect(client).toMatch(/extensionKindEmblem\("agent",\s*"size-3\.5"\)/);
+  });
+
+  // Design#25 §VII derives the Agent card from §VI minus version +
+  // Active/Archived — reuse <InstalledExtensionCard> without those two props,
+  // and with the description clamped to 2 lines (not §VI's 3).
+  it("renders cards via InstalledExtensionCard without version/status, 2-line description clamp", () => {
+    const client = readClientSource();
+    expect(client).toMatch(/<InstalledExtensionCard/);
+    expect(client).toMatch(/descriptionLineClamp=\{2\}/);
+    expect(client).not.toMatch(/\bversion=\{/);
+    expect(client).not.toMatch(/\bstatus=\{/);
   });
 
   // Search toolbar (cinatra#814) — AgentRunClient provides client-side filter.

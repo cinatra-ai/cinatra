@@ -231,7 +231,9 @@ describe("ComposedDashboard under DashboardsClientShell — page-anchor seam", (
         '[data-cinatra-page-action="run-agent"]',
     );
     expect(liveAction).not.toBeNull();
-    expect(liveAction?.getAttribute("href")).toBe("/agents/run");
+    // cinatra#1007: /agents/run removed (not redirected) — the run-agent
+    // picker moved to /agents.
+    expect(liveAction?.getAttribute("href")).toBe("/agents");
 
     // Both route actions render inside the toolbar, in declared order.
     const anchors = [

@@ -242,14 +242,17 @@ const nextConfig: NextConfig = {
         destination: "/projects",
         permanent: false,
       },
+      // cinatra#1007: /agents/run was removed (not redirected, by design) —
+      // these legacy /campaign-types bookmarks now land on /agents, the new
+      // home of the run-agent picker (the "All Agents" tab).
       {
         source: "/campaign-types",
-        destination: "/agents/run",
+        destination: "/agents",
         permanent: false,
       },
       {
         source: "/campaign-types/:path*",
-        destination: "/agents/run",
+        destination: "/agents",
         permanent: false,
       },
       {

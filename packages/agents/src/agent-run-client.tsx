@@ -1,30 +1,55 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// AgentRunClient — filterable card-grid for /agents/run.
+// AgentRunClient — filterable card-grid for /agents (the "All Agents" tab).
 //
 // Receives the pre-built `rows` array from the server component (NewAgentPage)
 // and renders a search toolbar using the same ToolbarSearchInput primitive used
 // by the marketplace and notifications archive pages. Filter-as-you-type on
 // name and description; no URL params needed for a picker page.
+//
+// Card design (cinatra#1007 / design#25 §VIII "Agent card (All Agents)"):
+// reuses <InstalledExtensionCard> — the same three-panel §VI Installed-
+// extensions card (coloured logo-tile panel, byline + description middle
+// panel, hairline-divided actions panel) — but WITHOUT the version and
+// Active/Archived status row (both props simply go unpassed), the
+// description clamped to 2 lines instead of 3, and the right panel dropping to
+// the primary action Run (a solid, fill-current play icon in place of the
+// settings gear) PLUS "More details". Run stays a filled button; More details
+// takes the design's `btn link` treatment, never a second filled button.
+//
+// "More details" opens the §V detail modal IN PLACE (owner ruling, 2026-07-06:
+// design#25 §VIII) — the SAME <MarketplaceDetailModal> the §VI installed-
+// extensions card (registry-catalog-screen.tsx) uses, details-only (no footer
+// CTA — an agent picker never installs/uninstalls from this surface). The
+// `linkTrigger` renders "More details" as the §VI link-styled anchor whose
+// `href` is the agent's full-page marketplace detail (a no-JS progressive-
+// enhancement fallback); JS intercepts the click to open the modal.
+//
+// ACCESS CONSISTENCY (the owner's core point): the modal loads its content via
+// `getAgentMarketplaceDetailAction`, gated at requireAuthSession() — the SAME
+// member floor as /agents itself — NOT the admin-gated
+// `getPublicMarketplaceDetailAction` the browse/installed surfaces use. So a
+// member who can already see the agent card can open its More-details modal
+// (no /not-authorized bounce); the data is the truly-public storefront listing.
+//
+// External A2A / unscoped agents carry no listing → packageName + detailHref
+// are null → no More-details rendered at all (Run only).
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
 import Link from "next/link";
-import { Bot } from "lucide-react";
+import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
   Toolbar,
   ToolbarSearchGroup,
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
-import { ExtensionCard, deriveExtensionAccent } from "@cinatra-ai/sdk-ui";
+import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
+import { extensionKindEmblem } from "@/components/extension-kind-emblem";
+import { deriveExtensionAccent } from "@/lib/extension-accent";
 
 export type AgentRunRowModel = {
   key: string;
@@ -35,6 +60,21 @@ export type AgentRunRowModel = {
   /** "local" for Cinatra-hosted agents; connector slug for external A2A. */
   host: "local" | string;
   runHref: string;
+  /**
+   * The scoped npm package name of the agent's marketplace listing — the
+   * loader key for the §V detail modal (design#25 §VIII). null for external
+   * A2A agents (no listing) and unscoped/legacy packages, in lockstep with
+   * `detailHref` (both null together → no More-details action).
+   */
+  packageName: string | null;
+  /**
+   * "More details" target (design#25 §VIII): the agent's marketplace listing
+   * detail route (/configuration/marketplace/<scope>/<name>). Used as the §V
+   * modal's no-JS `linkTrigger` fallback href; JS opens the modal in place.
+   * null for external A2A agents and unscoped/legacy packages — those render
+   * no More-details action.
+   */
+  detailHref: string | null;
 };
 
 export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
@@ -52,7 +92,11 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
   return (
     <div className="flex flex-col gap-6">
       <Toolbar aria-label="Agent filters">
-        <ToolbarSearchGroup>
+        {/* w-full max-w-md flex-none — same non-stretch override as the
+            marketplace + notifications-archive toolbars (cinatra#1007):
+            ToolbarSearchGroup's base `flex-1` would otherwise stretch this
+            lone search field across the entire toolbar. */}
+        <ToolbarSearchGroup className="w-full max-w-md flex-none">
           <ToolbarSearchInput
             placeholder="Search agents…"
             value={query}
@@ -61,82 +105,56 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
         </ToolbarSearchGroup>
       </Toolbar>
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4">
         {filtered.map((row) => {
-          const visibleSkills = row.skills.slice(0, 3);
-          const remainingSkills = row.skills.slice(3);
-          const truncatedHost =
-            row.host.length > 24 ? `${row.host.slice(0, 23)}…` : row.host;
-          const hostBadge =
-            row.host === "local" ? (
-              <Badge variant="secondary" className="rounded-chip">
-                Cinatra
-              </Badge>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="outline" className="rounded-chip cursor-default">
-                    {truncatedHost}
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent>{row.host}</TooltipContent>
-              </Tooltip>
-            );
+          const vendor = row.host === "local" ? "Cinatra" : row.host;
           return (
-            <ExtensionCard
+            <InstalledExtensionCard
               key={row.key}
               name={row.name}
               accentColor={deriveExtensionAccent(row.key)}
-              emblem={<Bot aria-hidden="true" />}
+              emblem={extensionKindEmblem("agent")}
+              kindIcon={extensionKindEmblem("agent", "size-3.5")}
+              kindLabel="Agent"
+              vendor={vendor}
               description={row.description || undefined}
-              meta={
-                <div className="flex flex-wrap items-center gap-2">
-                  {row.version ? (
-                    <Badge
-                      variant="outline"
-                      className="rounded-chip text-xs font-mono"
-                    >
-                      v{row.version}
-                    </Badge>
-                  ) : null}
-                  {row.skills.length > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {visibleSkills.map((s) => (
-                        <Badge
-                          key={s}
-                          variant="secondary"
-                          className="rounded-chip text-xs"
-                        >
-                          {s}
-                        </Badge>
-                      ))}
-                      {remainingSkills.length > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Badge
-                              variant="outline"
-                              className="rounded-chip text-xs cursor-default"
-                            >
-                              +{remainingSkills.length}
-                            </Badge>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {remainingSkills.join(", ")}
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {hostBadge}
-                </div>
-              }
-              footer={
-                <Button asChild size="sm">
-                  <Link href={row.runHref}>
-                    <Bot data-icon="inline-start" aria-hidden="true" />
-                    Run
-                  </Link>
-                </Button>
+              descriptionLineClamp={2}
+              // No `version` / `status` — design#25 §VIII derives the Agent
+              // card from §VI minus the version + Active/Archived indicator.
+              actions={
+                <>
+                  <Button asChild size="sm">
+                    <Link href={row.runHref}>
+                      {/* Solid play icon (design#25 §VIII: fill="currentColor",
+                          no outline) — fill-current fills the lucide glyph. */}
+                      <Play
+                        data-icon="inline-start"
+                        aria-hidden="true"
+                        className="fill-current"
+                      />
+                      Run
+                    </Link>
+                  </Button>
+                  {/* design#25 §VIII (owner ruling, 2026-07-06): "More details"
+                      opens the §V detail modal IN PLACE — the same
+                      <MarketplaceDetailModal> the §VI installed-extensions card
+                      uses, DETAILS-ONLY (no footer props → no install CTA). The
+                      `linkTrigger` renders the §VI link-styled "More details"
+                      anchor; its `href` is the full-page detail (no-JS
+                      fallback), JS intercepts the click to open the modal. The
+                      loader is the MEMBER-gated getAgentMarketplaceDetailAction
+                      (same access as /agents), not the admin-gated browse
+                      action. Rendered only for a scoped listing; A2A / unscoped
+                      agents (packageName + detailHref null) show Run only. */}
+                  {row.detailHref && row.packageName && (
+                    <AgentDetailModal
+                      name={row.name}
+                      description={row.description}
+                      packageName={row.packageName}
+                      detailHref={row.detailHref}
+                    />
+                  )}
+                </>
               }
             />
           );

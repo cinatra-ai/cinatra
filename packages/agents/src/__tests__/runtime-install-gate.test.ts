@@ -1,6 +1,6 @@
 // cinatra#659 — the runtime-lifecycle gate shared by the four non-connector
 // AGENT consumer surfaces (agent_run, the workflow agent_task executor + probe,
-// the /agents/run picker, and the agent_list MCP primitive).
+// the /agents picker, and the agent_list MCP primitive).
 //
 // Mirrors `packages/extensions/src/__tests__/connector-installed-predicate.test.ts`
 // (the #657 connector predicate's direct unit test): the rule is small but

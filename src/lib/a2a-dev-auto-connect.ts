@@ -298,7 +298,7 @@ export async function ensureA2ADevPeerConnections(): Promise<void> {
         // Only upsert synthetic placeholder for brand-new connections.
         // Existing connections already have real names from an earlier deferred fetch;
         // overwriting them with the synthetic slug on every restart was causing the
-        // "a2a-dev-localhost-XXXX" name regression visible in /agents/run.
+        // "a2a-dev-localhost-XXXX" name regression visible in /agents.
         // The deferred fetch always re-fetches the real card for ALL connections (new + existing).
         if (isNew) {
           await upsertExternalAgentTemplate({

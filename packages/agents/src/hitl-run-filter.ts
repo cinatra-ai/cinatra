@@ -20,7 +20,7 @@ export function templateHasOwnHitl(t: HitlRunFilterTemplate): boolean {
 
 /**
  * Returns the set of installed agent templates that should be rendered on
- * `/agents/run`:
+ * `/agents`:
  *
  *   1. Any internal template with at least one HITL signal of its own
  *      (`hitlRequired`, `hitlScreens.length > 0`, or `gatedSteps.length > 0`).
@@ -31,7 +31,7 @@ export function templateHasOwnHitl(t: HitlRunFilterTemplate): boolean {
  *      pre-classify HITL behavior of remote A2A agents, so we never hide them.
  *
  * Templates without a `packageName` are dropped from descendant resolution
- * because the `/agents/run` Run button cannot route to them. External
+ * because the `/agents` Run button cannot route to them. External
  * templates are exempt from the packageName requirement because the page
  * links them by (connectorSlug, remoteAgentId) instead.
  */

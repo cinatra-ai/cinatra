@@ -91,7 +91,7 @@ export type InstallAgentFromPackageInput = {
   requireStorePayload?: boolean;
   creatorId?: string;
   // Includes "active" so the install handler can pass status:"active" and
-  // newly installed extensions appear in /agents/run (which filters by status
+  // newly installed extensions appear in /agents (which filters by status
   // IN ('active','published')).
   status?: "draft" | "published" | "active";
   // Install-time owner tier. Threaded from installRegistryPackageAtScope's

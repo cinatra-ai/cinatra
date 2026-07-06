@@ -1046,9 +1046,9 @@ export async function readAllAgentTemplatesWithPackageName(): Promise<AgentTempl
   return rows.map(deserializeTemplate);
 }
 
-// used by /agents/run discovery page to show only installed agents.
+// used by /agents discovery page to show only installed agents.
 // Filters agent_templates WHERE packageName IS NOT NULL AND status IN (statuses).
-// Default statuses = ["active", "published"] so draft templates never leak to /agents/run.
+// Default statuses = ["active", "published"] so draft templates never leak to /agents.
 export async function readInstalledAgentTemplates(
   options?: { statuses?: string[] },
 ): Promise<AgentTemplateRecord[]> {

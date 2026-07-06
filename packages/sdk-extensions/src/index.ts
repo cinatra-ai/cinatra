@@ -235,6 +235,14 @@ export type {
 } from "./external-mcp-toolbox-contract";
 export { parseDevFixtures, DevFixtureValidationError, DEV_FIXTURE_SURFACES } from "./dev-fixtures";
 export type { DevFixture, DevFixtureFile, DevFixtureSetting, DevFixtureObject } from "./dev-fixtures";
+export { isExtensionDevSetupModule } from "./dev-setup";
+export type {
+  ExtensionDevSetupStatus,
+  ExtensionDevSetupHelpers,
+  ExtensionDevSetupCapabilities,
+  ExtensionDevSetupContext,
+  ExtensionDevSetupModule,
+} from "./dev-setup";
 export {
   CONNECTOR_ACCESS_SCOPES,
   CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,

@@ -9,7 +9,7 @@
 // WHY a separate pure module (mirrors `connector-installed-predicate.ts` from
 // cinatra#657): the four non-connector consumer surfaces — `agent_run`
 // (execution), the workflow `agent_task` executor + its instantiate/start
-// re-auth probe, the `/agents/run` picker, and the `agent_list` MCP discovery
+// re-auth probe, the `/agents` picker, and the `agent_list` MCP discovery
 // primitive — must apply ONE consistent runtime-lifecycle rule. Centralizing the
 // rule in a pure, directly-unit-tested function keeps the four call sites from
 // drifting and keeps the fail-open/fail-closed/CG-1 semantics in exactly one place.

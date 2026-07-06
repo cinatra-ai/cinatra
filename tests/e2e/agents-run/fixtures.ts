@@ -1,5 +1,5 @@
 /**
- * Locked `/agents/run` inventory + per-agent fixture data for the
+ * Locked `/agents` (All Agents run-agent picker) inventory + per-agent fixture data for the
  * end-to-end harness.
  *
  * The 16-agent visible set is locked from the canonical `cinatra`

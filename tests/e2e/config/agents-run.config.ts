@@ -1,9 +1,10 @@
 /**
- * Path-gated Playwright config for the `/agents/run` end-to-end harness.
+ * Path-gated Playwright config for the `/agents` (All Agents run-agent
+ * picker — cinatra#1007 moved this from `/agents/run`) end-to-end harness.
  *
  * Runs against the canonical `cinatra` schema on port 3000 by default
  * (the main worktree's dev server) — distinct from the dashboards smoke
- * which targets port 3100. This is intentional: `/agents/run` E2E must
+ * which targets port 3100. This is intentional: `/agents` E2E must
  * exercise real WayFlow mounts, real OAuth tokens, and the canonical
  * BullMQ queue, none of which a scoped feature-branch schema can
  * provide. Per the live-test invariant, actual execution happens on the

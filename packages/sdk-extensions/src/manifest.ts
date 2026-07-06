@@ -121,6 +121,19 @@ export type CinatraManifest = {
    */
   devFixtures?: string;
   /**
+   * Package-relative path to an IMPERATIVE dev-mode provisioning hook module
+   * (recommended `./src/dev-setup`) exposing `runDevSetup(ctx)` — see
+   * `ExtensionDevSetupModule` in `./dev-setup`. On a dev boot the host's
+   * dev-only orchestration shell imports + invokes it IDEMPOTENTLY to wire the
+   * connector's OWN local docker fixture (mint a credential, register an
+   * instance row, push a widget config) through host services resolved on the
+   * hook context — core owns the shell, the connector owns its provisioning.
+   * Dev-only, localhost-only, soft-fail; NOT part of the frozen `register(ctx)`
+   * ABI. Distinct from `devFixtures` (DECLARATIVE data). cinatra#976 (epic #978
+   * wave W-D).
+   */
+  devSetup?: string;
+  /**
    * Self-declared connector vendor identity (#12). A `kind:"connector"`
    * extension declares its OWN vendor key + name here — the SDK owns no vendor
    * roster (open marketplace). The marketplace publish gate (separate repo)

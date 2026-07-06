@@ -17,6 +17,11 @@
  *
  * Page chrome lives inside Cinatra's standard `<Main>` + `<PageHeader>`
  * + `<PageContent>` shell.
+ *
+ * Mounted at /agents/executions (cinatra#1007 — moved from the bare /agents,
+ * which now serves the "All Agents" run-agent picker instead). The
+ * All Agents / Executions <AgentsTabNav> renders directly beneath the
+ * PageHeader on both routes.
  */
 import "server-only";
 import Link from "next/link";
@@ -28,6 +33,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { AgentsTabNav } from "@/components/agents-tab-nav";
 
 import { getAuthSession } from "@/lib/auth-session";
 
@@ -116,7 +122,10 @@ export async function AgentsDashboardPage() {
             className="flex flex-wrap items-center gap-2"
           >
             <Button asChild>
-              <Link href="/agents/run">
+              {/* cinatra#1007: the run-agent picker moved from /agents/run to
+                  /agents (the "All Agents" tab) — /agents/run no longer
+                  resolves (removed, not redirected). */}
+              <Link href="/agents">
                 <Play data-icon="inline-start" aria-hidden="true" />
                 Run agent
               </Link>
@@ -130,6 +139,7 @@ export async function AgentsDashboardPage() {
           </div>
         }
       />
+      <AgentsTabNav activeTab="executions" />
       <PageContent className="flex flex-col gap-6 pb-8">
         <EmbeddedDrizzleCubeDashboardGrid
           dashboard={initialConfig}
