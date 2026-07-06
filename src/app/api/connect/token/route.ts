@@ -6,7 +6,7 @@ import {
   exchangeInstallCode,
   sha256Base64Url,
 } from "@/lib/connect-provisioning";
-import { generateWidgetAuthConfig, readWidgetAuthConfig } from "@/lib/wordpress-widget-auth";
+import { requireWordPressWidgetAuth } from "@/lib/widget-auth-provider";
 import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
 import { emitConnectAudit } from "@/lib/connect-audit";
 
@@ -47,8 +47,8 @@ function clientIp(request: Request): string {
 
 // The webhook secret returned to the CMS. For v1 we reuse the existing
 // per-connector SHARED webhookSecret (the /api/webhooks/wordpress receiver
-// still validates the shared secret); generateWidgetAuthConfig lazily ensures
-// it exists. KNOWN v1 TRADEOFF (codex adversarial Medium, accepted per spec
+// still validates the shared secret); the widget-auth store's generate() lazily
+// ensures it exists. KNOWN v1 TRADEOFF (codex adversarial Medium, accepted per spec
 // §2.4): every connected site receives the same webhookSecret, so the webhook
 // receiver authenticates "a connected site" but not WHICH site. The
 // security-critical value — the long-lived per-site CREDENTIAL — IS per-site,
@@ -56,10 +56,15 @@ function clientIp(request: Request): string {
 // receiver verification are tracked as follow-up; the connect-site row already
 // carries a webhook_secret_hash column so the migration is non-breaking. The WP
 // publish webhook receiver currently only logs events (no state mutation).
+// FAIL-LOUD (cinatra#975): the store is the connector-registered
+// `@cinatra-ai/host:wordpress-widget-auth` capability, resolved lazily. A
+// missing connector THROWS here (surfaced as a generic invalid_grant by the
+// handler's existing try/catch — never a silently-minted or empty secret).
 function resolveWebhookSecret(): string {
-  const existing = readWidgetAuthConfig();
+  const store = requireWordPressWidgetAuth();
+  const existing = store.read();
   if (existing?.webhookSecret) return existing.webhookSecret;
-  return generateWidgetAuthConfig().webhookSecret;
+  return store.generate().webhookSecret;
 }
 
 // #220 token-broker availability. The broker is not part of this issue; until
