@@ -131,7 +131,8 @@ describe("NewAgentPage merged discovery table", () => {
 
   // Design#25 §VII derives the Agent card from §VI minus version +
   // Active/Archived — reuse <InstalledExtensionCard> without those two props,
-  // and with the description clamped to 2 lines (not §VI's 3).
+  // and with the description clamped to 2 lines (since cinatra#1005 the §VI
+  // default is also 2, so the explicit prop is belt-and-braces).
   it("renders cards via InstalledExtensionCard without version/status, 2-line description clamp", () => {
     const client = readClientSource();
     expect(client).toMatch(/<InstalledExtensionCard/);

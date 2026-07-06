@@ -61,10 +61,11 @@ export type InstalledExtensionCardProps = {
    */
   actions?: ReactNode;
   /**
-   * Description clamp — §VI (Installed extensions) is 3 lines; the derived
-   * §VII "Agent card (All Agents)" (cinatra#1007 / design#25) clamps to 2
-   * lines since it carries no version/status row to share the middle panel
-   * with. Defaults to 3 so every existing §VI caller is unaffected.
+   * Description clamp — 2 lines everywhere since cinatra#1005: §VI
+   * (Installed extensions) caps the card description at two lines, matching
+   * the derived §VII "Agent card (All Agents)" (cinatra#1007 / design#25).
+   * The 3-line variant remains addressable for a future caller, but no
+   * current surface uses it — the default is 2.
    */
   descriptionLineClamp?: 2 | 3;
   /**
@@ -134,7 +135,7 @@ export function InstalledExtensionCard({
   actions,
   archived = false,
   className,
-  descriptionLineClamp = 3,
+  descriptionLineClamp = 2,
 }: InstalledExtensionCardProps) {
   const { bg } = ACCENT_PALETTE[accentColor];
   return (

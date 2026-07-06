@@ -11,8 +11,8 @@
  *     stay rendered (Restore/Reinstall must remain operable).
  *   - Omitting `version`/`status` (the §VII Agent-card derivation) drops the
  *     whole version/status row from the DOM rather than rendering it empty.
- *   - `descriptionLineClamp={2}` (§VII) renders `line-clamp-2`; the default
- *     (§VI, no prop) stays `line-clamp-3`.
+ *   - The description clamps to 2 lines by default (§VI, cinatra#1005) and
+ *     under an explicit `descriptionLineClamp={2}` (§VII).
  */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -98,7 +98,7 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
     expect(html).not.toContain("data-testid=\"status-slot\"");
   });
 
-  it("clamps the description to 2 lines (not §VI's default 3)", () => {
+  it("clamps the description to 2 lines under the explicit §VII prop", () => {
     const html = renderAgentCard();
     // The description <p> carries line-clamp-2. The banner's ITALIC NAME
     // (e.g. "Research Assistant") always renders line-clamp-3 regardless of
@@ -110,7 +110,7 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
     expect(descriptionParagraph).not.toContain("line-clamp-3");
   });
 
-  it("defaults to the §VI 3-line clamp when descriptionLineClamp is not passed", () => {
+  it("defaults to the 2-line clamp when descriptionLineClamp is not passed (§VI, cinatra#1005)", () => {
     const html = renderToStaticMarkup(
       <InstalledExtensionCard
         name="Web Research Agent"
@@ -120,8 +120,11 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
         description="Stateless schema-driven web research enricher."
       />,
     );
-    expect(html).toContain("line-clamp-3");
-    expect(html).not.toContain("line-clamp-2");
+    // Assert on the description <p> specifically — the banner's italic NAME
+    // always renders its own (unrelated) line-clamp-3 title clamp.
+    const descriptionParagraph = html.match(/<p class="[^"]*">[^<]*<\/p>/)?.[0];
+    expect(descriptionParagraph).toContain("line-clamp-2");
+    expect(descriptionParagraph).not.toContain("line-clamp-3");
   });
 
   it("still renders the Run action", () => {
