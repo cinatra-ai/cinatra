@@ -73,8 +73,14 @@ import {
 // register completes (and surfaces a failure as a thrown `register-threw`)
 // BEFORE `await server.register(ctx)` resolves.
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+// Host-owned request/response capture backing `HostLoggerPort.capture` /
+// `captureDirectory` (cinatra#981) — see the module header there for the full
+// rationale (retires extension-side `node:fs` logging).
+import { captureExtensionLogEntry, resolveExtensionCaptureDirectory } from "@/lib/extension-log-capture";
 
-const ABI_VERSION = "2.2.0";
+// Kept in lockstep with SDK_EXTENSIONS_ABI_VERSION (cinatra#981 bumped 2.2.0 ->
+// 2.3.0 for the additive `logger.capture`/`logger.captureDirectory` methods).
+const ABI_VERSION = "2.3.0";
 
 function makeLogger(packageName: string): HostLoggerPort {
   const tag = `[ext:${packageName}]`;
@@ -83,6 +89,10 @@ function makeLogger(packageName: string): HostLoggerPort {
     info: (msg, fields) => console.info(tag, msg, fields ?? ""),
     warn: (msg, fields) => console.warn(tag, msg, fields ?? ""),
     error: (msg, fields) => console.error(tag, msg, fields ?? ""),
+    // Host-owned capture (cinatra#981): storage/rotation only — the
+    // extension gates enabled/opt-in + any redaction itself before calling.
+    capture: (channel, entry) => captureExtensionLogEntry(packageName, channel, entry),
+    captureDirectory: (channel) => resolveExtensionCaptureDirectory(packageName, channel),
   };
 }
 
