@@ -6,7 +6,7 @@
 #
 # Functional acceptance (cinatra#985, design-conformance L2b): the
 # design-conformance-functional Playwright project consumes the PINNED
-# conformance manifests (tests/e2e/design/conformance/spec-pins.json —
+# conformance manifests (tests/e2e/design/conformance-pins.json —
 # generated from the annotated design specs, published under
 # docs.cinatra.ai/references/design/conformance/) and asserts fields/actions/
 # state variants of every covered surface on /design-fixtures/conformance.

@@ -23,7 +23,7 @@ The harness mounts the REAL components through the REAL state machinery
 install form); the only substitution is the bound server action. Server-side
 install effects are owned by the seeded-fixture gate (cinatra#986).
 
-## Spec pinning (`spec-pins.json`)
+## Spec pinning (`conformance-pins.json`)
 
 Each manifest is pinned twice: `manifestSha256` (sha256 of the committed
 verbatim generated artifact under `manifests/`) and `specContentHash` (the
@@ -40,7 +40,7 @@ the manifest: review the spec change, re-pin, and adjust coverage in the same
 PR).
 
 Adopting a new upstream manifest = replace the file under `manifests/`
-verbatim + update both hashes in `spec-pins.json` in the same commit. The
+verbatim + update both hashes in `conformance-pins.json` in the same commit. The
 committed copies are generated artifacts — **never hand-edit**.
 
 ## Stable data-testid contract (`testid-contract.json`)

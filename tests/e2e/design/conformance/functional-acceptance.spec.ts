@@ -2,7 +2,7 @@
  * Manifest-driven functional-acceptance conformance gate (cinatra#985,
  * design-conformance L2b).
  *
- * Consumes the PINNED conformance manifests (spec-pins.json — generated from
+ * Consumes the PINNED conformance manifests (conformance-pins.json — generated from
  * the annotated design specs, published at
  * docs.cinatra.ai/references/design/conformance/) and asserts, per covered
  * surface, on the production-equivalent standalone boot:
@@ -16,7 +16,7 @@
  *     (allowlist.json — shrink-only, CI-ratcheted) is a RED.
  *   - A pin/manifest hash mismatch is a distinct "PIN INTEGRITY" red; a
  *     published-manifest/pin mismatch is a distinct "UPSTREAM DRIFT" red
- *     (active once spec-pins.json flips source to "published").
+ *     (active once conformance-pins.json flips source to "published").
  *   - Pixel-diff + axe (design-fixtures.spec.ts) remain supporting evidence,
  *     never the sole gate.
  */
@@ -56,14 +56,14 @@ test.describe("conformance manifest consumption", () => {
 
 for (const pm of manifests) {
   test.describe(`conformance:${pm.pin.id} (${pm.manifest.spec})`, () => {
-    test("spec pin integrity — committed manifest matches spec-pins.json", () => {
+    test("spec pin integrity — committed manifest matches conformance-pins.json", () => {
       expect(
         pm.repoSha256,
-        `PIN INTEGRITY: manifests/${pm.pin.file} bytes do not hash to spec-pins.json manifestSha256 — the committed copy must be the VERBATIM generated artifact; re-copy it from cinatra-ai/design and update the pin in the same commit`,
+        `PIN INTEGRITY: manifests/${pm.pin.file} bytes do not hash to conformance-pins.json manifestSha256 — the committed copy must be the VERBATIM generated artifact; re-copy it from cinatra-ai/design and update the pin in the same commit`,
       ).toBe(pm.pin.manifestSha256);
       expect(
         pm.manifest.contentHash,
-        `PIN INTEGRITY: manifests/${pm.pin.file} embeds contentHash ${pm.manifest.contentHash} but spec-pins.json pins ${pm.pin.specContentHash} — the pin no longer names the spec bytes this manifest was generated from`,
+        `PIN INTEGRITY: manifests/${pm.pin.file} embeds contentHash ${pm.manifest.contentHash} but conformance-pins.json pins ${pm.pin.specContentHash} — the pin no longer names the spec bytes this manifest was generated from`,
       ).toBe(pm.pin.specContentHash);
       expect(pm.manifest.schemaVersion, "unsupported manifest schemaVersion").toBe("1.0.0");
     });
@@ -71,14 +71,14 @@ for (const pm of manifests) {
     test("published manifest matches the spec pin (upstream drift)", async ({ request }) => {
       test.skip(
         pm.pin.source !== "published",
-        `repo-pin fallback active (source: "repo") until the docs wave publishes ${pm.publishedUrl}; flip source to "published" in spec-pins.json — no code change`,
+        `repo-pin fallback active (source: "repo") until the docs wave publishes ${pm.publishedUrl}; flip source to "published" in conformance-pins.json — no code change`,
       );
       const res = await request.get(pm.publishedUrl);
       expect(res.ok(), `could not fetch published manifest ${pm.publishedUrl} (HTTP ${res.status()})`).toBe(true);
       const body = await res.body();
       expect(
         sha256Hex(body),
-        `UPSTREAM DRIFT: published manifest ${pm.publishedUrl} no longer matches the pinned artifact (spec-pins.json manifestSha256). Upstream regenerated the manifest — review the spec change, re-pin (update manifests/${pm.pin.file} + both hashes) and extend/adjust coverage in the same PR`,
+        `UPSTREAM DRIFT: published manifest ${pm.publishedUrl} no longer matches the pinned artifact (conformance-pins.json manifestSha256). Upstream regenerated the manifest — review the spec change, re-pin (update manifests/${pm.pin.file} + both hashes) and extend/adjust coverage in the same PR`,
       ).toBe(pm.pin.manifestSha256);
     });
 

@@ -35,7 +35,7 @@ export const metadata: Metadata = {
  * untouched; coverage here is assertion-based.
  *
  * Operational sources: the published conformance manifests (see
- * tests/e2e/design/conformance/spec-pins.json) generated from the annotated
+ * tests/e2e/design/conformance-pins.json) generated from the annotated
  * design specs at https://docs.cinatra.ai/references/design/.
  */
 export default function ConformanceHarnessPage() {
