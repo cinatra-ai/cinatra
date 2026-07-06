@@ -3,7 +3,7 @@
  * (cinatra#985).
  *
  * The manifests are GENERATED artifacts of the annotated design specs
- * (cinatra-ai/design, design#19 L2a) published under
+ * (the design-system source of truth, L2a) published under
  * docs.cinatra.ai/references/design/conformance/. This repo verifies against
  * an EXACT pinned artifact (../conformance-pins.json):
  *

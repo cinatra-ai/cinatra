@@ -2,7 +2,7 @@
 
 Manifest-driven functional-acceptance gate for the in-app design surfaces —
 the L2b consumer of the conformance manifests generated from the annotated
-design specs (cinatra-ai/design, L2a). Runs inside the existing
+design specs (the design-system source of truth, L2a). Runs inside the existing
 `design-visual-verify` workflow (same production-standalone boot); pixel-diff
 + axe remain supporting evidence, never the sole gate.
 

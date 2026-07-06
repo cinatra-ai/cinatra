@@ -260,6 +260,10 @@
     { "alias": "@cinatra-ai/extensions", "target": "./packages/extensions/src/index.ts" },
     { "alias": "@cinatra-ai/extensions/screens", "target": "./packages/extensions/src/screens/index.ts" },
     { "alias": "@cinatra-ai/extensions/screens/marketplace-detail-modal", "target": "./packages/extensions/src/screens/marketplace-detail-modal.tsx" },
+    { "alias": "@cinatra-ai/extensions/screens/marketplace-listing-card", "target": "./packages/extensions/src/screens/marketplace-listing-card.tsx" },
+    { "alias": "@cinatra-ai/extensions/screens/marketplace-install-form", "target": "./packages/extensions/src/screens/marketplace-install-form.tsx" },
+    { "alias": "@cinatra-ai/extensions/screens/marketplace-card-model", "target": "./packages/extensions/src/screens/marketplace-card-model.ts" },
+    { "alias": "@cinatra-ai/extensions/screens/marketplace-failure-copy", "target": "./packages/extensions/src/screens/marketplace-failure-copy.ts" },
     { "alias": "@cinatra-ai/extensions/mcp-handlers", "target": "./packages/extensions/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/extensions/mcp-module", "target": "./packages/extensions/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/extensions/actions", "target": "./packages/extensions/src/actions.ts" },
@@ -387,6 +391,7 @@
     { "alias": "@cinatra-ai/objects/mcp-handlers", "target": "./packages/objects/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/objects/classifier-signals", "target": "./packages/objects/src/classifier-signals.ts" },
     { "alias": "@cinatra-ai/registries", "target": "./packages/registries/src/index.ts" },
+    { "alias": "@cinatra-ai/registries/src/version-compare", "target": "./packages/registries/src/version-compare.ts" },
     { "alias": "@cinatra-ai/registries/types", "target": "./packages/registries/src/types.ts" },
     { "alias": "@cinatra-ai/registries/install", "target": "./packages/registries/src/install/install-with-deps.ts" }
   ],

@@ -59,7 +59,7 @@ for (const pm of manifests) {
     test("spec pin integrity — committed manifest matches conformance-pins.json", () => {
       expect(
         pm.repoSha256,
-        `PIN INTEGRITY: manifests/${pm.pin.file} bytes do not hash to conformance-pins.json manifestSha256 — the committed copy must be the VERBATIM generated artifact; re-copy it from cinatra-ai/design and update the pin in the same commit`,
+        `PIN INTEGRITY: manifests/${pm.pin.file} bytes do not hash to conformance-pins.json manifestSha256 — the committed copy must be the VERBATIM generated artifact; re-copy the generated artifact from the design-system source of truth (published under docs.cinatra.ai/references/design/conformance/) and update the pin in the same commit`,
       ).toBe(pm.pin.manifestSha256);
       expect(
         pm.manifest.contentHash,
