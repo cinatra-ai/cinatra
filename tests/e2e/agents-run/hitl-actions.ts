@@ -1,5 +1,5 @@
 /**
- * HITL action helpers for the `/agents/run` e2e harness.
+ * HITL action helpers for the `/agents` (All Agents run-agent picker) e2e harness.
  *
  * Drives the UI for advancing each HITL screen and uses
  * `/api/agents/runs/${runId}` for status polling. API-based polling
@@ -39,16 +39,17 @@ type RunStatusResponse = {
 };
 
 /**
- * Navigate `/agents/run` → click the row's Run link → wait for the
- * `/new` server-action to auto-start a run and redirect to the run's
- * workspace URL. Returns the parsed `runId`.
+ * Navigate `/agents` (the "All Agents" run-agent picker — moved here from
+ * the removed `/agents/run` by cinatra#1007) → click the row's Run link →
+ * wait for the `/new` server-action to auto-start a run and redirect to the
+ * run's workspace URL. Returns the parsed `runId`.
  *
  * The `/agents/<vendor>/<slug>/new` route is NOT an intermediate
  * form-fill page — `packages/agents/src/instance-screens.tsx:109`
  * detects `instanceId === "new"`, calls
  * `createAndTriggerRunWithContext` server-side, and `redirect()`s to
  * `/agents/${agentId}/${runId}`. There is no "Run agent" button to
- * click on the canonical /agents/run flow; the AlertDialog confirm
+ * click on the canonical /agents flow; the AlertDialog confirm
  * pattern lives only on older agent-builder paths.
  */
 export async function startAgentRun(page: Page, fixture: AgentFixture): Promise<string> {
@@ -57,7 +58,7 @@ export async function startAgentRun(page: Page, fixture: AgentFixture): Promise<
   //    Gate on hydration BEFORE clicking the Run link (#82): a
   //    pre-hydration click bypasses the Next.js client router (plain
   //    anchor fallback) and races the dev-mode hydration window.
-  await page.goto("/agents/run", { waitUntil: "domcontentloaded" });
+  await page.goto("/agents", { waitUntil: "domcontentloaded" });
   await waitForHydration(page);
 
   // 2. Locate the row's Run link by the deterministic `href` attribute.
@@ -65,7 +66,7 @@ export async function startAgentRun(page: Page, fixture: AgentFixture): Promise<
   //    `<Link href={row.runHref}>` where `runHref` is the workspace path.
   const workspacePath = `/agents/${fixture.vendor}/${fixture.slug}/new`;
   const runLink = page.locator(`a[href="${workspacePath}"]`).first();
-  await expect(runLink, `Run link for ${fixture.packageName} missing on /agents/run`)
+  await expect(runLink, `Run link for ${fixture.packageName} missing on /agents`)
     .toBeVisible({ timeout: 30_000 });
   await runLink.click();
 
@@ -395,7 +396,7 @@ async function advanceReviewerAgentOutput(
  * `@cinatra-ai/agent-builder:schema-field-fallback` is the setup-loop
  * renderer that surfaces when an agent's StartNode declares a
  * required input that wasn't pre-filled at run-creation (e.g. the canonical
- * /agents/run flow creates a run with empty `inputParams`, so any required
+ * /agents run-agent flow creates a run with empty `inputParams`, so any required
  * input becomes a setup-loop HITL gate).
  *
  * The renderer renders one field at a time (it walks the input schema in

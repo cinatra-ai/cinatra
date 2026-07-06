@@ -221,7 +221,9 @@ describe("CinatraDashboardToolbar — route-scoped page actions", () => {
     renderToolbar({ pageAnchor: "agents" });
 
     expect(actionAnchors()).toEqual([
-      { id: "run-agent", href: "/agents/run", text: "Run agent" },
+      // cinatra#1007: /agents/run removed (not redirected) — the run-agent
+      // picker moved to /agents.
+      { id: "run-agent", href: "/agents", text: "Run agent" },
       {
         id: "create-agent",
         href: "/chat?mode=create-agent",

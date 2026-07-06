@@ -817,6 +817,23 @@ jobs:
       - name: Extension import-ban gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/extension-import-ban.test.mjs
 
+      # DENY-by-default node:fs/node:fs/promises in extension source (cinatra#979
+      # checker home, landed with #981's host-owned ctx.logger.capture port). A
+      # connector reaching for node:fs directly to write its own logs bypasses the
+      # host-managed data root + rotation/retention + telemetry-page listing/
+      # clearing #981 centralized. Two carve-outs: the PERMANENT owner-ruled,
+      # self-policing FS_IMPORT_ALLOWLIST (currently one entry: openai's
+      # non-logging skill-mount existsSync check), and a TEMPORARY shrink-only
+      # ratchet baseline tolerating the three cinatra#981-migrated connectors'
+      # pre-migration source until their lock-pins bump (their own repos are
+      # already clean — gemini-connector#42, openai-connector#56,
+      # apollo-connector#45).
+      - name: Extension node:fs import-ban gate
+        run: node scripts/audit/extension-fs-import-ban.mjs
+
+      - name: Extension node:fs import-ban gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/extension-fs-import-ban.test.mjs
+
       # Host-peer VALUE-import ban. A runtime-loaded
       # extension's cinatra.serverEntry import graph must keep the host-internal
       # SDK peers (@cinatra-ai/sdk-extensions / sdk-ui / mcp-client) type-only

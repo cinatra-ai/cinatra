@@ -15,7 +15,7 @@ type QueryResult = {
 };
 
 // Env-overridable timeout ceiling. Production stays at 30s (a sane
-// "something is very wrong" ceiling for a sync query). The `/agents/run`
+// "something is very wrong" ceiling for a sync query). The `/agents`
 // Playwright suite sets POSTGRES_SYNC_TIMEOUT_MS=90000 on its webServer
 // because `pnpm dev` + Turbopack compilation + sustained suite load
 // starves the sync worker thread — genuine queries that complete in <1s

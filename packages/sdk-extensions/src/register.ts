@@ -25,8 +25,10 @@ import type { ExtensionHostContext } from "./host-context";
  * 2.0.0: added the `telemetry` host port — see `host-context.ts`.
  * 2.1.0: added optional `mcp.getPublicBaseUrl`.
  * 2.2.0: added optional `nango` render-time getters (getStatus,
- *   getFrontendConfig, getPrimarySavedConnection(s), listConnectionRecords). */
-export const SDK_EXTENSIONS_ABI_VERSION = "2.2.0" as const;
+ *   getFrontendConfig, getPrimarySavedConnection(s), listConnectionRecords).
+ * 2.3.0: added optional `logger.capture`/`logger.captureDirectory` — host-owned
+ *   request/response log capture (cinatra#981). */
+export const SDK_EXTENSIONS_ABI_VERSION = "2.3.0" as const;
 
 /**
  * The package `exports` subpaths every extension package must expose.

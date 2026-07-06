@@ -10,6 +10,7 @@ import type {
 } from "@cinatra-ai/extension-types";
 import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
 import { objectTypeRegistry } from "@cinatra-ai/objects";
+import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 // Validate the SEMANTIC artifact manifest. An artifact extension declares a
 // semantic work-product type; representation details live under
@@ -77,9 +78,11 @@ const artifactDescriptorSchema = z
 // …) is rejected outright. `dependencies` (cross-kind ExtensionDependency[],
 // extension-deps gate) and `roles` (cinatra#151 Stage 5 role bindings,
 // validated fail-closed by the agent-bindings generator) are permitted
-// CROSS-KIND metadata on any extension manifest; keep in lock-step with
-// register-artifact-extensions.ts ALLOWED_CINATRA_KEYS.
-const ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact", "dependencies", "roles"]);
+// CROSS-KIND metadata on any extension manifest. No longer a locally
+// duplicated literal: imported above as `ARTIFACT_ALLOWED_CINATRA_KEYS` from
+// `@cinatra-ai/sdk-extensions/artifact-contract`, the same canonical export
+// `register-artifact-extensions.ts` and `packages/agents/src/mcp/handlers.ts`
+// use (cinatra#979).
 
 // ---------------------------------------------------------------------------
 // ArtifactExtensionTypeHandler.

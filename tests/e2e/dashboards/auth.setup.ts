@@ -15,21 +15,23 @@
  *      `"default"` org + makes the user its owner + writes
  *      `activeOrganizationId` on the session). No explicit
  *      `POST /api/auth/organization/create` call needed. See the
- *      inline comment at step 3 for why `/agents` is NOT used here
- *      (concurrent bootstrap writers).
+ *      inline comment at step 3 for why `/agents/executions` is NOT
+ *      used here (concurrent bootstrap writers).
  *   3. Seeds the agent_runs/agent_templates fixtures so the
- *      `/agents` portlets have data to render. Runs LAST among the
- *      DB writes because it reads `public."user"` + `public."member"`
- *      via direct pg, which both require the user + org rows from
- *      step 2.
- *   4. Warms the Next.js dev-mode per-route compile of `/agents` AND
- *      the cube API route `[...endpoint]/route.ts` by issuing two
- *      APIRequestContext GETs (post-seed, post-bootstrap). NOT used
- *      for initial bootstrap (that's step 2's `/not-authorized` GET) —
- *      used only as a warm-up so the chromium project's first
- *      `page.goto("/agents")` does not pay the cold-compile cost
- *      (drizzle-cube + recharts + DC bundle) AND the cube `/v1/load`
- *      fetch fires within the test's 15s `waitForResponse` window.
+ *      `/agents/executions` portlets have data to render. Runs LAST
+ *      among the DB writes because it reads `public."user"` +
+ *      `public."member"` via direct pg, which both require the user +
+ *      org rows from step 2.
+ *   4. Warms the Next.js dev-mode per-route compile of
+ *      `/agents/executions` AND the cube API route
+ *      `[...endpoint]/route.ts` by issuing two APIRequestContext GETs
+ *      (post-seed, post-bootstrap). NOT used for initial bootstrap
+ *      (that's step 2's `/not-authorized` GET) — used only as a
+ *      warm-up so the chromium project's first
+ *      `page.goto("/agents/executions")` does not pay the cold-compile
+ *      cost (drizzle-cube + recharts + DC bundle) AND the cube
+ *      `/v1/load` fetch fires within the test's 15s `waitForResponse`
+ *      window.
  *   5. Stores the resulting cookie state in
  *      `tests/e2e/dashboards/.auth/state.json` so chromium project
  *      tests inherit the session.
@@ -110,9 +112,10 @@ setup("create test user + seed dashboard fixtures + save session", async ({ requ
   //    makes the user its owner + sets `activeOrganizationId` on the
   //    session). A single GET to any layout-rendered page is enough.
   //
-  //    We use `/not-authorized` (not `/agents`) for the bootstrap GET
-  //    because the agents page component ALSO calls `getAuthSession()`
-  //    at `packages/dashboards/src/screens/agents-dashboard.tsx:95` —
+  //    We use `/not-authorized` (not `/agents/executions`) for the
+  //    bootstrap GET because the agents-dashboard page component ALSO
+  //    calls `getAuthSession()` at
+  //    `packages/dashboards/src/screens/agents-dashboard.tsx:95` —
   //    so a GET there would run TWO `getAuthSession` writers (root
   //    layout + page) on the same request, each potentially racing to
   //    create the default-org row. `/not-authorized` is layout-rendered
@@ -166,29 +169,32 @@ setup("create test user + seed dashboard fixtures + save session", async ({ requ
     `seeded apiVersion 1.2 analytics row must persist its config_version (got "${v12.configVersion}")`,
   ).toBe(APIVERSION_V12);
 
-  // 6. Preflight `/agents` (200) — and, under a local `pnpm dev`, warm its per-route compile — so the
-  //    chromium project's first `page.goto("/agents")` does NOT pay the
-  //    cold-compile cost. In dev mode Next.js compiles each page on first
-  //    request; the `/agents` route pulls drizzle-cube + recharts + the DC
+  // 6. Preflight `/agents/executions` (200) — and, under a local `pnpm dev`,
+  //    warm its per-route compile — so the chromium project's first
+  //    `page.goto("/agents/executions")` does NOT pay the cold-compile
+  //    cost. In dev mode Next.js compiles each page on first request; the
+  //    `/agents/executions` route pulls drizzle-cube + recharts + the DC
   //    client bundle, which historically exceeded the 10s assertion
   //    timeout on the chromium test's `getByRole("heading", { name: "Agents" })`
   //    expect. Bootstrap (step 3) ran via `/not-authorized` which compiles a
   //    different — much smaller — route bundle; this warm-up exercises the
-  //    actual dashboard surface. By the time chromium runs, the cached
-  //    compile is fast (<2s). Reusing this fixture's APIRequestContext is
-  //    safe because the session cookie is already populated (steps 1–4).
+  //    actual dashboard surface (cinatra#1007 moved it here from the bare
+  //    `/agents`, which now serves the "All Agents" run-agent picker
+  //    instead). By the time chromium runs, the cached compile is fast
+  //    (<2s). Reusing this fixture's APIRequestContext is safe because the
+  //    session cookie is already populated (steps 1–4).
   //
   //    Race-safety note: bootstrap is COMPLETE by step 5, so this GET will
   //    not re-trigger the layout's `ensureDefaultOrganizationMembership`
   //    write race. The page-level `getAuthSession` inside
   //    `AgentsDashboardPage` is a READ at this point — no writes.
-  const agentsWarmup = await request.get("/agents", {
+  const agentsWarmup = await request.get("/agents/executions", {
     failOnStatusCode: false,
     maxRedirects: 0,
   });
   expect(
     agentsWarmup.status(),
-    `warm-up GET /agents failed: ${await describe(agentsWarmup)}`,
+    `warm-up GET /agents/executions failed: ${await describe(agentsWarmup)}`,
   ).toBe(200);
   await agentsWarmup.text();
 

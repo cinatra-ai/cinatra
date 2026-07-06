@@ -1,0 +1,146 @@
+name: Extension Conformance Gate
+
+# cinatra#979 — enforcement point 1: run the unified extension-side
+# conformance checker (scripts/extensions/conformance-gate.mjs) over the
+# MATERIALIZED tree (every companion extension repo cloned back into
+# extensions/cinatra-ai/<slug> by .github/actions/clone-extensions), so a
+# pinned-lock bump that regresses a companion repo's conformance is caught
+# here, not just in that repo's own CI.
+#
+# POSTURE: detection/report on this first rollout, same posture
+# extension-ioc-gate.yml shipped with for the closely related IoC gate. This
+# checker's OWN fleet spot-check (see scripts/extensions/lib/
+# conformance-rules.mjs's NODE_FS_ALLOWLIST/PROCESS_ENV_ALLOWLIST comments)
+# found real, previously-untracked node:fs/process.env violations in MORE
+# connectors than #981/#982's text names — enforcing hard on day one would
+# block on remediation this PR does not own. Set CONFORMANCE_ENFORCE=1 once
+# the fleet re-scan (this job, run for real against all 82 repos) is clean or
+# every remaining finding is triaged into the baseline.
+#
+# The "a seeded violation fails the build" acceptance proof lives in the
+# deterministic unit-test fixtures (scripts/extensions/__tests__/
+# conformance-gate.test.mjs) — picked up automatically by build-image.yml's
+# "Root Vitest suite (wholesale — gate of record)" step via vitest.config.ts's
+# existing `scripts/extensions/__tests__/**/*.test.{ts,mjs}` include glob (a
+# REQUIRED check), not this live materialized-tree loop, whose current pass/
+# fail split depends on the real fleet's present state.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/**/package.json'
+      - 'extensions/**/*.ts'
+      - 'extensions/**/*.tsx'
+      - 'extensions/**/*.mjs'
+      - 'extensions/**/*.cjs'
+      - 'extensions/**/*.mts'
+      - 'extensions/**/*.cts'
+      - 'extensions/**/cinatra/**'
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
+      - '.github/actions/clone-extensions/**'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'scripts/extensions/conformance-gate.mjs'
+      - 'scripts/extensions/lib/conformance-rules.mjs'
+      - 'scripts/extensions/conformance-gate.baseline.json'
+      - 'packages/sdk-extensions/src/host-context.ts'
+      - 'packages/sdk-extensions/src/artifact-contract.ts'
+      - 'packages/sdk-extensions/src/access-config.ts'
+      - '.github/workflows/extension-conformance-gate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'extensions/**/package.json'
+      - 'extensions/**/*.ts'
+      - 'extensions/**/*.tsx'
+      - 'extensions/**/*.mjs'
+      - 'extensions/**/*.cjs'
+      - 'extensions/**/*.mts'
+      - 'extensions/**/*.cts'
+      - 'extensions/**/cinatra/**'
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
+      - '.github/actions/clone-extensions/**'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'scripts/extensions/conformance-gate.mjs'
+      - 'scripts/extensions/lib/conformance-rules.mjs'
+      - 'scripts/extensions/conformance-gate.baseline.json'
+      - 'packages/sdk-extensions/src/host-context.ts'
+      - 'packages/sdk-extensions/src/artifact-contract.ts'
+      - 'packages/sdk-extensions/src/access-config.ts'
+      - '.github/workflows/extension-conformance-gate.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  extension-conformance-gate:
+    name: Extension conformance gate (materialized tree)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # POSTURE: report-only for the initial rollout. Set CONFORMANCE_ENFORCE=1
+    # to block once the fleet is clean or fully triaged (see header comment).
+    env:
+      CONFORMANCE_ENFORCE: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Run the conformance gate over each materialized extension
+        run: |
+          set -u
+          GATE=scripts/extensions/conformance-gate.mjs
+          if [ ! -f "$GATE" ]; then
+            echo "::error::extension-conformance-gate: gate script not found at $GATE"
+            exit 1
+          fi
+          fail=0
+          broke=0
+          count=0
+          shopt -s nullglob
+          for pkg in extensions/cinatra-ai/*/package.json; do
+            dir="$(dirname "$pkg")"
+            count=$((count + 1))
+            echo "::group::conformance-gate $dir"
+            rc=0
+            node "$GATE" --package "$dir" || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "  conform"
+            elif [ "$rc" -eq 1 ]; then
+              fail=$((fail + 1))
+              echo "::warning title=extension-conformance-gate::extension has conformance finding(s)"
+            else
+              broke=$((broke + 1))
+              echo "::error title=extension-conformance-gate::gate errored (exit $rc) on an extension package"
+            fi
+            echo "::endgroup::"
+          done
+          echo "extension-conformance-gate: scanned $count package(s), $fail with finding(s), $broke gate-error(s)."
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no extension packages materialized under extensions/cinatra-ai/ (clone-back failed?)"
+            exit 1
+          fi
+          if [ "$broke" -gt 0 ]; then
+            echo "::error::extension-conformance-gate: $broke package(s) errored the gate (infra failure)."
+            exit 1
+          fi
+          if [ "$fail" -gt 0 ] && [ "${CONFORMANCE_ENFORCE}" = "1" ]; then
+            echo "::error::extension-conformance-gate: $fail package(s) failed (enforce mode)."
+            exit 1
+          fi

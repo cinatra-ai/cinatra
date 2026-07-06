@@ -86,7 +86,9 @@ describe("EmbeddedDrizzleCubeDashboardGrid — embedded drizzle-cube grid under 
         '[data-cinatra-page-action="run-agent"]',
     );
     expect(liveAction).not.toBeNull();
-    expect(liveAction?.getAttribute("href")).toBe("/agents/run");
+    // cinatra#1007: /agents/run removed (not redirected) — the run-agent
+    // picker moved to /agents.
+    expect(liveAction?.getAttribute("href")).toBe("/agents");
   });
 
   test("forwards dashboardModes — ['grid','rows'] surfaces the Grid/Rows toggle in edit mode", () => {
