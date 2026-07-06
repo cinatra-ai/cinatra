@@ -1,0 +1,116 @@
+name: extension-conformance-gate (reusable)
+
+# cinatra#979 — enforcement point 2: a reusable `workflow_call` an INDIVIDUAL
+# extension repo's own CI can adopt to run the SAME unified checker
+# (scripts/extensions/conformance-gate.mjs) that core CI runs over the
+# materialized tree, with NO per-repo copy-paste of rule logic.
+#
+# RELATIONSHIP TO THE EXISTING extension-kind-gate.mjs: most extension repos
+# already ship a self-contained, zero-dependency `extension-kind-gate.mjs`
+# (single source of truth: cinatra-ai/extension-release-tooling, embedded
+# byte-identically per repo by that repo's extraction tooling) precisely so a
+# BRAND-NEW repo's CI can validate itself BEFORE the @cinatra-ai registry is
+# even reachable — this reusable workflow does not replace that bootstrap
+# mechanism. It is a COMPLEMENTARY, opt-in option for a repo whose CI can
+# already reach github.com (checking out a pinned cinatra SHA needs no
+# npm-registry access, just git) and wants the #979 conformance rules that
+# derive live from cinatra's OWN current source (HOST_PORT_NAMES,
+# ARTIFACT_ALLOWED_CINATRA_KEYS, the connector access-config format version)
+# rather than a hand-mirrored copy that can drift between releases.
+#
+# Usage from a companion extension repo's own workflow:
+#
+#   jobs:
+#     extension-conformance-gate:
+#       uses: cinatra-ai/cinatra/.github/workflows/extension-conformance-gate-reusable.yml@<pinned-sha>
+#       with:
+#         ref: <same-pinned-sha>
+#
+# Double-pin per the workflow-pinning convention used elsewhere in this repo
+# (skills-drift-gate.yml, extension-ioc-gate.yml): the `uses:` ref and the
+# `ref` input below MUST be the SAME cinatra commit, so the gate code is never
+# pulled from mutable main.
+#
+# ORG-RULESET NOTE (not executed by this PR — see the #979 PR body): making
+# this workflow a REQUIRED check org-wide for every extension repo needs an
+# org-level ruleset targeting the extension-repo naming/topic convention (the
+# `github-org-rulesets-on-team` mechanism already used for org-wide required
+# workflows), added the same way skills-drift-gate/extension-ioc-gate were
+# rolled out to cinatra itself. That is an org-wide policy change with a real
+# blast radius across ~82 repos and stays owner-reviewed; this PR ships the
+# reusable workflow so that ruleset (or a per-repo opt-in in the meantime) has
+# something to point at.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: >-
+          Pinned cinatra-ai/cinatra commit SHA to check out the checker +
+          its live-derivation SDK sources from. MUST match the `uses:` pin
+          on the caller's `uses: cinatra-ai/cinatra/.github/workflows/
+          extension-conformance-gate-reusable.yml@<sha>` line.
+        required: true
+        type: string
+      enforce:
+        description: 'Fail the job on a non-baselined finding (default true).'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  extension-conformance-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the calling repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: package-under-test
+          persist-credentials: false
+
+      - name: Checkout the cinatra conformance checker (pinned)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: cinatra-ai/cinatra
+          ref: ${{ inputs.ref }}
+          path: cinatra-conformance-gate
+          sparse-checkout: |
+            scripts/extensions/conformance-gate.mjs
+            scripts/extensions/lib/conformance-rules.mjs
+            scripts/audit/lib/strip-comments.mjs
+            packages/sdk-extensions/src/host-context.ts
+            packages/sdk-extensions/src/artifact-contract.ts
+            packages/sdk-extensions/src/access-config.ts
+            packages/sdk-extensions/package.json
+            packages/sdk-ui/package.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Run the conformance gate
+        run: |
+          set -u
+          GATE=cinatra-conformance-gate/scripts/extensions/conformance-gate.mjs
+          if [ ! -f "$GATE" ]; then
+            echo "::error::extension-conformance-gate: pinned checker not found at $GATE (bad ref, or the sparse-checkout paths above drifted from cinatra's layout)."
+            exit 1
+          fi
+          ARGS="--package package-under-test --sdk-root cinatra-conformance-gate"
+          if [ "${{ inputs.enforce }}" = "true" ]; then
+            node "$GATE" $ARGS
+          else
+            node "$GATE" $ARGS || {
+              rc=$?
+              if [ "$rc" -eq 2 ]; then exit "$rc"; fi
+              echo "::warning title=extension-conformance-gate::finding(s) reported (enforce: false)"
+              exit 0
+            }
+          fi

@@ -51,3 +51,34 @@ export type SemanticArtifactManifest = {
  * semantic artifact types they produce. Schema-only.
  */
 export type SemanticArtifactRef = { extension: string };
+
+/**
+ * The complete allowlist of top-level `cinatra.*` package.json keys a
+ * `kind:"artifact"` extension may declare (cinatra#979 checker-rules
+ * addendum: "mirror ARTIFACT_ALLOWED_CINATRA_KEYS by importing the live
+ * constants, never a re-listed copy").
+ *
+ * This is now the SINGLE canonical copy. It used to be hand-duplicated
+ * ("kept in lock-step") across `packages/objects/src/integration/
+ * register-artifact-extensions.ts`, `packages/extensions/src/
+ * artifact-handler.ts`, and `packages/agents/src/mcp/handlers.ts` — three
+ * independent literals with no shared source, exactly the prose-vs-code drift
+ * risk the #979 addendum calls out. All three now import this export instead
+ * of re-declaring it. Safe to share from here: `sdk-extensions` is a leaf
+ * package (no workspace dependencies of its own), so importing it does not
+ * create the objects↔extensions cycle those two packages otherwise avoid by
+ * duplicating code between themselves.
+ *
+ * `dependencies` (cross-kind `ExtensionDependency[]`, extension-deps gate) and
+ * `roles` (cinatra#151 Stage 5 role bindings, validated fail-closed by the
+ * agent-bindings generator) are permitted CROSS-KIND metadata on any
+ * extension manifest, not agent-package drift — hence their presence here
+ * alongside the artifact-only `artifact` key.
+ */
+export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "apiVersion",
+  "artifact",
+  "dependencies",
+  "roles",
+]);

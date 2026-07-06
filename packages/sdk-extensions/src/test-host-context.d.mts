@@ -27,6 +27,9 @@ export type TestHostRecorder = {
   jobsEnqueued: Array<{ jobName: string; payload: unknown; opts?: Record<string, unknown> }>;
   notificationsEmitted: Array<{ level: "info" | "warn" | "error"; title: string; body?: string }>;
   telemetryEmitted: unknown[];
+  /** `ctx.logger.capture(channel, entry)` calls (cinatra#981) — recorded here
+   *  instead of touching the real filesystem in the author test harness. */
+  capturesWritten: Array<{ channel: string; entry: { label: string; kind: string; body: unknown } }>;
 };
 
 export type CreateTestHostContextOptions = {

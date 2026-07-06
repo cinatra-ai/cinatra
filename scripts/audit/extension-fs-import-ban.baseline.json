@@ -1,0 +1,17 @@
+{
+  "note": "extension-fs-import-ban — TEMPORARY shrink-only ratchet baseline (see the gate's module header for the staged-rollout rationale: the three cinatra#981-migrated connectors' lock pins can't bump until their companion PRs merge). A hit here is TOLERATED debt, already fixed upstream in the connector repo, pending a lock-pin bump — NOT a permanent exemption (that's FS_IMPORT_ALLOWLIST in extension-fs-import-ban.mjs). Regenerate via --write-baseline after any lock-pin bump; it should trend toward (and eventually reach) empty. Seeded 2026-07-05 against the CURRENT cinatra-required-extensions.lock.json / cinatra-dev-extensions.lock.json pins (pre-#981-migration source) — see gemini-connector#42, openai-connector#56, apollo-connector#45 (already merged/mergeable; the pins just haven't bumped yet).",
+  "hits": {
+    "@cinatra-ai/apollo-connector": [
+      "src/index.ts",
+      "src/log-retention.ts"
+    ],
+    "@cinatra-ai/gemini-connector": [
+      "src/index.ts",
+      "src/log-retention.ts"
+    ],
+    "@cinatra-ai/openai-connector": [
+      "src/index.ts",
+      "src/log-retention.ts"
+    ]
+  }
+}

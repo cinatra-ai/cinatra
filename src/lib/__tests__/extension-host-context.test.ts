@@ -1,7 +1,11 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createExtensionHostContext, createExtensionProbeHostContext } from "@/lib/extension-host-context";
 import { __resetCapabilityRegistry, resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { EXTENSION_DATA_ROOT_ENV } from "@/lib/extension-data-root";
 
 describe("createExtensionHostContext — grant-aware ports", () => {
   // The capability registry is module-global; isolate tests that register.
@@ -12,6 +16,39 @@ describe("createExtensionHostContext — grant-aware ports", () => {
     expect(() => ctx.logger.info("hi")).not.toThrow();
     expect(["development", "production"]).toContain(ctx.runtime.mode);
     expect(() => ctx.runtime.flag("SOME_FLAG")).not.toThrow();
+  });
+
+  describe("ctx.logger.capture / captureDirectory (cinatra#981, ambient)", () => {
+    let dataRoot: string;
+    let priorEnv: string | undefined;
+
+    beforeEach(async () => {
+      dataRoot = await mkdtemp(path.join(os.tmpdir(), "cinatra-ctx-capture-"));
+      priorEnv = process.env[EXTENSION_DATA_ROOT_ENV];
+      process.env[EXTENSION_DATA_ROOT_ENV] = dataRoot;
+    });
+    afterEach(async () => {
+      if (priorEnv === undefined) delete process.env[EXTENSION_DATA_ROOT_ENV];
+      else process.env[EXTENSION_DATA_ROOT_ENV] = priorEnv;
+      await rm(dataRoot, { recursive: true, force: true });
+    });
+
+    it("is available with NO grants (ambient) and scopes the directory to the extension's own packageName", async () => {
+      const ctx = createExtensionHostContext("@cinatra-ai/gemini-connector", []);
+      expect(typeof ctx.logger.capture).toBe("function");
+      const dir = ctx.logger.captureDirectory!("gemini-api");
+      expect(dir).toBe(path.join(dataRoot, "logs", "cinatra-ai-gemini-connector", "gemini-api"));
+
+      await ctx.logger.capture!("gemini-api", { label: "call", kind: "request", body: { a: 1 } });
+      const files = await readdir(dir);
+      expect(files).toHaveLength(1);
+    });
+
+    it("scopes captures per extension — two packages never share a directory", () => {
+      const geminiCtx = createExtensionHostContext("@cinatra-ai/gemini-connector", []);
+      const openaiCtx = createExtensionHostContext("@cinatra-ai/openai-connector", []);
+      expect(geminiCtx.logger.captureDirectory!("llm-api")).not.toBe(openaiCtx.logger.captureDirectory!("llm-api"));
+    });
   });
 
   it("an UNGRANTED privileged port throws NOT GRANTED on any access (least-privilege)", () => {
