@@ -30,6 +30,7 @@ import "server-only";
 
 import type { HostWordPressWidgetAuthService } from "@cinatra-ai/sdk-extensions";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
+import { GENERATED_WIDGET_STREAM_AGENTS } from "@/lib/generated/extensions.server";
 
 // Inlined string literal (the SAME id the connector registers under and
 // `HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth` holds) — a literal,
@@ -37,11 +38,38 @@ import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registr
 // barrel-init edge.
 const WORDPRESS_WIDGET_AUTH_CAPABILITY = "@cinatra-ai/host:wordpress-widget-auth";
 
-// The SOLE sanctioned owner of this capability (cinatra#975 Wave 2). The id
-// keeps its `@cinatra-ai/host:` prefix for continuity, so we pin the OWNING
-// package too (codex): another active extension holding the `capabilities` port
-// cannot spoof/collide this singleton store by registering under the same id.
-const WORDPRESS_WIDGET_AUTH_OWNER = "@cinatra-ai/wordpress-mcp-connector";
+// The connector_config key of the EXACT store this capability wraps (the
+// UUID-pair api key + webhook secret row `connector_config:wordpress_widget_auth`)
+// — a persisted DATA key, never an extension package name.
+const WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY = "wordpress_widget_auth";
+
+/**
+ * The SOLE sanctioned owner of this capability (cinatra#975 Wave 2), DERIVED
+ * from the generated manifest tree instead of a hardcoded package literal
+ * (core-extension-instance-coupling-ban: core must never name a specific
+ * extension; the generated tree is the one sanctioned named-extension source).
+ *
+ * The owner is the UNIQUE `packageName` among the generator-emitted
+ * `GENERATED_WIDGET_STREAM_AGENTS` entries whose `auth.tokenConfigKey`
+ * declares this exact store — i.e. the extension whose reviewed, byte-pinned
+ * `cinatra.widgetStream` manifest declaration claims the
+ * `wordpress_widget_auth` credential store. Anti-spoof is PRESERVED (codex
+ * round-0, captured): `provider.packageName` is host-injected (truthful), and
+ * another active extension registering the same capability id is still
+ * rejected unless it ALSO became the unique manifest-declared owner of this
+ * token store — a reviewed generated-tree change, not a runtime registration.
+ * Zero or MULTIPLE declaring packages → null → resolution fails closed.
+ */
+function resolveWordPressWidgetAuthOwner(): string | null {
+  const owners = new Set<string>();
+  for (const entry of Object.values(GENERATED_WIDGET_STREAM_AGENTS)) {
+    if (entry.auth.tokenConfigKey === WORDPRESS_WIDGET_AUTH_TOKEN_CONFIG_KEY) {
+      owners.add(entry.packageName);
+    }
+  }
+  if (owners.size !== 1) return null; // absent or ambiguous → fail closed
+  return owners.values().next().value ?? null;
+}
 
 // Structural guard: a capability impl is `unknown` by contract (the registry
 // stores `unknown`; the runtime trust boundary is HERE, not the compile type).
@@ -58,11 +86,13 @@ function isWordPressWidgetAuthProvider(
 }
 
 /** The live WordPress widget-auth store, or null when the connector is absent.
- * Pinned to the owning package AND the structural guard — never a same-id
- * provider from any other extension. */
+ * Pinned to the manifest-derived owning package AND the structural guard —
+ * never a same-id provider from any other extension. */
 export function resolveWordPressWidgetAuth(): HostWordPressWidgetAuthService | null {
+  const owner = resolveWordPressWidgetAuthOwner();
+  if (!owner) return null;
   const match = resolveCapabilityProviders(WORDPRESS_WIDGET_AUTH_CAPABILITY).find(
-    (p) => p.packageName === WORDPRESS_WIDGET_AUTH_OWNER && isWordPressWidgetAuthProvider(p.impl),
+    (p) => p.packageName === owner && isWordPressWidgetAuthProvider(p.impl),
   );
   return (match?.impl as HostWordPressWidgetAuthService | undefined) ?? null;
 }
@@ -73,10 +103,19 @@ export function resolveWordPressWidgetAuth(): HostWordPressWidgetAuthService | n
 export function requireWordPressWidgetAuth(): HostWordPressWidgetAuthService {
   const provider = resolveWordPressWidgetAuth();
   if (!provider) {
+    // The owning connector's name comes from the manifest derivation (never a
+    // hardcoded package literal); when even the manifest declaration is
+    // absent/ambiguous the message says so instead.
+    const owner = resolveWordPressWidgetAuthOwner();
     throw new Error(
-      "WordPress widget-auth capability unavailable — the wordpress-mcp-connector " +
-        "extension is not installed/active. Install/activate it before the " +
-        "connect-token or wordpress-webhook surfaces can resolve widget credentials.",
+      "WordPress widget-auth capability unavailable — " +
+        (owner
+          ? `the owning connector extension (${owner}) is not installed/active. ` +
+            "Install/activate it before the connect-token or wordpress-webhook " +
+            "surfaces can resolve widget credentials."
+          : "no unique extension manifest declares the wordpress widget-auth " +
+            "token store (`cinatra.widgetStream.auth.tokenConfigKey`), so no " +
+            "provider can be trusted (fail-closed)."),
     );
   }
   return provider;
