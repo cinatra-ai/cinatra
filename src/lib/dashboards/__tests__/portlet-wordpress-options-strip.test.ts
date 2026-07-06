@@ -19,8 +19,9 @@ vi.mock("@/lib/blog/mcp/client/deterministic-client", () => ({ createDeterminist
 vi.mock("@cinatra-ai/agents/mcp-client", () => ({ createDeterministicAgentsClient: () => ({ agent: { run: vi.fn() } }) }));
 vi.mock("@cinatra-ai/workflows/mcp-client", () => ({ createDeterministicWorkflowsClient: () => ({ template: { list: vi.fn(), get: vi.fn(), instantiate: vi.fn() } }) }));
 vi.mock("@/lib/workflow-host-deps", () => ({ buildWorkflowHandlerDeps: () => ({}) }));
-vi.mock("@/lib/wordpress-api", () => ({
-  listWordPressInstances: vi.fn(async () => [
+vi.mock("@/lib/connector-client-providers", () => ({
+  resolveWordPressInstanceAdmin: () => ({
+    listWordPressInstances: vi.fn(async () => [
     {
       id: "wp-1",
       name: "Primary WP",
@@ -29,7 +30,8 @@ vi.mock("@/lib/wordpress-api", () => ({
       applicationPassword: "TOP-SECRET-PASSWORD",
       blogConnectorId: "example-namespace",
     },
-  ]),
+    ]),
+  }),
 }));
 
 import { loadWordpressInstanceOptions } from "../portlet-actions";

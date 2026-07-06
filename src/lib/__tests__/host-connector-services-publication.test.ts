@@ -121,14 +121,9 @@ const wordpressApiCalls: Record<string, unknown[][]> = {
   webhookList: [],
   webhookRegister: [],
   webhookRemove: [],
-  createDraft: [],
-  readPost: [],
-  readPostStatus: [],
-  listPublishedPosts: [],
-  deletePost: [],
-  uploadMedia: [],
-  updateDraftMeta: [],
-  updatePost: [],
+  save: [],
+  devPersist: [],
+  delete: [],
 };
 const WP_ROW = {
   id: "wp-1",
@@ -146,175 +141,81 @@ const WP_SUB = {
   post_types: [] as string[],
   created_at: "2026-01-03T00:00:00Z",
 };
-vi.mock("@/lib/wordpress-api", () => ({
-  deleteWordPressInstance: async () => ({}),
-  getWordPressAPISettings: () => ({ instances: [], loggingEnabled: true }),
-  getWordPressAPIStatus: () => ({
+// The relocated WordPress client the wordpress-mcp-connector registers under
+// `@cinatra-ai/host:wordpress-mcp` (cinatra#975 Wave 3) — the host publication
+// DELEGATES its client-backed members here (owner-pinned, fail-loud).
+const wordpressConnectorClient = {
+  listInstances: () => [] as unknown[],
+  getAPIStatus: () => ({
     status: "connected",
     detail: "1 WordPress instance is configured.",
   }),
-  readWordPressInstanceById: (id: string) => (id === WP_ROW.id ? WP_ROW : null),
-  saveWordPressInstance: async () => ({ id: WP_ROW.id, connectionId: "nango-wp-1" }),
-  persistLocalDevWordPressInstanceUnvalidated: async () => ({ id: WP_ROW.id, connectionId: "nango-wp-1" }),
+  getAPISettings: () => ({ instances: [], loggingEnabled: true }),
+  readInstanceById: (id: string) => (id === WP_ROW.id ? WP_ROW : null),
+  deleteInstance: async (...args: unknown[]) => {
+    wordpressApiCalls.delete.push(args);
+  },
+  webhookSubscriptions: {
+    list: async (...args: unknown[]) => {
+      wordpressApiCalls.webhookList.push(args);
+      return [WP_SUB];
+    },
+    register: async (...args: unknown[]) => {
+      wordpressApiCalls.webhookRegister.push(args);
+      return WP_SUB;
+    },
+    remove: async (...args: unknown[]) => {
+      wordpressApiCalls.webhookRemove.push(args);
+    },
+  },
+  // --- additive relocated-client members (core export names) ---------------
+  validateWordPressInstanceConnection: async () => ({}),
+  saveWordPressInstance: async (...args: unknown[]) => {
+    wordpressApiCalls.save.push(args);
+    return { id: WP_ROW.id, connectionId: "nango-wp-1" };
+  },
   saveWordPressInstanceFromNangoConnection: async (input: unknown) => {
     wordpressMaterialized.push(input);
   },
-  listWordPressWebhookSubscriptions: async (...args: unknown[]) => {
-    wordpressApiCalls.webhookList.push(args);
-    return [WP_SUB];
+  persistLocalDevWordPressInstanceUnvalidated: async (...args: unknown[]) => {
+    wordpressApiCalls.devPersist.push(args);
+    return { id: WP_ROW.id, connectionId: "nango-wp-1" };
   },
-  registerWordPressWebhookSubscription: async (...args: unknown[]) => {
-    wordpressApiCalls.webhookRegister.push(args);
-    return WP_SUB;
-  },
-  deleteWordPressWebhookSubscription: async (...args: unknown[]) => {
-    wordpressApiCalls.webhookRemove.push(args);
-  },
-  createWordPressDraft: async (...args: unknown[]) => {
-    wordpressApiCalls.createDraft.push(args);
-    return { wordpressPostId: 10, adminUrl: "https://wp.example/wp-admin/post.php?post=10&action=edit" };
-  },
-  readWordPressPost: async (...args: unknown[]) => {
-    wordpressApiCalls.readPost.push(args);
-    return { id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" };
-  },
-  readWordPressPostStatus: async (...args: unknown[]) => {
-    wordpressApiCalls.readPostStatus.push(args);
-    return { id: 10, status: "draft", adminUrl: "a" };
-  },
-  listPublishedWordPressPosts: async (...args: unknown[]) => {
-    wordpressApiCalls.listPublishedPosts.push(args);
-    return { items: [], total: 0 };
-  },
-  deleteWordPressPost: async (...args: unknown[]) => {
-    wordpressApiCalls.deletePost.push(args);
-    return { deleted: true, previousStatus: "draft" };
-  },
-  uploadWordPressMedia: async (...args: unknown[]) => {
-    wordpressApiCalls.uploadMedia.push(args);
-    return { mediaId: 7, sourceUrl: "https://wp.example/m.png" };
-  },
-  updateWordPressDraftMeta: async (...args: unknown[]) => {
-    wordpressApiCalls.updateDraftMeta.push(args);
-    return { id: 10 };
-  },
-  updateWordPressPost: async (...args: unknown[]) => {
-    wordpressApiCalls.updatePost.push(args);
-    return { id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" };
-  },
-}));
+  setWordPressInstanceBlogConnector: () => {},
+  saveWordPressLoggingSettings: async () => {},
+  getWordPressLoggingSettings: () => ({ enabled: true, directory: "/data/logs/x" }),
+  listWordPressInstances: async () => [],
+  readLatestPublishedWordPressPost: async () => null,
+};
 const linkedinMaterialized: unknown[] = [];
-// The HOST row carries legacy token material; the service must STRIP it
-// (least-privilege — the linkedin_accounts_list MCP primitive returns these
-// rows to callers).
-const LI_ACCOUNT = {
-  id: "li-1",
-  memberId: "m-1",
-  name: "Ada",
-  email: "ada@example.com",
-  accessToken: "li-legacy-bearer",
-  tokenExpiresAt: "2026-12-31T00:00:00Z",
-  destinations: [
-    { id: "org-1", type: "organization" as const, name: "Acme", urn: "urn:li:organization:org-1" },
-  ],
-  createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-02T00:00:00Z",
-};
-const {
-  accessToken: _liToken,
-  tokenExpiresAt: _liExpiry,
-  ...LI_ACCOUNT_PUBLISHED
-} = LI_ACCOUNT;
-const LI_DESTINATION = {
-  linkedinAccountId: "li-1",
-  linkedinAccountName: "Ada",
-  destinationType: "organization" as const,
-  destinationId: "org-1",
-  destinationName: "Acme",
-  authorUrn: "urn:li:organization:org-1",
-};
-const linkedinApiCalls: Record<string, unknown[][]> = {
-  listDestinations: [],
-  publishPost: [],
-};
-vi.mock("@/lib/linkedin-api", () => ({
-  saveLinkedInAccountFromNangoConnection: async (input: unknown) => {
+// The relocated LinkedIn client the linkedin-connector registers under
+// `@cinatra-ai/host:linkedin-connection` (cinatra#975 Wave 3) — the host no
+// longer publishes the id; the nango materializer's linkedin branch resolves
+// THIS provider (owner-pinned, fail-loud).
+const linkedinConnectorClient = {
+  getStatus: async () => ({ status: "connected", detail: "1 LinkedIn account is connected." }),
+  getSettings: async () => ({ accounts: [] }),
+  listAccounts: async () => [],
+  listDestinations: async () => [],
+  publishPost: async () => ({ postUrn: "urn:li:share:1", postUrl: "https://l.example" }),
+  saveAccountFromNangoConnection: async (input: unknown) => {
     linkedinMaterialized.push(input);
-    return { id: "acct" };
   },
-  getLinkedInAPIStatus: async () => ({
-    status: "connected",
-    detail: "1 LinkedIn account is connected.",
-  }),
-  getLinkedInAPISettings: async () => ({
-    clientId: "li-client",
-    clientSecret: "li-secret",
-    redirectUri: "https://app.example/callback",
-    accounts: [LI_ACCOUNT],
-    loggingEnabled: true,
-  }),
-  listLinkedInAccounts: async () => [LI_ACCOUNT],
-  listLinkedInDestinations: async (...args: unknown[]) => {
-    linkedinApiCalls.listDestinations.push(args);
-    return [LI_DESTINATION];
-  },
-  publishLinkedInPost: async (...args: unknown[]) => {
-    linkedinApiCalls.publishPost.push(args);
-    return {
-      postUrn: "urn:li:share:1",
-      postUrl: "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A1/",
-    };
-  },
-}));
-const GH_REPO = {
-  id: 7,
-  owner: "acme",
-  repo: "site",
-  fullName: "acme/site",
-  url: "https://github.com/acme/site",
-  visibility: "private" as const,
-  permissions: { admin: true, maintain: true, push: true, triage: true, pull: true },
+  getLoggingSettings: () => ({ enabled: true, directory: "/data/logs/li" }),
 };
-const githubApiCalls: Record<string, unknown[][]> = {
-  saveOAuthSettings: [],
-  saveRepositorySelection: [],
-};
-vi.mock("@/lib/github-api", () => ({
-  getGitHubAPIStatus: async () => ({
-    status: "connected",
-    detail: "Connected as Ada for acme/site.",
-    accountName: "Ada",
-    settingsConfigured: true,
-    selectedRepositoryFullName: "acme/site",
-    selectedRepositoryUrl: "https://github.com/acme/site",
-  }),
-  getGitHubOAuthSettings: async () => ({
-    clientId: "gh-client",
-    clientSecret: "gh-secret",
-    redirectUri: "https://app.example/callback",
-    scopes: ["repo", "workflow", "read:user", "user:email"],
-    selectedRepositoryFullName: "acme/site",
-    selectedRepositoryUrl: "https://github.com/acme/site",
-    // Host-side PAT fallback — the service must STRIP this before publishing.
-    personalAccessToken: "ghp-host-only",
-  }),
-  listGitHubRepositories: async () => [GH_REPO],
-  saveGitHubOAuthSettings: async (...args: unknown[]) => {
-    githubApiCalls.saveOAuthSettings.push(args);
-    return { clientId: "gh-client", clientSecret: "gh-secret", scopes: [] };
-  },
-  saveGitHubRepositorySelection: async (...args: unknown[]) => {
-    githubApiCalls.saveRepositorySelection.push(args);
-    return GH_REPO;
-  },
-}));
 const youtubeApiCalls: Record<string, number> = { getConfiguredAccessToken: 0 };
-vi.mock("@/lib/youtube-api", () => ({
-  getConfiguredYouTubeAccessToken: async () => {
+// The relocated youtube client the youtube-connector registers under
+// `@cinatra-ai/host:youtube-connection` (cinatra#975 Wave 3) — the host KEEPS
+// a thin null-degrading delegation on this id (its consumer is the
+// media-feeds connector, a different extension with no dependency edge).
+const youtubeConnectorClient = {
+  getConfiguredAccessToken: async () => {
     youtubeApiCalls.getConfiguredAccessToken += 1;
     return "yt-access-token";
   },
-}));
+  getStatus: () => ({ status: "connected", detail: "Connected." }),
+  clearSettings: async () => {},
+};
 vi.mock("@/lib/wordpress-mcp-connection", () => ({
   probeWordPressInstanceMcpAdapter: async () => ({}),
   invalidateWordPressMcpProbeCache: () => {},
@@ -343,19 +244,25 @@ vi.mock("@/lib/drupal-mcp-connection", () => ({
     { id: "i-1", name: "Site", siteUrl: "https://d.example", status: "registered", isPrivate: false },
   ],
 }));
-const drupalApiCalls: Record<string, unknown[][]> = { save: [], delete: [] };
-vi.mock("@/lib/drupal-api", () => ({
-  getDrupalAPISettings: () => ({ instances: [] }),
-  getDrupalAPIStatus: async () => ({ instanceCount: 0, instances: [] }),
-  saveDrupalInstance: async (...args: unknown[]) => {
+const drupalApiCalls: Record<string, unknown[][]> = { save: [], delete: [], devPersist: [] };
+// The relocated Drupal instance client the drupal-mcp-connector registers
+// under `@cinatra-ai/host:drupal-mcp` (cinatra#975 Wave 3) — the host
+// publication DELEGATES its client-backed members here.
+const drupalConnectorClient = {
+  listInstances: () => [] as unknown[],
+  getAPIStatus: async () => ({ instanceCount: 0, instances: [] }),
+  saveInstance: async (...args: unknown[]) => {
     drupalApiCalls.save.push(args);
     return { id: "i-1" };
   },
-  persistLocalDevDrupalInstanceUnvalidated: async () => ({ id: "i-1" }),
-  deleteDrupalInstance: async (...args: unknown[]) => {
+  deleteInstance: async (...args: unknown[]) => {
     drupalApiCalls.delete.push(args);
   },
-}));
+  devPersistLocalInstanceUnvalidated: async (...args: unknown[]) => {
+    drupalApiCalls.devPersist.push(args);
+    return { id: "i-1" };
+  },
+};
 // The per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
 // #978): the binder folds the seam's `identity | null` returns to outcome
 // booleans, so the mock returns an identity row / null / a marker-carrying
@@ -409,12 +316,8 @@ import {
   type HostMcpPaginationService,
   type HostDrupalMcpService,
   type HostWordPressMcpService,
-  type HostWordPressContentService,
   type HostInstanceWriteAuthorityService,
   type HostExternalMcpRegistryService,
-  type HostGitHubConnectionService,
-  type HostLinkedInConnectionService,
-  type HostYouTubeConnectionService,
   type HostInstanceConnectionGateService,
   type HostRuntimeModeService,
   type HostOpenAIConnectionService,
@@ -424,7 +327,40 @@ import {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
 } from "@cinatra-ai/sdk-extensions/internal";
-import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
+import {
+  registerCapabilityProvider,
+  invalidateProvidersForPackage,
+  resolveCapabilityProviders,
+} from "@/lib/extension-capabilities-registry";
+
+// The owning connector package names — in TEST code only (the coupling gates
+// exempt tests); production core derives them from the connectors-catalog
+// (see @/lib/connector-client-providers).
+const WORDPRESS_CONNECTOR_PKG = "@cinatra-ai/wordpress-mcp-connector";
+const DRUPAL_CONNECTOR_PKG = "@cinatra-ai/drupal-mcp-connector";
+const LINKEDIN_CONNECTOR_PKG = "@cinatra-ai/linkedin-connector";
+const YOUTUBE_CONNECTOR_PKG = "@cinatra-ai/youtube-connector";
+
+/** Register the fake CONNECTOR-owned relocated clients the host publication
+ * delegates to (cinatra#975 Wave 3) under their owning package names. */
+function registerConnectorClients() {
+  registerCapabilityProvider("@cinatra-ai/host:wordpress-mcp", {
+    packageName: WORDPRESS_CONNECTOR_PKG,
+    impl: wordpressConnectorClient,
+  });
+  registerCapabilityProvider("@cinatra-ai/host:drupal-mcp", {
+    packageName: DRUPAL_CONNECTOR_PKG,
+    impl: drupalConnectorClient,
+  });
+  registerCapabilityProvider("@cinatra-ai/host:linkedin-connection", {
+    packageName: LINKEDIN_CONNECTOR_PKG,
+    impl: linkedinConnectorClient,
+  });
+  registerCapabilityProvider("@cinatra-ai/host:youtube-connection", {
+    packageName: YOUTUBE_CONNECTOR_PKG,
+    impl: youtubeConnectorClient,
+  });
+}
 
 function resolveSingle<T>(capability: string): T {
   const providers = resolveCapabilityProviders(capability).filter(
@@ -436,7 +372,10 @@ function resolveSingle<T>(capability: string): T {
 
 beforeAll(async () => {
   // Module load auto-runs registerHostConnectorServices() against the REAL
-  // capability registry (the mocked deps keep it inert).
+  // capability registry (the mocked deps keep it inert). The delegating
+  // members resolve the connector-owned relocated clients LAZILY per call, so
+  // registration order host-vs-connector is immaterial.
+  registerConnectorClients();
   await import("@/lib/register-host-connector-services");
 });
 
@@ -501,6 +440,25 @@ describe("nango-connection-materializer capability (blocking save-path hooks)", 
       providerConfigKey: "cinatra-linkedin",
       connectionId: "c-3",
     });
+  });
+
+  it("FAILS LOUD when the owning connector is absent (never a silent half-saved connection)", async () => {
+    const m = resolveSingle<NangoConnectionMaterializer>(
+      NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
+    );
+    invalidateProvidersForPackage(WORDPRESS_CONNECTOR_PKG);
+    try {
+      await expect(
+        m.materialize({
+          connectorKey: "wordpress",
+          providerConfigKey: "cinatra-wordpress",
+          connectionId: "c-9",
+          siteUrl: "https://example.com",
+        }),
+      ).rejects.toThrow(/wordpress-mcp" unavailable[\s\S]*wordpress-mcp-connector/);
+    } finally {
+      registerConnectorClients();
+    }
   });
 
   it("reports handled:false for keys with no host materializer (caller fails loud)", async () => {
@@ -670,90 +628,19 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     expect(wordpressApiCalls.webhookRemove.at(-1)).toEqual([WP_ROW, "sub-1"]);
   });
 
-  it("publishes @cinatra-ai/host:wordpress-content with the full post/media CRUD member set", async () => {
+  it("the wordpress-content id is NO LONGER host-published — the connector owns the full content service (cinatra#975 Wave 3)", () => {
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressContent).toBe(
       "@cinatra-ai/host:wordpress-content",
     );
-    const content = resolveSingle<HostWordPressContentService>(
+    // The relocated client (wordpress-mcp-connector#57) registers the full
+    // member set from its own register(ctx); core resolves it owner-pinned
+    // through @/lib/connector-client-providers (fail-loud degradation —
+    // connector-client-providers.test.ts). The host publishes NOTHING here,
+    // and the connector's own deps slot falls back to its self-registration.
+    const hostProviders = resolveCapabilityProviders(
       HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressContent,
-    );
-
-    // createDraft — WRITER; instance row + payload forwarded intact.
-    const payload = { title: "T", content: "C", excerpt: "E", status: "draft" as const };
-    await expect(content.createDraft({ instance: WP_ROW, payload })).resolves.toEqual({
-      wordpressPostId: 10,
-      adminUrl: "https://wp.example/wp-admin/post.php?post=10&action=edit",
-    });
-    expect(wordpressApiCalls.createDraft.at(-1)).toEqual([{ instance: WP_ROW, payload }]);
-
-    // readPost — reader; forwards id + postType.
-    await expect(
-      content.readPost({ instance: WP_ROW, wordpressPostId: 10, postType: "page" }),
-    ).resolves.toEqual({ id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" });
-    expect(wordpressApiCalls.readPost.at(-1)).toEqual([
-      { instance: WP_ROW, wordpressPostId: 10, postType: "page" },
-    ]);
-
-    // readPostStatus — reader.
-    await expect(content.readPostStatus({ instance: WP_ROW, wordpressPostId: 10 })).resolves.toEqual({
-      id: 10,
-      status: "draft",
-      adminUrl: "a",
-    });
-    expect(wordpressApiCalls.readPostStatus.at(-1)).toEqual([
-      { instance: WP_ROW, wordpressPostId: 10 },
-    ]);
-
-    // listPublishedPosts — reader; pagination options forwarded.
-    await expect(content.listPublishedPosts(WP_ROW, { offset: 10, limit: 10 })).resolves.toEqual({
-      items: [],
-      total: 0,
-    });
-    expect(wordpressApiCalls.listPublishedPosts.at(-1)).toEqual([WP_ROW, { offset: 10, limit: 10 }]);
-
-    // deletePost — WRITER.
-    await expect(content.deletePost({ instance: WP_ROW, wordpressPostId: 10 })).resolves.toEqual({
-      deleted: true,
-      previousStatus: "draft",
-    });
-    expect(wordpressApiCalls.deletePost.at(-1)).toEqual([{ instance: WP_ROW, wordpressPostId: 10 }]);
-
-    // uploadMedia — WRITER.
-    const media = { instance: WP_ROW, imageBase64: "QUJD", imageMimeType: "image/png", title: "img" };
-    await expect(content.uploadMedia(media)).resolves.toEqual({
-      mediaId: 7,
-      sourceUrl: "https://wp.example/m.png",
-    });
-    expect(wordpressApiCalls.uploadMedia.at(-1)).toEqual([media]);
-
-    // updateDraftMeta — WRITER; meta envelope forwarded intact.
-    await expect(
-      content.updateDraftMeta({ instance: WP_ROW, wordpressPostId: 10, meta: { k: "v" } }),
-    ).resolves.toEqual({ id: 10 });
-    expect(wordpressApiCalls.updateDraftMeta.at(-1)).toEqual([
-      { instance: WP_ROW, wordpressPostId: 10, meta: { k: "v" } },
-    ]);
-
-    // updatePost — WRITER; top-level field envelope forwarded intact.
-    const fields = { title: "X", status: "draft" as const };
-    await expect(
-      content.updatePost({ instance: WP_ROW, wordpressPostId: 10, postType: "post", fields }),
-    ).resolves.toEqual({ id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" });
-    expect(wordpressApiCalls.updatePost.at(-1)).toEqual([
-      { instance: WP_ROW, wordpressPostId: 10, postType: "post", fields },
-    ]);
-  });
-
-  it("normalizes skew rows missing timestamps (epoch fallback) before reaching the host API", async () => {
-    const content = resolveSingle<HostWordPressContentService>(
-      HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressContent,
-    );
-    const skewRow = { id: "wp-2", name: "S", siteUrl: "https://wp2.example", username: "u", applicationPassword: "p" };
-    await content.readPostStatus({ instance: skewRow, wordpressPostId: 1 });
-    const forwarded = (wordpressApiCalls.readPostStatus.at(-1)![0] as { instance: Record<string, unknown> }).instance;
-    expect(forwarded.createdAt).toBe(new Date(0).toISOString());
-    expect(forwarded.updatedAt).toBe(new Date(0).toISOString());
-    expect(forwarded.id).toBe("wp-2");
+    ).filter((p) => p.packageName === "@cinatra-ai/host");
+    expect(hostProviders).toEqual([]);
   });
 
   // The wordpress widget-auth store INVERTED to the wordpress-mcp-connector
@@ -1018,128 +905,59 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     expect(target.name).toBe("target");
   });
 
-  it("publishes @cinatra-ai/host:github-connection with the full connection-admin member set", async () => {
+  it("the github/linkedin connection ids are NO LONGER host-published — each owning connector registers its relocated client (cinatra#975 Wave 3)", () => {
+    // The ids stay minted in the SDK contract (the connectors register under
+    // them; consumers resolve them), but the HOST provider is retired: the
+    // relocated clients (github-connector#36 / linkedin-connector#42) carry
+    // the full former member sets — the SDK contract members with the
+    // identical token/PAT-stripping posture, PLUS the additive core-call-site
+    // members — pinned by each connector's own suite. Core resolves them
+    // owner-pinned through @/lib/connector-client-providers (tested
+    // degradation there).
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection).toBe(
       "@cinatra-ai/host:github-connection",
     );
-    const github = resolveSingle<HostGitHubConnectionService>(
-      HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection,
-    );
-
-    // getStatus — settings-page badge + Nango card read.
-    await expect(github.getStatus()).resolves.toEqual({
-      status: "connected",
-      detail: "Connected as Ada for acme/site.",
-      accountName: "Ada",
-      settingsConfigured: true,
-      selectedRepositoryFullName: "acme/site",
-      selectedRepositoryUrl: "https://github.com/acme/site",
-    });
-
-    // getOAuthSettings — OAuth app settings document. The host-side PAT
-    // fallback must be STRIPPED (toEqual is exact-match: its absence below
-    // pins the strip — codex H4 round-1 finding 2).
-    await expect(github.getOAuthSettings()).resolves.toEqual({
-      clientId: "gh-client",
-      clientSecret: "gh-secret",
-      redirectUri: "https://app.example/callback",
-      scopes: ["repo", "workflow", "read:user", "user:email"],
-      selectedRepositoryFullName: "acme/site",
-      selectedRepositoryUrl: "https://github.com/acme/site",
-    });
-    await expect(github.getOAuthSettings()).resolves.not.toHaveProperty(
-      "personalAccessToken",
-    );
-
-    // listRepositories — live-connection repository options.
-    await expect(github.listRepositories()).resolves.toEqual([GH_REPO]);
-
-    // saveOAuthSettings — WRITER; input envelope forwarded intact.
-    const oauthInput = { clientId: "next-id", clientSecret: "next-secret" };
-    await expect(github.saveOAuthSettings(oauthInput)).resolves.toEqual({
-      clientId: "gh-client",
-      clientSecret: "gh-secret",
-      scopes: [],
-    });
-    expect(githubApiCalls.saveOAuthSettings.at(-1)).toEqual([oauthInput]);
-
-    // saveRepositorySelection — WRITER; input envelope forwarded intact.
-    await expect(
-      github.saveRepositorySelection({ repositoryFullName: "acme/site" }),
-    ).resolves.toEqual(GH_REPO);
-    expect(githubApiCalls.saveRepositorySelection.at(-1)).toEqual([
-      { repositoryFullName: "acme/site" },
-    ]);
-  });
-
-  it("publishes @cinatra-ai/host:linkedin-connection with the full connection-admin + publish member set", async () => {
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection).toBe(
       "@cinatra-ai/host:linkedin-connection",
     );
-    const linkedin = resolveSingle<HostLinkedInConnectionService>(
+    for (const id of [
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection,
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection,
+    ]) {
+      const hostProviders = resolveCapabilityProviders(id).filter(
+        (p) => p.packageName === "@cinatra-ai/host",
+      );
+      expect(hostProviders).toEqual([]);
+    }
+    // The registered fake connector client is the sole linkedin provider —
+    // the nango materializer's linkedin branch (asserted above) resolved THIS.
+    const linkedinProviders = resolveCapabilityProviders(
       HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection,
     );
-
-    // getStatus — the connector's linkedin_status primitive read.
-    await expect(linkedin.getStatus()).resolves.toEqual({
-      status: "connected",
-      detail: "1 LinkedIn account is connected.",
-    });
-
-    // getSettings — full settings document (credentials + account rows).
-    // Account rows are published TOKEN-STRIPPED (toEqual is exact-match: the
-    // absence of accessToken/tokenExpiresAt below pins the strip — codex H4
-    // round-1 finding 1; the host mock row DOES carry both).
-    await expect(linkedin.getSettings()).resolves.toEqual({
-      clientId: "li-client",
-      clientSecret: "li-secret",
-      redirectUri: "https://app.example/callback",
-      accounts: [LI_ACCOUNT_PUBLISHED],
-      loggingEnabled: true,
-    });
-
-    // listAccounts — connected account rows, token-stripped the same way.
-    await expect(linkedin.listAccounts()).resolves.toEqual([LI_ACCOUNT_PUBLISHED]);
-    const [publishedRow] = await linkedin.listAccounts();
-    expect(publishedRow).not.toHaveProperty("accessToken");
-    expect(publishedRow).not.toHaveProperty("tokenExpiresAt");
-
-    // listDestinations — options envelope forwarded intact (incl. the
-    // user-scope variant the MCP destinations handler uses).
-    await expect(linkedin.listDestinations()).resolves.toEqual([LI_DESTINATION]);
-    expect(linkedinApiCalls.listDestinations.at(-1)).toEqual([]);
-    await linkedin.listDestinations({ scope: "user", userId: "u-1" });
-    expect(linkedinApiCalls.listDestinations.at(-1)).toEqual([
-      { scope: "user", userId: "u-1" },
-    ]);
-
-    // publishPost — the WRITER (publishes to the remote LinkedIn network);
-    // input envelope forwarded intact. This is one of the two coarse H4
-    // surfaces the design's grant-drift hardening names explicitly.
-    const post = {
-      linkedinAccountId: "li-1",
-      destinationType: "organization" as const,
-      destinationId: "org-1",
-      content: "Hello",
-      userId: "u-1",
-    };
-    await expect(linkedin.publishPost(post)).resolves.toEqual({
-      postUrn: "urn:li:share:1",
-      postUrl: "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A1/",
-    });
-    expect(linkedinApiCalls.publishPost.at(-1)).toEqual([post]);
+    expect(linkedinProviders.map((p) => p.packageName)).toEqual([LINKEDIN_CONNECTOR_PKG]);
   });
 
-  it("publishes @cinatra-ai/host:youtube-connection with the single token-mint reader", async () => {
+  it("youtube-connection KEEPS a host-published NULL-DEGRADING delegation (its consumer is another extension — codex Wave-3 round-1 finding 1)", async () => {
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection).toBe(
       "@cinatra-ai/host:youtube-connection",
     );
-    const youtube = resolveSingle<HostYouTubeConnectionService>(
+    const youtube = resolveSingle<{ getConfiguredAccessToken(): Promise<string | null> }>(
       HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection,
     );
+    // Delegates to the connector-owned relocated client when present…
+    const before = youtubeApiCalls.getConfiguredAccessToken;
     await expect(youtube.getConfiguredAccessToken()).resolves.toBe("yt-access-token");
-    expect(youtubeApiCalls.getConfiguredAccessToken).toBe(1);
-    // No writer members on this service (single reader by design).
+    expect(youtubeApiCalls.getConfiguredAccessToken).toBe(before + 1);
+    // …and degrades to null (the former "no usable credential" contract) when
+    // the youtube connector is absent — media_feed_youtube_list keeps its
+    // token-missing domain error instead of a wiring throw.
+    invalidateProvidersForPackage(YOUTUBE_CONNECTOR_PKG);
+    try {
+      await expect(youtube.getConfiguredAccessToken()).resolves.toBeNull();
+    } finally {
+      registerConnectorClients();
+    }
+    // Single reader by design — no writer members on the host delegation.
     expect(Object.keys(youtube)).toEqual(["getConfiguredAccessToken"]);
   });
 

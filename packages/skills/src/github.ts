@@ -3,7 +3,18 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "
 import path from "node:path";
 import { Octokit } from "octokit";
 import { unzipSync } from "fflate";
-import { getGitHubAccessToken, getGitHubAPIStatus, getGitHubOAuthSettings } from "@/lib/github-api";
+// The GitHub connection client is CONNECTOR-owned since cinatra#975 Wave 3 —
+// the push/install token mints resolve the relocated client lazily and FAIL
+// LOUD when the owning connector is absent (`requireGitHubConnectionClient`),
+// while the startup auto-sync keeps its fail-SILENT posture via the
+// null-returning resolver. The published `getOAuthSettings` strips the stored
+// PAT (least-privilege); the actor-less `getAccessToken` mint keeps the PAT
+// fallback inside the client.
+import {
+  requireGitHubConnectionClient,
+  resolveGitHubConnectionClient,
+  type GitHubConnectionClient as GitHubClient,
+} from "@/lib/connector-client-providers";
 import { upsertRepositoryBackedSkillPackage, getSkillsDataRootPath } from "./skills-store";
 import { compileAndRegisterAgentSkillsForRepo, type CompileAgentSkillsResult } from "./compile-agent-skills";
 
@@ -240,13 +251,14 @@ export function parseGitHubRepositoryReference(value: string): GitHubRepositoryR
   }
 }
 
-export type GitHubConnectionStatus = Awaited<ReturnType<typeof getGitHubAPIStatus>>;
+export type GitHubConnectionStatus = Awaited<ReturnType<GitHubClient["getStatus"]>>;
 
 export async function getGitHubOctokit(input?: {
   connectionId?: string;
 }) {
-  const { accessToken, connection } = await getGitHubAccessToken(input);
-  const settings = await getGitHubOAuthSettings();
+  const client = requireGitHubConnectionClient();
+  const { accessToken, connection } = await client.getAccessToken(input);
+  const settings = await client.getOAuthSettings();
   const selectedRepository = settings.selectedRepositoryFullName
     ? parseGitHubRepositoryReference(settings.selectedRepositoryFullName)
     : null;
@@ -441,7 +453,8 @@ async function cloneGitHubRepoToDirectory(input: {
  * serving whatever is available locally.
  */
 export async function ensureConfiguredRepositorySynced(): Promise<void> {
-  const settings = await getGitHubOAuthSettings().catch(() => null);
+  const settings =
+    (await resolveGitHubConnectionClient()?.getOAuthSettings().catch(() => null)) ?? null;
   if (!settings?.selectedRepositoryFullName) {
     return; // No repo configured — nothing to sync
   }

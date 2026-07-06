@@ -38,11 +38,11 @@ import * as authorityModule from "@/lib/connector-authority";
 // the module's OWN un-mocked logic — these mocks only supply the rows.
 const wpRows: Record<string, { id: string; orgId?: string } | null> = {};
 const drupalRows: Array<{ id: string; orgId?: string }> = [];
-vi.mock("@/lib/wordpress-api", () => ({
-  readWordPressInstanceById: (id: string) => wpRows[id] ?? null,
-}));
-vi.mock("@/lib/drupal-api", () => ({
-  getDrupalAPISettings: () => ({ instances: drupalRows }),
+vi.mock("@/lib/connector-client-providers", () => ({
+  resolveWordPressInstanceAdmin: () => ({
+    readInstanceById: (id: string) => wpRows[id] ?? null,
+  }),
+  resolveDrupalInstanceAdmin: () => ({ listInstances: () => drupalRows }),
 }));
 
 // Mock the membership resolver. The universal live-membership

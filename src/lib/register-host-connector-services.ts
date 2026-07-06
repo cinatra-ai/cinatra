@@ -91,12 +91,8 @@ import {
   type HostContentEditorDispatchService,
   type HostDrupalMcpService,
   type HostWordPressMcpService,
-  type HostWordPressContentService,
   type HostInstanceWriteAuthorityService,
-  type WordPressInstanceRowShape,
   type HostExternalMcpRegistryService,
-  type HostGitHubConnectionService,
-  type HostLinkedInConnectionService,
   type HostYouTubeConnectionService,
   type HostInstanceConnectionGateService,
   type HostRuntimeModeService,
@@ -145,62 +141,25 @@ import {
   createInstanceListAuthority,
   createInstanceWriteAuthorityService,
 } from "./connector-instance-write-authority";
-// WordPress instance settings + hard-delete + LinkedIn account
-// materialization for the nango connection-save flow — published as the
-// BLOCKING `nango-connection-materializer` capability and the
-// `wordpress-mcp` per-concern service. The connection/instance-admin reads,
-// the remote webhook-subscription client, and the post/media content surface
-// (cinatra#172 Stage H3) are published as the extended `wordpress-mcp` and
-// the NEW `wordpress-content` services so the wordpress connectors' settings
-// and handler modules carry no `@/` edge.
+// The vendor connection/instance CLIENTS are GONE from core (cinatra#975
+// Wave 3 CORE EVICTION, epic #978): each owning connector registers its
+// relocated client under the SAME capability id from its `register(ctx)`.
+// The host resolves the connector-owned client LAZILY per call through the
+// catalog-owner-pinned `@/lib/connector-client-providers` resolvers
+// (fail-loud) — it re-publishes the client-backed members on the ids it still
+// owns (wordpress-mcp / drupal-mcp, which carry HOST-side non-members, and the
+// null-degrading youtube-connection mint whose consumer is another extension)
+// by DELEGATION, and no longer publishes the ids whose full surface the
+// connectors now own (wordpress-content / github-connection /
+// linkedin-connection).
 import {
-  createWordPressDraft,
-  deleteWordPressInstance,
-  deleteWordPressPost,
-  deleteWordPressWebhookSubscription,
-  getWordPressAPISettings,
-  getWordPressAPIStatus,
-  listPublishedWordPressPosts,
-  listWordPressWebhookSubscriptions,
-  readWordPressInstanceById,
-  readWordPressPost,
-  readWordPressPostStatus,
-  registerWordPressWebhookSubscription,
-  saveWordPressInstance,
-  saveWordPressInstanceFromNangoConnection,
-  persistLocalDevWordPressInstanceUnvalidated,
-  updateWordPressDraftMeta,
-  updateWordPressPost,
-  uploadWordPressMedia,
-  type WordPressInstanceSettings,
-} from "@/lib/wordpress-api";
-// LinkedIn account materialization for the nango connection-save flow + the
-// connection-admin/publish surface (cinatra#172 Stage H4) published as the
-// `linkedin-connection` per-concern service so the connector's settings page,
-// transport adapter, and MCP handlers carry no `@/` edge. `publishLinkedInPost`
-// is the service's WRITER — see the contract's TRUST note.
-import {
-  getLinkedInAPISettings,
-  getLinkedInAPIStatus,
-  listLinkedInAccounts,
-  listLinkedInDestinations,
-  publishLinkedInPost,
-  saveLinkedInAccountFromNangoConnection,
-} from "@/lib/linkedin-api";
-// GitHub OAuth/connection-admin surface (cinatra#172 Stage H4): published as
-// the `github-connection` per-concern service so the connector's settings
-// page + manage-gated "use server" actions carry no `@/` edge.
-import {
-  getGitHubAPIStatus,
-  getGitHubOAuthSettings,
-  listGitHubRepositories,
-  saveGitHubOAuthSettings,
-  saveGitHubRepositorySelection,
-} from "@/lib/github-api";
-// YouTube OAuth token mint (cinatra#172 Stage H4): published as the
-// `youtube-connection` per-concern service so the media-feeds connector's
-// MCP handlers carry no `@/` edge (the scraper receives the mint function).
-import { getConfiguredYouTubeAccessToken } from "@/lib/youtube-api";
+  requireDrupalInstanceAdmin,
+  requireLinkedInConnectionClient,
+  requireWordPressInstanceAdmin,
+  resolveDrupalInstanceAdmin,
+  resolveWordPressInstanceAdmin,
+  resolveYouTubeConnectionClient,
+} from "@/lib/connector-client-providers";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
 // are published as the `wordpress-mcp` / `drupal-mcp` per-concern services so
@@ -228,17 +187,11 @@ import {
   invalidateDrupalMcpProbeCache,
   resolveDrupalMcpServerUrl,
 } from "@/lib/drupal-mcp-connection";
-// Drupal instance-admin surface (cinatra#172 Stage H2): the connector settings
-// page's save/delete/status moved behind the extended `drupal-mcp` service so
-// the connector's settings/handlers modules carry no `@/` edge. The write
-// members stay behind the connector's manage-gated "use server" actions.
-import {
-  deleteDrupalInstance,
-  getDrupalAPISettings,
-  getDrupalAPIStatus,
-  saveDrupalInstance,
-  persistLocalDevDrupalInstanceUnvalidated,
-} from "@/lib/drupal-api";
+// The Drupal instance-settings client relocated to the drupal-mcp-connector
+// (cinatra#975 Wave 3) — the host `drupal-mcp` publication below DELEGATES the
+// client-backed members to the connector-owned provider; only the host-side
+// probe/url-policy/status surface (`@/lib/drupal-mcp-connection`) stays
+// implemented here.
 
 let _registered = false;
 
@@ -369,7 +322,13 @@ export function registerHostConnectorServices(): void {
   // reports `handled` so the nango save path can fail loud on a key that
   // requires materialization but finds no handler. Failures propagate — the
   // save FAILS, exactly the inline semantics the save body carried when it
-  // imported these host modules directly.
+  // imported these host modules directly. Since the Wave-3 core eviction the
+  // row writers are the CONNECTOR-owned relocated clients, resolved fail-loud
+  // per dispatch (a save for a key whose owning connector is absent FAILS
+  // LOUD — never a silent half-saved connection). The host keeps owning the
+  // materializer DISPATCH itself: the nango save path runs EVERY registered
+  // provider, so a second connector-registered linkedin/wordpress handler
+  // would double-materialize each save (linkedin-connector#42).
   const hostNangoMaterializer: NangoConnectionMaterializer = {
     materialize: async (input: NangoConnectionMaterializerInput) => {
       if (input.connectorKey === "wordpress") {
@@ -377,7 +336,7 @@ export function registerHostConnectorServices(): void {
         if (!siteUrl) {
           throw new Error("Enter the WordPress site domain before connecting with Nango.");
         }
-        await saveWordPressInstanceFromNangoConnection({
+        await requireWordPressInstanceAdmin().saveWordPressInstanceFromNangoConnection({
           siteUrl,
           providerConfigKey: input.providerConfigKey,
           connectionId: input.connectionId,
@@ -385,7 +344,7 @@ export function registerHostConnectorServices(): void {
         return { handled: true };
       }
       if (input.connectorKey === "linkedin") {
-        await saveLinkedInAccountFromNangoConnection({
+        await requireLinkedInConnectionClient().saveAccountFromNangoConnection({
           providerConfigKey: input.providerConfigKey,
           connectionId: input.connectionId,
         });
@@ -527,32 +486,42 @@ export function registerHostConnectorServices(): void {
   const filterAuthorizedDrupalInstances = createInstanceListAuthority("drupal");
   const filterAuthorizedWordPressInstances = createInstanceListAuthority("wordpress");
 
+  // The host stays the FIRST (and complete) `drupal-mcp` provider so every
+  // existing `[0]` resolver (the drupal connector's deps slot + dev-setup
+  // hook) keeps resolving ONE full service. Since the Wave-3 core eviction
+  // the CLIENT-backed members (instance list/status/save/delete + the dev
+  // persist) DELEGATE lazily to the connector-owned relocated client
+  // (fail-loud, owner-pinned); the host-side non-members — the cached MCP
+  // probe + endpoint/url-policy surface, the actor-scoped lister, and the
+  // dev-MODE guard — stay implemented here (authz + probes stay core, #975).
   register(svc.drupalMcp, {
-    listInstances: () => getDrupalAPISettings().instances,
+    listInstances: () => requireDrupalInstanceAdmin().listInstances(),
     // ACTOR-SCOPED lister for the external-MCP toolbox-injection path. The host
     // resolves the trusted actor from the MCP request frame and returns ONLY
-    // that actor's org-entitled instances; [] fail-closed when no actor resolves.
+    // that actor's org-entitled instances; [] fail-closed when no actor resolves
+    // AND when the owning connector (the instance store) is absent.
     // The connector toolbox uses THIS, never the global unscoped `listInstances`.
     listAuthorizedInstances: () =>
-      filterAuthorizedDrupalInstances(getDrupalAPISettings().instances),
+      filterAuthorizedDrupalInstances(resolveDrupalInstanceAdmin()?.listInstances() ?? []),
     probe: probeDrupalMcp,
     resolveServerUrl: resolveDrupalMcpServerUrl,
     isPrivateUrl,
-    // Instance-admin surface (cinatra#172 Stage H2). The writers
-    // (saveInstance/deleteInstance) sit behind the connector's manage-gated
-    // "use server" actions — identical posture to the static imports they
-    // replace (see the contract's TRUST note).
-    getAPIStatus: getDrupalAPIStatus,
-    saveInstance: saveDrupalInstance,
-    deleteInstance: deleteDrupalInstance,
+    // Instance-admin surface (cinatra#172 Stage H2), delegated to the
+    // connector-owned client. The writers (saveInstance/deleteInstance) sit
+    // behind the connector's manage-gated "use server" actions — identical
+    // posture to the static imports they replaced (contract TRUST note).
+    getAPIStatus: () => requireDrupalInstanceAdmin().getAPIStatus(),
+    saveInstance: (input) => requireDrupalInstanceAdmin().saveInstance(input),
+    deleteInstance: (id) => requireDrupalInstanceAdmin().deleteInstance(id),
     getInstanceStatuses: getDrupalMcpInstanceStatuses,
     // --- dev-boot provisioning surface (cinatra#976, epic #978 W-D) ----------
     // Resolved ONLY by the Drupal connector `dev-setup.ts` hook via the
-    // strictly dev-gated `dev-auto-setup` shell. Dev-only (guarded), never a
-    // production affordance; the persist helper enforces loopback host-side.
+    // strictly dev-gated `dev-auto-setup` shell. The dev-MODE guard is
+    // host-side defense-in-depth; the relocated persist helper keeps its
+    // intrinsic loopback-only hard-gate (and its own runtime-mode refusal).
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("drupal-mcp.devPersistLocalInstanceUnvalidated");
-      const persisted = await persistLocalDevDrupalInstanceUnvalidated(input);
+      const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(input);
       return { id: persisted.id };
     },
     devProbeWithBearer: probeDrupalMcpWithBearer,
@@ -564,105 +533,75 @@ export function registerHostConnectorServices(): void {
   // from its own `register(ctx)` (persisting through the host connector-config
   // capability), so the host publishes nothing here.
 
+  // The host stays the FIRST (and complete) `wordpress-mcp` provider — the
+  // wordpress connector's deps slot prefers a NON-SELF provider, so it must
+  // find one full service here. Since the Wave-3 core eviction the
+  // CLIENT-backed members DELEGATE lazily to the connector-owned relocated
+  // client (fail-loud, owner-pinned); the host-side non-members — the
+  // mcp-adapter probe + endpoint resolution + url-policy
+  // (`@/lib/wordpress-mcp-connection`), the actor-scoped lister, and the
+  // dev-MODE guard — stay implemented here (authz + probes stay core, #975).
   register(svc.wordpressMcp, {
-    listInstances: () => getWordPressAPISettings().instances,
+    listInstances: () => requireWordPressInstanceAdmin().listInstances(),
     // ACTOR-SCOPED lister, published symmetrically with the Drupal service (the
     // WordPress connector toolbox is already fail-closed via the per-instance
     // `instance-write-authority` gate; this is the additive single-call lister
     // a future toolbox revision can adopt). Same trusted-actor +
-    // membership-reverify + per-instance gate.
+    // membership-reverify + per-instance gate; [] fail-closed when the owning
+    // connector (the instance store) is absent.
     listAuthorizedInstances: () =>
-      filterAuthorizedWordPressInstances(getWordPressAPISettings().instances),
+      filterAuthorizedWordPressInstances(
+        resolveWordPressInstanceAdmin()?.getAPISettings().instances ?? [],
+      ),
     probeAdapter: probeWordPressInstanceMcpAdapter,
     resolveServerUrl: resolveWordPressMcpFallbackEndpoint,
     isPrivateUrl,
     // Instance hard-delete behind the connector's manage-gated relocated
-    // action. Wrapped to discard the host fn's return (the contract is
-    // Promise<void>).
-    deleteInstance: async (id) => {
-      await deleteWordPressInstance(id);
-    },
-    // Connection/instance-admin surface (cinatra#172 Stage H3). The webhook
-    // writers (register/remove) sit behind the assistant connector's
-    // manage-gated "use server" actions — identical posture to the static
-    // imports they replace (see the contract's TRUST note).
-    getAPIStatus: getWordPressAPIStatus,
-    getAPISettings: getWordPressAPISettings,
-    readInstanceById: readWordPressInstanceById,
+    // action (the relocated client already returns Promise<void>).
+    deleteInstance: (id) => requireWordPressInstanceAdmin().deleteInstance(id),
+    // Connection/instance-admin surface (cinatra#172 Stage H3), delegated to
+    // the connector-owned client. The webhook writers (register/remove) sit
+    // behind the assistant connector's manage-gated "use server" actions —
+    // identical posture to the static imports they replaced (contract TRUST
+    // note).
+    getAPIStatus: () => requireWordPressInstanceAdmin().getAPIStatus(),
+    getAPISettings: () => requireWordPressInstanceAdmin().getAPISettings(),
+    readInstanceById: (id) => requireWordPressInstanceAdmin().readInstanceById(id),
     resolveEndpoint: resolveWordPressMcpEndpoint,
     webhookSubscriptions: {
-      list: listWordPressWebhookSubscriptions,
-      register: registerWordPressWebhookSubscription,
-      remove: deleteWordPressWebhookSubscription,
+      list: (instance) => requireWordPressInstanceAdmin().webhookSubscriptions.list(instance),
+      register: (instance, subscription) =>
+        requireWordPressInstanceAdmin().webhookSubscriptions.register(instance, subscription),
+      remove: (instance, subscriptionId) =>
+        requireWordPressInstanceAdmin().webhookSubscriptions.remove(instance, subscriptionId),
     },
     // --- dev-boot provisioning surface (cinatra#976, epic #978 W-D) ----------
     // Resolved ONLY by the WordPress connector `dev-setup.ts` hook via the
-    // strictly dev-gated `dev-auto-setup` shell. Dev-only (guarded), never a
-    // production affordance; the unvalidated persist enforces loopback host-side.
+    // strictly dev-gated `dev-auto-setup` shell. The dev-MODE guard is
+    // host-side defense-in-depth; the relocated unvalidated persist keeps its
+    // intrinsic loopback-only hard-gate.
     devSaveInstance: async (input) => {
       assertDevSetupHostOnly("wordpress-mcp.devSaveInstance");
-      const saved = await saveWordPressInstance(input);
+      const saved = await requireWordPressInstanceAdmin().saveWordPressInstance(input);
       return { id: saved.id, connectionId: saved.connectionId };
     },
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("wordpress-mcp.devPersistLocalInstanceUnvalidated");
-      const persisted = await persistLocalDevWordPressInstanceUnvalidated(input);
+      const persisted =
+        await requireWordPressInstanceAdmin().persistLocalDevWordPressInstanceUnvalidated(input);
       return { id: persisted.id, connectionId: persisted.connectionId };
     },
     devInvalidateProbeCache: invalidateWordPressMcpProbeCache,
   } satisfies HostWordPressMcpService);
 
-  // WordPress post/media CONTENT surface (cinatra#172 Stage H3) — a SEPARATE
-  // capability id from the connection-focused `wordpress-mcp` service so
-  // connection admin and content CRUD never evolve under one id. Basic-auth
-  // resolution (Nango on the row's credential binding) runs host-side inside
-  // each member. The contract keeps row timestamps OPTIONAL for skew while
-  // the host API requires them — host rows always carry them, so the epoch
-  // fallback only guards hand-built rows from a skewed companion.
-  const asWordPressInstanceRow = (
-    instance: WordPressInstanceRowShape,
-  ): WordPressInstanceSettings => ({
-    ...instance,
-    createdAt: instance.createdAt ?? new Date(0).toISOString(),
-    updatedAt: instance.updatedAt ?? new Date(0).toISOString(),
-  });
-  register(svc.wordpressContent, {
-    createDraft: (input) =>
-      createWordPressDraft({ instance: asWordPressInstanceRow(input.instance), payload: input.payload }),
-    readPost: (input) =>
-      readWordPressPost({
-        instance: asWordPressInstanceRow(input.instance),
-        wordpressPostId: input.wordpressPostId,
-        postType: input.postType,
-      }),
-    readPostStatus: (input) =>
-      readWordPressPostStatus({
-        instance: asWordPressInstanceRow(input.instance),
-        wordpressPostId: input.wordpressPostId,
-      }),
-    listPublishedPosts: (instance, options) =>
-      listPublishedWordPressPosts(asWordPressInstanceRow(instance), options),
-    deletePost: (input) =>
-      deleteWordPressPost({
-        instance: asWordPressInstanceRow(input.instance),
-        wordpressPostId: input.wordpressPostId,
-      }),
-    uploadMedia: (input) =>
-      uploadWordPressMedia({ ...input, instance: asWordPressInstanceRow(input.instance) }),
-    updateDraftMeta: (input) =>
-      updateWordPressDraftMeta({
-        instance: asWordPressInstanceRow(input.instance),
-        wordpressPostId: input.wordpressPostId,
-        meta: input.meta,
-      }),
-    updatePost: (input) =>
-      updateWordPressPost({
-        instance: asWordPressInstanceRow(input.instance),
-        wordpressPostId: input.wordpressPostId,
-        postType: input.postType,
-        fields: input.fields,
-      }),
-  } satisfies HostWordPressContentService);
+  // The WordPress post/media CONTENT surface (`@cinatra-ai/host:
+  // wordpress-content`, cinatra#172 Stage H3) is NO LONGER host-published:
+  // the wordpress-mcp-connector registers the full content service from its
+  // own `register(ctx)` (cinatra#975 Wave 3 — the relocated client), and its
+  // deps slot's non-self preference falls back to its own registration on
+  // this post-eviction host. Core's blog publish/status/delete flows resolve
+  // the connector-owned provider through `@/lib/connector-client-providers`
+  // (fail-loud degradation).
 
   // Per-user / per-connector-instance WRITE authority (cinatra#409). The
   // wordpress/drupal content-editor MCP connectors resolve this service and
@@ -726,63 +665,30 @@ export function registerHostConnectorServices(): void {
   // deps slots bind the same way since the transport-DI inversion
   // (cinatra#151 Stage 3) — no static registrar call survives here.
 
-  // Transport-tail connection services (cinatra#172 Stage H4): the last four
-  // hostInternal edges (github / linkedin / media-feeds / twenty) invert onto
-  // per-concern services here — the domain modules (`@/lib/github-api`,
-  // `@/lib/linkedin-api`, `@/lib/youtube-api`, `@/lib/external-mcp-registry`)
-  // stay host-side; the connectors adapt these services into their own deps
-  // slots at activation.
+  // Transport-tail connection services (cinatra#172 Stage H4 →
+  // cinatra#975 Wave 3): the `github-connection` / `linkedin-connection` ids
+  // are NO LONGER host-published. Each owning connector registers its
+  // relocated client (the full former host member set: the SDK contract
+  // members with the identical token/PAT-stripping posture, PLUS the additive
+  // core-call-site members) from its own `register(ctx)`; the github
+  // connector's own deps slot resolves `[0]` and now finds the
+  // connector-owned provider, and the linkedin connector binds its deps
+  // directly to its own client. Core resolves the connector-owned providers
+  // through `@/lib/connector-client-providers` (owner-pinned, fail-loud
+  // degradation).
 
-  // GitHub OAuth/connection-admin surface. The writers
-  // (saveOAuthSettings / saveRepositorySelection) sit behind the connector's
-  // manage-gated "use server" actions — identical posture to the static
-  // imports they replace (see the contract's TRUST note).
-  register(svc.githubConnection, {
-    getStatus: getGitHubAPIStatus,
-    // The stored personal-access-token fallback is STRIPPED before
-    // publication: it belongs to the host's skills-configuration fallback
-    // path, not the connector's settings surface (least-privilege hardening
-    // over the static import — codex H4 round-1 finding 2).
-    getOAuthSettings: async () => {
-      const { personalAccessToken: _hostOnlyPat, ...settings } = await getGitHubOAuthSettings();
-      return settings;
-    },
-    listRepositories: listGitHubRepositories,
-    saveOAuthSettings: saveGitHubOAuthSettings,
-    saveRepositorySelection: saveGitHubRepositorySelection,
-  } satisfies HostGitHubConnectionService);
-
-  // LinkedIn connection-admin + publish surface. `publishPost` is the WRITER
-  // (publishes to the remote LinkedIn network) — reached only through the
-  // host's MCP dispatch + actor gating and the social-media facade's routing,
-  // identical posture to the static imports replaced (contract TRUST note).
-  // Token material never leaves the host through this service: legacy stored
-  // account rows may carry an OAuth bearer (`accessToken`/`tokenExpiresAt`),
-  // and the connector's `linkedin_accounts_list` MCP primitive returns these
-  // rows to callers — STRIP both fields from every published row
-  // (least-privilege hardening over the static import — codex H4 round-1
-  // finding 1). The publish path resolves tokens host-side from the store.
-  const stripLinkedInAccountTokens = (
-    account: Awaited<ReturnType<typeof listLinkedInAccounts>>[number],
-  ) => {
-    const { accessToken: _hostOnlyToken, tokenExpiresAt: _hostOnlyExpiry, ...row } = account;
-    return row;
-  };
-  register(svc.linkedinConnection, {
-    getStatus: getLinkedInAPIStatus,
-    getSettings: async () => {
-      const { accounts, ...settings } = await getLinkedInAPISettings();
-      return { ...settings, accounts: accounts.map(stripLinkedInAccountTokens) };
-    },
-    listAccounts: async () => (await listLinkedInAccounts()).map(stripLinkedInAccountTokens),
-    listDestinations: listLinkedInDestinations,
-    publishPost: publishLinkedInPost,
-  } satisfies HostLinkedInConnectionService);
-
-  // YouTube OAuth token mint (single reader; the bearer stays in-process —
-  // the media-feeds scraper forwards it only to the YouTube Data API).
+  // `youtube-connection` KEEPS a host-published provider — a thin DELEGATION
+  // to the connector-owned relocated client — because its consumer is a
+  // DIFFERENT extension (the media-feeds connector's `[0]` deps adapter, with
+  // no manifest dependency edge on the youtube connector). An absent youtube
+  // connector degrades the mint to `null` — the SAME "no usable credential"
+  // contract the former in-core client returned when Nango/the connection was
+  // unconfigured — so `media_feed_youtube_list` keeps its token-missing
+  // domain error instead of a host-service wiring throw (codex Wave-3
+  // eviction round-1 finding 1).
   register(svc.youtubeConnection, {
-    getConfiguredAccessToken: getConfiguredYouTubeAccessToken,
+    getConfiguredAccessToken: async () =>
+      (await resolveYouTubeConnectionClient()?.getConfiguredAccessToken()) ?? null,
   } satisfies HostYouTubeConnectionService);
 
   // Per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic

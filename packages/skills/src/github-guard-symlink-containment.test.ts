@@ -25,10 +25,17 @@ const realSkillsRoot = realpathSync.native(skillsRoot);
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/github-api", () => ({
-  getGitHubAccessToken: vi.fn(),
-  getGitHubAPIStatus: vi.fn(),
-  getGitHubOAuthSettings: vi.fn(),
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireGitHubConnectionClient: () => ({
+    getAccessToken: vi.fn(),
+    getStatus: vi.fn(),
+    getOAuthSettings: vi.fn(),
+  }),
+  resolveGitHubConnectionClient: () => ({
+    getAccessToken: vi.fn(),
+    getStatus: vi.fn(),
+    getOAuthSettings: vi.fn(),
+  }),
 }));
 
 vi.mock("octokit", () => ({

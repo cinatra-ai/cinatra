@@ -22,9 +22,12 @@ vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: vi.fn(),
 }));
 
-vi.mock("@/lib/wordpress-api", () => ({
-  saveWordPressInstance: (...a: unknown[]) => saveWordPressInstance(...a),
-  listWordPressInstances: vi.fn(),
+// The WordPress client is CONNECTOR-owned (cinatra#975 Wave 3): the action
+// resolves the relocated client fail-loud and calls its saveWordPressInstance.
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireWordPressInstanceAdmin: () => ({
+    saveWordPressInstance: (...a: unknown[]) => saveWordPressInstance(...a),
+  }),
 }));
 
 vi.mock("next/navigation", () => ({

@@ -50,10 +50,11 @@ import {
   ensureNangoIntegration,
   saveNangoConnectionAction as _saveNangoConnectionAction,
 } from "@/lib/nango-system";
-import {
-  listWordPressInstances,
-  saveWordPressInstance,
-} from "@/lib/wordpress-api";
+// The WordPress instance save resolves the CONNECTOR-owned relocated client
+// lazily (cinatra#975 Wave 3 — the vendor client is gone from core).
+// FAIL-LOUD: an admin save with the connector absent throws a descriptive
+// error (surfaced by the form wrapper) instead of silently dropping the row.
+import { requireWordPressInstanceAdmin } from "@/lib/connector-client-providers";
 import {
   writeDefaultImageProviderToDatabase,
   writeObjectsClassificationModelToDatabase,
@@ -422,7 +423,7 @@ export async function saveWordPressInstanceAction(formData: FormData) {
     applicationPassword: formData.get("applicationPassword"),
     blogConnectorId: (formData.get("blogConnectorId") as string | null) ?? undefined,
   });
-  await saveWordPressInstance({
+  await requireWordPressInstanceAdmin().saveWordPressInstance({
     id: parsed.id?.trim() || randomUUID(),
     siteUrl: parsed.siteUrl,
     username: parsed.username,
@@ -689,7 +690,6 @@ export async function saveOpenAISkillsSettingsAction(formData: FormData) {
 // mutations.
 
 // Silence unused-import warnings for helpers kept as safety shims.
-void listWordPressInstances;
 void createNotification;
 void importNangoConnection;
 void ensureNangoIntegration;

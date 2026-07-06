@@ -1,6 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getGitHubAPIStatus, getGitHubOAuthSettings, listGitHubRepositories } from "@/lib/github-api";
+// The GitHub connection client is CONNECTOR-owned since cinatra#975 Wave 3 —
+// this page resolves the relocated client lazily. Tested degradation: an
+// absent connector renders the not-connected library state (no OAuth
+// settings, no repositories) instead of breaking the page. The published
+// settings read STRIPS the stored personal-access-token (least-privilege —
+// the PAT field below is WRITE-ONLY, matching the codebase's secret-field
+// convention).
+import { resolveGitHubConnectionClient } from "@/lib/connector-client-providers";
 import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango-system";
 import { NangoUserConnectButton } from "@cinatra-ai/sdk-ui/nango";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -99,16 +106,31 @@ export default async function SettingsSkillsPage({ searchParams }: Props) {
 }
 
 async function LibraryTabContent() {
+  const githubClient = resolveGitHubConnectionClient();
   const [githubStatus, settings, storageConfig] = await Promise.all([
-    getGitHubAPIStatus(),
-    getGitHubOAuthSettings(),
+    githubClient?.getStatus() ??
+      Promise.resolve({ status: "not_connected" as const, settingsConfigured: false }),
+    githubClient?.getOAuthSettings() ??
+      Promise.resolve({
+        clientId: undefined,
+        clientSecret: undefined,
+        redirectUri: undefined,
+        scopes: [] as string[],
+        selectedRepositoryFullName: undefined,
+        selectedRepositoryUrl: undefined,
+      }),
     Promise.resolve(readSkillsStorageConfig()),
   ]);
 
   const nangoFrontendConfig = getNangoFrontendConfig();
   const connectionServiceReady = getNangoStatus().status === "connected";
-  const savedConnection = getPrimarySavedNangoConnection("github");
-  const repositories = savedConnection ? await listGitHubRepositories().catch(() => []) : [];
+  // The connected-branch render is gated on the CONNECTOR being present too
+  // (codex Wave-3 eviction round-1 finding 2): a saved Nango connection with
+  // the github connector absent must degrade to the not-connected state — the
+  // connector-backed repo picker/status/writers cannot serve it.
+  const savedConnection = githubClient ? getPrimarySavedNangoConnection("github") : null;
+  const repositories =
+    savedConnection && githubClient ? await githubClient.listRepositories().catch(() => []) : [];
 
   const isConnected = githubStatus.status === "connected";
   const isIncomplete = githubStatus.status === "incomplete";
@@ -218,7 +240,6 @@ async function LibraryTabContent() {
               <Input
                 name="personalAccessToken"
                 type="password"
-                defaultValue={settings.personalAccessToken ?? ""}
                 placeholder="ghp_…"
                 className="flex-1 font-mono"
                 style={{ minWidth: "240px" }}

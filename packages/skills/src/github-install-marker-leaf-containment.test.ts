@@ -36,10 +36,17 @@ mkdirSync(outsideDir, { recursive: true });
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/github-api", () => ({
-  getGitHubAccessToken: vi.fn(async () => ({ accessToken: "ghp_test", connection: {} })),
-  getGitHubAPIStatus: vi.fn(),
-  getGitHubOAuthSettings: vi.fn(async () => ({ selectedRepositoryFullName: null })),
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireGitHubConnectionClient: () => ({
+    getAccessToken: vi.fn(async () => ({ accessToken: "ghp_test", connection: {} })),
+    getStatus: vi.fn(),
+    getOAuthSettings: vi.fn(async () => ({ selectedRepositoryFullName: null })),
+  }),
+  resolveGitHubConnectionClient: () => ({
+    getAccessToken: vi.fn(async () => ({ accessToken: "ghp_test", connection: {} })),
+    getStatus: vi.fn(),
+    getOAuthSettings: vi.fn(async () => ({ selectedRepositoryFullName: null })),
+  }),
 }));
 
 vi.mock("octokit", () => ({

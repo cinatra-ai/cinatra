@@ -18,11 +18,15 @@ vi.mock("@/lib/nango-system", () => ({
   })),
   listSavedNangoConnections: vi.fn(() => [{ connectionId: "a2a-1" }]),
 }));
-vi.mock("@/lib/wordpress-api", () => ({
-  getWordPressAPISettings: vi.fn(() => ({ instances: [{ id: "wp1" }, { id: "wp2" }] })),
-}));
-vi.mock("@/lib/drupal-api", () => ({
-  getDrupalAPISettings: vi.fn(() => ({ instances: [] })),
+// The wordpress/drupal instance stores are CONNECTOR-owned (cinatra#975
+// Wave 3): the probes resolve the relocated clients lazily. The drupal
+// resolver returns null here (connector absent) to pin the degraded
+// not-connected posture.
+vi.mock("@/lib/connector-client-providers", () => ({
+  resolveWordPressInstanceAdmin: vi.fn(() => ({
+    getAPISettings: () => ({ instances: [{ id: "wp1" }, { id: "wp2" }] }),
+  })),
+  resolveDrupalInstanceAdmin: vi.fn(() => null),
 }));
 vi.mock("@/lib/better-auth-oauth-client", () => ({
   countExternalMcpOAuthClients: vi.fn(async () => 3),

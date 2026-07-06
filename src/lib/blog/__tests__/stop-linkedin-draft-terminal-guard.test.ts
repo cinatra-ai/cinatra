@@ -57,10 +57,12 @@ vi.mock("@/lib/notifications", () => ({ createNotification: vi.fn() }));
 vi.mock("@cinatra-ai/social-media-connector", () => ({
   publishSocialMediaPostThroughSystem: vi.fn(),
 }));
-vi.mock("@/lib/wordpress-api", () => ({
-  deleteWordPressPost: vi.fn(),
-  readWordPressInstanceById: vi.fn(),
-  readWordPressPostStatus: vi.fn(),
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireWordPressInstanceAdmin: () => ({ readInstanceById: vi.fn() }),
+  requireWordPressContentClient: () => ({
+    deletePost: vi.fn(),
+    readPostStatus: vi.fn(),
+  }),
 }));
 vi.mock("../openai", () => ({
   deleteUploadedFile: vi.fn(),

@@ -49,11 +49,16 @@ vi.mock("../store", () => ({
   getDefaultBlogPostWordPressDraftState: vi.fn(),
 }));
 
-vi.mock("@/lib/wordpress-api", () => ({
-  deleteWordPressPost: (...args: unknown[]) => deleteWordPressPost(...args),
-  readWordPressInstanceById: (...args: unknown[]) =>
-    readWordPressInstanceById(...args),
-  readWordPressPostStatus: vi.fn(),
+// The WordPress clients are CONNECTOR-owned (cinatra#975 Wave 3): the delete
+// flow resolves the relocated instance-admin + content clients fail-loud.
+vi.mock("@/lib/connector-client-providers", () => ({
+  requireWordPressInstanceAdmin: () => ({
+    readInstanceById: (...args: unknown[]) => readWordPressInstanceById(...args),
+  }),
+  requireWordPressContentClient: () => ({
+    deletePost: (...args: unknown[]) => deleteWordPressPost(...args),
+    readPostStatus: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/background-jobs", () => ({

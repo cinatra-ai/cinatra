@@ -4,8 +4,14 @@ import { getAnthropicLoggingSettings } from "@/lib/logging";
 // capability each connector registers at activation (lazy/guarded host-access
 // cutover). An absent connector's row is simply omitted (degraded).
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
-import { getWordPressLoggingSettings } from "@/lib/wordpress-api";
-import { getLinkedInLoggingSettings } from "@/lib/linkedin-api";
+// The wordpress/linkedin logging settings resolve the CONNECTOR-owned
+// relocated clients lazily (cinatra#975 Wave 3 — the vendor clients are gone
+// from core). Tested degradation: an absent connector's row is simply
+// omitted — the same posture as the llm-provider surfaces above.
+import {
+  resolveLinkedInConnectionClient,
+  resolveWordPressInstanceAdmin,
+} from "@/lib/connector-client-providers";
 import { getMcpLoggingSettings } from "@/lib/mcp-logging";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -36,8 +42,8 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
   const apollo = getLlmProviderSurface("apollo")?.getLoggingSettings?.() ?? null;
   const gemini = getLlmProviderSurface("gemini")?.getLoggingSettings?.() ?? null;
   const openAI = getLlmProviderSurface("openai")?.getLoggingSettings?.() ?? null;
-  const wordpress = getWordPressLoggingSettings();
-  const linkedin = getLinkedInLoggingSettings();
+  const wordpress = resolveWordPressInstanceAdmin()?.getWordPressLoggingSettings() ?? null;
+  const linkedin = resolveLinkedInConnectionClient()?.getLoggingSettings() ?? null;
   const mcp = getMcpLoggingSettings();
 
   return (
@@ -72,13 +78,15 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
                       directory: gemini.directory,
                     }]
                   : []),
-                {
-                  id: "linkedin",
-                  label: "LinkedIn API",
-                  description: "Persist LinkedIn OAuth and API request and response payloads for account connection, profile lookup, and organization authorization checks.",
-                  enabled: linkedin.enabled,
-                  directory: linkedin.directory,
-                },
+                ...(linkedin
+                  ? [{
+                      id: "linkedin" as const,
+                      label: "LinkedIn API",
+                      description: "Persist LinkedIn OAuth and API request and response payloads for account connection, profile lookup, and organization authorization checks.",
+                      enabled: linkedin.enabled,
+                      directory: linkedin.directory,
+                    }]
+                  : []),
                 {
                   id: "mcpServer",
                   label: "MCP server",
@@ -109,13 +117,15 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
                   enabled: anthropic.enabled,
                   directory: anthropic.directory,
                 },
-                {
-                  id: "wordpress",
-                  label: "WordPress API",
-                  description: "Persist WordPress API request and response payloads for connection checks, latest-post retrieval, media uploads, and draft creation.",
-                  enabled: wordpress.enabled,
-                  directory: wordpress.directory,
-                },
+                ...(wordpress
+                  ? [{
+                      id: "wordpress" as const,
+                      label: "WordPress API",
+                      description: "Persist WordPress API request and response payloads for connection checks, latest-post retrieval, media uploads, and draft creation.",
+                      enabled: wordpress.enabled,
+                      directory: wordpress.directory,
+                    }]
+                  : []),
               ]}
             />
             {logsCleared && (

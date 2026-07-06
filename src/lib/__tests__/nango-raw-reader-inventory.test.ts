@@ -44,6 +44,12 @@ const PINNED: Record<string, { count: number; status: string; note?: string }> =
   // dev-only nango raw reads moved OUT of core into the owning connector
   // `dev-setup.ts` hooks (extensions/, separate repos — not scanned here); the
   // core shell is now vendor-neutral and reads no nango credential.
+  // The five vendor connection clients (wordpress/drupal/linkedin/github/
+  // youtube) relocated into their owning connectors (cinatra#975 Wave 3 core
+  // eviction; extensions/ are separate repos — not scanned here). Their raw
+  // reads now ride the first-party `nango-system` ctx capability and the
+  // #1077 instance-connection-gate seam, pinned by each connector's own test
+  // suite.
   "src/lib/registry-credentials.ts": {
     count: 2,
     status: "system-credential",
@@ -54,37 +60,10 @@ const PINNED: Record<string, { count: number; status: string; note?: string }> =
     status: "gated-by-w2",
     note: "bearer mint behind gateExternalMcpConnectionUse; Twenty import readback",
   },
-  "src/lib/youtube-api.ts": {
-    count: 1,
-    status: "gated-by-w2",
-    note: "scraper mint behind enforceConnectionUse (org-bound InternalWorker)",
-  },
-  "src/lib/github-api.ts": {
-    count: 1,
-    status: "gated-by-w2",
-    note: "actor-carrying calls resolve via resolveConnectionForUse/enforceConnectionUse; actor-LESS legacy callers are the W3 threading residue",
-  },
   "src/lib/extension-host-context.ts": {
     count: 2,
     status: "w3-residue",
     note: "first-party extension ctx capability (reserved surface) — W3/W4 fleet wave",
-  },
-  "src/lib/linkedin-api.ts": {
-    count: 3,
-    status: "gated-by-w2",
-    note:
-      "cinatra#967: the account-token (resolveLinkedInAccessToken) and per-user (readLinkedInUserConnection, real live actor) reads resolve/self-heal-seed an identity row and gate + audit via enforceInstanceConnectionUse/enforcePerUserInstanceConnectionUse; saveLinkedInAccountFromNangoConnection's read is the generic Nango-connect materializer seam, already fully authorized by /api/nango/connections/save's own pre/post identity guard — gating it here would race that route's real-session registration with a guessed single-tenant seed (codex round-1 finding), so it deliberately stays as-is",
-  },
-  "src/lib/wordpress-api.ts": {
-    count: 2,
-    status: "gated-by-w2",
-    note:
-      "cinatra#967: resolveWordPressBasicAuth (the content-editor read/write flows) gates via enforceInstanceConnectionUse (self-heal identity seeding + actor threading) before both raw reads in resolveWordPressNangoCredentials; the OTHER call site (saveWordPressInstanceFromNangoConnection, the generic Nango-connect materializer seam) is already fully authorized by /api/nango/connections/save's own pre/post identity guard and deliberately left ungated here — gating it would race that route's real-session registration with a guessed single-tenant seed (codex round-1 finding)",
-  },
-  "src/lib/drupal-api.ts": {
-    count: 1,
-    status: "gated-by-w2",
-    note: "cinatra#967: saveDrupalInstance gates the post-import readback via enforceInstanceConnectionUse (self-heal identity seeding + actor threading)",
   },
   "src/lib/drupal-mcp-connection.ts": {
     count: 1,

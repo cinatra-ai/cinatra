@@ -1,7 +1,11 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { saveGitHubRepositorySelection, saveGitHubPersonalAccessToken } from "@/lib/github-api";
+// The GitHub connection client is CONNECTOR-owned since cinatra#975 Wave 3 —
+// the repository-selection / PAT writers resolve the relocated client lazily
+// and FAIL LOUD (descriptive error through the form wrappers) when the owning
+// connector is absent.
+import { requireGitHubConnectionClient } from "@/lib/connector-client-providers";
 import {
   matchAgentsToSkills,
   readAgentsForSkillMatching,
@@ -71,7 +75,7 @@ export async function saveGitHubRepoFromSkillsAction(formData: FormData) {
   await requireAdminSession();
   const repositoryFullName = String(formData.get("repositoryFullName") ?? "").trim();
   try {
-    await saveGitHubRepositorySelection({ repositoryFullName });
+    await requireGitHubConnectionClient().saveRepositorySelection({ repositoryFullName });
     await cloneConfiguredGitHubSkillRepository();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save the repository.";
@@ -98,7 +102,7 @@ export async function saveSkillAutosaveAction(formData: FormData) {
 export async function saveGitHubPersonalAccessTokenAction(formData: FormData) {
   await requireAdminSession();
   const pat = String(formData.get("personalAccessToken") ?? "").trim() || null;
-  saveGitHubPersonalAccessToken(pat);
+  requireGitHubConnectionClient().savePersonalAccessToken(pat);
 }
 
 export async function matchAgentsToSkillsAction() {

@@ -6,8 +6,13 @@
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("@/lib/drupal-api", () => ({
-  getDrupalAPISettings: vi.fn(),
+// The Drupal instance store is CONNECTOR-owned (cinatra#975 Wave 3): the
+// status sweep resolves the relocated client lazily (null → empty sweep).
+const listDrupalInstancesMock = vi.fn();
+vi.mock("@/lib/connector-client-providers", () => ({
+  resolveDrupalInstanceAdmin: () => ({
+    listInstances: () => listDrupalInstancesMock(),
+  }),
 }));
 
 vi.mock("@/lib/url-policy", () => ({
@@ -25,7 +30,6 @@ vi.mock("@/lib/instance-connection-actor", () => ({
   enforceInstanceConnectionUse: vi.fn(async () => null),
 }));
 
-import { getDrupalAPISettings } from "@/lib/drupal-api";
 import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
 import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
 import { ConnectionUseDeniedError } from "@/lib/connection-use-gate";
@@ -83,9 +87,9 @@ describe("probeDrupalMcp — classification", () => {
 
 describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
   it("classifies unreachable when Nango credential is missing (no token in response)", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [inst("status-missing-cred", "https://status-missing.example.com")],
-    });
+    listDrupalInstancesMock.mockReturnValue([
+      inst("status-missing-cred", "https://status-missing.example.com"),
+    ]);
     vi.mocked(buildBearerAuthHeaderFromNango).mockResolvedValueOnce(null);
 
     const statuses = await getDrupalMcpInstanceStatuses();
@@ -96,9 +100,9 @@ describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
   });
 
   it("issues HEAD probe with the Nango-resolved Authorization header", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [inst("status-ok", "https://status-ok.example.com")],
-    });
+    listDrupalInstancesMock.mockReturnValue([
+      inst("status-ok", "https://status-ok.example.com"),
+    ]);
     vi.mocked(buildBearerAuthHeaderFromNango).mockResolvedValueOnce({ Authorization: "Bearer token-a" });
 
     const statuses = await getDrupalMcpInstanceStatuses();
@@ -113,7 +117,7 @@ describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
 
   it("cinatra#967: gates each instance's Bearer resolution via enforceInstanceConnectionUse, threading its {orgId, runBy} binding, BEFORE the raw Nango read", async () => {
     const instanceWithBinding = { ...inst("status-gated", "https://status-gated.example.com"), orgId: "org-1", runBy: "user-1" };
-    vi.mocked(getDrupalAPISettings).mockReturnValue({ instances: [instanceWithBinding] });
+    listDrupalInstancesMock.mockReturnValue([instanceWithBinding]);
     const callOrder: string[] = [];
     vi.mocked(enforceInstanceConnectionUse).mockImplementationOnce(async () => {
       callOrder.push("gate");
@@ -138,12 +142,10 @@ describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
   });
 
   it("cinatra#967: a ConnectionUseDeniedError for one instance surfaces as auth_error and does not abort the sweep for other instances", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [
-        inst("denied-instance", "https://denied.example.com"),
-        inst("ok-instance", "https://ok-instance.example.com"),
-      ],
-    });
+    listDrupalInstancesMock.mockReturnValue([
+      inst("denied-instance", "https://denied.example.com"),
+      inst("ok-instance", "https://ok-instance.example.com"),
+    ]);
     vi.mocked(enforceInstanceConnectionUse)
       .mockRejectedValueOnce(
         new ConnectionUseDeniedError({ statusCode: 403, reason: "forbidden", message: "denied" }),
@@ -161,9 +163,9 @@ describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
 
   it("cinatra#967: a NON-deny error (e.g. a DB/identity-seeding failure) stays LOUD — rethrown, never swallowed into a status code", async () => {
     class DbFailure extends Error {}
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [inst("db-failure-instance", "https://db-failure.example.com")],
-    });
+    listDrupalInstancesMock.mockReturnValue([
+      inst("db-failure-instance", "https://db-failure.example.com"),
+    ]);
     vi.mocked(enforceInstanceConnectionUse).mockRejectedValueOnce(new DbFailure("db down"));
 
     await expect(getDrupalMcpInstanceStatuses()).rejects.toThrow(DbFailure);
