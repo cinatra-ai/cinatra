@@ -25,6 +25,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # merge_group (engineering#484): `CRM migration gates` is a branch-protection
+  # required check, so it must also conclude on GitHub merge-queue candidates
+  # or a queue entry hangs forever on the missing check (found by
+  # scripts/ci/merge-group-coverage-guard.mjs — this was the one required
+  # context outside the 5 org gates without merge_group coverage). The job is
+  # event-agnostic (static scans over the checkout). Inert until a merge queue
+  # is enabled (engineering#485).
+  merge_group:
   workflow_dispatch:
 
 permissions:
