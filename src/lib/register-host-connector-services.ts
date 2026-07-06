@@ -182,11 +182,13 @@ import { getConfiguredYouTubeAccessToken } from "@/lib/youtube-api";
 // are published as the `wordpress-mcp` / `drupal-mcp` per-concern services so
 // the connectors' `mcp-toolbox` modules carry no `@/` edge.
 import {
-  isPrivateUrl,
   probeWordPressInstanceMcpAdapter,
   resolveWordPressMcpEndpoint,
   resolveWordPressMcpFallbackEndpoint,
 } from "@/lib/wordpress-mcp-connection";
+// Private-URL policy is a NEUTRAL mechanism (cinatra#975) — sourced from the
+// vendor-agnostic `@/lib/url-policy` module, not the wordpress vendor file.
+import { isPrivateUrl } from "@/lib/url-policy";
 // Widget auth-config storage for the wordpress assistant widget (cinatra#172
 // Stage H3): published as the `wordpress-widget-auth` per-concern service
 // (the webhook HMAC verification stays host-only).

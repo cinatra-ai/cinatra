@@ -26,7 +26,7 @@ vi.mock("@/lib/database", () => ({
   ensurePostgresSchema: () => {},
   postgresSchema: "public",
 }));
-vi.mock("@/lib/wordpress-mcp-connection", () => ({ isPrivateUrl: () => false }));
+vi.mock("@/lib/url-policy", () => ({ isPrivateUrl: () => false }));
 vi.mock("@cinatra-ai/mcp-server/credentials", () => ({ getMcpPublicBaseUrl: () => ({ publicBaseUrl: null }) }));
 
 const ensureNangoIntegration = vi.fn();
