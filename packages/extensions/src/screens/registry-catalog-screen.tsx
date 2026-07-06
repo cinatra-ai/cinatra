@@ -656,6 +656,10 @@ export async function RegistryCatalogScreen({
       installCount: null,
       iconUrl: null,
       vendorLogoUrl: null,
+      // Storefront-owned like the assets above (#1003 added the publisher ref
+      // to the card model): the §VI shell carries no vendor block; the modal
+      // hydrates the vendor byline from the fetched detail on open.
+      vendor: null,
       sdkAbiRange: null,
     };
     return (
