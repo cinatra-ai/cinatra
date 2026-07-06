@@ -68,6 +68,21 @@ import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { createNotification } from "@/lib/notifications";
+// The per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
+// #978): published so the RELOCATED vendor connection clients gate credential
+// use without importing `@/lib/instance-connection-actor` /
+// `@/lib/connection-use-gate` / `@/lib/authz` (authz stays core). The seam
+// module is deliberately light at module load — it lazy-imports the
+// identity-store/use-gate DB/auth graph per call, so this static import adds
+// no boot weight.
+import {
+  resolveOrSeedInstanceIdentity,
+  enforceInstanceConnectionUse,
+  enforcePerUserInstanceConnectionUse,
+  authorizeWorkerConnectionUse,
+  isConnectionUseDeniedError,
+  resolveTrustedSessionBinding,
+} from "@/lib/instance-connection-actor";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 import {
   type NangoConnectionMaterializer,
@@ -83,6 +98,7 @@ import {
   type HostGitHubConnectionService,
   type HostLinkedInConnectionService,
   type HostYouTubeConnectionService,
+  type HostInstanceConnectionGateService,
   type HostRuntimeModeService,
   type HostNotificationsService,
   type HostSkillsCatalogService,
@@ -768,6 +784,38 @@ export function registerHostConnectorServices(): void {
   register(svc.youtubeConnection, {
     getConfiguredAccessToken: getConfiguredYouTubeAccessToken,
   } satisfies HostYouTubeConnectionService);
+
+  // Per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
+  // #978): the gate decision, audit rows, actor construction and identity-row
+  // storage stay HOST-SIDE (authz stays core — #975); the relocated vendor
+  // clients resolve outcome records only. Identity-row internals never cross
+  // the boundary: the host seam's `NangoConnectionIdentity | null` returns
+  // fold to `{ identityResolved } / { gated }` booleans (`null` == the
+  // pre-#967 ungated fallback — the import-era semantics, preserved). A
+  // use-gate DENY propagates fail-closed out of the enforce members
+  // (classifiable via `isConnectionUseDenied`); `authorizeWorkerConnectionUse`
+  // is the actor-less worker gate (no seeding; no-identity AND deny both fold
+  // to a bare `false` — the youtube-api scraper-mint pattern);
+  // `resolveTrustedSessionBinding` is the only sanctioned FRESH-binding
+  // source (validated session, never request input). NOTE this id is in the
+  // host's RESERVED_SYSTEM_CAPABILITIES (extension-host-context.ts): a
+  // non-first-party extension can neither resolve nor register it through
+  // the `ctx.capabilities` port — identity seeding is authz-adjacent and
+  // must not be ambient to marketplace code (codex round-0 finding).
+  register(svc.instanceConnectionGate, {
+    resolveOrSeedInstanceIdentity: async (input) => ({
+      identityResolved: (await resolveOrSeedInstanceIdentity(input)) !== null,
+    }),
+    enforceInstanceConnectionUse: async (input) => ({
+      gated: (await enforceInstanceConnectionUse(input)) !== null,
+    }),
+    enforcePerUserInstanceConnectionUse: async (input) => ({
+      gated: (await enforcePerUserInstanceConnectionUse(input)) !== null,
+    }),
+    authorizeWorkerConnectionUse,
+    resolveTrustedSessionBinding,
+    isConnectionUseDenied: isConnectionUseDeniedError,
+  } satisfies HostInstanceConnectionGateService);
 
   // Observability parity: agent extensions log per-package via
   // `[cinatra:extensions:agent]`; skill extensions log a scan summary via

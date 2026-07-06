@@ -22,7 +22,10 @@ import {
   registerCapabilityProvider,
   resolveCapabilityProviders,
 } from "@/lib/extension-capabilities-registry";
-import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
+import {
+  NANGO_SYSTEM_CAPABILITY,
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
+} from "@cinatra-ai/sdk-extensions/internal";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 
 // Real first-party host-build packages (the gate is keyed on package identity,
@@ -153,6 +156,51 @@ describe("extension-facing capability port — reserved system credential capabi
       expect(() => ctx.capabilities.resolveProviders("email-send")).not.toThrow();
       expect(ctx.capabilities.resolveProviders("not-a-capability")).toEqual([]);
     }
+  });
+
+  it("instance-connection-gate (#975 Wave 3, epic #978) is RESERVED: third-party resolve fails closed ([]), first-party resolves; register through the port is denied for everyone (host namespace)", () => {
+    const GATE = HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate;
+    // The host published the seam (register-host-connector-services binds the
+    // real impl; a stand-in suffices for the fence assertion).
+    registerCapabilityProvider(GATE, {
+      packageName: "@cinatra-ai/host",
+      impl: { resolveOrSeedInstanceIdentity: async () => ({ identityResolved: true }) },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Third-party marketplace code must not ambiently seed identities or
+    // probe authorization: fail-closed resolve.
+    const thirdPartyCtx = createExtensionHostContext(THIRD_PARTY, [CAP]);
+    expect(thirdPartyCtx.capabilities.resolveProviders(GATE)).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+
+    // First-party connectors (the relocated vendor clients) resolve it — the
+    // import-era in-process trust boundary, preserved.
+    const firstPartyCtx = createExtensionHostContext(FIRST_PARTY_CONSUMER, [CAP]);
+    expect(firstPartyCtx.capabilities.resolveProviders(GATE)).toHaveLength(1);
+
+    // A THIRD-PARTY register attempt is denied fail-loud (anti-poisoning —
+    // the reserved-system fence, same as nango-system).
+    expect(() =>
+      thirdPartyCtx.capabilities.registerProvider(GATE, {
+        packageName: THIRD_PARTY,
+        impl: {},
+      }),
+    ).toThrow(/may not register\b[\s\S]*host-internal system capability/i);
+
+    // A first-party register is bound to ITS OWN identity (never
+    // "@cinatra-ai/host"), so the host's provider selection — which filters
+    // packageName === "@cinatra-ai/host" — can never pick an extension
+    // registration even from first-party code.
+    firstPartyCtx.capabilities.registerProvider(GATE, {
+      packageName: "@cinatra-ai/host",
+      impl: { spoofed: true },
+    });
+    const providers = resolveCapabilityProviders(GATE);
+    expect(providers.filter((pr) => pr.packageName === "@cinatra-ai/host")).toHaveLength(1);
+    expect(
+      providers.find((pr) => pr.packageName === FIRST_PARTY_CONSUMER)?.impl,
+    ).toEqual({ spoofed: true });
   });
 
   it("PROBE parity: a third-party probe denies reserved resolve ([]) and reserved register (throws); a first-party probe resolves normally", () => {

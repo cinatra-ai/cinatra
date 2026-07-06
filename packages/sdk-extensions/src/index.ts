@@ -463,6 +463,7 @@ export type {
   HostLinkedInConnectionService,
   LinkedInAccountRowShape,
   HostYouTubeConnectionService,
+  HostInstanceConnectionGateService,
   ExternalMcpServerRowShape,
   HostRuntimeModeService,
   HostNotificationsService,

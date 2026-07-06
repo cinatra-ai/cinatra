@@ -97,6 +97,11 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   githubConnection: "@cinatra-ai/host:github-connection",
   linkedinConnection: "@cinatra-ai/host:linkedin-connection",
   youtubeConnection: "@cinatra-ai/host:youtube-connection",
+  // --- vendor-client capability inversion prerequisites (#975 Wave 3, epic
+  // #978): the per-connection use-gate seam the relocated vendor clients
+  // resolve INSTEAD of importing `@/lib/instance-connection-actor` /
+  // `@/lib/connection-use-gate` / `@/lib/authz` (authz stays core — #975).
+  instanceConnectionGate: "@cinatra-ai/host:instance-connection-gate",
   runtimeMode: "@cinatra-ai/host:runtime-mode",
   notifications: "@cinatra-ai/host:notifications",
   skillsCatalog: "@cinatra-ai/host:skills-catalog",
@@ -745,6 +750,138 @@ export type HostYouTubeConnectionService = {
    * resolution REJECTS (it is not folded to null). Callers keep their existing
    * null/throw handling. */
   getConfiguredAccessToken(): Promise<string | null>;
+};
+
+/**
+ * The per-instance connection use-gate seam (cinatra#967) as a per-concern
+ * host service (#975 Wave 3 prerequisite, epic #978). The relocated vendor
+ * connection clients resolve this service INSTEAD of importing the host's
+ * `@/lib/instance-connection-actor` / `@/lib/connection-use-gate` /
+ * `@/lib/authz` modules — the gate DECISION, the audit rows, the actor
+ * construction (`POLICY_VERSION`, `ActorContext`), and the identity-row
+ * storage all stay HOST-SIDE behind these members (authz stays core — #975).
+ *
+ * LEAST PRIVILEGE: identity-row internals (`ownerUserId`, `organizationId`,
+ * grant material) deliberately DO NOT cross this boundary — no import-era
+ * caller consumed them; members return minimal outcome records instead of the
+ * `NangoConnectionIdentity` row. The service is vendor-NEUTRAL: `connectorKey`
+ * is the open vendor-key shape (data), and the org/actor threading input is
+ * the same `{orgId, runBy}` instance binding the import-era callers passed.
+ *
+ * TRUST: this is one in-process capability id on the server-side registry —
+ * never client-resolvable — AND a RESERVED SYSTEM CAPABILITY (codex round-0
+ * finding): identity seeding is an authz-adjacent mutation, so a
+ * NON-first-party (third-party marketplace) extension can neither resolve nor
+ * register this id through the `ctx.capabilities` port (the same fail-closed
+ * fence as `nango-system`; see the host's RESERVED_SYSTEM_CAPABILITIES).
+ * That fence preserves the import-era trust boundary exactly: the callers
+ * are the first-party in-process vendor clients that could already import
+ * the seam. There are NO writers against remote systems here; the "writes"
+ * are the idempotent identity-row self-heal seeds (cinatra#967 SEED BEFORE
+ * GATE) the import-era functions already performed. AUTHORIZATION SEMANTICS
+ * ARE PRESERVED EXACTLY: allow AND deny are audited host-side; a deny is
+ * awaited-then-THROWN (fail-closed, classifiable across the boundary via
+ * `isConnectionUseDenied`); a connection whose identity cannot be resolved OR
+ * seeded falls back to the pre-#967 ungated read (`gated: false`) — never a
+ * new regression — while a foreign-row identity conflict FAILS CLOSED
+ * (propagates), exactly as the host seam documents.
+ *
+ * BINDING PROVENANCE: a `binding` passed to the seed/enforce members MUST be
+ * (a) the instance row's PERSISTED `{orgId, runBy}` binding (cinatra#274), or
+ * (b) the live result of `resolveTrustedSessionBinding()` below — never a
+ * connector-fabricated pair (the identity seam's "validated session, never
+ * request input" rule).
+ *
+ * EXPLICIT NON-MEMBER (codex round-0 finding): the ACTOR-AWARE W2
+ * grant-following resolver (`@/lib/connection-credential-resolver`
+ * `resolveConnectionForUse` + a live `ActorContext`, the
+ * `getGitHubAccessToken({actor})` path) is deliberately NOT on this surface —
+ * `ActorContext` must never cross the extension boundary. Its only consumers
+ * are HOST-side (packages/skills); after a vendor-client relocation that
+ * actor-gated resolution stays AT THE HOST CALL SITE (gate first, then call
+ * the connector surface with the resolved, already-authorized connectionId).
+ */
+export type HostInstanceConnectionGateService = {
+  /**
+   * Idempotent identity self-heal at an instance-import/save seam: read the
+   * identity row for the connection, seeding it when absent (from the
+   * instance's own `{orgId, runBy}` binding when complete, else the
+   * single-tenant default owner/org). `identityResolved: false` means no row
+   * exists AND none could be seeded — read-time gating will fall back
+   * ungated. A foreign-row conflict propagates (fail-closed).
+   */
+  resolveOrSeedInstanceIdentity(input: {
+    connectorKey: string;
+    connectionId: string;
+    binding?: { orgId?: string; runBy?: string };
+  }): Promise<{ identityResolved: boolean }>;
+  /**
+   * Resolve-or-seed the identity, then gate + audit the use through the
+   * host's per-connection use-gate (cinatra#952 W2). THROWS on deny
+   * (fail-closed — classify with `isConnectionUseDenied`; the deny audit row
+   * is durably written before the throw). Resolves `{ gated: false }` when no
+   * identity could be resolved/seeded — the caller keeps the pre-#967
+   * ungated fallback, identical to the import-era `null` return.
+   */
+  enforceInstanceConnectionUse(input: {
+    connectorKey: string;
+    connectionId: string;
+    binding?: { orgId?: string; runBy?: string };
+    source: string;
+    runId?: string;
+  }): Promise<{ gated: boolean }>;
+  /**
+   * Per-USER (org-less) twin for `scope:"user"` personal connections
+   * (LinkedIn member profiles today): the acting HumanUser IS the identity
+   * owner by construction. `userId` MUST come from trusted context (the
+   * host-resolved session/run binding threaded into the caller), never from
+   * request input. Same throw-on-deny / `{ gated: false }` semantics.
+   */
+  enforcePerUserInstanceConnectionUse(input: {
+    connectorKey: string;
+    connectionId: string;
+    userId: string;
+    source: string;
+    runId?: string;
+  }): Promise<{ gated: boolean }>;
+  /**
+   * The actor-less in-process worker gate (the youtube-api scraper-mint
+   * pattern): NO seeding — resolves `false` BOTH when no identity row exists
+   * AND on a use-gate deny (fail-closed: false means DO NOT use the
+   * credential; the deny is still audited host-side). Unexpected errors
+   * rethrow. A BARE boolean by design (codex round-0 finding): a result
+   * RECORD is truthy even when unauthorized, so `if (await …)` would misread
+   * a deny — the bare boolean makes the naive check correct. The host builds
+   * the `InternalWorker` actor (`worker:<source>`, bound to the identity
+   * row's organization) — actor material never crosses this boundary.
+   * Callers resolve the connection under the correct scope FIRST (e.g. the
+   * nango-system surface's `scope:"app"` readers).
+   */
+  authorizeWorkerConnectionUse(input: {
+    connectorKey: string;
+    connectionId: string;
+    source: string;
+    runId?: string;
+  }): Promise<boolean>;
+  /**
+   * The TRUSTED save-time `{orgId, runBy}` binding source (codex round-0
+   * finding): resolves the CURRENT request's validated admin session to the
+   * install→org binding persisted on instance rows (cinatra#274) — the host
+   * session is the only sanctioned origin for a FRESH binding (the identity
+   * seam's "validated session, never request input" rule). Read-only and
+   * never throws/redirects: resolves `null` when no session/org resolves (a
+   * session-less path keeps the row's existing binding and single-tenant
+   * fallback semantics, exactly the import-era behavior). Returns null
+   * rather than half a binding — both ids or nothing.
+   */
+  resolveTrustedSessionBinding(): Promise<{ orgId: string; runBy: string } | null>;
+  /**
+   * Cross-boundary deny classifier: `true` iff `err` is the host's
+   * `ConnectionUseDeniedError` (a gate DENY — degrade per the caller's
+   * import-era contract; any other error stays fail-loud). Extensions cannot
+   * import the host error class, so denial is identified structurally here.
+   */
+  isConnectionUseDenied(err: unknown): boolean;
 };
 
 /** Host runtime-mode flag (development vs production). */

@@ -9,6 +9,7 @@ import type {
   EmailConnector,
   CrmConnector,
   SocialMediaConnector,
+  HostInstanceConnectionGateService,
 } from "../index";
 
 // P11b — the typed capability-id -> contract-surface map.
@@ -26,6 +27,12 @@ describe("CapabilityContractMap (typed capability-id -> contract surface)", () =
     // The additive provider-registry ids — each resolves to one typed surface.
     expectTypeOf<CapabilityContractMap["crm-provider"]>().toEqualTypeOf<CrmConnector>();
     expectTypeOf<CapabilityContractMap["social-post"]>().toEqualTypeOf<SocialMediaConnector>();
+    // Host-registered per-concern service id (#975 Wave 3 prerequisite, epic
+    // #978) — keyed via `typeof` off the fenced constants object, so the map
+    // entry tracks the one authoritative id string.
+    expectTypeOf<
+      CapabilityContractMap["@cinatra-ai/host:instance-connection-gate"]
+    >().toEqualTypeOf<HostInstanceConnectionGateService>();
   });
 
   it("KnownCapabilityId is the union of the mapped first-party ids (open string is NOT collapsed into it)", () => {
@@ -34,6 +41,7 @@ describe("CapabilityContractMap (typed capability-id -> contract surface)", () =
     expectTypeOf<"email-send">().toMatchTypeOf<KnownCapabilityId>();
     expectTypeOf<"crm-provider">().toMatchTypeOf<KnownCapabilityId>();
     expectTypeOf<"social-post">().toMatchTypeOf<KnownCapabilityId>();
+    expectTypeOf<"@cinatra-ai/host:instance-connection-gate">().toMatchTypeOf<KnownCapabilityId>();
     // …but an arbitrary third-party id is NOT a KnownCapabilityId (stays open).
     expectTypeOf<"some-third-party-cap">().not.toMatchTypeOf<KnownCapabilityId>();
   });

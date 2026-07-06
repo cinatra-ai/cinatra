@@ -51,7 +51,10 @@ import {
 // subpath (host modules are the sanctioned value-importer; see
 // packages/sdk-extensions/src/internal.ts). Used to build
 // RESERVED_SYSTEM_CAPABILITIES below.
-import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
+import {
+  NANGO_SYSTEM_CAPABILITY,
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
+} from "@cinatra-ai/sdk-extensions/internal";
 // The FIRST-PARTY host-build extension set — the packages COMPILED INTO the host
 // image (static bundle). Pure DATA (the connector `import()`s are lazy `load()`
 // thunks in GENERATED_EXTENSION_SERVER_ENTRIES, not this map), so importing it is
@@ -199,7 +202,16 @@ function isFirstPartyPackage(packageName: string): boolean {
  * a specific third-party connector can be re-permitted a specific reserved
  * capability without re-opening the surface to arbitrary marketplace code.
  */
-const RESERVED_SYSTEM_CAPABILITIES: ReadonlySet<string> = new Set<string>([NANGO_SYSTEM_CAPABILITY]);
+const RESERVED_SYSTEM_CAPABILITIES: ReadonlySet<string> = new Set<string>([
+  NANGO_SYSTEM_CAPABILITY,
+  // The per-instance connection use-gate seam (#975 Wave 3, epic #978):
+  // identity-row SEEDING is an authz-adjacent mutation (it establishes the
+  // ownership/grant material the use-gate later evaluates), so the surface is
+  // first-party-only like the credential reader above — a marketplace
+  // extension must not ambiently seed identities or probe authorization
+  // (codex round-0 finding on the instance-connection-gate contract).
+  HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate,
+]);
 
 /** True when `capability` is a host-internal system credential surface that a
  * NON-first-party extension may neither resolve nor register through the

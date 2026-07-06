@@ -233,3 +233,108 @@ export async function enforcePerUserInstanceConnectionUse(input: {
   });
   return identity;
 }
+
+/**
+ * Cross-boundary deny classifier (#975 Wave 3 / epic #978): `true` iff `err`
+ * is the host use-gate's `ConnectionUseDeniedError`. STRUCTURAL (checks the
+ * class's `connectionUseDenied` marker field) rather than `instanceof`, so
+ * this stays SYNCHRONOUS with no static import of the use-gate module — this
+ * seam deliberately keeps the DB/auth module graph out of its load path (see
+ * the LAZY IMPORTS note above), and the classifier is published to extensions
+ * as the `@cinatra-ai/host:instance-connection-gate` service's
+ * `isConnectionUseDenied` member (extensions cannot import the error class).
+ * Keep in sync with the marker on `ConnectionUseDeniedError`
+ * (`@/lib/connection-use-gate`).
+ */
+export function isConnectionUseDeniedError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as { connectionUseDenied?: unknown }).connectionUseDenied === true
+  );
+}
+
+/**
+ * The actor-less in-process WORKER gate (#975 Wave 3 / epic #978): the
+ * youtube-api scraper-mint pattern generalized for any relocated vendor
+ * client whose consumer is an in-process host service with no live actor.
+ *
+ * NO seeding (unlike `enforceInstanceConnectionUse`): a connection with no
+ * identity row FAILS CLOSED to `false` — the actor-less global reader must
+ * never self-heal an ownership claim it cannot ground. A use-gate DENY also
+ * folds to `false` (the deny audit row is durably written by the gate before
+ * it throws); any OTHER error propagates fail-loud. Returns a BARE boolean —
+ * a result record would be truthy even when unauthorized, so `if (await …)`
+ * would misread a deny (codex round-0 finding). The `InternalWorker` actor
+ * is bound to the identity row's ORGANIZATION only (never a fabricated human
+ * / `runAsUserId` — see the `buildInstanceActor` note), so the cross-org
+ * guard and workspace grants evaluate correctly.
+ */
+export async function authorizeWorkerConnectionUse(input: {
+  connectorKey: string;
+  connectionId: string;
+  source: string;
+  runId?: string;
+}): Promise<boolean> {
+  const { readNangoConnectionByNaturalKey } = await import(
+    "@cinatra-ai/extensions/connection-identity-store"
+  );
+  const identity = await readNangoConnectionByNaturalKey(input.connectorKey, input.connectionId);
+  if (!identity) return false;
+  const actor: ActorContext = {
+    principalType: "InternalWorker",
+    principalId: `worker:${input.source}`,
+    organizationId: identity.organizationId ?? undefined,
+    authSource: "worker",
+    policyVersion: POLICY_VERSION,
+  };
+  const { enforceConnectionUse } = await import("@/lib/connection-use-gate");
+  try {
+    await enforceConnectionUse({
+      identity,
+      actor,
+      subjectUserId: undefined,
+      runId: input.runId,
+      source: input.source,
+    });
+  } catch (err) {
+    if (isConnectionUseDeniedError(err)) return false;
+    throw err;
+  }
+  return true;
+}
+
+/**
+ * The TRUSTED save-time `{orgId, runBy}` binding source (#975 Wave 3 / epic
+ * #978, codex round-0 finding): resolves the CURRENT request's validated
+ * admin session to the install→org binding persisted on instance rows
+ * (cinatra#274). This mirrors drupal-api's private
+ * `resolveActorBindingFromSession` EXACTLY — the host session is the only
+ * sanctioned origin for a FRESH binding (the identity seam's "validated
+ * session, never request input" rule), so the relocated vendor clients
+ * resolve it here instead of importing `@/lib/auth-session`.
+ *
+ * - Returns `null` unless BOTH the active organization id and the user id
+ *   resolve — never half a binding.
+ * - NEVER throws or redirects: a session-less call path (local-dev /
+ *   dev-auto-setup, or a request with no cookies) simply yields `null`, so
+ *   the row keeps whatever binding it already had and the resolver falls
+ *   back to single-tenant identity. Read-only — it gates nothing (the
+ *   caller's `requireExtensionAction("manage")` already did).
+ * - Lazy-imports `@/lib/auth-session` (see the LAZY IMPORTS note above).
+ */
+export async function resolveTrustedSessionBinding(): Promise<
+  { orgId: string; runBy: string } | null
+> {
+  try {
+    const { getAuthSession } = await import("@/lib/auth-session");
+    const session = await getAuthSession();
+    const orgId = session?.session?.activeOrganizationId?.trim() || "";
+    const runBy = session?.user?.id?.trim() || "";
+    if (!orgId || !runBy) return null;
+    return { orgId, runBy };
+  } catch {
+    // No request context / headers unavailable / no session — the caller
+    // keeps the existing binding and single-tenant fallback semantics.
+    return null;
+  }
+}

@@ -40,12 +40,20 @@ vi.mock("@/lib/content-editor-run-identity", () => ({
     resolveSingleTenantContentEditorIdentity(...a),
 }));
 
+const getAuthSession = vi.fn();
+vi.mock("@/lib/auth-session", () => ({
+  getAuthSession: (...a: unknown[]) => getAuthSession(...a),
+}));
+
 import {
   resolveOrSeedInstanceIdentity,
   buildInstanceActor,
   enforceInstanceConnectionUse,
   resolveOrSeedPerUserInstanceIdentity,
   enforcePerUserInstanceConnectionUse,
+  authorizeWorkerConnectionUse,
+  isConnectionUseDeniedError,
+  resolveTrustedSessionBinding,
 } from "@/lib/instance-connection-actor";
 
 function identity(over: Partial<NangoConnectionIdentity> = {}): NangoConnectionIdentity {
@@ -275,5 +283,150 @@ describe("per-user (org-less) instance identity — cinatra#967 LinkedIn scope:u
     await expect(
       resolveOrSeedPerUserInstanceIdentity({ connectorKey: "linkedin", connectionId: "li-conn", userId: "user-42" }),
     ).rejects.toThrow(ConnectionIdentityConflictError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #975 Wave 3 prerequisite (epic #978): the actor-less worker gate + the
+// cross-boundary deny classifier the `@cinatra-ai/host:instance-connection-gate`
+// capability service publishes to relocated vendor clients.
+// ---------------------------------------------------------------------------
+
+/** The host use-gate deny, shaped structurally (the marker field is what the
+ * classifier keys on — the real `ConnectionUseDeniedError` carries it as a
+ * class field; this test module mocks `@/lib/connection-use-gate`, so the
+ * marker is reproduced here). */
+class DeniedShape extends Error {
+  readonly connectionUseDenied = true as const;
+}
+
+describe("isConnectionUseDeniedError (cross-boundary deny classifier)", () => {
+  it("classifies an Error carrying the connectionUseDenied marker as a deny", () => {
+    expect(isConnectionUseDeniedError(new DeniedShape("denied"))).toBe(true);
+  });
+
+  it("does NOT classify a generic Error, a non-Error, or a spoofed non-true marker", () => {
+    expect(isConnectionUseDeniedError(new Error("boom"))).toBe(false);
+    expect(isConnectionUseDeniedError({ connectionUseDenied: true })).toBe(false);
+    const nonTrue = new Error("boom") as Error & { connectionUseDenied?: unknown };
+    nonTrue.connectionUseDenied = "yes";
+    expect(isConnectionUseDeniedError(nonTrue)).toBe(false);
+    expect(isConnectionUseDeniedError(undefined)).toBe(false);
+  });
+
+  it("classifies the REAL ConnectionUseDeniedError class (marker stays in sync)", async () => {
+    // Import the ACTUAL module (bypassing this file's mock) so a drift
+    // between the class's marker field and the structural classifier fails
+    // here, not in production.
+    const actual = await vi.importActual<typeof import("@/lib/connection-use-gate")>(
+      "@/lib/connection-use-gate",
+    );
+    const denied = new actual.ConnectionUseDeniedError({ statusCode: 403, reason: "forbidden" });
+    expect(isConnectionUseDeniedError(denied)).toBe(true);
+  });
+});
+
+describe("authorizeWorkerConnectionUse (actor-less worker gate — the youtube-api scraper-mint pattern)", () => {
+  it("fails CLOSED (false) when NO identity row exists — never seeds one", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValue(null);
+
+    const result = await authorizeWorkerConnectionUse({
+      connectorKey: "youtube",
+      connectionId: "yt-conn",
+      source: "media-feeds-scraper",
+    });
+
+    expect(result).toBe(false);
+    expect(registerSavedConnectionIdentity).not.toHaveBeenCalled();
+    expect(resolveSingleTenantContentEditorIdentity).not.toHaveBeenCalled();
+    expect(enforceConnectionUse).not.toHaveBeenCalled();
+  });
+
+  it("threads an ORG-BOUND InternalWorker actor (no runAsUserId, no subjectUserId) and authorizes on allow", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValue(identity({ organizationId: "org-7" }));
+
+    const result = await authorizeWorkerConnectionUse({
+      connectorKey: "youtube",
+      connectionId: "yt-conn",
+      source: "media-feeds-scraper",
+      runId: "run-1",
+    });
+
+    expect(result).toBe(true);
+    const call = (enforceConnectionUse.mock.calls[0] as unknown[])[0] as {
+      actor: { principalType: string; principalId: string; organizationId?: string; runAsUserId?: string };
+      subjectUserId?: string;
+      runId?: string;
+      source?: string;
+    };
+    expect(call.actor).toMatchObject({
+      principalType: "InternalWorker",
+      principalId: "worker:media-feeds-scraper",
+      organizationId: "org-7",
+    });
+    expect(call.actor.runAsUserId).toBeUndefined();
+    expect(call.subjectUserId).toBeUndefined();
+    expect(call.runId).toBe("run-1");
+    expect(call.source).toBe("media-feeds-scraper");
+  });
+
+  it("folds a use-gate DENY to a bare false (the gate audited before throwing) — falsy so `if (await …)` reads a deny correctly", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValue(identity());
+    enforceConnectionUse.mockRejectedValueOnce(new DeniedShape("denied"));
+
+    const result = await authorizeWorkerConnectionUse({
+      connectorKey: "youtube",
+      connectionId: "yt-conn",
+      source: "media-feeds-scraper",
+    });
+
+    expect(result).toBe(false);
+  });
+
+  it("rethrows an UNEXPECTED error fail-loud (never folded to a boolean)", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValue(identity());
+    enforceConnectionUse.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(
+      authorizeWorkerConnectionUse({
+        connectorKey: "youtube",
+        connectionId: "yt-conn",
+        source: "media-feeds-scraper",
+      }),
+    ).rejects.toThrow("db down");
+  });
+});
+
+describe("resolveTrustedSessionBinding (the trusted FRESH-binding source — codex round-0 finding)", () => {
+  it("resolves {orgId, runBy} from the validated session (both ids required)", async () => {
+    getAuthSession.mockResolvedValue({
+      session: { activeOrganizationId: "org-5" },
+      user: { id: "admin-5" },
+    });
+
+    await expect(resolveTrustedSessionBinding()).resolves.toEqual({
+      orgId: "org-5",
+      runBy: "admin-5",
+    });
+  });
+
+  it("returns null — never half a binding — when the org or user id is missing/blank", async () => {
+    getAuthSession.mockResolvedValue({
+      session: { activeOrganizationId: "  " },
+      user: { id: "admin-5" },
+    });
+    await expect(resolveTrustedSessionBinding()).resolves.toBeNull();
+
+    getAuthSession.mockResolvedValue({ session: {}, user: { id: "admin-5" } });
+    await expect(resolveTrustedSessionBinding()).resolves.toBeNull();
+
+    getAuthSession.mockResolvedValue(null);
+    await expect(resolveTrustedSessionBinding()).resolves.toBeNull();
+  });
+
+  it("NEVER throws: a session-less / no-request-context path yields null (import-era drupal-api semantics)", async () => {
+    getAuthSession.mockRejectedValue(new Error("headers() called outside a request scope"));
+
+    await expect(resolveTrustedSessionBinding()).resolves.toBeNull();
   });
 });
