@@ -61,7 +61,19 @@ import type {
 } from "./types";
 import type { ExternalFreshnessMap } from "./eligibility";
 
-const { hashInputData, computeChecksum } = __internals;
+// DEFERRED reads of the canonical-writer internals — never a module-scope
+// destructure: this module sits on an import cycle with canonical-writer
+// (via the @/lib/database hub), so depending on which route entry evaluates
+// the shared chunk first, this module can run BEFORE canonical-writer's
+// `__internals` const initializes. A module-scope `const { … } = __internals`
+// then TDZ-crashes `next build` page-data collection ("Cannot access 'K'
+// before initialization") for whichever route happens to win the race —
+// surfaced when cinatra#986 added new route entries into the shared graph.
+// Reading through the live import binding at CALL time is always safe.
+const hashInputData: (typeof __internals)["hashInputData"] = (...args) =>
+  __internals.hashInputData(...args);
+const computeChecksum: (typeof __internals)["computeChecksum"] = (...args) =>
+  __internals.computeChecksum(...args);
 
 export type RestoreChangeSetInput = {
   changeSetId: string;

@@ -90,10 +90,23 @@ const PUBLIC_EXACT_PATHS = [
 // contract (real components mounted with deterministic fixtures; no DB, no
 // user data); its Playwright suite runs in the same production-standalone
 // design-visual-verify harness.
+// "/design-fixtures/conformance/seeded" (cinatra#986): the SEEDED
+// data-contract harness — real components rendered from the run-namespaced
+// seeded fixture kit (deterministic fixture rows only; no user data). Its
+// Playwright suite runs in the same production-standalone harness. Unlike its
+// siblings it READS the canonical installed_extension store (fixture rows the
+// seed endpoint provisioned); it exposes no user data.
+// "/design-fixtures/conformance/seed" (cinatra#986): the seeded-fixture
+// provisioning endpoint. The handler additionally SELF-GUARDS with the same
+// non-production/CINATRA_E2E_SETUP_BYPASS contract and only ever writes
+// deterministic fixture rows inside the @cinatra-e2e/<runId>-- namespace
+// through the real extension lifecycle primitive.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
   "/design-fixtures/conformance",
+  "/design-fixtures/conformance/seeded",
+  "/design-fixtures/conformance/seed",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

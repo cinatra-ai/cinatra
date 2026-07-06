@@ -1,35 +1,23 @@
 {
-  "$comment": "SHRINK-ONLY coverage-ratchet allowlist (cinatra#985). A manifest surface listed here is exempt from functional-acceptance coverage FOR NOW; every unlisted manifest surface without a mapped contract is a RED. CI (scripts/design/check-conformance-ratchet.mjs) enforces monotonicity against the PR base: entries may be REMOVED (as coverage lands) but never added or re-added. Each entry names the manifest it belongs to and why it is not yet covered.",
+  "$comment": "SHRINK-ONLY coverage-ratchet allowlist (cinatra#985; aspect granularity since cinatra#986). An entry WITHOUT `aspects` exempts the whole surface from functional-acceptance coverage FOR NOW; an entry WITH `aspects` (\"field:<name>\" / \"action:<name>\" / \"state:<state>\") exempts ONLY those aspects of an otherwise-covered surface — every other annotated field binding, action, and state variant with no assertion is a RED. CI (scripts/design/check-conformance-ratchet.mjs) enforces monotonicity against the PR base at (surface, aspect) granularity: entries/aspects may be REMOVED (as coverage lands) or a whole-surface entry NARROWED to aspects, but never added, re-added, or widened. Each entry names the manifest it belongs to and why it is not yet covered.",
   "allow": [
     {
       "manifest": "app-extensions",
       "surface": "extension-listing-grid",
-      "reason": "Grid empty state exists (ExtensionsMarketplaceClient); the manifest also requires error + loading variants which the real route does not yet render as distinct surfaces — needs the seeded-fixture harness of cinatra#986."
-    },
-    {
-      "manifest": "app-extensions",
-      "surface": "extension-detail-modal",
-      "reason": "The SV detail modal already has an assertion-based Playwright guard (tests/e2e/design/marketplace-detail-modal.spec.ts, cinatra#989) but is not yet driven by the manifest contract; fold it into this suite next."
-    },
-    {
-      "manifest": "app-extensions",
-      "surface": "installed-extensions-filter",
-      "reason": "Status-filter control lives inside the server RegistryCatalogScreen; needs a fixture mount before its filter-status -> filtered action is assertable on the production standalone boot."
+      "aspects": ["state:error"],
+      "reason": "Marketplace browse surfaces storefront failures LOUDLY by design (src/lib/marketplace-browse.ts throws; no in-surface error treatment exists on the route) — cover the error variant when the surface gains a real error presentation. empty/loading + exact cardinality are covered on the seeded harness (cinatra#986)."
     },
     {
       "manifest": "app-extensions",
       "surface": "installed-extensions-list",
-      "reason": "Installed list (SVI cards) renders from DB reads in RegistryCatalogScreen; needs the seeded-fixture data path of cinatra#986 for empty/error/loading variants."
-    },
-    {
-      "manifest": "app-connectors",
-      "surface": "connector-connection-filter",
-      "reason": "Connectors client (packages/connectors) not yet mounted in the conformance harness; cover with the connector-grid fixture mount."
+      "aspects": ["state:error", "state:loading"],
+      "reason": "The §VI screen renders server-side with no distinct in-surface error or loading treatment (reads throw to the route boundary; no streaming fallback exists in RegistryCatalogScreen) — cover when those presentations exist. empty + exact cardinality + the status filter are covered from the LIVE seeded canonical store (cinatra#986)."
     },
     {
       "manifest": "app-connectors",
       "surface": "connector-grid",
-      "reason": "Connector grid renders from the extension catalog + readiness probes; needs a fixture mount (and its empty/error/loading variants) before honest assertion."
+      "aspects": ["state:empty", "state:loading"],
+      "reason": "/connectors renders a bare grid when zero cards match (ConnectorsClient has no designed empty state) and is server-rendered without a streaming fallback — cover when those presentations exist. The name binding, exact cardinality, the connection filter, and the fail-soft error card (cinatra#110 containment) are covered on the seeded harness (cinatra#986)."
     }
   ]
 }

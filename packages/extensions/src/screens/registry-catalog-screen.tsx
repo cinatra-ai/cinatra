@@ -1,4 +1,4 @@
-import { Archive, Package, Settings, Upload } from "lucide-react";
+import { Package, Settings, Upload } from "lucide-react";
 import Link from "next/link";
 import { requireAuthSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -40,6 +40,9 @@ import type { AgentTemplateRecord } from "@cinatra-ai/agents";
 // an installed-but-unlisted or unscoped package can never dead-end on a 404
 // (the modal renders its own graceful `notfound` state instead).
 import { MarketplaceDetailModal } from "./marketplace-detail-modal";
+// §VI empty states — extracted (cinatra#986) so the design-conformance seeded
+// harness renders the SAME presentations this screen does.
+import { ActiveEmptyState, ArchivedEmptyState } from "./installed-empty-states";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { marketplaceDetailHref } from "./marketplace-card-model";
 import { resolveInstalledVendorName } from "./installed-vendor";
@@ -74,37 +77,6 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 
-// ---------------------------------------------------------------------------
-// Empty state sub-components
-// ---------------------------------------------------------------------------
-
-function ActiveEmptyState() {
-  return (
-    <div className="soft-panel rounded-card flex flex-col items-center justify-center py-16 text-center gap-3">
-      <Package className="h-8 w-8 text-muted-foreground" />
-      <p className="font-semibold text-foreground">No active extensions</p>
-      <p className="text-sm text-muted-foreground">
-        No extensions are installed yet. Browse the marketplace to add one.
-      </p>
-      <Button asChild variant="outline" size="sm">
-        <Link href="/configuration/marketplace">Browse marketplace</Link>
-      </Button>
-    </div>
-  );
-}
-
-function ArchivedEmptyState() {
-  return (
-    <div className="soft-panel rounded-card flex flex-col items-center justify-center py-16 text-center gap-3">
-      <Archive className="h-8 w-8 text-muted-foreground" />
-      <p className="font-semibold text-foreground">No archived extensions</p>
-      <p className="text-sm text-muted-foreground">
-        Extensions uninstalled after first use appear here. Their run history
-        remains intact.
-      </p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Card row model (cinatra#948)

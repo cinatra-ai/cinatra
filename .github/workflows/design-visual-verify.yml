@@ -14,8 +14,17 @@
 # SHRINK-ONLY (ratchet step below). A covered surface losing its stable
 # data-testid contract attribute is RED (testid step below).
 #
-# The fixture routes are STATIC (no DB queries), so this workflow does NOT
-# spin up Postgres or run `cinatra setup branch`.
+# Seeded data-contract gate (cinatra#986): the suite additionally asserts
+# BOUND FIELDS + exact counts + forced state variants against a deterministic
+# seeded fixture kit. The installed-extensions surfaces genuinely render from
+# the canonical installed_extension store, so this job runs an EPHEMERAL
+# Postgres service (the dashboard-live-verify pattern) and the suite
+# provisions run-namespaced rows through /design-fixtures/conformance/seed
+# (the real lifecycle primitive; idempotent + converging, so retries cannot
+# cross-contaminate exact-count assertions). The original fixture routes stay
+# static; `cinatra setup branch` is still NOT required — boot's own
+# core-migrations + ensurePostgresSchema create the app schema on the fresh
+# service DB.
 #
 # Pixel threshold: maxDiffPixelRatio 0.005 + maxDiffPixels 800 (configured
 # in tests/e2e/config/design.config.ts). axe-core gate: zero serious/critical
@@ -57,6 +66,12 @@ on:
       - "src/lib/auth-route-guard.ts"
       - "src/components/extension-card-icon-image.tsx"
       - "src/components/extension-kind-emblem.tsx"
+      # Seeded data-contract surfaces (cinatra#986): the §VI installed card +
+      # URL-driven status filter, and the /connectors client/badge family.
+      - "src/components/extensions/installed-extension-card.tsx"
+      - "src/components/extensions/extensions-tab-select.tsx"
+      - "packages/connectors/src/**"
+      - "packages/connectors/package.json"
       - "scripts/design/**"
       - "tests/e2e/config/design.config.ts"
       - "tests/e2e/config/base.ts"
@@ -84,10 +99,11 @@ jobs:
     # to retry FOREVER — so with no Redis, register() never resolves and the
     # standalone server accepts TCP connections but never responds (the
     # /design-fixtures readiness curl then times out at 5s/poll). A throwaway
-    # Redis is enough; nothing reads the queue here. (Postgres is NOT needed:
-    # the boot's DB calls are all try/catch-wrapped and fail fast against the
-    # placeholder, and production runtime mode skips the dev-only on-disk
-    # extension fs-scans.)
+    # Redis is enough; nothing reads the queue here. Postgres (added in
+    # cinatra#986) exists ONLY for the seeded data-contract surfaces — the
+    # boot still tolerates it being empty (core-migrations +
+    # ensurePostgresSchema bootstrap the schema; production runtime mode
+    # skips the dev-only on-disk extension fs-scans).
     services:
       redis:
         image: redis:7
@@ -95,6 +111,26 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      # Ephemeral Postgres for the seeded data-contract surfaces
+      # (cinatra#986): installed-extensions-list/-filter render from the REAL
+      # canonical installed_extension store, provisioned per run through the
+      # seed endpoint. Job-scoped and thrown away — per-run isolation is
+      # structural in CI; the run-id namespace (CINATRA_CONFORMANCE_RUN_ID
+      # below) additionally isolates any shared/local database. Mirrors the
+      # dashboard-live-verify service block (same image/port pattern).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -107,11 +143,19 @@ jobs:
       # bypass (src/lib/setup-wizard.ts) is required — otherwise the readiness
       # curl gets HTTP 200 from the redirect/loading shell and Playwright
       # snapshots /setup instead of the fixtures. Matches dashboard-live-verify.
+      # It ALSO authorizes the seeded harness route + seed endpoint under the
+      # production build (cinatra#986; same contract, src/lib/auth-route-guard.ts).
       CINATRA_E2E_SETUP_BYPASS: "true"
-      # The route does not query a DB, but Next.js boots a session helper
-      # against Better Auth env vars. Provide harmless placeholders so the
-      # server starts cleanly under CI's stricter env-check.
-      SUPABASE_DB_URL: postgresql://placeholder:placeholder@127.0.0.1:65535/placeholder
+      # REAL ephemeral database (cinatra#986): the seeded data-contract
+      # surfaces read the canonical installed_extension store. Dedicated
+      # schema name so nothing collides with other suites' conventions.
+      # Boot creates the schema itself (core-migrations + ensurePostgresSchema
+      # — the migrations dir is copied next to the standalone server below).
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      SUPABASE_SCHEMA: cinatra_e2e_design
+      # Run-namespace for the seeded fixture kit: retries of THIS workflow run
+      # share (and converge) one namespace; a re-run attempt gets a fresh one.
+      CINATRA_CONFORMANCE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
       BETTER_AUTH_SECRET: design-visual-verify-placeholder-secret-not-used-by-static-route
       # required-env-preflight (app-boot deploy-robustness) refuses to boot
       # without an encryption key; the /design-fixtures route never touches
@@ -200,6 +244,15 @@ jobs:
       - name: install playwright chromium
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Provision Better Auth tables (public schema)
+        # With a REAL service DB (cinatra#986) the boot's instrumentation hook
+        # queries public.user and fails on relation-not-exist (the old
+        # placeholder DB failed the CONNECTION, which the boot tolerates).
+        # Apply the committed idempotent snapshot of Better Auth's public.*
+        # tables — same step and rationale as dashboard-live-verify; the
+        # cinatra app schema is created by boot itself.
+        run: node scripts/apply-public-schema.mjs
+
       - name: Add CI build swap (default-runner only)
         # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
         # job to a larger runner). A 4G swapfile absorbs `pnpm build` page-data
@@ -227,11 +280,15 @@ jobs:
         run: pnpm build
 
       - name: Start standalone server
-        # /design-fixtures is static (no DB); the placeholder SUPABASE_DB_URL is
-        # enough. Run server.js directly (instant boot from the prebuilt bundle).
+        # Run server.js directly (instant boot from the prebuilt bundle).
+        # migrations/ is copied next to the server exactly like the Dockerfile
+        # COPYs it to /app (cinatra#986): the boot's core-migrations phase then
+        # bootstraps the versioned app schema on the fresh service Postgres,
+        # the same way a production image boot would.
         run: |
           cp -r .next/static .next/standalone/.next/static
           [ -d public ] && cp -r public .next/standalone/public || true
+          [ -d migrations ] && cp -r migrations .next/standalone/migrations || true
           (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1) &
           echo "standalone server launched as PID $!"
 

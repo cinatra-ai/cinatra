@@ -1,8 +1,9 @@
-# Design-conformance functional acceptance (cinatra#985)
+# Design-conformance functional acceptance (cinatra#985 + cinatra#986)
 
 Manifest-driven functional-acceptance gate for the in-app design surfaces —
 the L2b consumer of the conformance manifests generated from the annotated
-design specs (the design-system source of truth, L2a). Runs inside the existing
+design specs (the design-system source of truth, L2a) — extended by the
+seeded data-contract gate (cinatra#986). Runs inside the existing
 `design-visual-verify` workflow (same production-standalone boot); pixel-diff
 + axe remain supporting evidence, never the sole gate.
 
@@ -11,17 +12,54 @@ design specs (the design-system source of truth, L2a). Runs inside the existing
 For every surface in the pinned manifests, either:
 
 - a **driver** exists (`contract.ts`) and the suite
-  (`functional-acceptance.spec.ts`) asserts on the harness route
-  `/design-fixtures/conformance` that required **fields** render bound to the
-  right data, **actions** produce their specified outcomes, and required
-  **state variants** exist; or
-- the surface is **allowlisted** (`allowlist.json`) — a shrink-only ratchet;
-- otherwise the gate is **RED** (unmapped manifest surface).
+  (`functional-acceptance.spec.ts`) asserts on a harness route
+  (`/design-fixtures/conformance`, or `/design-fixtures/conformance/seeded`
+  for the seeded data-contract surfaces) that required **fields** render
+  bound to the right data, **actions** produce their specified outcomes, and
+  required **state variants** exist; or
+- the surface — or, since cinatra#986, an individual **aspect** of it — is
+  **allowlisted** (`allowlist.json`) — a shrink-only ratchet;
+- otherwise the gate is **RED** (unmapped manifest surface / an annotated
+  field binding, action, or state variant with no assertion).
 
-The harness mounts the REAL components through the REAL state machinery
+The harnesses mount the REAL components through the REAL state machinery
 (`resolveMarketplaceCardCta`, `deriveExtensionCompatState`, the pending-aware
-install form); the only substitution is the bound server action. Server-side
-install effects are owned by the seeded-fixture gate (cinatra#986).
+install form, `resolveReadinessFailSoft`, the URL-driven server filters); the
+only substitutions are the bound server action (cards/modal), the storefront
+detail fetch (injected loader, §V fixture convention), and — on the seeded
+harness — the session/actor visibility scoping plus the per-kind display
+hydration (native descriptor sources are build-time catalogs, not seedable
+data). Every substitution is documented at its mount.
+
+## Seeded fixture kit (cinatra#986)
+
+`src/app/design-fixtures/conformance/seed-data.ts` is the deterministic,
+dependency-free kit behind `/design-fixtures/conformance/seeded`:
+
+- **Anti-lookalike seeds** — competing sources get DISTINCT values (every
+  `displayName` shares no token with its `packageName`/`slug`), so a
+  wrong-source binding (e.g. rendering the package slug where the manifest
+  binds `displayName`) is a red, never a lookalike pass.
+- **Exact cardinality** — every cardinality-bearing surface (the marketplace
+  grid, the installed list per status, the connector grid per connection
+  state) asserts an EXACT count against the kit, and counts of confusable
+  collections are pairwise distinct (7 / 4 / 2 / 3 / 5).
+- **Forced state variants** — empty (empty catalog / never-provisioned
+  namespace), loading (the REAL Suspense fallback over a delayed source,
+  `?variant=loading`), error (the REAL cinatra#110 fail-soft containment on a
+  throwing readiness probe), and per-kind variants (the #985 card surfaces).
+
+**DB-backed surfaces:** installed-extensions-list/-filter render from the
+REAL canonical `installed_extension` store. CI runs an ephemeral Postgres
+service; `POST /design-fixtures/conformance/seed { runId }` provisions the
+`@cinatra-e2e/<runId>--` namespace through the REAL lifecycle primitive.
+Provisioning is idempotent and CONVERGING (extra/stale namespace rows are
+removed), so retries and shards sharing a run id cannot cross-contaminate
+exact-count assertions; `DELETE` with the same body cleans a namespace up.
+The run id comes from `CINATRA_CONFORMANCE_RUN_ID` (CI: run id + attempt;
+locally "local"). The endpoint refuses to exist in production unless the
+documented `CINATRA_E2E_SETUP_BYPASS` e2e switch is set (the same
+reachability contract as the fixture routes, `src/lib/auth-route-guard.ts`).
 
 ## Spec pinning (`conformance-pins.json`)
 
@@ -65,10 +103,16 @@ Harness-only instrumentation (fixture route, not real components):
 
 ## Coverage ratchet (`allowlist.json`)
 
-Shrink-only: `scripts/design/check-conformance-ratchet.mjs` compares HEAD
-against the PR base and fails on any added (or re-added) entry. To cover a
-surface: add the driver + harness mount + testid contract, and REMOVE its
-allowlist entry in the same PR.
+Shrink-only, at **(surface, aspect)** granularity since cinatra#986: an entry
+without `aspects` exempts the whole surface; an entry with
+`aspects: ["field:<name>" | "action:<name>" | "state:<state>", ...]` exempts
+ONLY those aspects of an otherwise-covered surface — every other annotated
+field binding, action, or state variant with no assertion is a red.
+`scripts/design/check-conformance-ratchet.mjs` compares HEAD against the PR
+base and fails on any added or WIDENED exemption; narrowing a whole-surface
+entry to aspects, and removing entries/aspects, always passes. To cover a
+surface (or aspect): add the driver + harness mount + testid contract, and
+REMOVE the corresponding exemption in the same PR.
 
 ## Running locally
 
@@ -77,3 +121,10 @@ node scripts/design/check-conformance-testids.mjs
 node scripts/design/check-conformance-ratchet.mjs origin/main
 pnpm test:e2e:design   # runs pixel-diff + this suite (boots pnpm dev locally)
 ```
+
+The seeded data-contract surfaces additionally need a reachable
+`SUPABASE_DB_URL` (the suite auto-provisions the "local" run namespace via
+the seed endpoint). Without one, the seeded harness renders an explicit
+`installed-extensions-store-unreachable` panel and only the DB-backed
+surfaces fail (with that diagnosable reason); the dataless surfaces still
+pass.

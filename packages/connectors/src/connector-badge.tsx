@@ -38,6 +38,8 @@ export function ConnectorBadge({ connected, label }: { connected: boolean; label
     return (
       <Badge
         variant="success"
+        data-testid="connector-badge"
+        data-connected=""
         className="bg-success text-success-foreground dark:bg-success font-semibold"
         aria-label={label ? `Connected (${label})` : "Connected"}
       >
@@ -49,6 +51,7 @@ export function ConnectorBadge({ connected, label }: { connected: boolean; label
   return (
     <Badge
       variant="destructive"
+      data-testid="connector-badge"
       className="bg-destructive text-destructive-foreground dark:bg-destructive"
       aria-label="Not connected"
     >
