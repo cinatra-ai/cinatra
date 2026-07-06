@@ -225,6 +225,29 @@ export type HostDrupalMcpService = {
       isPrivate: boolean;
     }>
   >;
+  // --- dev-boot provisioning surface (cinatra#976, epic #978 W-D) -----------
+  // The connector's `dev-setup.ts` hook resolves this service and uses these
+  // members to wire the LOCAL docker Drupal. ALL OPTIONAL + pure-additive: the
+  // host provider (`register-host-connector-services.ts`, typed with
+  // `satisfies HostDrupalMcpService`) implements them only once the hook is
+  // wired, and the hook probes each with `?.` / a `typeof … === "function"`
+  // guard and soft-skips when absent (older host). Dev-only; never a
+  // production affordance.
+  /** WRITER (dev/localhost) — persist a COMPLETE local-dev instance row WITHOUT
+   * any Nango side effect (the no-Nango first-wire fallback). */
+  devPersistLocalInstanceUnvalidated?(input: {
+    id?: string;
+    name: string;
+    siteUrl: string;
+  }): Promise<{ id: string }>;
+  /** Probe `/_mcp_tools` with an explicit stored Bearer, cache-bypassing (the
+   * reconcile's reuse-vs-rotate decision keys on this). */
+  devProbeWithBearer?(
+    siteUrl: string,
+    bearer: string,
+  ): Promise<"registered" | "not_installed" | "auth_error" | "unreachable">;
+  /** Evict the URL-keyed MCP probe cache after a credential rotate. */
+  devInvalidateProbeCache?(siteUrl: string): void;
 };
 
 /** Widget AUTH-CONFIG storage for the Drupal assistant widget
@@ -358,6 +381,33 @@ export type HostWordPressMcpService = {
       subscriptionId: string,
     ): Promise<void>;
   };
+  // --- dev-boot provisioning surface (cinatra#976, epic #978 W-D) -----------
+  // The connector's `dev-setup.ts` hook resolves this service and uses these
+  // members to wire the LOCAL docker WordPress. ALL OPTIONAL + pure-additive:
+  // the host provider (`register-host-connector-services.ts`, typed with
+  // `satisfies HostWordPressMcpService`) implements them only once the hook is
+  // wired, and the hook probes each with `?.` / a `typeof … === "function"`
+  // guard and soft-skips when absent (older host). Dev-only; never a
+  // production affordance.
+  /** WRITER (dev) — network-validated instance persist + best-effort Nango
+   * import (the dev mint/rotate path). Returns the persisted id + the Nango
+   * connection id. */
+  devSaveInstance?(input: {
+    id?: string;
+    siteUrl: string;
+    username: string;
+    applicationPassword: string;
+  }): Promise<{ id: string; connectionId?: string }>;
+  /** WRITER (dev/localhost) — persist a COMPLETE local-dev instance row when the
+   * validated save cannot pass (the first-wire resilience fallback). */
+  devPersistLocalInstanceUnvalidated?(input: {
+    id?: string;
+    siteUrl: string;
+    username: string;
+    applicationPassword: string;
+  }): Promise<{ id: string; connectionId?: string }>;
+  /** Evict the URL-keyed MCP probe cache after a credential rotate. */
+  devInvalidateProbeCache?(siteUrl: string): void;
 };
 
 /** WordPress post/media CONTENT surface (`@/lib/wordpress-api` stays
@@ -817,6 +867,12 @@ export type HostExternalMcpRegistryService = {
    * is unconfigured, the row has no connection, or resolution fails —
    * callers treat null as "no auth header"). */
   resolveBearer(server: ExternalMcpServerRowShape): Promise<string | null>;
+  /** The shared external-MCP Nango provider-config key (published as DATA so a
+   * dev-boot hook imports its minted bearer under the SAME key the row's
+   * `resolveBearer` reads — never hardcoded connector-side). OPTIONAL +
+   * pure-additive (cinatra#976, epic #978 W-D): the Twenty `dev-setup.ts` hook
+   * treats absence as "older host" and soft-skips the mint. */
+  nangoProviderConfigKey?: string;
 };
 
 /** Auth headers for the in-app MCP self-client. */
