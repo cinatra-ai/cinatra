@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app.html",
+  "contentHash": "sha256:3b3f049e0849f6953fc95935757a3c19f3266dd9ba067479f1b01428748d3159",
+  "surfaces": [
+    {
+      "id": "status-pills",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "button-variants",
+      "fields": [],
+      "actions": [],
+      "states": []
+    }
+  ]
+}

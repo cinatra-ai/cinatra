@@ -1,0 +1,35 @@
+{
+  "$comment": "SHRINK-ONLY coverage-ratchet allowlist (cinatra#985). A manifest surface listed here is exempt from functional-acceptance coverage FOR NOW; every unlisted manifest surface without a mapped contract is a RED. CI (scripts/design/check-conformance-ratchet.mjs) enforces monotonicity against the PR base: entries may be REMOVED (as coverage lands) but never added or re-added. Each entry names the manifest it belongs to and why it is not yet covered.",
+  "allow": [
+    {
+      "manifest": "app-extensions",
+      "surface": "extension-listing-grid",
+      "reason": "Grid empty state exists (ExtensionsMarketplaceClient); the manifest also requires error + loading variants which the real route does not yet render as distinct surfaces — needs the seeded-fixture harness of cinatra#986."
+    },
+    {
+      "manifest": "app-extensions",
+      "surface": "extension-detail-modal",
+      "reason": "The SV detail modal already has an assertion-based Playwright guard (tests/e2e/design/marketplace-detail-modal.spec.ts, cinatra#989) but is not yet driven by the manifest contract; fold it into this suite next."
+    },
+    {
+      "manifest": "app-extensions",
+      "surface": "installed-extensions-filter",
+      "reason": "Status-filter control lives inside the server RegistryCatalogScreen; needs a fixture mount before its filter-status -> filtered action is assertable on the production standalone boot."
+    },
+    {
+      "manifest": "app-extensions",
+      "surface": "installed-extensions-list",
+      "reason": "Installed list (SVI cards) renders from DB reads in RegistryCatalogScreen; needs the seeded-fixture data path of cinatra#986 for empty/error/loading variants."
+    },
+    {
+      "manifest": "app-connectors",
+      "surface": "connector-connection-filter",
+      "reason": "Connectors client (packages/connectors) not yet mounted in the conformance harness; cover with the connector-grid fixture mount."
+    },
+    {
+      "manifest": "app-connectors",
+      "surface": "connector-grid",
+      "reason": "Connector grid renders from the extension catalog + readiness probes; needs a fixture mount (and its empty/error/loading variants) before honest assertion."
+    }
+  ]
+}

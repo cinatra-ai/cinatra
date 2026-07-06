@@ -236,6 +236,9 @@ export async function ExtensionsMarketplaceScreen({
         card={card}
         accentColor={deriveExtensionAccent(card.packageName)}
         ctaControl={ctaControl}
+        // Conformance contract (cinatra#985): expose the resolved six-state
+        // CTA identity on the card's CTA slot (data-cta-state).
+        ctaState={cta.state}
         detailsControl={
           // More details opens the in-app extension-detail modal (embedding
           // the marketplace listing detail) instead of navigating to the

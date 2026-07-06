@@ -272,6 +272,10 @@
       "@cinatra-ai/extensions": ["./packages/extensions/src/index.ts"],
       "@cinatra-ai/extensions/screens": ["./packages/extensions/src/screens/index.ts"],
       "@cinatra-ai/extensions/screens/marketplace-detail-modal": ["./packages/extensions/src/screens/marketplace-detail-modal.tsx"],
+      "@cinatra-ai/extensions/screens/marketplace-listing-card": ["./packages/extensions/src/screens/marketplace-listing-card.tsx"],
+      "@cinatra-ai/extensions/screens/marketplace-install-form": ["./packages/extensions/src/screens/marketplace-install-form.tsx"],
+      "@cinatra-ai/extensions/screens/marketplace-card-model": ["./packages/extensions/src/screens/marketplace-card-model.ts"],
+      "@cinatra-ai/extensions/screens/marketplace-failure-copy": ["./packages/extensions/src/screens/marketplace-failure-copy.ts"],
       "@cinatra-ai/extensions/mcp-handlers": ["./packages/extensions/src/mcp/handlers.ts"],
       "@cinatra-ai/extensions/mcp-module": ["./packages/extensions/src/mcp/module.ts"],
       "@cinatra-ai/extensions/actions": ["./packages/extensions/src/actions.ts"],
@@ -399,6 +403,7 @@
       "@cinatra-ai/objects/mcp-handlers": ["./packages/objects/src/mcp/handlers.ts"],
       "@cinatra-ai/objects/classifier-signals": ["./packages/objects/src/classifier-signals.ts"],
       "@cinatra-ai/registries": ["./packages/registries/src/index.ts"],
+      "@cinatra-ai/registries/src/version-compare": ["./packages/registries/src/version-compare.ts"],
       "@cinatra-ai/registries/types": ["./packages/registries/src/types.ts"],
       "@cinatra-ai/registries/install": ["./packages/registries/src/install/install-with-deps.ts"]
     }

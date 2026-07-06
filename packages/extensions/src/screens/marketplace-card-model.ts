@@ -10,7 +10,12 @@
  */
 
 import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
-import { comparePluginVersions } from "@cinatra-ai/registries";
+// Deep module import ON PURPOSE (cinatra#985): this model is client-safe (the
+// conformance harness renders the six-state CTA resolver in the browser), but
+// the registries BARREL pulls pacote/node-gyp (child_process reach) — via the
+// barrel, any client import of this file breaks `pnpm build`. version-compare
+// is the pure semver helper only.
+import { comparePluginVersions } from "@cinatra-ai/registries/src/version-compare";
 import type { ExtensionCompatState } from "@/lib/extension-compat-badge";
 
 export type MarketplaceCardKind =

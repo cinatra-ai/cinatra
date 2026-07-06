@@ -1,0 +1,151 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-extensions.html",
+  "contentHash": "sha256:08aa0a0ee3f83bf0add4511a2185c849ca2add8d642d064749ec3c673b450d1d",
+  "surfaces": [
+    {
+      "id": "extension-listing-grid",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "extension-listing-card-available",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "install",
+          "outcome": "installed"
+        }
+      ],
+      "states": [
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "extension-listing-card-installed",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "kind:skill"
+      ]
+    },
+    {
+      "id": "extension-listing-card-update",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "update",
+          "outcome": "installed-latest"
+        }
+      ],
+      "states": [
+        "kind:workflow"
+      ]
+    },
+    {
+      "id": "extension-listing-card-restore",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "restore",
+          "outcome": "installed"
+        }
+      ],
+      "states": [
+        "kind:connector"
+      ]
+    },
+    {
+      "id": "extension-listing-card-installing",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "kind:artifact",
+        "loading"
+      ]
+    },
+    {
+      "id": "extension-listing-card-incompatible",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "extension-detail-modal",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "install",
+          "outcome": "installed"
+        }
+      ],
+      "states": [
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "installed-extensions-filter",
+      "fields": [],
+      "actions": [
+        {
+          "action": "filter-status",
+          "outcome": "filtered"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "installed-extensions-list",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    }
+  ]
+}

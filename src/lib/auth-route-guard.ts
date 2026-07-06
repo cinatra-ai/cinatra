@@ -85,9 +85,15 @@ const PUBLIC_EXACT_PATHS = [
 // detail-modal seeded-fixture route — same static, dataless, seeded-render
 // contract as the index page (its Playwright guard runs in the same
 // production-standalone design-visual-verify harness).
+// "/design-fixtures/conformance" (cinatra#985): the design-conformance
+// functional-acceptance harness — same static, dataless, seeded-render
+// contract (real components mounted with deterministic fixtures; no DB, no
+// user data); its Playwright suite runs in the same production-standalone
+// design-visual-verify harness.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
+  "/design-fixtures/conformance",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

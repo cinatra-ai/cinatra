@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-connectors.html",
+  "contentHash": "sha256:ed8480def054c75b92a3f79b35727061e7fb8aa2dae5391b4312a672075ad70d",
+  "surfaces": [
+    {
+      "id": "connector-connection-filter",
+      "fields": [],
+      "actions": [
+        {
+          "action": "filter-connection",
+          "outcome": "filtered"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "connector-grid",
+      "fields": [
+        {
+          "field": "name",
+          "source": "connector.displayName"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    }
+  ]
+}

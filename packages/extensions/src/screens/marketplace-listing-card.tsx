@@ -233,6 +233,14 @@ export type MarketplaceListingCardProps = {
   ctaControl: ReactNode;
   /** The centred underlined "More details" control (modal trigger). */
   detailsControl: ReactNode;
+  /**
+   * The resolved six-state CTA identity (`MarketplaceCardCta["state"]`),
+   * surfaced as `data-cta-state` on the CTA slot for the design-conformance
+   * functional-acceptance suite (cinatra#985 — stable data-testid contract,
+   * tests/e2e/design/conformance/testid-contract.json). Renaming the contract
+   * attributes below is a BREAKING change to that suite by design.
+   */
+  ctaState?: string;
   className?: string;
 };
 
@@ -241,6 +249,7 @@ export function MarketplaceListingCard({
   accentColor,
   ctaControl,
   detailsControl,
+  ctaState,
   className,
 }: MarketplaceListingCardProps) {
   const freshness = freshnessLabel(card.freshnessAt);
@@ -250,6 +259,11 @@ export function MarketplaceListingCard({
   return (
     <div
       data-slot="extension-card"
+      // Conformance-contract root id + kind binding (cinatra#985): the
+      // functional-acceptance suite keys the extension-listing-card-* surfaces
+      // on these attributes (tests/e2e/design/conformance/testid-contract.json).
+      data-testid="extension-listing-card"
+      data-kind={card.kindSlug}
       data-accent={accentColor}
       className={cn(
         "flex h-full flex-col overflow-hidden rounded-card border border-line bg-surface-strong",
@@ -284,7 +298,13 @@ export function MarketplaceListingCard({
               {price}
             </div>
           )}
-          {ctaControl}
+          {/* Conformance-contract CTA slot (cinatra#985): `display: contents`
+              so the wrapper adds ZERO layout impact while giving the
+              functional-acceptance suite a stable hook + the resolved
+              six-state identity. */}
+          <div data-testid="extension-card-cta" data-cta-state={ctaState} className="contents">
+            {ctaControl}
+          </div>
           {detailsControl}
         </div>
         {/* Two-column footer meta (spec §IV L475–483): rating + installs LEFT,
