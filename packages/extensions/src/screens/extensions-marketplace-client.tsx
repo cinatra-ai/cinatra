@@ -39,6 +39,21 @@ type Props = {
   cards: Array<{ meta: CardMeta; node: ReactNode }>;
 };
 
+/**
+ * The grid region's loading presentation — the Suspense fallback
+ * ExtensionsMarketplaceScreen renders while this client mounts. Exported as a
+ * single source of truth so the design-conformance harness (cinatra#986) can
+ * force the SAME loading treatment through the same Suspense machinery.
+ * data-testid: conformance stable-id contract (testid-contract.json).
+ */
+export function MarketplaceGridLoadingFallback() {
+  return (
+    <div data-testid="marketplace-grid-loading" className="text-muted-foreground text-sm">
+      Loading filters...
+    </div>
+  );
+}
+
 export function ExtensionsMarketplaceClient({ cards }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -104,7 +119,9 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
         </ToolbarSearchGroup>
       </Toolbar>
       {visibleCount === 0 ? (
-        <Empty className="border border-line bg-surface">
+        // data-testid: conformance stable-id contract (testid-contract.json) —
+        // the extension-listing-grid `empty` state variant.
+        <Empty data-testid="marketplace-grid-empty" className="border border-line bg-surface">
           <EmptyHeader>
             <EmptyTitle>
               {cards.length === 0 ? "No extensions available" : "No extensions found"}
@@ -120,10 +137,17 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
         // auto-rows-fr locks every grid row to equal heights (design spec §IV
         // "grid-auto-rows: 1fr"); each card stretches (h-full on the card +
         // h-full on this wrapper) so bodies align across a row.
-        <div className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        // data-testid attrs: conformance stable-id contract — grid root +
+        // per-card item wrappers (exact-cardinality assertions count VISIBLE
+        // items, so the display:none filter path stays honestly counted).
+        <div
+          data-testid="marketplace-grid"
+          className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+        >
           {cards.map((c) => (
             <div
               key={c.meta.packageName}
+              data-testid="marketplace-grid-item"
               className="h-full"
               style={{ display: matches(c.meta) ? undefined : "none" }}
             >

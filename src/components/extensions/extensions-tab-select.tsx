@@ -15,16 +15,28 @@ import {
 // URL-driven Active/Archived select for /configuration/extensions. Server
 // renders the body based on the URL param; this control just pushes the new URL
 // when the value changes.
+//
+// `basePath` (default: the real /configuration/extensions route) lets the
+// design-conformance seeded harness (cinatra#986) mount this SAME control on
+// its own route with its run-id query preserved — the real URL-driven
+// server-filter mechanism, not a stand-in. The real screen's behavior is
+// byte-identical (default arg).
 
-export function ExtensionsTabSelect({ value }: { value: "active" | "archived" }) {
+export function ExtensionsTabSelect({
+  value,
+  basePath = "/configuration/extensions",
+}: {
+  value: "active" | "archived";
+  basePath?: string;
+}) {
   const router = useRouter();
   return (
     <Select
       value={value}
       onValueChange={(next) => {
         const target = next === "archived"
-          ? "/configuration/extensions?tab=archived"
-          : "/configuration/extensions";
+          ? `${basePath}${basePath.includes("?") ? "&" : "?"}tab=archived`
+          : basePath;
         router.push(target);
       }}
     >

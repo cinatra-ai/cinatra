@@ -16,7 +16,10 @@ import {
   updateExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
-import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
+import {
+  ExtensionsMarketplaceClient,
+  MarketplaceGridLoadingFallback,
+} from "./extensions-marketplace-client";
 import { ExtensionInstallScopeDialog } from "./extension-install-scope-dialog";
 import { isInstallAccessTargetKind } from "../install-access-target";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
@@ -298,7 +301,7 @@ export async function ExtensionsMarketplaceScreen({
             </AlertDescription>
           </Alert>
         )}
-        <Suspense fallback={<div className="text-muted-foreground text-sm">Loading filters...</div>}>
+        <Suspense fallback={<MarketplaceGridLoadingFallback />}>
           <ExtensionsMarketplaceClient cards={renderedCards} />
         </Suspense>
       </PageContent>

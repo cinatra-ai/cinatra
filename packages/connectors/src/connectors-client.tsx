@@ -380,6 +380,13 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
           return (
             <li
               key={connector.slug}
+              // Conformance stable-id contract (cinatra#986, testid-contract.json):
+              // the card root carries its slug + connection state so the
+              // functional-acceptance suite can assert exact counts, the
+              // manifest displayName binding, and the fail-soft error card.
+              data-testid="connector-card"
+              data-connector-slug={connector.slug}
+              data-connected={connector.connected ? "" : undefined}
               className="group flex flex-col gap-4 rounded-card border border-line bg-surface p-5 shadow-sm transition hover:border-foreground/30 hover:bg-surface-muted cursor-pointer"
               onClick={() => router.push(connector.href)}
             >
@@ -402,7 +409,12 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
                 />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-foreground">{connector.name}</h3>
+                {/* Conformance field binding: the card name renders the
+                    connector manifest displayName (never the slug) — see
+                    packages/connectors/src/pages.tsx card assembly. */}
+                <h3 data-slot="connector-card-name" className="text-base font-semibold text-foreground">
+                  {connector.name}
+                </h3>
               </div>
             </li>
           );

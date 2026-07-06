@@ -71,9 +71,23 @@ export function loadSpecPins(): SpecPins {
   return JSON.parse(raw) as SpecPins;
 }
 
-export function loadAllowlist(): Array<{ manifest: string; surface: string; reason: string }> {
+/**
+ * Allowlist entry (shrink-only ratchet). WITHOUT `aspects`: the whole surface
+ * is exempt (pre-#986 shape). WITH `aspects` (cinatra#986): ONLY the named
+ * aspects — "field:<name>" / "action:<name>" / "state:<state>" — are exempt;
+ * every other annotated field/action/state on the surface requires an
+ * assertion (no-assertion = uncovered = red).
+ */
+export type AllowlistEntry = {
+  manifest: string;
+  surface: string;
+  aspects?: string[];
+  reason: string;
+};
+
+export function loadAllowlist(): AllowlistEntry[] {
   const raw = readFileSync(path.join(CONFORMANCE_DIR, "allowlist.json"), "utf8");
-  return (JSON.parse(raw) as { allow: Array<{ manifest: string; surface: string; reason: string }> }).allow;
+  return (JSON.parse(raw) as { allow: AllowlistEntry[] }).allow;
 }
 
 /**

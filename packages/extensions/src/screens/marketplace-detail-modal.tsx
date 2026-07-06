@@ -458,7 +458,12 @@ function ModalHero({
             from the per-kind manifest displayName); the fetched storefront
             title is the fallback. Never the raw package slug (owner ruling:
             the modal shows the human name, not the package name). */}
-        <h2 className="font-display text-modal-title font-extrabold italic text-foreground">
+        {/* data-slot: conformance stable-id contract (cinatra#986) — the name
+            field binds the manifest displayName, never the package slug. */}
+        <h2
+          data-slot="marketplace-modal-name"
+          className="font-display text-modal-title font-extrabold italic text-foreground"
+        >
           {card.displayName || detail.displayName}
         </h2>
         {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
@@ -469,7 +474,11 @@ function ModalHero({
             {extensionKindEmblem(card.kindSlug, "size-3.5")}
           </span>
           <span className="min-w-0 truncate">
-            <span className="text-foreground">{detail.kindLabel}</span>
+            {/* data-slot: conformance stable-id contract (cinatra#986) — §V
+                byline kind label (per-kind state variant assertions). */}
+            <span data-slot="marketplace-modal-kind" className="text-foreground">
+              {detail.kindLabel}
+            </span>
             {detail.vendor ? (
               <>
                 {" by "}

@@ -1,5 +1,5 @@
 {
-  "$comment": "The stable data-testid / stable-attribute contract for design-conformance surfaces (cinatra#985). Each covered manifest surface maps to the REAL component file(s) that implement it and the attribute literals that MUST be present in that source (scripts/design/check-conformance-testids.mjs turns a missing id into a CI red). Renaming any of these attributes is a BREAKING change to the functional-acceptance suite by design — update the contract, the drivers (contract.ts), and the harness in the same PR. Selector notes document how the suite locates each surface at runtime; harness instrumentation attributes (data-surface-id, data-installed-version) live on the conformance fixture route, everything else on real component code.",
+  "$comment": "The stable data-testid / stable-attribute contract for design-conformance surfaces (cinatra#985, extended by the seeded data-contract wave cinatra#986). Each covered manifest surface maps to the REAL component file(s) that implement it and the attribute literals that MUST be present in that source (scripts/design/check-conformance-testids.mjs turns a missing id into a CI red). Renaming any of these attributes is a BREAKING change to the functional-acceptance suite by design — update the contract, the drivers (contract.ts), and the harness in the same PR. Selector notes document how the suite locates each surface at runtime; harness instrumentation attributes (data-surface-id, data-variant, data-tab, data-installed-version) live on the conformance fixture routes, everything else on real component code.",
   "surfaces": {
     "status-pills": {
       "manifest": "app",
@@ -26,7 +26,98 @@
     "extension-listing-card-update": { "$ref": "extension-listing-card" },
     "extension-listing-card-restore": { "$ref": "extension-listing-card" },
     "extension-listing-card-installing": { "$ref": "extension-listing-card" },
-    "extension-listing-card-incompatible": { "$ref": "extension-listing-card" }
+    "extension-listing-card-incompatible": { "$ref": "extension-listing-card" },
+    "extension-listing-grid": {
+      "manifest": "app-extensions",
+      "selector": "[data-testid=\"marketplace-grid\"] (items: [data-testid=\"marketplace-grid-item\"]; empty state: [data-testid=\"marketplace-grid-empty\"]; loading fallback: [data-testid=\"marketplace-grid-loading\"])",
+      "requires": [
+        {
+          "file": "packages/extensions/src/screens/extensions-marketplace-client.tsx",
+          "literals": [
+            "data-testid=\"marketplace-grid\"",
+            "data-testid=\"marketplace-grid-item\"",
+            "data-testid=\"marketplace-grid-empty\"",
+            "data-testid=\"marketplace-grid-loading\""
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/extensions-marketplace-screen.tsx",
+          "literals": ["MarketplaceGridLoadingFallback"]
+        }
+      ]
+    },
+    "installed-extensions-list": {
+      "manifest": "app-extensions",
+      "selector": "[data-slot=\"installed-extension-card\"] (archived treatment: [data-archived]); empty states: [data-testid=\"installed-extensions-empty\"]",
+      "requires": [
+        {
+          "file": "src/components/extensions/installed-extension-card.tsx",
+          "literals": [
+            "data-slot=\"installed-extension-card\"",
+            "data-archived={archived ? \"\" : undefined}"
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/installed-empty-states.tsx",
+          "literals": ["data-testid=\"installed-extensions-empty\""]
+        },
+        {
+          "file": "packages/extensions/src/screens/registry-catalog-screen.tsx",
+          "literals": ["./installed-empty-states"]
+        }
+      ]
+    },
+    "installed-extensions-filter": {
+      "manifest": "app-extensions",
+      "selector": "combobox [aria-label=\"Filter installed extensions by state\"] (URL-driven ?tab= server filter)",
+      "requires": [
+        {
+          "file": "src/components/extensions/extensions-tab-select.tsx",
+          "literals": ["aria-label=\"Filter installed extensions by state\"", "tab=archived"]
+        }
+      ]
+    },
+    "extension-detail-modal": {
+      "manifest": "app-extensions",
+      "selector": "role=dialog; name: [data-slot=\"marketplace-modal-name\"]; kind byline: [data-slot=\"marketplace-modal-kind\"]; footer CTA: the real MarketplaceInstallForm submit",
+      "requires": [
+        {
+          "file": "packages/extensions/src/screens/marketplace-detail-modal.tsx",
+          "literals": [
+            "data-slot=\"marketplace-modal-name\"",
+            "data-slot=\"marketplace-modal-kind\""
+          ]
+        }
+      ]
+    },
+    "connector-grid": {
+      "manifest": "app-connectors",
+      "selector": "[data-testid=\"connector-card\"][data-connector-slug] (connected state: [data-connected]; name: [data-slot=\"connector-card-name\"]; badge: [data-testid=\"connector-badge\"])",
+      "requires": [
+        {
+          "file": "packages/connectors/src/connectors-client.tsx",
+          "literals": [
+            "data-testid=\"connector-card\"",
+            "data-connector-slug={connector.slug}",
+            "data-slot=\"connector-card-name\""
+          ]
+        },
+        {
+          "file": "packages/connectors/src/connector-badge.tsx",
+          "literals": ["data-testid=\"connector-badge\""]
+        }
+      ]
+    },
+    "connector-connection-filter": {
+      "manifest": "app-connectors",
+      "selector": "toggle group [aria-label=\"Filter by connection state\"]",
+      "requires": [
+        {
+          "file": "packages/connectors/src/connectors-client.tsx",
+          "literals": ["aria-label=\"Filter by connection state\""]
+        }
+      ]
+    }
   },
   "shared": {
     "extension-listing-card": {
