@@ -145,7 +145,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "e0c5d36adf84addf6697e6905e6dbe62fd8b3d7b"
+      "resolvedSha": "53efd8612685ed55a6a20252f27bf5bb672a8e5f"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",
@@ -275,7 +275,7 @@
     {
       "packageName": "@cinatra-ai/plane-connector",
       "repo": "cinatra-ai/plane-connector",
-      "resolvedSha": "6eecd8b36dce0b9ba136ef09e2b8aff13e18ef1f"
+      "resolvedSha": "55f960f1c7d6b2c6fe8f86edc0415dc344837fbc"
     },
     {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
@@ -335,7 +335,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "185cb7ecaaa07878f1669c18024389f09e0bbb3d"
+      "resolvedSha": "b02ed8f5d2463dac263d3608f7bb0902c74cf1a7"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",
@@ -360,7 +360,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "fd60b781f14df8aa5904d3f5edb86527c31d7321"
+      "resolvedSha": "34d301dc7dfd734b61ada0f4fd16a9f6527bb250"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",

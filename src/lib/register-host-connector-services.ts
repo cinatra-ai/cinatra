@@ -40,6 +40,7 @@ import {
   getExternalMcpServerById,
   listExternalMcpServers,
   resolveExternalMcpServerBearer,
+  EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
 } from "@/lib/external-mcp-registry";
 // Connector setup-page server actions for @cinatra-ai/mcp-server-connector
 // (cinatra#612) and @cinatra-ai/twenty-connector (twenty-connector#39): the
@@ -144,7 +145,9 @@ import {
   readWordPressPost,
   readWordPressPostStatus,
   registerWordPressWebhookSubscription,
+  saveWordPressInstance,
   saveWordPressInstanceFromNangoConnection,
+  persistLocalDevWordPressInstanceUnvalidated,
   updateWordPressDraftMeta,
   updateWordPressPost,
   uploadWordPressMedia,
@@ -185,6 +188,7 @@ import {
   probeWordPressInstanceMcpAdapter,
   resolveWordPressMcpEndpoint,
   resolveWordPressMcpFallbackEndpoint,
+  invalidateWordPressMcpProbeCache,
 } from "@/lib/wordpress-mcp-connection";
 // Private-URL policy is a NEUTRAL mechanism (cinatra#975) — sourced from the
 // vendor-agnostic `@/lib/url-policy` module, not the wordpress vendor file.
@@ -199,6 +203,8 @@ import {
 import {
   getDrupalMcpInstanceStatuses,
   probeDrupalMcp,
+  probeDrupalMcpWithBearer,
+  invalidateDrupalMcpProbeCache,
   resolveDrupalMcpServerUrl,
 } from "@/lib/drupal-mcp-connection";
 // Drupal instance-admin surface (cinatra#172 Stage H2): the connector settings
@@ -210,6 +216,7 @@ import {
   getDrupalAPISettings,
   getDrupalAPIStatus,
   saveDrupalInstance,
+  persistLocalDevDrupalInstanceUnvalidated,
 } from "@/lib/drupal-api";
 // Widget auth-config storage for the drupal assistant widget (cinatra#172
 // Stage H2): published as the `drupal-widget-auth` per-concern service.
@@ -223,6 +230,20 @@ let _registered = false;
 /** The provider key the host registers its per-concern service impls under in
  * the capability registry. Not an extension package name (reserved host id). */
 const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
+
+/**
+ * Dev-boot provisioning WRITERS (cinatra#976, epic #978 W-D) are DEV-ONLY: they
+ * persist unvalidated local-dev instance rows / drive a local docker credential
+ * rotate. Only the connector `dev-setup.ts` hook (invoked by the strictly
+ * dev-gated `dev-auto-setup` shell) resolves them, but we defense-in-depth
+ * refuse outside development so a member can never be a production affordance
+ * even if resolved on another path. The persist helpers themselves ALSO enforce
+ * loopback-only host-side. */
+function assertDevSetupHostOnly(member: string): void {
+  if (!isAppDevelopmentMode()) {
+    throw new Error(`${member} is a dev-only devSetup provisioning member; refused outside development.`);
+  }
+}
 
 // Host-LOCAL extension of the SDK `HostExternalMcpRegistryService` for the
 // "MCP Servers" connector setup-page surface (cinatra#612). Kept host-side
@@ -383,6 +404,11 @@ export function registerHostConnectorServices(): void {
     isConnectionServiceReady: () => getNangoStatus().status === "connected",
     // Private-URL guard (LLM providers cannot reach localhost/private IPs).
     isPrivateUrl,
+    // The shared external-MCP Nango provider-config key, published as DATA so a
+    // dev-boot hook (the Twenty `dev-setup.ts`) imports its minted bearer under
+    // the SAME key the row's `resolveBearer` reads — never hardcoded
+    // connector-side (cinatra#976, epic #978 W-D).
+    nangoProviderConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
   } satisfies HostExternalMcpRegistrySetupSurface);
 
   register(svc.mcpSelfClient, { buildHeaders: buildAppMcpSelfClientHeaders });
@@ -458,6 +484,17 @@ export function registerHostConnectorServices(): void {
     saveInstance: saveDrupalInstance,
     deleteInstance: deleteDrupalInstance,
     getInstanceStatuses: getDrupalMcpInstanceStatuses,
+    // --- dev-boot provisioning surface (cinatra#976, epic #978 W-D) ----------
+    // Resolved ONLY by the Drupal connector `dev-setup.ts` hook via the
+    // strictly dev-gated `dev-auto-setup` shell. Dev-only (guarded), never a
+    // production affordance; the persist helper enforces loopback host-side.
+    devPersistLocalInstanceUnvalidated: async (input) => {
+      assertDevSetupHostOnly("drupal-mcp.devPersistLocalInstanceUnvalidated");
+      const persisted = await persistLocalDevDrupalInstanceUnvalidated(input);
+      return { id: persisted.id };
+    },
+    devProbeWithBearer: probeDrupalMcpWithBearer,
+    devInvalidateProbeCache: invalidateDrupalMcpProbeCache,
   } satisfies HostDrupalMcpService);
 
   // Widget auth-config storage for the drupal assistant widget (cinatra#172
@@ -499,6 +536,21 @@ export function registerHostConnectorServices(): void {
       register: registerWordPressWebhookSubscription,
       remove: deleteWordPressWebhookSubscription,
     },
+    // --- dev-boot provisioning surface (cinatra#976, epic #978 W-D) ----------
+    // Resolved ONLY by the WordPress connector `dev-setup.ts` hook via the
+    // strictly dev-gated `dev-auto-setup` shell. Dev-only (guarded), never a
+    // production affordance; the unvalidated persist enforces loopback host-side.
+    devSaveInstance: async (input) => {
+      assertDevSetupHostOnly("wordpress-mcp.devSaveInstance");
+      const saved = await saveWordPressInstance(input);
+      return { id: saved.id, connectionId: saved.connectionId };
+    },
+    devPersistLocalInstanceUnvalidated: async (input) => {
+      assertDevSetupHostOnly("wordpress-mcp.devPersistLocalInstanceUnvalidated");
+      const persisted = await persistLocalDevWordPressInstanceUnvalidated(input);
+      return { id: persisted.id, connectionId: persisted.connectionId };
+    },
+    devInvalidateProbeCache: invalidateWordPressMcpProbeCache,
   } satisfies HostWordPressMcpService);
 
   // WordPress post/media CONTENT surface (cinatra#172 Stage H3) — a SEPARATE

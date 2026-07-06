@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 132,
-    "/api/mcp": 1332,
-    "/chat": 1370,
-    "/api/a2a": 1338,
-    "/api/llm-bridge": 1342
+    "/api/mcp": 1337,
+    "/chat": 1375,
+    "/api/a2a": 1343,
+    "/api/llm-bridge": 1347
   },
   "absorbs": {
     "/api/mcp": {
-      "from": 1331,
-      "to": 1332,
-      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1331->1332.",
-      "pr": 1027
+      "from": 1332,
+      "to": 1337,
+      "reason": "cinatra#976 (PR #1029): the Turbopack-safe fix replaces the runtime-computed devSetup specifier (which threw 'expression is too dynamic' under Turbopack, silently skipping every fixture hook) with a STATIC import map GENERATED_DEV_SETUP_MODULES in src/lib/generated/extensions.server.ts that literally `import()`s each of the 4 connectors' `/src/dev-setup` modules. That makes 5 new first-party leaf modules reachable from this route via the always-imported generated manifest: the 4 dev-setup modules (extensions/cinatra-ai/{drupal-mcp-connector,plane-connector,twenty-connector,wordpress-mcp-connector}/src/dev-setup.ts) plus extensions/cinatra-ai/twenty-connector/src/twenty-keygen.mjs (imported ONLY by twenty's dev-setup). +5 reachable leaves, re-stacked on main's post-#1027 ceiling (1332). Delta verified locally with the companion extensions cloned pinned (uniform +5 across all 4 host routes; the 5 new modules are all downstream of the new devSetup import map). Absorbed raise 1332->1337.",
+      "pr": 1029
     },
     "/chat": {
-      "from": 1369,
-      "to": 1370,
-      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1369->1370.",
-      "pr": 1027
+      "from": 1370,
+      "to": 1375,
+      "reason": "cinatra#976 (PR #1029): the Turbopack-safe fix replaces the runtime-computed devSetup specifier (which threw 'expression is too dynamic' under Turbopack, silently skipping every fixture hook) with a STATIC import map GENERATED_DEV_SETUP_MODULES in src/lib/generated/extensions.server.ts that literally `import()`s each of the 4 connectors' `/src/dev-setup` modules. That makes 5 new first-party leaf modules reachable from this route via the always-imported generated manifest: the 4 dev-setup modules (extensions/cinatra-ai/{drupal-mcp-connector,plane-connector,twenty-connector,wordpress-mcp-connector}/src/dev-setup.ts) plus extensions/cinatra-ai/twenty-connector/src/twenty-keygen.mjs (imported ONLY by twenty's dev-setup). +5 reachable leaves, re-stacked on main's post-#1027 ceiling (1370). Delta verified locally with the companion extensions cloned pinned (uniform +5 across all 4 host routes; the 5 new modules are all downstream of the new devSetup import map). Absorbed raise 1370->1375.",
+      "pr": 1029
     },
     "/api/a2a": {
-      "from": 1337,
-      "to": 1338,
-      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1337->1338.",
-      "pr": 1027
+      "from": 1338,
+      "to": 1343,
+      "reason": "cinatra#976 (PR #1029): the Turbopack-safe fix replaces the runtime-computed devSetup specifier (which threw 'expression is too dynamic' under Turbopack, silently skipping every fixture hook) with a STATIC import map GENERATED_DEV_SETUP_MODULES in src/lib/generated/extensions.server.ts that literally `import()`s each of the 4 connectors' `/src/dev-setup` modules. That makes 5 new first-party leaf modules reachable from this route via the always-imported generated manifest: the 4 dev-setup modules (extensions/cinatra-ai/{drupal-mcp-connector,plane-connector,twenty-connector,wordpress-mcp-connector}/src/dev-setup.ts) plus extensions/cinatra-ai/twenty-connector/src/twenty-keygen.mjs (imported ONLY by twenty's dev-setup). +5 reachable leaves, re-stacked on main's post-#1027 ceiling (1338). Delta verified locally with the companion extensions cloned pinned (uniform +5 across all 4 host routes; the 5 new modules are all downstream of the new devSetup import map). Absorbed raise 1338->1343.",
+      "pr": 1029
     },
     "/api/llm-bridge": {
-      "from": 1341,
-      "to": 1342,
-      "reason": "cinatra#982 (PR #1027): the manifest-declared env-override layer adds one new first-party leaf module packages/sdk-extensions/src/env-overrides.ts (the namespaced-vs-legacy env-override validator), re-exported from the SDK barrel and reachable from src/lib/extension-host-context.ts on this route. +1 reachable leaf, re-stacked on main's post-#976 ceiling (#1024's dev-setup.ts +1 raise). Delta verified locally vs origin/main (a first-party workspace module, resolves without the cloned extensions, so the +1 is exact). Absorbed raise 1341->1342.",
-      "pr": 1027
+      "from": 1342,
+      "to": 1347,
+      "reason": "cinatra#976 (PR #1029): the Turbopack-safe fix replaces the runtime-computed devSetup specifier (which threw 'expression is too dynamic' under Turbopack, silently skipping every fixture hook) with a STATIC import map GENERATED_DEV_SETUP_MODULES in src/lib/generated/extensions.server.ts that literally `import()`s each of the 4 connectors' `/src/dev-setup` modules. That makes 5 new first-party leaf modules reachable from this route via the always-imported generated manifest: the 4 dev-setup modules (extensions/cinatra-ai/{drupal-mcp-connector,plane-connector,twenty-connector,wordpress-mcp-connector}/src/dev-setup.ts) plus extensions/cinatra-ai/twenty-connector/src/twenty-keygen.mjs (imported ONLY by twenty's dev-setup). +5 reachable leaves, re-stacked on main's post-#1027 ceiling (1342). Delta verified locally with the companion extensions cloned pinned (uniform +5 across all 4 host routes; the 5 new modules are all downstream of the new devSetup import map). Absorbed raise 1342->1347.",
+      "pr": 1029
     }
   }
 }

@@ -18,6 +18,7 @@ import {
   GENERATED_WIDGET_STREAM_AGENTS,
   GENERATED_CHAT_WIDGET_MODULES,
   GENERATED_CHAT_WIDGET_MANIFEST_MODULES,
+  GENERATED_DEV_SETUP_MODULES,
 } from "../extensions.server";
 import { GENERATED_WEBHOOK_HANDLERS } from "../webhooks.server";
 import { GENERATED_STREAM_DECLARATIONS } from "../streams.server";
@@ -34,6 +35,7 @@ const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>
   GENERATED_CONNECTOR_PRIMITIVE_HANDLERS,
   GENERATED_EXTERNAL_MCP_TOOLBOXES,
   GENERATED_WIDGET_STREAM_AGENTS,
+  GENERATED_DEV_SETUP_MODULES,
   GENERATED_WEBHOOK_HANDLERS,
   GENERATED_STREAM_DECLARATIONS,
   GENERATED_CHAT_WIDGET_MODULES,
@@ -123,6 +125,10 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTERNAL_MCP_TOOLBOXES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_WIDGET_STREAM_AGENTS", key: "drupal-content-editor", resolution: "guardedOptional" },
   { map: "GENERATED_WIDGET_STREAM_AGENTS", key: "wordpress-content-editor", resolution: "guardedOptional" },
+  { map: "GENERATED_DEV_SETUP_MODULES", key: "@cinatra-ai/drupal-mcp-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_DEV_SETUP_MODULES", key: "@cinatra-ai/plane-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_DEV_SETUP_MODULES", key: "@cinatra-ai/twenty-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_DEV_SETUP_MODULES", key: "@cinatra-ai/wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_WEBHOOK_HANDLERS", key: "cinatra-ai/drupal-mcp-connector/node-published", resolution: "guardedOptional" },
   { map: "GENERATED_WEBHOOK_HANDLERS", key: "cinatra-ai/wordpress-mcp-connector/post-published", resolution: "guardedOptional" },
   { map: "GENERATED_CHAT_WIDGET_MODULES", key: "@cinatra-ai/apollo-connector", resolution: "guardedOptional" },
