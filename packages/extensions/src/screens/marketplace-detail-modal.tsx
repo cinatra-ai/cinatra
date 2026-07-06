@@ -94,7 +94,9 @@ export interface MarketplaceDetailModalProps {
    * DETAILS-ONLY and passes NONE of the footer props, so the footer bar is not
    * rendered at all (owner ruling: an installed extension's modal shows no
    * install/uninstall/manage buttons and no footer info). The footer renders
-   * only when the full CTA + lifecycle actions are all provided.
+   * only when the full CTA + lifecycle actions are all provided. The six-state
+   * CTA already encodes registry state in `disabled` and folds the ABI verdict
+   * into "incompatible" (#1003).
    */
   cta?: MarketplaceCardCta;
   installAction?: BoundLifecycleAction;
@@ -110,8 +112,8 @@ export interface MarketplaceDetailModalProps {
   /**
    * Entry-point trigger override (cinatra#948): the Installed extensions page
    * renders the §VI link-style "More details"; the browse card keeps the
-   * default outline button when this is not passed. Must be a single element
-   * (Radix `asChild`).
+   * default §IV centred underlined-link button when this is not passed. Must be
+   * a single element (Radix `asChild`).
    */
   trigger?: ReactElement;
   /** See {@link MarketplaceDetailModalInitialLoad}. */
@@ -214,7 +216,11 @@ export function MarketplaceDetailModal({
       ) : (
         <DialogTrigger asChild>
           {trigger ?? (
-            <Button size="sm" variant="outline" className="flex-1">
+            // §IV browse-card default: centred underlined link button (design
+            // spec §IV "More details") — always underlined in the action
+            // colour, not just on hover. Still a real button (modal trigger),
+            // only the visual treatment is a link.
+            <Button size="sm" variant="link" className="underline">
               More details
             </Button>
           )}

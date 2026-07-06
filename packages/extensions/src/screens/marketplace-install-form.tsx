@@ -92,8 +92,9 @@ export function MarketplaceInstallForm({
 
 // Pending-aware submit button. useFormStatus reads the enclosing
 // <MarketplaceInstallForm> submission state so the button disables + shows a
-// busy label during install — preventing the double-submit a plain
-// server-action submit allowed.
+// spinner + busy label during install (the "Installing…" visual of the design
+// spec §IV six-state CTA) — preventing the double-submit a plain server-action
+// submit allowed.
 type MarketplaceInstallSubmitProps = {
   children: ReactNode;
   pendingLabel: string;

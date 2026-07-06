@@ -215,7 +215,7 @@ export function ExtensionInstallScopeDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button type="button" size="sm" className={triggerClassName}>
-          Install Now
+          Install now
         </Button>
       </DialogTrigger>
       <DialogContent>
