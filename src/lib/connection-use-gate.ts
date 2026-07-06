@@ -333,7 +333,19 @@ export async function decideConnectionUse(input: {
 // resolver's discovery uses decideConnectionUse directly (unaudited).
 // ---------------------------------------------------------------------------
 
-export class ConnectionUseDeniedError extends AuthzError {}
+export class ConnectionUseDeniedError extends AuthzError {
+  /**
+   * Stable STRUCTURAL discriminator for cross-boundary classification
+   * (#975 Wave 3 / epic #978): `AuthzError`'s constructor pins `name` to
+   * "AuthzError", so a name-check cannot identify a deny, and extension code
+   * (which cannot import this class) classifies via the
+   * `@cinatra-ai/host:instance-connection-gate` service's
+   * `isConnectionUseDenied` member — implemented as a marker-field check in
+   * `@/lib/instance-connection-actor` (no load-order coupling). Keep this
+   * field in sync with `isConnectionUseDeniedError` there.
+   */
+  readonly connectionUseDenied = true as const;
+}
 
 function auditActorPrincipalType(
   actor: ActorContext | undefined | null,

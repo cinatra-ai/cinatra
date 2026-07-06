@@ -42,6 +42,7 @@
 // ---------------------------------------------------------------------------
 
 import type {
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
   EMAIL_SEND_CAPABILITY,
   LLM_TOOLBOX_CAPABILITY,
   OBJECT_TYPE_REGISTRAR_CAPABILITY,
@@ -62,6 +63,7 @@ import type { EMAIL_SENDER_IDENTITIES_CAPABILITY_ID } from "./email-sender-ident
 import type { APPOINTMENT_SCHEDULES_CAPABILITY_ID } from "./appointment-schedules-contract";
 
 import type {
+  HostInstanceConnectionGateService,
   LlmToolboxProvider,
   ObjectTypeRegistrarProvider,
   CrmSyncBootstrapProvider,
@@ -109,6 +111,11 @@ export type CapabilityContractMap = {
   [DEV_TUNNEL_STATUS_CAPABILITY]: DevTunnelStatusProvider;
   [APPOINTMENT_SCHEDULES_CAPABILITY_ID]: AppointmentSchedulesProvider;
   [CHAT_USER_CONTEXT_CAPABILITY_ID]: ChatUserContextContributor;
+  // Host-registered per-concern service ids are keyed the same way (via
+  // `typeof` off the fenced constants object — no re-typed literal to drift).
+  // Only the ids whose resolvers benefit from a typed `impl` are mapped;
+  // adding another `@cinatra-ai/host:*` entry here stays purely additive.
+  [HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate]: HostInstanceConnectionGateService;
 };
 
 /** A first-party capability id that has a TYPED contract in the map above

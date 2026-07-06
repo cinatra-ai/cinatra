@@ -356,6 +356,53 @@ vi.mock("@/lib/drupal-api", () => ({
     drupalApiCalls.delete.push(args);
   },
 }));
+// The per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
+// #978): the binder folds the seam's `identity | null` returns to outcome
+// booleans, so the mock returns an identity row / null / a marker-carrying
+// deny per call to pin the fold + the fail-loud deny propagation. The
+// CLASSIFIER is the REAL one (importOriginal) — the published member must be
+// the seam's marker-field check by identity, not a test stand-in.
+const instanceGateCalls: Record<string, unknown[][]> = {
+  resolveOrSeed: [],
+  enforce: [],
+  enforcePerUser: [],
+  authorizeWorker: [],
+  sessionBinding: [],
+};
+const instanceGateMock = {
+  resolveOrSeedInstanceIdentity: async (...args: unknown[]) => {
+    instanceGateCalls.resolveOrSeed.push(args);
+    const input = args[0] as { connectionId: string };
+    return input.connectionId === "no-owner-conn" ? null : { id: "identity-1" };
+  },
+  enforceInstanceConnectionUse: async (...args: unknown[]) => {
+    instanceGateCalls.enforce.push(args);
+    const input = args[0] as { connectionId: string };
+    if (input.connectionId === "denied-conn") {
+      const denied = new Error("use denied") as Error & { connectionUseDenied?: true };
+      denied.connectionUseDenied = true;
+      throw denied;
+    }
+    return input.connectionId === "no-owner-conn" ? null : { id: "identity-1" };
+  },
+  enforcePerUserInstanceConnectionUse: async (...args: unknown[]) => {
+    instanceGateCalls.enforcePerUser.push(args);
+    return { id: "identity-1" };
+  },
+  authorizeWorkerConnectionUse: async (...args: unknown[]) => {
+    instanceGateCalls.authorizeWorker.push(args);
+    const input = args[0] as { connectionId: string };
+    return input.connectionId !== "no-identity-conn";
+  },
+  resolveTrustedSessionBinding: async (...args: unknown[]) => {
+    instanceGateCalls.sessionBinding.push(args);
+    return { orgId: "org-1", runBy: "admin-1" };
+  },
+};
+vi.mock("@/lib/instance-connection-actor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/instance-connection-actor")>();
+  return { ...actual, ...instanceGateMock };
+});
 import {
   type HostConnectorConfigService,
   type NangoConnectionMaterializer,
@@ -368,6 +415,7 @@ import {
   type HostGitHubConnectionService,
   type HostLinkedInConnectionService,
   type HostYouTubeConnectionService,
+  type HostInstanceConnectionGateService,
   type HostRuntimeModeService,
   type HostOpenAIConnectionService,
   type HostAnthropicConnectionService,
@@ -1093,5 +1141,105 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     expect(youtubeApiCalls.getConfiguredAccessToken).toBe(1);
     // No writer members on this service (single reader by design).
     expect(Object.keys(youtube)).toEqual(["getConfiguredAccessToken"]);
+  });
+
+  it("publishes @cinatra-ai/host:instance-connection-gate delegating to the host seam (#975 Wave 3 prerequisite)", async () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate).toBe(
+      "@cinatra-ai/host:instance-connection-gate",
+    );
+    const gate = resolveSingle<HostInstanceConnectionGateService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate,
+    );
+
+    // Identity-row internals never cross the boundary: the seam's
+    // `identity | null` folds to outcome booleans.
+    await expect(
+      gate.resolveOrSeedInstanceIdentity({
+        connectorKey: "wordpress",
+        connectionId: "conn-1",
+        binding: { orgId: "org-1", runBy: "admin-1" },
+      }),
+    ).resolves.toEqual({ identityResolved: true });
+    expect(instanceGateCalls.resolveOrSeed.at(-1)).toEqual([
+      { connectorKey: "wordpress", connectionId: "conn-1", binding: { orgId: "org-1", runBy: "admin-1" } },
+    ]);
+
+    await expect(
+      gate.enforceInstanceConnectionUse({
+        connectorKey: "wordpress",
+        connectionId: "conn-1",
+        source: "wordpress-api",
+      }),
+    ).resolves.toEqual({ gated: true });
+
+    await expect(
+      gate.enforcePerUserInstanceConnectionUse({
+        connectorKey: "linkedin",
+        connectionId: "li-conn",
+        userId: "user-42",
+        source: "linkedin-api",
+      }),
+    ).resolves.toEqual({ gated: true });
+
+    await expect(
+      gate.authorizeWorkerConnectionUse({
+        connectorKey: "youtube",
+        connectionId: "yt-conn",
+        source: "media-feeds-scraper",
+      }),
+    ).resolves.toBe(true);
+
+    await expect(gate.resolveTrustedSessionBinding()).resolves.toEqual({
+      orgId: "org-1",
+      runBy: "admin-1",
+    });
+  });
+
+  it("instance-connection-gate DEGRADATION: no resolvable identity folds to { gated:false } / { identityResolved:false } (the pre-#967 ungated fallback), and the worker gate fails CLOSED to bare false", async () => {
+    const gate = resolveSingle<HostInstanceConnectionGateService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate,
+    );
+
+    await expect(
+      gate.resolveOrSeedInstanceIdentity({ connectorKey: "wordpress", connectionId: "no-owner-conn" }),
+    ).resolves.toEqual({ identityResolved: false });
+    await expect(
+      gate.enforceInstanceConnectionUse({
+        connectorKey: "wordpress",
+        connectionId: "no-owner-conn",
+        source: "wordpress-api",
+      }),
+    ).resolves.toEqual({ gated: false });
+    // The actor-less worker gate: a bare boolean (falsy on no-identity so a
+    // naive `if (await …)` reads the fail-closed outcome correctly).
+    await expect(
+      gate.authorizeWorkerConnectionUse({
+        connectorKey: "youtube",
+        connectionId: "no-identity-conn",
+        source: "media-feeds-scraper",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("instance-connection-gate FAIL-LOUD: a use-gate DENY propagates out of the enforce members and the published classifier identifies it", async () => {
+    const gate = resolveSingle<HostInstanceConnectionGateService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate,
+    );
+
+    let thrown: unknown;
+    try {
+      await gate.enforceInstanceConnectionUse({
+        connectorKey: "wordpress",
+        connectionId: "denied-conn",
+        source: "wordpress-api",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    // The published classifier is the REAL seam classifier (marker-field
+    // check): deny -> true; a generic error -> false.
+    expect(gate.isConnectionUseDenied(thrown)).toBe(true);
+    expect(gate.isConnectionUseDenied(new Error("boom"))).toBe(false);
   });
 });
