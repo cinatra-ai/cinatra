@@ -40,7 +40,10 @@ const PINNED: Record<string, { count: number; status: string; note?: string }> =
     note: "contract member declarations, not calls",
   },
   "src/lib/nango-system.ts": { count: 3, status: "primitive-surface" },
-  "src/lib/dev-auto-setup.ts": { count: 4, status: "dev-only" },
+  // src/lib/dev-auto-setup.ts retired (cinatra#976, epic #978 W-D): the 4
+  // dev-only nango raw reads moved OUT of core into the owning connector
+  // `dev-setup.ts` hooks (extensions/, separate repos — not scanned here); the
+  // core shell is now vendor-neutral and reads no nango credential.
   "src/lib/registry-credentials.ts": {
     count: 2,
     status: "system-credential",
