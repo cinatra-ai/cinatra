@@ -2,9 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 132,
-    "/api/mcp": 1326,
-    "/chat": 1364,
-    "/api/a2a": 1332,
-    "/api/llm-bridge": 1336
+    "/api/mcp": 1328,
+    "/chat": 1366,
+    "/api/a2a": 1334,
+    "/api/llm-bridge": 1338
+  },
+  "absorbs": {
+    "/api/mcp": {
+      "from": 1327,
+      "to": 1328,
+      "reason": "cinatra#975 (epic #978, Wave 1): new neutral src/lib/url-policy.ts module (isPrivateUrl extracted from the wordpress vendor module wordpress-mcp-connection.ts) is reachable from this route via external-mcp-registry.ts / drupal-mcp-connection.ts / register-host-connector-services.ts",
+      "pr": 1018
+    },
+    "/chat": {
+      "from": 1365,
+      "to": 1366,
+      "reason": "cinatra#975 (epic #978, Wave 1): new neutral src/lib/url-policy.ts module (isPrivateUrl extracted from the wordpress vendor module wordpress-mcp-connection.ts) is reachable from this route via external-mcp-registry.ts / drupal-mcp-connection.ts / register-host-connector-services.ts",
+      "pr": 1018
+    },
+    "/api/a2a": {
+      "from": 1333,
+      "to": 1334,
+      "reason": "cinatra#975 (epic #978, Wave 1): new neutral src/lib/url-policy.ts module (isPrivateUrl extracted from the wordpress vendor module wordpress-mcp-connection.ts) is reachable from this route via external-mcp-registry.ts / drupal-mcp-connection.ts / register-host-connector-services.ts",
+      "pr": 1018
+    },
+    "/api/llm-bridge": {
+      "from": 1337,
+      "to": 1338,
+      "reason": "cinatra#975 (epic #978, Wave 1): new neutral src/lib/url-policy.ts module (isPrivateUrl extracted from the wordpress vendor module wordpress-mcp-connection.ts) is reachable from this route via external-mcp-registry.ts / drupal-mcp-connection.ts / register-host-connector-services.ts",
+      "pr": 1018
+    }
   }
 }

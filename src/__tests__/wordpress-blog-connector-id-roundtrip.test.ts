@@ -48,6 +48,16 @@ vi.mock("@/lib/nango-system", () => ({
   isNangoConfigured: vi.fn().mockReturnValue(true),
 }));
 
+// cinatra#967: the owner-aware instance-gating seam (identity seeding +
+// actor threading) is covered by its OWN dedicated test suite
+// (instance-connection-actor.test.ts, wordpress-api-instance-gate.test.ts) —
+// stub it here to a no-op so this file's blogConnectorId round-trip
+// assertions exercise ONLY that field, not the real DB-backed identity store.
+vi.mock("@/lib/instance-connection-actor", () => ({
+  enforceInstanceConnectionUse: vi.fn(async () => null),
+  resolveOrSeedInstanceIdentity: vi.fn(async () => null),
+}));
+
 // The two save paths invoke `validateWordPressInstanceConnection` which
 // performs an HTTPS HEAD/GET on `<siteUrl>/wp-json/wp/v2/posts?per_page=1`
 // plus `/users/me`. We stub global fetch to return a minimal "happy path"

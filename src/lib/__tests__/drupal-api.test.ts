@@ -32,6 +32,18 @@ vi.mock("@/lib/nango-system", () => ({
   saveNangoConnectionRecord: vi.fn(async () => undefined),
 }));
 
+// ---------------------------------------------------------------------------
+// Mock the cinatra#967 owner-aware instance-gating seam. Unit tests here
+// exercise the SAVE flow, not the resolver internals (covered by
+// instance-connection-actor.test.ts) — a `null` return means "no identity
+// resolved/seeded" so saveDrupalInstance falls through to the ungated
+// readback exactly like the pre-#967 behavior.
+// ---------------------------------------------------------------------------
+
+vi.mock("@/lib/instance-connection-actor", () => ({
+  enforceInstanceConnectionUse: vi.fn(async () => null),
+}));
+
 import {
   deleteNangoConnection,
   ensureNangoConnectorIntegration,
@@ -41,6 +53,7 @@ import {
   removeNangoConnectionRecord,
   saveNangoConnectionRecord,
 } from "@/lib/nango-system";
+import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
 
 import {
   saveDrupalInstance,
@@ -222,6 +235,48 @@ describe("saveDrupalInstance credential persistence", () => {
     ).rejects.toThrow(/MCP API key is required/);
     // Nango not called at all.
     expect(vi.mocked(importNangoConnection)).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#967: gates the post-import readback via enforceInstanceConnectionUse, threading the {orgId, runBy} binding, BEFORE the raw readback call", async () => {
+    const callOrder: string[] = [];
+    vi.mocked(enforceInstanceConnectionUse).mockImplementationOnce(async () => {
+      callOrder.push("gate");
+      return null;
+    });
+    vi.mocked(getNangoCredentials).mockImplementationOnce(async () => {
+      callOrder.push("readback");
+      return { apiKey: KEY } as never;
+    });
+
+    const result = await saveDrupalInstance({
+      name: "Site A",
+      siteUrl: "https://a.example.com",
+      mcpApiKey: KEY,
+      orgId: "org-1",
+      runBy: "user-1",
+    });
+
+    expect(vi.mocked(enforceInstanceConnectionUse)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectorKey: "drupal",
+        connectionId: result.id,
+        binding: { orgId: "org-1", runBy: "user-1" },
+        source: "drupal-api",
+      }),
+    );
+    expect(callOrder).toEqual(["gate", "readback"]);
+  });
+
+  it("cinatra#967: a denied gate propagates (fails closed) and never persists or saves the Nango pointer", async () => {
+    class Denied extends Error {}
+    vi.mocked(enforceInstanceConnectionUse).mockRejectedValueOnce(new Denied("denied"));
+
+    await expect(
+      saveDrupalInstance({ name: "Site A", siteUrl: "https://a.example.com", mcpApiKey: KEY }),
+    ).rejects.toThrow(Denied);
+
+    expect(vi.mocked(getNangoCredentials)).not.toHaveBeenCalled();
+    expect(vi.mocked(saveNangoConnectionRecord)).not.toHaveBeenCalled();
   });
 
   it("rejects a short rotation key (min 8 chars)", async () => {

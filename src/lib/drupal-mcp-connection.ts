@@ -9,8 +9,9 @@ import "server-only";
 // This file keeps the host-owned probe used by the connector settings pages.
 
 import { getDrupalAPISettings } from "@/lib/drupal-api";
-import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
+import { isPrivateUrl } from "@/lib/url-policy";
 import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
+import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
 
 const MCP_TOOLS_PATH = "/_mcp_tools";
 
@@ -129,6 +130,39 @@ export async function getDrupalMcpInstanceStatuses(): Promise<DrupalMcpInstanceS
       out.push({ id: instance.id, name: instance.name, siteUrl: instance.siteUrl, status: "registered", isPrivate: true });
       continue;
     }
+    // Owner-aware resolver routing (cinatra#967, W3 residue): resolve
+    // (self-heal seeding when absent) the instance's identity row and gate +
+    // audit this credential use through the W2 use-gate, with the
+    // configuring admin (or an org-bound InternalWorker) threaded as the
+    // acting actor. An instance whose identity cannot be resolved/seeded at
+    // all falls back to the pre-#967 ungated probe — never a regression. A
+    // DENIED gate must not abort the WHOLE status sweep (other instances'
+    // statuses are independent) — surface it as 'auth_error', the same
+    // status code path a live 401/403 from the site itself would classify
+    // to. Only `ConnectionUseDeniedError` is downgraded this way; anything
+    // else (a DB error, an identity conflict, an audit-write failure) is a
+    // genuine anomaly and must stay LOUD — rethrown, not silently swallowed
+    // into a misleading status code (codex round-0 finding).
+    try {
+      await enforceInstanceConnectionUse({
+        connectorKey: "drupal",
+        connectionId: instance.nangoConnectionId,
+        binding: { orgId: instance.orgId, runBy: instance.runBy },
+        source: "drupal-mcp-connection",
+      });
+    } catch (err) {
+      const { ConnectionUseDeniedError } = await import("@/lib/connection-use-gate");
+      if (!(err instanceof ConnectionUseDeniedError)) {
+        throw err;
+      }
+      console.warn(
+        `[drupal-mcp-connection] use-gate denied for instance ${instance.id} (surfaced as auth_error):`,
+        err.message,
+      );
+      out.push({ id: instance.id, name: instance.name, siteUrl: instance.siteUrl, status: "auth_error", isPrivate: false });
+      continue;
+    }
+
     // Resolve the Bearer token from Nango per instance.
     const authHeader = await buildBearerAuthHeaderFromNango({
       providerConfigKey: instance.providerConfigKey,

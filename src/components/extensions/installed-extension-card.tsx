@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Check, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -20,8 +21,12 @@ import { ACCENT_PALETTE } from "@/lib/extension-accent";
  *   2. MIDDLE — the "{Kind} by {Vendor}" byline (small kind glyph tinted with
  *      the accent), the description, then the mono version with the lifecycle
  *      status indicator beside it.
- *   3. RIGHT — a hairline-divided actions panel (Settings primary, More
- *      details, plus any management actions the caller passes).
+ *   3. RIGHT — a hairline-divided actions panel carrying EXACTLY the §VI
+ *      drawing's two actions — Settings (primary, only where a configuration
+ *      surface exists) + More details — nothing else (cinatra#948 reopen,
+ *      2026-07-05: Update/Uninstall/Reinstall/admin-overflow are not in the
+ *      drawing; the caller relocates that management surface into the "More
+ *      details" §V modal instead of rendering it on the card).
  *
  * Server-renderable (no client hooks); all interactivity lives in the slots
  * the caller provides (links / server-action forms). Colors ride the shared
@@ -43,9 +48,17 @@ export type InstalledExtensionCardProps = {
   description?: string | null;
   /** Already-formatted version text (the v-prefixed formatting is the caller's). */
   version?: string | null;
-  /** Lifecycle status indicator (+ any visibility/risk badges) beside the version. */
+  /**
+   * Lifecycle status indicator beside the version — the §VI spec line carries
+   * ONLY the mono version + this indicator (cinatra#948 reopen, gap 3).
+   */
   status?: ReactNode;
-  /** Right-panel actions, top to bottom (Settings, More details, management). */
+  /**
+   * Right-panel actions — exactly the §VI drawing's two: Settings then More
+   * details, ALWAYS both (owner ruling, 2026-07-05). No management actions
+   * (Update/Uninstall/Restore/Reinstall/admin-overflow) and no chips belong
+   * on the card.
+   */
   actions?: ReactNode;
   /**
    * Archived / fully-greyed §VI treatment (cinatra#957): the accent ground
@@ -56,6 +69,49 @@ export type InstalledExtensionCardProps = {
   archived?: boolean;
   className?: string;
 };
+
+/**
+ * §VI "Installed extensions" status indicator (published design system §VI
+ * drawing, refreshed 2026-07-05: "green-check Active / grey-cross
+ * Archived"). A check icon (green) for Active/Locked, a cross icon (muted)
+ * for Archived, beside the mono, uppercase, letter-spaced label. The earlier
+ * "bare dot" reading of this indicator (this branch's prior commits) cited a
+ * now-superseded revision of the published reference — the current §VI
+ * example markup renders an explicit check/cross `<svg>`, not a bare dot.
+ * Active and `locked` (a system extension is live) read green; archived
+ * reads muted. The general `LifecycleBadge`/`StatusPill` stays the §VII
+ * list/table renderer.
+ */
+export function InstalledStatusIndicator({
+  status,
+}: {
+  status: "active" | "locked" | "archived";
+}) {
+  const archived = status === "archived";
+  const label = archived ? "Archived" : status === "locked" ? "Locked" : "Active";
+  const Icon = archived ? X : Check;
+  return (
+    <span
+      data-slot="installed-status-indicator"
+      data-status={status}
+      className={cn(
+        // §VI status label = the canonical badge-2xs kicker style (9.5px mono,
+        // uppercase, the design-system badge letter-spacing) — named tokens per
+        // the ui-design-system gate; no arbitrary text-[]/tracking-[].
+        "inline-flex items-center gap-1.5 font-mono text-badge-2xs font-bold uppercase",
+        archived ? "text-muted-foreground" : "text-success",
+      )}
+      title={
+        status === "locked"
+          ? "System extension — always active; cannot be archived or uninstalled."
+          : undefined
+      }
+    >
+      <Icon aria-hidden className="size-3 shrink-0" strokeWidth={3} />
+      {label}
+    </span>
+  );
+}
 
 export function InstalledExtensionCard({
   name,
@@ -136,8 +192,10 @@ export function InstalledExtensionCard({
           </p>
         )}
         <div
+          data-slot="installed-extension-spec-line"
           className={cn(
-            "flex flex-wrap items-center gap-x-3 gap-y-1.5",
+            // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
+            "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
             archived && "opacity-70",
           )}
         >
@@ -148,12 +206,17 @@ export function InstalledExtensionCard({
         </div>
       </div>
 
-      {/* RIGHT — hairline-divided actions panel; archived cards mute it so the
-          whole card reads inactive while Restore / Reinstall stay operable. */}
+      {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly
+          Settings + More details, naturally sized and CENTERED (not
+          stretched full-width) — `align-items: center` on the panel, no
+          per-button width utility. Archived cards mute the whole panel
+          (cinatra#957) while both actions stay operable. */}
       {actions && (
         <div
           className={cn(
-            "flex flex-col items-stretch justify-center gap-2 border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
+            // gap-[9px]: the drawing's exact 9px actions-panel gap (a layout
+            // arbitrary, not a color/type one — cinatra#803 convention).
+            "flex flex-col items-center justify-center gap-[9px] border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
             archived && "opacity-70",
           )}
         >

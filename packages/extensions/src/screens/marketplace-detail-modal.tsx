@@ -18,7 +18,7 @@
 // is the browse-card "More details" experience only.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
@@ -33,7 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import {
@@ -61,6 +61,7 @@ import {
   type MarketplaceDetailReview,
 } from "@/lib/marketplace-detail-view";
 import { getPublicMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
+import { isRedirectError } from "./is-redirect-error";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import {
   buildMarketplaceFailureCopy,
@@ -73,14 +74,34 @@ type BoundLifecycleAction = () => Promise<MarketplaceInstallActionResult | void>
 
 type LoadStatus = "idle" | "loading" | "loaded" | "notfound" | "error";
 
+/**
+ * Fixture/test seam (cinatra#948): a pinned load state so the static
+ * `/design-fixtures` render (no DB, no session) can show the loaded and
+ * `notfound` bodies without driving the admin-gated server action. When set,
+ * the modal NEVER fetches — the pinned state is the state.
+ */
+export type MarketplaceDetailModalInitialLoad =
+  | { status: "loaded"; detail: MarketplaceDetailView }
+  | { status: "notfound" }
+  | { status: "error" };
+
 export interface MarketplaceDetailModalProps {
   card: MarketplaceCardData;
-  /** The card's six-state CTA — `disabled` already encodes registry state,
-   *  and "incompatible" already folds in the ABI verdict. */
-  cta: MarketplaceCardCta;
-  installAction: BoundLifecycleAction;
-  updateAction: BoundLifecycleAction;
-  restoreAction: BoundLifecycleAction;
+  /**
+   * The card's install-lifecycle CTA. Optional (cinatra#948 reopen,
+   * 2026-07-05): the Marketplace browse card passes it and the footer renders
+   * its 6-state install CTA; the §VI Installed-extensions modal is
+   * DETAILS-ONLY and passes NONE of the footer props, so the footer bar is not
+   * rendered at all (owner ruling: an installed extension's modal shows no
+   * install/uninstall/manage buttons and no footer info). The footer renders
+   * only when the full CTA + lifecycle actions are all provided. The six-state
+   * CTA already encodes registry state in `disabled` and folds the ABI verdict
+   * into "incompatible" (#1003).
+   */
+  cta?: MarketplaceCardCta;
+  installAction?: BoundLifecycleAction;
+  updateAction?: BoundLifecycleAction;
+  restoreAction?: BoundLifecycleAction;
   /**
    * Detail loader override — defaults to the admin-gated marketplace server
    * action. Injectable so the /design-fixtures harness can seed a
@@ -88,6 +109,27 @@ export interface MarketplaceDetailModalProps {
    * production callers never pass it.
    */
   loadDetail?: (packageName: string) => Promise<MarketplaceDetailLoadResult>;
+  /**
+   * Entry-point trigger override (cinatra#948): the Installed extensions page
+   * renders the §VI link-style "More details"; the browse card keeps the
+   * default §IV centred underlined-link button when this is not passed. Must be
+   * a single element (Radix `asChild`).
+   */
+  trigger?: ReactElement;
+  /** See {@link MarketplaceDetailModalInitialLoad}. */
+  initialLoad?: MarketplaceDetailModalInitialLoad;
+  /**
+   * Installed-page (§VI) "More details" affordance: a real `<a>` element (the
+   * published §VI drawing renders More details as `<a class="btn link">`, never
+   * a button). When set, the modal renders this anchor as its opener instead of
+   * the browse card's `<DialogTrigger>` button — `variant:"link"` for an active
+   * row (underlined indigo link), `variant:"ghost"` for an archived row (muted
+   * ghost text). The `href` is the package's marketplace-detail path, a
+   * progressive-enhancement fallback: JS intercepts the click to open the modal
+   * IN PLACE (no navigation); without JS the anchor still resolves to a real
+   * page. The browse card omits this and keeps its `<DialogTrigger>` button.
+   */
+  linkTrigger?: { variant: "link" | "ghost"; href: string };
 }
 
 export function MarketplaceDetailModal({
@@ -97,10 +139,15 @@ export function MarketplaceDetailModal({
   updateAction,
   restoreAction,
   loadDetail = getPublicMarketplaceDetailAction,
+  trigger,
+  initialLoad,
+  linkTrigger,
 }: MarketplaceDetailModalProps) {
   const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<LoadStatus>("idle");
-  const [detail, setDetail] = useState<MarketplaceDetailView | null>(null);
+  const [status, setStatus] = useState<LoadStatus>(initialLoad?.status ?? "idle");
+  const [detail, setDetail] = useState<MarketplaceDetailView | null>(
+    initialLoad?.status === "loaded" ? initialLoad.detail : null,
+  );
 
   const load = useCallback(async () => {
     setStatus("loading");
@@ -112,35 +159,73 @@ export function MarketplaceDetailModal({
       } else {
         setStatus(result.reason === "not_found" ? "notfound" : "error");
       }
-    } catch {
+    } catch (error) {
+      // Auth redirect sentinel (the detail action is admin-gated; the
+      // Installed page is session-gated, cinatra#948) — re-throw so Next.js
+      // navigates to /not-authorized instead of masking authorization as a
+      // retryable "Couldn't load details".
+      if (isRedirectError(error)) throw error;
       // A server-action rejection is masked in production — never crash the
       // browse route; render the retryable error state instead.
       setStatus("error");
     }
   }, [card.packageName, loadDetail]);
 
+  // A pinned fixture state never fetches (there is no session/DB behind the
+  // static fixtures route; the admin-gated action would redirect).
+  const pinned = initialLoad != null;
+
   const onOpenChange = useCallback(
     (next: boolean) => {
       setOpen(next);
       // Fetch on first open (and never again once loaded — reviews/specs are a
       // point-in-time read). Retry re-drives load() from the error state.
-      if (next && status !== "loaded" && status !== "loading") {
+      if (next && !pinned && status !== "loaded" && status !== "loading") {
         void load();
       }
     },
-    [status, load],
+    [pinned, status, load],
   );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger asChild>
-        {/* Centred underlined link button (design spec §IV "More details") —
-            always underlined in the action colour, not just on hover. Still a
-            real button (modal trigger), only the visual treatment is a link. */}
-        <Button size="sm" variant="link" className="underline">
+      {linkTrigger ? (
+        // §VI Installed-page opener: a real anchor — Next <Link> renders an
+        // <a> in the DOM (never a <button>), link-styled via buttonVariants
+        // per the §VI drawing (owner ruling 2026-07-05: "More details" is a
+        // link, never a button). Rendered OUTSIDE <DialogTrigger> so the
+        // controlled Dialog opens via onOpenChange while the click's default
+        // navigation is suppressed (the href is only the no-JS fallback).
+        <Link
+          href={linkTrigger.href}
+          data-slot="installed-more-details"
+          aria-haspopup="dialog"
+          className={cn(
+            buttonVariants({ variant: linkTrigger.variant, size: "sm" }),
+            linkTrigger.variant === "link"
+              ? "underline underline-offset-3"
+              : "text-muted-foreground",
+          )}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenChange(true);
+          }}
+        >
           More details
-        </Button>
-      </DialogTrigger>
+        </Link>
+      ) : (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            // §IV browse-card default: centred underlined link button (design
+            // spec §IV "More details") — always underlined in the action
+            // colour, not just on hover. Still a real button (modal trigger),
+            // only the visual treatment is a link.
+            <Button size="sm" variant="link" className="underline">
+              More details
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       {/* Overlay stops below the navbar (top-16). Portalled so it escapes any
           transformed card ancestor and dims the whole viewport below the nav. */}
       <DialogPortal>
@@ -189,7 +274,8 @@ export function MarketplaceDetailModal({
             <ModalMessage
               title="Couldn't load details"
               body="Something went wrong loading this extension. Please try again."
-              onRetry={() => void load()}
+              // A pinned fixture error state has nothing to retry against.
+              onRetry={pinned ? undefined : () => void load()}
             />
           ) : detail ? (
             <ModalBody card={card} detail={detail} />
@@ -197,16 +283,26 @@ export function MarketplaceDetailModal({
         </div>
 
         {/* Footer — the six-state install CTA, right-aligned per the §V
-            drawing (hairline separator, 15px/26px padding). */}
-        <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
-          <ModalFooterCta
-            card={card}
-            cta={cta}
-            installAction={installAction}
-            updateAction={updateAction}
-            restoreAction={restoreAction}
-          />
-        </div>
+            drawing (hairline separator, 15px/26px padding). Rendered ONLY for
+            the Marketplace browse card (all four footer props supplied). The
+            §VI Installed-extensions modal supplies none of them, so the footer
+            bar is omitted entirely: an installed extension's "More details" is
+            details-only, with no install/uninstall/manage buttons and no
+            footer info (owner ruling, 2026-07-05). */}
+        {cta != null &&
+        installAction != null &&
+        updateAction != null &&
+        restoreAction != null ? (
+          <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
+            <ModalFooterCta
+              card={card}
+              cta={cta}
+              installAction={installAction}
+              updateAction={updateAction}
+              restoreAction={restoreAction}
+            />
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -357,9 +453,13 @@ function ModalHero({
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {/* §V title: Archivo (display) italic 800 23px ink — the named
-            `text-modal-title` token (globals.css @theme). */}
+            `text-modal-title` token (globals.css @theme). Prefer the
+            caller-supplied human-readable name (the Installed page hydrates it
+            from the per-kind manifest displayName); the fetched storefront
+            title is the fallback. Never the raw package slug (owner ruling:
+            the modal shows the human name, not the package name). */}
         <h2 className="font-display text-modal-title font-extrabold italic text-foreground">
-          {detail.displayName}
+          {card.displayName || detail.displayName}
         </h2>
         {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
             vendor as a semibold primary link (no underline at rest) out to

@@ -66,10 +66,28 @@ const PINNED: Record<string, { count: number; status: string; note?: string }> =
     status: "w3-residue",
     note: "first-party extension ctx capability (reserved surface) — W3/W4 fleet wave",
   },
-  "src/lib/linkedin-api.ts": { count: 3, status: "w3-residue" },
-  "src/lib/wordpress-api.ts": { count: 2, status: "w3-residue" },
-  "src/lib/drupal-api.ts": { count: 1, status: "w3-residue" },
-  "src/lib/drupal-mcp-connection.ts": { count: 1, status: "w3-residue" },
+  "src/lib/linkedin-api.ts": {
+    count: 3,
+    status: "gated-by-w2",
+    note:
+      "cinatra#967: the account-token (resolveLinkedInAccessToken) and per-user (readLinkedInUserConnection, real live actor) reads resolve/self-heal-seed an identity row and gate + audit via enforceInstanceConnectionUse/enforcePerUserInstanceConnectionUse; saveLinkedInAccountFromNangoConnection's read is the generic Nango-connect materializer seam, already fully authorized by /api/nango/connections/save's own pre/post identity guard — gating it here would race that route's real-session registration with a guessed single-tenant seed (codex round-1 finding), so it deliberately stays as-is",
+  },
+  "src/lib/wordpress-api.ts": {
+    count: 2,
+    status: "gated-by-w2",
+    note:
+      "cinatra#967: resolveWordPressBasicAuth (the content-editor read/write flows) gates via enforceInstanceConnectionUse (self-heal identity seeding + actor threading) before both raw reads in resolveWordPressNangoCredentials; the OTHER call site (saveWordPressInstanceFromNangoConnection, the generic Nango-connect materializer seam) is already fully authorized by /api/nango/connections/save's own pre/post identity guard and deliberately left ungated here — gating it would race that route's real-session registration with a guessed single-tenant seed (codex round-1 finding)",
+  },
+  "src/lib/drupal-api.ts": {
+    count: 1,
+    status: "gated-by-w2",
+    note: "cinatra#967: saveDrupalInstance gates the post-import readback via enforceInstanceConnectionUse (self-heal identity seeding + actor threading)",
+  },
+  "src/lib/drupal-mcp-connection.ts": {
+    count: 1,
+    status: "gated-by-w2",
+    note: "cinatra#967: getDrupalMcpInstanceStatuses gates the per-instance Bearer resolution via enforceInstanceConnectionUse (self-heal identity seeding + actor threading)",
+  },
   "packages/google-oauth-connection/src/index.ts": {
     count: 1,
     status: "w3-residue",
