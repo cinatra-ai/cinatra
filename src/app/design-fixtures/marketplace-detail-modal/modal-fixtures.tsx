@@ -192,6 +192,7 @@ function cardFor(detail: MarketplaceDetailView, kindSlug: MarketplaceCardData["k
     installCount: detail.installCount,
     iconUrl: null,
     vendorLogoUrl: null,
+    vendor: detail.vendor ? { name: detail.vendor.name, storeUrl: detail.vendor.storeUrl } : null,
     sdkAbiRange: detail.sdkAbiRange,
   };
 }

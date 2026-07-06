@@ -9,7 +9,7 @@ import "server-only";
 // This file keeps the host-owned probe used by the connector settings pages.
 
 import { getDrupalAPISettings } from "@/lib/drupal-api";
-import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
+import { isPrivateUrl } from "@/lib/url-policy";
 import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
 import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
 
