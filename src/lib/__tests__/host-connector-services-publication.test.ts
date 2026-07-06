@@ -51,6 +51,7 @@ const EXT_MCP_ROW = {
 };
 const extMcpCalls: Record<string, unknown[][]> = { resolveBearer: [] };
 vi.mock("@/lib/external-mcp-registry", () => ({
+  EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY: "cinatra-external-mcp",
   upsertExternalMcpServer: async () => ({}),
   deleteExternalMcpServer: async () => {},
   getExternalMcpServerById: (id: string) => (id === EXT_MCP_ROW.id ? EXT_MCP_ROW : null),
@@ -153,6 +154,8 @@ vi.mock("@/lib/wordpress-api", () => ({
     detail: "1 WordPress instance is configured.",
   }),
   readWordPressInstanceById: (id: string) => (id === WP_ROW.id ? WP_ROW : null),
+  saveWordPressInstance: async () => ({ id: WP_ROW.id, connectionId: "nango-wp-1" }),
+  persistLocalDevWordPressInstanceUnvalidated: async () => ({ id: WP_ROW.id, connectionId: "nango-wp-1" }),
   saveWordPressInstanceFromNangoConnection: async (input: unknown) => {
     wordpressMaterialized.push(input);
   },
@@ -314,6 +317,7 @@ vi.mock("@/lib/youtube-api", () => ({
 }));
 vi.mock("@/lib/wordpress-mcp-connection", () => ({
   probeWordPressInstanceMcpAdapter: async () => ({}),
+  invalidateWordPressMcpProbeCache: () => {},
   resolveWordPressMcpFallbackEndpoint: (siteUrl: string) =>
     `${siteUrl}/index.php?rest_route=/mcp/mcp-adapter-default-server`,
   resolveWordPressMcpEndpoint: (siteUrl: string) => `${siteUrl}/wp-json/mcp/mcp-adapter-default-server`,
@@ -339,6 +343,8 @@ vi.mock("@/lib/wordpress-widget-auth", () => ({
 }));
 vi.mock("@/lib/drupal-mcp-connection", () => ({
   probeDrupalMcp: async () => ({}),
+  probeDrupalMcpWithBearer: async () => "registered",
+  invalidateDrupalMcpProbeCache: () => {},
   resolveDrupalMcpServerUrl: () => null,
   getDrupalMcpInstanceStatuses: async () => [
     { id: "i-1", name: "Site", siteUrl: "https://d.example", status: "registered", isPrivate: false },
@@ -352,6 +358,7 @@ vi.mock("@/lib/drupal-api", () => ({
     drupalApiCalls.save.push(args);
     return { id: "i-1" };
   },
+  persistLocalDevDrupalInstanceUnvalidated: async () => ({ id: "i-1" }),
   deleteDrupalInstance: async (...args: unknown[]) => {
     drupalApiCalls.delete.push(args);
   },
