@@ -9,8 +9,10 @@
  * helpers via its host-bound deps (the `@cinatra-ai/host:wordpress-mcp`
  * service published by src/lib/register-host-connector-services.ts).
  * This file keeps the host-owned pieces: the cached reachability probe (also
- * used by the assistant-connector settings pages), the endpoint resolution,
- * and the private-URL policy shared with the external-MCP registry.
+ * used by the assistant-connector settings pages) and the endpoint resolution.
+ * The private-URL policy moved to the neutral `@/lib/url-policy` module
+ * (cinatra#975) so the generic external-MCP registry no longer imports a
+ * vendor-named module for that neutral concern.
  *
  * Uses EXISTING connector-wordpress credentials (siteUrl + username +
  * applicationPassword), so no new credential entry is required.
@@ -43,28 +45,6 @@ const WP_MCP_ADAPTER_ROUTE = "/mcp/mcp-adapter-default-server";
 // ---------------------------------------------------------------------------
 // Public helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Returns true if the given URL hostname is a private/local address that cannot
- * be reached by external LLM providers (OpenAI, Anthropic). Such sites can still
- * show "Registered" in the administration UI (Cinatra's server can reach them) but must
- * not be registered as external MCP server tools.
- */
-export function isPrivateUrl(siteUrl: string): boolean {
-  try {
-    const { hostname } = new URL(siteUrl);
-    return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "::1" ||
-      /^10\./.test(hostname) ||
-      /^192\.168\./.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
-    );
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Strip trailing slashes via a LINEAR char-index trim. The anchored greedy

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 // vendored-primitive refresh cascade (src/lib/utils.ts is a registry source
 // vendored into extension repos), tracked with the arbitrary-value lint gate.
 import { cn } from "@cinatra-ai/sdk-ui/lib/utils";
+import { ExtensionCardIconImage } from "@/components/extension-card-icon-image";
 import {
   ACCENT_PALETTE,
   type ExtensionAccent,
@@ -239,7 +240,11 @@ function ExtensionCardChip({
  * (Archivo italic-800, 18px, line-clamp 3), not beneath the emblem (that is the
  * §V running-agent chip). The icon tile resolves a fallback chain: a hosted
  * square icon URL → else the kind/vendor `emblem` (the caller resolves
- * icon → vendor-logo → kind-emblem before passing `iconUrl`/`emblem`).
+ * icon → vendor-logo → kind-emblem before passing `iconUrl`/`emblem`). The
+ * tile never goes blank even when the resolved URL is present but the image
+ * fails to LOAD (a dead/expired asset) — `ExtensionCardIconImage` degrades to
+ * the `emblem` on a load error, so the kind-emblem tail of the chain is
+ * always reachable (cinatra#1003).
  *
  * `badges` (kind + commerce) overlay the top-right corner so the icon+name row
  * stays the §IV layout; the name reserves right padding when badges are present
@@ -290,7 +295,9 @@ export function ExtensionCardListingBanner({
     >
       {/* Square icon tile — 46×46, 11px radius, white ground, soft shadow,
           icon colour matching the banner (spec §IV). A hosted icon image
-          renders cover-fit inside the tile; otherwise the kind/vendor emblem. */}
+          renders cover-fit inside the tile (degrading to the kind/vendor
+          emblem on a load failure, never a blank square — cinatra#1003);
+          absent a URL, the emblem renders directly. */}
       {/* Muted variant: the tile keeps its white ground but the emblem inks
           muted-foreground instead of the accent (SVI "logo tile muted"). */}
       <span
@@ -305,15 +312,9 @@ export function ExtensionCardListingBanner({
           // An arbitrary remote marketplace asset host; not a build-time-known
           // image, so the Next <Image> loader/allowlist does not apply. The URL
           // is a sanitized hosted asset (the marketplace rasterizes; never a raw
-          // SVG blob).
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={iconUrl}
-            alt=""
-            className="h-full w-full object-cover"
-            loading="lazy"
-            decoding="async"
-          />
+          // SVG blob). `key={iconUrl}` resets the client component's load-error
+          // state when the resolved URL changes (cinatra#1003).
+          <ExtensionCardIconImage key={iconUrl} src={iconUrl} emblem={emblem} />
         ) : (
           emblem
         )}

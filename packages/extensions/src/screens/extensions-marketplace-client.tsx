@@ -117,9 +117,16 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        // auto-rows-fr locks every grid row to equal heights (design spec §IV
+        // "grid-auto-rows: 1fr"); each card stretches (h-full on the card +
+        // h-full on this wrapper) so bodies align across a row.
+        <div className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {cards.map((c) => (
-            <div key={c.meta.packageName} style={{ display: matches(c.meta) ? undefined : "none" }}>
+            <div
+              key={c.meta.packageName}
+              className="h-full"
+              style={{ display: matches(c.meta) ? undefined : "none" }}
+            >
               {c.node}
             </div>
           ))}

@@ -126,6 +126,24 @@ export default defineConfig({
         __dirname,
         "src/__tests__/__mocks__/gatekept-install.ts",
       ),
+      // aliases for marketplace-listing-card.test.tsx (cinatra#1003 — the §IV
+      // ListingCard's CompatMeta plain-row + RatingRow rating-star-token
+      // fixes). All real source (no stubs needed): every one of these is a
+      // pure/presentational module, none pull in server-only/DB code.
+      "@/components/extension-card": path.join(__dirname, "../../src/components/extension-card.tsx"),
+      "@/components/extension-card-icon-image": path.join(
+        __dirname,
+        "../../src/components/extension-card-icon-image.tsx",
+      ),
+      "@/components/extension-kind-emblem": path.join(
+        __dirname,
+        "../../src/components/extension-kind-emblem.tsx",
+      ),
+      "@/components/ui/button": path.join(__dirname, "../../src/components/ui/button.tsx"),
+      "@/lib/extension-accent": path.join(__dirname, "../../src/lib/extension-accent.ts"),
+      "@/lib/extension-compat-badge": path.join(__dirname, "../../src/lib/extension-compat-badge.ts"),
+      "@/lib/marketplace-detail-view": path.join(__dirname, "../../src/lib/marketplace-detail-view.ts"),
+      "@/lib/utils": path.join(__dirname, "../../src/lib/utils.ts"),
     },
   },
   test: {

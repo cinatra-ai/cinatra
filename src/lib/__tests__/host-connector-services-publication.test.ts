@@ -313,11 +313,18 @@ vi.mock("@/lib/youtube-api", () => ({
   },
 }));
 vi.mock("@/lib/wordpress-mcp-connection", () => ({
-  isPrivateUrl: () => false,
   probeWordPressInstanceMcpAdapter: async () => ({}),
   resolveWordPressMcpFallbackEndpoint: (siteUrl: string) =>
     `${siteUrl}/index.php?rest_route=/mcp/mcp-adapter-default-server`,
   resolveWordPressMcpEndpoint: (siteUrl: string) => `${siteUrl}/wp-json/mcp/mcp-adapter-default-server`,
+}));
+// The private-URL policy is now the neutral `@/lib/url-policy` module
+// (cinatra#975) — register-host-connector-services resolves `isPrivateUrl`
+// from there and republishes it into the drupal/wordpress/external-mcp
+// capabilities. Stub it false so the published-member assertions stay
+// deterministic.
+vi.mock("@/lib/url-policy", () => ({
+  isPrivateUrl: () => false,
 }));
 const wpWidgetAuthCalls: Record<string, number> = { read: 0, generate: 0 };
 vi.mock("@/lib/wordpress-widget-auth", () => ({

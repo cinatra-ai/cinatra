@@ -4,6 +4,7 @@ import {
   catalogEntryToCardData,
   normalizeCardDescription,
   resolveMarketplaceCardCta,
+  resolveCardPriceLabel,
   marketplaceDetailHref,
 } from "../screens/marketplace-card-model";
 
@@ -27,12 +28,17 @@ function catalogEntry(over: Partial<MarketplaceCatalogEntry> = {}): MarketplaceC
 }
 
 describe("catalogEntryToCardData — listing-card fields (install count, icon/vendor URLs, ABI range)", () => {
-  it("maps a clean install count, icon URL, vendor-logo URL, and ABI range", () => {
+  it("maps a clean install count, icon URL, vendor-logo URL (WP-media descriptor shape), and ABI range", () => {
+    // The LIVE storefront catalog serves icon_url/vendor_logo_url as a
+    // {url, width, height} descriptor — the same WP-media shape the public
+    // detail endpoint's icon_url already carries (cinatra#1003) — not a bare
+    // string. A prior bare-string-only mapping silently discarded every real
+    // asset on every listing.
     const card = catalogEntryToCardData(
       catalogEntry({
         install_count: 2147,
-        icon_url: "https://assets.example/icon.png",
-        vendor_logo_url: "https://assets.example/vendor.png",
+        icon_url: { url: "https://assets.example/icon.png", width: 256, height: 256 },
+        vendor_logo_url: { url: "https://assets.example/vendor.png", width: 256, height: 256 },
         sdk_abi_range: "^2",
       }),
     );
@@ -40,6 +46,28 @@ describe("catalogEntryToCardData — listing-card fields (install count, icon/ve
     expect(card!.iconUrl).toBe("https://assets.example/icon.png");
     expect(card!.vendorLogoUrl).toBe("https://assets.example/vendor.png");
     expect(card!.sdkAbiRange).toBe("^2");
+  });
+
+  it("still accepts a bare string icon/vendor-logo URL (a pre-descriptor catalog build)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        icon_url: "https://assets.example/icon.png",
+        vendor_logo_url: "https://assets.example/vendor.png",
+      }),
+    );
+    expect(card!.iconUrl).toBe("https://assets.example/icon.png");
+    expect(card!.vendorLogoUrl).toBe("https://assets.example/vendor.png");
+  });
+
+  it("degrades a descriptor with a blank/absent `url` field to null (never a broken-image placeholder)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        icon_url: { url: null, width: 256, height: 256 },
+        vendor_logo_url: { width: 256, height: 256 },
+      }),
+    );
+    expect(card!.iconUrl).toBeNull();
+    expect(card!.vendorLogoUrl).toBeNull();
   });
 
   it("degrades every new field to null when the marketplace omits them (older catalog)", () => {
@@ -178,39 +206,116 @@ describe("normalizeCardDescription", () => {
   });
 });
 
-describe("resolveMarketplaceCardCta", () => {
+describe("resolveMarketplaceCardCta (six-state, cinatra#988)", () => {
   const card = { packageVersion: "2.0.0" };
 
   it("not installed → install (enabled when registry connected, disabled when not)", () => {
-    expect(resolveMarketplaceCardCta(card, undefined, true)).toEqual({ state: "install", disabled: false });
-    expect(resolveMarketplaceCardCta(card, undefined, false)).toEqual({ state: "install", disabled: true });
+    expect(resolveMarketplaceCardCta(card, undefined, true, "compatible")).toEqual({ state: "install", disabled: false });
+    expect(resolveMarketplaceCardCta(card, undefined, false, "compatible")).toEqual({ state: "install", disabled: true });
+  });
+
+  it("not installed + undeclared ABI (unknown) stays installable — exactly as lenient as the install gate", () => {
+    expect(resolveMarketplaceCardCta(card, undefined, true, "unknown")).toEqual({ state: "install", disabled: false });
+  });
+
+  it("not installed + incompatible ABI → incompatible install (never softer than the install gate)", () => {
+    expect(resolveMarketplaceCardCta(card, undefined, true, "incompatible")).toEqual({
+      state: "incompatible",
+      blockedAction: "install",
+    });
+    // Registry state cannot soften/override the ABI refusal.
+    expect(resolveMarketplaceCardCta(card, undefined, false, "incompatible")).toEqual({
+      state: "incompatible",
+      blockedAction: "install",
+    });
+  });
+
+  it("installed older + incompatible NEWER catalog version → incompatible update (the update gate refusal)", () => {
+    // Updating would fetch + activate the incompatible catalog version, so an
+    // enabled Update would be softer than the gate — grey it out too.
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true, "incompatible")).toEqual({
+      state: "incompatible",
+      blockedAction: "update",
+    });
+  });
+
+  it("incompatible never gates actionless/DB-only states — restore + installed keep their state", () => {
+    // Restore reactivates the already-installed version (no catalog fetch);
+    // Installed has no action to gate.
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, true, "incompatible")).toEqual({
+      state: "restore",
+    });
+    expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true, "incompatible")).toEqual({
+      state: "installed",
+    });
   });
 
   it("archived → restore (registry-independent)", () => {
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, false)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, false, "compatible")).toEqual({
       state: "restore",
     });
   });
 
   it("installed older → update (disabled when registry not connected)", () => {
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true, "compatible")).toEqual({
       state: "update",
       disabled: false,
     });
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, false)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, false, "compatible")).toEqual({
       state: "update",
       disabled: true,
     });
   });
 
   it("installed current/newer → installed (no spurious update for a prerelease catalog version)", () => {
-    expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true, "compatible")).toEqual({
       state: "installed",
     });
     // Installed stable 2.0.0; catalog shows 2.0.0-rc.1 (a prerelease) → NOT an update.
     expect(
-      resolveMarketplaceCardCta({ packageVersion: "2.0.0-rc.1" }, { version: "2.0.0", isArchived: false }, true),
+      resolveMarketplaceCardCta({ packageVersion: "2.0.0-rc.1" }, { version: "2.0.0", isArchived: false }, true, "compatible"),
     ).toEqual({ state: "installed" });
+  });
+});
+
+describe("catalogEntryToCardData — publisher/vendor block (§IV publisher line, cinatra#988)", () => {
+  it("maps a full vendor block (name + store URL)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        vendor: { name: "Foundry", slug: "foundry", store_url: "https://marketplace.cinatra.ai/store/foundry" },
+      }),
+    );
+    expect(card!.vendor).toEqual({
+      name: "Foundry",
+      storeUrl: "https://marketplace.cinatra.ai/store/foundry",
+    });
+  });
+
+  it("falls back to the slug when the name is blank, and null store URL when absent", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ vendor: { name: "  ", slug: "foundry", store_url: null } }),
+    );
+    expect(card!.vendor).toEqual({ name: "foundry", storeUrl: null });
+  });
+
+  it("degrades to null (no publisher line vendor) when the catalog omits or blanks the block", () => {
+    expect(catalogEntryToCardData(catalogEntry())!.vendor).toBeNull();
+    expect(catalogEntryToCardData(catalogEntry({ vendor: null }))!.vendor).toBeNull();
+    expect(
+      catalogEntryToCardData(catalogEntry({ vendor: { name: " ", slug: "", store_url: "x" } }))!.vendor,
+    ).toBeNull();
+  });
+});
+
+describe("resolveCardPriceLabel (§IV price row, cinatra#988)", () => {
+  it("maps the three commerce variants to the spec price strings", () => {
+    expect(resolveCardPriceLabel({ text: "Open source", variant: "oss" })).toBe("Free, Open Source");
+    expect(resolveCardPriceLabel({ text: "Free", variant: "free" })).toBe("Free");
+    expect(resolveCardPriceLabel({ text: "$9/mo", variant: "price" })).toBe("$9/mo");
+  });
+
+  it("renders no price row for a badge-less card (wire defence)", () => {
+    expect(resolveCardPriceLabel(null)).toBeNull();
   });
 });
 
