@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
 
 export const metadata: Metadata = { title: "Setup: Connections" };
-import { getNangoSettings, getNangoStatus } from "@/lib/nango-system";
+import { getNangoSettings, getNangoSettingsEnvManaged, getNangoStatus } from "@/lib/nango-system";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 
 type SetupNangoPageProps = {
@@ -32,6 +32,10 @@ export default async function SetupNangoPage({ searchParams }: SetupNangoPagePro
 
   const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
   const settings = getNangoSettings();
+  // Which fields are supplied by an operator env override (host-resolved from
+  // the connector's manifest, cinatra-ai/cinatra#982) — replaces the direct
+  // `process.env.NANGO_*` reads so core hardcodes no connector env-var names.
+  const envManaged = getNangoSettingsEnvManaged();
   const errorMessage = pickSearchParam(resolvedSearchParams.error);
   const saved = pickSearchParam(resolvedSearchParams.saved) === "1";
 
@@ -64,10 +68,10 @@ export default async function SetupNangoPage({ searchParams }: SetupNangoPagePro
             <Input
               name="secretKey"
               type="password"
-              defaultValue={process.env.NANGO_SECRET_KEY ? "" : (settings.secretKey ?? "")}
-              required={!process.env.NANGO_SECRET_KEY && !settings.secretKey}
+              defaultValue={envManaged.secretKey ? "" : (settings.secretKey ?? "")}
+              required={!envManaged.secretKey && !settings.secretKey}
             />
-            {process.env.NANGO_SECRET_KEY || settings.secretKey ? (
+            {envManaged.secretKey || settings.secretKey ? (
               <span className="text-xs font-normal text-muted-foreground">Leave blank to keep the current saved key.</span>
             ) : null}
           </Field>
@@ -80,7 +84,7 @@ export default async function SetupNangoPage({ searchParams }: SetupNangoPagePro
               <InputGroupInput
                 name="serverUrl"
                 type="url"
-                defaultValue={process.env.NANGO_SERVER_URL ? "" : (settings.serverUrl ?? "")}
+                defaultValue={envManaged.serverUrl ? "" : (settings.serverUrl ?? "")}
                 placeholder="https://api.nango.dev"
               />
             </InputGroup>
