@@ -97,6 +97,13 @@ import {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
 } from "@cinatra-ai/sdk-extensions/internal";
+// The generated extension registry — the host's runtime source of truth for
+// each extension's manifest, including the raw `cinatra.envOverrides`
+// declaration (cinatra#982) and the generator-owned `resolution`
+// classification. Read here so the env-override env-var NAMES come SOLELY from
+// a connector's own manifest, never hardcoded in core.
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import { computeConnectorConfigEnvOverrides } from "@/lib/connector-config-env-overrides";
 import {
   getGoogleOAuthStatus,
   googleApiFetch,
@@ -255,6 +262,44 @@ type HostExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
   isPrivateUrl(serverUrl: string): boolean;
 };
 
+// ---------------------------------------------------------------------------
+// Env-override precedence for the instance-global `connector-config` store
+// (cinatra#982, Option A).
+//
+// Nango KEEPS its persistence exactly where it is: a single instance-global
+// connector-config KV blob (constant id), read from ACTOR-FREE contexts (the
+// inbound Nango webhook signature verify resolves the secret with no cookie /
+// MCP / A2A actor). The org-scoped `ctx.settings`/`ctx.secrets` ports
+// deliberately fail closed with no actor, so nango must NOT be routed through
+// them. Instead, the operator env override (the shape nango already supported
+// via its now-evicted `process.env` reads) is applied HERE, at the
+// connector-config boundary: env-first-else-DB, resolved from `process.env`
+// plus the connector's OWN manifest `cinatra.envOverrides` — core hardcodes NO
+// env-var name. A connector opts in by binding its package name to
+// `resolveEnvOverrides` in its `register(ctx)` (nango does); this member is
+// additive and does not alter the frozen `HostConnectorConfigService` contract.
+// The pure precedence/validation lives in `@/lib/connector-config-env-overrides`
+// (unit-tested without the host boot graph); this file owns the registry lookup
+// and the capability wiring.
+// ---------------------------------------------------------------------------
+
+/**
+ * The `resolveEnvOverrides` member bound onto the host `connector-config`
+ * capability. Looks the CALLER's manifest up in the generated registry (by the
+ * package name it supplies from its own `register(ctx)`) and resolves its
+ * currently-set env overrides. Returns `{}` for a package that declares none
+ * (every extension today, until nango's manifest change ships), so the member
+ * is inert for every other connector-config consumer.
+ */
+export function resolveConnectorConfigEnvOverrides(packageName: string): Record<string, string> {
+  const record = STATIC_EXTENSION_MANIFEST[packageName];
+  return computeConnectorConfigEnvOverrides(
+    packageName,
+    record?.envOverrides,
+    record?.resolution,
+  );
+}
+
 /**
  * Publish the per-concern host connector services into the capability
  * registry. A serverEntry transport's `register(ctx)` resolves exactly the
@@ -279,6 +324,15 @@ export function registerHostConnectorServices(): void {
     // the dead, untrusted key must be REMOVED, never blanked) binds this
     // member through its injected config store.
     delete: deleteConnectorConfig,
+    // ADDITIVE member (cinatra#982, Option A) — the frozen SDK
+    // `HostConnectorConfigService` contract (read/write/delete) is unchanged;
+    // consumers that need env-override precedence resolve it structurally (the
+    // `HostExternalMcpRegistrySetupSurface` precedent). Nango calls this,
+    // bound to its own package name, to overlay the operator env override onto
+    // its instance-global settings read WITHOUT the org-scoped ports —
+    // preserving the actor-free webhook-verify secret read (see the note above
+    // this function).
+    resolveEnvOverrides: resolveConnectorConfigEnvOverrides,
   });
 
   // BLOCKING nango connection-save materializers (linkedin account row +

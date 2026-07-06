@@ -80,6 +80,25 @@ export const getNangoFrontendConfig: NangoSystemSurface["getNangoFrontendConfig"
   requireNangoSystem().getNangoFrontendConfig();
 export const getNangoSettings: NangoSystemSurface["getNangoSettings"] = () =>
   requireNangoSystem().getNangoSettings();
+
+/**
+ * Which nango settings/secrets keys are supplied by an operator env override
+ * (host-resolved from the connector's manifest `cinatra.envOverrides`,
+ * cinatra-ai/cinatra#982). A host settings/setup surface uses this — never
+ * `process.env` — to blank the write-only field and skip `required` when a
+ * value is env-managed. Resolved STRUCTURALLY (additive nango-system member,
+ * not on the frozen `NangoSystemSurface` contract): a connector build that
+ * predates the member reports "not env-managed", so the field falls back to the
+ * resolved settings value (safe — the surface's `getNangoSettings` already
+ * carries env-first precedence).
+ */
+export function getNangoSettingsEnvManaged(): { secretKey: boolean; serverUrl: boolean } {
+  const surface = requireNangoSystem() as NangoSystemSurface & {
+    getNangoSettingsEnvManaged?: () => { secretKey: boolean; serverUrl: boolean };
+  };
+  return surface.getNangoSettingsEnvManaged?.() ?? { secretKey: false, serverUrl: false };
+}
+
 export const getNangoOAuthCallbackUrl: NangoSystemSurface["getNangoOAuthCallbackUrl"] = () =>
   requireNangoSystem().getNangoOAuthCallbackUrl();
 
