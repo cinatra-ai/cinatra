@@ -44,13 +44,17 @@ import {
 } from "@/lib/external-mcp-registry";
 // Connector setup-page server actions for @cinatra-ai/mcp-server-connector
 // (cinatra#612) and @cinatra-ai/twenty-connector (twenty-connector#39): the
-// connectors bind these into their own deps slots at activation and pass them
-// DIRECTLY into `<form action={…}>`. They MUST therefore be real
-// server-action REFERENCES — exports of a "use server" module — not adapter
-// closures defined here: a closure in this (non-"use server") module carries
-// no server-reference marker and React rejects it at RSC form render
-// (twenty-connector#39, digest 1769553696; the setup page 500'd for every
-// admin). The dedicated `@/app/campaigns/connector-setup-actions` module is
+// connectors adapt these into their own deps slots. The mcp-server-connector
+// bundled-react fallback (and a lock-pinned OLDER twenty-connector — compat
+// window, cinatra#1097) passes them DIRECTLY into `<form action={…}>`, so
+// they MUST be real server-action REFERENCES — exports of a "use server"
+// module — not adapter closures defined here: a closure in this
+// (non-"use server") module carries no server-reference marker and React
+// rejects it at RSC form render (twenty-connector#39, digest 1769553696; the
+// setup page 500'd for every admin). The CURRENT twenty-connector instead
+// binds connector-local "use server" actions that call the published
+// implementation at POST time (cinatra#1097), so for it these are plain
+// in-process functions. The dedicated `@/app/campaigns/connector-setup-actions` module is
 // feather-weight (no static imports — each action lazy-imports the heavy
 // `@/app/campaigns/actions` graph on FIRST INVOCATION, preserving the boot- /
 // test-collection-path reason the old closures lazy-imported), so this static
