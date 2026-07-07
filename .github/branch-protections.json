@@ -18,10 +18,19 @@
     "works-after-proof.yml upgrade gate (job `proof`).",
     "NOTE: a `v*` tag triggers a production deploy (build-image.yml -> ops), so",
     "tag/release creation must be restricted to maintainers SEPARATELY (Settings ->",
-    "Tags, or a `v*` tag protection rule) \u2014 branch protection does not cover tags."
+    "Tags, or a `v*` tag protection rule) \u2014 branch protection does not cover tags.",
+    "required_status_checks.strict is false (NOT true): requiring branches to be",
+    "up to date before merging was deliberately dropped (owner decision,",
+    "2026-07-06, merge-train livelock fix, Path B kept over a merge queue). Review",
+    "provenance now binds to the change CONTENT (the content/diff-binding",
+    "attribution gate), so a mechanical update-branch no longer invalidates an",
+    "approval, and the mandatory post-merge verification on the real merged SHA",
+    "catches semantic conflicts that an up-to-date requirement would have. If a",
+    "GitHub merge queue is ever enabled, revisit this note and the setting",
+    "together."
   ],
   "required_status_checks": {
-    "strict": true,
+    "strict": false,
     "contexts": [
       "RBAC browser e2e",
       "Workflows browser e2e",
