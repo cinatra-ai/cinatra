@@ -738,6 +738,12 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
   // --- twenty-connector#39 regression: the published setup-page actions must
   // be REAL server-action references, not adapter closures. -----------------
   //
+  // (Scope note, cinatra#1097: the CURRENT twenty-connector binds
+  // connector-local "use server" actions and only CALLS these members at POST
+  // time; the direct `<form action={…}>` binding below remains true for the
+  // mcp-server-connector bundled-react fallback and for a lock-pinned OLDER
+  // twenty-connector — the compat window the bridge keeps reflecting.)
+  //
   // The connectors bind these members DIRECTLY into `<form action={…}>`; React
   // only serializes a function into the RSC client payload when it carries a
   // server-reference marker, which the Next compiler attaches to exports of a
