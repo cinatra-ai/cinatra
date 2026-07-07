@@ -905,6 +905,68 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     expect(target.name).toBe("target");
   });
 
+  // --- cinatra#1068 regression: re-copy over a target React has ALREADY
+  // registered as a real <form action>. React's server-reference registration
+  // re-defines $$typeof/$$id/$$bound as NON-configurable data props on the
+  // published instance; the next bridge re-evaluation (Turbopack HMR / a
+  // second compilation layer) re-copies the same descriptors and previously
+  // threw `TypeError: Cannot redefine property: $$typeof` — an intermittent
+  // dev 500 on the connector setup dispatch route. A locked prop with the
+  // identical value must be skipped; the copy must stay correct for fresh
+  // (unlocked) targets. -----------------------------------------------------
+  it("re-copy over a React-registered (non-configurable $$typeof/$$id/$$bound) reference is safe — cinatra#1068", async () => {
+    const { copyServerReferenceProps } = await import(
+      "@/lib/connector-setup-action-references.server"
+    );
+
+    const transformed = (async () => {}) as (formData: FormData) => Promise<void>;
+    Object.defineProperties(transformed, {
+      $$typeof: { value: Symbol.for("react.server.reference") },
+      $$id: { value: "40deadbeef".padEnd(40, "0") },
+      $$bound: { value: null },
+    });
+    const published = (async () => {}) as (formData: FormData) => Promise<void>;
+
+    // First bridge evaluation decorates the boot-published instance.
+    copyServerReferenceProps(transformed, published);
+
+    // React registers the decorated instance as a form action: the reference
+    // props become NON-configurable data props holding the SAME values (the
+    // shared registry symbol + the deterministic compiler-minted id).
+    for (const prop of ["$$typeof", "$$id", "$$bound"]) {
+      const current = Object.getOwnPropertyDescriptor(published, prop)!;
+      Object.defineProperty(published, prop, {
+        value: current.value,
+        writable: false,
+        enumerable: current.enumerable,
+        configurable: false,
+      });
+    }
+
+    // Second bridge evaluation (HMR / another layer): must NOT throw, and the
+    // locked metadata must survive intact.
+    expect(() =>
+      copyServerReferenceProps(transformed, published),
+    ).not.toThrow();
+    const locked = published as unknown as Record<string, unknown>;
+    expect(locked.$$typeof).toBe(Symbol.for("react.server.reference"));
+    expect(locked.$$id).toBe("40deadbeef".padEnd(40, "0"));
+    expect(
+      Object.getOwnPropertyDescriptor(published, "$$typeof")!.configurable,
+    ).toBe(false);
+
+    // Still correct for a FRESH (unlocked) target after the guard: props land
+    // configurable so later re-copies keep working.
+    const fresh = (async () => {}) as (formData: FormData) => Promise<void>;
+    copyServerReferenceProps(transformed, fresh);
+    expect((fresh as unknown as Record<string, unknown>).$$id).toBe(
+      "40deadbeef".padEnd(40, "0"),
+    );
+    expect(
+      Object.getOwnPropertyDescriptor(fresh, "$$typeof")!.configurable,
+    ).toBe(true);
+  });
+
   it("the github/linkedin connection ids are NO LONGER host-published — each owning connector registers its relocated client (cinatra#975 Wave 3)", () => {
     // The ids stay minted in the SDK contract (the connectors register under
     // them; consumers resolve them), but the HOST provider is retired: the
