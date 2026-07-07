@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-07
+
+This release scopes connector connections to their owners with server-enforced sharing, makes workflow artifacts first-class materialized outputs, evicts vendor-specific code from the core in favor of connector-owned capabilities, and brings the marketplace, installed-extensions, and connectors surfaces into full design-system conformance.
+
+### Added
+
+- **Connection access scoping and sharing.** Connector connections now carry an owner and a six-scope share picker; grant-following resolution, per-connection use-gates, allow/deny audit records, and revocation-on-next-use are enforced server-side.
+- **First-class workflow artifacts.** Workflow runs can declare output bindings that materialize into an org-scoped, content-addressed artifact store, with deterministic materialization tools, an idempotency ledger, and a garbage-collection reaper.
+- **Environment-override for connector configuration.** Connectors can declare manifest-driven environment-variable overrides on their settings and secrets, with host-side precedence rules.
+- **Connector-owned dev setup.** Connectors can ship their own `devSetup` hook, orchestrated by the host during development setup.
+- **Standard webhook contract.** The WordPress connector negotiates a standard webhook contract at token exchange, and Drupal node-published events flow through the generic webhook facility.
+
+### Changed
+
+- **Vendor code evicted from the core.** The vendor-specific connection clients were removed from the core; connectors now own their capabilities (connection lifecycle, widget-auth stores, instance flows) behind neutral host ports, guarded by a shrink-only ratchet.
+- **Design-system conformance.** Marketplace listing cards, the extension detail modal, the Installed extensions page (card-per-item, lifecycle status), the /connectors connect-state UI, and the /agents page (split into All Agents and Executions tabs with a redesigned card) now follow the published design system.
+- **Unified extension store.** Connector, agent, skill, and artifact installs route onto a unified content-addressed runtime store, with sealed bundled/image imports preserved under one identity.
+- **Chat internals.** The chat page monolith was split into routing, streaming, and persistence seams, and the heavy renderers are lazy-loaded.
+
+### Fixed
+
+- Connector setup pages publish real server-action references, so setup forms submit correctly.
+- Marketplace install failures fail closed with a graceful, actionable message.
+- The sign-in page shows the forgot-password link below the field in the server-rendered state.
+- The agent-idea selection chooser surfaces its gate inputs to the renderer.
+
+### Security
+
+- **Authenticated agent context resolution.** Per-child context resolve and finalize calls are authenticated via per-node HMAC attestation.
+- **Server-enforced connection authorization.** Connection use is authorized through the owner-aware grant-following resolver with audited allow/deny decisions; legacy scope sources were deleted and the gates flipped hard.
+
 ## [0.1.6] - 2026-07-02
 
 This release makes model-backed connectors runtime-configurable, refreshes the marketplace card experience, and hardens the production install path.
@@ -180,7 +211,8 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
-[Unreleased]: https://github.com/cinatra-ai/cinatra/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/cinatra-ai/cinatra/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.7
 [0.1.6]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.6
 [0.1.5]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.5
 [0.1.4]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.4
