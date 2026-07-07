@@ -59,19 +59,18 @@ jobs:
     uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@45826486a3965bc8ebd6203a26330ad0dc1ae511 # v0.1.2-next.4582648
     with:
       # assistant-skills pin: points at the commit that carries the skills'
-      # `cinatra-watches` declarations. As of the closeout W5 skills-drift
-      # reconciliation (closeout W5 skills-drift) this is back in STRICT
-      # LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
-      # cinatra-required-extensions.lock.json (both 538a817). The prior
-      # watches-PR lead (skills_ref@2b65ef8 ahead of lock@2b65ef8, then
-      # lock re-pinned to 538a817 by PR#424 without updating this pin) is
-      # closed. The two intervening commits on assistant-skills are
-      # docs-only (cat /skills/ mount guidance + chat-agent-authoring
-      # instant-grant docs, the latter covered by the PR#382 Skills-PR
-      # acknowledgement). Keep them in lockstep: at each
-      # required-extensions lock refresh, re-pin this skills_ref to the
-      # new assistant-skills resolvedSha now written into the lock.
-      # Correction-for: PR#432 (malformed Reviewed-by — missing tier=maintainer).
-      skills_ref: 538a8176f12a5e9dfe0c95f29b4b74cd711f7038
+      # `cinatra-watches` declarations. Re-pinned at the release-closeout
+      # skills-drift reconciliation (docs/skills-drift-decisions.md, newest
+      # section) to the lock-resolved assistant-skills ref — back in
+      # STRICT LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
+      # cinatra-required-extensions.lock.json (both e9d5a7e, written into the
+      # lock by the #1086 required-extension lock refresh). The prior pin
+      # (538a817) lagged that lock by seventeen assistant-skills commits,
+      # which among other things GREW the watched surface (the
+      # chat-extension-discovery skill's watch block). Keep them in
+      # lockstep: at each required-extensions lock refresh, re-pin this
+      # skills_ref to the new assistant-skills resolvedSha now written into
+      # the lock.
+      skills_ref: e9d5a7eae98b750d934fdb9acdcde7d49af70484
       mode: enforce
       ref: 45826486a3965bc8ebd6203a26330ad0dc1ae511 # same SHA as the workflow @ref
