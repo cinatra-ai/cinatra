@@ -64,17 +64,6 @@ function classifyStatus(code: number): DrupalMcpStatus {
   return "unreachable";
 }
 
-/**
- * Exported classification of a raw HTTP status into the DrupalMcpStatus the
- * dev-auto-setup reconcile keys its reuse-vs-rotate decision on. Sharing the
- * single classifier here keeps the "only a definite 401/403 = auth_error"
- * boundary in ONE place (it must NEVER drift between the UI status path and the
- * reconcile rotate trigger).
- */
-export function classifyDrupalMcpStatus(code: number): DrupalMcpStatus {
-  return classifyStatus(code);
-}
-
 export async function probeDrupalMcp(
   siteUrl: string,
   authHeader: string,

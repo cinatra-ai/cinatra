@@ -42,15 +42,3 @@ export async function loadConnectorModule<T>(slug: string): Promise<T | null> {
   }
   return ns as T;
 }
-
-/**
- * Strict variant — throws when the slug has no bundled entry module. Use on
- * surfaces that cannot render without the connector (legacy mounts).
- */
-export async function requireConnectorModule<T>(slug: string): Promise<T> {
-  const mod = await loadConnectorModule<T>(slug);
-  if (mod === null) {
-    throw new Error(`No bundled entry module for connector slug: ${slug}`);
-  }
-  return mod;
-}

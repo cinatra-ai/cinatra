@@ -78,14 +78,6 @@ export function resolveWordPressMcpFallbackEndpoint(siteUrl: string): string {
   return `${trimmed}/index.php?rest_route=${WP_MCP_ADAPTER_ROUTE}`;
 }
 
-/**
- * True iff a given URL points to a WordPress mcp-adapter endpoint
- * (used by administration UI and diagnostic logging).
- */
-export function isWordPressMcpAdapterEndpoint(url: string): boolean {
-  return url.includes(WP_MCP_ADAPTER_ROUTE);
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

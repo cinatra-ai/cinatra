@@ -29,6 +29,12 @@
         "src/index.{ts,tsx,mjs,mts}",
         "bin/cinatra.mjs"
       ]
+    },
+    "packages/google-oauth-connection": {
+      "entry": [
+        "src/index.{ts,tsx,mjs,mts}",
+        "src/disconnect.ts"
+      ]
     }
   },
   "ignore": [
@@ -44,6 +50,12 @@
     "tests/e2e/**",
     "**/vitest.integration.config.ts",
     "src/components/ui/**"
+  ],
+  "ignoreBinaries": [
+    "python3",
+    "mkfifo",
+    "gemini",
+    "codex"
   ],
   "ignoreDependencies": [
     "tw-animate-css",

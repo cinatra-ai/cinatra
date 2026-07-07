@@ -231,8 +231,8 @@ export function validateExternalUrl(rawUrl: string): URL {
   return parsed;
 }
 
-// Mirrors the production YOUTUBE_HOSTNAMES set in _llm-dispatch.ts so the
-// strict helper here is a drop-in replacement at the bridge call site.
+// The single YouTube hostname allowlist for the bridge (the unused
+// _llm-dispatch.ts mirror was removed by the dead-code sweep).
 // Includes `youtube-nocookie.com` (privacy-enhanced embed domain) — both
 // the `www.` and bare forms are routinely emitted by YouTube and remain
 // legitimate.

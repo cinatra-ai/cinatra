@@ -6,8 +6,6 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "@cinatra-ai/connectors-catalog": "workspace:*",
-    "@cinatra-ai/extensions": "workspace:*",
-    "@cinatra-ai/google-oauth-connection": "workspace:*"
+    "@cinatra-ai/extensions": "workspace:*"
   }
 }

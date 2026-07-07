@@ -402,28 +402,11 @@ export async function syncInstalledAgentsToDatabase() {
   return scannedAgents;
 }
 
-export async function readAgentsCatalog() {
-  const current = readAgentCatalogFromDatabase();
-  const storedAgents = Array.isArray(current.agents)
-    ? current.agents
-        .map((entry) => normalizeStoredAgent(entry as Record<string, unknown>))
-        .filter((entry): entry is PersistedAgent => entry !== null)
-    : [];
-
-  // Return DB-stored catalog when it is already populated (avoids a
-  // filesystem scan on every call and lets tests control the catalog
-  // via database mocks).
-  if (storedAgents.length > 0) {
-    return storedAgents;
-  }
-
-  return syncInstalledAgentsToDatabase();
-}
-
 /**
  * Canonical "installed runnable agents" reader for the skill matcher.
  *
- * `readAgentsCatalog()` returns a filesystem scan of `packages/*`: workspace
+ * The retired `readAgentsCatalog()` (removed by the dead-code sweep once the
+ * matcher switched here) returned a filesystem scan of `packages/*`: workspace
  * build packages, not user-installed runnable agents. The matcher axis must be
  * installed agents × skills.
  *
@@ -437,7 +420,7 @@ export async function readAgentsCatalog() {
  * whose agent_id is not in the live catalog, so no destructive migration
  * is needed.
  *
- * Mapped to the same `PersistedAgent` shape as `readAgentsCatalog()` so
+ * Mapped to the same `PersistedAgent` shape as the retired catalog reader so
  * downstream `adaptAgentForMatching()` and existing call sites work
  * unchanged.
  */
@@ -769,7 +752,7 @@ export async function readAgentsForSkillMatching(
  */
 export async function matchAgentsToSkills() {
   // "Agents" axis = installed runnable agents only.
-  // `readAgentsCatalog()` workspace-package scans and draft templates are
+  // Workspace-package scans and draft templates are
   // excluded via `readAgentsForSkillMatching()`. Orphan rows whose agent_id is
   // not in the live catalog are dropped by the defensive filter below.
   // The matcher write path must fail closed on any upstream read error.
