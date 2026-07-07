@@ -21,6 +21,13 @@ protect destructive operations.
 - `setExtensionInstallOpPhaseReader` / `readExtensionInstallOpPhase` — install-op journal phase reader seam.
 - `readEffectiveStatusByPackageNames` — resolves effective lifecycle status per package.
 
+Connector access-scoping modules (cinatra#951): `connection-identity-store.ts` —
+the read/write surface over the `nango_connection` identity table (one row per
+saved external connection, owned by its creator) that the per-connection
+permission grants and the six-scope sharing model resolve against;
+`install-access-target.ts` / `install-access-contract.ts` — the install-time
+access-target selection the install scope dialog drives.
+
 Named sub-entry points (see `package.json` `exports`):
 
 - `./runtime-discovery`, `./runtime-discovery-host` — active-manifest capability dispatcher.
@@ -30,6 +37,10 @@ Named sub-entry points (see `package.json` `exports`):
 - `./required-in-prod`, `./registry-immutability`, `./system-extension-inventory` — protection policies.
 - `./license-detection`, `./destination-resolver`, `./publish-authority` — publish routing helpers.
 - `./actions`, `./screens`, `./lifecycle-ui`, `./components/*`, `./mcp-module` — UI, server actions, and MCP wiring.
+- `./screens/marketplace-listing-card`, `./screens/marketplace-detail-modal`,
+  `./screens/installed-empty-states`, `./screens/marketplace-card-model` — the
+  design-system marketplace listing card, the extension detail modal (Changelog +
+  Dependencies tabs), and the card-per-item Installed extensions page pieces.
 
 ## Usage
 

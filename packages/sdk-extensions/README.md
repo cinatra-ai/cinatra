@@ -181,6 +181,53 @@ a port whose method talks to a local service in integration tests, point it at a
 mock server on an ephemeral `localhost` port and inject that port through the
 stubbed `ctx`; nothing about the ABI requires a fixed port.
 
+## `cinatra.devSetup` — the connector-owned dev-provisioning hook (NOT part of the ABI)
+
+A connector MAY declare `cinatra.devSetup` (a package-relative module path,
+recommended `./src/dev-setup`) whose module exposes a single `runDevSetup(ctx)`
+entry (`ExtensionDevSetupModule` in [`src/dev-setup.ts`](src/dev-setup.ts)). On
+a **dev boot only**, the host's dev-only orchestration shell discovers each
+materialized connector declaring the hook, imports it, and invokes it
+**idempotently** to wire the connector's OWN local docker fixture (mint a
+credential, register an instance row, push a widget config) — core owns the
+orchestration mechanism, the connector owns its vendor provisioning
+(cinatra#976, epic cinatra#978 wave W-D).
+
+Key properties, per the contract module:
+
+- **Dev-only, localhost-only, soft-fail.** The shell runs fire-and-forget under
+  `CINATRA_RUNTIME_MODE === "development"`; a hook never throws to the shell —
+  it returns a `created` / `already-wired` / `skipped` / `error` status, so one
+  connector's docker hiccup never blocks dev boot.
+- **Host-supplied IO.** The imperative IO a hook needs (argv-based
+  `docker exec` capture, HTTP/container probes, loopback checks) arrives on
+  `ctx.helpers` — a connector never imports `node:child_process` (or `node:fs`)
+  for provisioning.
+- **Resolve-only capabilities.** `ctx.capabilities` is the same string-keyed
+  `resolveProviders` shape as the `register(ctx)` port, but read-only by
+  contract: a devSetup hook only RESOLVES host services, never registers one.
+- **Distinct from `cinatra.devFixtures`** — that sibling key is DECLARATIVE
+  demo data (`setting`/`object` surfaces); devSetup is IMPERATIVE provisioning
+  that cannot be expressed as static data.
+- **NOT part of the frozen `register(ctx)` ABI.** The devSetup context is a
+  separate, host-owned, dev-only shape; changing it is a dev-DX concern, not an
+  SDK ABI break.
+
+## `cinatra.envOverrides` — manifest-declared env-first settings/secrets keys
+
+An extension may declare `cinatra.envOverrides` (cinatra#982): a map from a
+process-environment variable NAME the host process reads to the
+`settings:`/`secrets:` key it overrides, e.g.
+`{"NANGO_SERVER_URL": "settings:serverUrl", "NANGO_SECRET_KEY": "secrets:secretKey"}`.
+The HOST's `settings`/`secrets` port implementation then serves that key
+**env-first-else-DB** — the env-var names live in the extension's own manifest,
+never in core, so core stays vendor-free. Security guard (validated host-side
+by [`src/env-overrides.ts`](src/env-overrides.ts), never trusted unvalidated):
+a marketplace extension may claim only a NAMESPACED env key
+(`CINATRA_EXT_<PKG>_*`, derived from its own package name); a legacy
+(non-namespaced) name is honored only for a `resolution: "required"` system
+extension.
+
 ## `cinatra.serverEntry` — published packages ship BUILT artifacts
 
 A runtime-store-installed package's `cinatra.serverEntry` must resolve —
