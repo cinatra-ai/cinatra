@@ -51,14 +51,14 @@ Most AI tools are optimized for individual use and short chat sessions. Cinatra 
 The main sidebar groups the day-to-day workspace:
 
 - **Intelligence → Chat** — multi-threaded AI assistant chat with team threads; the place agents are created, run, and edited conversationally
-- **Agents** — installed agents and run history. The top-level `/agents` route is an interactive dashboard of recently used and recently run agents, and is the installed-agents surface
+- **Agents** — two tabs: the top-level `/agents` route is **All Agents**, the run-agent picker; **Executions** (`/agents/executions`) is an interactive dashboard of recently used and recently run agents. Installing agents happens in Configuration → Marketplace
 - **Management** — Personal, Projects, Teams, Organizations
 - **Information** — Artifacts, Data (a unified object list with typed views, plus History and Merge), and Analytics (LLM and API usage)
 - **Tools** — Skills (catalog, installed packages, match overview, autosave from chat edits) and Connectors (e.g. Gmail, Google Calendar, Apollo, LinkedIn, WordPress, Drupal, Apify, YouTube, GitHub)
 
 Platform admins also see an **Admin** group at the top of the sidebar (Approvals, Configuration).
 
-Beyond the sidebar, the platform ships routes for **Dashboards** (operator workspaces composed from extension-shipped portlets, with the agents dashboard as the default at `/agents`, also reachable as an MCP primitive) and **Notifications** (a durable feed with real-time updates and failure routing). They are reachable directly by URL.
+Beyond the sidebar, the platform ships routes for **Dashboards** (operator workspaces composed from extension-shipped portlets, with the agents dashboard at `/agents/executions`, also reachable as an MCP primitive) and **Notifications** (a durable feed with real-time updates and failure routing). They are reachable directly by URL.
 
 A separate **Configuration** area (linked from the sidebar as **Admin → Configuration**) covers platform-level settings: environment, AI providers, MCP, extensions, webhooks, [marketplace](https://docs.cinatra.ai/guides/admin/marketplace/) (install agents, connectors, skills, artifacts, and workflows from the shared registry), skills, [permissions](https://docs.cinatra.ai/guides/admin/permissions/) (a co-owner model across extension resources — agents, agent runs, connectors, skills, skill packages, artifacts, and workflows), access control, workflows, agents, assistants, workspace, telemetry, and development. Most configuration screens are admin-only. The [Admin Guide](https://docs.cinatra.ai/guides/admin/) covers this surface in detail.
 
