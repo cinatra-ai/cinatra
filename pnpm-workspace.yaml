@@ -74,14 +74,22 @@ overrides:
   # is feasible but is discretionary-majors milestone work, not a Medium triage.
   # Bounded-currency rule: no reachable prod exposure -> defer the major.
   dompurify@<3.4.11: ">=3.4.11 <4" # lifts all sub-3.4.11 copies (monaco-editor 0.55.1 via @queuedash/ui pins 3.2.7; mermaid 11.15.0 resolves 3.4.10) to the patched 3.4.11 (GHSA-gvmj/-vxr8/-76mc + GHSA-cmwh-pvxp-8882 ALLOWED_ATTR pollution)
-  # vite (GHSA-fx2h-pf6j-xcff high + GHSA-v2wj-q39q-566r / -p9ff-h696-f583) NOT
+  # vite (GHSA-fx2h-pf6j-xcff high + GHSA-v2wj-q39q-566r / -p9ff-h696-f583, and
+  # since the previous closeout's triage also GHSA-4w7w-66w2-5vf9 moderate, path
+  # traversal in optimized-deps `.map` handling, patched >=8.0.5, +
+  # GHSA-v6wh-96g9-6wx3 moderate, launch-editor NTLMv2 hash disclosure via UNC
+  # paths on Windows, patched >=8.0.16 — re-triaged at this closeout's W1) NOT
   # overridden: vite is dev/test-only here (sole consumer is vitest/@vitest/
   # mocker; this repo dev/builds on Next + Turbopack, ships no Vite dev server),
-  # so the dev-server fs.deny-bypass / file-read advisories have NO production
-  # exposure. The in-range patched vite (8.0.16) ALSO breaks vitest module
-  # mocking (vi.resetModules + dynamic import of a vi.mock'd module stops
+  # so all five advisories (dev-server fs.deny-bypass / file-read / .map path
+  # traversal / dev-time launch-editor) have NO production exposure. The
+  # in-range patched vite (8.0.16) ALSO breaks vitest module mocking
+  # (vi.resetModules + dynamic import of a vi.mock'd module stops
   # intercepting -> sentry.test.ts / background-jobs-sentry.test.ts go red).
-  # Bounded-currency rule: keep CI green, defer the no-prod-exposure bump.
+  # vite 8.1.x (>=8.1.0, 2026-06-23) is now in-range and MAY fix that mocking
+  # regression — retest it in the next weekly Renovate window before renewing
+  # this deferral. Bounded-currency rule: keep CI green, defer the
+  # no-prod-exposure bump.
   lodash@<4.17.24: ">=4.17.24 <5" # chevrotain (mermaid) pins 4.17.21 (GHSA-r5fr/-f23m)
   lodash-es@<4.17.24: ">=4.17.24 <5"
   postcss@<8.5.10: ">=8.5.10 <9" # next bundles 8.4.31 (GHSA-qx2v)
