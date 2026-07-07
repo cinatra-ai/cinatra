@@ -106,6 +106,21 @@ vi.mock("./providers/gemini", () => ({
 }));
 
 import { runSkillAwareDeterministicLlmTask } from "./index";
+import { withActorContext } from "./actor-context";
+import type { ActorContext } from "./actor-context";
+
+// runSkillAwareDeterministicLlmTask fail-closes without an ALS actor frame
+// (requireActorFrame in index.ts) — establish the deterministic dev actor the
+// way every real caller does.
+const testActor: ActorContext = {
+  principalType: "HumanUser",
+  principalId: "u-test",
+  organizationId: "org-test",
+  authSource: "ui",
+  policyVersion: "v2",
+};
+const runWithActor = <T,>(fn: () => Promise<T>): Promise<T> =>
+  withActorContext(testActor, fn);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -123,12 +138,12 @@ describe("runSkillAwareDeterministicLlmTask — personal skill rendering", () =>
   });
 
   it("appends Custom skill instructions: block when customSkillContent is provided", async () => {
-    await runSkillAwareDeterministicLlmTask({
+    await runWithActor(() => runSkillAwareDeterministicLlmTask({
       provider: "openai",
       system: "BASE-SYSTEM",
       user: "user prompt",
       customSkillContent: "DELTA-CONTENT-MARKER-XYZ",
-    });
+    }));
 
     expect(_capturedGenerateInput).toBeDefined();
     const capturedSystem = _capturedGenerateInput?.system ?? "";
@@ -147,12 +162,12 @@ describe("runSkillAwareDeterministicLlmTask — personal skill rendering", () =>
   });
 
   it("does NOT include Custom skill instructions: block when customSkillContent is undefined", async () => {
-    await runSkillAwareDeterministicLlmTask({
+    await runWithActor(() => runSkillAwareDeterministicLlmTask({
       provider: "openai",
       system: "BASE-SYSTEM",
       user: "user prompt",
       // customSkillContent is deliberately omitted
-    });
+    }));
 
     expect(_capturedGenerateInput).toBeDefined();
     const capturedSystem = _capturedGenerateInput?.system ?? "";
