@@ -77,7 +77,7 @@ set -euo pipefail
 # Run from the repo root (so node_modules/.bin/cinatra and the migrations/ +
 # packages/migrations checkout sentinel are present).
 #
-# NOTE (cinatra#402 P2 transition, completed at the v0.1.7 closeout): the
+# NOTE (cinatra#402 P2 transition — the deploy-compat forwarder era): the
 # PREV_IMAGE side AUTO-DETECTS the provisioning entrypoint the previous release
 # actually ships. Images from 0.1.6 onward carry the published CLI at
 # node_modules/@cinatra-ai/cinatra and provision via `instance setup prod`
