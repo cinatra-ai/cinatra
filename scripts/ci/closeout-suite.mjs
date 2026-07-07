@@ -87,7 +87,7 @@ const MEMBERS = [
     args: ["scripts/extensions/build-design-registry.mjs", "--check"],
     network: true,
   },
-  // ---- gates added in the v0.1.7 milestone (closeout W3, engineering#512) ----
+  // ---- gates added alongside the vendor-inversion program (closeout W3) ----
   {
     // Shrink-only residual floor for vendor-token occurrences outside the
     // sanctioned surfaces (#975 vendor-inversion cluster / epic #978).

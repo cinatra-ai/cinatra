@@ -107,7 +107,7 @@ vi.mock("./providers/gemini", () => ({
 
 import { runSkillAwareDeterministicLlmTask } from "./index";
 import { withActorContext } from "./actor-context";
-import type { ActorContext } from "./actor-context";
+import type { ActorContext } from "@/lib/authz/actor-context";
 
 // runSkillAwareDeterministicLlmTask fail-closes without an ALS actor frame
 // (requireActorFrame in index.ts) — establish the deterministic dev actor the
@@ -120,7 +120,7 @@ const testActor: ActorContext = {
   policyVersion: "v2",
 };
 const runWithActor = <T,>(fn: () => Promise<T>): Promise<T> =>
-  withActorContext(testActor, fn);
+  Promise.resolve(withActorContext(testActor, fn));
 
 // ---------------------------------------------------------------------------
 // Tests
