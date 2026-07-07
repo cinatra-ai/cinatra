@@ -99,12 +99,28 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates ownership schema", () => {
        VALUES ($1, $2, 'ownership-backfill', '', '[]', '{}', '{"steps":[]}', '@cinatra/ownership-backfill-test')`,
       ["tmpl-ownership-backfill", "org-existing-ownership"],
     );
+    // Mirrors the EXACT backfill in buildCreateStoreSchemaQueries
+    // (`owner_id = COALESCE(org_id, '') WHERE owner_level IS NULL`). In the
+    // real migration sequence that UPDATE runs BEFORE agent_owner_move_trg is
+    // created (cinatra#550); the beforeAll here applies DDL only, so the
+    // trigger already exists — disable it around the replay to reproduce the
+    // migration's ordering (the trigger RAISEs on exactly the legacy
+    // owner_level-NULL rows the backfill exists to repair).
     const SQL = `UPDATE "${TEST_SCHEMA}".agent_templates
-                    SET owner_level = 'organization', owner_id = org_id
-                  WHERE owner_level IS NULL AND org_id IS NOT NULL`;
-    await pool.query(SQL);
-    // Re-run — must be a no-op (idempotency check).
-    await pool.query(SQL);
+                    SET owner_level = 'organization', owner_id = COALESCE(org_id, '')
+                  WHERE owner_level IS NULL`;
+    await pool.query(
+      `ALTER TABLE "${TEST_SCHEMA}".agent_templates DISABLE TRIGGER agent_owner_move_trg`,
+    );
+    try {
+      await pool.query(SQL);
+      // Re-run — must be a no-op (idempotency check).
+      await pool.query(SQL);
+    } finally {
+      await pool.query(
+        `ALTER TABLE "${TEST_SCHEMA}".agent_templates ENABLE TRIGGER agent_owner_move_trg`,
+      );
+    }
     const { rows } = await pool.query(
       `SELECT owner_level, owner_id FROM "${TEST_SCHEMA}".agent_templates WHERE id = $1`,
       ["tmpl-ownership-backfill"],

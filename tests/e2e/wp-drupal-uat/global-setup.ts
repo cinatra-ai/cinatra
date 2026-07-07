@@ -206,11 +206,32 @@ function readDevActor(): DevActor {
 async function establishCinatraSession(actor: DevActor): Promise<void> {
   const ctx = await playwrightRequest.newContext({ baseURL: CINATRA_BASE });
   try {
-    const signIn = await ctx.post("/api/auth/sign-in/email", {
-      data: { email: actor.email, password: actor.password },
-      headers: { Origin: CINATRA_BASE },
-      failOnStatusCode: false,
-    });
+    // The dev server is still churning through first-compile + background
+    // extension registration when global-setup starts (a first GET can take
+    // >40s on a CI runner), and a request landing in that window can die with
+    // a socket-level ECONNRESET before any HTTP status exists (ci#61 — both
+    // on-demand nightly proofs failed exactly here). Retry TRANSPORT errors
+    // with a backoff; an HTTP response (any status) ends the retry loop and
+    // is judged by the existing status check below.
+    const maxAttempts = 10;
+    let signIn: Awaited<ReturnType<typeof ctx.post>> | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        signIn = await ctx.post("/api/auth/sign-in/email", {
+          data: { email: actor.email, password: actor.password },
+          headers: { Origin: CINATRA_BASE },
+          failOnStatusCode: false,
+        });
+        break;
+      } catch (err) {
+        if (attempt === maxAttempts) throw err;
+        console.log(
+          `[wp-drupal-uat] sign-in POST transport error (attempt ${attempt}/${maxAttempts}): ${String(err)} — retrying in 6s`,
+        );
+        sleepSeconds(6);
+      }
+    }
+    if (!signIn) throw new Error("[wp-drupal-uat] sign-in POST never produced a response (unreachable)");
     if (!signIn.ok()) {
       throw new Error(
         `[wp-drupal-uat] dev UAT user sign-in failed (HTTP ${signIn.status()}). ` +

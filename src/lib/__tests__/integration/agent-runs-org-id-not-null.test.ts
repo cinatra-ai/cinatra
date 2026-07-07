@@ -107,6 +107,13 @@ describe.skipIf(!hasDb)(
       // migration to verify cleanup removes rows that cannot satisfy the new
       // constraint.
       await applyMigration();
+      // A full apply leaves org_id NOT NULL, so a legacy NULL row cannot be
+      // inserted directly. Recreate the LEGACY state the DELETE-then-ALTER
+      // cleanup exists for by dropping the constraint first — the re-apply
+      // below must delete the row and restore NOT NULL.
+      await client.query(
+        `ALTER TABLE "${schema}"."agent_runs" ALTER COLUMN org_id DROP NOT NULL`,
+      );
       // Insert a NULL row that the migration must clean up.
       const legacyId = randomUUID();
       await client.query(

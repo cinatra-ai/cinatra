@@ -37,6 +37,12 @@ export default defineConfig({
       // Alias the authz sub-files used by the objects handlers so vitest can
       // resolve them. The barrel (`@/lib/authz`) is also aliased for tests that
       // vi.mock it.
+      // Sealed-room read filter (cinatra#1031 cluster): handlers.ts imports
+      // assertProjectReadAccess from here. Route to the REAL source (pure
+      // predicate logic); its `import "server-only"` marker is neutralized by
+      // the server-only stub alias below.
+      "@/lib/sealed-room": path.join(root, "src/lib/sealed-room.ts"),
+      "server-only": path.join(__dirname, "src/__tests__/__stubs__/server-only.ts"),
       "@/lib/authz/enforce-resource-access": path.join(root, "src/lib/authz/enforce-resource-access.ts"),
       "@/lib/authz/errors": path.join(root, "src/lib/authz/errors.ts"),
       "@/lib/authz/build-actor-context": path.join(root, "src/lib/authz/build-actor-context.ts"),

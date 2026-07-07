@@ -19,6 +19,9 @@ export default defineConfig({
       // real sources so type/shape compatibility is preserved. The barrel
       // (`@/lib/authz`) goes to a tiny stub so we don't pull `audit.ts`
       // (which creates a pg Pool at module-load).
+      // Pure pg text[] literal serializer used by handlers.ts (no imports) —
+      // resolve to the real source.
+      "@/lib/pg-array": path.join(root, "src/lib/pg-array.ts"),
       "@/lib/authz/enforce-resource-access": path.join(root, "src/lib/authz/enforce-resource-access.ts"),
       "@/lib/authz/errors": path.join(root, "src/lib/authz/errors.ts"),
       "@/lib/authz/build-actor-context": path.join(root, "src/lib/authz/build-actor-context.ts"),

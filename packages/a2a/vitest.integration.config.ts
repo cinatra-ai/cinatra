@@ -11,13 +11,17 @@ import * as path from "node:path";
 
 const serverOnlyStub = path.join(
   __dirname,
-  "src/__tests__/__stubs__/server-only.ts",
+  "tests/__stubs__/server-only.ts",
 );
 
 export default defineConfig({
   resolve: {
     alias: {
       "server-only": serverOnlyStub,
+      // Fallback for app `@/` imports reached transitively through workspace
+      // package sources (e.g. agents/src/store.ts -> @/lib/nango-system).
+      // Integration runs use the real modules — DB/Redis are live here.
+      "@/": path.join(__dirname, "../..", "src") + "/",
     },
   },
   test: {
