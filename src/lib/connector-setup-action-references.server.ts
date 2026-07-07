@@ -40,6 +40,26 @@ import "server-only";
 // apify/github pattern), this bridge and the registry publication can retire
 // together.
 //
+// KNOWN LIMIT of the reflection approach (cinatra#1097): this module runs
+// ONCE per compilation and decorates the instances the registry holds AT THAT
+// MOMENT. The registrar (`@/lib/register-host-connector-services`) is also
+// imported by OTHER bundle graphs (e.g. the chat route), and each such
+// evaluation RE-PUBLISHES the service, REPLACING the registry instances — so
+// an instance a connector captured into its deps slot at activation can
+// predate the instances this bridge decorates and reach React's serializer
+// unmarked ("Functions cannot be passed directly to Client Components…").
+// The twenty-connector therefore RETIRED off this bridge onto connector-local
+// "use server" actions that resolve the host implementation lazily at POST
+// time (twenty-connector fix/setup-use-server-actions) — the CURRENT
+// connector never binds the reflected instances into a form. The twenty
+// members below are kept reflected as a COMPATIBILITY WINDOW for a host
+// paired (via the extension locks) with a pre-#1097 twenty-connector, whose
+// setup page still binds the deps-slot instances; drop them once the
+// required/dev locks pin a connector-local-actions build. The external-mcp
+// members serve mcp-server-connector's bundled-react FALLBACK (its live
+// surface is schema-config) and stay until that connector makes the same
+// move (tracked on cinatra#1097).
+//
 // Idempotent + fail-soft: re-evaluation (dev HMR, multiple layers) re-copies
 // the same descriptors; a layer whose import is NOT transformed (no `$$id`,
 // e.g. the BullMQ worker) and a not-yet-published registry are both no-ops.
@@ -56,6 +76,9 @@ import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/
 const MEMBER_TO_EXPORT = {
   createServerAction: "createExternalMcpServerAction",
   deleteServerAction: "deleteExternalMcpServerAction",
+  // Compatibility window ONLY (cinatra#1097): the current twenty-connector
+  // binds its own connector-local "use server" actions and never passes these
+  // reflected instances to a form; a lock-pinned OLDER connector still does.
   saveTwentyConnectionAction: "saveTwentyConnectionAction",
   disconnectTwentyConnectionAction: "disconnectTwentyConnectionAction",
 } as const;
