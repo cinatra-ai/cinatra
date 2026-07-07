@@ -77,13 +77,16 @@ set -euo pipefail
 # Run from the repo root (so node_modules/.bin/cinatra and the migrations/ +
 # packages/migrations checkout sentinel are present).
 #
-# NOTE (cinatra#402 P2 transition): the PREV_IMAGE side below deliberately keeps
-# the legacy `node packages/cli/bin/cinatra.mjs` invocation — older published
-# release images (e.g. 0.1.x) still ship the in-image packages/cli bin and do
-# NOT carry node_modules/@cinatra-ai/cinatra. Only the candidate (current-
-# checkout) side moves to the published CLI. Once a release built FROM this
-# change becomes a PREV_IMAGE, switch that side to
-# `node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod` too.
+# NOTE (cinatra#402 P2 transition, completed at the v0.1.7 closeout): the
+# PREV_IMAGE side AUTO-DETECTS the provisioning entrypoint the previous release
+# actually ships. Images from 0.1.6 onward carry the published CLI at
+# node_modules/@cinatra-ai/cinatra and provision via `instance setup prod`
+# (the exact invocation their own scripts/ci/prod-boot-e2e.sh used — the
+# in-image packages/cli bin became a deploy-compat forwarder whose top-level
+# `setup prod` command no longer exists). Older images (0.1.0–0.1.5) only ship
+# the in-image packages/cli bin with the legacy top-level `setup prod`. The
+# probe below picks whichever the image provides, so the proof keeps working
+# for any published PREV_IMAGE without hand-editing.
 
 PREV_IMAGE="${PREV_IMAGE:-}"
 PREV_IMAGE_PLATFORM="${PREV_IMAGE_PLATFORM:-linux/amd64}"
@@ -183,7 +186,18 @@ done
 # OLD schema shape (incl. the `metadata` table — the freshness key) exactly as
 # that release deployed. Asserting exit 0 proves the previous image still boots
 # its setup against a current postgres:17.
-echo "==> [prev ${PREV_IMAGE}] cinatra setup prod (fresh database)"
+# Pick the provisioning entrypoint the previous release actually ships (see
+# the cinatra#402 header note): 0.1.6+ images carry the published CLI and
+# provision via `instance setup prod`; older images only have the legacy
+# in-image bin with the top-level `setup prod`.
+if docker run --rm --platform "$PREV_IMAGE_PLATFORM" --entrypoint node \
+     "$PREV_IMAGE" -e 'require("fs").accessSync("node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs")' \
+     >/dev/null 2>&1; then
+  PREV_SETUP_CMD=(node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance setup prod)
+else
+  PREV_SETUP_CMD=(node packages/cli/bin/cinatra.mjs setup prod)
+fi
+echo "==> [prev ${PREV_IMAGE}] cinatra setup prod (fresh database) via: ${PREV_SETUP_CMD[*]}"
 docker run --rm --network "$NET" --platform "$PREV_IMAGE_PLATFORM" \
   -e SUPABASE_DB_URL="$DB_URL_IN_NET" \
   -e SUPABASE_SCHEMA="$SCHEMA" \
@@ -191,7 +205,7 @@ docker run --rm --network "$NET" --platform "$PREV_IMAGE_PLATFORM" \
   -e BETTER_AUTH_URL="$APP_ORIGIN" \
   -e CINATRA_ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -e CINATRA_RUNTIME_MODE=production \
-  "$PREV_IMAGE" node packages/cli/bin/cinatra.mjs setup prod
+  "$PREV_IMAGE" "${PREV_SETUP_CMD[@]}"
 
 # Sanity: the previous release must have created the `metadata` table. If it is
 # absent the candidate chain would LEDGER-FAKE (fresh path) and the proof would
