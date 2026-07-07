@@ -44,8 +44,6 @@ import { createNotification } from "@/lib/notifications";
 import { syncCatalogSkillsToAnthropic } from "@/lib/anthropic-skill-sync-service";
 import { reclaimStaleAnthropicSkills } from "@/lib/anthropic-skill-gc-service";
 import {
-  isNangoConfigured,
-  deleteNangoConnection,
   importNangoConnection,
   ensureNangoIntegration,
   saveNangoConnectionAction as _saveNangoConnectionAction,
@@ -58,7 +56,6 @@ import { requireWordPressInstanceAdmin } from "@/lib/connector-client-providers"
 import {
   writeDefaultImageProviderToDatabase,
   writeObjectsClassificationModelToDatabase,
-  writeConnectorConfigToDatabase,
   writeAgentCreationLlmProviderToDatabase,
   writeAgentCreationModelToDatabase,
   writeAnthropicSkillSyncEnabledToDatabase,
@@ -377,18 +374,6 @@ export async function setDefaultProvidersAction(formData: FormData) {
     });
   }
 
-  redirect("/configuration/llm");
-}
-
-// ---------------------------------------------------------------------------
-// YouTube
-// ---------------------------------------------------------------------------
-
-export async function clearYouTubeConnectionAction() {
-  if (isNangoConfigured()) {
-    await deleteNangoConnection("youtube", "cinatra-youtube").catch(() => null);
-  }
-  writeConnectorConfigToDatabase("youtube_connection", null);
   redirect("/configuration/llm");
 }
 

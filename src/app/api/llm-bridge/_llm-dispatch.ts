@@ -42,12 +42,14 @@ import {
 // ---------------------------------------------------------------------------
 // Media-branch helpers (pure; importable from tests)
 //
-// All five exports below are deterministic helpers driving the media branch
+// The exports below are deterministic helpers driving the media branch
 // inside /api/llm-bridge route.ts. They live here (not route.ts) so vitest
 // can drive them directly — Next.js restricts named imports from route files.
 //
-//   - YouTube detection uses host-based parsing via new URL(), with an
-//     explicit allowlist of YouTube hostnames and no regex.
+//   - YouTube detection (host-based parsing with an explicit hostname
+//     allowlist, no regex) lives in _url-validation.ts
+//     (`isYouTubeUrlStrict` / `YOUTUBE_HOST_ALLOWLIST`), the single copy the
+//     bridge call site uses.
 //   - MIME inference uses an explicit Gemini-supported MIME set with no
 //     audio/* / video/* wildcards. It falls back to URL pathname extension
 //     when the Content-Type header is missing/unparseable, and the final MIME
@@ -57,25 +59,6 @@ import {
 //     the full buffer. Content-Length is the fast-path short-circuit one
 //     level up in route.ts.
 // ---------------------------------------------------------------------------
-
-const YOUTUBE_HOSTNAMES: ReadonlySet<string> = new Set([
-  "youtube.com",
-  "www.youtube.com",
-  "m.youtube.com",
-  "music.youtube.com",
-  "youtu.be",
-  "youtube-nocookie.com",
-  "www.youtube-nocookie.com",
-]);
-
-export function isYouTubeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return YOUTUBE_HOSTNAMES.has(parsed.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-}
 
 export const GEMINI_MEDIA_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   "audio/wav",

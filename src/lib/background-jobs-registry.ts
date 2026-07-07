@@ -193,8 +193,8 @@ export async function runRecurringLoop(args: {
  * Host-side CatalogProvider for the four SKILL_MATCH_* BullMQ job handlers.
  *
  * This is the SOLE place where `@cinatra-ai/skills` and `@/lib/agents-store`
- * collaborate via lazy dependency injection. Lifting
- * `readAgentsCatalog` / `listInstalledSkills` / `getInstalledSkillById`
+ * collaborate via lazy dependency injection. Lifting the agents-catalog /
+ * `listInstalledSkills` / `getInstalledSkillById` reads
  * out of `packages/skills/src/llm-matching/jobs.ts` and into a host-app
  * provider breaks the Skills ⇄ Agents circular dependency that would tie
  * `@cinatra-ai/skills/llm-matching/jobs.ts` to `@/lib/agents-store` (which

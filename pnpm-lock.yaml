@@ -1471,9 +1471,6 @@ importers:
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
-      '@cinatra-ai/metric-usage-api':
-        specifier: workspace:*
-        version: link:../metric-usage-api
       '@cinatra-ai/objects':
         specifier: workspace:*
         version: link:../objects
@@ -1531,10 +1528,6 @@ importers:
         version: 29.1.1(@noble/hashes@2.2.0)
 
   packages/artifacts:
-    dependencies:
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       vitest:
         specifier: ^4.1.9
@@ -1598,15 +1591,9 @@ importers:
 
   packages/connectors:
     dependencies:
-      '@cinatra-ai/connectors-catalog':
-        specifier: workspace:*
-        version: link:../connectors-catalog
       '@cinatra-ai/extensions':
         specifier: workspace:*
         version: link:../extensions
-      '@cinatra-ai/google-oauth-connection':
-        specifier: workspace:*
-        version: link:../google-oauth-connection
 
   packages/connectors-catalog:
     devDependencies:
@@ -1696,9 +1683,6 @@ importers:
       '@cinatra-ai/marketplace-mcp-client':
         specifier: workspace:*
         version: link:../marketplace-mcp-client
-      '@cinatra-ai/mcp-client':
-        specifier: workspace:*
-        version: link:../mcp-client
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
@@ -1729,9 +1713,6 @@ importers:
       '@cinatra-ai/extensions':
         specifier: workspace:*
         version: link:../extensions
-      '@cinatra-ai/sdk-extensions':
-        specifier: workspace:*
-        version: link:../sdk-extensions
 
   packages/llm:
     dependencies:
@@ -1759,10 +1740,6 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/marketplace-application-reconcile:
-    dependencies:
-      '@cinatra-ai/marketplace-mcp-client':
-        specifier: workspace:*
-        version: link:../marketplace-mcp-client
     devDependencies:
       vitest:
         specifier: ^4.1.9
@@ -1779,9 +1756,6 @@ importers:
       '@cinatra-ai/marketplace-mcp-client':
         specifier: workspace:*
         version: link:../marketplace-mcp-client
-      '@cinatra-ai/registries':
-        specifier: workspace:*
-        version: link:../registries
     devDependencies:
       vitest:
         specifier: ^4.1.9
@@ -2110,9 +2084,6 @@ importers:
       '@cinatra-ai/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
-      '@cinatra-ai/mcp-server':
-        specifier: workspace:*
-        version: link:../mcp-server
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -2128,9 +2099,6 @@ importers:
       undici:
         specifier: ^8.5.0
         version: 8.5.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       vitest:
         specifier: ^4.1.9

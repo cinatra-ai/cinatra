@@ -410,8 +410,8 @@ export async function POST(req: Request): Promise<Response> {
 
     // Host-allowlist only: do not trust `kind === "youtube"` by itself.
     // Uses `isYouTubeUrlStrict` from `_url-validation.ts`, whose explicit
-    // allowlist mirrors `_llm-dispatch.YOUTUBE_HOSTNAMES`, including
-    // `youtube-nocookie.com`. The test suite covers this helper directly.
+    // allowlist includes `youtube-nocookie.com`. The test suite covers this
+    // helper directly.
     const isYouTube = isYouTubeUrlStrict(body.media.url);
 
     if (isYouTube) {
