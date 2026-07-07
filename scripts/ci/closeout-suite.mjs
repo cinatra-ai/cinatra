@@ -87,6 +87,43 @@ const MEMBERS = [
     args: ["scripts/extensions/build-design-registry.mjs", "--check"],
     network: true,
   },
+  // ---- gates added in the v0.1.7 milestone (closeout W3, engineering#512) ----
+  {
+    // Shrink-only residual floor for vendor-token occurrences outside the
+    // sanctioned surfaces (#975 vendor-inversion cluster / epic #978).
+    name: "vendor-token-core gate",
+    cmd: "node",
+    args: ["scripts/audit/vendor-token-core-gate.mjs"],
+  },
+  {
+    // node:fs value-import ban across the materialized extension tree (#1021).
+    // The per-extension-repo kind-gates are subsumed by the unified
+    // conformance checker (scripts/extensions/conformance-gate.mjs): its
+    // enforcement fixtures ride the root Vitest suite, and the live
+    // materialized-tree fleet loop stays CI-owned while in detection posture
+    // (see OUT_OF_SCOPE below).
+    name: "extension-fs-import-ban (#1021)",
+    cmd: "node",
+    args: ["scripts/audit/extension-fs-import-ban.mjs"],
+  },
+  {
+    // merge_group-aware required-context coverage (engineering#484 stage 3,
+    // gate-suite 2026.07.3): every mirrored required context + gate-suite.json
+    // entry must be merge_group-covered or the merge queue hard-stalls.
+    name: "merge-group coverage guard",
+    cmd: "node",
+    args: ["scripts/ci/merge-group-coverage-guard.mjs"],
+  },
+  {
+    // Design-conformance testid contract (#985/#986 via #1078/#1080): the
+    // pinned conformance manifests' testids must match the fixture surfaces.
+    // The Playwright functional-acceptance/data-contract projects are browser
+    // e2e (design-visual-verify CI) and the coverage ratchet needs a diff base
+    // ref, so this static contract check is the suite-runnable member.
+    name: "conformance testid contract (#985)",
+    cmd: "node",
+    args: ["scripts/design/check-conformance-testids.mjs"],
+  },
 ];
 
 // Out-of-scope batteries — named so a reader knows the closeout coverage that
@@ -95,6 +132,8 @@ const OUT_OF_SCOPE = [
   "DB-tier + unit + browser e2e + schema-migration + node --test gates → push-event `build-image` CI",
   "operator previous-release upgrade proof → scripts/ci/upgrade-proof.sh (closeout W3, #74)",
   "per-service works-after functional proof (Redis/BullMQ, Nango, Neo4j+Graphiti, Wayflow, Verdaccio, Postgres data-survival) → scripts/ci/works-after-proof.sh + .github/workflows/works-after-proof.yml (cinatra#352; needs Docker, gates env-app/stack majors)",
+  "extension conformance fleet loop (kind-gate successor; detection posture, CONFORMANCE_ENFORCE=0) → .github/workflows/extension-conformance-gate.yml (+ the per-repo reusable extension-conformance-gate-reusable.yml)",
+  "design-conformance functional-acceptance + data-contract Playwright projects (#985/#986) + shrink-only coverage ratchet (diff-based) → .github/workflows/design-visual-verify.yml",
 ];
 
 console.log("== Closeout verification suite (closeout W3, cinatra#75) ==");

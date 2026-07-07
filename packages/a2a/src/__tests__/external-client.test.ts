@@ -54,6 +54,9 @@ vi.mock("@a2a-js/sdk/client", () => {
       hoisted.clientFactoryCtorCalls.push(args);
     }
     createFromUrl = vi.fn().mockResolvedValue(hoisted.sdkClientMock);
+    // The URL-override path resolves the AgentCard first and then creates the
+    // client FROM the card (external-client.ts) — mirror the SDK surface.
+    createFromAgentCard = vi.fn().mockResolvedValue(hoisted.sdkClientMock);
   }
 
   const ClientFactoryOptions = {
@@ -76,6 +79,19 @@ vi.mock("@a2a-js/sdk/client", () => {
     constructor(options: Record<string, unknown>) {
       hoisted.defaultAgentCardResolverCtorCalls.push(options);
     }
+    // external-client.ts resolves the card and overrides its `url` with the
+    // caller-provided agentUrl (Docker container-internal-address fix); return
+    // a card advertising an unreachable internal bind address so the override
+    // is what makes the client usable.
+    resolve = vi.fn(async (_baseUrl: string, _path?: string) => ({
+      name: "mock-agent",
+      url: "http://0.0.0.0:19999/",
+      version: "0.0.1",
+      capabilities: {},
+      defaultInputModes: ["text"],
+      defaultOutputModes: ["text"],
+      skills: [],
+    }));
   }
 
   const createAuthenticatingFetchWithRetry = vi.fn(

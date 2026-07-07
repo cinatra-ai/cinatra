@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@cinatra/agent-builder", () => ({
+vi.mock("@cinatra-ai/agents", () => ({
   readPublishedAgentTemplates: vi.fn(),
   createAgentRun: vi.fn(),
   readAgentRunById: vi.fn(),
@@ -88,7 +88,11 @@ describe("createInProcessA2AClient", () => {
     expect(client.agentCard).toBeDefined();
   });
 
-  it("sendMessage returns a Task whose terminal status.state is 'completed'", async () => {
+  it("sendMessage returns the submitted Task and the background poll drives it to 'completed'", async () => {
+    // The executor publishes the initial Task in `submitted` state and returns;
+    // a BACKGROUND poll (readAgentRunById: queued -> running -> completed)
+    // updates the task store afterwards — observe the terminal state via
+    // getTask, not via the sendMessage return value.
     const client = await createInProcessA2AClient({
       packageName: "pkg-a",
       enqueueJob: vi.fn().mockResolvedValue(undefined),
@@ -99,7 +103,15 @@ describe("createInProcessA2AClient", () => {
     const task = await client.sendMessage({ text: "hello" });
     expect(typeof task.id).toBe("string");
     expect(task.id.length).toBeGreaterThan(0);
-    expect(task.status.state).toBe("completed");
+    expect(task.status.state).toBe("submitted");
+
+    let state = task.status.state as string;
+    const deadline = Date.now() + 4_000;
+    while (state !== "completed" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+      state = (await client.getTask(task.id)).status.state;
+    }
+    expect(state).toBe("completed");
   }, 5_000);
 
   it("sendMessage calls enqueueJob exactly once with ('AGENT_BUILDER_EXECUTION', { runId })", async () => {
