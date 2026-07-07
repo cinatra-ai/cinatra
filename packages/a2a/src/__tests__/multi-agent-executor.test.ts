@@ -108,10 +108,13 @@ describe("MultiAgentExecutor", () => {
     await exec.execute(ctx, bus);
     expect(executeSpy).not.toHaveBeenCalled();
     expect(bus.finished).toHaveBeenCalled();
+    // publishFailed publishes a task snapshot FIRST (so ResultManager.currentTask
+    // is set; prevents -32603), then the final status-update carrying the code.
     const published = (bus as unknown as { _published: unknown[] })._published;
-    expect(published).toHaveLength(1);
-    expect((published[0] as { kind: string }).kind).toBe("status-update");
-    const text = (published[0] as {
+    expect(published).toHaveLength(2);
+    expect((published[0] as { kind: string }).kind).toBe("task");
+    expect((published[1] as { kind: string }).kind).toBe("status-update");
+    const text = (published[1] as {
       status: { message?: { parts: { text: string }[] } };
     }).status.message?.parts?.[0]?.text;
     expect(text).toContain("SKILL_NOT_FOUND");
@@ -145,7 +148,8 @@ describe("MultiAgentExecutor", () => {
     await exec.execute(ctx, bus);
     expect(executeSpy).not.toHaveBeenCalled();
     const published = (bus as unknown as { _published: unknown[] })._published;
-    const text = (published[0] as {
+    expect(published).toHaveLength(2);
+    const text = (published[1] as {
       status: { message?: { parts: { text: string }[] } };
     }).status.message?.parts?.[0]?.text;
     expect(text).toContain("SKILL_ID_REQUIRED");
@@ -196,7 +200,8 @@ describe("MultiAgentExecutor", () => {
     await exec.execute(ctx, bus);
     expect(executeSpy).not.toHaveBeenCalled();
     const published = (bus as unknown as { _published: unknown[] })._published;
-    const text = (published[0] as {
+    expect(published).toHaveLength(2);
+    const text = (published[1] as {
       status: { message?: { parts: { text: string }[] } };
     }).status.message?.parts?.[0]?.text;
     expect(text).toContain("VERSION_RESOLUTION_FAILED");

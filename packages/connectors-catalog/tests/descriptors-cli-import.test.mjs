@@ -24,11 +24,15 @@ const MCP_LESS_CONNECTOR_SLUGS = new Set([
   // exposes no outbound MCP primitives — the per-user connect + publish
   // primitives live on @cinatra-ai/linkedin-connector.
   "linkedin-oauth-connector",
+  // MCP Servers (cinatra#612) carries the external-MCP management UI as its
+  // setup page — the registered external servers ARE the MCP; the connector
+  // itself ships no primitives of its own (see the descriptor's comment).
+  "mcp-server-connector",
 ]);
 
 describe("connector descriptors (CLI-safe surface)", () => {
-  it("ships the canonical 21-entry catalog", () => {
-    expect(CONNECTOR_DESCRIPTORS).toHaveLength(21);
+  it("ships the canonical 22-entry catalog", () => {
+    expect(CONNECTOR_DESCRIPTORS).toHaveLength(22);
   });
 
   it("every descriptor has the required fields with non-empty values", () => {
