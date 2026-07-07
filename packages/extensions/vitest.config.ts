@@ -20,6 +20,13 @@ export default defineConfig({
         __dirname,
         "../../packages/agents/src/verdaccio/package-contract.ts",
       ),
+      // Leaf subpath BEFORE the barrel (vite picks the more-specific alias
+      // first): marketplace-card-model.ts imports the pure semver helper via
+      // `@cinatra-ai/registries/src/version-compare` to avoid the barrel.
+      "@cinatra-ai/registries/src/version-compare": path.join(
+        __dirname,
+        "../../packages/registries/src/version-compare.ts",
+      ),
       "@cinatra-ai/registries": path.join(
         __dirname,
         "../../packages/registries/src/index.ts",

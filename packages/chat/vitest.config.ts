@@ -34,6 +34,13 @@ export default defineConfig({
       // import-analysis must resolve a bare specifier before a test's vi.mock()
       // can replace it — so map those `@/` paths to their source files.
       // (The useAgentCreationProgress hook itself now imports `@cinatra-ai/notifications/*`.)
+      // notifications-flyout.tsx (imported through @cinatra-ai/notifications)
+      // reads the app notification context — map it to the real source so the
+      // import resolves; tests vi.mock it where behaviour matters.
+      "@/context/notification-context": path.join(
+        root,
+        "src/context/notification-context.tsx",
+      ),
       "@/lib/notifications/flyout-state": path.join(
         root,
         "packages/notifications/src/flyout-state.ts",
@@ -58,6 +65,11 @@ export default defineConfig({
         root,
         "node_modules/react-dom/client.js",
       ),
+      // Fallback for remaining app `@/` imports pulled in transitively (e.g.
+      // notifications-flyout.tsx -> @/components/ui/badge). Listed LAST so the
+      // specific stub aliases above keep winning; vite object aliases are
+      // prefix-replacements evaluated in insertion order.
+      "@/": path.join(root, "src") + "/",
     },
   },
   test: {

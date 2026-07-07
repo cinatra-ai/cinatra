@@ -43,6 +43,9 @@ import "server-only";
 // Idempotent + fail-soft: re-evaluation (dev HMR, multiple layers) re-copies
 // the same descriptors; a layer whose import is NOT transformed (no `$$id`,
 // e.g. the BullMQ worker) and a not-yet-published registry are both no-ops.
+// Idempotency holds even AFTER React's server-reference registration locks
+// the copied props non-configurable on the published instance (cinatra#1068):
+// a locked prop is skipped instead of redefined (see copyServerReferenceProps).
 
 import * as transformedSetupActions from "@/app/campaigns/connector-setup-actions";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
@@ -70,6 +73,30 @@ export function copyServerReferenceProps(
   const descriptors = Object.getOwnPropertyDescriptors(reference);
   for (const [prop, descriptor] of Object.entries(descriptors)) {
     if (prop === "length" || prop === "name") continue;
+    // Idempotency across React's registration (cinatra#1068): once the
+    // decorated instance has been used as a real <form action>, React's
+    // server-reference registration re-defines `$$typeof`/`$$id`/`$$bound`
+    // as NON-configurable, so the next bridge re-evaluation (dev HMR / a
+    // second compilation layer) cannot redefine them — attempting to would
+    // throw `TypeError: Cannot redefine property: $$typeof` and 500 the
+    // dispatch route. The values are identical anyway (same shared symbol,
+    // same deterministic compiler-minted id), so a locked prop is skipped;
+    // a locked prop holding a DIFFERENT value would mean the reflected
+    // metadata diverged — log-soft (never throw on this path) so it stays
+    // observable without breaking the route.
+    const existing = Object.getOwnPropertyDescriptor(target, prop);
+    if (existing && !existing.configurable) {
+      const identical =
+        "value" in descriptor &&
+        "value" in existing &&
+        Object.is(existing.value, descriptor.value);
+      if (!identical) {
+        console.warn(
+          `[connector-setup-action-references] skipped non-configurable "${prop}" whose value diverges from the transformed layer's descriptor (target already locked, e.g. by React's server-reference registration)`,
+        );
+      }
+      continue;
+    }
     Object.defineProperty(target, prop, { ...descriptor, configurable: true });
   }
 }

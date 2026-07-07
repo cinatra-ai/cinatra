@@ -274,7 +274,7 @@ describe("AnthropicSkillSyncEngine — NO remote GC", () => {
     // engine, never the sync path. The no-DELETE structural boundary now
     // scopes to the SYNC portion before the GC client marker.
     const gcMarkerIdx = rawClient.indexOf(
-      "The delete-capable GC client",
+      "Delete-capable GC client",
     );
     expect(gcMarkerIdx).toBeGreaterThan(0); // marker must exist (boundary anchor)
     // Robustness against a moved/duplicated marker:
