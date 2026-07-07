@@ -396,7 +396,12 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     ).rejects.toThrow(/mutually exclusive/);
   });
 
-  it("without --pinned the lock files are not even read (tip-tracking unchanged)", async () => {
+  it("without --pinned the locks are consulted BEST-EFFORT only — unreadable locks degrade, tip-tracking unchanged", async () => {
+    // cinatra#1136: non-pinned mode now RESOLVES the committed pins so a
+    // companion left DETACHED at a previous lock sha can be re-pinned to the
+    // CURRENT lock. The read is best-effort: this fixture has NO lock files,
+    // and the sync must neither throw nor detach — a fresh clone stays
+    // tip-tracking exactly as before.
     const lockReads = [];
     const gitCalls = [];
     const deps = makeDeps(gitCalls);
@@ -407,7 +412,10 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
     };
     const r = await syncCinatraDevExtensions({ repoRoot: "/repo", targetRoot: "/repo", argv: [], env: {}, log: () => {}, deps });
     expect(r.results[0].action).toBe("cloned");
-    expect(lockReads).toEqual([]);
+    // The best-effort resolution attempts the lock read…
+    expect(lockReads.some((p) => p.includes("cinatra-required-extensions.lock.json"))).toBe(true);
+    // …but an unreadable lock never fails the sync and never detaches a
+    // tip-tracking checkout.
     expect(gitCalls.some((g) => g.startsWith("checkout --detach"))).toBe(false);
   });
 });
