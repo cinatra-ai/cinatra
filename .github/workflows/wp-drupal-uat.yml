@@ -248,7 +248,7 @@ jobs:
           echo "app-service env present"
       - name: Run full UAT suite
         if: needs.changed-paths.outputs.run_uat == 'true'
-        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@9738531797a6a67c4293a64026f768152abe3e9a # v0.1.0-ci61.9738531
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@9f228d76262a8ea075b4d49c4db52f78ac912978 # v0.1.0-ci61-merged.9f228d7
         with:
           # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
           # when configured so a future private flip keeps working unchanged.
@@ -337,7 +337,7 @@ jobs:
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
           echo "app-service env present"
       - name: Run full UAT suite
-        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@9738531797a6a67c4293a64026f768152abe3e9a # v0.1.0-ci61.9738531
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@9f228d76262a8ea075b4d49c4db52f78ac912978 # v0.1.0-ci61-merged.9f228d7
         with:
           # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
           # when configured so a future private flip keeps working unchanged.
