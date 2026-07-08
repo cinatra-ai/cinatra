@@ -43,6 +43,7 @@ import {
 } from "./dev-admin-bypass";
 import { PageHeader } from "@/components/page-header";
 import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getLocalMcpServerUrl, getPublicMcpServerUrl, getTrustedTokenOrigins } from "./llm-credentials";
+import { CLI_OAUTH_SCOPES, cliValidAudiences } from "./cli-audience";
 import { z } from "zod";
 
 const DEFAULT_SCOPES = ["openid", "profile", "email", "offline_access", "mcp:connect"] as const;
@@ -1161,12 +1162,32 @@ export function createMcpServerAuthPlugins(
   // the resource doesn't match validAudiences, oauth-provider falls back to an
   // opaque token, and verifyMcpAccessToken (JWT-only) rejects it with 401.
   const publicMcpUrl = getPublicMcpServerUrl();
-  const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
+  const mcpAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
+
+  // the CLI-audience decision record §2d (D2-A): register the dedicated `/api/cli` resource audiences so
+  // a token requested with `resource=<origin>/api/cli` is minted as a JWT bound
+  // to `aud=<origin>/api/cli` (without the entry the provider falls back to an
+  // OPAQUE token the JWKS verifier rejects). Same trusted origins the MCP
+  // audiences use, so the CLI surface is reachable on exactly the origins the
+  // instance already trusts — never a wider set.
+  const cliAudiences = cliValidAudiences(getTrustedTokenOrigins());
+  const validAudiences = [...mcpAudiences, ...cliAudiences];
+
+  // Advertise + ALLOW the CLI scopes for DCR (so the public PKCE CLI client can
+  // REQUEST them) but DELIBERATELY EXCLUDE them from the DCR DEFAULT scopes — a
+  // freshly-registered client must never silently receive control-plane
+  // authority (codex MAJOR). "Scope admits, role authorizes": the scope is only
+  // an admission ticket; the route-guard still resolves the real role.
+  const advertisedScopes = [...scopes, ...CLI_OAUTH_SCOPES];
+  const clientRegistrationDefaultScopes = [...scopes]; // CLI scopes excluded.
+  const clientRegistrationAllowedScopes = [...scopes, ...CLI_OAUTH_SCOPES];
 
   const urls = buildMcpHandshakeUrls(handshakeBasePath);
   return buildMcpAuthPlugins({
     validAudiences,
-    scopes,
+    scopes: advertisedScopes,
+    clientRegistrationDefaultScopes,
+    clientRegistrationAllowedScopes,
     loginPage: urls.loginPage,
     consentPage: urls.consentPage,
     signupPage: urls.signupPage,

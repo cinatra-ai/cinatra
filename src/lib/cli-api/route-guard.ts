@@ -19,14 +19,18 @@
 //     OWN dev box work without an OAuth dance, exactly as the MCP path already
 //     does.
 //
-// SCOPE BOUNDARY (cinatra#255 G2 PR split) — remote OAuth Bearer access tokens
-// are NOT resolved here yet. The MCP server verifies those through a SEPARATE
-// machinery (`verifyMcpAccessToken` → per-origin aud/iss/jwks → service-account
-// → userId), which is wired in the SAME unit as `cinatra login` (the flow that
-// MINTS those tokens). Until that lands, a remote Bearer token FAILS CLOSED
-// (401) here — by design, never a false-accept. So today this guard authorizes
-// exactly two paths: an established Better-Auth session, or the dev-admin
-// loopback bypass.
+// REMOTE BEARER (the CLI-audience decision record §2d, D2-A) — a remote OAuth Bearer is resolved here
+// for SCOPED routes ONLY, via `verifyCliBearer`: the token must JWKS-verify
+// against the DEDICATED `/api/cli` audience (`aud=<origin>/api/cli`) AND carry
+// the route's `cli:*` scope. An MCP-only token (bound to `aud=<origin>/api/mcp`)
+// is REJECTED — the audiences are deliberately separate so an `mcp:connect`
+// token can never become a CLI control-plane token (the audience-confusion
+// hole). A route that declares NO `requiredScope` is never reachable by a
+// remote Bearer at all. The actor (platform/org role) is resolved fail-closed
+// from the VERIFIED identity, never a token claim. So this guard now authorizes
+// three paths: an established Better-Auth session, a verified `/api/cli` Bearer
+// (scoped routes), or the dev-admin loopback bypass — and fails closed
+// otherwise.
 //
 // AUTHORIZATION — scope admits, ROLE authorizes (codex G2 decision):
 //   The OAuth `mcp:connect` scope is the admission ticket, but it must NEVER
@@ -60,6 +64,7 @@ import {
   isTrustedDevHost,
   shouldGrantDevAdminBypass,
 } from "@cinatra-ai/mcp-server/dev-admin-bypass";
+import { verifyCliBearer } from "@/lib/cli-api/verify-cli-bearer";
 
 /** The role tiers permitted to drive the CLI control plane. */
 const AUTHORIZED_ORG_ROLES: ReadonlySet<AuthzOrgRole> = new Set<AuthzOrgRole>([
@@ -78,9 +83,11 @@ export type CliActor = {
   organizationId: string | null;
   /**
    * How the caller was authorized. `dev-admin-bypass` marks the loopback path
-   * (no real session); `session` marks a cookie/Bearer session.
+   * (no real session); `session` marks a cookie/Bearer session;
+   * `verified-bearer` marks a remote OAuth Bearer JWKS-verified against the
+   * dedicated `/api/cli` audience + a `cli:*` scope (the CLI-audience decision record §2d).
    */
-  via: "session" | "dev-admin-bypass";
+  via: "session" | "dev-admin-bypass" | "verified-bearer";
 };
 
 export type CliGuardSuccess = { ok: true; actor: CliActor };
@@ -93,16 +100,27 @@ export type CliAuthTier = "org-admin" | "platform-admin";
 export type AuthorizeCliOptions = {
   /** Minimum tier required. `platform-admin` excludes org owners/admins. */
   minTier?: CliAuthTier;
+  /**
+   * The dedicated `cli:*` scope a REMOTE OAuth Bearer must carry to authorize
+   * this route (the CLI-audience decision record §2d). REQUIRED for the verified-Bearer path to be
+   * attempted — when omitted, a remote Bearer is NOT resolved and falls through
+   * to the dev-bypass / 401 (a route that does not declare a scope can never be
+   * driven by a remote token). A cookie session / dev-admin bypass ignore it.
+   */
+  requiredScope?: string;
 };
 
 /**
  * Resolve and authorize the caller of a `/api/cli/*` route.
  *
  * Order:
- *   1. Try the authenticated session (cookie OR verified Bearer JWT). When
- *      present, authorize on platform-admin / org-admin role.
- *   2. Otherwise, try the dev-admin loopback bypass (local CLI → local box).
- *   3. Otherwise deny (401 if unauthenticated, 403 if authenticated but
+ *   1. Try the authenticated session (cookie / session token). When present,
+ *      authorize on platform-admin / org-admin role.
+ *   2. Else, when the route declares a `cli:*` scope and a Bearer is present,
+ *      try the remote OAuth Bearer verified against the `/api/cli` audience
+ *      (the CLI-audience decision record §2d). Fail-closed; a missing/invalid Bearer falls through.
+ *   3. Else, try the dev-admin loopback bypass (local CLI → local box).
+ *   4. Otherwise deny (401 if unauthenticated, 403 if authenticated but
  *      under-privileged).
  *
  * Never throws on auth failure — returns a typed failure the route turns into
@@ -161,7 +179,55 @@ export async function authorizeCliRequest(
     };
   }
 
-  // ---- 2. Dev-admin loopback bypass (local CLI → local instance). ---------
+  // ---- 2. Remote OAuth Bearer verified against the `/api/cli` audience. ----
+  // the CLI-audience decision record §2d (D2-A). Only attempted when the route declares a `cli:*` scope
+  // AND the request carries an Authorization header. `verifyCliBearer` is
+  // fail-closed: it JWKS-verifies the token against `aud=<origin>/api/cli` +
+  // the required scope, rejects any token also bound to `/api/mcp`, and
+  // resolves the actor (platform-admin / org-role) from the VERIFIED identity
+  // — never a token role claim. A null result here is NOT a hard deny: it
+  // falls through to the dev-bypass / 401 below so a missing/invalid Bearer
+  // behaves exactly as it does today.
+  if (options?.requiredScope && request.headers.get("authorization")) {
+    const verified = await verifyCliBearer(request, options.requiredScope).catch(
+      () => null,
+    );
+    if (verified) {
+      const orgAdminTier =
+        verified.orgRole !== undefined &&
+        AUTHORIZED_ORG_ROLES.has(verified.orgRole);
+      const authorized =
+        minTier === "platform-admin"
+          ? verified.isPlatformAdmin
+          : verified.isPlatformAdmin || orgAdminTier;
+
+      if (!authorized) {
+        return {
+          ok: false,
+          status: 403,
+          error:
+            minTier === "platform-admin"
+              ? "Forbidden: this CLI endpoint requires platform admin."
+              : "Forbidden: the CLI control plane requires platform admin or an organization owner/admin role.",
+        };
+      }
+
+      return {
+        ok: true,
+        actor: {
+          userId: verified.userId,
+          isPlatformAdmin: verified.isPlatformAdmin,
+          ...(verified.orgRole ? { orgRole: verified.orgRole } : {}),
+          organizationId: verified.organizationId,
+          via: "verified-bearer",
+        },
+      };
+    }
+    // A present-but-invalid Bearer falls through to the dev-bypass / 401 — it
+    // is never silently upgraded, and the 401 below tells the caller to re-auth.
+  }
+
+  // ---- 3. Dev-admin loopback bypass (local CLI → local instance). ---------
   // SAME guards the MCP transport uses; never fires in production.
   const url = request.url;
   const trustedDevHost = isTrustedDevHost({
@@ -190,11 +256,11 @@ export async function authorizeCliRequest(
     };
   }
 
-  // ---- 3. Deny (fail closed). ---------------------------------------------
-  // Reached when there is no established session AND the loopback bypass did
-  // not apply — including the remote OAuth Bearer case, which this guard does
-  // not yet resolve (see the SCOPE BOUNDARY note). Failing closed here is
-  // intentional; a remote Bearer is never silently accepted.
+  // ---- 4. Deny (fail closed). ---------------------------------------------
+  // Reached when there is no established session, no valid `/api/cli`-audience
+  // Bearer for a scoped route, AND the loopback bypass did not apply. Failing
+  // closed here is intentional; an unverified/under-scoped Bearer is never
+  // silently accepted.
   return {
     ok: false,
     status: 401,

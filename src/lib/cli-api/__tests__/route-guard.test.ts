@@ -28,6 +28,13 @@ vi.mock("next/headers", () => ({
   headers: () => headersMock(),
 }));
 
+// The verified-Bearer resolver is unit-tested separately; here we mock it to
+// drive the route-guard's verified-bearer branch deterministically.
+const verifyCliBearerMock = vi.fn();
+vi.mock("@/lib/cli-api/verify-cli-bearer", () => ({
+  verifyCliBearer: (...args: unknown[]) => verifyCliBearerMock(...args),
+}));
+
 import { authorizeCliRequest } from "../route-guard";
 
 function fakeHeaders(map: Record<string, string> = {}) {
@@ -40,10 +47,22 @@ function req(url = "https://instance.cinatra.ai/api/cli/status"): Request {
   return new Request(url, { method: "GET" });
 }
 
+function bearerReq(
+  url = "https://instance.cinatra.ai/api/cli/status",
+  token = "tok",
+): Request {
+  return new Request(url, {
+    method: "GET",
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
 describe("authorizeCliRequest", () => {
   beforeEach(() => {
     getSessionMock.mockReset();
     resolveOrgRoleMock.mockReset();
+    verifyCliBearerMock.mockReset();
+    verifyCliBearerMock.mockResolvedValue(null);
     headersMock.mockReset();
     headersMock.mockResolvedValue(fakeHeaders());
     // Default: no bypass.

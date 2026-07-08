@@ -7,9 +7,11 @@
 // `agent.json` (formatVersion 1) + optional `manifest.json` (version 1), and
 // INSERTS a NEW draft template (fresh UUID) plus an initial version row.
 //
-// AUTH: PLATFORM-ADMIN ONLY via `authorizeCliRequest({ minTier })`. Import
-// inserts an instance-level template (no org predicate), so org-admins must NOT
-// get cross-org write reach.
+// AUTH: PLATFORM-ADMIN ONLY via `authorizeCliRequest`. A remote Bearer must
+// carry the non-default `cli:agent:write` scope on the dedicated `/api/cli`
+// audience (the CLI-audience decision record §2d) — `mcp:connect` alone is too broad. Import inserts an
+// instance-level template (no org predicate), so org-admins must NOT get
+// cross-org write reach.
 // AUTHORING, NON-DESTRUCTIVE: only ever creates a new draft — never updates or
 // deletes — so it is safe to expose ahead of the G3 remote-operator hardening.
 //
@@ -30,7 +32,10 @@ export const dynamic = "force-dynamic";
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export async function POST(request: Request): Promise<Response> {
-  const guard = await authorizeCliRequest(request, { minTier: "platform-admin" });
+  const guard = await authorizeCliRequest(request, {
+    minTier: "platform-admin",
+    requiredScope: "cli:agent:write",
+  });
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

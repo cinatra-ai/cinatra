@@ -6,9 +6,11 @@
 // (`agent.json` formatVersion 1 + `manifest.json`) byte-compatible with the
 // CLI's own export, so a remote-exported archive imports identically.
 //
-// AUTH: PLATFORM-ADMIN ONLY via `authorizeCliRequest({ minTier })`. Export
-// resolves a template by id/name across the whole instance (no org predicate),
-// so org-admins must NOT get cross-org reach. READ-ONLY.
+// AUTH: PLATFORM-ADMIN ONLY via `authorizeCliRequest`. A remote Bearer must
+// carry the `cli:agent:read` scope on the dedicated `/api/cli` audience
+// (the CLI-audience decision record §2d). Export resolves a template by id/name across the whole
+// instance (no org predicate), so org-admins must NOT get cross-org reach.
+// READ-ONLY.
 // ---------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";
@@ -21,7 +23,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const guard = await authorizeCliRequest(request, { minTier: "platform-admin" });
+  const guard = await authorizeCliRequest(request, {
+    minTier: "platform-admin",
+    requiredScope: "cli:agent:read",
+  });
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
