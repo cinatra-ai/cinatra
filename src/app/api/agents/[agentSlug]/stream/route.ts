@@ -23,6 +23,11 @@ import {
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { validateAuthInitRequest } from "@/lib/wp-drupal-contract";
+import {
+  assertScriptedProviderNotProduction,
+  buildScriptedContentEditorReplyText,
+  isScriptedTestProviderEnabled,
+} from "@cinatra-ai/llm/scripted-test-provider";
 
 // cinatra#408 — per-user widget identity proof header (the "dual token"). The
 // site `cit_` transport token stays on `Authorization`; this carries the
@@ -412,27 +417,54 @@ export async function POST(
       }
 
       try {
+        // Deterministic SCRIPTED stand-in for the content-editor agent
+        // (CINATRA_TEST_LLM_PROVIDER=scripted; the wp/drupal Playwright UATs).
+        // Replaces ONLY the A2A relay leg, AFTER every fail-closed check above
+        // already ran — the dual-token auth path, the live membership
+        // re-checks, and the server-derived instance binding are exercised for
+        // real; the scripted reply then flows through the SAME JSON→SSE frame
+        // mapping below as a real agent reply. This restores the suite's
+        // documented scope (the scripted provider stands in for the
+        // content-editor agent; no WayFlow CMS mutation) which the relay
+        // architecture had silently orphaned: the scripted short-circuit lived
+        // only in the host LLM `stream()` entry, a path this route no longer
+        // touches, so the relay scenarios could not go green without a live
+        // provider key. Fail-loud outside an explicit development runtime
+        // (assertScriptedProviderNotProduction); a no-op unless the env flag
+        // is set.
+        assertScriptedProviderNotProduction();
+        const scripted = isScriptedTestProviderEnabled();
         // RELAY: blocking A2A dispatch to the content-editor agent. The host
         // helper pre-creates the OBO-carrier agent_run (cinatra#246) so the
         // agent's downstream `/api/mcp` CMS write authorizes via the real
         // agent-run OBO path, then walks the agent's reply for its final text.
-        const text = await dispatchContentEditorViaA2A({
-          agentUrl: relay.agentUrl,
-          payload,
-          timeoutMs: 300_000, // aligned with the /chat blocking budget
-          packageName: relay.agentPackageName,
-          // Multi-tenant install→org binding anchors (cinatra#274). The
-          // verified origin is authoritative; the client-supplied instanceId
-          // only disambiguates among origin-matched rows. On the per-user path
-          // (cinatra#408) the explicit actorOverride SHORT-CIRCUITS this
-          // resolver entirely — runBy is the authenticated end user, never the
-          // install's service identity, and there is no anonymous fallback.
-          instancesConfigKey: entry.auth.instancesConfigKey,
-          origin: verifiedOrigin,
-          instanceId:
-            typeof context.instanceId === "string" ? context.instanceId : null,
-          actorOverride: widgetActorOverride ?? undefined,
-        });
+        const text = scripted
+          ? buildScriptedContentEditorReplyText({
+              instructions,
+              // The declared contextFields carry the CMS id: Drupal payloads
+              // have `nodeId`, WordPress payloads have `postId`.
+              idKey: "nodeId" in payload ? "nodeId" : "postId",
+              idValue: String(
+                ("nodeId" in payload ? payload.nodeId : payload.postId) ?? "",
+              ),
+            })
+          : await dispatchContentEditorViaA2A({
+              agentUrl: relay.agentUrl,
+              payload,
+              timeoutMs: 300_000, // aligned with the /chat blocking budget
+              packageName: relay.agentPackageName,
+              // Multi-tenant install→org binding anchors (cinatra#274). The
+              // verified origin is authoritative; the client-supplied instanceId
+              // only disambiguates among origin-matched rows. On the per-user path
+              // (cinatra#408) the explicit actorOverride SHORT-CIRCUITS this
+              // resolver entirely — runBy is the authenticated end user, never the
+              // install's service identity, and there is no anonymous fallback.
+              instancesConfigKey: entry.auth.instancesConfigKey,
+              origin: verifiedOrigin,
+              instanceId:
+                typeof context.instanceId === "string" ? context.instanceId : null,
+              actorOverride: widgetActorOverride ?? undefined,
+            });
 
         // Parse the agent's reply. A structured `{ postId|nodeId, changes[] }`
         // edit emits a `changes` frame (the widget's reload-to-apply path); a

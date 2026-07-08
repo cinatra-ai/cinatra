@@ -154,6 +154,17 @@ export default defineConfig({
           "packages/llm/src/providers/openai-model-capabilities.ts",
         ),
       },
+      // Dependency-light deterministic UAT provider leaf (node:crypto + a type
+      // import only). Imported by src/app/api/agents/[agentSlug]/stream/route.ts
+      // (the widget relay's dev-only scripted stand-in) and its route test;
+      // like /actor-context it must be aliased BEFORE the bare entry.
+      {
+        find: "@cinatra-ai/llm/scripted-test-provider",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/scripted-test-provider.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

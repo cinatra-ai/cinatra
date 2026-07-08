@@ -19,6 +19,7 @@ import {
 } from "@/lib/better-auth-db";
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
+import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
 import { insertOAuthClientWithTx } from "@/lib/better-auth-oauth-client";
 
 const authBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
@@ -480,25 +481,37 @@ async function canManageWorkspaceBootstrap() {
   }
 }
 
+// Single count-of-HUMANS query every first-human one-shot below keys on:
+// only rows whose "userType" is 'human' (or NULL — rows predating the column
+// default) are humans. This deliberately excludes EVERY machine userType, not
+// just 'assistant' (ensureBuiltInCinatraAssistant): the dev UAT fixture
+// (`uat-fixture`, seeded by dev-auto-setup's ensureDevConnectActor) used to
+// count as the "first user" on a fresh dev install and consumed the one-shot
+// initial-admin bootstrap before any real person registered (cinatra#1135) —
+// the documented "first user to register becomes the platform admin" flow
+// then landed on role=user + /not-authorized. The humanness predicate itself
+// (NULL = human) lives in `initial-admin-bootstrap-policy.ts`; this SQL is its
+// set-level twin and the shared source for all three count sites so they
+// cannot drift apart again.
+const countHumanUsersSql = sql`select count(*)::text as count from public."user" where coalesce("userType", 'human') = 'human'`;
+
 export async function hasAnyBetterAuthUsers() {
   if (!(await canManageBootstrapState())) {
     return false;
   }
 
-  // Exclude assistant users (e.g. cinatra@system.local seeded on boot by
-  // ensureBuiltInCinatraAssistant) — same rationale as the count in
-  // ensureInitialAdminBootstrap below: a fresh install always carries the
-  // built-in assistant row, so counting it would make the bootstrap state
-  // (inline "Create the first account" form, /sign-up canonical redirect)
-  // unreachable on every real fresh install.
-  const result = await betterAuthDb.execute<{ count: string }>(
-    sql`select count(*)::text as count from public."user" where "userType" is distinct from 'assistant'`,
-  );
+  // Count HUMANS only (see countHumanUsersSql) — a fresh install always
+  // carries the built-in assistant row (and, in dev, the UAT fixture row), so
+  // counting machine accounts would make the bootstrap state (inline "Create
+  // the first account" form, /sign-up canonical redirect) unreachable on
+  // every real fresh install.
+  const result = await betterAuthDb.execute<{ count: string }>(countHumanUsersSql);
 
   return Number(result.rows[0]?.count ?? "0") > 0;
 }
 
-// Definitive count of HUMAN users (userType is distinct from 'assistant' — D3),
+// Definitive count of HUMAN users (userType 'human' or NULL — D3, tightened
+// by cinatra#1135 to exclude every machine userType, not just 'assistant'),
 // for the closed-registration gate. Unlike hasAnyBetterAuthUsers(), this THROWS
 // on any inspection failure (D4): hasAnyBetterAuthUsers returns false on error,
 // conflating "zero humans" with "DB unavailable", which would let the
@@ -523,9 +536,10 @@ async function countHumanUsersLocked(): Promise<number> {
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext('cinatra'), hashtext('registration-gate'))`,
     );
-    const result = await tx.execute<{ count: string }>(
-      sql`select count(*)::text as count from public."user" where "userType" is distinct from 'assistant'`,
-    );
+    // HUMANS only (see countHumanUsersSql): D3's intent is "does a real
+    // person exist yet" — machine rows (assistant, dev UAT fixture) must not
+    // consume the first-human registration exception either (cinatra#1135).
+    const result = await tx.execute<{ count: string }>(countHumanUsersSql);
     const raw = result.rows[0]?.count;
     const parsed = Number(raw ?? NaN);
     if (!Number.isFinite(parsed)) {
@@ -595,15 +609,34 @@ export async function ensureInitialAdminBootstrap(userId: string) {
     return false;
   }
 
-  // Exclude assistant users (e.g. cinatra@system.local seeded by
-  // ensureBuiltInCinatraAssistant) — otherwise the first human registrant
-  // lands with userCount=2 and never gets promoted to admin, so the setup
-  // wizard (requireAdminSession) is unreachable on a fresh instance.
-  const userCountResult = await betterAuthDb.execute<{ count: string }>(
-    sql`select count(*)::text as count from public."user" where "userType" is distinct from 'assistant'`,
-  );
+  // HUMAN-only one-shot (cinatra#1135): the candidate itself must be a real
+  // person, and the count below only counts real people. Both arms of
+  // `isInitialAdminBootstrapEligible` matter here:
+  //   - candidate arm: the dev UAT fixture signs in role-less through the
+  //     Playwright harness, which routes it here via getAuthSession — without
+  //     this guard it would be promoted to platform admin + Default-org owner
+  //     the moment exactly one human exists;
+  //   - count arm: counting machine rows (assistant, dev UAT fixture) made
+  //     the fixture consume the slot on every fresh dev install, so the first
+  //     real registrant landed with userCount=2, stayed role=user, and the
+  //     setup wizard (requireAdminSession) was unreachable.
+  const targetRows = await betterAuthDb
+    .select({ userType: betterAuthUsers.userType })
+    .from(betterAuthUsers)
+    .where(eq(betterAuthUsers.id, userId))
+    .limit(1);
+  if (targetRows.length === 0) {
+    return false;
+  }
 
-  if (Number(userCountResult.rows[0]?.count ?? "0") !== 1) {
+  const userCountResult = await betterAuthDb.execute<{ count: string }>(countHumanUsersSql);
+
+  if (
+    !isInitialAdminBootstrapEligible({
+      targetUserType: targetRows[0].userType,
+      humanUserCount: Number(userCountResult.rows[0]?.count ?? "0"),
+    })
+  ) {
     return false;
   }
 

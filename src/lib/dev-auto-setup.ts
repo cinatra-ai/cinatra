@@ -59,7 +59,9 @@ import { readConnectorAccessDeclarationFromStore } from "@/lib/connector-access-
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { randomUUID } from "node:crypto";
-import { auth, ensureInitialAdminBootstrap } from "@/lib/auth";
+import { auth } from "@/lib/auth";
+import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
+import { DEV_UAT_FIXTURE_USER_TYPE } from "@/lib/initial-admin-bootstrap-policy";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { upsertConnectSiteAndMintCredential } from "@/lib/connect-provisioning";
 
@@ -678,10 +680,14 @@ let cachedDevActor: DevConnectActor | null = null;
 
 /**
  * Idempotently ensure the deterministic dev UAT user + Default org membership,
- * reusing an existing user if present. Reuses the production bootstrap
- * (`ensureInitialAdminBootstrap` → Default org + owner membership + active org)
- * so the seeded org IS the one `autoSeedConnectorPolicyFixture` already keys on
- * (earliest user → first org). Writes a gitignored handoff file for the
+ * reusing an existing user if present. The fixture is a MACHINE account
+ * (`userType='uat-fixture'`) with a plain 'member' membership of the Default
+ * org — everything the UAT harness needs (a sign-in-able user whose hosted
+ * /widget-auth consent + stream org-membership re-checks pass) and nothing
+ * more. It must NEVER route through `ensureInitialAdminBootstrap`: seeding it
+ * as the "first user" consumed the one-shot platform-admin bootstrap on every
+ * fresh dev install, so the first real registrant stayed role=user and the
+ * setup wizard 403'd (cinatra#1135). Writes a gitignored handoff file for the
  * Playwright suite. Returns null (soft) if seeding is unavailable.
  */
 export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
@@ -726,15 +732,47 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
     }
   }
 
-  // Make the (first) user the Default-org owner via the production bootstrap.
-  // No-ops cleanly if another user already claimed the single-admin slot.
+  // Mark the fixture row as a MACHINE account before any org wiring: better-
+  // auth's signup default is userType='human' (the field is input:false, so it
+  // cannot be set at signup time), and a 'human'-typed fixture is counted by
+  // the first-human one-shots in auth.ts — on every fresh dev install it
+  // consumed the initial-admin bootstrap before any real person registered
+  // (cinatra#1135). Idempotent, and it also HEALS a fixture row an earlier
+  // boot seeded as 'human', so an existing dev DB with a single real user
+  // regains the pending bootstrap on that user's next session. FAIL CLOSED:
+  // if the marking cannot be confirmed, do not wire the actor — an unmarked
+  // fixture must never sit in the DB claiming the first-human slot.
   try {
-    await ensureInitialAdminBootstrap(userId);
-  } catch {
-    // Soft — membership is re-resolved below; a failure just means no org yet.
+    const markResults = runPostgresQueriesSync({
+      connectionString,
+      queries: [
+        {
+          text: `UPDATE public."user" SET "userType" = $2 WHERE id = $1 AND "userType" IS DISTINCT FROM $2`,
+          values: [userId, DEV_UAT_FIXTURE_USER_TYPE],
+        },
+        {
+          text: `SELECT 1 FROM public."user" WHERE id = $1 AND "userType" = $2`,
+          values: [userId, DEV_UAT_FIXTURE_USER_TYPE],
+        },
+      ],
+    });
+    const marked = (markResults[1]?.rows as unknown[] | undefined)?.length;
+    if (!marked) throw new Error("fixture userType marking did not persist");
+  } catch (err) {
+    console.log(
+      `${tag}:connect could not mark the dev UAT user as a machine fixture (${err instanceof Error ? err.message : "unknown"}) — ` +
+        "not wiring the actor; it must never count as the first human (cinatra#1135)",
+    );
+    return null;
   }
 
-  // Resolve the org: this user's first membership, else the Default org row.
+  // Resolve the org: this user's first membership, else the Default org row +
+  // a plain 'member' membership. DELIBERATELY not ensureInitialAdminBootstrap
+  // (cinatra#1135): the one-shot first-human admin slot belongs to the first
+  // real registrant. The UAT harness needs exactly a sign-in-able user that is
+  // a MEMBER of the org owning the `cnx_` connect-sites (the hosted
+  // /widget-auth consent and the stream's live org-membership re-check are
+  // membership checks) — not platform admin, not org owner.
   let orgId: string | undefined = (
     runPostgresQueriesSync({
       connectionString,
@@ -750,6 +788,9 @@ export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
   if (!orgId) {
     try {
       orgId = await ensureDefaultOrganizationRow();
+      // Race-safe + promote-only writer; promoteToOwner=false — the fixture
+      // has no authority to own the Default org.
+      await ensureBetterAuthMembershipRow(userId, orgId, "member", false);
     } catch {
       orgId = undefined;
     }

@@ -23,11 +23,16 @@ import { createHash } from "node:crypto";
 // ---------------------------------------------------------------------------
 
 let FIXTURE_ROOT = "";
+// The dev-source tree (docker-compose bind-mounts `./extensions` into the dev
+// wayflow container) — the phase backfills it IN ADDITION to the runtime mount
+// when the runtime is explicit development. Defaults to the runtime-mount
+// fixture unless a test points it elsewhere.
+let DEV_FIXTURE_ROOT = "";
 
 // Seam 1: install-dir resolver (DB-backed in prod) → point at the fixture tree.
 vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => FIXTURE_ROOT,
-  resolveDevExtensionSourceRoot: () => FIXTURE_ROOT,
+  resolveDevExtensionSourceRoot: () => DEV_FIXTURE_ROOT || FIXTURE_ROOT,
 }));
 
 // Seam 2: wayflow reload client (HTTP to the wayflow container in prod). No
@@ -87,9 +92,13 @@ async function makeAgentDir(
 describe("engineering #418 — agent-marker-backfill prod boot phase (real surface)", () => {
   beforeEach(async () => {
     FIXTURE_ROOT = await mkdtemp(join(tmpdir(), "eng418-markers-"));
+    DEV_FIXTURE_ROOT = "";
     triggerWayflowReload.mockClear();
   });
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("self-heals missing + stale markers so the wayflow loader mounts them, while never publishing an in-progress draft", async () => {
     // (a) MISSING marker — fresh install (the ossflywheel 5-of-6 case).
@@ -182,5 +191,39 @@ describe("engineering #418 — agent-marker-backfill prod boot phase (real surfa
     expect(result.status).toBe("ok");
     expect(triggerWayflowReload).not.toHaveBeenCalled();
     void stat; // referenced to keep import meaningful for future fixtures
+  });
+
+  it("development runtime ALSO backfills the dev source tree (the dir compose mounts into the dev wayflow) and wakes wayflow", async () => {
+    // cinatra#1137 regression pin: a fresh pinned clone ships NO markers, the
+    // wayflow ro-mount cannot write one, and the promoted phase used to target
+    // ONLY the runtime mount — so a fresh dev/CI environment served ZERO
+    // agents and the widget-stream relay 404'd on the agent card.
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+    DEV_FIXTURE_ROOT = await mkdtemp(join(tmpdir(), "dev-source-markers-"));
+    const oas = { openapi: "3.1.0", metadata: { cinatra: { packageName: "@cinatra-ai/wordpress-agent", packageVersion: "1.0.0" } } };
+    const devSlugDir = join(DEV_FIXTURE_ROOT, "cinatra-ai", "wordpress-agent");
+    await mkdir(join(devSlugDir, "cinatra"), { recursive: true });
+    await writeFile(join(devSlugDir, "cinatra", "oas.json"), JSON.stringify(oas, null, 2));
+    expect(await loaderMarkerStatus(devSlugDir)).toBe("missing");
+
+    const result = await runBootPhase(agentMarkerBackfillPhases()[0]);
+    expect(result.status).toBe("ok");
+    // The dev-source agent is now loader-mountable, and wayflow was woken.
+    expect(await loaderMarkerStatus(devSlugDir)).toBe("valid");
+    expect(triggerWayflowReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("outside development runtime the dev source tree is NOT touched", async () => {
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "production");
+    DEV_FIXTURE_ROOT = await mkdtemp(join(tmpdir(), "dev-source-untouched-"));
+    const oas = { openapi: "3.1.0", metadata: { cinatra: { packageName: "@cinatra-ai/wordpress-agent", packageVersion: "1.0.0" } } };
+    const devSlugDir = join(DEV_FIXTURE_ROOT, "cinatra-ai", "wordpress-agent");
+    await mkdir(join(devSlugDir, "cinatra"), { recursive: true });
+    await writeFile(join(devSlugDir, "cinatra", "oas.json"), JSON.stringify(oas, null, 2));
+
+    const result = await runBootPhase(agentMarkerBackfillPhases()[0]);
+    expect(result.status).toBe("ok");
+    // Prod never writes into the git-native authoring tree.
+    expect(existsSync(join(devSlugDir, PUBLISHED))).toBe(false);
   });
 });

@@ -188,6 +188,15 @@ jobs:
       CINATRA_RUNTIME_MODE: development
       BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      # App-side wayflow endpoint (compose publishes 3010). The wayflow
+      # container starts BEFORE the app in this job, so its startup scan sees a
+      # markerless just-cloned tree and mounts ZERO agents; the app's
+      # agent-marker-backfill boot phase then writes the published markers and
+      # POSTs the authenticated reload via triggerWayflowReload — which is a
+      # silent no-op (reason=no_base_url) unless this is set. Without it every
+      # widget-stream relay 404s on the agent card ("(no response)" in tests
+      # 4/5) even with a healthy, tokened wayflow.
+      WAYFLOW_BASE_URL: http://localhost:3010
       # next.config.ts REQUIRED_ENV asserts presence of OPENAI_API_KEY at
       # dev-server startup (next.config.ts:6-13). The UAT boots `pnpm dev` with
       # the deterministic SCRIPTED provider (no real OpenAI call), but the
@@ -234,6 +243,21 @@ jobs:
         # minted per run — never an ops secret. Exported to $GITHUB_ENV so the
         # job env reaches the composite action's `docker compose up` step.
         run: echo "NANGO_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Derive CINATRA_BRIDGE_TOKEN (throwaway, per-run)
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        # The wayflow container authenticates its /api/llm-bridge callback with
+        # this shared secret, and its boot preflight (agent_loader.py) EXITS
+        # non-zero when the token is absent — so without this derivation the
+        # container restart-loops, the widget-stream relay to localhost:3010
+        # dies with "fetch failed", and the SSE/edit UAT scenarios fail with
+        # "(no response)" (the pre-existing red on every real run of this
+        # suite; the wp/drupal auth+widget scenarios still passed because they
+        # never touch the relay). Reaches BOTH sides from the single job env:
+        # `pnpm setup:dev` (composite step) writes docker/wayflow/.wayflow.env
+        # from it via scripts/gen-wayflow-env.mjs (env_file for the container),
+        # and the Playwright webServer `pnpm dev` inherits it for the app-side
+        # bridge check. THROWAWAY crypto minted per run — never an ops secret.
+        run: echo "CINATRA_BRIDGE_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
         if: needs.changed-paths.outputs.run_uat == 'true'
         # Env-presence guard ONLY (runs in the caller, BEFORE the composite
@@ -243,6 +267,7 @@ jobs:
           : "${SUPABASE_DB_URL:?cinatra#173 regression: SUPABASE_DB_URL must be exported (postgres service + job env) before cinatra setup dev}"
           : "${BETTER_AUTH_SECRET:?cinatra#173 regression: BETTER_AUTH_SECRET must be derived (openssl rand) before cinatra setup dev}"
           : "${NANGO_ENCRYPTION_KEY:?cinatra#665 regression: NANGO_ENCRYPTION_KEY must be derived (openssl rand -base64 32) before docker compose up — nango-server boots blank otherwise}"
+          : "${CINATRA_BRIDGE_TOKEN:?regression pin: CINATRA_BRIDGE_TOKEN must be derived (openssl rand) before cinatra setup dev — the wayflow runtime refuses to boot without it and the widget-stream relay scenarios fail with '(no response)'}"
           : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
           echo "app-service env present"
@@ -297,6 +322,11 @@ jobs:
       CINATRA_RUNTIME_MODE: development
       BETTER_AUTH_URL: http://localhost:3000
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      # App-side wayflow endpoint (compose publishes 3010) — same rationale as
+      # the uat-gate job: the app's agent-marker-backfill reload is a silent
+      # no-op without it and the widget-stream relay then 404s on the agent
+      # card (wayflow scanned the just-cloned, markerless tree at startup).
+      WAYFLOW_BASE_URL: http://localhost:3010
       # Presence-only — next.config.ts REQUIRED_ENV asserts it at dev-server
       # startup; the UAT uses the deterministic scripted provider, never a real
       # OpenAI call. Zero-secret placeholder (mirrors dashboard-live-verify.yml).
@@ -325,6 +355,14 @@ jobs:
         # secret. Exported to $GITHUB_ENV so the job env reaches the composite
         # action's `docker compose up` step.
         run: echo "NANGO_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Derive CINATRA_BRIDGE_TOKEN (throwaway, per-run)
+        # Same rationale as the uat-gate job's step: the wayflow container's
+        # boot preflight refuses to start without the bridge token, so the
+        # widget-stream relay scenarios fail with "(no response)" unless the
+        # job env carries it into `pnpm setup:dev` (which writes
+        # docker/wayflow/.wayflow.env via scripts/gen-wayflow-env.mjs) and the
+        # Playwright webServer `pnpm dev`. THROWAWAY crypto minted per run.
+        run: echo "CINATRA_BRIDGE_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
         # Env-presence guard ONLY (runs in the caller, BEFORE the composite
         # action installs `pg`). Postgres reachability is already guaranteed by
@@ -333,6 +371,7 @@ jobs:
           : "${SUPABASE_DB_URL:?cinatra#173 regression: SUPABASE_DB_URL must be exported (postgres service + job env) before cinatra setup dev}"
           : "${BETTER_AUTH_SECRET:?cinatra#173 regression: BETTER_AUTH_SECRET must be derived (openssl rand) before cinatra setup dev}"
           : "${NANGO_ENCRYPTION_KEY:?cinatra#665 regression: NANGO_ENCRYPTION_KEY must be derived (openssl rand -base64 32) before docker compose up — nango-server boots blank otherwise}"
+          : "${CINATRA_BRIDGE_TOKEN:?regression pin: CINATRA_BRIDGE_TOKEN must be derived (openssl rand) before cinatra setup dev — the wayflow runtime refuses to boot without it and the widget-stream relay scenarios fail with '(no response)'}"
           : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
           echo "app-service env present"

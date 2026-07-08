@@ -42,24 +42,53 @@ export function agentMarkerBackfillPhases(): BootPhase[] {
         const { backfillPublishedMarkers, triggerWayflowReload } = await import(
           "@cinatra-ai/agents"
         );
-        const { resolveAgentRuntimeMountDir } = await import(
-          "@cinatra-ai/agents/agent-runtime-mount"
-        );
-        const agentsDir = resolveAgentRuntimeMountDir();
+        const { resolveAgentRuntimeMountDir, resolveDevExtensionSourceRoot } =
+          await import("@cinatra-ai/agents/agent-runtime-mount");
 
         // Backfill `.cinatra-published.json` markers for every on-disk agent dir
         // BEFORE wayflow's loader scans. Idempotent; missing/stale markers are
         // (re)derived from the current oas.json hash; in-progress drafts skipped.
-        const result = await backfillPublishedMarkers(agentsDir);
-        const repaired = result.written + result.rewritten;
-        if (repaired > 0 || result.errors.length > 0) {
-          console.log(
-            `[agents/backfill-markers] scanned=${result.scanned} ` +
-              `written=${result.written} rewritten=${result.rewritten} ` +
-              `skipped=${result.skipped} errors=${result.errors.length}`,
-          );
-          for (const err of result.errors) {
-            console.warn(`[agents/backfill-markers] ${err.path}: ${err.reason}`);
+        //
+        // TWO trees, because dev and prod mount DIFFERENT dirs into wayflow:
+        //   1. the RUNTIME mount (`<extension-data-root>/.agent-mount`) — the
+        //      deploy-owned projection prod wayflow mounts;
+        //   2. dev only: the git-native dev source tree (`<cwd>/extensions`) —
+        //      the dir docker-compose.yml bind-mounts (`./extensions:/agents:ro`)
+        //      into the dev wayflow container. When this phase was promoted out
+        //      of the dev-only scan it kept ONLY tree (1), so a FRESH dev
+        //      environment (pinned clones ship no markers; the wayflow loader
+        //      cannot write through its ro mount) served ZERO agents: the
+        //      widget-stream relay 404'd on the agent card and the wp/drupal
+        //      UAT SSE/edit scenarios failed with "(no response)" on every
+        //      fresh run (cinatra#1137) while long-lived checkouts kept
+        //      coasting on markers written before the promotion.
+        const trees: Array<{ dir: string; label: string }> = [
+          { dir: resolveAgentRuntimeMountDir(), label: "runtime-mount" },
+        ];
+        if (
+          process.env.CINATRA_RUNTIME_MODE === "development" &&
+          process.env.NODE_ENV !== "production"
+        ) {
+          trees.push({ dir: resolveDevExtensionSourceRoot(), label: "dev-source" });
+        }
+
+        let repaired = 0;
+        let writtenTotal = 0;
+        let rewrittenTotal = 0;
+        for (const tree of trees) {
+          const result = await backfillPublishedMarkers(tree.dir);
+          repaired += result.written + result.rewritten;
+          writtenTotal += result.written;
+          rewrittenTotal += result.rewritten;
+          if (result.written + result.rewritten > 0 || result.errors.length > 0) {
+            console.log(
+              `[agents/backfill-markers] tree=${tree.label} scanned=${result.scanned} ` +
+                `written=${result.written} rewritten=${result.rewritten} ` +
+                `skipped=${result.skipped} errors=${result.errors.length}`,
+            );
+            for (const err of result.errors) {
+              console.warn(`[agents/backfill-markers] ${err.path}: ${err.reason}`);
+            }
           }
         }
 
@@ -72,7 +101,7 @@ export function agentMarkerBackfillPhases(): BootPhase[] {
             if (reloadResult.ok) {
               console.log(
                 `[agents/backfill-markers] post-backfill reload triggered (` +
-                  `wrote ${result.written} + rewrote ${result.rewritten} markers; ` +
+                  `wrote ${writtenTotal} + rewrote ${rewrittenTotal} markers; ` +
                   `wayflow mounted ${reloadResult.report.agents ?? "?"} agents)`,
               );
             } else {
