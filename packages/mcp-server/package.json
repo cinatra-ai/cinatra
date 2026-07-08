@@ -7,7 +7,8 @@
   "types": "./src/index.tsx",
   "exports": {
     ".": "./src/index.tsx",
-    "./auth-plugins": "./src/auth-plugins.ts"
+    "./auth-plugins": "./src/auth-plugins.ts",
+    "./obo-ceiling": "./src/obo-ceiling.ts"
   },
   "scripts": {
     "test": "vitest run"

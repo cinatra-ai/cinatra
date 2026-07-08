@@ -5,6 +5,10 @@ import {
   getLocalMcpServerUrl,
   getPublicMcpServerUrl,
 } from "@cinatra-ai/mcp-server/credentials";
+import {
+  isOboCeilingChain,
+  type OboCeilingChain,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 
 // ---------------------------------------------------------------------------
 // Agent-run → MCP delegated on-behalf-of (OBO) actor token.
@@ -65,6 +69,16 @@ export type AgentRunMcpActor = {
   runId: string;
   /** Platform role at MINT time (live read of `public.user.role`). */
   platformRole: AgentRunMcpPlatformRole;
+  /**
+   * The agent's anchored scope-ceiling CHAIN. Re-derived from the run's locked
+   * template anchor + project launch at mint, containment-checked against the
+   * run's persisted dispatch ceiling, and — on pass — the PERSISTED chain is
+   * minted into the token (the `cl` claim). A missing / malformed `cl` on an
+   * agent-run token FAILS CLOSED at the verifier: the actor is never
+   * reconstructed, so the caller falls back to the machine token (deny), never
+   * an un-ceilinged OBO actor.
+   */
+  oboCeiling: OboCeilingChain;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -73,6 +87,8 @@ type AgentRunMcpActorTokenClaims = {
   org: string;
   run: string;
   prole: AgentRunMcpPlatformRole;
+  /** Scope-ceiling chain claim — validated on verify; missing → fail closed. */
+  cl: OboCeilingChain;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -134,6 +150,7 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
     org: input.orgId,
     run: input.runId,
     prole: input.platformRole,
+    cl: input.oboCeiling,
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -219,6 +236,11 @@ export function verifyAgentRunMcpActorToken(input: {
     if (typeof payload.org !== "string" || payload.org.length === 0) return null;
     if (typeof payload.run !== "string" || payload.run.length === 0) return null;
     if (!isPlatformRole(payload.prole)) return null;
+    // Scope-ceiling chain is REQUIRED on every agent-run OBO token. A missing or
+    // malformed `cl` (empty array, unknown tier, blank id) FAILS CLOSED — the
+    // actor is not reconstructed, so the caller falls back to the machine token
+    // (denied at the boundary), never an un-ceilinged agent-run OBO actor.
+    if (!isOboCeilingChain(payload.cl)) return null;
     if (typeof payload.aud !== "string" || payload.aud !== expectedAudience) {
       return null;
     }
@@ -239,6 +261,7 @@ export function verifyAgentRunMcpActorToken(input: {
       orgId: payload.org,
       runId: payload.run,
       platformRole: payload.prole,
+      oboCeiling: payload.cl,
     };
   } catch {
     return null;

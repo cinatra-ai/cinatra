@@ -71,6 +71,8 @@ describe("AgentTemplateRecord type surface", () => {
     const sample: AgentTemplateRecord = {
       id: "tpl_x",
       orgId: null,
+      ownerLevel: null,
+      ownerId: null,
       creatorId: null,
       name: "x",
       description: null,
@@ -144,6 +146,7 @@ describe("AgentRunRecord type surface", () => {
       idempotencyKey: null,
       workflowId: null,
       workflowTaskId: null,
+      oboCeiling: null,
     };
     expect(sample.authPolicy).toEqual(VALID_POLICY);
 
@@ -161,6 +164,8 @@ function makeTemplateRow(overrides: Record<string, unknown> = {}): any {
   return {
     id: "tpl_1",
     orgId: null,
+    ownerLevel: null,
+    ownerId: null,
     creatorId: null,
     name: "Test",
     description: null,

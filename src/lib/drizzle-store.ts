@@ -2873,6 +2873,57 @@ END $$` },
     // any reader that encounters owner_id='' MUST treat it the same as
     // legacy NULL-org rows (no implicit access).
     { text: `UPDATE "${schemaName.replaceAll('"', '""')}"."agent_templates" SET owner_level = 'organization', owner_id = COALESCE(org_id, '') WHERE owner_level IS NULL` },
+    // agent_runs OBO scope-ceiling chain (obo_ceiling, JSON-as-text). Persisted
+    // at run creation from the LOCKED template owner anchor + org + project
+    // launch; re-derived + containment-checked at MCP-token mint (fail closed).
+    // Placed AFTER the agent_templates owner_level/owner_id backfill above so the
+    // set-based backfill below joins populated anchors. The backfill mirrors the
+    // deriveOboCeilingChain helper (packages/mcp-server obo-ceiling) EXACTLY:
+    //   - a known NON-ORG owner tier with an empty/absent id → CORRUPT → leave
+    //     obo_ceiling NULL (that run fails closed at mint; never widened to org);
+    //   - owner_level='organization' → {organization, owner_id||org_id};
+    //   - null / missing-template / unrecognized tier → no owner element;
+    //   - EVERY non-null chain carries a mandatory {organization, run.org_id}
+    //     floor (deduped); an explicit project launch appends {project, project_id}.
+    // Idempotent: WHERE obo_ceiling IS NULL matches zero rows on later boots.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS obo_ceiling text` },
+    { text: `UPDATE "${schemaName.replaceAll('"', '""')}"."agent_runs" r
+      SET obo_ceiling = c.chain
+      FROM (
+        SELECT
+          r2.id AS run_id,
+          CASE
+            WHEN t.owner_level IN ('user','team','workspace','project')
+                 AND NULLIF(t.owner_id, '') IS NULL
+              THEN NULL
+            ELSE (
+              SELECT jsonb_agg(elem ORDER BY min_ord)::text
+              FROM (
+                SELECT elem, MIN(ord) AS min_ord
+                FROM unnest(array_remove(ARRAY[
+                  CASE
+                    WHEN t.owner_level IN ('user','team','workspace')
+                      THEN jsonb_build_object('tier', t.owner_level, 'id', NULLIF(t.owner_id, ''))
+                    WHEN t.owner_level = 'project'
+                      THEN jsonb_build_object('tier', 'project', 'id', NULLIF(t.owner_id, ''))
+                    WHEN t.owner_level = 'organization'
+                      THEN jsonb_build_object('tier', 'organization', 'id', COALESCE(NULLIF(t.owner_id, ''), r2.org_id))
+                    ELSE NULL
+                  END,
+                  jsonb_build_object('tier', 'organization', 'id', r2.org_id),
+                  CASE WHEN r2.project_id IS NOT NULL
+                    THEN jsonb_build_object('tier', 'project', 'id', r2.project_id)
+                    ELSE NULL END
+                ], NULL)) WITH ORDINALITY AS u(elem, ord)
+                GROUP BY elem
+              ) d
+            )
+          END AS chain
+        FROM "${schemaName.replaceAll('"', '""')}"."agent_runs" r2
+        LEFT JOIN "${schemaName.replaceAll('"', '""')}"."agent_templates" t ON t.id = r2.template_id
+        WHERE r2.obo_ceiling IS NULL
+      ) c
+      WHERE r.id = c.run_id` },
     // usage_events provider-routing telemetry.
     // requested_provider: what cinatra_llm.preferredProvider asked for (NULL when no preference).
     // effective_provider: the provider that actually dispatched.

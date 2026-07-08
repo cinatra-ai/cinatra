@@ -23,6 +23,7 @@ import { findCarveOut, type BoundaryPerimeter } from "./carve-out";
 import { logAuditEvent } from "./audit";
 import { can } from "./enforce";
 import type { ActorContext } from "./actor-context";
+import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 export type McpBoundaryDecision =
   | { allowed: true; reason?: never; shouldBlock?: never }
@@ -53,6 +54,12 @@ export type McpBoundaryRequest = {
      */
     runId?: string;
     projectContext?: { projectId?: string | null };
+    /**
+     * Agent-run OBO scope-ceiling chain forwarded from the delegated actor
+     * (`McpRequestContext.oboCeiling`). Carried onto the synthetic actor so the
+     * enforcement wave can consult it; no boundary decision reads it yet.
+     */
+    oboCeiling?: OboCeilingChain;
   };
   /** When true, dispatch is via the chat-bridge token (delegated_chat_token perimeter). */
   delegatedRestricted: boolean;
@@ -82,6 +89,9 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
         ? undefined
         : ctx?.orgRole ?? (isMember ? "member" : undefined),
     platformRole: ctx?.platformRole ?? undefined,
+    // Carry the agent-run OBO ceiling onto the synthetic actor (carrier only —
+    // no boundary decision consults it yet). Undefined for non-agent-run callers.
+    ...(ctx?.oboCeiling ? { oboCeiling: ctx.oboCeiling } : {}),
     ...(extraRoles && extraRoles.length > 0 ? ({ roles: extraRoles } as Partial<ActorContext>) : {}),
   } as ActorContext;
 }
