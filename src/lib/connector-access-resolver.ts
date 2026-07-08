@@ -18,7 +18,7 @@ import "server-only";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import type { ExtensionOwnerContext } from "@cinatra-ai/extensions/enforce-extension-access";
 import {
   isResolvedConnectorAccessDeclaration,
@@ -130,10 +130,15 @@ export function resolveConnectorCanonicalAccessSync(
       | undefined;
     let policy: AgentAuthPolicy | null = null;
     if (policyRow?.policy != null) {
-      policy =
+      const raw =
         typeof policyRow.policy === "string"
-          ? (JSON.parse(policyRow.policy) as AgentAuthPolicy)
+          ? (JSON.parse(policyRow.policy) as unknown)
           : policyRow.policy;
+      // Multi-scope W1: coerce stored scalar visibility fields to non-empty
+      // arrays on read via the canonical schema; a schema-invalid row fails
+      // closed (policy stays null → caller applies the fail-closed default).
+      const parsed = AgentAuthPolicySchema.safeParse(raw);
+      policy = parsed.success ? parsed.data : null;
     }
     const coOwnerUserIds = ((coOwnerRes?.rows ?? []) as Array<{ user_id: string }>).map(
       (r) => r.user_id,
