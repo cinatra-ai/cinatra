@@ -300,6 +300,23 @@ export async function syncCinatraDevExtensions({
   // pinned sync refuses outright (a partially-pinned universe would mix
   // committed state with floating tips).
   const pins = flags.pinned ? loadDevExtensionPins(repoRoot, deps?.readFile) : null;
+  // Non-pinned (tip-tracking) mode still resolves the committed lock pins
+  // BEST-EFFORT (cinatra#1136): a companion left DETACHED by a pinned
+  // `make setup` is the committed-lock state, and when a `git pull` moved the
+  // lock, the reconcile (`cinatra instance refresh` / `instance setup dev`)
+  // must move that checkout to the CURRENT pin — leaving it at the old sha
+  // 500s every server-rendered page against the committed generated import
+  // maps. Tip-tracking branch checkouts are untouched (syncOneRepo consults
+  // `lockSha` only for detached checkouts); a missing/invalid lock degrades to
+  // the previous leave-as-is behavior — only explicit --pinned is fail-closed.
+  let detachedRepinPins = null;
+  if (!flags.pinned) {
+    try {
+      detachedRepinPins = loadDevExtensionPins(repoRoot, deps?.readFile);
+    } catch {
+      detachedRepinPins = null;
+    }
+  }
   const selected = selectEntries(config, flags);
   if (selected.length === 0) {
     log("- Dev extensions: nothing matched the --select/--kind/--exclude filters.");
@@ -325,6 +342,7 @@ export async function syncCinatraDevExtensions({
       // it never unpins (loadDevExtensionPins validated the lock against the
       // committed config URL, not the override).
       sha: pins ? pins.get(pkgName).sha : undefined,
+      lockSha: detachedRepinPins?.get(pkgName)?.sha,
       dest,
       force: flags.force,
       deps: realDeps,

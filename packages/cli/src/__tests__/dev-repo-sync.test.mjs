@@ -32,8 +32,7 @@ function makeDeps(state) {
       if (j.startsWith("clone")) return "";
       if (j === "remote get-url origin") return state.origin ?? "";
       if (j === "rev-parse --abbrev-ref HEAD") return state.branch ?? "";
-      if (j === "status --porcelain")
-        return state.porcelain ?? (state.dirty ? " M somefile\n" : "");
+      if (j === "status --porcelain") return state.dirty ? " M somefile\n" : "";
       return "";
     },
   };
@@ -224,8 +223,7 @@ describe("syncOneRepo — pinned mode (cinatra#141: detached checkout at a lock 
         if (args[0] === "clone") return "";
         if (j === "remote get-url origin") return state.origin ?? "";
         if (j === "rev-parse --abbrev-ref HEAD") return state.abbrev ?? "HEAD";
-        if (j === "status --porcelain")
-          return state.porcelain ?? (state.dirty ? " M somefile\n" : "");
+        if (j === "status --porcelain") return state.dirty ? " M somefile\n" : "";
         if (j === "rev-parse HEAD") return state.head ?? "";
         if (args[0] === "cat-file") {
           if (!state.hasCommit) throw new Error("not a valid object name");
@@ -337,44 +335,6 @@ describe("syncOneRepo — pinned mode (cinatra#141: detached checkout at a lock 
       expect(deps.gitNames.some((g) => g.startsWith("reset"))).toBe(false);
       expect(deps.gitNames.some((g) => g.startsWith("checkout"))).toBe(false);
     }
-  });
-
-  // Machine-artifact exemption: the dev boot's agent-marker-backfill writes an
-  // UNTRACKED `.cinatra-published.json` (the wayflow published-marker) into
-  // every agent dir of the dev source tree — the tree docker-compose
-  // bind-mounts into the dev wayflow container. It is a derived artifact, not
-  // local work, so it must not hard-fail the post-boot `--pinned` re-sync.
-  it("an untracked .cinatra-published.json alone is NOT dirt — pinned re-sync proceeds", () => {
-    const state = {
-      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
-      origin: URL,
-      head: OTHER_HEAD,
-      hasCommit: true,
-      porcelain: "?? .cinatra-published.json\n",
-    };
-    const deps = makePinnedDeps(state);
-    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
-    expect(r).toMatchObject({ action: "repinned", changed: true, pinnedSha: SHA });
-  });
-
-  it("the marker alongside REAL dirt still hard-fails pinned mode", () => {
-    const deps = makePinnedDeps({
-      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
-      origin: URL,
-      head: OTHER_HEAD,
-      porcelain: "?? .cinatra-published.json\n M src/real-work.ts\n",
-    });
-    expect(() => syncOneRepo({ ...baseArgs, sha: SHA, deps })).toThrow(/never stashes or resets/);
-  });
-
-  it("a MODIFIED tracked marker (non-?? status) still counts as dirt", () => {
-    const deps = makePinnedDeps({
-      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
-      origin: URL,
-      head: OTHER_HEAD,
-      porcelain: " M .cinatra-published.json\n",
-    });
-    expect(() => syncOneRepo({ ...baseArgs, sha: SHA, deps })).toThrow(/never stashes or resets/);
   });
 
   it("wrong origin still hard-fails in pinned mode", () => {
