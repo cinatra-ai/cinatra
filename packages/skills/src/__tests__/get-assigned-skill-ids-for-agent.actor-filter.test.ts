@@ -26,8 +26,15 @@ const {
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/database", () => ({
-  // Mocked database readers consumed by the agents-store read path.
+// Spread the REAL module (its readers connect lazily — no DB hit at import) and
+// override ONLY the two assignment readers this suite drives. Importing
+// @/lib/agents-store transitively loads the @cinatra-ai/skills barrel + the
+// connector/notifications boot graph, which statically pull ~30 other symbols
+// from @/lib/database at module-load; importOriginal keeps every one of them
+// present (real, but never called here) so the mock never rots as that graph
+// grows.
+vi.mock("@/lib/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/database")>()),
   readCustomSkillAssignmentsForAgent: readCustomSkillAssignmentsForAgentMock,
   readSystemGlobalSkillIdsForAgent: readSystemGlobalSkillIdsForAgentMock,
 }));
