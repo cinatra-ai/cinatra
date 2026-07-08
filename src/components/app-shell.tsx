@@ -487,7 +487,12 @@ export function AppShell({
             scrollOffset > 10 ? "shadow-sm" : "shadow-none",
           )}
         >
-          <div className="flex h-full items-center gap-3 px-4 sm:gap-4 sm:px-6">
+          {/* Topbar rides the same centred max-w-7xl stage as PageContent/PageHeader
+              (mx-auto max-w-7xl px-5 sm:px-8 lg:px-0) so chrome and full-width
+              content share identical gutters below the cap and equal growing
+              margins above it. The header itself stays full-bleed (border-b spans
+              edge to edge); only this inner control row is capped and centred. */}
+          <div className="mx-auto flex h-full w-full max-w-7xl items-center gap-3 px-5 sm:gap-4 sm:px-8 lg:px-0">
             <SidebarTrigger variant="outline" className="max-md:scale-125" />
             <Separator orientation="vertical" className="h-6 shrink-0" />
             <Breadcrumb className="hidden sm:flex">
