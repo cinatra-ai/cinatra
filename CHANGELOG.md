@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-08
+
+A patch release repairing the production upgrade path of 0.1.7.
+
+### Fixed
+
+- **Production schema-sync on existing databases.** The runtime image now carries the schema-bootstrap bundle and applies it before the versioned core-migration chain during `setup prod` (the boot path's order), so upgrading an existing installation no longer aborts on tables introduced by the new version. Fresh installs keep their existing semantics. (#1143)
+- The development `make refresh` target bootstraps its pinned CLI first and calls `instance refresh` (the retired `dev refresh` subcommand is no longer referenced). (#1142)
+
+### Changed
+
+- The pinned development CLI moves to the published 0.1.8. (#1142)
+
 ## [0.1.7] - 2026-07-07
 
 This release scopes connector connections to their owners with server-enforced sharing, makes workflow artifacts first-class materialized outputs, evicts vendor-specific code from the core in favor of connector-owned capabilities, and brings the marketplace, installed-extensions, and connectors surfaces into full design-system conformance.

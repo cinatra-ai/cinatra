@@ -6,8 +6,12 @@ setup:
 
 # Update an existing checkout: after `git pull`, reconcile dependencies and the
 # dev database schema to the code on disk. Dev-only; never touches git.
+# The explicit install first bootstraps the freshly pinned CLI so `pnpm exec`
+# resolves the version this checkout declares, not whatever an older checkout
+# left in node_modules (the refresh's own install runs too late for that).
 refresh:
-	pnpm exec cinatra dev refresh
+	pnpm install
+	pnpm exec cinatra instance refresh
 
 # Validate that every supporting service is reachable.
 check:
