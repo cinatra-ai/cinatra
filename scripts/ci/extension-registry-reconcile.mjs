@@ -166,12 +166,32 @@ function ghJsonLines(apiPath, jqFilter) {
   return out.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
-/** PUBLIC, non-archived org repo names. `type=public` keeps private names out. */
+/**
+ * PUBLIC, non-archived org repo names. `type=public` keeps private names out.
+ * Retries a few times so a TRANSIENT GitHub API / network error does not red
+ * this report-only canary — an infra blip is not registry drift. A persistent
+ * failure is surfaced to the caller (main exits 0 with a ::notice::), never a
+ * silent reconcile against a partial list. This mirrors the resilience the
+ * orphan/manifest probes already have (probeVisibilityLive / hasExtensionKind
+ * both swallow transient errors); the org enumeration was the one unguarded
+ * network call. The genuine config-integrity failure (empty cinatra.devExtensions)
+ * stays a hard error in main(); only this network enumeration fails open.
+ */
 function listPublicOrgRepos() {
-  return ghJsonLines(
-    `orgs/${ORG}/repos?type=public&per_page=100`,
-    ".[] | select(.archived == false) | .name",
-  );
+  const attempts = 3;
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return ghJsonLines(
+        `orgs/${ORG}/repos?type=public&per_page=100`,
+        ".[] | select(.archived == false) | .name",
+      );
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) sleepSync(2_000);
+    }
+  }
+  throw lastErr;
 }
 
 /** True iff the repo's root package.json carries a `cinatra.kind` manifest. */
@@ -250,7 +270,23 @@ function main() {
   }
   const registryRepoNames = registryRepoNamesFrom(devExtensions);
   const allowlist = readAllowlist(repoRoot);
-  const orgRepos = listPublicOrgRepos();
+  let orgRepos;
+  try {
+    orgRepos = listPublicOrgRepos();
+  } catch (err) {
+    // Report-only: a transient GitHub API / network failure enumerating the org
+    // is NOT registry drift, so it must not red this non-required canary (a
+    // network-blip red would erode the trust the check must earn before it can
+    // ratchet to required). Surface a ::notice:: and exit 0; the next scheduled
+    // run re-checks. A genuine config-integrity problem (empty
+    // cinatra.devExtensions) still hard-fails above — only this network
+    // enumeration fails open.
+    const code = (err && (err.code || err.status)) || "error";
+    console.log(
+      `::notice::[extension-registry-reconcile] could not enumerate the cinatra-ai org's public repos after retries (${code}) — a transient GitHub API/network condition, not registry drift. Skipping reconciliation this run (report-only); the next scheduled run re-checks.`,
+    );
+    process.exit(0);
+  }
 
   const { missing, orphanCandidates } = reconcile({
     orgRepos,
