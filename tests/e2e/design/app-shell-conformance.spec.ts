@@ -56,19 +56,55 @@ async function expandViaLabel(label: Locator, subItems: Locator): Promise<void> 
   }).toPass({ timeout: 20_000 });
 }
 
+/**
+ * Deterministically stop a sidebar `<Link>` anchor (identified by testid) from
+ * performing its DEFAULT navigation, while leaving every React click handler on
+ * it fully intact.
+ *
+ * A capture-phase document listener runs before Next's Link click handler and
+ * calls `preventDefault()`. Because `preventDefault()` does NOT stop
+ * propagation, the component's own onClick still fires (e.g.
+ * `handleChatLinkClick`'s unconditional `setOpen((prev) => !prev)` toggle), and
+ * Next's `<Link>` — which only navigates when the click was not
+ * default-prevented — becomes a no-op. This isolates the #819 label-toggle
+ * behaviour under test from the ORTHOGONAL /chat navigation, with no dependence
+ * on `window.location` (which the App Router re-syncs to the canonical URL
+ * between clicks). Document-level + testid-scoped via `closest()` so it survives
+ * any React re-render/remount of the anchor and never touches other links.
+ */
+async function neutralizeLinkNav(page: Page, testId: string): Promise<void> {
+  await page.evaluate((id) => {
+    document.addEventListener(
+      "click",
+      (e) => {
+        const target = e.target;
+        if (target instanceof Element && target.closest(`[data-testid="${CSS.escape(id)}"]`)) {
+          e.preventDefault();
+        }
+      },
+      { capture: true },
+    );
+  }, testId);
+}
+
 type CollapsibleGroup = {
   name: string;
   labelTestId: string;
   subItemsTestId: string;
   sampleSubItem: string;
   /**
-   * Chat's label is a `<Link href="/chat">`; `handleChatLinkClick` only
-   * suppresses navigation (and toggles in place) when the browser is already on
-   * a /chat route (it reads `window.location.pathname`). Pin the URL to /chat
-   * via history.replaceState — WITHOUT a real navigation, so Next's router
-   * state (and the sidebar) stay put — so a label click exercises the in-place
-   * toggle instead of navigating away. The generic NavGroup collapsibles toggle
-   * a plain CollapsibleTrigger button and need no such guard.
+   * Chat's label is a real `<Link href="/chat">` (the generic NavGroup
+   * collapsibles toggle a plain CollapsibleTrigger button and never navigate, so
+   * they need no guard). `handleChatLinkClick` toggles the collapsible
+   * UNCONDITIONALLY, then only calls `e.preventDefault()` when the browser is
+   * already on a /chat route (it reads `window.location.pathname`). This static
+   * `/design-fixtures` harness cannot host the /chat route, and the App Router
+   * owns `window.history`: a `replaceState("/chat")` to coax the in-place branch
+   * is re-synced back to the canonical `/design-fixtures` URL between clicks, so
+   * a later click navigates for real and unmounts the shell (the original
+   * cinatra#1112 flake). When set, `neutralizeLinkNav` deterministically stops
+   * the anchor's default navigation at the capture phase instead — the toggle
+   * still fires, the navigation never does.
    */
   suppressLinkNav?: boolean;
 };
@@ -97,9 +133,11 @@ test.describe("sidebar group label-click expansion (cinatra#819)", () => {
       await gotoShell(page);
 
       if (group.suppressLinkNav) {
-        // Keep the rendered /design-fixtures DOM; only the URL reads /chat so
-        // the in-place toggle branch of handleChatLinkClick is taken.
-        await page.evaluate(() => window.history.replaceState(null, "", "/chat"));
+        // Chat's label is a real <Link href="/chat">. Neutralise its default
+        // navigation deterministically (capture-phase preventDefault) so each
+        // click only exercises the handleChatLinkClick toggle and never
+        // navigates away from the harness — see the suppressLinkNav docs.
+        await neutralizeLinkNav(page, group.labelTestId);
       }
 
       const label = page.getByTestId(group.labelTestId);
