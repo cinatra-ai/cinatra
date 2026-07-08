@@ -1187,6 +1187,7 @@ jobs:
           scripts/extensions/__tests__/build-server-entry.test.ts
           scripts/extensions/__tests__/update-dev-extension-lock.test.mjs
           scripts/ci/__tests__/extension-pin-divergence-report.test.mjs
+          scripts/ci/__tests__/resolve-prev-release-images.test.mjs
           scripts/extensions/__tests__/strip-comments.test.mjs
           scripts/extensions/__tests__/vendor-extension-primitives.test.mjs
           packages/cli/src/__tests__
@@ -2083,7 +2084,9 @@ jobs:
   #     `:latest`, so this MUST stay ungated.
   #   publish-release-image     — GATED (environment: release-approval). The
   #     v*-tag GHCR image publish. A release artifact, so it pauses for the
-  #     owner before it publishes.
+  #     owner before it publishes. ALSO gated on the `upgrade-proof` job below
+  #     via `needs`: an image that cannot schema-sync an existing
+  #     previous-release database never even reaches the approval pause.
   #   release-dispatch          — GATED (environment: release-approval). Fires
   #     the cross-repo `cinatra-release-published` repository_dispatch to ops
   #     that triggers the prod deploy. The real outward release action — paused.
@@ -2153,6 +2156,139 @@ jobs:
             CI=true
           cache-from: type=gha
 
+  # ---------------------------------------------------------------------------
+  # upgrade-proof — the release recurrence barrier for the prod schema-sync
+  # failure class (cinatra#1136): before a release image may publish, prove the
+  # JUST-BUILT candidate image can `setup prod` a database provisioned by each
+  # of the two most recent PUBLISHED releases. The incident this bars: an image
+  # whose own setup runs the versioned migration chain BEFORE its bootstrap DDL
+  # boots fine on a FRESH database (the prod-boot e2e in `build` above) yet
+  # aborts the prod deploy on every EXISTING database. The harness
+  # (scripts/ci/upgrade-proof.sh in CANDIDATE_IMAGE mode) exercises the exact
+  # ops deploy sequence: the previous image's setup on a fresh DB, seeded
+  # data-bearing rows, then the candidate image's OWN `setup prod` through its
+  # deploy-compat forwarder, with ledger/data-preservation/idempotency
+  # assertions. Previously this harness only ran on a manual works-after-proof
+  # dispatch with a hand-supplied PREV_IMAGE — nothing gated the release path.
+  #
+  # TWO bases, not one (codex round-0 convergence): a release can be tagged AND
+  # published and still fail its prod deploy, leaving production's database one
+  # release behind when the next tag builds — proving only the immediate prior
+  # tag would false-green exactly that window. Bases resolve automatically from
+  # the repo's release tags (scripts/ci/lib/resolve-prev-release-images.sh:
+  # stable tags strictly below the building tag; a tag with no published image
+  # is skipped, because a barrier-blocked release leaves a git tag but no
+  # image; ZERO resolvable bases fail closed). Deliberately NOT GHCR `:latest`
+  # — that tag floats to the main-branch tip on every push and is not a
+  # release.
+  #
+  # BLOCKING EDGE: publish-release-image below declares `needs` on this job
+  # (and its `if:` carries no always()), so a red — or skipped — proof leaves
+  # the whole release path (publish-release-image → release-dispatch +
+  # create-release) unreachable: the release-approval Environment pause is
+  # never even requested for an image that cannot upgrade an existing
+  # database. NOT a required PR status check — on pull_request / merge_group /
+  # workflow_dispatch this job is skipped by its `if:` (it must never be added
+  # to branch protection, where it would sit "Expected" forever on PRs), so it
+  # costs nothing outside v* tag builds. Event guard byte-mirrors
+  # publish-release-image's.
+  # ---------------------------------------------------------------------------
+  upgrade-proof:
+    name: Upgrade proof (previous releases to candidate)
+    needs: build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # The base-image existence probe + `docker run` pulls read the PRIVATE
+      # previous-release images from GHCR.
+      packages: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Non-semver checkpoint/marker v-tags publish a checkpoint image but cut
+      # no Release and trigger no deploy (see the clearance-gate exemption on
+      # publish-release-image) — there is no operator upgrade path to prove,
+      # so they skip the proof GREEN (a red here would block the checkpoint
+      # publish through the needs edge). Regex kept IDENTICAL to the
+      # clearance / release-dispatch semver guards. NOTE: a step cannot
+      # short-circuit its job by exiting 0, so this guard emits an output and
+      # every later step conditions on it.
+      - name: Release-tag guard (checkpoint tags skip the proof)
+        id: guard
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release tag '$TAG' — running the previous-release upgrade proof."
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, upgrade proof not applicable."
+          fi
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        if: ${{ steps.guard.outputs.release == 'true' }}
+
+      - name: Login to GHCR
+        if: ${{ steps.guard.outputs.release == 'true' }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Automatic, fail-closed base resolution (see the job header). The
+      # existence probe is `docker buildx imagetools inspect` — the same probe
+      # release-dispatch runs before deploying.
+      - name: Resolve previous-release base images
+        id: bases
+        if: ${{ steps.guard.outputs.release == 'true' }}
+        env:
+          TAG: ${{ github.ref_name }}
+          IMAGE_REPO: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          BASES="$(bash scripts/ci/lib/resolve-prev-release-images.sh "$TAG" "$IMAGE_REPO")"
+          echo "Resolved previous-release upgrade bases:"
+          printf '%s\n' "$BASES"
+          {
+            echo 'list<<UPGRADE_PROOF_BASES'
+            printf '%s\n' "$BASES"
+            echo 'UPGRADE_PROOF_BASES'
+          } >> "$GITHUB_OUTPUT"
+
+      # Materialize the candidate image for `docker run`: a pure re-export of
+      # the gha cache `build` populated (identical build-args keep the cache
+      # hit total) — the same no-rebuild pattern the publish jobs use, with
+      # `load:` instead of `push:`.
+      - name: Load candidate image from the build cache
+        if: ${{ steps.guard.outputs.release == 'true' }}
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          load: true
+          tags: cinatra-upgrade-proof:candidate
+          build-args: |
+            CI=true
+          cache-from: type=gha
+
+      - name: Upgrade proof from each previous-release base
+        if: ${{ steps.guard.outputs.release == 'true' }}
+        env:
+          BASES: ${{ steps.bases.outputs.list }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r PREV; do
+            [ -n "$PREV" ] || continue
+            echo "::group::upgrade-proof: ${PREV} -> candidate"
+            PREV_IMAGE="$PREV" CANDIDATE_IMAGE="cinatra-upgrade-proof:candidate" \
+              bash scripts/ci/upgrade-proof.sh
+            echo "::endgroup::"
+          done <<< "$BASES"
+
   # GATED v*-tag image publish. The image-publish half of the release path is a
   # real release artifact, so it pauses behind the `release-approval`
   # Environment (provisioned in THIS repo: required reviewer @groganz,
@@ -2162,7 +2298,12 @@ jobs:
   # mirrors the dispatch/release jobs: only the canonical repo publishes.
   publish-release-image:
     name: Publish image (release)
-    needs: build
+    # `upgrade-proof` is a hard prerequisite (no always() on this job): a red
+    # or skipped proof skips this job, so the release-approval pause is never
+    # requested — and release-dispatch + create-release, both downstream of
+    # this job, stay unreachable — for an image that cannot upgrade an
+    # existing database. On non-tag events the `if:` below is false anyway.
+    needs: [build, upgrade-proof]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
     runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 30
