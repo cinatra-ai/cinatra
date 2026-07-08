@@ -178,6 +178,15 @@
         "public.\"user\"",
         "extension_accent_color"
       ]
+    },
+    {
+      "seq": "0017",
+      "file": "core/core__0017_backfill-agent-run-obo-ceiling.mjs",
+      "summary": "One-time backfill of agent_runs.obo_ceiling (the agent on-behalf-of scope-ceiling chain, cinatra-ai/cinatra#1050) for runs that predate the column. The column is added nullable by the bootstrap DDL (buildCreateStoreSchemaQueries, same PR) and written going-forward at run creation; the MCP-token mint path re-derives the chain from the run's LOCKED template anchor and FAILS CLOSED when the persisted chain is absent or non-containing, so a pre-existing NULL run would degrade to the machine-token fallback at mint. up() backfills those rows deterministically from the run's org + project launch + its template's locked owner anchor, mirroring the shared deriveOboCeilingChain helper EXACTLY: a known non-org owner tier (user/team/workspace/project) with an empty/absent id is a corrupt anchor left NULL (fails closed at mint, never widened to org); owner_level='organization' -> {organization, owner_id||org_id}; null/missing-template/unrecognized owner tier -> no owner element; EVERY non-null chain carries a mandatory {organization, run.org_id} floor (deduped); an explicit project launch appends an independent {project, project_id} element (deduped). The same agreement with the helper is asserted on a real Postgres by the wave's live proof. Gated on obo_ceiling IS NULL so it is minimal-touch + idempotent; a fresh install is born at the post-column shape and holds no runs, so this chain ledger-fakes there while db migrate executes it against an existing deployment. down() is a NO-OP: a backfilled chain is indistinguishable from a going-forward write, so reverting would strip legitimate chains and reintroduce the fail-closed-at-mint degradation. Additive nullable column plus an optional backfill artifact (not a user-land data rewrite of an existing column), so destructive=false.",
+      "destructive": false,
+      "tables": [
+        "agent_runs"
+      ]
     }
   ]
 }
