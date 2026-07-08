@@ -20,7 +20,7 @@
  *         badge (design-system Badge `success`/`destructive` variants) wrapping
  *         the #605 plug icon (+ count).
  *   #683  the toggle items lead with the card plug glyphs and the second item
- *         reads "Disconnected" (the persisted `available` value is unchanged).
+ *         reads "Disconnected" (its internal `available` value is unchanged).
  *   #1014 (design system §VII "Connectors") the toolbar reorders to filter →
  *         search → scope → +Connector (hairline dividers on both sides) →
  *         spacer → sort (far right); the search placeholder renames to
@@ -160,16 +160,36 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).toContain("Disconnected");
     });
 
-    it("keeps the persisted filter value 'available' for back-compat", () => {
-      // The visible label changed but the stored key / filter semantics did not.
+    it("keeps the internal filter value 'available' for the Disconnected segment", () => {
+      // The visible label is "Disconnected" but the toggle's internal `value`
+      // (and the `connected` vs `!connected` filter semantics) stay "available".
       expect(SRC).toMatch(/value="available"/);
-      expect(SRC).toContain('"cinatra:connectors:filter"');
     });
 
     it("leads each toggle item with the matching card plug glyph", () => {
       // connected item → PlugZap before the label; disconnected → Unplug.
       expect(SRC).toMatch(/value="connected"[\s\S]*?<PlugZap[\s\S]*?Connected/);
       expect(SRC).toMatch(/value="available"[\s\S]*?<Unplug[\s\S]*?Disconnected/);
+    });
+  });
+
+  describe("cinatra#1092 defaults to Connected and drops filter persistence", () => {
+    it("defaults filterType to \"connected\" on every mount", () => {
+      expect(SRC).toMatch(/useState<FilterType>\("connected"\)/);
+    });
+
+    it("no longer persists the connection filter to localStorage", () => {
+      expect(SRC).not.toContain("window.localStorage");
+      expect(SRC).not.toContain('"cinatra:connectors:filter"');
+      expect(SRC).not.toContain("FILTER_STORAGE_KEY");
+    });
+
+    it("stays on Connected with a \"Connect a service\" empty-state CTA when nothing is connected", () => {
+      expect(SRC).toMatch(/showConnectedEmptyState/);
+      expect(SRC).toMatch(/const hasConnectedConnectors = cards\.some/);
+      expect(SRC).toContain("Connect a service");
+      // The CTA switches to the Available/Disconnected list, no silent fallback.
+      expect(SRC).toMatch(/onClick=\{\(\) => setFilterType\("available"\)\}/);
     });
   });
 
