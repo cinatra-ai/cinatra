@@ -18,7 +18,10 @@ import "server-only";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
-import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+// Schema from the client-safe types module (zod only): a value import of the
+// server auth-policy barrel would drag its enforcement graph in for what is
+// only a scalar→array coercion on read.
+import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 import type { ExtensionOwnerContext } from "@cinatra-ai/extensions/enforce-extension-access";
 import {
   isResolvedConnectorAccessDeclaration,

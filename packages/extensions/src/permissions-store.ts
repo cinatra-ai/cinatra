@@ -16,7 +16,12 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 
-import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+// Import the schema from the client-safe types module (zod only) rather than
+// the server auth-policy barrel — a VALUE import of the barrel would drag its
+// server-only enforcement graph (authz, mcp-server) across the package
+// boundary. This module needs the schema solely to coerce a stored scalar
+// visibility field to a non-empty array on read.
+import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
 import type { ExtensionKind } from "./permissions-kind-hooks";
 

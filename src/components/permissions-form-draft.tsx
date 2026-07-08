@@ -53,7 +53,10 @@ import type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
 } from "@cinatra-ai/agents/auth-policy";
-import { normalizeVisibilitySelection } from "@cinatra-ai/agents/auth-policy";
+// Client-safe module (zod only): this is a "use client" component, so the
+// value import must NOT come from the server auth-policy barrel — that barrel
+// carries `import "server-only"`, which the bundler rejects in client code.
+import { normalizeVisibilitySelection } from "@cinatra-ai/agents/auth-policy-types";
 import type {
   OwnerView,
   SharingCandidate,
