@@ -28,7 +28,8 @@ describe("parseSemanticArtifactManifest", () => {
       capabilities: { editable: true },
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join(" ")).toMatch(/substrate `artifactType` descriptor is retracted/);
+    if (!r.ok)
+      expect(r.errors.join(" ")).toMatch(/substrate `artifactType` descriptor is unsupported/);
   });
 
   it("rejects an empty accepts (no representation form)", () => {

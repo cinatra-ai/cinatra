@@ -25,6 +25,16 @@ export default defineConfig({
       // touching a real PG instance.
       "@/lib/objects-store": path.join(root, "src/lib/objects-store.ts"),
       "@/lib/postgres-sync": path.join(root, "src/lib/postgres-sync.ts"),
+      // objects-store.ts resolves project inheritance for new object rows at
+      // INSERT time via this pure helper (its only side-effecting import is
+      // `server-only`, already neutralised by the stub alias below). Route to
+      // the real source so the objects-store CRUD + type-register handler tests
+      // can load it.
+      "@/lib/project-inheritance": path.join(root, "src/lib/project-inheritance.ts"),
+      // objects-store.ts derives the ownership WHERE-filter via this pure
+      // helper (its only import is a type-only ActorContext). Route to real
+      // source so the objects-store CRUD + type-register handler tests load.
+      "@/lib/derived-store-ownership": path.join(root, "src/lib/derived-store-ownership.ts"),
       // Archive gate support: the objects_update handler calls
       // assertProjectWritable on a project-move; the upsertObject* writer paths
       // in src/lib/objects-store.ts call assertProjectWritableSync inside the

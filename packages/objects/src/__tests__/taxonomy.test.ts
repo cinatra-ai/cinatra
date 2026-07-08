@@ -24,12 +24,13 @@ describe("taxonomy taxa sets", () => {
     expect(OBJECT_RBAC_RESOURCE_TYPES.length).toBeGreaterThan(0);
   });
 
-  it("wrapper primitives cover the legacy accounts_*/contacts_* surface", () => {
+  it("wrapper primitives cover the legacy accounts_*/contacts_*/lists_* surface", () => {
     expect(WRAPPER_PRIMITIVES).toContain("accounts_list");
     expect(WRAPPER_PRIMITIVES).toContain("accounts_delete");
     expect(WRAPPER_PRIMITIVES).toContain("contacts_sources_list");
-    // 5 accounts_* + 6 contacts_* = 11
-    expect(WRAPPER_PRIMITIVES.length).toBe(11);
+    expect(WRAPPER_PRIMITIVES).toContain("lists_members_count");
+    // 5 accounts_* + 6 contacts_* + 8 lists_* = 19
+    expect(WRAPPER_PRIMITIVES.length).toBe(19);
   });
 });
 
