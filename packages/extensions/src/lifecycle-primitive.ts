@@ -192,6 +192,38 @@ export async function installExtensionManifest(
       { sourceErrors },
     );
   }
+  // Connector org-anchor invariant (cinatra#1125): connector installs are
+  // organization-owned by invariant — the canonical connector resolver
+  // (connector-access-resolver.ts / extension-resource-identity.ts) reads a
+  // connector ONLY at owner_level='organization' with owner_id =
+  // organization_id, so a connector row at any other anchor is resolver-
+  // invisible. Reject it at the single install chokepoint. The one legitimate
+  // non-org connector shape is a platform/workspace STATIC-BUNDLE anchor (the
+  // boot seeder's bundled-provenance anchor/tombstone rows) — allowed through
+  // ONLY when the source is actually a static-bundle anchor, so a non-bundled
+  // platform/workspace connector (e.g. a verdaccio install) cannot slip past
+  // as resolver-invisible. The M1 migration (core__0017) normalizes any
+  // pre-existing stray rows; this guard keeps the invariant closed going forward.
+  if (row.kind === "connector") {
+    const isBundleAnchor =
+      (row.ownerLevel === "platform" || row.ownerLevel === "workspace") &&
+      isStaticBundleAnchorSource(row.source as ExtensionSource);
+    const isOrgAnchor =
+      row.ownerLevel === "organization" &&
+      row.organizationId != null &&
+      row.ownerId === row.organizationId;
+    if (!isBundleAnchor && !isOrgAnchor) {
+      throw new LifecycleTransitionError(
+        "INVALID_INPUT",
+        `connector install must be organization-anchored (owner_level='organization', ` +
+          `owner_id = organization_id) or a static-bundle platform/workspace anchor; got ` +
+          `owner_level='${row.ownerLevel}', owner_id='${row.ownerId}', ` +
+          `organization_id='${row.organizationId ?? "null"}', source.type='${
+            (row.source as { type?: string } | null)?.type ?? "null"
+          }'`,
+      );
+    }
+  }
   return _internalInsertInstalledExtension({ ...row, status: initialStatus });
 }
 
