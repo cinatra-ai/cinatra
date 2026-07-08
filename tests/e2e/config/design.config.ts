@@ -73,7 +73,7 @@ export default defineConfig({
   webServer: process.env.E2E_REUSE_SERVER
     ? undefined
     : {
-        command: `PORT=${PORT} pnpm dev`,
+        command: `PORT=${PORT} CINATRA_E2E_SETUP_BYPASS=true pnpm dev`,
         cwd: REPO_ROOT,
         url: BASE_URL,
         timeout: 240_000,

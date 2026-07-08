@@ -140,6 +140,9 @@ function SidebarMenuLink({
 function SidebarMenuCollapsible({ item, href }: { item: NavCollapsible; href: string }) {
   const { setOpenMobile } = useSidebar();
   const subUrls = item.items.map((i) => i.url);
+  // Stable, per-group testid hook for the browser conformance spec (label-click
+  // expansion, cinatra#1112). Slug the visible group title.
+  const groupSlug = item.title.toLowerCase().replace(/\s+/g, "-");
   return (
     <Collapsible
       asChild
@@ -148,7 +151,7 @@ function SidebarMenuCollapsible({ item, href }: { item: NavCollapsible; href: st
     >
       <SidebarMenuItem>
         <CollapsibleTrigger asChild>
-          <SidebarMenuButton tooltip={item.title}>
+          <SidebarMenuButton tooltip={item.title} data-testid={`sidebar-collapsible-label-${groupSlug}`}>
             {item.icon && <item.icon />}
             <span>{item.title}</span>
             {item.badge && <NavBadge>{item.badge}</NavBadge>}
@@ -156,7 +159,7 @@ function SidebarMenuCollapsible({ item, href }: { item: NavCollapsible; href: st
           </SidebarMenuButton>
         </CollapsibleTrigger>
         <CollapsibleContent className="CollapsibleContent">
-          <SidebarMenuSub>
+          <SidebarMenuSub data-testid={`sidebar-collapsible-subitems-${groupSlug}`}>
             {item.items.map((subItem) => (
               <SidebarMenuSubItem key={subItem.title}>
                 <SidebarMenuSubButton
