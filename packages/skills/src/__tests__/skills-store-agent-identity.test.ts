@@ -57,6 +57,7 @@ vi.mock("@/lib/database", () => ({
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: vi.fn() }));
 
 import { deriveContextFromLegacy, __getSkillDiskDirForTest } from "../skills-store";
+import { deriveAgentStoragePathFromPackageName } from "../agent-skill-paths";
 
 describe("deriveContextFromLegacy — agent vendor/name (cinatra#537)", () => {
   it("splits a scoped name on the first '/' only, NEVER the hyphen in the scope", () => {
@@ -184,5 +185,43 @@ describe("getSkillDiskDir agent-case — fail-closed disk path (cinatra#537)", (
         expect(segs.some((s) => s.startsWith("@") || s === "..")).toBe(false);
       }
     }
+  });
+});
+
+describe("co-located agent-skill disk layout (cinatra#1088)", () => {
+  const dir = (slug: string): string =>
+    __getSkillDiskDirForTest("agent", slug, "reviewer-methodology");
+
+  it("scoped packageName derives the canonical 2-segment <vendor>/<package> — no `skills/` grouping", () => {
+    // The fix: registerPackageAgentSkill omits storagePackagePath, so upsertSkill
+    // derives the on-disk package from the scoped npm name — the SAME
+    // <vendor>/<package> the read/scan/relocate side (resolveSkillDir /
+    // walkAgentsBucket / the SQL relocation trigger) reads back.
+    expect(deriveAgentStoragePathFromPackageName("@acme-vendor/reviewer-agent"))
+      .toBe("acme-vendor/reviewer-agent");
+    expect(dir("acme-vendor/reviewer-agent").replace(/\\/g, "/"))
+      .toContain("/workspace/~agents/acme-vendor/reviewer-agent/reviewer-methodology");
+  });
+
+  it("the pre-fix 3-segment source-mirror slug `<vendor>/<agent>/skills` throws the unsafe-segment error", () => {
+    // deriveStoragePackagePathFromSkillMd emits `<vendor>/<agent>/skills` for a
+    // co-located `extensions/<vendor>/<agent>/skills/<slug>/SKILL.md` bundle —
+    // correct for the WORKSPACE mirror but NOT the ~agents layout: its `skills/`
+    // grouping makes the agent case split `pkg` into the multi-segment
+    // `<agent>/skills`, which assertSafePathSegment rejects. This is the exact
+    // boot-time skip cinatra#1088 fixes by no longer routing it here.
+    expect(() => dir("acme-vendor/reviewer-agent/skills"))
+      .toThrow(/unsafe agent skill package/);
+  });
+
+  it("an unscoped agent packageName is path-safe via the `unknown` vendor bucket (intentional fallback, no throw)", () => {
+    // The only production caller (the dev watcher) always passes a scoped
+    // `@vendor/agent` name. If an unscoped name ever reaches upsertSkill with no
+    // storagePackagePath, deriveAgentStoragePathFromPackageName returns undefined
+    // and the flat slug lands under `unknown` — path-safe, NOT the unsafe-segment
+    // regression (codex-noted invariant).
+    expect(deriveAgentStoragePathFromPackageName("reviewer-agent")).toBeUndefined();
+    expect(dir("reviewer-agent").replace(/\\/g, "/"))
+      .toContain("/workspace/~agents/unknown/reviewer-agent/reviewer-methodology");
   });
 });

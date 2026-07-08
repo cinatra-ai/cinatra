@@ -106,6 +106,72 @@ export function isSystemExtension(packageName: string): boolean {
   return SYSTEM_EXTENSIONS.includes(packageName);
 }
 
+// ---------------------------------------------------------------------------
+// Removal choke-point (cinatra#1036).
+//
+// A system-relevant extension can be UPDATED (reinstall / upgrade-in-place) but
+// must NEVER be removed from the live runtime — no uninstall, force-delete,
+// archive, disable, purge or registry-removal. `assertCanRemoveExtension` is the
+// single, kind-agnostic intent gate for that rule: it is called from the
+// user-facing delete-intent server actions (the clean front door) AND delegated
+// to by the dispatcher-level `assertNoLockedCanonicalRow` backstop, so every
+// removal surface refuses a system package with ONE consistent, typed error.
+// It keys on host-declared MEMBERSHIP (`SYSTEM_EXTENSIONS`), not on a row's
+// current lock status, so protection holds even for a not-yet-locked row
+// (dev boot, drift, a fresh install before the boot-lock ran).
+// ---------------------------------------------------------------------------
+
+/** The removal intents a system extension is protected against. */
+export type ExtensionRemovalIntent =
+  | "uninstall"
+  | "force_delete"
+  | "archive"
+  | "disable"
+  | "purge"
+  | "registry_remove";
+
+/** Stable, user-facing copy for the refusal — the SAME string on every surface. */
+export const SYSTEM_EXTENSION_REMOVAL_MESSAGE =
+  "System extension — can be updated but not deleted.";
+
+/**
+ * Typed refusal thrown by `assertCanRemoveExtension`. Carries the offending
+ * package + intent for programmatic handling; `.message` is the stable
+ * user-facing copy above.
+ */
+export class SystemExtensionRemovalError extends Error {
+  readonly code = "SYSTEM_EXTENSION_PROTECTED";
+  readonly packageName: string;
+  readonly intent: ExtensionRemovalIntent;
+  constructor(packageName: string, intent: ExtensionRemovalIntent) {
+    super(SYSTEM_EXTENSION_REMOVAL_MESSAGE);
+    this.name = "SystemExtensionRemovalError";
+    this.packageName = packageName;
+    this.intent = intent;
+  }
+}
+
+/**
+ * Refuse a removal intent for a host-declared system extension.
+ *
+ * Throws `SystemExtensionRemovalError` when `packageName ∈ SYSTEM_EXTENSIONS`;
+ * a no-op otherwise. FAIL-CLOSED: `SYSTEM_EXTENSIONS` is read once at module
+ * load by the fail-loud `readSystemExtensions` — a missing/malformed host
+ * declaration throws THERE, so this module (and every delete path that imports
+ * it) fails to load rather than silently permitting deletion of an unreadable
+ * system set. Guards the INTENT to remove — NOT the low-level
+ * `extensionRegistry.uninstall` primitive, which reinstall/update reuse and
+ * which must keep working.
+ */
+export function assertCanRemoveExtension(
+  packageName: string,
+  intent: ExtensionRemovalIntent,
+): void {
+  if (isSystemExtension(packageName)) {
+    throw new SystemExtensionRemovalError(packageName, intent);
+  }
+}
+
 /**
  * Lock every installed_extension row for a given package across all
  * (org, owner) tuples. The lifecycle primitive enforces transition rules

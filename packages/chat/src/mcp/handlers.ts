@@ -28,6 +28,11 @@ import { z } from "zod";
 import { resolveActorFromRequest } from "./actor-context";
 import { parseMentions, resolveMentions, resolveMentionsWithDefault, resolveAssistantsByIds } from "../mentions";
 import type { ChatMessage, ChatThread, Mention } from "../types";
+// Canonical per-thread read/act authorization. `evaluateChatThreadAccess` is the
+// same pure decision the authenticated HTTP read route uses;
+// `isActorTeamMemberForChat` is the tenant-scoped team-membership lookup.
+import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
+import { isActorTeamMemberForChat } from "@/lib/chat-thread-store";
 
 // Built-in CLI assistant handles bypass webhook delivery and respond
 // synchronously in-process. chatgpt/gemini are dev-only CLI tools.
@@ -46,6 +51,45 @@ type PrimitiveRequest<T = Record<string, unknown>> = {
   actor: { actorType: string; source: string; [key: string]: unknown };
   mode: string;
 };
+
+// ---------------------------------------------------------------------------
+// Per-thread read/act authorization
+// ---------------------------------------------------------------------------
+//
+// chat_threads have no org_id; access is derived from the PERSISTED payload's
+// ownerUserId / teamId / taggedAssistantUserIds (never caller-supplied input)
+// via the canonical `evaluateChatThreadAccess` helper — the same contract the
+// authenticated HTTP read route (GET /api/chat/thread/[threadId]) uses,
+// extended on this MCP surface with the tagged-assistant participant axis and a
+// deny-legacy-ownerless-to-non-admin posture. Team membership is resolved
+// (tenant-scoped) only on the branch that actually needs it. A denial is
+// surfaced by the callers as a missing row so a thread's existence is not
+// disclosed across users.
+function isPlatformAdminActor(actor: PrimitiveRequest["actor"]): boolean {
+  return (actor as Record<string, unknown>)?.platformRole === "platform_admin";
+}
+
+function authorizeChatThreadForActor(
+  thread: ChatThread,
+  actorUserId: string | undefined,
+  isPlatformAdmin: boolean,
+): boolean {
+  const ownerUserId = thread.ownerUserId ?? null;
+  const teamId = (thread as { teamId?: string | null }).teamId ?? null;
+  let isActorTeamMember = false;
+  if (!isPlatformAdmin && !ownerUserId && teamId && actorUserId) {
+    isActorTeamMember = isActorTeamMemberForChat(teamId, actorUserId);
+  }
+  return evaluateChatThreadAccess({
+    ownerUserId,
+    teamId,
+    actorUserId: actorUserId ?? "",
+    isPlatformAdmin,
+    isActorTeamMember,
+    taggedAssistantUserIds: thread.taggedAssistantUserIds ?? null,
+    legacyOwnerlessPolicy: "deny-non-admin",
+  });
+}
 
 // ---------------------------------------------------------------------------
 // chat_thread_list
@@ -133,6 +177,14 @@ async function handleChatThreadGet(
   const threads = readChatThreadsFromDatabase() as unknown as ChatThread[];
   const thread = threads.find((t) => t.id === threadId);
   if (!thread) return { error: `Thread not found: ${threadId}` };
+
+  // Per-thread ownership gate: only the owner, a tagged participant, a team
+  // member, or a platform admin may read the thread (and its full message
+  // history). A denial is indistinguishable from a missing row.
+  const actor = await resolveActorFromRequest(request);
+  if (!authorizeChatThreadForActor(thread, actor.userId, isPlatformAdminActor(request.actor))) {
+    return { error: `Thread not found: ${threadId}` };
+  }
   return thread;
 }
 
@@ -191,6 +243,13 @@ async function handleChatThreadSend(
     const threads = readChatThreadsFromDatabase() as unknown as ChatThread[];
     const found = threads.find((t) => t.id === threadId);
     if (!found) return { error: `Thread not found: ${threadId}` };
+    // Per-thread ownership gate on the EXISTING-thread continuation path: a
+    // caller may only append to (and, via runChatTurn, replay the full prior
+    // history of) a thread they own, are tagged into, or share a team with.
+    // New-thread creation above is unaffected. Denial reads as a missing row.
+    if (!authorizeChatThreadForActor(found, actor.userId, transportPlatformRole === "platform_admin")) {
+      return { error: `Thread not found: ${threadId}` };
+    }
     thread = found;
   }
 
@@ -679,6 +738,14 @@ async function handleChatThreadPauseAssistant(request: PrimitiveRequest): Promis
   const thread = threads.find((t) => t.id === threadId);
   if (!thread) return { error: `Thread not found: ${threadId}` };
 
+  // Per-thread ownership gate: pausing an assistant mutates thread routing
+  // state, so restrict it to the owner / a tagged participant / a team member /
+  // a platform admin. Denial reads as a missing row.
+  const actor = await resolveActorFromRequest(request);
+  if (!authorizeChatThreadForActor(thread, actor.userId, isPlatformAdminActor(request.actor))) {
+    return { error: `Thread not found: ${threadId}` };
+  }
+
   const current = new Set(thread.pausedParticipants ?? []);
   current.add(assistantId);
   // Pausing a participant is not conversational activity — preserve the
@@ -696,6 +763,12 @@ async function handleChatThreadResumeAssistant(request: PrimitiveRequest): Promi
   const threads = readChatThreadsFromDatabase() as unknown as ChatThread[];
   const thread = threads.find((t) => t.id === threadId);
   if (!thread) return { error: `Thread not found: ${threadId}` };
+
+  // Per-thread ownership gate (see pause). Denial reads as a missing row.
+  const actor = await resolveActorFromRequest(request);
+  if (!authorizeChatThreadForActor(thread, actor.userId, isPlatformAdminActor(request.actor))) {
+    return { error: `Thread not found: ${threadId}` };
+  }
 
   const current = new Set(thread.pausedParticipants ?? []);
   current.delete(assistantId);
