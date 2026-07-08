@@ -95,7 +95,7 @@ immutable pin is used.
 ## 3. Postgres spread decision
 
 Current Postgres pins across the compose: `17-alpine` (platform),
-`15-alpine` (nango-db), `16` (twenty-db, profile), `15.7-alpine` (plane-db,
+`17-alpine` (nango-db), `16` (twenty-db, profile), `15.7-alpine` (plane-db,
 profile). Upstream major target is postgres 18.
 
 **Decision: record the consolidation target, defer the actual image bump.**
