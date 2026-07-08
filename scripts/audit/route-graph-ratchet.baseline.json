@@ -11,26 +11,26 @@
     "/api/a2a": {
       "from": 1348,
       "to": 1349,
-      "reason": "cinatra#1031 (PR #1177): the PmWorkStore work-item CRUD contract adds ONE net-new reachable first-party module, packages/sdk-extensions/src/pm-work-store-registry-contract.ts (the provider-agnostic PM work-store registry), reachable from the public SDK barrel packages/sdk-extensions/src/index.ts via its VALUE re-export of the registry functions (registerPmWorkStore/lookupPmWorkStore/listPmWorkStores/setPmWorkStoreExternalResolver) — so every locked route that reaches the sdk-extensions barrel graph grows by exactly one first-party module. The sibling pm-work-store-contract.ts re-export is type-only (erased, not counted). Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0), reproducing +1 on each of the four barrel-reaching routes. Absorbed raise 1348->1349.",
-      "pr": 1177
+      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds one net-new, dependency-free first-party module packages/mcp-server/src/obo-ceiling.ts (the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint), imported by the agents store (packages/agents/src/store.ts), the authz kernel (src/lib/authz/*), and the llm-bridge mint path — one new reachable first-party leaf on every locked route that reaches the agent-run / MCP-boundary graph, so each such route grows by exactly one first-party module. Delta measured by CI with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact. Absorbed raise 1348->1349.",
+      "pr": 1172
     },
     "/api/llm-bridge": {
       "from": 1353,
       "to": 1354,
-      "reason": "cinatra#1031 (PR #1177): the PmWorkStore work-item CRUD contract adds ONE net-new reachable first-party module, packages/sdk-extensions/src/pm-work-store-registry-contract.ts (the provider-agnostic PM work-store registry), reachable from the public SDK barrel packages/sdk-extensions/src/index.ts via its VALUE re-export of the registry functions (registerPmWorkStore/lookupPmWorkStore/listPmWorkStores/setPmWorkStoreExternalResolver) — so every locked route that reaches the sdk-extensions barrel graph grows by exactly one first-party module. The sibling pm-work-store-contract.ts re-export is type-only (erased, not counted). Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0), reproducing +1 on each of the four barrel-reaching routes. Absorbed raise 1353->1354.",
-      "pr": 1177
+      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds one net-new, dependency-free first-party module packages/mcp-server/src/obo-ceiling.ts (the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint), imported by the agents store (packages/agents/src/store.ts), the authz kernel (src/lib/authz/*), and the llm-bridge mint path — one new reachable first-party leaf on every locked route that reaches the agent-run / MCP-boundary graph, so each such route grows by exactly one first-party module. Delta measured by CI with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact. Absorbed raise 1353->1354.",
+      "pr": 1172
     },
     "/api/mcp": {
       "from": 1343,
       "to": 1344,
-      "reason": "cinatra#1031 (PR #1177): the PmWorkStore work-item CRUD contract adds ONE net-new reachable first-party module, packages/sdk-extensions/src/pm-work-store-registry-contract.ts (the provider-agnostic PM work-store registry), reachable from the public SDK barrel packages/sdk-extensions/src/index.ts via its VALUE re-export of the registry functions (registerPmWorkStore/lookupPmWorkStore/listPmWorkStores/setPmWorkStoreExternalResolver) — so every locked route that reaches the sdk-extensions barrel graph grows by exactly one first-party module. The sibling pm-work-store-contract.ts re-export is type-only (erased, not counted). Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0), reproducing +1 on each of the four barrel-reaching routes. Absorbed raise 1343->1344.",
-      "pr": 1177
+      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds one net-new, dependency-free first-party module packages/mcp-server/src/obo-ceiling.ts (the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint), imported by the agents store (packages/agents/src/store.ts), the authz kernel (src/lib/authz/*), and the llm-bridge mint path — one new reachable first-party leaf on every locked route that reaches the agent-run / MCP-boundary graph, so each such route grows by exactly one first-party module. Delta measured by CI with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact. Absorbed raise 1343->1344.",
+      "pr": 1172
     },
     "/chat": {
       "from": 1381,
       "to": 1382,
-      "reason": "cinatra#1031 (PR #1177): the PmWorkStore work-item CRUD contract adds ONE net-new reachable first-party module, packages/sdk-extensions/src/pm-work-store-registry-contract.ts (the provider-agnostic PM work-store registry), reachable from the public SDK barrel packages/sdk-extensions/src/index.ts via its VALUE re-export of the registry functions (registerPmWorkStore/lookupPmWorkStore/listPmWorkStores/setPmWorkStoreExternalResolver) — so every locked route that reaches the sdk-extensions barrel graph grows by exactly one first-party module. The sibling pm-work-store-contract.ts re-export is type-only (erased, not counted). Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0), reproducing +1 on each of the four barrel-reaching routes. Absorbed raise 1381->1382.",
-      "pr": 1177
+      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds one net-new, dependency-free first-party module packages/mcp-server/src/obo-ceiling.ts (the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint), imported by the agents store (packages/agents/src/store.ts), the authz kernel (src/lib/authz/*), and the llm-bridge mint path — one new reachable first-party leaf on every locked route that reaches the agent-run / MCP-boundary graph, so each such route grows by exactly one first-party module. Delta measured by CI with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact. Absorbed raise 1381->1382.",
+      "pr": 1172
     },
     "/sign-in": {
       "from": 132,
