@@ -3,10 +3,17 @@
 //
 // The cinatra app now has THREE distinct kinds of marketplace bearer:
 //
-//   1. Consumer attachment bearer (minted by `instance_attach_self`; this
+//   1. Consumer attachment credential (minted by `instance_attach_self`; this
 //      resolver returns it):
-//      stored encrypted under AAD "consumer.marketplace.token" inside
+//      a raw WordPress Application Password stored encrypted under AAD
+//      "consumer.marketplace.token" inside
 //      `instance_identity.consumerAttachment.marketplaceTokenCiphertext`.
+//      The marketplace authenticates Application Passwords ONLY via HTTP
+//      Basic, so this resolver returns it PRE-SCHEMED as
+//      `Basic base64(marketplaceUsername:appPassword)` — the MCP client
+//      passes an explicitly-schemed value through unchanged (a bare value
+//      would be wrapped as `Bearer`, arrive unauthenticated, and bind the
+//      boot-time instance-attach principal → 403 on install; cinatra #1134).
 //      Used for install (PRINCIPAL_INSTANCE). Browse uses the anonymous public
 //      REST catalog and does not resolve a bearer.
 //
@@ -88,22 +95,42 @@ export function resolveConsumerOrVendorMarketplaceToken(identity: InstanceIdenti
         attachment.marketplaceTokenCiphertext.length === 0 ||
         typeof attachment.marketplaceTokenIv !== "string" ||
         attachment.marketplaceTokenIv.length === 0 ||
-        attachment.marketplaceTokenAlgo !== "aes-256-gcm"
+        attachment.marketplaceTokenAlgo !== "aes-256-gcm" ||
+        typeof attachment.marketplaceUsername !== "string" ||
+        attachment.marketplaceUsername.length === 0
       ) {
         throw new VendorCredentialsMissingError(
           "consumerAttachment is present but malformed (missing ciphertext / IV " +
-            "/ wrong algo). Refusing to silently fall through to the legacy " +
-            "vendor token — operator must inspect the instance_identity row " +
-            "and repair the consumerAttachment payload.",
+            "/ wrong algo / missing marketplaceUsername). Refusing to silently " +
+            "fall through to the legacy vendor token — operator must inspect " +
+            "the instance_identity row and repair the consumerAttachment " +
+            "payload.",
           "CONSUMER_ATTACHMENT_CORRUPTED",
         );
       }
-      return decryptSecret(
+      const appPassword = decryptSecret(
         {
           ciphertext: attachment.marketplaceTokenCiphertext,
           iv: attachment.marketplaceTokenIv,
         },
         CONSUMER_MARKETPLACE_TOKEN_AAD,
+      );
+      // The consumer credential KIND is a WP Application Password — the
+      // marketplace authenticates it only via HTTP Basic. Normalize at SEND
+      // time (not store time) so already-attached rows carrying the raw
+      // password are repaired without a re-mint/migration (cinatra #1134).
+      // Defensive pass-through: a value that already carries an explicit
+      // scheme (hand-repaired row / future pre-schemed mint) is returned
+      // unchanged rather than double-wrapped.
+      if (/^(Bearer|Basic)\s/i.test(appPassword)) {
+        return appPassword;
+      }
+      return (
+        "Basic " +
+        Buffer.from(
+          `${attachment.marketplaceUsername}:${appPassword}`,
+          "utf8",
+        ).toString("base64")
       );
     }
 
@@ -196,7 +223,9 @@ export function describeMarketplaceTokenSource(
         attachment.marketplaceTokenCiphertext.length > 0 &&
         typeof attachment.marketplaceTokenIv === "string" &&
         attachment.marketplaceTokenIv.length > 0 &&
-        attachment.marketplaceTokenAlgo === "aes-256-gcm";
+        attachment.marketplaceTokenAlgo === "aes-256-gcm" &&
+        typeof attachment.marketplaceUsername === "string" &&
+        attachment.marketplaceUsername.length > 0;
       return wellFormed ? "consumer-attachment" : "consumer-attachment-corrupted";
     }
 

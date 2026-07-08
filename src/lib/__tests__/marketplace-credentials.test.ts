@@ -62,9 +62,14 @@ describe("resolveConsumerOrVendorMarketplaceToken", () => {
     expect(resolveConsumerOrVendorMarketplaceToken(identity)).toBe("env-bearer-1234");
   });
 
-  it("decrypts consumerAttachment.marketplaceTokenCiphertext when env override is absent", () => {
-    const plaintext = "consumer-decoded-bearer";
-    const enc = encryptSecret(plaintext, CONSUMER_MARKETPLACE_TOKEN_AAD);
+  it("returns the consumer app password PRE-SCHEMED as Basic base64(username:appPw) — regression for cinatra #1134", () => {
+    // The consumer credential minted by `instance_attach_self` is a raw WP
+    // Application Password. The marketplace authenticates it ONLY via HTTP
+    // Basic; a bare return value would be Bearer-wrapped by the MCP client,
+    // arrive unauthenticated, and bind the instance-attach principal (403 on
+    // every install). The resolver must therefore emit the Basic form.
+    const appPassword = "abcd EFGH ijkl MNOP qrst uvwx";
+    const enc = encryptSecret(appPassword, CONSUMER_MARKETPLACE_TOKEN_AAD);
     const identity: InstanceIdentity = {
       ...BARE_IDENTITY,
       consumerAttachment: {
@@ -81,7 +86,57 @@ describe("resolveConsumerOrVendorMarketplaceToken", () => {
         verdaccioReadTokenAlgo: "aes-256-gcm",
       },
     };
-    expect(resolveConsumerOrVendorMarketplaceToken(identity)).toBe(plaintext);
+    const expected =
+      "Basic " +
+      Buffer.from(`cinatra-instance-foo:${appPassword}`, "utf8").toString("base64");
+    expect(resolveConsumerOrVendorMarketplaceToken(identity)).toBe(expected);
+  });
+
+  it("passes a stored consumer value that ALREADY carries a scheme through unchanged (no double-wrap)", () => {
+    const preSchemed = "Basic cHJlLXNjaGVtZWQ=";
+    const enc = encryptSecret(preSchemed, CONSUMER_MARKETPLACE_TOKEN_AAD);
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      consumerAttachment: {
+        instanceIdAtAttach: "11111111-1111-4111-8111-111111111111",
+        attachedAt: "2026-05-27T00:00:00.000Z",
+        lastRefreshedAt: "2026-05-27T00:00:00.000Z",
+        marketplaceUsername: "cinatra-instance-foo",
+        verdaccioUsername: "ci-foo",
+        marketplaceTokenCiphertext: enc.ciphertext,
+        marketplaceTokenIv: enc.iv,
+        marketplaceTokenAlgo: "aes-256-gcm",
+      },
+    };
+    expect(resolveConsumerOrVendorMarketplaceToken(identity)).toBe(preSchemed);
+  });
+
+  it("throws CONSUMER_ATTACHMENT_CORRUPTED when marketplaceUsername is empty — Basic cannot be formed; no vendor fallback", () => {
+    const vendorEnc = encryptSecret("vendor-bearer", "vendor.token");
+    const enc = encryptSecret("app-pw", CONSUMER_MARKETPLACE_TOKEN_AAD);
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      tokenCiphertext: vendorEnc.ciphertext,
+      tokenIv: vendorEnc.iv,
+      consumerAttachment: {
+        instanceIdAtAttach: "11111111-1111-4111-8111-111111111111",
+        attachedAt: "2026-05-27T00:00:00.000Z",
+        lastRefreshedAt: "2026-05-27T00:00:00.000Z",
+        marketplaceUsername: "",
+        verdaccioUsername: "ci-foo",
+        marketplaceTokenCiphertext: enc.ciphertext,
+        marketplaceTokenIv: enc.iv,
+        marketplaceTokenAlgo: "aes-256-gcm",
+      },
+    };
+    let thrown: unknown;
+    try {
+      resolveConsumerOrVendorMarketplaceToken(identity);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(VendorCredentialsMissingError);
+    expect((thrown as VendorCredentialsMissingError).code).toBe("CONSUMER_ATTACHMENT_CORRUPTED");
   });
 
   it("falls back to vendor tokenCiphertext when no env override + no consumerAttachment", () => {
@@ -289,6 +344,24 @@ describe("describeMarketplaceTokenSource (cinatra #627 diagnostic)", () => {
         verdaccioReadTokenCiphertext: "v-ct",
         verdaccioReadTokenIv: "v-iv",
         verdaccioReadTokenAlgo: "aes-256-gcm",
+      },
+    };
+    expect(describeMarketplaceTokenSource(identity)).toBe("consumer-attachment-corrupted");
+  });
+
+  it("reports consumer-attachment-corrupted when marketplaceUsername is empty (mirrors the resolver's Basic-credential gate)", () => {
+    const enc = encryptSecret("app-pw", CONSUMER_MARKETPLACE_TOKEN_AAD);
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      consumerAttachment: {
+        instanceIdAtAttach: "11111111-1111-4111-8111-111111111111",
+        attachedAt: "2026-05-27T00:00:00.000Z",
+        lastRefreshedAt: "2026-05-27T00:00:00.000Z",
+        marketplaceUsername: "",
+        verdaccioUsername: "v",
+        marketplaceTokenCiphertext: enc.ciphertext,
+        marketplaceTokenIv: enc.iv,
+        marketplaceTokenAlgo: "aes-256-gcm",
       },
     };
     expect(describeMarketplaceTokenSource(identity)).toBe("consumer-attachment-corrupted");
