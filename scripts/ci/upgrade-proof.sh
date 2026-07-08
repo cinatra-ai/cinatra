@@ -72,8 +72,10 @@ set -euo pipefail
 #   SUPABASE_SCHEMA      app schema (default cinatra).
 #
 # The CANDIDATE side runs from the current checkout (this repo): its bootstrap
-# DDL via tsx + its migration runner via the published `cinatra` CLI resolved
-# from node_modules (@cinatra-ai/cinatra, a pinned devDependency; cinatra#402 P2).
+# DDL via the image schema-bootstrap bundle (built here from the checkout —
+# the exact artifact the runtime image bakes) + its migration runner via the
+# published `cinatra` CLI resolved from node_modules (@cinatra-ai/cinatra, a
+# pinned devDependency; cinatra#402 P2).
 # Run from the repo root (so node_modules/.bin/cinatra and the migrations/ +
 # packages/migrations checkout sentinel are present).
 #
@@ -237,18 +239,24 @@ echo "    seeded ${SEED_COUNT} rows"
 # 4a. Candidate bootstrap DDL — the exact `ensureStoreSchema` boot pass
 #     (buildCreateStoreSchemaQueries). Additive over the previous tables; adds
 #     the new tables (installed_extension, extension_install_ops, …) the later
-#     migrations operate on. Run from the checkout via tsx.
-# Invoke a REAL on-disk module rather than `node --import tsx -e '<inline>'`:
-# the inline-eval form cannot resolve the NAMED export from the tsx-transformed
-# .ts source on Node 22 (the importer is a virtual `[eval1]` module — tsx throws
-# "does not provide an export named 'buildCreateStoreSchemaQueries'"), so the
-# proof would fail locally on the common LTS while passing on CI's Node 24. A
-# real entry file resolves the export on BOTH Node 22 and 24. See the header of
-# scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs.
-echo "==> [candidate] apply bootstrap DDL (buildCreateStoreSchemaQueries)"
+#     migrations operate on.
+# Applied via the SHIPPED artifact: the self-contained schema-bootstrap bundle
+# (scripts/build-schema-bootstrap-bundle.mjs → scripts/schema-bootstrap.bundle.mjs)
+# that the runtime image bakes and the deploy-compat CLI entry
+# (packages/cli/bin/cinatra.mjs) runs before `setup prod` on a prod deploy.
+# Building + running the bundle here (instead of a tsx pass over the TS source,
+# formerly scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs) makes this proof
+# exercise the exact bootstrap-before-chain vehicle production uses on an
+# EXISTING database at the previous release's ledger — the cinatra#1136
+# prod-deploy failure class (core migration `LOCK TABLE nango_connection` →
+# relation does not exist, when the chain ran without the candidate baseline).
+echo "==> [candidate] build the image schema-bootstrap bundle"
+node scripts/build-schema-bootstrap-bundle.mjs \
+  || fail "schema-bootstrap bundle build failed (esbuild from the checkout devDependencies)."
+echo "==> [candidate] apply bootstrap DDL via the bundle (buildCreateStoreSchemaQueries)"
 SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node --import tsx scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs \
-  || fail "candidate bootstrap DDL failed against the upgraded database."
+  node scripts/schema-bootstrap.bundle.mjs \
+  || fail "candidate bootstrap DDL (image bundle) failed against the upgraded database."
 
 # 4b. Candidate core migration chain — the SAME runner production uses
 #     (`db migrate` always EXECUTES; it never ledger-fakes — only `setup`
