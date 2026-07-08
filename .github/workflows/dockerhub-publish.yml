@@ -11,7 +11,13 @@ name: Mirror image to Docker Hub
 #
 # How it runs:
 #   - completion of "Build and publish image" (build-image.yml) for a `v*` tag
-#     -> auto-mirror that release once the build SUCCEEDED (VERSION = the tag).
+#     -> auto-mirror that release once the builder's PUBLISH JOB succeeded
+#     (VERSION = the tag). The gate keys on the outcome of the SPECIFIC
+#     "Publish image (release)" job, NOT the whole upstream run: a later
+#     post-publish job (e.g. "Trigger prod deploy in ops") can fail and turn the
+#     whole run red AFTER the image is already on GHCR — and that must not
+#     silently skip the public mirror (cinatra#1087). A genuinely-unpublished
+#     release (publish job failed/skipped) still correctly no-ops, with a notice.
 #     This is a `workflow_run` dependency, NOT a parallel `push: tags` trigger:
 #     the mirror starts only AFTER the canonical builder finishes, so it never
 #     races the build and never gives up on a slow build (cinatra#676 — the old
@@ -63,8 +69,98 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Decide whether to mirror — keyed on the builder's PUBLISH JOB outcome, NOT
+  # the whole upstream run. This is the cinatra#1087 fix: gating on whole-run
+  # success let a failed post-publish job (the prod-deploy trigger) silently
+  # suppress the mirror even though the image had already published to GHCR.
+  # This job carries NO `environment:`, so it never requests the owner-approval
+  # pause just to compute a "skip" — only the `mirror` job below, which actually
+  # publishes, gates on `release-approval`.
+  gate:
+    name: Decide whether to mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # List the upstream run's jobs to read the publish job's per-job outcome.
+      actions: read
+    # Fire on a manual backfill dispatch, OR on completion of a `v*` TAG build —
+    # deliberately WITHOUT the old `workflow_run.conclusion == 'success'` guard
+    # (that whole-run gate WAS the bug). build-image also runs on main-branch
+    # push / PR / merge_group / dispatch; those are excluded because head_branch
+    # is 'main' or a feature/PR ref and fails the `startsWith(..., 'v')` tag
+    # guard. The per-job decision then happens in the step below, and the strict
+    # regex allow-list in the mirror job's "Resolve VERSION" is the final tag
+    # backstop.
+    if: >-
+      github.repository == 'cinatra-ai/cinatra'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (
+          github.event.workflow_run.event == 'push'
+          && startsWith(github.event.workflow_run.head_branch, 'v')
+        )
+      )
+    outputs:
+      should_mirror: ${{ steps.decide.outputs.should_mirror }}
+    steps:
+      - name: Decide from the publish job's outcome (not the whole run)
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # The build-image.yml job that publishes the release image to GHCR —
+          # the ONLY upstream outcome the mirror actually depends on. Kept in
+          # lockstep with that job's `name:`; if it is renamed there, rename here.
+          PUBLISH_JOB_NAME: Publish image (release)
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # A manual backfill always targets an already-published GHCR tag; the
+            # mirror job re-validates the tag shape and the source's existence.
+            echo "should_mirror=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Manual dispatch — proceeding to mirror (source existence is re-checked in the mirror job)."
+            exit 0
+          fi
+          # workflow_run path: read the conclusion of the SPECIFIC publish job
+          # from the upstream run, ignoring the whole-run conclusion. "absent"
+          # means the job never ran (e.g. a non-release build) — treated as
+          # not-success, so we skip. Fail-closed: unresolvable => do not mirror.
+          publish_conclusion="$(
+            gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs" -q '.jobs[]' \
+              | jq -s -r --arg n "$PUBLISH_JOB_NAME" '
+                  [ .[] | select(.name == $n) ] as $m
+                  | if ($m | length) == 0 then "absent"
+                    elif ($m | map(.conclusion) | index("success")) then "success"
+                    else ($m[0].conclusion // "unknown") end'
+          )"
+          echo "Upstream run ${RUN_ID}: whole-run conclusion='${RUN_CONCLUSION}', '${PUBLISH_JOB_NAME}' conclusion='${publish_conclusion}'."
+          if [ "$publish_conclusion" = "success" ]; then
+            echo "should_mirror=true" >> "$GITHUB_OUTPUT"
+            if [ "$RUN_CONCLUSION" != "success" ]; then
+              echo "::warning::The build run concluded '${RUN_CONCLUSION}', but its '${PUBLISH_JOB_NAME}' job SUCCEEDED — mirroring anyway so a failed post-publish job (e.g. the prod-deploy trigger) cannot silently skip the Docker Hub mirror (cinatra#1087)."
+            fi
+          elif [ "$publish_conclusion" = "absent" ]; then
+            # The gate `if:` only lets a v* TAG build reach this decision, and a
+            # release build is EXPECTED to contain the publish job. "absent" here
+            # therefore means either the job genuinely did not run OR — the exact
+            # regression this fix guards against — that PUBLISH_JOB_NAME no longer
+            # matches the builder's job (a rename). Warn LOUDLY rather than emit a
+            # low-visibility notice, so a mirror skip caused by name drift can
+            # never itself become the new silent failure (cinatra#1087).
+            echo "should_mirror=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::'${PUBLISH_JOB_NAME}' was NOT found among upstream run ${RUN_ID}'s jobs on a release-tag build — the Docker Hub mirror is being SKIPPED. If the builder's publish job was renamed, update PUBLISH_JOB_NAME in this workflow to match it (kept in lockstep by design); otherwise no release image was published to GHCR and this is a correct no-op."
+          else
+            echo "should_mirror=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::'${PUBLISH_JOB_NAME}' did not succeed (outcome='${publish_conclusion}') — no release image was published to GHCR, so there is nothing to mirror. Skipping (a correct no-op, not a failure)."
+          fi
+
   mirror:
     name: Mirror GHCR image to Docker Hub
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Gate the public Docker Hub mirror publish behind the org-wide
@@ -75,26 +171,14 @@ jobs:
     # can_admins_bypass=false); a referenced-but-unprovisioned Environment
     # auto-creates UNPROTECTED, so the line and the provisioning ship together.
     environment: release-approval
-    # Run only when:
-    #   - this is the canonical repo (a fork / non-canonical clone must never
-    #     publish to the public Docker Hub org); AND
-    #   - a manual backfill dispatch, OR the upstream builder SUCCEEDED for a
-    #     `v*` TAG push. For a tag-triggered build-image run, the resulting
-    #     workflow_run carries event=='push' and head_branch == the tag name
-    #     (e.g. 'v0.1.5'); build-image also runs on main-branch push / PR /
-    #     merge_group / dispatch, which are excluded here (head_branch 'main' or
-    #     a PR/feature branch fails the `startsWith(..., 'v')` tag guard). The
-    #     strict regex allow-list in "Resolve VERSION" is the final backstop.
+    # Publish only when the `gate` job resolved should_mirror=true (a manual
+    # backfill, or a build whose "Publish image (release)" job succeeded — even
+    # if a later post-publish job reddened the whole run). The repo guard is
+    # belt-and-suspenders; the gate job already enforced it. The strict regex
+    # allow-list in "Resolve VERSION" below remains the final tag backstop.
     if: >-
       github.repository == 'cinatra-ai/cinatra'
-      && (
-        github.event_name == 'workflow_dispatch'
-        || (
-          github.event.workflow_run.conclusion == 'success'
-          && github.event.workflow_run.event == 'push'
-          && startsWith(github.event.workflow_run.head_branch, 'v')
-        )
-      )
+      && needs.gate.outputs.should_mirror == 'true'
     steps:
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
