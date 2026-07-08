@@ -49,9 +49,11 @@ test-*.ts
 **/*.test.*
 **/*.spec.*
 
-# Generated at build time inside the image (RUN pnpm build:auth-migrate-bundle);
-# keep any stale local copy out of the build context so it's always fresh.
+# Generated at build time inside the image (RUN pnpm build:auth-migrate-bundle
+# / build:schema-bootstrap-bundle); keep any stale local copy out of the build
+# context so it's always fresh.
 scripts/better-auth-migrate.bundle.mjs
+scripts/schema-bootstrap.bundle.mjs
 
 # Required-extension OAS seed (cinatra-ai/ops#436). Projected INSIDE the build
 # from the acquired /app/extensions (RUN build-required-oas-seed.mjs). A stale

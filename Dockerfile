@@ -106,6 +106,18 @@ RUN node scripts/extensions/record-bundled-digests.mjs \
 # `setup prod` prefers this bundle over the loose .mts when present.
 RUN pnpm build:auth-migrate-bundle
 
+# Bundle the schema-bootstrap DDL pass (buildCreateStoreSchemaQueries — the
+# exact `ensurePostgresSchema` boot baseline) into a SELF-CONTAINED .mjs for
+# the same reason: the standalone runtime image ships neither the TypeScript
+# source nor tsx, so the published CLI's checkout-bootstrap DDL pass
+# (cinatra-cli#115) cannot run there — yet the prod deploy runs `setup prod`
+# (the versioned core migration chain) BEFORE the new image ever boots. The
+# deploy-compat CLI entry (packages/cli/bin/cinatra.mjs) runs this bundle
+# before handing schema-mutating subcommands to the published CLI, so an
+# EXISTING database at the previous release's ledger gets the net-new tables
+# the chain references (cinatra#1136, prod-deploy surface).
+RUN pnpm build:schema-bootstrap-bundle
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 # Cinatra is a large Next app (many workspace packages). Default Node heap
@@ -185,6 +197,13 @@ COPY --from=build /app/migrations ./migrations
 # this bundle over the loose .mts when present; without it, `setup prod` on a
 # fresh database cannot resolve better-auth in the standalone image.
 COPY --from=build /app/scripts/better-auth-migrate.bundle.mjs ./scripts/better-auth-migrate.bundle.mjs
+
+# Self-contained schema-bootstrap DDL runner (see build stage). The deploy-compat
+# CLI entry (packages/cli/bin above) applies it before handing `setup` /
+# `db migrate` to the published CLI, so the versioned core migration chain never
+# executes against an upgraded-but-not-yet-bootstrapped database (cinatra#1136,
+# prod-deploy surface). Load-bearing for release upgrades of EXISTING databases.
+COPY --from=build /app/scripts/schema-bootstrap.bundle.mjs ./scripts/schema-bootstrap.bundle.mjs
 
 # Required-extension OAS seed (cinatra-ai/ops#436). The image-owned, symlink-free
 # projection of the required set's agent OAS trees (built in the build stage from
