@@ -228,7 +228,14 @@ jobs:
           # The same shape is what build-image.yml ever pushes to GHCR, so a
           # legitimate tag always passes.
           if ! [[ "$VERSION" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
-            echo "::error::VERSION '${VERSION}' is not an allowed tag (must match ^v[0-9][A-Za-z0-9._-]*$). Refusing to mirror." >&2
+            # VERSION failed the allow-list and, on a workflow_dispatch, may be an
+            # untrusted (possibly multi-line) operator input. Strip control chars
+            # (CR/LF included) and truncate before interpolating it into a
+            # workflow command, so a crafted value cannot inject a second
+            # `::...::` command into the Actions log. Pre-existing hardening,
+            # applied opportunistically while this file is reworked.
+            safe_ver="$(printf '%s' "$VERSION" | tr -d '[:cntrl:]' | cut -c1-60)"
+            echo "::error::VERSION '${safe_ver}' is not an allowed tag (must match ^v[0-9][A-Za-z0-9._-]*$). Refusing to mirror." >&2
             exit 1
           fi
           # Docker enforces a 128-char tag limit; reject early with a clear
