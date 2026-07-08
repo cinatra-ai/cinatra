@@ -468,6 +468,152 @@ describe("createHttpMarketplaceMcpClient", () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Structured DECISION errors (#1046). The moderation decide methods
+  // (extension-submission + vendor-application approve/reject) opt into
+  // preserving refusal-class statuses so a separation-of-duties 409 surfaces
+  // with its status + machine-readable code + message instead of collapsing to a
+  // generic 502 that is indistinguishable from a transient failure. The decide
+  // abilities return a WP_Error(code, message, ['status'=>N]) whose shape is
+  // identical to the grant-refresh refusal seam and travels the same MCP
+  // envelope path, so the same conservative preservation applies.
+  // ---------------------------------------------------------------------------
+
+  const SOD_CODE = "cinatra.approver_separation_violation";
+  const SOD_MESSAGE =
+    "Separation of duties: the approver must not be the submitter, the submission vendor owner, or the namespace owner.";
+  // The realistic marketplace refusal envelope: the WP_Error surfaces as an
+  // isError result carrying the code + message + `data.status` in BOTH
+  // structuredContent and a JSON text block (the cinatra client reads either).
+  const sodRefusal = () => ({
+    isError: true as const,
+    structuredContent: { code: SOD_CODE, message: SOD_MESSAGE, data: { status: 409 } },
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ code: SOD_CODE, message: SOD_MESSAGE, data: { status: 409 } }),
+      },
+    ],
+  });
+
+  const decisionMethods: ReadonlyArray<[string, () => Promise<unknown>]> = [
+    [
+      "extensionSubmissionApprove",
+      () =>
+        createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionSubmissionApprove({
+          submission_id: "sub-1",
+        }),
+    ],
+    [
+      "extensionSubmissionReject",
+      () =>
+        createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionSubmissionReject({
+          submission_id: "sub-1",
+          reason: "not yours to approve",
+        }),
+    ],
+    [
+      "vendorApplicationApprove",
+      () =>
+        createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).vendorApplicationApprove({
+          application_id: "app-1",
+        }),
+    ],
+    [
+      "vendorApplicationReject",
+      () =>
+        createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).vendorApplicationReject({
+          application_id: "app-1",
+          decision_reason: "not yours to approve",
+        }),
+    ],
+  ];
+
+  it.each(decisionMethods)(
+    "%s preserves a 409 separation-of-duties refusal with status + code + message",
+    async (_name, call) => {
+      callToolMock.mockResolvedValue(sodRefusal());
+      const promise = call();
+      await expect(promise).rejects.toBeInstanceOf(MarketplaceMcpError);
+      await expect(promise).rejects.toMatchObject({
+        httpStatus: 409,
+        // The machine-readable code + message ride in responseBody (the seam the
+        // decision helpers / cm-error classifier read) AND the message.
+        responseBody: expect.stringContaining(SOD_CODE),
+        message: expect.stringContaining(SOD_MESSAGE),
+      });
+    },
+  );
+
+  it("preserves the 409 status from a structuredContent-only refusal (no text block)", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { code: SOD_CODE, message: SOD_MESSAGE, data: { status: 409 } },
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionSubmissionApprove({
+        submission_id: "sub-1",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 409 });
+  });
+
+  it("preserves the 409 status + code from a JSON text-block-only refusal (no structuredContent)", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      content: [
+        { type: "text", text: JSON.stringify({ code: SOD_CODE, message: SOD_MESSAGE, status: 409 }) },
+      ],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).vendorApplicationApprove({
+        application_id: "app-1",
+      }),
+    ).rejects.toMatchObject({
+      httpStatus: 409,
+      responseBody: expect.stringContaining(SOD_CODE),
+    });
+  });
+
+  it("preserves a 403 not-authorized refusal on a decision method", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { code: "cinatra.forbidden", data: { status: 403 } },
+      content: [{ type: "text", text: "not a moderator" }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).vendorApplicationReject({
+        application_id: "app-1",
+        decision_reason: "x",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+  });
+
+  it("does NOT preserve a non-refusal status on a decision method (500 stays 502) — scoped opt-in", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { code: "cinatra.unexpected", data: { status: 500 } },
+      content: [{ type: "text", text: "boom" }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionSubmissionApprove({
+        submission_id: "sub-1",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 502 });
+  });
+
+  it("leaves a non-decision method unchanged (extensionSubmissionWithdraw 409 collapses to 502)", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { code: "cinatra.submission_not_pending", data: { status: 409 } },
+      content: [{ type: "text", text: "not pending" }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionSubmissionWithdraw({
+        submission_id: "sub-1",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 502 });
+  });
+
   it("extensionSubmissionPromotionRetry forwards submission_id", async () => {
     callToolMock.mockResolvedValue({
       structuredContent: {
