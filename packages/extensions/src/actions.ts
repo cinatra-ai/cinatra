@@ -12,6 +12,10 @@ import type { Actor } from "@cinatra-ai/extension-types";
 import type { DanglingReferences } from "./audit-log";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
+  assertCanRemoveExtension,
+  isSystemExtension,
+} from "./system-extension-inventory";
+import {
   deriveTypeId,
   resolveExtensionTypeId,
   resolveExtensionPackageForLifecycle,
@@ -140,6 +144,10 @@ export async function uninstallExtensionPackage(
   "use server";
   await requireAdminSession();
   try {
+    // cinatra#1036: a system extension can be updated but never removed from the
+    // live runtime. Refuse the intent up front — before any registry round-trip —
+    // with the stable typed error (the dispatcher primitive is the backstop).
+    assertCanRemoveExtension(packageName, "uninstall");
     const typeId = await resolveExtensionTypeId(packageName, packageVersion);
     await extensionRegistry.uninstall(
       typeId,
@@ -167,6 +175,9 @@ export async function archiveExtensionPackage(
   "use server";
   await requireAdminSession();
   try {
+    // cinatra#1036: archive removes a package from the live runtime — refused for
+    // a system extension (which is required-in-prod and must stay live).
+    assertCanRemoveExtension(packageName, "archive");
     const typeId = await resolveExtensionTypeId(packageName, packageVersion);
     await extensionRegistry.archive(
       typeId,
@@ -244,6 +255,19 @@ export async function reinstallLatestExtensionPackage(
     }
     const latestVersion = resolution.resolvedVersion;
     const typeId = resolution.typeId;
+    // cinatra#1036: a system extension can be reinstalled/upgraded but must NEVER
+    // leave the live runtime. Route its "reinstall" through an IN-PLACE update
+    // (re-materialize → re-finalize → re-activate the latest digest) instead of
+    // the uninstall-then-install path — so there is NO uninstall phase that could
+    // strand it, and "reinstall" honors "update is permitted, deletion is not".
+    if (isSystemExtension(packageName)) {
+      await extensionRegistry.update(
+        typeId,
+        { registryUrl: "", packageName, version: latestVersion },
+        actor,
+      );
+      return { success: true };
+    }
     // Step 1: uninstall (archive or hard-delete per predicate)
     await extensionRegistry.uninstall(
       typeId,
@@ -289,6 +313,9 @@ export async function forceDeleteExtensionPackage(
   "use server";
   await requireAdminSession();
   try {
+    // cinatra#1036: force-delete is the hardest removal — still refused for a
+    // system extension (update is the only permitted destructive-looking op).
+    assertCanRemoveExtension(packageName, "force_delete");
     const typeId = await resolveExtensionTypeId(packageName, packageVersion);
     const result = await extensionRegistry.forceDelete(
       typeId,

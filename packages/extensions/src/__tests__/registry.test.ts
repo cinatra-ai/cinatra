@@ -194,6 +194,56 @@ describe("ExtensionRegistry", () => {
     expect(handler.restore).toHaveBeenCalledWith(ref, actor);
   });
 
+  // cinatra#1036 — the dispatcher is the fail-closed BACKSTOP for the removal
+  // rule (behind the user-facing action guards): a host-declared system
+  // extension is refused on every destructive primitive by MEMBERSHIP, even
+  // when the canonical store reports NO locked row (the mock returns []), and
+  // the per-kind handler is never reached. Uses a real system package name.
+  describe("system-extension removal backstop", () => {
+    const SYSTEM_PKG = "@cinatra-ai/nango-connector";
+    const REMOVAL_COPY = /can be updated but not deleted/;
+
+    it("uninstall refuses a system extension (membership, not row-lock) and never calls the handler", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      const actor = makeActor();
+      await expect(
+        extensionRegistry.uninstall("agent", makeRef(SYSTEM_PKG), actor),
+      ).rejects.toThrow(REMOVAL_COPY);
+      expect(handler.uninstall).not.toHaveBeenCalled();
+      expect(handler.archive).not.toHaveBeenCalled();
+    });
+
+    it("archive refuses a system extension and never calls the handler", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      await expect(
+        extensionRegistry.archive("agent", makeRef(SYSTEM_PKG), makeActor()),
+      ).rejects.toThrow(REMOVAL_COPY);
+      expect(handler.archive).not.toHaveBeenCalled();
+    });
+
+    it("forceDelete refuses a system extension and never calls the handler", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      await expect(
+        extensionRegistry.forceDelete("agent", makeRef(SYSTEM_PKG), makeActor()),
+      ).rejects.toThrow(REMOVAL_COPY);
+      expect(handler.uninstall).not.toHaveBeenCalled();
+    });
+
+    // Non-system packages are UNAFFECTED — the backstop keys on host membership,
+    // not on being "an extension". (update-in-place for a system extension is
+    // proven end-to-end against a mocked registry in the actions suite.)
+    it("uninstall of a non-system package is NOT blocked by the system backstop", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      mockNeverUsedNoDepScenario();
+      await extensionRegistry.uninstall("agent", makeRef("@acme/normal-ext"), makeActor());
+      expect(handler.uninstall).toHaveBeenCalled();
+    });
+  });
+
   // Durable data-teardown wiring: the dispatcher must fire the host-injected
   // data-teardown hook on HARD removal (uninstall hard-delete branch +
   // forceDelete) and must NOT fire it on the archive branch (archived

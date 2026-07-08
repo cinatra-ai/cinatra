@@ -57,15 +57,43 @@ describe("lifecycle badges", () => {
 });
 
 describe("disabled-action reasons", () => {
-  it("locked+required archive shows 'Cannot archive — required-in-prod'", () => {
+  // cinatra#1036 — a known system extension gets the exact, authoritative copy
+  // for EVERY destructive affordance (archive/uninstall/force_delete/purge).
+  it("system extension shows the canonical 'can be updated but not deleted' copy for every destructive action", () => {
+    for (const action of ["archive", "uninstall", "force_delete", "purge"] as const) {
+      expect(
+        disabledActionReason(ext({ status: "locked", requiredInProd: true }), action, {
+          isSystem: true,
+        }),
+      ).toBe("System extension — can be updated but not deleted.");
+    }
+  });
+
+  it("system extension still permits update/activate (null)", () => {
+    // `update`/`activate` are not destructive — never disabled by the system rule.
+    expect(
+      disabledActionReason(ext({ status: "locked" }), "activate", { isSystem: true }),
+    ).toBeNull();
+  });
+
+  it("locked+required (no system signal) refuses every destructive action without over-claiming 'system'", () => {
     expect(disabledActionReason(ext({ status: "locked", requiredInProd: true }), "archive")).toBe(
-      "Cannot archive — required-in-prod",
+      "Cannot archive — locked (required-in-prod); update is permitted.",
+    );
+    expect(disabledActionReason(ext({ status: "locked", requiredInProd: true }), "uninstall")).toBe(
+      "Cannot uninstall — locked (required-in-prod); update is permitted.",
     );
   });
 
-  it("locked uninstall shows 'Cannot uninstall — locked; archive instead'", () => {
-    expect(disabledActionReason(ext({ status: "locked" }), "uninstall")).toBe(
-      "Cannot uninstall — locked; archive instead",
+  it("locked (no system signal) uninstall no longer says the wrong 'archive instead'", () => {
+    const reason = disabledActionReason(ext({ status: "locked" }), "uninstall");
+    expect(reason).toBe("Cannot uninstall — locked; update is permitted.");
+    expect(reason).not.toContain("archive instead");
+  });
+
+  it("locked archive is refused too (archive is NOT an escape hatch for a locked row)", () => {
+    expect(disabledActionReason(ext({ status: "locked" }), "archive")).toBe(
+      "Cannot archive — locked; update is permitted.",
     );
   });
 
