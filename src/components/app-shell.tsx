@@ -481,6 +481,7 @@ export function AppShell({
             below the impersonation banner so the flow position matches the visual sticky position. */}
         <div aria-hidden style={{ height: "var(--banner-height, 0px)" }} className="shrink-0" />
         <header
+          data-testid="app-shell-topbar"
           style={{ top: "var(--banner-height, 0px)" }}
           className={cn(
             "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background/90 backdrop-blur-xl transition-shadow",
