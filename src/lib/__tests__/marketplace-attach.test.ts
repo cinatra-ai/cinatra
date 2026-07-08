@@ -50,6 +50,9 @@ vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", () => ({
 }));
 
 import { ensureMarketplaceAttachment } from "@/lib/marketplace-attach";
+// Real class (its client module is pure — no SDK/server-only), NOT mocked here:
+// the `.../http-client` subpath is mocked above, but the package index is not.
+import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
 
 const BASE_IDENTITY = {
   instanceId: "11111111-1111-4111-8111-111111111111",
@@ -214,5 +217,94 @@ describe("ensureMarketplaceAttachment — attach flip", () => {
     expect(written?.consumerAttachment?.verdaccioReadTokenCiphertext).toBe(
       `enc(${CONSUMER_VERDACCIO_TOKEN_AAD})`,
     );
+  });
+});
+
+describe("ensureMarketplaceAttachment — vendor-status soft-fail log (cinatra#1089)", () => {
+  // Identity already carries a consumerAttachment, so step 1 (attach) is skipped
+  // and step 2 (vendor-status reconcile) runs directly, where the probe fails.
+  const ATTACHED_IDENTITY = { ...BASE_IDENTITY, consumerAttachment: { marketplaceUsername: "x" } };
+
+  it("logs ONE sanitized warning (phase + HTTP status), never console.error with the stack/server detail", async () => {
+    isGatekeptInstallEnabledMock.mockReturnValue(false);
+    readInstanceIdentityMock.mockReturnValue({ ...ATTACHED_IDENTITY });
+
+    // The probe rejects with a MarketplaceMcpError whose message embeds the
+    // server's raw `detail` — the exact text the fix must NOT surface.
+    const SERVER_DETAIL = "instance 42 is not a registered vendor: secret-internal-detail";
+    const client = {
+      instanceAttachSelf: vi.fn(),
+      vendorApplicationStatus: vi.fn().mockRejectedValue(
+        new MarketplaceMcpError(
+          `Marketplace vendor_application_status returned an error: ${SERVER_DETAIL}`,
+          403,
+          SERVER_DETAIL,
+        ),
+      ),
+      vendorRegistryTokenRotateSelf: vi.fn(),
+    };
+    createHttpClientMock.mockReturnValue(client);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Soft-fail: never throws, boot continues.
+    await expect(ensureMarketplaceAttachment()).resolves.toBeUndefined();
+
+    // The probe was attempted...
+    expect(client.vendorApplicationStatus).toHaveBeenCalledTimes(1);
+    // ...and its failure was NOT logged via console.error (no full error object).
+    expect(
+      errorSpy.mock.calls.some((c) => String(c[0]).includes("vendor_application_status")),
+    ).toBe(false);
+
+    // Exactly ONE warn line for this phase.
+    const phaseWarns = warnSpy.mock.calls.filter((c) =>
+      String(c[0]).includes("vendor_application_status"),
+    );
+    expect(phaseWarns.length).toBe(1);
+    const line = phaseWarns[0]!.map((a) => String(a)).join(" ");
+    expect(line).toContain("soft-failed");
+    expect(line).toContain("HTTP 403"); // actionable: names the status
+    // Sanitized: no server detail, no multi-line stack, no raw error object.
+    expect(line).not.toContain(SERVER_DETAIL);
+    expect(line).not.toContain("secret-internal-detail");
+    expect(line).not.toContain("\n");
+    // The warn payload is a single string — not the Error object (which would
+    // print a stack). `warn(msg)` ⇒ exactly one arg.
+    expect(phaseWarns[0]!.length).toBe(1);
+
+    // No behavioral change: prior vendor state preserved (no reconcile write).
+    expect(writeInstanceIdentityMock).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("falls back to err.name (no server text) for a non-MarketplaceMcpError", async () => {
+    isGatekeptInstallEnabledMock.mockReturnValue(false);
+    readInstanceIdentityMock.mockReturnValue({ ...ATTACHED_IDENTITY });
+    const client = {
+      instanceAttachSelf: vi.fn(),
+      vendorApplicationStatus: vi
+        .fn()
+        .mockRejectedValue(new TypeError("fetch failed: https://marketplace.internal/secret-host")),
+      vendorRegistryTokenRotateSelf: vi.fn(),
+    };
+    createHttpClientMock.mockReturnValue(client);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(ensureMarketplaceAttachment()).resolves.toBeUndefined();
+
+    const line = warnSpy.mock.calls
+      .map((c) => c.map((a) => String(a)).join(" "))
+      .find((l) => l.includes("vendor_application_status"));
+    expect(line).toBeDefined();
+    expect(line).toContain("soft-failed");
+    expect(line).toContain("TypeError"); // the code-defined class name
+    // The error message (which could carry an internal host/URL) is NOT surfaced.
+    expect(line).not.toContain("marketplace.internal");
+    expect(line).not.toContain("fetch failed");
+    warnSpy.mockRestore();
   });
 });

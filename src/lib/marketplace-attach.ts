@@ -43,7 +43,7 @@
 // -----------------------------------------------------------------------------
 
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-import type { MarketplaceInstanceAttachSelfOutput } from "@cinatra-ai/marketplace-mcp-client";
+import { MarketplaceMcpError, type MarketplaceInstanceAttachSelfOutput } from "@cinatra-ai/marketplace-mcp-client";
 
 import {
   CONSUMER_MARKETPLACE_TOKEN_AAD,
@@ -251,9 +251,21 @@ export async function ensureMarketplaceAttachment(): Promise<void> {
     nextVendorScope = status.scope ?? null;
     nextApplicationId = status.application_id ?? null;
   } catch (err) {
-    console.error(
-      "[marketplace-attach] vendor_application_status failed — preserving prior vendorState:",
-      err,
+    // Non-fatal and EXPECTED on any not-vendor-attached instance (e.g. a dev /
+    // isolated instance): the probe simply can't complete. Log a SINGLE
+    // sanitized line — the phase plus the HTTP status only — instead of
+    // console.error with the full error object (stack + response body). We
+    // deliberately do NOT surface err.message / responseBody: a
+    // MarketplaceMcpError builds its message from the server's raw `detail`, so
+    // logging it would leak server-provided text into the boot output. The
+    // non-HTTP fallback uses err.name (a code-defined class name, no server
+    // text), keeping the line actionable without a stack.
+    const status = err instanceof MarketplaceMcpError ? err.httpStatus : null;
+    console.warn(
+      "[marketplace-attach] vendor_application_status soft-failed (non-fatal; preserving prior vendorState)" +
+        (status != null
+          ? ` — HTTP ${status}`
+          : ` — ${err instanceof Error ? err.name : typeof err}`),
     );
     // Fall through; nextVendorState stays null so we skip the write below.
   }
