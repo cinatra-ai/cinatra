@@ -32,15 +32,24 @@
 // propagates). Idempotent. The output file `docker/wayflow/.wayflow.env` is
 // gitignored and written 0600.
 //
+// SOURCES: the parsed .env.local overlaid with the PROCESS env for exactly the
+// wayflow keys (non-empty env value wins; see overlayProcessEnv). The overlay
+// is what lets the wp-drupal UAT gate — which provisions the whole app-service
+// env from in-repo runner-env values and never writes an .env.local — hand the
+// per-run CINATRA_BRIDGE_TOKEN to the container; without it the wayflow boot
+// preflight exits non-zero, the container restart-loops, and the widget-stream
+// relay dies with "fetch failed".
+//
 // FAIL POLICY
 // -----------
-// By default this is TOLERANT: if .env.local is absent or has no bridge token,
-// it writes whatever keys it can (so a fresh checkout / non-wayflow flow is not
-// blocked) and exits 0 with a warning. Pass `--require-bridge-token` (used by
-// the `services` script that is about to start wayflow) to HARD-FAIL when the
-// bridge token is missing or whitespace-only — turning the silent 403 into a
-// loud, actionable error BEFORE the container starts. The wayflow container
-// ALSO fails loud at boot (agent_loader.py main()) as a second backstop.
+// By default this is TOLERANT: if neither .env.local nor the process env has a
+// bridge token, it writes whatever keys it can (so a fresh checkout /
+// non-wayflow flow is not blocked) and exits 0 with a warning. Pass
+// `--require-bridge-token` (used by the `services` script that is about to
+// start wayflow) to HARD-FAIL when the bridge token is missing or
+// whitespace-only in BOTH sources — turning the silent 403 into a loud,
+// actionable error BEFORE the container starts. The wayflow container ALSO
+// fails loud at boot (agent_loader.py main()) as a second backstop.
 
 import path from "node:path";
 import process from "node:process";
@@ -83,6 +92,30 @@ export function parseDotenv(contents) {
   return env;
 }
 
+// Overlay the PROCESS env onto the parsed .env.local for EXACTLY the wayflow
+// keys. Pure (no IO) so it is unit-testable.
+//
+// WHY: the wp-drupal UAT gate provisions the app-service env from in-repo,
+// zero-secret values in the RUNNER env (SUPABASE_DB_URL, BETTER_AUTH_SECRET,
+// CINATRA_BRIDGE_TOKEN, ... — .github/workflows/wp-drupal-uat.yml) and never
+// writes an .env.local at all, so a file-only read left the wayflow container
+// with NO bridge token in CI: agent_loader's boot preflight then exits
+// non-zero, the container restart-loops, and the widget-stream relay to
+// localhost:3010 dies with "fetch failed" ("(no response)" in the widget —
+// exactly the silent 403 family this generator exists to prevent). A
+// NON-EMPTY process-env value wins over the file (the `services` script
+// `source`s .env.local first, so the two agree in the local flow); an
+// empty/whitespace process value never clobbers a file value; keys outside
+// WAYFLOW_KEYS are never read from the process env.
+export function overlayProcessEnv(source, processEnv) {
+  const merged = { ...source };
+  for (const key of WAYFLOW_KEYS) {
+    const raw = processEnv?.[key];
+    if (typeof raw === "string" && raw.trim() !== "") merged[key] = raw;
+  }
+  return merged;
+}
+
 // Build the narrow env map + a list of missing-secret keys. Pure (no IO) so it
 // is unit-testable. `source` is the parsed .env.local object.
 export function buildWayflowEnv(source) {
@@ -122,21 +155,21 @@ function main() {
   const outDir = path.join(repoRoot, "docker", "wayflow");
   const outPath = path.join(outDir, ".wayflow.env");
 
-  let source = {};
+  let fileSource = {};
   if (existsSync(envLocalPath)) {
-    source = parseDotenv(readFileSync(envLocalPath, "utf8"));
-  } else if (requireBridgeToken) {
-    console.error(
-      "[gen-wayflow-env] FATAL: .env.local not found but --require-bridge-token " +
-        "was set. Run the dev setup (`npm run setup:dev`) to create it before " +
-        "starting the wayflow service.",
-    );
-    process.exit(1);
+    fileSource = parseDotenv(readFileSync(envLocalPath, "utf8"));
   } else {
     console.warn(
-      "[gen-wayflow-env] .env.local not found; writing wayflow env with defaults only.",
+      "[gen-wayflow-env] .env.local not found; reading the wayflow keys from the process env only " +
+        "(the CI runner provisions them there; locally run the dev setup to create .env.local).",
     );
   }
+  // Process-env overlay (CI provisioning path; see overlayProcessEnv). The
+  // former ".env.local not found + --require-bridge-token = FATAL" branch is
+  // deliberately gone: the file being absent is fine as long as the RESULTING
+  // source carries the bridge token — the bridgeMissing check below is the
+  // single fail-closed arbiter for both sources.
+  const source = overlayProcessEnv(fileSource, process.env);
 
   const { env, missing } = buildWayflowEnv(source);
   const bridgeMissing = missing.includes("CINATRA_BRIDGE_TOKEN");
@@ -144,10 +177,11 @@ function main() {
   if (bridgeMissing && requireBridgeToken) {
     console.error(
       "[gen-wayflow-env] FATAL: CINATRA_BRIDGE_TOKEN is missing or empty in " +
-        ".env.local. The wayflow runtime needs it to authenticate its callback " +
-        "to /api/llm-bridge; without it the bridge returns 403 and the widget " +
-        'content-edit returns "(no response)". Set CINATRA_BRIDGE_TOKEN in ' +
-        ".env.local (the dev setup mints one) and re-run.",
+        ".env.local AND the process env. The wayflow runtime needs it to " +
+        "authenticate its callback to /api/llm-bridge; without it the bridge " +
+        'returns 403 and the widget content-edit returns "(no response)". Set ' +
+        "CINATRA_BRIDGE_TOKEN in .env.local (the dev setup mints one) or export " +
+        "it (CI derives a throwaway per-run value) and re-run.",
     );
     process.exit(1);
   }

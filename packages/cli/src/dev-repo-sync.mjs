@@ -245,8 +245,24 @@ export function syncOneRepo({
     );
   }
 
-  // clean+correct origin+branch: check dirty
-  const dirty = git(["status", "--porcelain"], dest).trim() !== "";
+  // clean+correct origin+branch: check dirty.
+  //
+  // MACHINE-ARTIFACT EXEMPTION: an UNTRACKED (`?? `) top-level
+  // `.cinatra-published.json` never counts as dirt. The dev boot's
+  // agent-marker-backfill phase writes that wayflow published-marker into every
+  // agent dir of the dev source tree (docker-compose bind-mounts
+  // `./extensions:/agents:ro`, and the loader hard-gates each agent on the
+  // marker — a fresh pinned clone ships none, so without the backfill the dev
+  // wayflow serves zero agents). It is a derived, machine-written artifact —
+  // not local work this sync exists to protect — and treating it as dirt made
+  // every post-boot `--pinned` re-sync hard-fail. A MODIFIED tracked marker
+  // (any non-`??` status) still counts as dirt, as does any other file.
+  const dirtyEntries = git(["status", "--porcelain"], dest)
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l !== "")
+    .filter((l) => l !== "?? .cinatra-published.json");
+  const dirty = dirtyEntries.length > 0;
 
   if (sha) {
     // Pinned mode has NO stash/reset path: a dirty tree is a hard fail (CI

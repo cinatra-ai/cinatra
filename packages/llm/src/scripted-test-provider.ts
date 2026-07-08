@@ -54,6 +54,53 @@ export function assertScriptedProviderNotProduction(env: EnvLike = process.env):
 const EDIT_INTENT =
   /\b(edit|change|rewrite|update|revise|tighten|shorten|summar|title|headline|add|append|fix)\b/i;
 
+/**
+ * Deterministic stand-in for the CONTENT-EDITOR AGENT'S REPLY TEXT on the
+ * widget-stream relay path (cinatra#246 architecture). The widget stream route
+ * calls this INSTEAD of the A2A dispatch when the scripted provider is enabled
+ * — after every fail-closed auth check has already run, so the dual-token
+ * path, the live membership re-checks, and the instance binding stay fully
+ * real; only the agent leg (WayFlow → /api/llm-bridge → provider) is stood in
+ * for, exactly the suite's documented scope ("does NOT exercise a real CMS
+ * mutation via WayFlow").
+ *
+ * Shape contract: the return value is the same TEXT a real content-editor
+ * agent emits, so the route's one JSON→SSE frame mapping is exercised
+ * unchanged by scripted and real replies alike:
+ *   - an edit intent → the agent's structured JSON
+ *     `{ postId|nodeId, changes:[{field,before,after}] }` (→ `changes` frame,
+ *     the widget's diff card);
+ *   - anything else → a sentinel-bearing plain-text reply (→ `text` frame).
+ * Intent is matched against the USER'S INSTRUCTIONS ONLY — never a prompt
+ * template — mirroring `runScriptedStream`'s last-user-message matching.
+ */
+export function buildScriptedContentEditorReplyText(input: {
+  /** The end user's editing instruction (the latest user message). */
+  instructions: string;
+  /** CMS id key: WordPress carries `postId`, Drupal carries `nodeId`. */
+  idKey: "postId" | "nodeId";
+  /** The trusted CMS context's id value (may be empty). */
+  idValue: string;
+}): string {
+  if (EDIT_INTENT.test(input.instructions)) {
+    return JSON.stringify({
+      [input.idKey]: input.idValue,
+      changes: [
+        {
+          field: "title",
+          before: "UAT seeded title",
+          after: "UAT seeded title (edited by the deterministic provider)",
+        },
+      ],
+    });
+  }
+  const cms = input.idKey === "nodeId" ? "Drupal" : "WordPress";
+  return (
+    `${UAT_SENTINEL}: deterministic test reply for ${cms}. ` +
+    `You said: "${input.instructions.slice(0, 120)}".`
+  );
+}
+
 function lastUserMessage(input: OrchestrateStreamInput): string {
   const messages = input.messages ?? [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {

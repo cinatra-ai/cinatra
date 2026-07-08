@@ -28,6 +28,7 @@ import {
   parseDotenv,
   buildWayflowEnv,
   serializeDotenv,
+  overlayProcessEnv,
 } from "../gen-wayflow-env.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -99,6 +100,82 @@ describe("gen-wayflow-env — buildWayflowEnv", () => {
       OPENAI_API_KEY: "sk",
     });
     expect(env.CINATRA_BRIDGE_TOKEN).toBe("tok");
+  });
+});
+
+describe("gen-wayflow-env — overlayProcessEnv (CI provisioning path)", () => {
+  // The wp-drupal UAT gate provisions the app-service env in the RUNNER env
+  // and never writes an .env.local; a file-only read left the wayflow
+  // container with NO bridge token in CI (agent_loader's boot preflight then
+  // exits non-zero → restart-loop → the widget-stream relay dies with
+  // "fetch failed" / "(no response)"). These pins keep the env overlay honest.
+
+  it("a non-empty process-env value wins over the file for a wayflow key", () => {
+    const merged = overlayProcessEnv(
+      { CINATRA_BRIDGE_TOKEN: "file-tok" },
+      { CINATRA_BRIDGE_TOKEN: "env-tok" },
+    );
+    expect(merged.CINATRA_BRIDGE_TOKEN).toBe("env-tok");
+  });
+
+  it("fills a wayflow key that the file lacks entirely (the CI no-.env.local path)", () => {
+    const merged = overlayProcessEnv({}, { CINATRA_BRIDGE_TOKEN: "ci-tok" });
+    expect(merged.CINATRA_BRIDGE_TOKEN).toBe("ci-tok");
+  });
+
+  it("an empty/whitespace process value never clobbers a file value", () => {
+    const merged = overlayProcessEnv(
+      { CINATRA_BRIDGE_TOKEN: "file-tok" },
+      { CINATRA_BRIDGE_TOKEN: "   " },
+    );
+    expect(merged.CINATRA_BRIDGE_TOKEN).toBe("file-tok");
+  });
+
+  it("never reads keys outside WAYFLOW_KEYS from the process env", () => {
+    const merged = overlayProcessEnv(
+      {},
+      { BETTER_AUTH_SECRET: "leak-me-not", PORT: "3000", CINATRA_BRIDGE_TOKEN: "t" },
+    );
+    expect(merged).not.toHaveProperty("BETTER_AUTH_SECRET");
+    expect(merged).not.toHaveProperty("PORT");
+  });
+});
+
+describe("wp-drupal UAT bridge-token provisioning wiring", () => {
+  // Regression pins for the CI chain that keeps the wayflow container
+  // bootable in the uat-gate: the workflow derives a per-run
+  // CINATRA_BRIDGE_TOKEN into the job env, and `pnpm setup:dev` (run by the
+  // shared composite BEFORE `docker compose up`) writes it into
+  // docker/wayflow/.wayflow.env via this generator. Break either edge and the
+  // relay scenarios (SSE sentinel + edit diff) regress to "(no response)".
+
+  it("the wp-drupal-uat workflow derives CINATRA_BRIDGE_TOKEN in BOTH jobs and asserts it", () => {
+    const wf = fs.readFileSync(
+      path.join(REPO_ROOT, ".github/workflows/wp-drupal-uat.yml"),
+      "utf8",
+    );
+    const deriveCount = (
+      wf.match(/CINATRA_BRIDGE_TOKEN=\$\(openssl rand -hex 32\)/g) ?? []
+    ).length;
+    expect(deriveCount).toBe(2); // uat-gate + nightly
+    expect(wf).toMatch(/\$\{CINATRA_BRIDGE_TOKEN:\?/); // presence assert
+    // The app-side reload target: without WAYFLOW_BASE_URL in the job env the
+    // agent-marker-backfill phase's wayflow reload is a silent no-op
+    // (reason=no_base_url) and the container keeps serving its markerless
+    // startup scan (zero agents → agent-card 404 in the relay scenarios).
+    const wayflowUrlCount = (
+      wf.match(/WAYFLOW_BASE_URL: http:\/\/localhost:3010/g) ?? []
+    ).length;
+    expect(wayflowUrlCount).toBe(2); // uat-gate + nightly job env blocks
+  });
+
+  it("package.json setup:dev runs gen-wayflow-env BEFORE the CLI setup", () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+    );
+    expect(pkg.scripts["setup:dev"]).toMatch(
+      /^node scripts\/gen-wayflow-env\.mjs && /,
+    );
   });
 });
 
