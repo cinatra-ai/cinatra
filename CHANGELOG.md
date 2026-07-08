@@ -28,7 +28,11 @@ This release scopes connector connections to their owners with server-enforced s
 ### Fixed
 
 - Connector setup pages publish real server-action references, so setup forms submit correctly.
+- The connector setup-action bridge re-copies its actions idempotently after React locks the reference props, so setup forms keep working across re-renders.
 - Marketplace install failures fail closed with a graceful, actionable message.
+- Gatekept marketplace installs send the consumer app-password credential as HTTP Basic, so authenticated installs succeed against a gatekept registry.
+- The development auto-setup fixture no longer consumes the one-shot initial-admin bootstrap, so the first real registrant receives the admin slot.
+- Pinned extension sync tolerates and cleans stray published-marker debris, and companion checkouts left detached re-pin to the committed lock, so `make refresh` completes on upgraded installs.
 - The sign-in page shows the forgot-password link below the field in the server-rendered state.
 - The agent-idea selection chooser surfaces its gate inputs to the renderer.
 
@@ -36,6 +40,10 @@ This release scopes connector connections to their owners with server-enforced s
 
 - **Authenticated agent context resolution.** Per-child context resolve and finalize calls are authenticated via per-node HMAC attestation.
 - **Server-enforced connection authorization.** Connection use is authorized through the owner-aware grant-following resolver with audited allow/deny decisions; legacy scope sources were deleted and the gates flipped hard.
+
+### Thanks
+
+- Thanks to @marcushorndt for the field reports behind many of this release's fixes: the agent-run stepper input reset (#810) and stale-gate notice (#811), the UAT findings batch resolved in this cycle (#808, #809, #813, #814, #815, #817, #819, #822, #824, #831, #833, #847, #888), and the report that led to the wired Twenty CRM connect flow.
 
 ## [0.1.6] - 2026-07-02
 
