@@ -30,7 +30,9 @@ import "server-only";
 export type InstallTargetLevel = "organization" | "team" | "project";
 
 export type InstallTarget = {
-  /** Picker value: "org" | "team:<id>" | "project:<id>" */
+  /** Picker value: "org:<id>" | "team:<id>" | "project:<id>" (multi-scope W1
+   * retired the bare "org" token; the org row now carries "org:<activeOrgId>"
+   * so labels / adapters / ownerEntityNames unify on the id-carrying form). */
   value: string;
   label: string;
   level: InstallTargetLevel;
@@ -91,7 +93,8 @@ export function buildInstallTargets(
   {
     const enabled = isPlatformAdmin || isOrgAdminOrOwner;
     rows.push({
-      value: "org",
+      // Multi-scope W1: id-carrying org token (retired the bare "org").
+      value: `org:${activeOrgId}`,
       label: `Anyone in ${orgName || "this organization"}`,
       level: "organization",
       id: activeOrgId,

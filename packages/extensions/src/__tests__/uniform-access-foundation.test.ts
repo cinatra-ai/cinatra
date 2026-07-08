@@ -39,9 +39,10 @@ describe("install-time defaults", () => {
   it("artifact / workflow default to workspace visibility", () => {
     for (const k of ["artifact", "workflow"] as ExtensionKind[]) {
       const p = defaultAccessPolicyForKind(k);
-      expect(p.runListVisibility).toBe("workspace");
-      expect(p.runDataVisibility).toBe("workspace");
-      expect(p.runExecuteVisibility).toBe("workspace");
+      // Multi-scope W1: visibility fields are non-empty token arrays.
+      expect(p.runListVisibility).toEqual(["workspace"]);
+      expect(p.runDataVisibility).toEqual(["workspace"]);
+      expect(p.runExecuteVisibility).toEqual(["workspace"]);
       expect(p.allowRunSharing).toBe(false);
     }
   });
@@ -57,7 +58,7 @@ describe("install-time defaults", () => {
 
   it("agent / skill kinds default to owner visibility (fail-safe)", () => {
     for (const k of ["agent_run", "agent_template", "skill_package", "skill"] as ExtensionKind[]) {
-      expect(defaultAccessPolicyForKind(k).runDataVisibility).toBe("owner");
+      expect(defaultAccessPolicyForKind(k).runDataVisibility).toEqual(["owner"]);
     }
   });
 });

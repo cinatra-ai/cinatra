@@ -29,9 +29,9 @@ describe("accessTargetToInstallPolicy", () => {
 
   it("team target → all three visibility tiers scoped to team:<id>, sharing off", () => {
     expect(accessTargetToInstallPolicy({ level: "team", id: TEAM_ID })).toEqual({
-      runListVisibility: `team:${TEAM_ID}`,
-      runDataVisibility: `team:${TEAM_ID}`,
-      runExecuteVisibility: `team:${TEAM_ID}`,
+      runListVisibility: [`team:${TEAM_ID}`],
+      runDataVisibility: [`team:${TEAM_ID}`],
+      runExecuteVisibility: [`team:${TEAM_ID}`],
       allowRunSharing: false,
     });
   });
@@ -40,9 +40,9 @@ describe("accessTargetToInstallPolicy", () => {
     expect(
       accessTargetToInstallPolicy({ level: "project", id: PROJECT_ID }),
     ).toEqual({
-      runListVisibility: `project:${PROJECT_ID}`,
-      runDataVisibility: `project:${PROJECT_ID}`,
-      runExecuteVisibility: `project:${PROJECT_ID}`,
+      runListVisibility: [`project:${PROJECT_ID}`],
+      runDataVisibility: [`project:${PROJECT_ID}`],
+      runExecuteVisibility: [`project:${PROJECT_ID}`],
       allowRunSharing: false,
     });
   });

@@ -20,7 +20,10 @@ import "server-only";
 // kind-aware branching outside this file).
 // ---------------------------------------------------------------------------
 
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+} from "@cinatra-ai/agents/auth-policy";
 
 export type ExtensionKind =
   | "agent_run"
@@ -405,10 +408,15 @@ async function connectionHooks(): Promise<ExtensionKindHooks> {
       const identity = await readNangoConnectionById(id);
       if (!identity) return "not_found";
 
-      const visibilities = [
-        policy.runListVisibility,
-        policy.runDataVisibility,
-        policy.runExecuteVisibility,
+      // Multi-scope W1: each field is a token ARRAY. This write-validator
+      // checks every token across all three fields is a real, actor-held locus
+      // within the connector ceiling — so flatten the selections into the full
+      // token set (fail-closed: EVERY token must pass). Identical to the
+      // pre-array behavior when each field holds a single token.
+      const visibilities: AgentAuthPolicyVisibility[] = [
+        ...policy.runListVisibility,
+        ...policy.runDataVisibility,
+        ...policy.runExecuteVisibility,
       ];
       const ownerOnly = visibilities.every((v) => v === "owner");
 

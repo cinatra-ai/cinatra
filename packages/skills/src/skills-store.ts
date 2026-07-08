@@ -2742,7 +2742,9 @@ export async function writeSkillAccessPolicy(
     // still consume those fields stay correct until they migrate to
     // accessPolicy. Locksteps with the access-form save path.
     const { level, scope } = visibilityToLevelScope(
-      policy.runListVisibility,
+      // Multi-scope W1: read the first token for the legacy (level, scope)
+      // projection (locksteps single-token until the multi-select picker, W3).
+      policy.runListVisibility[0],
       existing.ownerUserId,
     );
     updated.level = level;

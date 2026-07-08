@@ -61,7 +61,11 @@ export function buildConnectionScopeEntries(
     // shared it as.
     if (isOwn) push(row.connectorPackageId, { locus: "personal" });
 
-    const visibility = policies.get(row.id)?.runDataVisibility ?? "owner";
+    // Multi-scope W1: runDataVisibility is a token array. This share-locus
+    // projection reads the FIRST token to preserve single-token behavior; the
+    // per-token fan-out (one locus entry per token) is the enforcement-lift
+    // issue (W2). Single-token writes until the multi-select picker (W3).
+    const visibility = policies.get(row.id)?.runDataVisibility?.[0] ?? "owner";
     if (visibility === "owner") continue; // owner-only: nothing beyond personal
     if (visibility === "workspace") continue; // broad grant — default view only
     if (visibility === "admin") {

@@ -45,6 +45,7 @@ import type {
   ExtensionDevSetupHelpers,
   ExtensionDevSetupStatus,
 } from "@cinatra-ai/sdk-extensions";
+import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
@@ -445,11 +446,12 @@ async function runDevSetupHooks(): Promise<DevSetupHookResult[]> {
 // generically — it names no vendor — so it stays core.
 // ---------------------------------------------------------------------------
 
-function policyForVisibility(visibility: "admin" | "workspace") {
+function policyForVisibility(visibility: "admin" | "workspace"): AgentAuthPolicy {
+  // Multi-scope W1: visibility fields are non-empty token arrays.
   return {
-    runListVisibility: visibility,
-    runDataVisibility: visibility,
-    runExecuteVisibility: visibility,
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
     allowRunSharing: false,
   };
 }

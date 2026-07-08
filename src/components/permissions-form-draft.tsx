@@ -49,7 +49,11 @@ import {
   AccessComboboxHierarchical,
   type AvailableScopes,
 } from "@/components/access-combobox-hierarchical";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+} from "@cinatra-ai/agents/auth-policy";
+import { normalizeVisibilitySelection } from "@cinatra-ai/agents/auth-policy";
 import type {
   OwnerView,
   SharingCandidate,
@@ -103,13 +107,15 @@ export function PermissionsFormDraft({
   // PermissionsForm's onSubmit projection so the draft + bound paths agree on
   // shape; downstream compatibility projection depends on this.
   const setAccess = (next: string) => {
-    const access = next as AgentAuthPolicy["runListVisibility"];
+    // Multi-scope W1: normalize the (currently single-token) selection to its
+    // canonical array form. Mirrors the bound PermissionsForm's projection.
+    const selection = normalizeVisibilitySelection([next as AgentAuthPolicyVisibility]);
     onChange({
       ...value,
       policy: {
-        runListVisibility: access,
-        runDataVisibility: access,
-        runExecuteVisibility: access,
+        runListVisibility: selection,
+        runDataVisibility: selection,
+        runExecuteVisibility: selection,
         allowRunSharing: policy.allowRunSharing,
       },
     });
@@ -213,7 +219,7 @@ export function PermissionsFormDraft({
         <h2 className="text-base font-semibold text-foreground">Access</h2>
         <div className="flex flex-col gap-1.5">
           <AccessComboboxHierarchical
-            value={policy.runListVisibility}
+            value={policy.runListVisibility[0]}
             onChange={setAccess}
             scopes={availableScopes}
             disabled={disabled}

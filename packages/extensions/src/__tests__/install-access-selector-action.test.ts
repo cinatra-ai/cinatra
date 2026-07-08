@@ -188,9 +188,9 @@ describe("installExtensionPackageFormAction — access selector", () => {
       resourceId: "iext_abc123",
       installedByUserId: "admin-1",
       policy: {
-        runListVisibility: `team:${TEAM_ID}`,
-        runDataVisibility: `team:${TEAM_ID}`,
-        runExecuteVisibility: `team:${TEAM_ID}`,
+        runListVisibility: [`team:${TEAM_ID}`],
+        runDataVisibility: [`team:${TEAM_ID}`],
+        runExecuteVisibility: [`team:${TEAM_ID}`],
         allowRunSharing: false,
       },
     });
