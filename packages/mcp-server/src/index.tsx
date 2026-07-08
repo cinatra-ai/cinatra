@@ -32,6 +32,7 @@ import {
   type McpRuntimeToolServer,
 } from "./runtime-server";
 import { mcpRequestContextStorage, type DelegatedMcpActor } from "./request-context";
+import type { OboCeilingChain } from "./obo-ceiling";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -1237,6 +1238,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       orgRole?: "org_owner" | "org_admin" | "member";
       delegatedActor?: DelegatedMcpActor | null;
       delegatedRestricted?: boolean;
+      oboCeiling?: OboCeilingChain;
     } = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
@@ -1261,6 +1263,13 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // `enforceMcpBoundary` still gate the rest.
       delegatedActor,
       delegatedRestricted: delegatedActor?.delegation === "chat",
+      // Forward the agent-run OBO scope-ceiling chain onto the request frame so
+      // the boundary can read it. Only agent-run delegations carry a ceiling;
+      // chat / session / machine callers leave it undefined.
+      oboCeiling:
+        delegatedActor?.delegation === "agent_run"
+          ? delegatedActor.oboCeiling
+          : undefined,
     };
     const response = await mcpRequestContextStorage.run(
       requestStore,

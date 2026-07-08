@@ -17,6 +17,11 @@ import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import {
+  deriveOboCeilingChain,
+  parseOboCeilingChain,
+  type OboCeilingChain,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
+import {
   agentTemplates,
   agentVersions,
   agentRuns,
@@ -121,6 +126,12 @@ export type ApprovalPolicy = {
 export type AgentTemplateRecord = {
   id: string;
   orgId: string | null;
+  // install-target owner anchor (the scope picker's choice), locked after first
+  // run. Nullable for pre-backfill rows. Read by the OBO ceiling derivation at
+  // run creation + mint. `owner_level` may be 'project' for a locked project
+  // install (a project-axis anchor), distinct from the 4 ownership tiers.
+  ownerLevel: string | null;
+  ownerId: string | null;
   creatorId: string | null;
   name: string;
   description: string | null;
@@ -230,6 +241,11 @@ export type AgentRunRecord = {
   idempotencyKey: string | null;
   workflowId: string | null;
   workflowTaskId: string | null;
+  // Persisted agent-run OBO scope-ceiling chain, derived at run creation from the
+  // locked template anchor + org + project launch. NULL for a corrupt anchor
+  // (fails closed at mint) or a pre-backfill row. Parsed from the JSON-as-text
+  // column; re-derived + containment-checked at mint.
+  oboCeiling: OboCeilingChain | null;
 };
 
 export type CreateAgentTemplateInput = {
@@ -428,6 +444,8 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
   return {
     id: row.id,
     orgId: row.orgId,
+    ownerLevel: row.ownerLevel ?? null,
+    ownerId: row.ownerId ?? null,
     creatorId: row.creatorId,
     name: row.name,
     description: row.description,
@@ -1323,9 +1341,48 @@ export async function createAgentVersion(
 // CRUD — agent_runs
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Persist-at-dispatch: derive the agent-run OBO scope-ceiling chain from the
+// run's LOCKED template owner anchor + org + (optional) project launch, and
+// return it JSON-serialized for the agent_runs.obo_ceiling column. Called by
+// EVERY run-creation path (createAgentRun / createAgentRunPendingInput) so all
+// origins — interactive, A2A, widget, workflow-child, recurring-trigger clone —
+// record the exact chain the mint path re-derives and compares against.
+//
+// Returns null ONLY for a corrupt partial anchor (a known non-org owner tier
+// with a missing id); the run then fails closed at mint. A null / null (pre-
+// backfill) anchor derives the organization floor — NOT the fail-closed case.
+// ---------------------------------------------------------------------------
+async function deriveRunOboCeilingJson(input: {
+  templateId: string;
+  orgId: string;
+  projectId: string | null | undefined;
+}): Promise<string | null> {
+  const [tmpl] = await db
+    .select({
+      ownerLevel: agentTemplates.ownerLevel,
+      ownerId: agentTemplates.ownerId,
+    })
+    .from(agentTemplates)
+    .where(eq(agentTemplates.id, input.templateId))
+    .limit(1);
+  const chain = deriveOboCeilingChain({
+    ownerLevel: tmpl?.ownerLevel ?? null,
+    ownerId: tmpl?.ownerId ?? null,
+    orgId: input.orgId,
+    projectId: input.projectId ?? null,
+  });
+  return chain ? JSON.stringify(chain) : null;
+}
+
 export async function createAgentRun(
   input: CreateAgentRunInput,
 ): Promise<AgentRunRecord> {
+  const oboCeilingJson = await deriveRunOboCeilingJson({
+    templateId: input.templateId,
+    orgId: input.orgId,
+    projectId: input.projectId,
+  });
   const values = {
     id: input.id,
     templateId: input.templateId,
@@ -1359,6 +1416,9 @@ export async function createAgentRun(
     // Persist whatever the caller supplied; the run-worker reads this at
     // re-authz time to reconstruct the originating user's authority.
     delegatedActorSnapshot: input.delegatedActorSnapshot ?? null,
+    // persist-at-dispatch OBO scope-ceiling chain (JSON-as-text; null = corrupt
+    // anchor → fails closed at mint).
+    oboCeiling: oboCeilingJson,
   } as const;
 
   // Fast path: no idempotency key → plain insert, legacy behavior unchanged.
@@ -2048,6 +2108,9 @@ function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunRecord {
     idempotencyKey: row.idempotencyKey ?? null,
     workflowId: row.workflowId ?? null,
     workflowTaskId: row.workflowTaskId ?? null,
+    // persisted OBO scope-ceiling chain (JSON-as-text). Defensive parse — a
+    // malformed / empty stored value becomes null (fails closed at mint).
+    oboCeiling: parseOboCeilingChain(row.oboCeiling ?? null),
   };
 }
 
@@ -3247,6 +3310,14 @@ export async function createAgentRunPendingInput(input: {
 }): Promise<AgentRunRecord> {
   const id = randomUUID();
   const versionIdToPin = await readLatestAgentVersionIdForTemplate(input.templateId);
+  // persist-at-dispatch OBO ceiling — same derivation as createAgentRun, so a
+  // pending-input run (incl. the recurring-trigger clone) carries the chain the
+  // mint path re-derives. A copied projectId (recurring clone) flows in here.
+  const oboCeilingJson = await deriveRunOboCeilingJson({
+    templateId: input.templateId,
+    orgId: input.orgId,
+    projectId: input.projectId,
+  });
   await db.insert(agentRuns).values({
     id,
     templateId: input.templateId,
@@ -3264,6 +3335,7 @@ export async function createAgentRunPendingInput(input: {
     // create time so the eventual queued→running transition's worker sees
     // the same project frame.
     projectId: input.projectId ?? null,
+    oboCeiling: oboCeilingJson,
   });
   const created = await readAgentRunById(id);
   if (!created) throw new Error(`Failed to create pending_input agent run: ${id}`);
