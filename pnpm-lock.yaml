@@ -272,8 +272,8 @@ importers:
         specifier: ^4.11.3
         version: 4.11.3(playwright-core@1.61.0)
       '@cinatra-ai/cinatra':
-        specifier: 0.1.7
-        version: 0.1.7(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+        specifier: 0.1.8
+        version: 0.1.8(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@playwright/test':
         specifier: ^1.61.0
         version: 1.61.0
@@ -2410,8 +2410,8 @@ packages:
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
 
-  '@cinatra-ai/cinatra@0.1.7':
-    resolution: {integrity: sha512-A7RPFqGIkL8MhR4r9Z+H/eLZPXcfTatPVsrCH2vd2DeWMMRuz56IyZwe+F3voirwd7+EZ0ztbV+VjE03e34jKQ==}
+  '@cinatra-ai/cinatra@0.1.8':
+    resolution: {integrity: sha512-E01yXLLR13Du0fe+N94VBEqMuYz54mS3kMdOe8cUtAEG1ui4gu4EdbMjsA6DXAzGBfiAEYImpAel4LBj19YTbQ==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -10537,7 +10537,7 @@ snapshots:
 
   '@chevrotain/types@11.1.2': {}
 
-  '@cinatra-ai/cinatra@0.1.7(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+  '@cinatra-ai/cinatra@0.1.8(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       pacote: 21.5.1
