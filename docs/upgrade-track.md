@@ -31,7 +31,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | Service / artifact | File | Current pin | Upstream major target | Notes |
 |---|---|---|---|---|
 | postgres (platform) | docker-compose.yml | `postgres:17-alpine` | postgres 18-alpine | platform DB; consolidation + defer per §3 |
-| nango-db | docker-compose.yml | `postgres:15-alpine` | postgres 18-alpine | Nango's own DB; the 17/15 spread to reconcile (§3) |
+| nango-db | docker-compose.yml | `postgres:17-alpine` | postgres 18-alpine | Nango's own DB; 17/15 spread reconciled — live hub data migrated via the ops pg-major-cutover playbook (hub-nango) |
 | twenty-db | docker-compose.yml | `postgres:16` | follows Twenty upstream | profile `twenty`; upstream-dictated major, not ours |
 | plane-db | docker-compose.yml | `postgres:15.7-alpine` | follows Plane upstream | profile `plane`; upstream-dictated, track don't lead |
 | redis (platform) | docker-compose.yml | `redis:7-alpine` | redis 8-alpine | major deferred to its own lane |
