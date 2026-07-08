@@ -1119,6 +1119,15 @@ export const CRM_PROVIDER_CAPABILITY = "crm-provider";
  *  external resolver from this capability — same shape as crm-provider. */
 export const PM_PROVIDER_CAPABILITY = "pm-provider";
 
+/** The pm-work-store capability id concrete PM work-item STORE providers register
+ *  under (the "PmConnector v2" typed CRUD surface; plane-connector today). A
+ *  SEPARATE id from `pm-provider` so the trigger-mirror seam (`PmConnector`) and
+ *  the work-item CRUD seam (`PmWorkStore`) evolve independently and a CRUD-only
+ *  provider need not implement the mirror. The host store bridge
+ *  (src/lib/register-pm-work-store-providers.ts) feeds the SDK PM work-store
+ *  registry's external resolver from this capability. */
+export const PM_WORK_STORE_CAPABILITY = "pm-work-store";
+
 /** The email-send capability id concrete email providers register under. */
 export const EMAIL_SEND_CAPABILITY = "email-send";
 
