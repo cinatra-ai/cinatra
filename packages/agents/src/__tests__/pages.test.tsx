@@ -160,7 +160,7 @@ describe("NewAgentPage merged discovery table", () => {
   // Page-shell contract (CLAUDE.md — non-negotiable)
   it("wraps NewAgentPage in the required Main/PageHeader/PageContent shell", () => {
     const source = readSource();
-    expect(source.match(/<Main\s/g)?.length ?? 0).toBeGreaterThanOrEqual(2); // AgentsPage + NewAgentPage
+    expect(source.match(/<Main\s/g)?.length ?? 0).toBeGreaterThanOrEqual(1); // NewAgentPage (cinatra#1095 removed the unrouted AgentsPage)
     expect(source).toMatch(/<PageHeader\s/);
     expect(source).toMatch(/<PageContent\s/);
   });

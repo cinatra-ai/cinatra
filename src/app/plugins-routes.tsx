@@ -5,7 +5,6 @@ import {
   AgentDataPage,
   AgentExecutionPage,
   AgentRunsPage,
-  AgentsPage,
   NewAgentPage,
 } from "@cinatra-ai/agents/pages";
 import { ConnectorsPage } from "@cinatra-ai/connectors/pages";
@@ -98,12 +97,6 @@ export async function SkillsCatchAllRoute({ params, searchParams }: SkillsCatchA
 // CRM data programmatically through the `crm_*` MCP primitives.
 // `/accounts/[path]` is unrelated — that is the user-account
 // administration UI (better-auth), intentionally untouched.
-
-export async function AgentsPageMount(props: {
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  return AgentsPage(props);
-}
 
 export function NewAgentPageMount() {
   return NewAgentPage();
