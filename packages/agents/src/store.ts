@@ -35,7 +35,7 @@ import {
 import type { GatedStep } from "./trigger-infer-side-effects";
 // ExtensionOrigin included in AgentTemplateRecord so callers
 // can read origin.visibility without a separate readAgentTemplateOrigin call.
-import type { ExtensionOrigin } from "./schema";
+import type { ExtensionOrigin, ConnectorDependencyMap } from "./schema";
 // AgentAuthPolicy persisted as JSON-as-text in
 // agent_templates.agent_auth_policy and (per-run override) agent_runs.auth_policy.
 // enforceRunAccess is the policy enforcer; PrimitiveActorContext is the actor
@@ -137,7 +137,7 @@ export type AgentTemplateRecord = {
   currentVersionId: string | null;           // pointer to the active version (null = latest)
   hitlScreens: string[] | null;              // namespaced x-renderer IDs this template produces as HITL states
   agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; optional ({} or absent when none)
-  connectorDependencies?: Record<string, string>; // @cinatra-ai/<x>-connector dep ranges; optional
+  connectorDependencies?: ConnectorDependencyMap; // @cinatra-ai/<x>-connector dep ranges (+requirement); optional
   ioSpec?: AgentIOSpec | null; // declared I/O contract; null when not yet set
   hitlRequired: boolean;
   executionProvider: "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default";
@@ -250,7 +250,7 @@ export type CreateAgentTemplateInput = {
   packageVersion?: string;                     // semantic version string
   hitlScreens?: string[] | null;              // namespaced x-renderer IDs this template produces as HITL states
   agentDependencies?: Record<string, string>;  // @cinatra/* dep ranges; omit or {} to write SQL NULL
-  connectorDependencies?: Record<string, string>; // @cinatra-ai/<x>-connector dep ranges; omit or {} to write SQL NULL
+  connectorDependencies?: ConnectorDependencyMap; // @cinatra-ai/<x>-connector dep ranges (+requirement); omit or {} to write SQL NULL
   ioSpec?: AgentIOSpec | null; // pass null to clear; omit to leave unchanged
   hitlRequired?: boolean;                                               // defaults to false
   executionProvider?: "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default";  // defaults to "wayflow"
@@ -457,7 +457,7 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
       ? (JSON.parse(row.agentDependencies) as Record<string, string>)
       : {},
     connectorDependencies: row.connectorDependencies
-      ? (JSON.parse(row.connectorDependencies) as Record<string, string>)
+      ? (JSON.parse(row.connectorDependencies) as ConnectorDependencyMap)
       : {},
     ioSpec: row.ioSpec ? (JSON.parse(row.ioSpec) as AgentIOSpec) : null,
     hitlRequired: row.hitlRequired ?? false, // null from pre-migration rows → false

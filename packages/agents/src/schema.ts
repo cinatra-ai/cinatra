@@ -27,6 +27,16 @@ export type ExtensionOrigin = {
   };
 };
 
+// Per-connector dependency value carried on the agent_templates.connector_dependencies
+// column (JSON-as-text). Widened from a bare `Record<pkg, rangeString>` so a
+// projected canonical connector edge carries its `requirement` alongside the
+// range. The column stays a UNION for backward compatibility: legacy rows (and
+// the legacy `cinatra.connectorDependencies` publish path, which writes bare
+// strings) remain valid `string` members, read as `requirement: "required"`.
+export type ConnectorDepRequirement = "required" | "optional";
+export type ConnectorDepValue = { range: string; requirement: ConnectorDepRequirement };
+export type ConnectorDependencyMap = Record<string, string | ConnectorDepValue>;
+
 const cinatraSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 
 // ---------------------------------------------------------------------------
