@@ -423,6 +423,50 @@ export async function sourceSwitchExtension(
       { sourceErrors },
     );
   }
+  // Connector org-anchor invariant (cinatra#1125) — enforced on source-switch
+  // too, not just install. A source-switch preserves the row's ANCHOR
+  // (owner_level / owner_id / organization_id) but REPLACES its provenance, so
+  // switching an existing platform/workspace static-bundle connector to a
+  // non-bundle source (verdaccio / local / github) would recreate exactly the
+  // resolver-invisible non-bundled connector the install chokepoint rejects:
+  // the canonical connector resolver (src/lib/connector-access-resolver.ts,
+  // extension-resource-identity.ts) reads a connector ONLY at
+  // owner_level='organization' with owner_id = organization_id. Evaluate the
+  // SAME invariant against {existing anchor + NEW source}: the result must
+  // remain either an organization anchor or a platform/workspace static-bundle
+  // anchor. Legitimate connector switches pass — the boot seeder refreshes a
+  // platform anchor to another bundled source (still a bundle anchor), and
+  // recordProvenance / dev-recompile switch an ORG-anchored connector's
+  // provenance (the org anchor is preserved). A bundled-connector→verdaccio/
+  // local switch is the invariant break and is refused here.
+  if (ext.kind === "connector") {
+    const isBundleAnchor =
+      (ext.ownerLevel === "platform" || ext.ownerLevel === "workspace") &&
+      isStaticBundleAnchorSource(newSource);
+    const isOrgAnchor =
+      ext.ownerLevel === "organization" &&
+      ext.organizationId != null &&
+      ext.ownerId === ext.organizationId;
+    if (!isBundleAnchor && !isOrgAnchor) {
+      throw new LifecycleTransitionError(
+        "INVALID_INPUT",
+        `connector source-switch would break the org-anchor invariant — a connector must remain ` +
+          `organization-anchored (owner_level='organization', owner_id = organization_id) or a ` +
+          `static-bundle platform/workspace anchor; row is owner_level='${ext.ownerLevel}', ` +
+          `owner_id='${ext.ownerId}', organization_id='${ext.organizationId ?? "null"}' and the new ` +
+          `source.type='${
+            (newSource as { type?: string } | null)?.type ?? "null"
+          }' is not a static-bundle anchor`,
+        {
+          kind: ext.kind,
+          ownerLevel: ext.ownerLevel,
+          ownerId: ext.ownerId,
+          organizationId: ext.organizationId,
+          newSourceType: (newSource as { type?: string } | null)?.type ?? null,
+        },
+      );
+    }
+  }
   // status preserved (locked stays locked, archived stays archived).
   const updated = await _internalUpdateInstalledExtensionSource(id, newSource);
   return updated;

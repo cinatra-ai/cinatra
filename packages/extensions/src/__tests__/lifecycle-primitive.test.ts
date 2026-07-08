@@ -451,6 +451,119 @@ describe("sourceSwitchExtension", () => {
       ),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
+
+  // Connector org-anchor invariant on SOURCE-SWITCH (cinatra#1125). A source-
+  // switch preserves the row's anchor but replaces its provenance, so it must
+  // enforce the SAME invariant the install chokepoint does — otherwise a
+  // bundled platform/workspace connector could be rewritten to verdaccio/local,
+  // recreating a resolver-invisible non-bundled connector after install.
+  describe("connector org-anchor invariant guard on source-switch (#1125)", () => {
+    const connSource = {
+      bundled: {
+        type: "bundled" as const,
+        packageName: "@cinatra-ai/some-connector",
+        version: "0.2.0",
+      },
+      verdaccio: {
+        type: "verdaccio" as const,
+        registryUrl: "http://localhost:4873",
+        packageName: "@cinatra-ai/some-connector",
+        version: "1.0.0",
+        integrity: "sha512-x",
+      },
+      local: {
+        type: "local" as const,
+        path: "connector:some",
+        resolvedCommitOrTreeHash: "h",
+      },
+    };
+    const connectorRow = (over: Partial<InstalledExtension>): InstalledExtension => ({
+      id: "ext-conn",
+      packageName: "@cinatra-ai/some-connector",
+      ownerLevel: "organization",
+      ownerId: "org_1",
+      organizationId: "org_1",
+      kind: "connector",
+      status: "active",
+      source: connSource.verdaccio,
+      requiredInProd: false,
+      dependencies: [],
+      manifestHash: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...over,
+    });
+
+    it("REJECTS rewriting a bundled platform connector to verdaccio (the resolver-invisibility break)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({ ownerLevel: "platform", ownerId: null, organizationId: null, source: connSource.bundled }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.verdaccio, OPTS),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(store._internalUpdateInstalledExtensionSource).not.toHaveBeenCalled();
+    });
+
+    it("REJECTS rewriting a bundled platform connector to a local dev source", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({ ownerLevel: "platform", ownerId: null, organizationId: null, source: connSource.bundled }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.local, OPTS),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(store._internalUpdateInstalledExtensionSource).not.toHaveBeenCalled();
+    });
+
+    it("REJECTS rewriting a bundled workspace connector to verdaccio", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({ ownerLevel: "workspace", ownerId: null, organizationId: null, source: connSource.bundled }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.verdaccio, OPTS),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+
+    it("ACCEPTS refreshing a platform bundle-anchor connector to another bundled source (seeder digest/version refresh)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({ ownerLevel: "platform", ownerId: null, organizationId: null, source: connSource.bundled }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", { ...connSource.bundled, version: "0.3.0" }, OPTS),
+      ).resolves.toBeDefined();
+    });
+
+    it("ACCEPTS switching an org-anchored connector's provenance to verdaccio (recordProvenance path)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(connectorRow({}));
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.verdaccio, OPTS),
+      ).resolves.toBeDefined();
+    });
+
+    it("ACCEPTS switching an org-anchored connector's provenance to a local dev source (dev recompile of an org connector)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(connectorRow({}));
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.local, OPTS),
+      ).resolves.toBeDefined();
+    });
+
+    it("REJECTS an organization connector whose owner_id != organization_id switching provenance", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({ ownerLevel: "organization", ownerId: "user_1", organizationId: "org_1" }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.verdaccio, OPTS),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+
+    it("does NOT gate non-connector kinds (a platform agent may switch to a local dev source)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({ kind: "agent", ownerLevel: "platform", ownerId: null, organizationId: null, source: connSource.bundled }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.local, OPTS),
+      ).resolves.toBeDefined();
+    });
+  });
 });
 
 describe("unlock policy gate", () => {
