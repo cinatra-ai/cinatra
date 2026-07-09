@@ -9,6 +9,9 @@ import {
   getInProgressItems,
   getUnreadItems,
   isRunningProgressNotification,
+  isConfigurationNeedsNotification,
+  getConfigurationNeedsMetadata,
+  AGENT_CONFIGURATION_NEEDS_CATEGORY,
 } from "@cinatra-ai/notifications/client";
 
 // ---------------------------------------------------------------------------
@@ -458,5 +461,83 @@ describe("filterAgentCreationProgressByRunId", () => {
   it("returns [] for an empty runId (defensive)", () => {
     const row = progressRow("a", "r-1", "queued", "2026-05-17T00:00:00Z");
     expect(filterAgentCreationProgressByRunId([row], "")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent post-install configuration-needs entry (cinatra #1057 ruling (c)):
+// the metadata predicate + extractor the flyout row renders from.
+// ---------------------------------------------------------------------------
+describe("configuration-needs entry — metadata predicate + extractor", () => {
+  function configNeedsRow(
+    connectors: Array<{ displayName: string; packageName: string; settingsHref: string | null }>,
+  ): AppNotification {
+    return notification("cn-1", {
+      kind: "warning",
+      title: "Set up connections for agent Sales Agent",
+      metadata: {
+        category: AGENT_CONFIGURATION_NEEDS_CATEGORY,
+        configurationNeeds: {
+          agentPackageName: "@cinatra-ai/sales-agent",
+          agentDisplayName: "Sales Agent",
+          connectors,
+        },
+      },
+    });
+  }
+
+  it("isConfigurationNeedsNotification is true only for the config-needs category", () => {
+    expect(
+      isConfigurationNeedsNotification(
+        configNeedsRow([
+          { displayName: "Apollo", packageName: "@cinatra-ai/apollo-connector", settingsHref: "/x/setup" },
+        ]),
+      ),
+    ).toBe(true);
+    expect(isConfigurationNeedsNotification(notification("plain"))).toBe(false);
+    expect(
+      isConfigurationNeedsNotification(
+        notification("bg", { kind: "info", metadata: { category: "background_process" } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("extracts the agent + connector links (displayName -> settingsHref)", () => {
+    const meta = getConfigurationNeedsMetadata(
+      configNeedsRow([
+        { displayName: "Apollo", packageName: "@cinatra-ai/apollo-connector", settingsHref: "/connectors/cinatra-ai/apollo/setup" },
+        { displayName: "LinkedIn", packageName: "@cinatra-ai/linkedin-connector", settingsHref: "/connectors/cinatra-ai/linkedin/setup" },
+      ]),
+    );
+    expect(meta?.agentDisplayName).toBe("Sales Agent");
+    expect(meta?.connectors.map((c) => [c.displayName, c.settingsHref])).toEqual([
+      ["Apollo", "/connectors/cinatra-ai/apollo/setup"],
+      ["LinkedIn", "/connectors/cinatra-ai/linkedin/setup"],
+    ]);
+  });
+
+  it("returns null for a non-config-needs row", () => {
+    expect(getConfigurationNeedsMetadata(notification("plain"))).toBeNull();
+  });
+
+  it("returns null when the connector list is empty or malformed (defensive)", () => {
+    expect(getConfigurationNeedsMetadata(configNeedsRow([]))).toBeNull();
+    const malformed = notification("bad", {
+      kind: "warning",
+      metadata: {
+        category: AGENT_CONFIGURATION_NEEDS_CATEGORY,
+        configurationNeeds: { agentPackageName: "", agentDisplayName: "", connectors: 7 },
+      },
+    });
+    expect(getConfigurationNeedsMetadata(malformed)).toBeNull();
+  });
+
+  it("tolerates a null settingsHref (unresolved setup surface)", () => {
+    const meta = getConfigurationNeedsMetadata(
+      configNeedsRow([
+        { displayName: "Apollo", packageName: "@cinatra-ai/apollo-connector", settingsHref: null },
+      ]),
+    );
+    expect(meta?.connectors[0]?.settingsHref).toBeNull();
   });
 });

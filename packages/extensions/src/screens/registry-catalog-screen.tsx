@@ -47,6 +47,7 @@ import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 // needing setup (cinatra #1057).
 import "@/lib/connector-readiness.server";
 import { resolveConfigurationNeedsForAgents } from "@/lib/configuration-needs.server";
+import { syncAgentConfigurationNeedsNotifications } from "@/lib/agent-configuration-needs-notifications";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -135,6 +136,37 @@ export async function RegistryCatalogScreen({
     );
     return {} as Record<string, never>;
   });
+
+  // Reconcile the bell flyout's "Set up connections for agent <name>" entries
+  // (cinatra #1057 ruling (c)) from the SAME per-connector derivation that
+  // drives the card strip above, so the bell and the card can never disagree:
+  // one entry per gated agent, created on install-completion / when an agent
+  // becomes gated, and DELETED the moment the agent becomes runnable. SKIPPED
+  // when a search filter is active — a filtered active list is a partial view,
+  // and reconciling it would wrongly clear entries for gated agents it hides.
+  // Best-effort (the sync swallows + logs its own failures) so a notification
+  // write never blanks the Extensions list.
+  if (!query) {
+    const gatedAgents = activeRows.flatMap((row) => {
+      const needs = configurationNeedsByPackage[row.packageName]?.needs;
+      if (!needs || needs.length === 0) return [];
+      return [
+        {
+          agentPackageName: row.packageName,
+          agentDisplayName: row.displayName,
+          connectors: needs.map((need) => ({
+            displayName: need.displayName,
+            packageName: need.packageName,
+            settingsHref: need.settingsHref,
+          })),
+        },
+      ];
+    });
+    await syncAgentConfigurationNeedsNotifications({
+      userId: session.user?.id ?? null,
+      gatedAgents,
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Card renderers

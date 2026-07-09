@@ -14,6 +14,13 @@ export {
   getInProgressItems,
   getUnreadItems,
   isRunningProgressNotification,
+  isConfigurationNeedsNotification,
+  getConfigurationNeedsMetadata,
+  AGENT_CONFIGURATION_NEEDS_CATEGORY,
+} from "./flyout-state";
+export type {
+  ConfigurationNeedsConnector,
+  ConfigurationNeedsMetadata,
 } from "./flyout-state";
 
 export {
