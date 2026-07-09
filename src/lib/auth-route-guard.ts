@@ -101,12 +101,18 @@ const PUBLIC_EXACT_PATHS = [
 // non-production/CINATRA_E2E_SETUP_BYPASS contract and only ever writes
 // deterministic fixture rows inside the @cinatra-e2e/<runId>-- namespace
 // through the real extension lifecycle primitive.
+// "/design-fixtures/agents-card" (cinatra#1121): the /agents All-Agents card
+// accent-panel-as-detail-hotspot fixture — same static, dataless, seeded-render
+// contract as its siblings (the real AgentAllCard mounted with an injected
+// detail loader; no DB, no user data). Its Playwright guard runs in the same
+// production-standalone design-visual-verify harness.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
   "/design-fixtures/conformance",
   "/design-fixtures/conformance/seeded",
   "/design-fixtures/conformance/seed",
+  "/design-fixtures/agents-card",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

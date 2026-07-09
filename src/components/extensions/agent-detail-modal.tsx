@@ -29,6 +29,7 @@
 import { MarketplaceDetailModal } from "@cinatra-ai/extensions/screens/marketplace-detail-modal";
 import type { MarketplaceCardData } from "@cinatra-ai/extensions/screens";
 import { getAgentMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
+import type { MarketplaceDetailLoadResult } from "@/lib/marketplace-detail-view";
 
 export type AgentDetailModalProps = {
   /** Human-readable agent name — the modal title (never the package slug). */
@@ -41,6 +42,20 @@ export type AgentDetailModalProps = {
    * fallback href (JS opens the modal in place instead of navigating).
    */
   detailHref: string;
+  /**
+   * Controlled open state (cinatra#1121). The /agents All-Agents card lifts the
+   * modal's open state so the SAME modal is opened by both the "More details"
+   * link AND the card's coloured accent panel (a separate sibling hit-area).
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * Detail loader override — defaults to the MEMBER-gated
+   * getAgentMarketplaceDetailAction (the production loader). Injectable so the
+   * /design-fixtures harness can seed a deterministic detail without a session;
+   * production callers never pass it.
+   */
+  loadDetail?: (packageName: string) => Promise<MarketplaceDetailLoadResult>;
 };
 
 export function AgentDetailModal({
@@ -48,6 +63,9 @@ export function AgentDetailModal({
   description,
   packageName,
   detailHref,
+  open,
+  onOpenChange,
+  loadDetail = getAgentMarketplaceDetailAction,
 }: AgentDetailModalProps) {
   // Reuses the browse-card wire shape; storefront-owned fields (rating, badge,
   // freshness, assets, vendor, ABI) stay null — the modal hydrates them from
@@ -75,8 +93,10 @@ export function AgentDetailModal({
   return (
     <MarketplaceDetailModal
       card={card}
-      loadDetail={getAgentMarketplaceDetailAction}
+      loadDetail={loadDetail}
       linkTrigger={{ variant: "link", href: detailHref }}
+      open={open}
+      onOpenChange={onOpenChange}
     />
   );
 }

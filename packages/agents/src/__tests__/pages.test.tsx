@@ -22,6 +22,20 @@ const pagesPath = path.resolve(__dirname, "..", "pages.tsx");
 // Agent-run client: card grid + search toolbar extracted from NewAgentPage
 // (cinatra#814). Icon and row-type checks read this file instead of pages.tsx.
 const agentRunClientPath = path.resolve(__dirname, "..", "agent-run-client.tsx");
+// Per-row card component (app-src): the InstalledExtensionCard + Run/More-details
+// wiring extracted from agent-run-client so each row can lift the detail-modal
+// open state (cinatra#1121). Card-shape checks read this file.
+const agentAllCardPath = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "..",
+  "src",
+  "components",
+  "extensions",
+  "agent-all-card.tsx",
+);
 
 function readSource() {
   return readFileSync(pagesPath, "utf8");
@@ -29,6 +43,10 @@ function readSource() {
 
 function readClientSource() {
   return readFileSync(agentRunClientPath, "utf8");
+}
+
+function readAgentCardSource() {
+  return readFileSync(agentAllCardPath, "utf8");
 }
 
 describe("NewAgentPage merged discovery table", () => {
@@ -111,34 +129,54 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).not.toMatch(/Open registry/);
   });
 
-  // Icon pinning (cinatra#1007 / design#25 §VII): the Run button uses the
-  // lucide `Play` icon, not the robot icon — the emblem/kind icon (the
-  // §VI-derived card's coloured logo tile + byline glyph) still resolves to
-  // the "agent" kind emblem (Bot) via the shared extensionKindEmblem helper.
-  // Card rendering lives in agent-run-client.tsx (cinatra#814 extraction).
+  // Icon pinning (cinatra#1007): the Run button uses the lucide `Play` icon, not
+  // the robot icon — the emblem/kind icon (the Installed-extensions-derived
+  // card's coloured logo tile + byline glyph) still resolves to the "agent" kind
+  // emblem (Bot) via the shared extensionKindEmblem helper. Card rendering lives
+  // in agent-all-card.tsx (cinatra#1121 extraction from agent-run-client).
   it("uses the Play icon (not the robot icon) on the Run button", () => {
-    const client = readClientSource();
-    expect(existsSync(agentRunClientPath)).toBe(true);
-    expect(client).toMatch(/import\s+\{[^}]*\bPlay\b[^}]*\}\s+from\s+"lucide-react"/);
-    expect(client).toMatch(/<Play\s/);
+    const card = readAgentCardSource();
+    expect(existsSync(agentAllCardPath)).toBe(true);
+    expect(card).toMatch(/import\s+\{[^}]*\bPlay\b[^}]*\}\s+from\s+"lucide-react"/);
+    expect(card).toMatch(/<Play\s/);
   });
 
   it("resolves the card emblem + byline kind-icon via the shared extensionKindEmblem(\"agent\") helper", () => {
-    const client = readClientSource();
-    expect(client).toMatch(/extensionKindEmblem\("agent"\)/);
-    expect(client).toMatch(/extensionKindEmblem\("agent",\s*"size-3\.5"\)/);
+    const card = readAgentCardSource();
+    expect(card).toMatch(/extensionKindEmblem\("agent"\)/);
+    expect(card).toMatch(/extensionKindEmblem\("agent",\s*"size-3\.5"\)/);
   });
 
-  // Design#25 §VII derives the Agent card from §VI minus version +
-  // Active/Archived — reuse <InstalledExtensionCard> without those two props,
-  // and with the description clamped to 2 lines (since cinatra#1005 the §VI
-  // default is also 2, so the explicit prop is belt-and-braces).
+  // The Agent card derives from the Installed-extensions card minus the version
+  // + Active/Archived indicator (cinatra#1007): reuse <InstalledExtensionCard>
+  // without those two props, description clamped to 2 lines (since cinatra#1005
+  // the default is also 2, so the explicit prop is belt-and-braces).
   it("renders cards via InstalledExtensionCard without version/status, 2-line description clamp", () => {
+    const card = readAgentCardSource();
+    expect(card).toMatch(/<InstalledExtensionCard/);
+    expect(card).toMatch(/descriptionLineClamp=\{2\}/);
+    expect(card).not.toMatch(/\bversion=\{/);
+    expect(card).not.toMatch(/\bstatus=\{/);
+  });
+
+  // cinatra#1121 — AgentRunClient delegates each row to AgentAllCard, which lifts
+  // the detail-modal open state so the coloured accent panel AND the "More
+  // details" link open the SAME modal.
+  it("delegates each row to AgentAllCard (cinatra#1121)", () => {
     const client = readClientSource();
-    expect(client).toMatch(/<InstalledExtensionCard/);
-    expect(client).toMatch(/descriptionLineClamp=\{2\}/);
-    expect(client).not.toMatch(/\bversion=\{/);
-    expect(client).not.toMatch(/\bstatus=\{/);
+    expect(client).toMatch(/<AgentAllCard\b/);
+  });
+
+  it("wires the accent panel to the detail modal via lifted open state (cinatra#1121)", () => {
+    const card = readAgentCardSource();
+    // The accent panel becomes a detail affordance (href fallback + JS open)...
+    expect(card).toMatch(/accentDetailHref=/);
+    expect(card).toMatch(/onAccentActivate=/);
+    // ...opening the SAME modal instance via the lifted (controlled) open state.
+    expect(card).toMatch(/open=\{open\}/);
+    expect(card).toMatch(/onOpenChange=\{setOpen\}/);
+    // A2A / unscoped rows (no listing) keep the accent inert.
+    expect(card).toMatch(/accentInert=/);
   });
 
   // Search toolbar (cinatra#814) — AgentRunClient provides client-side filter.
