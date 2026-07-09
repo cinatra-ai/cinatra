@@ -65,6 +65,8 @@ function buildObjectResourceCheck(row: ObjectScopeSnapshot): ResourceForAccessCh
     ownerId: row.ownerId ?? "",
     visibility:
       (row.visibility as ResourceForAccessCheck["visibility"]) ?? "organization",
+    // Project-axis identity for the OBO scope-ceiling gate (W2/#1051).
+    projectId: row.projectId,
   };
 }
 
@@ -127,6 +129,8 @@ async function partitionEventsForReadAccess(
       visibility:
         (event.visibility as ResourceForAccessCheck["visibility"]) ??
         "organization",
+      // Project-axis identity for the OBO scope-ceiling gate (W2/#1051).
+      projectId: event.projectId,
     };
     if (!event.afterSnapshot) {
       const current = readObjectScopeById(event.objectId, { orgId });
@@ -189,6 +193,8 @@ export function createObjectHistoryPrimitiveHandlers() {
           visibility:
             (event.visibility as ResourceForAccessCheck["visibility"]) ??
             "organization",
+          // Project-axis identity for the OBO scope-ceiling gate (W2/#1051).
+          projectId: event.projectId,
         };
         const mode =
           event.operation === "create"
