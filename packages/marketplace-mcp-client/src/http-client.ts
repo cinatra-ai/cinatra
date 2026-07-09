@@ -725,6 +725,30 @@ function notServed(method: string): never {
   );
 }
 
+/**
+ * Refusal-class HTTP statuses PRESERVED on `MarketplaceMcpError.httpStatus` for
+ * the moderation DECISION methods (extension-submission + vendor-application
+ * approve/reject). Without this opt-in every non-404 decision error collapses to
+ * a generic 502, so a DETERMINISTIC refusal — most importantly a 409
+ * `cinatra.approver_separation_violation` separation-of-duties rejection (the
+ * submitter / submission-vendor owner / namespace owner may NOT approve their
+ * own request) — is indistinguishable from a transient transport failure. The
+ * decide abilities return a `WP_Error(code, message, ['status' => N])` whose
+ * shape is identical to the grant-refresh refusal seam and travels the same MCP
+ * envelope path, so the same conservative structured-status preservation applies
+ * verbatim. Preserving the status lets the caller (the non-redirecting decision
+ * helpers, then the unified approvals inbox) render a readable SoD explanation
+ * (409) / not-authorized (403) / gone (404) and retry only the genuinely
+ * transient classes (429 rate-limited, 503 internal). The marketplace's
+ * machine-readable error code + message ride in
+ * `MarketplaceMcpError.responseBody` / `.message` — the same seam the
+ * grant-refresh gatekept path and the vendor-application cm-error classifier
+ * already read. Per-method (NOT a shared widen of `callMarketplaceTool`), so the
+ * conservative 502 default and the `extensionGet` 403→502 regression guard are
+ * untouched.
+ */
+const DECISION_REFUSAL_STATUSES = [403, 404, 409, 429, 503] as const;
+
 export function createHttpMarketplaceMcpClient(
   opts: HttpMarketplaceClientOptions = {},
 ): MarketplaceMcpClient {
@@ -837,12 +861,14 @@ export function createHttpMarketplaceMcpClient(
         "extension_submission_approve",
         input as unknown as Record<string, unknown>,
         opts,
+        DECISION_REFUSAL_STATUSES,
       ),
     extensionSubmissionReject: (input: MarketplaceExtensionSubmissionRejectInput) =>
       callMarketplaceTool<MarketplaceExtensionSubmissionRejectOutput>(
         "extension_submission_reject",
         input as unknown as Record<string, unknown>,
         opts,
+        DECISION_REFUSAL_STATUSES,
       ),
     extensionSubmissionPromotionRetry: (input: MarketplaceExtensionSubmissionPromotionRetryInput) =>
       callMarketplaceTool<MarketplaceExtensionSubmissionPromotionRetryOutput>(
@@ -896,12 +922,14 @@ export function createHttpMarketplaceMcpClient(
         "vendor_application_approve",
         input as unknown as Record<string, unknown>,
         opts,
+        DECISION_REFUSAL_STATUSES,
       ),
     vendorApplicationReject: (input: MarketplaceVendorApplicationRejectInput) =>
       callMarketplaceTool<MarketplaceVendorApplicationRejectOutput>(
         "vendor_application_reject",
         input as unknown as Record<string, unknown>,
         opts,
+        DECISION_REFUSAL_STATUSES,
       ),
     vendorApplicationCompleteRecovery: (input: MarketplaceVendorApplicationCompleteRecoveryInput) =>
       callMarketplaceTool<MarketplaceVendorApplicationCompleteRecoveryOutput>(

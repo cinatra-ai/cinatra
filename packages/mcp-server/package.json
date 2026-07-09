@@ -7,7 +7,10 @@
   "types": "./src/index.tsx",
   "exports": {
     ".": "./src/index.tsx",
-    "./auth-plugins": "./src/auth-plugins.ts"
+    "./auth-plugins": "./src/auth-plugins.ts",
+    "./credentials": "./src/llm-credentials.ts",
+    "./delegated-chat-tool-policy": "./src/delegated-chat-tool-policy.ts",
+    "./dev-admin-bypass": "./src/dev-admin-bypass.ts"
   },
   "scripts": {
     "test": "vitest run"

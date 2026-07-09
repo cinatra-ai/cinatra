@@ -577,9 +577,9 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   const runScopedAvailableScopes = filterAvailableScopesForParentPolicy(
     availableScopes,
     template.agentAuthPolicy ?? {
-      runListVisibility: "owner",
-      runDataVisibility: "owner",
-      runExecuteVisibility: "owner",
+      runListVisibility: ["owner"],
+      runDataVisibility: ["owner"],
+      runExecuteVisibility: ["owner"],
       allowRunSharing: false,
     },
     template.orgId ?? null,
@@ -637,7 +637,9 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   // already-resolved `orgs` (no extra round-trip).
   const activeOrgForReason =
     orgs.find((o) => o.id === (session?.session?.activeOrganizationId ?? null)) ?? orgs[0] ?? null;
-  const visibility = effectivePolicy.runListVisibility;
+  // Multi-scope W1: runListVisibility is a token array; the scope-reason banner
+  // reads the first token (W3 renders the multi-scope summary).
+  const visibility = effectivePolicy.runListVisibility[0];
   const teamIdInVisibility = typeof visibility === "string" && visibility.startsWith("team:")
     ? visibility.slice("team:".length)
     : null;

@@ -252,7 +252,7 @@ import {
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, parseSemanticArtifactManifest } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
-import { enforceRunAccess, actorContextFromMcpRequest } from "../auth-policy";
+import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
 // Removed `getActorContext` / `getActorContextOrThrow` imports.
 // LLM-reachable paths are now fail-closed at the orchestration entry points
@@ -1150,9 +1150,9 @@ async function handleAgentBuilderGet(
   const { templateId } = request.input;
   if (!templateId || typeof templateId !== "string") return { error: "templateId is required." };
   try {
-    const template = await readAgentTemplateById(templateId);
-    if (!template) return { error: `Template not found: ${templateId}` };
-    return template;
+    const organizationId = await resolveOrgIdFromSession(request.actor as { orgId?: string | null } | undefined);
+    const isAdmin = await resolveIsPlatformAdminFromSession(request.actor as { platformRole?: string } | undefined);
+    return await authorizeAgentTemplateRead(request.actor, templateId, organizationId, isAdmin);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { error: `Get failed: ${message}` };

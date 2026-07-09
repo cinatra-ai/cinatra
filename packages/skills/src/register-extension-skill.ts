@@ -169,9 +169,22 @@ export async function registerPackageAgentSkill(input: {
   const name = attrs.name?.trim() || input.skillId;
   const description = attrs.description?.trim() || "";
 
-  const storagePackagePath =
-    deriveStoragePackagePathFromSkillMd(input.skillMdPath) ?? undefined;
-
+  // Do NOT derive a storagePackagePath from the SKILL.md path here. For an
+  // AGENT-bound skill the on-disk layout is the FIXED, canonical
+  // `workspace/~agents/<vendor>/<package>/<skill>` — the shape the binding
+  // resolver (`resolveSkillDir`), the disk scanner (`walkAgentsBucket`), and the
+  // SQL relocation trigger all read back. `deriveStoragePackagePathFromSkillMd`
+  // mirrors the FULL source tree (e.g. `<vendor>/<agent>/skills` for a
+  // co-located `extensions/<vendor>/<agent>/skills/<slug>/SKILL.md` bundle) — a
+  // 3-segment slug that is correct for the WORKSPACE mirror
+  // (`registerExtensionSkill`) but wrong for the `~agents` layout: its
+  // intermediate `skills/` segment makes `getSkillDiskDir`'s agent case split
+  // into a multi-segment `pkg` (`<agent>/skills`) that `assertSafePathSegment`
+  // rejects, so every co-located agent bundle failed to register (cinatra#1088).
+  // Instead, omit storagePackagePath so `upsertSkill` derives the canonical
+  // `<vendor>/<package>` from the scoped `packageName` (via
+  // `deriveAgentStoragePathFromPackageName`) — collapsing the source `skills/`
+  // grouping and matching what the read/scan/relocate side expects.
   const upserted = await upsertSkill({
     // level:"agent" + agentId is picked up by the direct-self-match path,
     // bypassing the LLM matcher and workspace visibility filter while still
@@ -183,7 +196,6 @@ export async function registerPackageAgentSkill(input: {
     description,
     content,
     skillId: input.skillId,
-    storagePackagePath,
     prefillText: "-",
   });
 

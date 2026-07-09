@@ -61,6 +61,9 @@ WORKS_AFTER_ONLY=redis,nango pnpm works-after:proof   # a subset (fast, single-m
 REDIS_TAG=8-alpine pnpm works-after:proof    # exercise a candidate redis major
 PG_TO_TAG=18-alpine pnpm works-after:proof   # exercise a candidate postgres major
 pnpm works-after:test                        # the fast service-free unit tests
+
+# GATE a major (fail-closed): name the arm(s) the major changes; a SKIP is a FAIL.
+PYTHON_TAG=3.15-slim pnpm works-after:gate -- --arms wayflow   # e.g. an agent-runtime major
 ```
 
 The six arms (each a standalone script under `scripts/ci/works-after/`):
@@ -71,7 +74,7 @@ The six arms (each a standalone script under `scripts/ci/works-after/`):
 | `postgres` | data survives a documented `pg_dump`/`pg_restore` into a NEW PGDATA volume; the bare same-mount tag bump REFUSES to start (negative). Also runs `upgrade-proof.sh` when `PREV_IMAGE` is set | `PG_FROM_TAG`, `PG_TO_TAG` |
 | `nango` | a synthetic connection round-trips byte-equal through the records-DB store + the `@nangohq/node` API contract (create integration → import connection → `setMetadata` → `getConnection`). Hermetic, no egress; the AES-GCM credential envelope is out of scope for the secret-free arm | `NANGO_SERVER_IMAGE` |
 | `graphiti` | object projection → store → search round-trip through `graphiti-client.ts`. **Needs a real `OPENAI_API_KEY`** (graphiti does LLM extraction before the Neo4j write, and the image doesn't honor a custom LLM base-URL) — so it is NOT secret-free: it runs in the major lane / `workflow_dispatch` with a key, and SKIPs otherwise | `NEO4J_TAG`, `GRAPHITI_IMAGE`, `OPENAI_API_KEY` |
-| `wayflow` | agent execution over A2A (`message/send` → `completed` task, nonce surfaced) using a committed no-LLM echo-flow fixture, building `docker/wayflow` at candidate pins | `PYTHON_TAG`, `WAYFLOWCORE_VERSION`, `PYAGENTSPEC_VERSION` |
+| `wayflow` | agent execution over A2A (`message/send` → `completed` task, nonce surfaced) using a committed no-LLM echo-flow fixture, building `docker/wayflow` at candidate pins. (The candidate wayflow runtime is blocking-only — its A2A server does not implement `message/stream`; the SSE streaming surface is a node/stack-layer concern proven by full CI, not this docker arm) | `PYTHON_TAG`, `WAYFLOWCORE_VERSION`, `PYAGENTSPEC_VERSION` |
 | `verdaccio` | publish → install round-trip (mint a throwaway user via the repo's `createNpmUser`, publish `@works-after/proof`, install it back, assert the sentinel), with the real immutability `config.yaml` mounted | `VERDACCIO_TAG` |
 
 Each candidate env defaults to the **current pin**, so a bare run is green on
@@ -86,6 +89,48 @@ only when an upgrade-relevant path changed (an internal `detect` paths-filter)
 and reports a green stub otherwise — so the same required context concludes
 `success` on every PR. It is deliberately NOT a `closeout-suite.mjs` member
 (that battery is service-free + static).
+
+### Gate mode — the per-lane enforcement contract
+
+`works-after:proof` is the harness; **`works-after:gate`
+(`scripts/ci/works-after-gate.sh`) is the enforced gate an upgrade lane runs**.
+It is the single documented entrypoint that turns "the harness is available"
+into "harness-green is a fail-closed prerequisite": it forces
+`WORKS_AFTER_GATE_MODE=1` (a SKIP becomes a FAIL), **requires** the lane to name
+the arm(s) its major changes, fail-fast-checks that arm's required candidate
+input is present, and exposes a stable exit-code contract:
+
+```sh
+pnpm works-after:gate -- --arms wayflow      # exit 0 = gate PASS, non-zero = blocked
+```
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | gate **PASSED** — every selected arm went green in gate mode |
+| `1` | gate **FAILED** — a proof failed (or a required arm SKIPped under gate mode); the major MUST NOT land until green |
+| `2` | gate **MISCONFIGURED** — no/invalid `--arms`, or a selected arm's required candidate input is missing (checked before any container starts) — fix the invocation |
+
+**Every upgrade lane MUST run this gate** with the arm(s) relevant to its major
+un-skipped and the candidate pin(s) set. Bake the exact invocation into the
+lane's acceptance:
+
+| Major lane | Gate invocation |
+| --- | --- |
+| agent-runtime (python / wayflowcore) | `PYTHON_TAG=… WAYFLOWCORE_VERSION=… PYAGENTSPEC_VERSION=… pnpm works-after:gate -- --arms wayflow` |
+| postgres | `PG_TO_TAG=<new> PREV_IMAGE=<last released prod image> pnpm works-after:gate -- --arms postgres` |
+| graphiti / neo4j | `NEO4J_IMAGE=… GRAPHITI_IMAGE=… OPENAI_API_KEY=… pnpm works-after:gate -- --arms graphiti` |
+| redis | `REDIS_TAG=<new> pnpm works-after:gate -- --arms redis` |
+| verdaccio | `VERDACCIO_TAG=<new> pnpm works-after:gate -- --arms verdaccio` |
+| nango | `NANGO_SERVER_IMAGE=<new> pnpm works-after:gate -- --arms nango` |
+| full-stack | `<all pins> PREV_IMAGE=… OPENAI_API_KEY=… pnpm works-after:gate -- --arms all` |
+
+Pure stack-layer groups that touch no datastore client (React / Next / TypeScript
+/ Vitest) are proven by **full CI at the named commit**, not by this gate — keep
+that split explicit in the stack-majors lane.
+
+The `.github/workflows/works-after-proof.yml` `workflow_dispatch` already exposes
+a `gate_mode` input for a maintainer-run CI gate; that dispatch lane runs the
+same harness in gate mode with candidate pins derived from the checked-out ref.
 
 ## Other scripts
 

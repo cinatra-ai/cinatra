@@ -44,6 +44,11 @@ vi.mock("@/lib/boot/phases/agent-marker-backfill", () => ({
     { name: "agent-marker-backfill", policy: "degraded", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/agent-runtime-dep-backfill", () => ({
+  agentRuntimeDepBackfillPhases: () => [
+    { name: "agent-runtime-dep-backfill", policy: "retryable", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/system-services", () => ({
   systemServicesPhases: () => [
     { name: "assistant-bootstrap", policy: "retryable", run: async () => {} },
@@ -118,6 +123,7 @@ describe("runBoot orchestration", () => {
       "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
       "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
+      "agent-runtime-dep-backfill", // cinatra#1056 — always-on, AWAITED, after marker backfill
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
       "assistant-bootstrap",
       "otel-tracing",
@@ -151,6 +157,7 @@ describe("runBoot orchestration", () => {
       "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
       "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
+      "agent-runtime-dep-backfill", // cinatra#1056 — runs in PROD too
       "assistant-bootstrap",
       "otel-tracing",
       // no a2a-dev-auto-connect in prod

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug, X } from "lucide-react";
@@ -201,52 +201,27 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
 // setup-page header — so the card badge and the setup-page badge stay
 // byte-identical.
 
-// localStorage key for the persisted Connected/Available filter selection.
-const FILTER_STORAGE_KEY = "cinatra:connectors:filter";
-
 export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClientProps) {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<FilterType>("connected");
   const [sort, setSort] = useState<SortOrder>("asc");
-  const [hydrated, setHydrated] = useState(false);
-
-  // Persist the Connected/Available filter across visits. Read AFTER mount
-  // (not in the useState initializer) so the server-rendered default and the
-  // first client render match — avoids a hydration mismatch — mirroring the
-  // localStorage-after-mount pattern used elsewhere (orchestrator-stepper-panel,
-  // prompt-field). `hydrated` flips only once the stored value has been read.
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(FILTER_STORAGE_KEY);
-      if (stored === "connected" || stored === "available") {
-        setFilterType(stored);
-      }
-    } catch {
-      // Ignore storage access failures and keep the default selection.
-    }
-    setHydrated(true);
-  }, []);
-
-  // The write effect is gated on `hydrated` (a state flag, not a ref) so the
-  // mount-time commit — where `filterType` still holds the SSR default and
-  // `hydrated` is false — cannot clobber a previously stored selection before
-  // the read effect restores it. The state flag closes over the render value,
-  // so even React Strict Mode's double-invoked mount effects both skip the
-  // write. Persistence begins once hydration has committed.
-  useEffect(() => {
-    if (!hydrated) return;
-    try {
-      window.localStorage.setItem(FILTER_STORAGE_KEY, filterType);
-    } catch {
-      // Ignore storage write failures (e.g. restricted/full storage).
-    }
-  }, [hydrated, filterType]);
+  // cinatra#1092: the connection filter is intentionally NOT persisted. Every
+  // visit starts on the "connected" default above; toggling to Disconnected
+  // works within the visit but is never written to storage, so a returning
+  // user always lands back on Connected.
 
   const filteredConnectors = [...cards]
     .sort((a, b) => sort === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name))
     .filter((c) => filterType === "connected" ? c.connected : !c.connected)
     .filter((c) => c.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  // cinatra#1092 empty-connected edge: with zero connected connectors, stay on
+  // the Connected filter and show an empty state with a "Connect a service"
+  // CTA that switches to the Disconnected/Available list, instead of silently
+  // falling back to Available (which would make the default unpredictable).
+  const hasConnectedConnectors = cards.some((c) => c.connected);
+  const showConnectedEmptyState = filterType === "connected" && !hasConnectedConnectors;
 
   return (
     <>
@@ -277,8 +252,8 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
             {/* Each item leads with the SAME plug glyph the cards use (#605):
                 connected → PlugZap, disconnected → Unplug. The second item's
                 visible label is "Disconnected" (#683), but its `value` stays
-                "available" so the persisted localStorage key and the filter
-                semantics (`connected` vs `!connected`) are unchanged. */}
+                "available" so the filter semantics (`connected` vs
+                `!connected`) are unchanged. */}
             <ToggleGroupItem
               value="connected"
               className="rounded-none bg-success/10 text-success hover:bg-success/15 data-[state=on]:bg-success data-[state=on]:text-success-foreground data-[state=on]:hover:bg-success"
@@ -374,6 +349,19 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
         </ToolbarGroup>
       </Toolbar>
 
+      {showConnectedEmptyState ? (
+        <section className="soft-panel rounded-card mt-4 flex flex-col items-center justify-center gap-4 py-16 text-center">
+          <h2 className="text-lg font-semibold">No connected services yet</h2>
+          <p className="text-muted-foreground text-sm max-w-md">
+            You have not connected any services yet. Connect one to start using
+            it across your agents and skills.
+          </p>
+          <Button type="button" onClick={() => setFilterType("available")}>
+            <Plus data-icon="inline-start" aria-hidden="true" />
+            Connect a service
+          </Button>
+        </section>
+      ) : (
       <ul className="faded-bottom no-scrollbar grid gap-4 overflow-auto pt-4 pb-16 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
         {filteredConnectors.map((connector) => {
           const paired = PAIRED_BRAND_BY_SLUG.get(connector.slug);
@@ -420,6 +408,7 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
           );
         })}
       </ul>
+      )}
     </>
   );
 }

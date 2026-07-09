@@ -90,7 +90,10 @@ export async function triggerAgentRun(
   try {
     await enqueueAgentRun(
       { runId: args.runId },
-      { jobId: args.runId },
+      // cinatra#1056: carry the template's connector dependencies so the
+      // run-start connector preflight fires (the chokepoint derives the run
+      // actor). Populated from the canonical connector edges at install.
+      { jobId: args.runId, connectorDependencies: template.connectorDependencies },
     );
   } catch (err) {
     // Compensation: undo the queued transition. We use the conditional
@@ -192,7 +195,10 @@ async function createAndTriggerRunCore(
   try {
     await enqueueAgentRun(
       { runId: created.id },
-      { jobId: created.id },
+      // cinatra#1056: carry the template's connector dependencies so the
+      // run-start connector preflight fires (the chokepoint derives the run
+      // actor). Populated from the canonical connector edges at install.
+      { jobId: created.id, connectorDependencies: template.connectorDependencies },
     );
   } catch {
     // Revert to pending_input so the user can retry via the Run button.

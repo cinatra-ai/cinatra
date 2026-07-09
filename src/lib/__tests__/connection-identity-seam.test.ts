@@ -15,10 +15,12 @@ vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
   readNangoConnectionByNaturalKey: (...a: unknown[]) => readNangoConnectionByNaturalKey(...a),
 }));
 
+// Multi-scope W1: visibility fields are non-empty token arrays. This mirrors
+// what `defaultAccessPolicyForKind` returns (the seam forwards it unchanged).
 const OWNER_POLICY = {
-  runListVisibility: "owner",
-  runDataVisibility: "owner",
-  runExecuteVisibility: "owner",
+  runListVisibility: ["owner"],
+  runDataVisibility: ["owner"],
+  runExecuteVisibility: ["owner"],
   allowRunSharing: false,
 };
 vi.mock("@cinatra-ai/extensions/install-access-contract", () => ({
@@ -101,7 +103,7 @@ describe("registerSavedConnectionIdentity", () => {
     expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
       "connection",
       "conn-uuid",
-      expect.objectContaining({ runDataVisibility: "workspace", seededDefault: true }),
+      expect.objectContaining({ runDataVisibility: ["workspace"], seededDefault: true }),
       "user-1",
     );
   });

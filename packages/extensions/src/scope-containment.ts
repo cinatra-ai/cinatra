@@ -176,8 +176,13 @@ export async function policyContainedBy(
   | { ok: false; field: "runListVisibility" | "runDataVisibility" | "runExecuteVisibility" | "allowRunSharing"; child: AgentAuthPolicyVisibility | boolean; parent: AgentAuthPolicyVisibility | boolean }
 > {
   for (const field of ["runListVisibility", "runDataVisibility", "runExecuteVisibility"] as const) {
-    const c = child[field];
-    const p = parent[field];
+    // TRANSITIONAL (multi-scope W1): fields are token arrays. Containment is
+    // checked on the FIRST token to preserve today's single-token subset
+    // relation; the pointwise lift (every child token ⊆ SOME parent token) is
+    // the enforcement-lift issue (W2). Writers are single-token until the
+    // multi-select picker (W3), so `[0]` matches the pre-array behavior.
+    const c = child[field][0];
+    const p = parent[field][0];
     if (!(await visibilityContainedBy(c, p, lookups))) {
       return { ok: false, field, child: c, parent: p };
     }

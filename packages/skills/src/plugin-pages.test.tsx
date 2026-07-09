@@ -1,15 +1,27 @@
 /**
- * Regression coverage for plugin page skill level filters.
+ * Regression coverage for the SkillsPage scope filter.
  *
- * Asserts the SkillsScreen level-filter array source contains an "agent" entry.
+ * The page used to filter with a flat `levelFilterOptions` <select> (entries
+ * like value:"agent" / value:"workspace" / value:"personal"). That flat level
+ * filter was replaced by a hierarchical scope picker: SkillsPage now hands a
+ * `scopeValue` + `scopes` vocabulary to <SkillsToolbar> and filters rows via
+ * `scopeSelectionMatches` from `@/lib/scope-filter`. These assertions track the
+ * current contract (and guard against the dropped flat array creeping back).
  *
  * Source-text assertion (rather than RSC render) because:
  *   1. plugin-pages.tsx is a server component with `cookies()` + DB calls in
  *      transitive paths — full render would require ~200 lines of mocks.
- *   2. The contract under test is "the array literal contains 'agent'" —
- *      the array is static at module load time and trivially observable from
- *      the source text. Once the array entry exists, the URL filter already
- *      evaluates `skill.level === levelFilter` automatically.
+ *   2. The contract under test is structural ("wires the scope picker; carries
+ *      the scope-token vocabulary") — statically observable from the source.
+ *
+ * Positive assertions match CODE-SPECIFIC constructs (a JSX prop, a call, the
+ * literal token array, the `isAdmin ? ["admin"]` spread) so a bare token in a
+ * comment can't satisfy them — dropping the real code must fail the check.
+ * (Comment-stripping this .tsx with a regex is unsafe: inline JSX comment
+ * blocks make a naive block-comment strip swallow surrounding code.) The
+ * negative guards below assert tokens that are absent from the file entirely
+ * — code and
+ * comments both — so scanning the raw source cannot false-fail.
  */
 import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -17,47 +29,39 @@ import path from "node:path";
 
 vi.mock("server-only", () => ({}));
 
-describe("plugin-pages levelFilterOptions contains Agent entry", () => {
-  it("source text contains an array entry with value:\"agent\" and label:\"Agents\"", () => {
-    const src = readFileSync(
-      path.join(__dirname, "plugin-pages.tsx"),
-      "utf8",
-    );
-    expect(src).toMatch(/value:\s*"agent"/);
-    expect(src).toMatch(/label:\s*"Agents"/);
+const src = readFileSync(path.join(__dirname, "plugin-pages.tsx"), "utf8");
+
+describe("SkillsPage scope filter", () => {
+  it("filters via the hierarchical scope picker wired through SkillsToolbar", () => {
+    // Rows are filtered by scopeSelectionMatches (from @/lib/scope-filter),
+    // not by a flat `skill.level === levelFilter` comparison.
+    expect(src).toMatch(/from\s+["']@\/lib\/scope-filter["']/);
+    expect(src).toMatch(/scopeSelectionMatches\(/);
+    // The picker itself lives in SkillsToolbar, fed the active scope + vocab,
+    // with the admin-only tier gated behind showAdmin.
+    expect(src).toMatch(/<SkillsToolbar/);
+    expect(src).toMatch(/scopeValue=\{/);
+    expect(src).toMatch(/scopes=\{scopes\}/);
+    expect(src).toMatch(/showAdmin=\{/);
   });
 
-  it("levelFilterOptions array still contains the legacy entries (regression)", () => {
-    const src = readFileSync(
-      path.join(__dirname, "plugin-pages.tsx"),
-      "utf8",
-    );
-    // Sanity — make sure the new entry was added without deleting an old one.
-    expect(src).toMatch(/value:\s*"personal"/);
-    // GitHub-installed extensions surface under their own level + the isCustom
-    // flag, so the remaining canonical entries still need direct coverage.
-    expect(src).toMatch(/value:\s*"organization"/);
-    expect(src).toMatch(/value:\s*"team"/);
-  });
-});
-
-describe("Workspace + Project filter options", () => {
-  const src = readFileSync(
-    path.join(__dirname, "plugin-pages.tsx"),
-    "utf8",
-  );
-
-  it("levelFilterOptions contains workspace entry", () => {
-    expect(src).toMatch(/value:\s*"workspace"/);
-    expect(src).toMatch(/label:\s*"Workspace"/);
+  it("carries the full scope-token vocabulary (personal, workspace, org, team, project, admin)", () => {
+    expect(src).toMatch(/\["personal", "workspace"/);
+    expect(src).toMatch(/org:\$\{/);
+    expect(src).toMatch(/team:\$\{/);
+    expect(src).toMatch(/project:\$\{/);
+    // The admin tier ("Workspace: Admins only") is spread in only for admins;
+    // match the code spread, not a bare "admin" a comment could satisfy.
+    expect(src).toMatch(/isAdmin\s*\?\s*\["admin"\]/);
   });
 
-  it("levelFilterOptions contains project entry", () => {
-    expect(src).toMatch(/value:\s*"project"/);
-    expect(src).toMatch(/label:\s*"Projects"/);
+  it("the legacy flat level-filter array (incl. the dropped Agents entry) is gone — regression", () => {
+    expect(src).not.toMatch(/levelFilterOptions/);
+    expect(src).not.toMatch(/value:\s*"agent"/);
+    expect(src).not.toMatch(/label:\s*"Agents"/);
   });
 
-  it("plugin-pages imports ScopeBadge from @/components/scope-badge", () => {
+  it("imports ScopeBadge from @/components/scope-badge", () => {
     expect(src).toMatch(/from\s+["']@\/components\/scope-badge["']/);
     expect(src).toMatch(/\bScopeBadge\b/);
   });
@@ -65,10 +69,6 @@ describe("Workspace + Project filter options", () => {
   it("inline level-badge span with hardcoded violet palette has been replaced", () => {
     // The inline `border-violet-200 bg-violet-50 text-violet-700` literal must
     // not appear in plugin-pages.tsx anymore; palette ownership lives in ScopeBadge.
-    // Strip JS comments first so a stray comment can't hide a regression.
-    const codeOnly = src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-    expect(codeOnly).not.toMatch(/border-violet-200/);
+    expect(src).not.toMatch(/border-violet-200/);
   });
 });

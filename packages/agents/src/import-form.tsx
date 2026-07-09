@@ -148,9 +148,9 @@ export function ImportAgentForm({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [permissionsDraft, setPermissionsDraft] = useState<PermissionsFormDraftValue>({
     policy: {
-      runListVisibility: "owner",
-      runDataVisibility: "owner",
-      runExecuteVisibility: "owner",
+      runListVisibility: ["owner"],
+      runDataVisibility: ["owner"],
+      runExecuteVisibility: ["owner"],
       allowRunSharing: true,
     },
     coOwners: [],
