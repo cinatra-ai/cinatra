@@ -34,7 +34,21 @@ vi.mock("@cinatra-ai/agents", () => ({
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   readEffectiveStatusByPackageNames: mocks.readEffectiveStatusByPackageNames,
 }));
-vi.mock("@/lib/agent-run-enqueue", () => ({ enqueueAgentRun: mocks.enqueueAgentRun }));
+vi.mock("@/lib/agent-run-enqueue", () => ({
+  enqueueAgentRun: mocks.enqueueAgentRun,
+  // Real projection (mirrors src/lib/agent-run-enqueue.ts) so the executor
+  // threads the #1056 connector edges + #1062 agentPackage into the enqueue opts.
+  enqueueDepsForTemplate: (t: {
+    connectorDependencies?: unknown;
+    packageName?: string | null;
+    packageVersion?: string | null;
+  } | null | undefined) => ({
+    connectorDependencies: t?.connectorDependencies,
+    agentPackage: t?.packageName
+      ? { name: t.packageName, version: t.packageVersion ?? null }
+      : undefined,
+  }),
+}));
 
 import {
   buildWorkflowAgentTaskExecutor,
@@ -82,7 +96,13 @@ describe("buildWorkflowAgentTaskExecutor - tenancy + dispatch", () => {
   });
 
   it("allows an own-org template; stamps provenance + idempotency key; enqueues a fresh run", async () => {
-    mocks.readAgentTemplateById.mockResolvedValue({ id: "tmpl-A", orgId: "org-A", connectorDependencies: { "@c/x": "^1" } });
+    mocks.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-A",
+      orgId: "org-A",
+      packageName: "@x/active",
+      packageVersion: "1.2.3",
+      connectorDependencies: { "@c/x": "^1" },
+    });
     mocks.createAgentRun.mockImplementation(async (i: { id: string }) => ({ id: i.id })); // newly inserted (echoes id)
     const out = await buildWorkflowAgentTaskExecutor()(input({ templateId: "tmpl-A" }));
     expect(out.status).toBe("running");
@@ -94,6 +114,13 @@ describe("buildWorkflowAgentTaskExecutor - tenancy + dispatch", () => {
     expect(arg.workflowTaskId).toBe("t1");
     expect(arg.inputParams).toEqual({ foo: 1 });
     expect(mocks.enqueueAgentRun).toHaveBeenCalledOnce();
+    // cinatra#1062: the delegated dispatch threads BOTH the connector deps
+    // (#1056) and the agent package identity so the LLM-provider preflight
+    // fires here too, under the delegated-reconciler softPreflight.
+    const enqOpts = mocks.enqueueAgentRun.mock.calls[0][1];
+    expect(enqOpts.connectorDependencies).toEqual({ "@c/x": "^1" });
+    expect(enqOpts.agentPackage).toEqual({ name: "@x/active", version: "1.2.3" });
+    expect(enqOpts.softPreflight).toBe(true);
   });
 
   it("skips re-enqueue on an idempotent hit whose run already left the queue", async () => {

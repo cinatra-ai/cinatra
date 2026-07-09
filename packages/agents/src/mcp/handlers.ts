@@ -47,7 +47,7 @@ import {
   readAgentRunsByTemplateRaw,
 } from "../store";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
-import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import {
   setRunTriggerForActor,
   getRunTriggerForActor,
@@ -1040,9 +1040,8 @@ async function handleAgentBuilderRun(
       delegatedActorSnapshot: delegatedActorSnapshotJson,
     });
 
-    await enqueueAgentRun({ runId }, {
-      connectorDependencies: template?.connectorDependencies,
-    });
+    // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
+    await enqueueAgentRun({ runId }, enqueueDepsForTemplate(template));
 
     void logAuditEvent({
       actorPrincipalId: request.actor?.userId,

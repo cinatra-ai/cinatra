@@ -33,7 +33,7 @@ import {
 } from "@cinatra-ai/agents";
 import { isAgentRuntimeRunnable } from "@cinatra-ai/agents/runtime-install-gate";
 import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
-import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type {
   Executor,
   ExecutorInput,
@@ -190,12 +190,16 @@ export function buildWorkflowAgentTaskExecutor(): Executor {
       // re-dispatch must repair that gap or the child run polls as queued
       // forever. The worker's queued→running CAS guards any double-enqueue. We
       // use softPreflight because the delegated reconciler has no live session
-      // actor — a missing/unconfigured connector then surfaces as a run failure
-      // at execution (captured by retry/dead-letter), not a hard enqueue block.
+      // actor — a missing/unconfigured connector (or LLM provider) then surfaces
+      // as a run failure at execution (captured by retry/dead-letter), not a hard
+      // enqueue block.
       if (run.id === runId || run.status === "queued") {
+        // cinatra#1056 connector edges + cinatra#1062 LLM-provider package
+        // identity, under the delegated-reconciler softPreflight so a missing
+        // provider surfaces at execution, not a hard enqueue block.
         await enqueueAgentRun(
           { runId: run.id },
-          { connectorDependencies: template.connectorDependencies, softPreflight: true },
+          { ...enqueueDepsForTemplate(template), softPreflight: true },
         );
       }
 

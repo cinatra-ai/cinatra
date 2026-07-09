@@ -57,7 +57,41 @@ export type AgentRunEnqueueOptions = Pick<
    * operator can preview an agent that isn't yet wired to its connectors.
    */
   softPreflight?: boolean;
+  /**
+   * Agent package identity so the LLM-provider availability preflight
+   * (cinatra#1062) can read the agent's declared OAS `metadata.cinatra.llm`
+   * requirement from the runtime mount and gate the run on provider
+   * availability. Omitted by callers that don't carry it → no LLM preflight
+   * (the provider is still enforced at the `/api/llm-bridge` step).
+   */
+  agentPackage?: { name: string; version?: string | null };
 };
+
+/**
+ * Project a template's run-enqueue dependency inputs into enqueueAgentRun
+ * options — the cinatra#1056 canonical connector edges AND the cinatra#1062
+ * LLM-provider package identity (whose OAS `metadata.cinatra.llm` requirement the
+ * enqueue preflight reads). One shared projection for every run-start call site,
+ * so the connector gate and the LLM-provider gate fire identically wherever a run
+ * is enqueued from an installed template.
+ */
+export function enqueueDepsForTemplate(
+  template:
+    | {
+        connectorDependencies?: ConnectorDependencyMap;
+        packageName?: string | null;
+        packageVersion?: string | null;
+      }
+    | null
+    | undefined,
+): Pick<AgentRunEnqueueOptions, "connectorDependencies" | "agentPackage"> {
+  return {
+    connectorDependencies: template?.connectorDependencies,
+    agentPackage: template?.packageName
+      ? { name: template.packageName, version: template.packageVersion ?? null }
+      : undefined,
+  };
+}
 
 export class ConnectorNotConfiguredError extends Error {
   override readonly name = "ConnectorNotConfiguredError";
@@ -131,6 +165,7 @@ export async function enqueueAgentRun(
     actorContext,
     connectorDependencies,
     softPreflight = false,
+    agentPackage,
     ...jobOptions
   } = options;
 
@@ -182,6 +217,43 @@ export async function enqueueAgentRun(
         );
       } else {
         throw err;
+      }
+    }
+  }
+
+  // LLM-provider availability preflight (cinatra#1062). When the caller supplies
+  // the agent package identity, read the agent's declared OAS
+  // `metadata.cinatra.llm` requirement from the runtime mount and gate the run on
+  // provider availability — mirroring the `/api/llm-bridge` dispatch so a
+  // missing/unconfigured provider surfaces BEFORE the run instead of deep at the
+  // bridge step. Dynamically imported + gated on `agentPackage` so a run with no
+  // llm requirement pays neither the mount I/O nor the LLM package load. Honors
+  // `softPreflight` (dev-preview) exactly like the connector gate above.
+  if (agentPackage?.name) {
+    // Import the narrow module (NOT the `@cinatra-ai/agents` barrel) so this
+    // lazy preflight loads only the lightweight mount reader — the barrel pulls
+    // the whole agents module graph (defeating the lazy-load intent and, via its
+    // side-effectful loads, breaking unrelated handler tests).
+    const { readLlmRequirementFromMount } = await import(
+      "@cinatra-ai/agents/read-llm-requirement-from-mount"
+    );
+    const requirement = await readLlmRequirementFromMount(
+      agentPackage.name,
+      agentPackage.version ?? null,
+    );
+    if (requirement) {
+      const { assertLlmProviderAvailableForRun, LlmProviderNotConfiguredError } =
+        await import("@/lib/agent-llm-preflight");
+      try {
+        await assertLlmProviderAvailableForRun(requirement);
+      } catch (err) {
+        if (softPreflight && err instanceof LlmProviderNotConfiguredError) {
+          console.warn(
+            `[agent-run-enqueue] soft-preflight: ${err.message} (settings: ${err.settingsHref})`,
+          );
+        } else {
+          throw err;
+        }
       }
     }
   }
