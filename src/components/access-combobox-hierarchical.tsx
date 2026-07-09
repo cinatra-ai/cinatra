@@ -10,11 +10,32 @@
 // availableScopes shape. This component uses the nested {orgs: [{teams: []}],
 // projects, canGrantWorkspace} shape that matches AgentAuthPolicy's
 // `team:` / `project:` / `org:` visibility scheme.
+//
+// Two modes, discriminated by `multiple` (cinatra#1072, multi-scope W3):
+//
+//   • multiple={false} (DEFAULT) — single-select. `value: string`,
+//     `onChange(next: string)`. A trailing Check marks the selected row and the
+//     popover closes on select. This is the FILTER-surface shape (scope-filter,
+//     skills toolbar); multi-scope filters are a later wave (#1074), so these
+//     callers are untouched.
+//
+//   • multiple={true} — checkbox multi-select. `value: string[]`,
+//     `onChange(next: string[])`. Each row leads with a Checkbox, the trailing
+//     Check is gone, the popover stays OPEN on toggle (Esc / outside closes),
+//     and the selection canonicalises through `normalizeVisibilitySelection`
+//     live (workspace collapses to just workspace; owner auto-clears when mixed
+//     with a broader grant). Downward implication is DISPLAY-ONLY: a checked
+//     org renders its own team rows checked+disabled ("Included via <org>"), a
+//     checked workspace implies every scope row, and projects are never implied
+//     by org/team. The trigger shows one token as "Type: Name" and N>1 as an
+//     "N scopes" summary with the full list in a tooltip. This is the GRANT
+//     surface shape (permissions form, extension access control).
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Command,
@@ -29,25 +50,33 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { AgentAuthPolicyVisibility } from "@cinatra-ai/agents/auth-policy";
 import {
   type AvailableScopes,
+  type AccessRowState,
   resolveAccessParts,
   resolveAccessLabel,
+  resolveAccessSummary,
+  accessRowState,
+  toggleAccessSelection,
 } from "@/components/access-scope";
 
 // Re-export the pure helpers so existing callers keep importing them from here.
-export { resolveAccessParts, resolveAccessLabel };
+export { resolveAccessParts, resolveAccessLabel, resolveAccessSummary };
 export type { AvailableScopes };
 
 // ---------------------------------------------------------------------------
 // AccessCombobox — searchable dropdown for the access selector
 // ---------------------------------------------------------------------------
 
-export type AccessComboboxHierarchicalProps = {
-  value: string;
-  onChange: (next: string) => void;
+type AccessComboboxHierarchicalBaseProps = {
   scopes: AvailableScopes;
   disabled?: boolean;
   /** Optional HTML id for the underlying trigger button (used by Labels). */
@@ -72,16 +101,39 @@ export type AccessComboboxHierarchicalProps = {
   disabledReasons?: Record<string, string>;
 };
 
-export function AccessComboboxHierarchical({
-  value,
-  onChange,
-  scopes,
-  disabled = false,
-  id,
-  showAdmin = true,
-  disabledScopes,
-  disabledReasons,
-}: AccessComboboxHierarchicalProps) {
+/** Single-select (filter surfaces). Trailing Check, closes on select. */
+export type AccessComboboxHierarchicalSingleProps =
+  AccessComboboxHierarchicalBaseProps & {
+    multiple?: false;
+    value: string;
+    onChange: (next: string) => void;
+  };
+
+/** Checkbox multi-select (grant surfaces). Stays open, implied-display. */
+export type AccessComboboxHierarchicalMultiProps =
+  AccessComboboxHierarchicalBaseProps & {
+    multiple: true;
+    value: string[];
+    onChange: (next: string[]) => void;
+  };
+
+export type AccessComboboxHierarchicalProps =
+  | AccessComboboxHierarchicalSingleProps
+  | AccessComboboxHierarchicalMultiProps;
+
+export function AccessComboboxHierarchical(
+  props: AccessComboboxHierarchicalProps,
+) {
+  const {
+    scopes,
+    disabled = false,
+    id,
+    showAdmin = true,
+    disabledScopes,
+    disabledReasons,
+  } = props;
+  const multiple = props.multiple === true;
+
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const matches = (text: string) => {
@@ -96,12 +148,31 @@ export function AccessComboboxHierarchical({
   const showOnlyMe = matches("only me");
   const showWorkspaceAll = matches("workspace all");
   const showAdminsOnly = showAdmin && matches("workspace admins only");
+
+  // -------------------------------------------------------------------------
+  // Selection as an array for uniform internal logic. Single mode wraps its
+  // one value; multi mode uses the array verbatim. The toggle + implication
+  // logic lives in the pure, unit-tested access-selection module.
+  // -------------------------------------------------------------------------
+  const selection: string[] = multiple ? props.value : [props.value];
+
+  const toggleMulti = (itemValue: string) => {
+    if (!multiple) return;
+    // Owner + workspace are EXCLUSIVE; scoped tokens + admin add/remove and
+    // canonicalise. Implied rows are disabled, so this only fires on a row
+    // whose checked state equals its explicit membership.
+    props.onChange(toggleAccessSelection(itemValue, selection) as string[]);
+  };
+
+  // Single-mode selected-row background (unchanged behaviour).
   const itemClass = (itemValue: string) =>
     cn(
       "rounded-none px-3 py-2 bg-surface-strong hover:bg-surface-muted data-[selected=true]:bg-surface-muted",
-      value === itemValue && "bg-surface-muted",
+      !multiple && props.value === itemValue && "bg-surface-muted",
     );
-  const renderRow = (itemValue: string) => {
+
+  // Row content for SINGLE mode: type/name + trailing Check on the selected.
+  const renderSingleRow = (itemValue: string) => {
     const parts = resolveAccessParts(itemValue as AgentAuthPolicyVisibility, scopes);
     return (
       <div className="flex items-center w-full">
@@ -114,30 +185,77 @@ export function AccessComboboxHierarchical({
         <Check
           className={cn(
             "ml-auto size-4",
-            value === itemValue ? "opacity-100" : "opacity-0",
+            !multiple && props.value === itemValue ? "opacity-100" : "opacity-0",
           )}
         />
       </div>
     );
   };
 
+  // Row content for MULTI mode: leading Checkbox + type/name (+ implied note).
+  const renderMultiRow = (itemValue: string, state: AccessRowState) => {
+    const parts = resolveAccessParts(itemValue as AgentAuthPolicyVisibility, scopes);
+    return (
+      <div className="flex items-center w-full gap-2">
+        <Checkbox
+          checked={state.checked}
+          disabled={state.impliedDisabled}
+          aria-hidden="true"
+          tabIndex={-1}
+          className="pointer-events-none"
+        />
+        <span className="flex items-baseline gap-1 min-w-0">
+          {parts.type && (
+            <span className="text-xs tracking-wide text-muted-foreground shrink-0">
+              {parts.type}:
+            </span>
+          )}
+          <span className="text-foreground whitespace-nowrap">{parts.name}</span>
+        </span>
+        {state.impliedNote && (
+          <span className="ml-auto text-xs italic text-muted-foreground whitespace-nowrap">
+            {state.impliedNote}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   // ONE selectable-row builder for every scope class so the per-scope disable
-  // semantics stay uniform. A disabled row wraps the entire disabled
-  // CommandItem in a <span> (the wrapper span is what receives hover/focus —
-  // a disabled CommandItem suppresses pointer events on its content) carrying
-  // the disabledReasons tooltip, and sets aria-disabled.
+  // semantics stay uniform across both modes. A disabled row (per-scope lock,
+  // or an implied row in multi mode) wraps the entire disabled CommandItem in a
+  // <span> — the wrapper span is what receives hover/focus, since a disabled
+  // CommandItem suppresses pointer events on its content — carrying the
+  // reason tooltip, and sets aria-disabled.
   const renderSelectableItem = (itemValue: string) => {
-    if (disabledScopes?.includes(itemValue)) {
-      const reason = disabledReasons?.[itemValue];
+    const lockDisabled = disabledScopes?.includes(itemValue) ?? false;
+    const state: AccessRowState = multiple
+      ? accessRowState(itemValue, selection, scopes)
+      : { checked: false, impliedDisabled: false };
+    const rowDisabled = lockDisabled || state.impliedDisabled;
+    const body = multiple
+      ? renderMultiRow(itemValue, state)
+      : renderSingleRow(itemValue);
+
+    if (rowDisabled) {
+      const reason = disabledReasons?.[itemValue] ?? state.impliedNote;
       return (
         <span key={itemValue} title={reason} className="block cursor-not-allowed">
           <CommandItem
             value={itemValue}
             disabled
             aria-disabled="true"
-            className="rounded-none px-3 py-2 bg-surface-strong text-muted-foreground opacity-60"
+            role="option"
+            aria-checked={multiple ? state.checked : undefined}
+            className={cn(
+              "rounded-none px-3 py-2 bg-surface-strong",
+              // Implied-checked rows keep the selected-row tint; pure locks mute.
+              multiple && state.checked
+                ? "bg-surface-muted text-foreground opacity-80"
+                : "text-muted-foreground opacity-60",
+            )}
           >
-            {renderRow(itemValue)}
+            {body}
           </CommandItem>
         </span>
       );
@@ -146,18 +264,28 @@ export function AccessComboboxHierarchical({
       <CommandItem
         key={itemValue}
         value={itemValue}
+        role="option"
+        aria-checked={multiple ? state.checked : undefined}
         onSelect={() => {
-          onChange(itemValue);
-          setOpen(false);
+          if (multiple) {
+            toggleMulti(itemValue);
+            // Popover stays OPEN on toggle (Esc / outside click closes).
+          } else {
+            props.onChange(itemValue);
+            setOpen(false);
+          }
         }}
-        className={itemClass(itemValue)}
+        className={cn(
+          itemClass(itemValue),
+          multiple && state.checked && "bg-surface-muted",
+        )}
       >
-        {renderRow(itemValue)}
+        {body}
       </CommandItem>
     );
   };
 
-  // Trigger width = longest option (no clipping, no jitter).
+  // Trigger width = longest option (no clipping, no jitter) — SINGLE mode only.
   // Collect every visibility string the user could select, resolve its parts,
   // and pick the parts whose "type: name" string is longest. A hidden-but-
   // -laid-out template inside the trigger then dictates the button's natural
@@ -186,52 +314,85 @@ export function AccessComboboxHierarchical({
       { type: null, name: "" },
     );
 
+  // -------------------------------------------------------------------------
+  // Trigger label
+  // -------------------------------------------------------------------------
+  const renderSingleTriggerLabel = () => {
+    const parts = resolveAccessParts(props.value as AgentAuthPolicyVisibility, scopes);
+    return (
+      <span className="relative inline-flex items-center">
+        {/* Hidden width template: the widest option label sets the trigger's
+            natural width, so the selection-visible span overlays without
+            clipping or jitter when the selection changes. */}
+        <span
+          aria-hidden="true"
+          className="invisible inline-flex items-center whitespace-nowrap"
+        >
+          {longestParts.type && (
+            <span className="text-xs tracking-wide mr-1">{longestParts.type}:</span>
+          )}
+          <span>{longestParts.name}</span>
+        </span>
+        <span className="absolute inset-0 flex items-center">
+          {parts.type && (
+            <span className="text-xs tracking-wide text-muted-foreground mr-1 shrink-0">
+              {parts.type}:
+            </span>
+          )}
+          <span className="text-foreground truncate">{parts.name}</span>
+        </span>
+      </span>
+    );
+  };
+
+  const multiSelection = multiple ? props.value : [];
+  const multiSummary = resolveAccessSummary(
+    multiSelection as AgentAuthPolicyVisibility[],
+    scopes,
+  );
+  const renderMultiTriggerLabel = () => (
+    <span className="flex items-center truncate">
+      <span className="text-foreground truncate">{multiSummary}</span>
+    </span>
+  );
+
+  const triggerButton = (
+    <Button
+      id={id ?? "access"}
+      type="button"
+      variant="outline"
+      role="combobox"
+      aria-expanded={open}
+      disabled={disabled}
+      className="w-auto justify-between bg-surface-strong font-normal"
+    >
+      {multiple ? renderMultiTriggerLabel() : renderSingleTriggerLabel()}
+      <ChevronDown className="size-4 opacity-50 shrink-0" />
+    </Button>
+  );
+
   return (
     <Popover open={open} onOpenChange={(next) => !disabled && setOpen(next)}>
       <PopoverTrigger asChild>
-        <Button
-          id={id ?? "access"}
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          disabled={disabled}
-          className="w-auto justify-between bg-surface-strong font-normal"
-        >
-          <span className="relative inline-flex items-center">
-            {/* Hidden width template: the widest option label sets the
-                trigger's natural width, so the selection-visible span overlays
-                without clipping or jitter when the selection changes. */}
-            <span
-              aria-hidden="true"
-              className="invisible inline-flex items-center whitespace-nowrap"
-            >
-              {longestParts.type && (
-                <span className="text-xs tracking-wide mr-1">{longestParts.type}:</span>
-              )}
-              <span>{longestParts.name}</span>
-            </span>
-            <span className="absolute inset-0 flex items-center">
-              {(() => {
-                const parts = resolveAccessParts(
-                  value as AgentAuthPolicyVisibility,
-                  scopes,
-                );
-                return (
-                  <>
-                    {parts.type && (
-                      <span className="text-xs tracking-wide text-muted-foreground mr-1 shrink-0">
-                        {parts.type}:
-                      </span>
-                    )}
-                    <span className="text-foreground truncate">{parts.name}</span>
-                  </>
-                );
-              })()}
-            </span>
-          </span>
-          <ChevronDown className="size-4 opacity-50 shrink-0" />
-        </Button>
+        {/* N>1 selections surface the full list in a tooltip on the trigger. */}
+        {multiple && multiSelection.length > 1 ? (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>{triggerButton}</TooltipTrigger>
+              <TooltipContent align="start" className="max-w-xs">
+                <ul className="flex flex-col gap-0.5">
+                  {multiSelection.map((v) => (
+                    <li key={v} className="text-xs whitespace-nowrap">
+                      {resolveAccessLabel(v as AgentAuthPolicyVisibility, scopes)}
+                    </li>
+                  ))}
+                </ul>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : (
+          triggerButton
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="start"
@@ -309,7 +470,9 @@ export function AccessComboboxHierarchical({
                       disabled
                       className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed bg-surface-strong"
                     >
-                      {renderRow("workspace")}
+                      {multiple
+                        ? renderMultiRow("workspace", { checked: false, impliedDisabled: true })
+                        : renderSingleRow("workspace")}
                     </CommandItem>
                   ))}
                   {showAdminsOnly && renderSelectableItem("admin")}

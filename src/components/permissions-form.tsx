@@ -66,7 +66,7 @@ import {
 
 import {
   AccessComboboxHierarchical,
-  resolveAccessLabel,
+  resolveAccessSummary,
   type AvailableScopes,
 } from "@/components/access-combobox-hierarchical";
 import type {
@@ -197,7 +197,11 @@ export type PermissionsFormProps = {
 
 const PAGE_SIZE = 20;
 
-const AccessFormSchema = z.object({ access: z.string() });
+// Multi-scope W3: the access field is a NON-EMPTY array of visibility tokens.
+// The canonical validation gate is server-side (AgentAuthPolicySchema); this
+// permissive client schema only guarantees non-emptiness so the picker always
+// has a floor token.
+const AccessFormSchema = z.object({ access: z.array(z.string()).nonempty() });
 type AccessFormValues = z.infer<typeof AccessFormSchema>;
 
 function getInitials(name: string): string {
@@ -244,13 +248,27 @@ export function PermissionsForm({
   // Access form (locksteps runListVisibility / runDataVisibility /
   // runExecuteVisibility to a single value)
   // -------------------------------------------------------------------------
-  // Multi-scope W1: this single-select grant surface (replaced by the checkbox
-  // multi-select picker in W3) reads the first token of the array.
-  const effectiveAccessValue = accessValueOverride ?? initialPolicy.runListVisibility[0];
+  // Multi-scope W3: the checkbox multi-select picker holds the full token
+  // array. `accessValueOverride` is a SINGLE-token preselect/lock override (the
+  // connection-share surface's connector recommendation, or a locked canonical
+  // value). It only overrides when it genuinely DIFFERS from the stored primary
+  // token — when it merely echoes the stored primary, the FULL stored selection
+  // is shown, so a saved multi-scope policy is never collapsed to one token
+  // (codex round-0 D4). The connection surface sets `value !== primary` exactly
+  // for the canonical/recommendation cases and `value === primary` when it is
+  // reflecting the stored policy, so this predicate matches its intent exactly.
+  const effectiveAccessSelection: string[] =
+    accessValueOverride != null &&
+    accessValueOverride !== initialPolicy.runListVisibility[0]
+      ? [accessValueOverride]
+      : [...initialPolicy.runListVisibility];
+  // Stable dependency key for the reset effect (the array identity changes
+  // every render).
+  const effectiveAccessKey = effectiveAccessSelection.join(" ");
   const [isSavingPolicy, startSavePolicy] = useTransition();
   const { control, handleSubmit, reset: resetAccessForm } = useForm<AccessFormValues>({
     resolver: zodResolver(AccessFormSchema),
-    defaultValues: { access: effectiveAccessValue },
+    defaultValues: { access: effectiveAccessSelection as [string, ...string[]] },
   });
 
   // `useForm.defaultValues` is captured only at mount. If the parent
@@ -260,15 +278,19 @@ export function PermissionsForm({
   // stale access value. Reset on every effective-value change so the form
   // always reflects the persisted state (or the explicit pre-selection).
   useEffect(() => {
-    resetAccessForm({ access: effectiveAccessValue });
-  }, [effectiveAccessValue, resetAccessForm]);
+    resetAccessForm({ access: effectiveAccessSelection as [string, ...string[]] });
+    // effectiveAccessSelection is a fresh array each render; key on its content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAccessKey, resetAccessForm]);
 
   const onSubmit = (values: AccessFormValues) => {
     startSavePolicy(async () => {
-      const access = values.access as AgentAuthPolicyVisibility;
-      // Multi-scope W1: normalize the (currently single-token) selection to its
-      // canonical array form before the server write.
-      const selection = normalizeVisibilitySelection([access]);
+      // Multi-scope W3: the picker already canonicalises live, but normalize
+      // again defensively before the server write (the write path is the
+      // authority; a double-normalize is idempotent).
+      const selection = normalizeVisibilitySelection(
+        values.access as AgentAuthPolicyVisibility[],
+      );
       const policy: AgentAuthPolicy = {
         runListVisibility: selection,
         runDataVisibility: selection,
@@ -501,6 +523,7 @@ export function PermissionsForm({
               name="access"
               render={({ field: f }) => (
                 <AccessComboboxHierarchical
+                  multiple
                   value={f.value}
                   onChange={f.onChange}
                   scopes={availableScopes}
@@ -511,8 +534,8 @@ export function PermissionsForm({
             />
           ) : (
             <span className="text-sm text-foreground">
-              {resolveAccessLabel(
-                initialPolicy.runListVisibility[0],
+              {resolveAccessSummary(
+                initialPolicy.runListVisibility,
                 availableScopes,
               )}
             </span>
