@@ -22,7 +22,7 @@ import { PageContent } from "@/components/page-content";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ScopeBadge } from "@/components/scope-badge";
 import { DeleteItemForm } from "@/components/data-safety/delete-item-form";
-import { SearchParamToast } from "@/components/search-param-toast";
+import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
 import { getListViewCookieName } from "@/lib/list-view";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { readOrgsWithTeamsForUser, readProjectsForUser } from "@/lib/better-auth-db";
