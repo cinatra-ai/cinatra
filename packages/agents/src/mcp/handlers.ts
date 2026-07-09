@@ -28,7 +28,6 @@ import {
   RunTransitionError,
   type AgentRunStatus,
   updateAgentTemplate,
-  deleteAgentTemplate,
   resolveDefaultOrgId,
   readAgentTemplateVersions,
   readAgentTemplateVersionById,
@@ -147,6 +146,7 @@ import {
 // resolvePublishDestination must be called before publishAgentPackageFromGitDir.
 import { resolvePublishDestination, PublishDestinationNotConfiguredError } from "@cinatra-ai/extensions/destination-resolver";
 import { updateAgentTemplateOrigin } from "../store";
+import { deleteAgentTemplateGuarded } from "../removal-gate";
 import {
   readInstanceIdentity,
   markFirstPublishedIfCurrentScope,
@@ -1580,19 +1580,16 @@ async function handleAgentBuilderDelete(
       throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Delete not permitted." });
     }
 
-    const deleted = await deleteAgentTemplate(templateId);
-    if (!deleted) return { error: `Template not found: ${templateId}` };
-    void logAuditEvent({
-      actorPrincipalId: request.actor?.userId,
-      actorPrincipalType: (request.actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
-      authSource: (request.actor?.source as AuditEventInput["authSource"]) ?? "mcp",
-      resourceType: "agent_template",
-      resourceId: templateId,
-      operation: "delete",
-      decision: "allowed",
+    // cinatra#1061: re-apply the removal gate this dispatcher-bypassing delete
+    // would otherwise skip, then delete + audit — all in deleteAgentTemplateGuarded
+    // (a returned refusal names the blocking dependents; MCP renders it, unmasked).
+    const outcome = await deleteAgentTemplateGuarded(template.packageName, templateId, {
+      logAuditEvent,
+      actor: request.actor,
       policyVersion: POLICY_VERSION,
-      runId: undefined,
     });
+    if ("error" in outcome) return outcome;
+    if (!outcome.deleted) return { error: `Template not found: ${templateId}` };
     // Purge purge skill_matches rows for this agent.
     //
     // same legacy-template behavior

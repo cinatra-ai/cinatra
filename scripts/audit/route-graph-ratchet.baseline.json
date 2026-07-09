@@ -1,41 +1,41 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 133,
-    "/api/mcp": 1346,
-    "/chat": 1384,
-    "/api/a2a": 1351,
-    "/api/llm-bridge": 1356
+    "/api/mcp": 1348,
+    "/chat": 1386,
+    "/api/a2a": 1353,
+    "/api/llm-bridge": 1358
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1349,
-      "to": 1351,
-      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds TWO net-new, dependency-free first-party modules reachable on every locked route that reaches the agent-run / MCP-boundary graph: (1) packages/mcp-server/src/obo-ceiling.ts — the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint, imported by the agents store, the authz kernel (src/lib/authz/*), and the llm-bridge mint path; and (2) packages/agents/src/agent-run-serde.ts — a thin-facade vertical slice extracted VERBATIM from packages/agents/src/store.ts (parseAuthPolicySafe + deserializeRun + deriveRunOboCeilingJson) so store.ts stays under the file-size ratchet ceiling, imported by the agents store. Each such route grows by exactly two first-party modules. Reconciled onto main's CURRENT post-#1177 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +2 is exact against the new base. Absorbed raise 1349->1351.",
-      "pr": 1172
+      "from": 1351,
+      "to": 1353,
+      "reason": "cinatra#1061 (PR #1241): the removal-correctness change adds TWO net-new reachable first-party modules \u2014 packages/agents/src/removal-gate.ts (the agent-catalog removal gate: assertAgentTemplateRemovable / listActiveAgentTemplateDependents) and packages/extensions/src/removal-failure.ts (the returned removal-failure contract: classifyRemovalFailure / removalFailureCopy) \u2014 both reachable via VALUE imports in the shared packages/agents/src/actions.ts server-actions module that every locked route's graph already reaches, so each barrel-reaching route grows by exactly two first-party modules. The sibling `type RemovalActionResult` imports are type-only (erased, not counted). Absorbed raise 1351->1353 (on top of #1172's OBO-carrier raise 1351).",
+      "pr": 1241
     },
     "/api/llm-bridge": {
-      "from": 1354,
-      "to": 1356,
-      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds TWO net-new, dependency-free first-party modules reachable on every locked route that reaches the agent-run / MCP-boundary graph: (1) packages/mcp-server/src/obo-ceiling.ts — the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint, imported by the agents store, the authz kernel (src/lib/authz/*), and the llm-bridge mint path; and (2) packages/agents/src/agent-run-serde.ts — a thin-facade vertical slice extracted VERBATIM from packages/agents/src/store.ts (parseAuthPolicySafe + deserializeRun + deriveRunOboCeilingJson) so store.ts stays under the file-size ratchet ceiling, imported by the agents store. Each such route grows by exactly two first-party modules. Reconciled onto main's CURRENT post-#1177 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +2 is exact against the new base. Absorbed raise 1354->1356.",
-      "pr": 1172
+      "from": 1356,
+      "to": 1358,
+      "reason": "cinatra#1061 (PR #1241): the removal-correctness change adds TWO net-new reachable first-party modules \u2014 packages/agents/src/removal-gate.ts (the agent-catalog removal gate: assertAgentTemplateRemovable / listActiveAgentTemplateDependents) and packages/extensions/src/removal-failure.ts (the returned removal-failure contract: classifyRemovalFailure / removalFailureCopy) \u2014 both reachable via VALUE imports in the shared packages/agents/src/actions.ts server-actions module that every locked route's graph already reaches, so each barrel-reaching route grows by exactly two first-party modules. The sibling `type RemovalActionResult` imports are type-only (erased, not counted). Absorbed raise 1356->1358 (on top of #1172's OBO-carrier raise 1356).",
+      "pr": 1241
     },
     "/api/mcp": {
-      "from": 1344,
-      "to": 1346,
-      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds TWO net-new, dependency-free first-party modules reachable on every locked route that reaches the agent-run / MCP-boundary graph: (1) packages/mcp-server/src/obo-ceiling.ts — the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint, imported by the agents store, the authz kernel (src/lib/authz/*), and the llm-bridge mint path; and (2) packages/agents/src/agent-run-serde.ts — a thin-facade vertical slice extracted VERBATIM from packages/agents/src/store.ts (parseAuthPolicySafe + deserializeRun + deriveRunOboCeilingJson) so store.ts stays under the file-size ratchet ceiling, imported by the agents store. Each such route grows by exactly two first-party modules. Reconciled onto main's CURRENT post-#1177 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +2 is exact against the new base. Absorbed raise 1344->1346.",
-      "pr": 1172
+      "from": 1346,
+      "to": 1348,
+      "reason": "cinatra#1061 (PR #1241): the removal-correctness change adds TWO net-new reachable first-party modules \u2014 packages/agents/src/removal-gate.ts (the agent-catalog removal gate: assertAgentTemplateRemovable / listActiveAgentTemplateDependents) and packages/extensions/src/removal-failure.ts (the returned removal-failure contract: classifyRemovalFailure / removalFailureCopy) \u2014 both reachable via VALUE imports in the shared packages/agents/src/actions.ts server-actions module that every locked route's graph already reaches, so each barrel-reaching route grows by exactly two first-party modules. The sibling `type RemovalActionResult` imports are type-only (erased, not counted). Absorbed raise 1346->1348 (on top of #1172's OBO-carrier raise 1346).",
+      "pr": 1241
     },
     "/chat": {
-      "from": 1382,
-      "to": 1384,
-      "reason": "cinatra-ai/cinatra#1050 (PR #1172): the agent OBO scope-ceiling carrier adds TWO net-new, dependency-free first-party modules reachable on every locked route that reaches the agent-run / MCP-boundary graph: (1) packages/mcp-server/src/obo-ceiling.ts — the single-source deriveOboCeilingChain / oboCeilingContains / parse helpers used at BOTH persist and mint, imported by the agents store, the authz kernel (src/lib/authz/*), and the llm-bridge mint path; and (2) packages/agents/src/agent-run-serde.ts — a thin-facade vertical slice extracted VERBATIM from packages/agents/src/store.ts (parseAuthPolicySafe + deserializeRun + deriveRunOboCeilingJson) so store.ts stays under the file-size ratchet ceiling, imported by the agents store. Each such route grows by exactly two first-party modules. Reconciled onto main's CURRENT post-#1177 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +2 is exact against the new base. Absorbed raise 1382->1384.",
-      "pr": 1172
+      "from": 1384,
+      "to": 1386,
+      "reason": "cinatra#1061 (PR #1241): the removal-correctness change adds TWO net-new reachable first-party modules \u2014 packages/agents/src/removal-gate.ts (the agent-catalog removal gate: assertAgentTemplateRemovable / listActiveAgentTemplateDependents) and packages/extensions/src/removal-failure.ts (the returned removal-failure contract: classifyRemovalFailure / removalFailureCopy) \u2014 both reachable via VALUE imports in the shared packages/agents/src/actions.ts server-actions module that every locked route's graph already reaches, so each barrel-reaching route grows by exactly two first-party modules. The sibling `type RemovalActionResult` imports are type-only (erased, not counted). Absorbed raise 1384->1386 (on top of #1172's OBO-carrier raise 1384).",
+      "pr": 1241
     },
     "/sign-in": {
       "from": 132,
       "to": 133,
-      "reason": "cinatra#1135 (PR #1137): the one-shot initial-admin bootstrap decision was extracted into a new dependency-free policy module src/lib/initial-admin-bootstrap-policy.ts (pure decision core, unit-testable without the server-only auth graph; same pattern as closed-registration-gate.ts), imported by src/lib/auth.ts — one new reachable first-party leaf on every route that reaches the auth core. Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). Absorbed raise 132->133.",
+      "reason": "cinatra#1135 (PR #1137): the one-shot initial-admin bootstrap decision was extracted into a new dependency-free policy module src/lib/initial-admin-bootstrap-policy.ts (pure decision core, unit-testable without the server-only auth graph; same pattern as closed-registration-gate.ts), imported by src/lib/auth.ts \u2014 one new reachable first-party leaf on every route that reaches the auth core. Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). Absorbed raise 132->133.",
       "pr": 1137
     }
   }
