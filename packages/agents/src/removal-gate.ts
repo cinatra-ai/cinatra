@@ -29,7 +29,11 @@ import {
   listInstalledExtensions,
   readEffectiveStatusByPackageNames,
 } from "@cinatra-ai/extensions/canonical-store";
-import { readAgentTemplatesDependingOn } from "./store";
+import { readAgentTemplatesDependingOn, deleteAgentTemplate } from "./store";
+// Type-only (erased): the audit-event shape the injected logger accepts. Injected
+// rather than imported-as-value so this gate module keeps no authz/audit runtime
+// edge (dependency inversion) — the MCP handler passes its own logAuditEvent.
+import type { AuditEventInput } from "@/lib/authz";
 
 /**
  * Refuse removal of `packageName` when it would break the runtime — throwing the
@@ -135,4 +139,52 @@ export async function listActiveAgentTemplateDependents(packageName: string): Pr
     // legacy preview omitted — same rationale.
   }
   return [...names];
+}
+
+/**
+ * MCP-side GUARDED agent-template delete (cinatra#1061). The direct
+ * `agent_templates` delete in the agents MCP handler bypassed the extension
+ * dispatcher choke-point; this re-applies the removal gate BEFORE deleting, then
+ * performs the delete + writes the lifecycle audit row. Returns:
+ *   - `{ error }`          — a removal REFUSAL (system / dependents / fail-closed
+ *                            outage), audited `denied`; the MCP surface renders
+ *                            it structurally (not masked).
+ *   - `{ deleted: false }` — no row matched the id (caller returns not-found).
+ *   - `{ deleted: true }`  — deleted + audited `allowed`.
+ *
+ * `logAuditEvent` is INJECTED (dependency inversion) so this gate module keeps no
+ * authz/audit runtime edge. Extracted from mcp/handlers.ts so re-gating that
+ * bypass does not grow the tracked bottleneck file (file-size ratchet).
+ */
+export async function deleteAgentTemplateGuarded(
+  packageName: string | null | undefined,
+  templateId: string,
+  ctx: {
+    logAuditEvent: (event: AuditEventInput) => void;
+    actor: { userId?: string; actorType?: string; source?: string } | undefined;
+    policyVersion: AuditEventInput["policyVersion"];
+  },
+): Promise<{ error: string } | { deleted: boolean }> {
+  const auditBase: Omit<AuditEventInput, "decision"> = {
+    actorPrincipalId: ctx.actor?.userId,
+    actorPrincipalType: (ctx.actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
+    authSource: (ctx.actor?.source as AuditEventInput["authSource"]) ?? "mcp",
+    resourceType: "agent_template",
+    resourceId: templateId,
+    operation: "delete",
+    policyVersion: ctx.policyVersion,
+    runId: undefined,
+  };
+  if (packageName) {
+    try {
+      await assertAgentTemplateRemovable(packageName);
+    } catch (gateErr) {
+      ctx.logAuditEvent({ ...auditBase, decision: "denied" });
+      return { error: gateErr instanceof Error ? gateErr.message : String(gateErr) };
+    }
+  }
+  const deleted = await deleteAgentTemplate(templateId);
+  if (!deleted) return { deleted: false };
+  ctx.logAuditEvent({ ...auditBase, decision: "allowed" });
+  return { deleted: true };
 }
