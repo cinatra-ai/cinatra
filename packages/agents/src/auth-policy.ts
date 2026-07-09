@@ -32,6 +32,11 @@ import {
 } from "@/lib/better-auth-db";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+// Pure OBO scope-ceiling helper (zero-dep subpath — never the heavy facade).
+import {
+  resourceWithinCeiling,
+  type CeilingResource,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 
 // Client-safe types and schema live in auth-policy-types.ts so that client
 // components can import them without pulling in this file's server-only guard.
@@ -215,6 +220,20 @@ export function requireResourceAccess(
   // org_admin/org_owner may MANAGE them — the blast-radius guard.
   mode: "read" | "manage" = "read",
 ): void {
+  // OBO scope-ceiling containment — evaluated BEFORE the platform_admin bypass
+  // (and before every owner/level short-circuit below), so a delegated agent run
+  // stays confined to the agent's anchored scope even when the invoking user is a
+  // platform admin OR the resource's own owner. `actor.oboCeiling` is set ONLY for
+  // agent-run OBO delegated actors (threaded from the signed token onto the kernel
+  // actor in actorContextFromMcpRequest); undefined ⇒ no-op for every human /
+  // session / machine caller. Load-bearing ordering, mirrors the #1051 kernel
+  // surfaces and the workflows/dashboards resolvers in this wave.
+  if (
+    actor.oboCeiling &&
+    !resourceWithinCeiling(skillResourceToCeilingFacets(resource, actor), actor.oboCeiling)
+  ) {
+    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
+  }
   // platform_admin bypass — mirrors policyAllows shortcircuit
   if (actor.platformRole === "platform_admin") return;
 
@@ -296,6 +315,60 @@ export function requireResourceAccess(
 }
 
 /**
+ * Map a `SkillResourceRef` onto the shared `CeilingResource` facets consumed by
+ * `resourceWithinCeiling`. The skill catalog's `level`
+ * (system/team/organization/workspace/project/personal/agent) collapses onto the
+ * ceiling's owner axis (user/team/organization/workspace) + project refinement:
+ *
+ *   - system                 → no tenant/owner/project ⇒ outside EVERY org-floored
+ *                              ceiling (a platform-global skill is never within an
+ *                              agent's org/user/team/project anchor → denied).
+ *   - organization           → owner {organization, org}, orgId = the skill's REAL
+ *                              owning org (`resource.organizationId`), so a
+ *                              cross-org org-skill fails the ceiling's org floor.
+ *   - team | workspace       → owner {tier, ownerId}.
+ *   - project                → projectId = ownerId (the project id); no owner element.
+ *   - personal | agent | ⊥   → owner {user, ownerId} (personal clamps to user tier).
+ *
+ * For the grant-scoped levels whose ref does not carry an explicit org
+ * (team/workspace/project/personal), orgId falls back to the invoker's active org.
+ * That is sound: these are org-scoped grants and an agent-run OBO actor shares the
+ * run org that produced the chain's org floor, so the OWNER / PROJECT element does
+ * the real narrowing while the org floor stays satisfied for in-org resources
+ * (genuine cross-org skills are never resolved into the ref on the in-org OBO path).
+ */
+function skillResourceToCeilingFacets(
+  resource: SkillResourceRef,
+  actor: ActorContext,
+): CeilingResource {
+  const level = resource.level;
+  if (level === "system") {
+    return { orgId: null, owner: null, projectId: null };
+  }
+  const orgId = resource.organizationId ?? actor.organizationId ?? null;
+  if (level === "project") {
+    return { orgId, owner: null, projectId: resource.ownerId ?? null };
+  }
+  if (level === "team" || level === "workspace") {
+    return resource.ownerId
+      ? { orgId, owner: { tier: level, id: resource.ownerId }, projectId: null }
+      : { orgId, owner: null, projectId: null };
+  }
+  if (level === "organization") {
+    return {
+      orgId,
+      owner: orgId ? { tier: "organization", id: orgId } : null,
+      projectId: null,
+    };
+  }
+  // personal | agent | undefined ⇒ user-tier owner (personal-skill tools clamp to
+  // the invoking user's tier).
+  return resource.ownerId
+    ? { orgId, owner: { tier: "user", id: resource.ownerId }, projectId: null }
+    : { orgId, owner: null, projectId: null };
+}
+
+/**
  * Async adapter: resolves teamIds and projectIds from the DB, then delegates
  * to buildActorContextFromPrimitive.
  *
@@ -370,12 +443,22 @@ export async function actorContextFromMcpRequest(
 
   // Pass projectGrants (canonical axis); projectIds is derived inside
   // buildActorContextFromPrimitive (single derivation).
-  return buildActorContextFromPrimitive(actor, orgId, {
+  const built = buildActorContextFromPrimitive(actor, orgId, {
     teamIds,
     projectGrants,
     platformRole,
     orgRole,
   });
+
+  // Thread the agent-run OBO scope-ceiling from the transport request frame onto
+  // the kernel actor so `requireResourceAccess` can confine delegated skill reads
+  // to the agent's anchored scope. Present ONLY for agent-run OBO delegations
+  // (stamped on the frame by the MCP boundary from the signed token); undefined
+  // for chat / session / machine callers, leaving their behavior unchanged.
+  if (requestCtx?.oboCeiling) {
+    (built as ActorContext).oboCeiling = requestCtx.oboCeiling;
+  }
+  return built;
 }
 
 /** Per-token scope-reason copy (UI-SPEC §C). Returns null for "owner" (owner
