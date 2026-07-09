@@ -28,6 +28,7 @@ import { createChatModule } from "@cinatra-ai/chat/module";
 import { createAgentsModule } from "@cinatra-ai/agents/module";
 import { createWorkflowsModule } from "@cinatra-ai/workflows/module";
 import { createExtensionsModule } from "@cinatra-ai/extensions/mcp-module";
+import { createApprovalsModule } from "@/app/configuration/approvals/mcp";
 import { readActiveManifestsFromStore } from "@cinatra-ai/extensions/runtime-discovery-host";
 import { setLiveAgentManifestProvider } from "@cinatra-ai/agents";
 import { buildWorkflowHandlerDeps } from "@/lib/workflow-host-deps";
@@ -73,6 +74,12 @@ const postConnectorPlatformModules = [
   // approver-scope) are built in ONE place so the launcher portlet action and the
   // MCP server share the exact same gates (no authz drift).
   createWorkflowsModule(buildWorkflowHandlerDeps()),
+  // Unified approvals tools (list/get/decide) over the ApprovalSource registry.
+  // Reuses the SAME non-redirecting per-source decision helpers the UI server
+  // actions use — no parallel decision path. Registered on this host path (not
+  // the delegated-chat allowlist); `approvals_decide` is additionally kept off
+  // chat by the `decide` denied-verb token.
+  createApprovalsModule(),
 ];
 
 // TRUSTED actor resolver, passed uniformly to every manifest-discovered

@@ -75,8 +75,17 @@ export interface ApprovalRow {
   /** Single-admin self-approval flag ("your own request"). */
   isOwnRequest?: boolean;
   eligibility?: RowEligibility;
+  /** OPTIONAL source-declared optimistic-concurrency token — the PUBLIC mirror of
+   *  the value the owning source feeds its decision component (the agent source
+   *  sets it to the proposal's snapshot hash). Surfaced by the `approvals_*` MCP
+   *  tools (list/get) so a non-UI caller can round-trip it back into
+   *  `approvals_decide` as `expectedVersion`, preserving the capture-then-decide
+   *  CAS guard WITHOUT reading the ADAPTER-PRIVATE `raw`. Absent for sources with
+   *  action-time enforcement (e.g. the marketplace sources). */
+  version?: string;
   /** ADAPTER-PRIVATE: only the owning source's rowRenderer may read it; nothing
-   *  else may depend on its shape (e.g. the agent source stashes the CAS token). */
+   *  else may depend on its shape (e.g. the agent source stashes the CAS token).
+   *  NEVER serialized past the source boundary — the MCP list/get tools strip it. */
   raw?: unknown;
 }
 

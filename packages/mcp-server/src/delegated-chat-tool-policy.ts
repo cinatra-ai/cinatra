@@ -255,6 +255,12 @@ const DENIED_VERB_TOKENS = new Set<string>([
   "upsert",
   "refresh",
   "trigger",
+  // A decision on an approval item (approve/reject) is a privileged, admin-gated
+  // side effect: a prompt-injected chat must never auto-approve. This makes the
+  // exclusion of `approvals_decide` (and `agent_creation_request_decide`, kept
+  // off chat only by allowlist omission until now) EXPLICIT rather than relying
+  // on deny-by-default. No chat-allowed tool carries a whole `decide` token.
+  "decide",
 ]);
 
 // Family prefixes that must never be reachable from chat regardless of verb.

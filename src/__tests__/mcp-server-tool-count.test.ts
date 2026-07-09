@@ -59,6 +59,11 @@ const MODULE_TO_HANDLERS: Record<string, string> = {
   // (dashboards_cube_discover/validate/load) so the regex-based scanner
   // can count them like the other modules.
   createDashboardCubesMcpModule: "packages/dashboards/src/mcp-cubes/handlers.ts",
+  // Unified approvals tools (list/get/decide). The tool names live in the
+  // registerTool calls + APPROVALS_TOOL_META inside mcp.ts (not a key:async()
+  // handler map), so the static key-scan counts them conservatively — same as
+  // the artifacts module, which registers the same way.
+  createApprovalsModule: "src/app/configuration/approvals/mcp.ts",
 };
 
 /**

@@ -83,6 +83,10 @@ function toRow(r: AgentCreationRequestRow, isOwnRequest: boolean): ApprovalRow {
     createdAt: r.createdAt,
     href: `/configuration/agents/approvals/${r.id}`,
     ...(isOwnRequest ? { isOwnRequest: true } : {}),
+    // PUBLIC CAS token — the non-private mirror of `raw.snapshotHash` an MCP
+    // caller round-trips into approvals_decide (`expectedVersion`). The decide
+    // helper still refuses when it is absent/stale (captured, never read fresh).
+    version: r.snapshotHash,
     raw,
   };
 }

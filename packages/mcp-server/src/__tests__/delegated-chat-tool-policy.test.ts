@@ -217,4 +217,30 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
     }
   });
+
+  // Approval decisions must never be reachable from a delegated chat token — a
+  // decide is a privileged, admin-gated side effect and a prompt-injected chat
+  // must not auto-approve. The exclusion is made EXPLICIT via the `decide`
+  // denied-verb token (not just deny-by-default allowlist omission).
+  it("denies every approval-decision tool (explicit `decide` verb token)", () => {
+    for (const name of [
+      "approvals_decide",
+      "agent_creation_request_decide",
+      // The token is matched as a WHOLE underscore-delimited segment, so any
+      // future *_decide tool is caught by the same backstop.
+      "some_future_decide",
+    ]) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+    }
+  });
+
+  // The read tools are intentionally NOT on the chat allowlist in v1 (admin
+  // approval reads are not a chat dispatch/discovery need); deny-by-default
+  // keeps them off. Their enforcement surface is the MCP boundary + the
+  // inventory classification, not the chat policy.
+  it("keeps approvals read tools off delegated chat (deny-by-default; not allowlisted)", () => {
+    for (const name of ["approvals_list", "approvals_get"]) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+    }
+  });
 });

@@ -93,6 +93,18 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   apollo_status:                 { resourceType: "connector_instance", action: "read",    status: "enforced" },
   apollo_validate:               { resourceType: "connector_instance", action: "read",    status: "enforced" },
 
+  // ───── approvals (unified approvals_* MCP tools over the ApprovalSource registry) ─────
+  // list/get are a member-readable READ so a future non-admin-eligible viewer is
+  // NOT hard-blocked at this coarse layer — per-source eligibility filters the
+  // content inside the handler. decide is a membership-gated WRITE: the boundary
+  // deny-by-defaults an org-less caller and audits the permission, but defers the
+  // source-specific eligibility (admin gate, SoD) to the per-source decide helper.
+  // Mapped onto `notification` (the closest attention/decision-item resource;
+  // members hold notification.read/list/update) to avoid a new authz vocabulary.
+  approvals_decide:              { resourceType: "notification", action: "update",  status: "enforced" },
+  approvals_get:                 { resourceType: "notification", action: "read",    status: "enforced" },
+  approvals_list:                { resourceType: "notification", action: "list",    status: "enforced" },
+
   // ───── artifact ─────
   artifact_assertion_get:           { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_assertion_list:          { resourceType: "artifact", action: "list",   status: "enforced" },
