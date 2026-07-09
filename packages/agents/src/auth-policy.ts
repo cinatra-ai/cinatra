@@ -18,8 +18,8 @@
  */
 import "server-only";
 
-import { can, AuthzError, POLICY_VERSION } from "@/lib/authz";
-import type { ActorContext, Permission, ResourceRef } from "@/lib/authz";
+import { can, AuthzError, POLICY_VERSION, logAuditEvent } from "@/lib/authz";
+import type { ActorContext, Permission, ResourceRef, AuditEventInput } from "@/lib/authz";
 import {
   enforceResourceAccess,
   type ResourceForAccessCheck,
@@ -873,4 +873,57 @@ export async function checkConnectorAccess(
       { name: "AuthzError", statusCode: 403, reason: "forbidden" },
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// agent_get read authorization
+// ---------------------------------------------------------------------------
+/**
+ * Cross-org read gate for the `agent_get` MCP handler. `agent_get` returns a
+ * FULL agent template (including its agentAuthPolicy + input schemas); without
+ * this gate any authenticated MCP caller who knows (or guesses) a template id
+ * could read any template across orgs. Mirrors the org-scoped sibling read
+ * paths (agent_list / agent_run_get):
+ *   - a non-admin with no active org is denied BEFORE any store read;
+ *   - a non-admin may only read a template in their active org — a cross-org row
+ *     is 404-hidden (returns the same "Template not found" as a genuine miss, so
+ *     a cross-org template's existence is not disclosed) and the denied read is
+ *     audited;
+ *   - a platform admin may read across orgs (consistent with agent_list's admin
+ *     path); a legacy null-org template is denied to non-admins (fail-closed).
+ *
+ * `organizationId` / `isAdmin` are resolved by the caller from the server-only,
+ * unforgeable actor envelope (falling back to the Better Auth session) — never
+ * caller-supplied tool input. Returns the template on success, or an `{ error }`
+ * envelope on denial/miss (the handler forwards either verbatim).
+ */
+export async function authorizeAgentTemplateRead(
+  actor: { userId?: string; actorType?: string; source?: string } | undefined,
+  templateId: string,
+  organizationId: string | undefined,
+  isAdmin: boolean,
+): Promise<unknown> {
+  if (!organizationId && !isAdmin) {
+    return { error: "Active organization required." };
+  }
+  // Dynamic import avoids a static cycle with ../store (which type-imports this
+  // module); ../store is already reachable via the handlers hub, so gating here
+  // adds no new module to any route's reachable first-party graph.
+  const { readAgentTemplateById } = await import("./store");
+  const template = await readAgentTemplateById(templateId);
+  if (!template) return { error: `Template not found: ${templateId}` };
+  if (!isAdmin && (template as { orgId?: string | null }).orgId !== organizationId) {
+    void logAuditEvent({
+      actorPrincipalId: actor?.userId,
+      actorPrincipalType: (actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
+      authSource: (actor?.source as AuditEventInput["authSource"]) ?? "mcp",
+      resourceType: "agent_template",
+      resourceId: templateId,
+      operation: "read",
+      decision: "denied",
+      policyVersion: POLICY_VERSION,
+    });
+    return { error: `Template not found: ${templateId}` };
+  }
+  return template;
 }

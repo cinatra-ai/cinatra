@@ -183,10 +183,20 @@ describe("GTM seed pack — exact-shape contract", () => {
   );
 
   it.each(PACK)(
-    "$slug — skills.matchers is EXACTLY [<packageName>:<slug>-matcher] (single entry)",
+    "$slug — skills is EXACTLY {matchers:[<pkg>:<slug>-matcher]} (+ authoring only for the marketing-icp exemplar)",
     ({ slug, pkgName, manifest }) => {
-      const expectedId = `${pkgName}:${slug.replace(/-artifact$/, "")}-matcher`;
-      expect(manifest.skills).toEqual({ matchers: [expectedId] });
+      const base = slug.replace(/-artifact$/, "");
+      const expected: { matchers: string[]; authoring?: string[] } = {
+        matchers: [`${pkgName}:${base}-matcher`],
+      };
+      // marketing-icp-artifact is the reference authoring exemplar and is the
+      // only pack that additionally declares an authoring skill. Keep this
+      // pinned so a new authoring skill on any other pack — or its removal
+      // here — forces an explicit test update rather than silently widening.
+      if (slug === "marketing-icp-artifact") {
+        expected.authoring = [`${pkgName}:${base}-author`];
+      }
+      expect(manifest.skills).toEqual(expected);
     },
   );
 

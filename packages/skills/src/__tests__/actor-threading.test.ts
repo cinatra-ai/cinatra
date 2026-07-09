@@ -115,7 +115,9 @@ describe("actor.principalId threading", () => {
       | { ownerUserId?: string }
       | undefined;
     expect(call?.ownerUserId).toBe("real-user-123");
-  });
+    // Dynamically importing ../actions cold-transforms the real skills + app
+    // boot graph (~6s first load); the default 5s per-test timeout is too tight.
+  }, 30_000);
 
   it("MCP zod schema for custom-skill handlers makes ownerUserId optional", async () => {
     const handlers = await import("../mcp/handlers");
@@ -158,5 +160,7 @@ describe("actor.principalId threading", () => {
     // Override still accepted.
     const parsed2 = ownerSchema!.parse({ ownerUserId: "x" }) as { ownerUserId?: unknown };
     expect(parsed2.ownerUserId).toBe("x");
-  });
+    // Dynamically importing ../mcp/handlers cold-transforms the real boot graph
+    // (~6s first load); raise the per-test timeout above the 5s default.
+  }, 30_000);
 });

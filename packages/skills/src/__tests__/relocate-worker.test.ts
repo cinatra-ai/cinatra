@@ -5,7 +5,12 @@
 // the worker's processOneRelocation()/recoverPendingMoves(), and asserts the
 // final state (DB row + on-disk paths).
 //
-// Skipped if SUPABASE_DB_URL is unset (e.g. CI without DB).
+// Skipped when no real Postgres is available (e.g. CI without a DB). The
+// package vitest.config injects a non-connecting sentinel
+// (postgres://unused:unused@localhost:5432/unused) so env-shape checks pass;
+// that sentinel is NOT a live DB, so it counts as "no DB" here — otherwise the
+// beforeAll pool.connect() would fire ECONNREFUSED and fail the whole file
+// instead of skipping cleanly.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -31,7 +36,10 @@ vi.mock("../skills-store", async (importOriginal) => {
 });
 
 const dbUrl = process.env.SUPABASE_DB_URL;
-const runDbTests = !!dbUrl;
+// The unused:unused sentinel is the config's "env var is set but points at no
+// real server" placeholder; treat it (and any empty value) as no DB.
+const hasRealDb = !!dbUrl && !dbUrl.includes("//unused:unused@");
+const runDbTests = hasRealDb;
 const describeIfDb = runDbTests ? describe : describe.skip;
 
 const SCHEMA = `relocate_worker_test_${Date.now().toString(36)}`;

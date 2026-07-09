@@ -196,7 +196,11 @@ describe("softDeleteObject (atomic with outbox, conditional CTE)", () => {
     expect(callArg.transaction).toBe(true);
     expect(callArg.queries).toHaveLength(1); // single CTE statement
     const sql = callArg.queries[0].text;
-    expect(sql).toMatch(/WITH\s+deleted\s+AS/i);
+    expect(sql).toMatch(/^\s*WITH\s+/i); // single WITH-CTE statement
+    // The soft-delete UPDATE lives in the `deleted` CTE. A `base_row` snapshot
+    // CTE now precedes it (captures the pre-delete payload for the atomic
+    // object_change_event history row), so `deleted` is no longer the FIRST CTE.
+    expect(sql).toMatch(/\bdeleted\s+AS\s*\(\s*UPDATE\b/i);
     expect(sql).toMatch(/SET\s+deleted_at\s*=\s*now\(\)/i);
     expect(sql).toMatch(/RETURNING/i);
     expect(sql).toContain("graphiti_projection_outbox");

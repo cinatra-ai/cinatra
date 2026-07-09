@@ -25,7 +25,7 @@ const {
   upsertCustomSkillMock,
   listInstalledSkillsMock,
   getInstalledSkillByIdMock,
-  readAgentsCatalogMock,
+  readAgentsForSkillMatchingMock,
   getAssignedSkillIdsForAgentMock,
   listPersonalSkillsForCurrentUserAndAgentMock,
 } = vi.hoisted(() => {
@@ -71,7 +71,7 @@ const {
       },
     ]),
     getInstalledSkillByIdMock: vi.fn(async () => null),
-    readAgentsCatalogMock: vi.fn(async () => [
+    readAgentsForSkillMatchingMock: vi.fn(async () => [
       {
         id: "agent-x",
         identifier: "agent-x",
@@ -97,7 +97,7 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 vi.mock("@/lib/agents-store", () => ({
-  readAgentsCatalog: readAgentsCatalogMock,
+  readAgentsForSkillMatching: readAgentsForSkillMatchingMock,
   getAssignedSkillIdsForAgent: getAssignedSkillIdsForAgentMock,
 }));
 
@@ -153,7 +153,7 @@ describe("createOrUpdatePersonalSkillForAgent — prompt delta semantics", () =>
       isCustomSkill: true,
       level: "personal" as const,
     });
-    readAgentsCatalogMock.mockResolvedValue([
+    readAgentsForSkillMatchingMock.mockResolvedValue([
       {
         id: "agent-x",
         identifier: "agent-x",
@@ -242,7 +242,7 @@ describe("createOrUpdatePersonalSkillForAgent — based_on frontmatter injection
       isCustomSkill: true,
       level: "personal" as const,
     });
-    readAgentsCatalogMock.mockResolvedValue([
+    readAgentsForSkillMatchingMock.mockResolvedValue([
       {
         id: "agent-x",
         identifier: "agent-x",
@@ -296,14 +296,14 @@ describe("createOrUpdatePersonalSkillForAgent — based_on frontmatter injection
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const upsertArgs = (upsertCustomSkillMock.mock.calls as any[][])[0]?.[0] as { content: string };
 
-    // based_on: block with first skill ID
+    // based_on: block with first skill ID (matches the installed-skill fixtures above)
     expect(upsertArgs.content).toMatch(
-      /based_on:\n\s+-\s+"@cinatra\/asset-blog:generate-blog-ideas"/,
+      /based_on:\n\s+-\s+"@cinatra-ai\/asset-blog:generate-blog-ideas"/,
     );
 
     // based_on: block with second skill ID
     expect(upsertArgs.content).toMatch(
-      /based_on:\n[\s\S]+-\s+"@cinatra\/email-outreach:campaign-email-outreach"/,
+      /based_on:\n[\s\S]+-\s+"@cinatra-ai\/email-outreach-agent:campaign-email-outreach"/,
     );
   });
 });
