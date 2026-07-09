@@ -114,6 +114,13 @@ const handoff = (workflowId: string, extra: Record<string, unknown> = {}) => ({
 function getActor(actor: LooseActor): WorkflowActor & { orgId: string | null; userId: string | null } {
   const s = (k: string) => (typeof actor[k] === "string" ? (actor[k] as string) : null);
   const arr = (k: string) => (Array.isArray(actor[k]) ? (actor[k] as string[]) : undefined);
+  // Agent-run OBO scope-ceiling chain (stamped by the workflows MCP registry
+  // from the request frame). Threaded onto the resolver actor so the ceiling
+  // gate in isReadable/canManage runs for delegated agent tool calls. Array of
+  // {tier,id} — read structurally; undefined for non-agent-run actors.
+  const oboCeiling = Array.isArray(actor["oboCeiling"])
+    ? (actor["oboCeiling"] as WorkflowActor["oboCeiling"])
+    : undefined;
   return {
     organizationId: s("orgId"),
     orgId: s("orgId"),
@@ -122,6 +129,7 @@ function getActor(actor: LooseActor): WorkflowActor & { orgId: string | null; us
     projectIds: arr("projectIds"),
     orgRole: s("orgRole"),
     platformRole: s("platformRole"),
+    oboCeiling,
   };
 }
 
