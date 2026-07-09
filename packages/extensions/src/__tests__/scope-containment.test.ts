@@ -255,3 +255,71 @@ describe("scope-containment / policyContainedBy (full policy)", () => {
     ).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-scope W2 — POINTWISE containment. Fields are NON-EMPTY token arrays;
+// child ⊆ parent iff EVERY child token is covered by SOME parent token (the
+// per-pair cover relation is unchanged). Fail-closed on the first uncovered
+// child token.
+// ---------------------------------------------------------------------------
+describe("scope-containment / policyContainedBy — pointwise token arrays (multi-scope W2)", () => {
+  const lookups = makeLookups({ legacyOrg: ORG_A });
+  const arr = (...t: AgentAuthPolicyVisibility[]) =>
+    t as [AgentAuthPolicyVisibility, ...AgentAuthPolicyVisibility[]];
+  const pol = (
+    tokens: AgentAuthPolicyVisibility[],
+  ): AgentAuthPolicy => ({
+    runListVisibility: arr(...tokens),
+    runDataVisibility: arr(...tokens),
+    runExecuteVisibility: arr(...tokens),
+    allowRunSharing: false,
+  });
+
+  it("accepts when EVERY child token is covered by SOME parent token", async () => {
+    // child [team:X-in-A, project:P-in-A] ⊆ parent [org:A]: both children are
+    // in org A, so org:A covers each.
+    const child = pol([`team:${TEAM_X_IN_A}`, `project:${PROJECT_P_IN_A}`]);
+    const parent = pol([`org:${ORG_A}`]);
+    expect((await policyContainedBy(child, parent, lookups)).ok).toBe(true);
+  });
+
+  it("rejects when ANY child token is covered by NO parent token", async () => {
+    // child [team:X-in-A, team:Y-in-B] ⊆ parent [org:A]?  team Y-in-B is in
+    // org B → not covered by org:A → reject, surfacing the offending token.
+    const child = pol([`team:${TEAM_X_IN_A}`, `team:${TEAM_Y_IN_B}`]);
+    const parent = pol([`org:${ORG_A}`]);
+    const result = await policyContainedBy(child, parent, lookups);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.field).toBe("runListVisibility");
+      expect(result.child).toBe(`team:${TEAM_Y_IN_B}`);
+    }
+  });
+
+  it("a child token covered by SOME (not the first) parent token still passes", async () => {
+    // child [project:P-in-A] under parent [team:X-in-A, org:A]: project P is
+    // NOT ⊆ team:X, but IS ⊆ org:A — coverage by SOME parent token suffices.
+    const child = pol([`project:${PROJECT_P_IN_A}`]);
+    const parent = pol([`team:${TEAM_X_IN_A}`, `org:${ORG_A}`]);
+    expect((await policyContainedBy(child, parent, lookups)).ok).toBe(true);
+  });
+
+  it("a multi-token parent widens coverage for a multi-token child", async () => {
+    // child [team:X-in-A, project:P-in-A] ⊆ parent [team:X-in-A, project:P-in-A]
+    // (each child token matches its exact parent peer).
+    const both: AgentAuthPolicyVisibility[] = [
+      `team:${TEAM_X_IN_A}`,
+      `project:${PROJECT_P_IN_A}`,
+    ];
+    expect((await policyContainedBy(pol(both), pol(both), lookups)).ok).toBe(true);
+  });
+
+  it("a single-token field reduces to the pre-array subset check", async () => {
+    expect(
+      (await policyContainedBy(pol([`team:${TEAM_X_IN_A}`]), pol([`org:${ORG_A}`]), lookups)).ok,
+    ).toBe(true);
+    expect(
+      (await policyContainedBy(pol([`org:${ORG_B}`]), pol([`org:${ORG_A}`]), lookups)).ok,
+    ).toBe(false);
+  });
+});

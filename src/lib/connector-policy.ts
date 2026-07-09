@@ -11,7 +11,10 @@ import {
   evaluateExtensionAccess,
   type ExtensionAccessOp,
 } from "@cinatra-ai/extensions/enforce-extension-access";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+} from "@cinatra-ai/agents/auth-policy";
 import { connectorAccessVisibilityTier } from "@cinatra-ai/sdk-extensions/access-config";
 import {
   connectorCatalogAccessDeclaration,
@@ -56,9 +59,16 @@ export function isOrgAdmin(actor: ActorContext): boolean {
 // ConnectorVisibility surfaced in the decision (connectors only ever store
 // workspace|admin).
 function visibilityFromPolicy(policy: AgentAuthPolicy | null): ConnectorVisibility {
-  // Connectors only ever store a single token (workspace|admin); read the
-  // first token of the array (multi-scope W1).
-  return policy?.runDataVisibility?.[0] === "admin" ? "admin" : "workspace";
+  // Connectors are 2-tier (workspace | admin) and single-token by
+  // construction. Read the SELECTION defensively (multi-scope W2): admin-tier
+  // iff an "admin" token is present and no broader "workspace" token overrides
+  // it. Equivalent to the pre-array `[0] === "admin"` for every normalized
+  // connector policy.
+  const selection: readonly AgentAuthPolicyVisibility[] =
+    policy?.runDataVisibility ?? [];
+  return selection.includes("admin") && !selection.includes("workspace")
+    ? "admin"
+    : "workspace";
 }
 
 function policyFromVisibility(visibility: ConnectorVisibility): AgentAuthPolicy {

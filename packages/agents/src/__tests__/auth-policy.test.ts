@@ -725,6 +725,66 @@ describe("policyAllows — widened actor-scope branches", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Multi-scope W2 — any-match run matcher. Each field is a NON-EMPTY token
+// array (a union of grants); policyAllows admits iff SOME token admits the
+// actor. platform_admin bypasses before any token is consulted; the run-path
+// "admin" tier is platform-admin-only (NOT a positive grant for a plain
+// member).
+// ---------------------------------------------------------------------------
+describe("policyAllows — any-match token arrays (multi-scope W2)", () => {
+  const anyOf = (...tokens: AgentAuthPolicyVisibility[]): AgentAuthPolicy => {
+    const sel = tokens as [AgentAuthPolicyVisibility, ...AgentAuthPolicyVisibility[]];
+    return {
+      runListVisibility: sel,
+      runDataVisibility: sel,
+      runExecuteVisibility: sel,
+      allowRunSharing: false,
+    };
+  };
+
+  it("admits an actor matching ANY token; denies one matching none", () => {
+    const p = anyOf(`team:${TEAM_A}`, `project:${PROJECT_X}`);
+    expect(policyAllows(p, "read", buildActor({ teamIds: [TEAM_A] }))).toBe(true);
+    expect(policyAllows(p, "read", buildActor({ projectIds: [PROJECT_X] }))).toBe(true);
+    expect(
+      policyAllows(p, "read", buildActor({ teamIds: [TEAM_B], projectIds: [PROJECT_Y] })),
+    ).toBe(false);
+  });
+
+  it("cross-org token mix [team, project] is a union — either locus admits", () => {
+    // The acceptance-criteria mix: a team token and a project token that would
+    // belong to DIFFERENT orgs. policyAllows runs after the kernel cross-org
+    // guard; here it folds the union, so holding EITHER locus admits.
+    const p = anyOf(`team:${TEAM_A}`, `project:${PROJECT_X}`);
+    expect(policyAllows(p, "execute", buildActor({ projectIds: [PROJECT_X] }))).toBe(true);
+    expect(policyAllows(p, "list", buildActor({ teamIds: [TEAM_A] }))).toBe(true);
+  });
+
+  it("run-path admin is not a positive grant for a non-admin, but the union's other tokens still admit", () => {
+    const p = anyOf("admin", `team:${TEAM_A}`);
+    // admitted via team:A (NOT via admin)
+    expect(policyAllows(p, "read", buildActor({ teamIds: [TEAM_A] }))).toBe(true);
+    // neither admin (non platform_admin) nor team:A matches
+    expect(policyAllows(p, "read", buildActor({ teamIds: [TEAM_B] }))).toBe(false);
+    // platform_admin still bypasses before tokens are consulted
+    expect(
+      policyAllows(p, "read", buildActor({ platformRole: "platform_admin", teamIds: [] })),
+    ).toBe(true);
+  });
+
+  it("platform_admin bypasses even an all-owner selection", () => {
+    expect(
+      policyAllows(anyOf("owner"), "read", buildActor({ platformRole: "platform_admin" })),
+    ).toBe(true);
+  });
+
+  it("a single-token array reduces to the pre-array scalar decision", () => {
+    expect(policyAllows(anyOf(`team:${TEAM_A}`), "read", buildActor({ teamIds: [TEAM_A] }))).toBe(true);
+    expect(policyAllows(anyOf(`team:${TEAM_A}`), "read", buildActor({ teamIds: [TEAM_B] }))).toBe(false);
+  });
+});
+
 describe("enforceRunAccess — co-owner branch", () => {
   // The co-owner branch consults run.coOwnerUserIds on RunForAccessCheck.
   // When the actor's userId is in the list, ops in the co-owner
