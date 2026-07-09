@@ -383,6 +383,7 @@
     { "alias": "@cinatra-ai/agent-ui-protocol", "target": "./packages/agent-ui-protocol/src/index.ts" },
     { "alias": "@cinatra-ai/agent-ui-protocol/server", "target": "./packages/agent-ui-protocol/src/server.ts" },
     { "alias": "@cinatra-ai/agent-ui-protocol/stream", "target": "./packages/agent-ui-protocol/src/stream.ts" },
+    { "alias": "@cinatra-ai/agent-ui-protocol/renderable-views", "target": "./packages/agent-ui-protocol/src/renderable-views/index.ts" },
     { "alias": "@cinatra-ai/objects", "target": "./packages/objects/src/index.ts" },
     { "alias": "@cinatra-ai/artifacts", "target": "./packages/artifacts/src/index.ts" },
     { "alias": "@cinatra-ai/default-artifact", "target": "./extensions/cinatra-ai/default-artifact/src/index.ts" },
