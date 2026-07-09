@@ -272,10 +272,40 @@ export type SchemaConfigField =
   | NumberField
   | FreeListField;
 
+/**
+ * The reserved tab id the host always orders LAST. A connector declares its
+ * setup how-to / documentation under a `{ id: "help", … }` tab and — wherever it
+ * sits in the declared order — the parser normalizes it to the end, so the
+ * "Help" tab is always last (design spec: app-connectors §II). Reserved id, not
+ * a reserved label: the label is still connector-authored.
+ */
+export const HELP_TAB_ID = "help";
+
+/**
+ * A tab GROUP over the setup surface (design spec: app-connectors §II — the
+ * tabbed connector setup page). PURE DATA (the same fail-closed, no
+ * executable/HTML-carrier vocabulary as a flat field list). The base `fields`
+ * render as the first "Setup" tab; each declared `tabs[]` entry follows in
+ * declared order, and the reserved `HELP_TAB_ID` tab is always ordered LAST.
+ * Connector-agnostic: core names no connector.
+ */
+export type TabDef = {
+  id: string;
+  label: string;
+  fields: SchemaConfigField[];
+};
+
 export type SchemaConfigSurface = {
   title?: string;
   description?: string;
   fields: SchemaConfigField[];
+  /**
+   * Optional tab groups. Absent (or an empty array) → the form renders FLAT
+   * (the pre-tabs behavior, unchanged). Present → the host renders a tablist
+   * (`Setup` + these, Help last). Field `key`s are unique across the base
+   * `fields` AND every tab's `fields` (they share one flat submit namespace).
+   */
+  tabs?: TabDef[];
 };
 
 export type ParseResult =
@@ -363,7 +393,12 @@ const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<string>> = 
 
 // Keys allowed at the configSchema ROOT (besides `fields`). Anything else is
 // rejected fail-closed (no executable/HTML carrier at the root either).
-const ROOT_KEY_ALLOWLIST: ReadonlySet<string> = new Set(["title", "description", "fields"]);
+const ROOT_KEY_ALLOWLIST: ReadonlySet<string> = new Set(["title", "description", "fields", "tabs"]);
+
+// Exact key allowlist for a tab group (fail-closed, same stance as the field
+// allowlists): a tab carries ONLY an id, a label, and a nested `fields` array —
+// never an executable/HTML carrier key.
+const TAB_KEY_ALLOWLIST: ReadonlySet<string> = new Set(["id", "label", "fields"]);
 
 const BADGE_VARIANTS: ReadonlySet<string> = new Set([
   "outline",
@@ -430,9 +465,35 @@ export function parseSchemaConfig(raw: unknown): ParseResult {
   }
 
   const seenKeys = new Set<string>();
+  const fields = parseFieldList(rawFields, "fields", errors, seenKeys);
+
+  // Optional tab groups. Parsed with the SAME `seenKeys` set so a field key is
+  // unique across the base fields AND every tab (they share one flat submit
+  // namespace). Absent/empty → the surface stays flat (back-compat).
+  const tabs = raw.tabs !== undefined ? parseTabs(raw.tabs, errors, seenKeys) : [];
+
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    surface: {
+      title: str(raw.title) ? raw.title : undefined,
+      description: str(raw.description) ? raw.description : undefined,
+      fields,
+      ...(tabs.length > 0 ? { tabs } : {}),
+    },
+  };
+}
+
+/** Validate a raw field array into typed fields (shared by the base list + tabs). */
+function parseFieldList(
+  rawFields: unknown[],
+  atPrefix: string,
+  errors: string[],
+  seenKeys: Set<string>,
+): SchemaConfigField[] {
   const fields: SchemaConfigField[] = [];
   rawFields.forEach((rawField, i) => {
-    const at = `fields[${i}]`;
+    const at = `${atPrefix}[${i}]`;
     if (!isObj(rawField)) {
       errors.push(`${at}: must be an object`);
       return;
@@ -445,16 +506,60 @@ export function parseSchemaConfig(raw: unknown): ParseResult {
     const validated = validateField(kind as SchemaConfigFieldKind, rawField, at, errors, seenKeys);
     if (validated) fields.push(validated);
   });
+  return fields;
+}
 
-  if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    surface: {
-      title: str(raw.title) ? raw.title : undefined,
-      description: str(raw.description) ? raw.description : undefined,
-      fields,
-    },
-  };
+/**
+ * Parse the optional `tabs` root key into normalized TabDefs (Help last).
+ * Fail-closed: rejects a non-array, unknown per-tab keys, an invalid/missing id
+ * or label, an empty `fields`, and duplicate tab ids. Field keys are threaded
+ * through `seenKeys` so they stay unique across the whole surface. Returns the
+ * valid tabs (possibly empty); any violation pushes an error (the caller's
+ * `errors.length` check then fails the whole parse — never a partial surface).
+ */
+function parseTabs(raw: unknown, errors: string[], seenKeys: Set<string>): TabDef[] {
+  if (!Array.isArray(raw)) {
+    errors.push(`configSchema.tabs must be an array`);
+    return [];
+  }
+  const tabs: TabDef[] = [];
+  const seenTabIds = new Set<string>();
+  raw.forEach((rawTab, i) => {
+    const at = `tabs[${i}]`;
+    if (!isObj(rawTab)) {
+      errors.push(`${at}: must be an object`);
+      return;
+    }
+    // Fail-closed: reject any key outside the tab allowlist FIRST.
+    if (!rejectUnknownKeys(rawTab, TAB_KEY_ALLOWLIST, at, errors)) return;
+    const id = rawTab.id;
+    if (!str(id) || !KEY_RE.test(id)) {
+      errors.push(`${at}: invalid or missing "id"`);
+      return;
+    }
+    if (seenTabIds.has(id)) {
+      errors.push(`${at}: duplicate tab id ${JSON.stringify(id)}`);
+      return;
+    }
+    seenTabIds.add(id);
+    if (!str(rawTab.label)) {
+      errors.push(`${at}: missing "label"`);
+      return;
+    }
+    if (!Array.isArray(rawTab.fields) || rawTab.fields.length === 0) {
+      errors.push(`${at}: tab requires a non-empty "fields" array`);
+      return;
+    }
+    const tabFields = parseFieldList(rawTab.fields, `${at}.fields`, errors, seenKeys);
+    // A tab whose fields all failed validation contributes nothing (errors were
+    // already pushed, so the whole parse fails).
+    if (tabFields.length === 0) return;
+    tabs.push({ id, label: rawTab.label, fields: tabFields });
+  });
+  // Normalize: the reserved Help tab is always LAST. Array.prototype.sort is
+  // stable, so every non-Help tab keeps its declared order.
+  tabs.sort((a, b) => Number(a.id === HELP_TAB_ID) - Number(b.id === HELP_TAB_ID));
+  return tabs;
 }
 
 function requireKey(raw: Record<string, unknown>, at: string, errors: string[], seenKeys: Set<string>): string | null {
@@ -816,14 +921,20 @@ function validateField(
 /** Collect every `actionId` a surface references (for the host action endpoint). */
 export function collectActionIds(surface: SchemaConfigSurface): string[] {
   const ids = new Set<string>();
-  for (const f of surface.fields) {
-    if (f.kind === "status-probe" || f.kind === "named-action") ids.add(f.actionId);
-    else if (f.kind === "advisory") ids.add(f.probeActionId);
-    else if (f.kind === "record-list") {
-      ids.add(f.listActionId);
-      if (f.deleteActionId) ids.add(f.deleteActionId);
-    } else if (f.kind === "dynamic-select-options") ids.add(f.optionsAction);
-  }
+  const collect = (fields: SchemaConfigField[]) => {
+    for (const f of fields) {
+      if (f.kind === "status-probe" || f.kind === "named-action") ids.add(f.actionId);
+      else if (f.kind === "advisory") ids.add(f.probeActionId);
+      else if (f.kind === "record-list") {
+        ids.add(f.listActionId);
+        if (f.deleteActionId) ids.add(f.deleteActionId);
+      } else if (f.kind === "dynamic-select-options") ids.add(f.optionsAction);
+    }
+  };
+  collect(surface.fields);
+  // Actions declared INSIDE a tab must be registered too, else the host action
+  // endpoint rejects a probe/named-action/record-list/dynamic-select on a tab.
+  for (const tab of surface.tabs ?? []) collect(tab.fields);
   return [...ids];
 }
 
