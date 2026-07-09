@@ -147,6 +147,9 @@ import {
 // resolvePublishDestination must be called before publishAgentPackageFromGitDir.
 import { resolvePublishDestination, PublishDestinationNotConfiguredError } from "@cinatra-ai/extensions/destination-resolver";
 import { updateAgentTemplateOrigin } from "../store";
+// cinatra#1061: the agent-catalog removal gate (system-extension + closure),
+// shared with the uninstallRegistryPackage UI action.
+import { assertAgentTemplateRemovable } from "../removal-gate";
 import {
   readInstanceIdentity,
   markFirstPublishedIfCurrentScope,
@@ -1578,6 +1581,32 @@ async function handleAgentBuilderDelete(
     };
     if (!can(actorCtx, "registry.uninstall", uninstallRef)) {
       throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Delete not permitted." });
+    }
+
+    // cinatra#1061: same removal-path gate as the UI action. This direct
+    // agent_templates delete bypassed the dispatcher choke-point, so re-apply the
+    // #1036 system-extension protection + the (fail-closed) dependency-closure
+    // gate BEFORE deleting. MCP surfaces the thrown message structurally (not
+    // masked), so return it as a typed error that names the blocking dependents.
+    // Guarded on packageName — a legacy template with no package name cannot be a
+    // package-keyed dependency target.
+    if (template.packageName) {
+      try {
+        await assertAgentTemplateRemovable(template.packageName);
+      } catch (gateErr) {
+        void logAuditEvent({
+          actorPrincipalId: request.actor?.userId,
+          actorPrincipalType: (request.actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
+          authSource: (request.actor?.source as AuditEventInput["authSource"]) ?? "mcp",
+          resourceType: "agent_template",
+          resourceId: templateId,
+          operation: "delete",
+          decision: "denied",
+          policyVersion: POLICY_VERSION,
+          runId: undefined,
+        });
+        return { error: gateErr instanceof Error ? gateErr.message : String(gateErr) };
+      }
     }
 
     const deleted = await deleteAgentTemplate(templateId);

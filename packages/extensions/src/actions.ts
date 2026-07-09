@@ -25,6 +25,13 @@ import {
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
 } from "./screens/marketplace-failure-copy";
+// cinatra#1061: the REMOVAL-side returned contract (uninstall/archive). Separate
+// from the marketplace taxonomy above — a removal refusal is a local closure
+// gate that NAMES its blockers, not a registry install failure.
+import {
+  classifyRemovalFailure,
+  type RemovalActionResult,
+} from "./removal-failure";
 // Pre-install access selector (cinatra#805): target schema + target→policy
 // mapping. PURE module — the authz gates + policy write are lazy-imported
 // inside the action so the no-target path pays nothing.
@@ -59,6 +66,25 @@ function logMarketplaceFailureForOperator(
     operation,
     packageName,
     category,
+    err instanceof Error ? (err.stack ?? err.message) : String(err),
+  );
+}
+
+// cinatra#1061 sibling of the above for REMOVAL (uninstall/archive). The user
+// sees only the reason-derived, non-technical copy (which for `dependents` names
+// the blocking installed extensions); the FULL technical error stays here for
+// operators. Same CWE-134-safe constant-format-string discipline.
+function logRemovalFailureForOperator(
+  operation: string,
+  packageName: string,
+  failure: RemovalActionResult,
+  err: unknown,
+): void {
+  console.error(
+    "[extension-removal] %s refused/failed for %s (reason=%s):",
+    operation,
+    packageName,
+    failure.reason,
     err instanceof Error ? (err.stack ?? err.message) : String(err),
   );
 }
@@ -140,7 +166,7 @@ export async function uninstallExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; failure?: RemovalActionResult }> {
   "use server";
   await requireAdminSession();
   try {
@@ -156,9 +182,14 @@ export async function uninstallExtensionPackage(
     );
     return { success: true };
   } catch (err) {
+    // cinatra#1061: classify the caught error HERE (the real error object, with
+    // its typed shape) so the form action can RETURN a structured refusal the
+    // user sees in production instead of a Next.js-masked thrown message —
+    // system-extension / active-dependents (named) / generic.
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      failure: classifyRemovalFailure(err),
     };
   }
 }
@@ -171,7 +202,7 @@ export async function archiveExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; failure?: RemovalActionResult }> {
   "use server";
   await requireAdminSession();
   try {
@@ -186,9 +217,12 @@ export async function archiveExtensionPackage(
     );
     return { success: true };
   } catch (err) {
+    // cinatra#1061: classify so the archive form action returns a structured,
+    // dependents-naming refusal instead of a prod-masked thrown error.
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      failure: classifyRemovalFailure(err),
     };
   }
 }
@@ -588,7 +622,7 @@ export async function updateExtensionPackageFormAction(input: {
 export async function uninstallExtensionPackageFormAction(input: {
   packageName: string;
   packageVersion: string;
-}): Promise<void> {
+}): Promise<RemovalActionResult | void> {
   "use server";
   const session = await requireAdminSession();
   const actor: Actor = {
@@ -601,7 +635,14 @@ export async function uninstallExtensionPackageFormAction(input: {
   };
   const result = await uninstallExtensionPackage(input.packageName, input.packageVersion, actor);
   if (!result.success) {
-    throw new Error(result.error ?? "Uninstallation failed");
+    // cinatra#1061: RETURN the classified refusal instead of throwing. A thrown
+    // server-action error is masked by Next.js in production (digest only) so
+    // the dependents/system message never reaches the user; a returned value is
+    // delivered intact and the client renders the reason-mapped copy. Raw detail
+    // stays operator-side (logs).
+    const failure = result.failure ?? { ok: false as const, reason: "error" as const };
+    logRemovalFailureForOperator("uninstall", input.packageName, failure, result.error);
+    return failure;
   }
   redirect("/configuration/extensions");
 }
@@ -617,7 +658,7 @@ export async function archiveExtensionPackageFormAction(input: {
   // so callers can't silently pass "" and have downstream code misbehave on
   // ref.version reads.
   packageVersion: string;
-}): Promise<void> {
+}): Promise<RemovalActionResult | void> {
   "use server";
   if (!input.packageVersion) {
     throw new Error("archiveExtensionPackageFormAction requires a non-empty packageVersion");
@@ -637,7 +678,11 @@ export async function archiveExtensionPackageFormAction(input: {
     actor,
   );
   if (!result.success) {
-    throw new Error(result.error ?? "Archive failed");
+    // cinatra#1061: RETURN the classified refusal (see uninstall action note) so
+    // the archive dependents/system message survives to the production client.
+    const failure = result.failure ?? { ok: false as const, reason: "error" as const };
+    logRemovalFailureForOperator("archive", input.packageName, failure, result.error);
+    return failure;
   }
   // revalidatePath is unnecessary because redirect re-renders the destination.
   redirect("/configuration/extensions");

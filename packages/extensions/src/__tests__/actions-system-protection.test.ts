@@ -86,13 +86,25 @@ beforeEach(() => {
 describe("delete-intent actions refuse a system extension (front door)", () => {
   it("uninstallExtensionPackage returns the exact refusal and never touches the registry", async () => {
     const res = await uninstallExtensionPackage(SYSTEM_PKG, "0.1.7", actor);
-    expect(res).toEqual({ success: false, error: MSG });
+    // cinatra#1061: the operator `error` message is unchanged; the core action
+    // now ALSO classifies the refusal into `failure` so the form action can
+    // RETURN a structured value the production client renders (a system
+    // extension → reason "system").
+    expect(res).toEqual({
+      success: false,
+      error: MSG,
+      failure: { ok: false, reason: "system" },
+    });
     expect(registry.uninstall).not.toHaveBeenCalled();
   });
 
   it("archiveExtensionPackage returns the exact refusal and never touches the registry", async () => {
     const res = await archiveExtensionPackage(SYSTEM_PKG, "0.1.7", actor);
-    expect(res).toEqual({ success: false, error: MSG });
+    expect(res).toEqual({
+      success: false,
+      error: MSG,
+      failure: { ok: false, reason: "system" },
+    });
     expect(registry.archive).not.toHaveBeenCalled();
   });
 
