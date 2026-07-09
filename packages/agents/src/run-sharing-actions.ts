@@ -10,12 +10,13 @@ import {
 
 import {
   readAgentRunById,
+  readAgentTemplateById,
   readRunCoOwners,
   addRunCoOwner as addRunCoOwnerStore,
   removeRunCoOwner as removeRunCoOwnerStore,
   clearRunRunBy as clearRunRunByStore,
 } from "./store";
-import type { AgentRunRecord } from "./store";
+import { resolveEffectivePolicy } from "./auth-policy";
 import type { AgentAuthPolicy } from "./auth-policy-types";
 
 // ---------------------------------------------------------------------------
@@ -198,13 +199,26 @@ export async function addRunCoOwner(
   // When the run's effective auth policy disallows sharing, reject even for
   // owners/admins with the distinct "sharing_disabled" code so the UI can
   // disambiguate from a generic 403. Fail-closed against shape drift: only
-  // explicit `true` permits sharing; any other value denies. readAgentRunById
-  // always populates effectivePolicy (store.ts:1457-1466), so this is
-  // defense-in-depth, not a fallback path.
-  const effectivePolicy = (run as AgentRunRecord & {
-    effectivePolicy: AgentAuthPolicy | null;
-  }).effectivePolicy;
-  if (effectivePolicy?.allowRunSharing !== true) {
+  // explicit `true` permits sharing; any other value denies.
+  //
+  // readAgentRunById does NOT attach effectivePolicy to the run it returns: it
+  // only resolves a policy and threads it into enforceRunAccess on the actor
+  // path, and this action reads the run WITHOUT an actor. Reading
+  // `run.effectivePolicy` therefore always yielded `undefined` and this branch
+  // always returned "sharing_disabled". Resolve the effective policy here the
+  // same way readAgentRunById's actor path does: the per-run override wins,
+  // otherwise fall back to the template default (resolveEffectivePolicy applies
+  // the locked DEFAULT_AGENT_AUTH_POLICY floor when neither is set). Using the
+  // shared helper keeps this in lockstep with the single source of truth for
+  // the resolution order.
+  let effectivePolicy: AgentAuthPolicy;
+  if (run.authPolicy) {
+    effectivePolicy = run.authPolicy;
+  } else {
+    const template = await readAgentTemplateById(run.templateId);
+    effectivePolicy = resolveEffectivePolicy(run, template);
+  }
+  if (effectivePolicy.allowRunSharing !== true) {
     return { ok: false, error: "sharing_disabled" };
   }
 
