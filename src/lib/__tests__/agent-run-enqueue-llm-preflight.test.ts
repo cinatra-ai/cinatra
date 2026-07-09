@@ -16,7 +16,7 @@ vi.mock("@/lib/connector-policy", () => ({
 }));
 
 const readLlmRequirementFromMount = vi.fn();
-vi.mock("@cinatra-ai/agents", () => ({
+vi.mock("@cinatra-ai/agents/read-llm-requirement-from-mount", () => ({
   readLlmRequirementFromMount: (...a: unknown[]) => readLlmRequirementFromMount(...(a as [])),
 }));
 

@@ -204,7 +204,13 @@ export async function enqueueAgentRun(
   // llm requirement pays neither the mount I/O nor the LLM package load. Honors
   // `softPreflight` (dev-preview) exactly like the connector gate above.
   if (agentPackage?.name) {
-    const { readLlmRequirementFromMount } = await import("@cinatra-ai/agents");
+    // Import the narrow module (NOT the `@cinatra-ai/agents` barrel) so this
+    // lazy preflight loads only the lightweight mount reader — the barrel pulls
+    // the whole agents module graph (defeating the lazy-load intent and, via its
+    // side-effectful loads, breaking unrelated handler tests).
+    const { readLlmRequirementFromMount } = await import(
+      "@cinatra-ai/agents/read-llm-requirement-from-mount"
+    );
     const requirement = await readLlmRequirementFromMount(
       agentPackage.name,
       agentPackage.version ?? null,
