@@ -5,6 +5,11 @@
 .dark .dancing-robot { --ink: var(--foreground); --paper: var(--background); }
 .dancing-robot * { transform-box: fill-box; }
 .dancing-robot .g-needle, .dancing-robot .g-needle line { transform-box: view-box; transform-origin: 0 0; }
+/* The dance moves sweep limbs (spins, high kicks, raised arms, the float drift)
+   past the SVG viewBox. Without this, the SVG's UA-default overflow:hidden clips
+   those limbs at the viewport edge. Let the mascot draw outside its box — the
+   surrounding empty-state layout has ample room and the graphic is decorative. */
+.dancing-robot svg { overflow: visible; }
 
 .dancing-robot .g-hips     { transform-origin: 50% 100%; animation: dr-hips 6.4s cubic-bezier(.45,.05,.55,.95) infinite; }
 .dancing-robot .g-torso    { transform-origin: 50% 90%;  animation: dr-torso 6.4s cubic-bezier(.45,.05,.55,.95) infinite; }

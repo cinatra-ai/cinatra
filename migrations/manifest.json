@@ -178,6 +178,19 @@
         "public.\"user\"",
         "extension_accent_color"
       ]
+    },
+    {
+      "seq": "0017",
+      "file": "core/core__0017_org-anchor-backfill.mjs",
+      "summary": "Org-anchor backfill + identity-collision merge + connector org-anchor normalization (cinatra-ai/cinatra#1125, P0 of the admin-extension-parity epic #1124; backward compatibility is NOT a concern). Eliminates the org-less asymmetry class that no org admin could reach: (A) CONNECTOR org-anchor invariant — every connector installed_extension row that is not already a valid org anchor (owner_level='organization' AND owner_id = organization_id) and not a platform/workspace bundle anchor is normalized to owner_level='organization', owner_id = organization_id (covers user/team-owned connectors and malformed organization-tier rows), matching the canonical connector resolver's org-only query; (B) generic USER-owned backfill — org-less non-connector rows (owner_level='user' AND organization_id IS NULL) get organization_id set to the owning user's organization; (C) nango org backfill — live org-less nango_connection identity rows get organization_id set the same way (the residue core__0014 could not resolve at creation). Org resolution is fail-safe (a user's SOLE public.member organization, a team's public.team.organizationId, each verified against public.\"organization\"; 0/>1 memberships => LEFT org-less, never guessed). Collision merge is deterministic (the existing org row WINS): backfilling to a taken identity tuple (organization_id, owner_level, owner_id, package_name) merges the loser into the survivor — extension_access_policy adopted onto the survivor only when it has none (else the loser's is dropped, survivor wins, full dropped policy recorded for audit), extension_co_owners UNIONed, the loser manifest row deleted; all dependent-row ops scoped by (resource_kind = loser.kind, resource_id = loser.id). Same owned-transaction model as core__0014 (pgm.noTransaction + explicit BEGIN/COMMIT/ROLLBACK; LOCK installed_extension, extension_access_policy, extension_co_owners, nango_connection IN SHARE ROW EXCLUSIVE) with a provenance report at metadata key 'org_anchor_backfill_report:v1' written in the same transaction. Idempotent: a re-run mutates no target table (resolved rows fall out of their predicate, merged losers are gone, unresolvable rows are deterministically re-skipped and remain platform-admin-only, expected ~zero). A companion guard in packages/extensions/src/lifecycle-primitive.ts rejects non-org connector anchors going forward. down() is a NO-OP: a backfilled organization_id is indistinguishable from a native one and the merge deletes loser rows, so a revert would corrupt anchored rows; the ledger row records the run and the report preserves exactly what changed. Fresh installs are born at the post-migration shape and ledger-fake the chain.",
+      "destructive": true,
+      "tables": [
+        "installed_extension",
+        "extension_access_policy",
+        "extension_co_owners",
+        "nango_connection",
+        "metadata"
+      ]
     }
   ]
 }
