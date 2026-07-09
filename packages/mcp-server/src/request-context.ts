@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { OboCeilingChain } from "./obo-ceiling";
 
 /**
  * Discriminated union of the two delegated MCP actor flavors.
@@ -28,6 +29,14 @@ export type DelegatedMcpActor =
       orgId: string;
       runId: string;
       platformRole: "platform_admin" | "member";
+      /**
+       * The agent's anchored scope-ceiling CHAIN, minted into the OBO token and
+       * re-derived + validated (containment) at mint. Carried here so the
+       * transport can stamp it onto the request frame; no surface enforces it
+       * yet. Always present on a valid agent-run token — a missing chain fails
+       * closed at the verifier (never reconstructs this actor).
+       */
+      oboCeiling: OboCeilingChain;
     };
 
 /**
@@ -127,6 +136,13 @@ export type McpRequestContext = {
    * NOT auto-tag.
    */
   projectContext?: { projectId: string | null };
+  /**
+   * The agent-run OBO scope-ceiling chain for this frame, forwarded from the
+   * delegated `agent_run` actor (the signed token claim). Present only for
+   * agent-run-OBO delegations; undefined for chat / session / machine callers.
+   * Carried so the boundary can read it; no surface enforces it yet.
+   */
+  oboCeiling?: OboCeilingChain;
 };
 
 /**

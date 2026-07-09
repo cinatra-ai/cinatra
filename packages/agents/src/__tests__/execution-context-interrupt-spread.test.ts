@@ -90,6 +90,7 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
     idempotencyKey: null,
     workflowId: null,
     workflowTaskId: null,
+    oboCeiling: null,
   };
 }
 

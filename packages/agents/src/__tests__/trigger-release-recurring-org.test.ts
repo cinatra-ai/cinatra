@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const TEST_ORG_ID = "org-source";
+const TEST_PROJECT_ID = "proj-source";
 
 // vi.hoisted spies for every dep that runAgentRunTriggerReleaseJob touches.
 const trigger = vi.hoisted(() => ({
@@ -94,13 +95,19 @@ function makeRecurringTrigger() {
   };
 }
 
-function makeSourceRun(overrides: Partial<{ orgId: string | null }> = {}) {
+function makeSourceRun(
+  overrides: Partial<{ orgId: string | null; projectId: string | null }> = {},
+) {
   return {
     id: "run-source",
     templateId: "tpl-1",
     runBy: "user-1",
     inputParams: { foo: "bar" },
     orgId: TEST_ORG_ID,
+    // project refinement carried by the schedule-defining run; the recurring
+    // clone MUST copy it so the run stays project-scoped and re-derives the same
+    // OBO scope-ceiling chain.
+    projectId: TEST_PROJECT_ID,
     ...overrides,
   };
 }
@@ -121,11 +128,15 @@ describe("runAgentRunTriggerReleaseJob - recurring clones orgId", () => {
 
     expect(store.createAgentRunPendingInput).toHaveBeenCalledTimes(1);
     const call = store.createAgentRunPendingInput.mock.calls[0][0];
-    // The new run inherits the source's org.
+    // The new run inherits the source's org AND its project refinement. Copying
+    // projectId keeps the clone project-scoped and makes createAgentRunPendingInput
+    // re-derive the identical OBO scope-ceiling chain (locked template anchor +
+    // copied projectId + orgId).
     expect(call).toMatchObject({
       templateId: "tpl-1",
       runBy: "user-1",
       orgId: TEST_ORG_ID,
+      projectId: TEST_PROJECT_ID,
     });
   });
 

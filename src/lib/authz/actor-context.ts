@@ -7,6 +7,10 @@
  * re-export it.
  */
 
+// Type-only import from the PURE `obo-ceiling` subpath (no react/better-auth
+// runtime) — keeps this pure-types kernel free of tier-restricting runtime deps.
+import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
+
 /**
  * Stamped on every ActorContext and AuditEvent so post-incident review
  * can correlate decisions to the policy table that produced them.
@@ -89,6 +93,14 @@ export type ActorContext = Principal & {
   runAsUserId?: string;
   delegatedBy?: string;
   tokenScopes?: string[];
+  /**
+   * Agent-run OBO scope-ceiling CHAIN — the agent's anchored-scope upper bound
+   * (`invoker authority ∩ agent anchor`). Set ONLY for agent-run-OBO delegated
+   * actors (carried from the signed token / the mint path); undefined for every
+   * other actor. JSON-serializable (BullMQ-payload-safe). Carrier field: no
+   * enforcement path consults it yet.
+   */
+  oboCeiling?: OboCeilingChain;
   policyVersion: string;
 };
 

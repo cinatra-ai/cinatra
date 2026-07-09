@@ -151,6 +151,15 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/llm-credentials.ts",
       ),
+      // `store.ts` imports the OBO scope-ceiling helper from this subpath. It is
+      // a PURE module (no React/host deps), so alias to the REAL source — never
+      // the barrel stub below. MUST precede the bare `@cinatra-ai/mcp-server`
+      // alias so vite's prefix matcher picks this specific subpath first;
+      // otherwise the stub swallows it and deriveOboCeilingChain is unresolved.
+      "@cinatra-ai/mcp-server/obo-ceiling": path.join(
+        root,
+        "packages/mcp-server/src/obo-ceiling.ts",
+      ),
       // Stub the mcp-server barrel itself. The real index.tsx imports React UI components from the host app
       // (`@/components/ui/*`), which are out of reach for this package's
       // vitest config. Our stub exports the runtime values used by
