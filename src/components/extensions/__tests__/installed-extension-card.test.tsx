@@ -206,3 +206,107 @@ describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)"
     expect(banner).not.toContain("data-accent-detail");
   });
 });
+
+// cinatra#1057 — post-install "needs configuration" treatment. An active AGENT
+// with unconfigured required connectors wears the greyed archived treatment and
+// a needs-review status strip listing each connector's displayName, deep-linked
+// to its setup page. The strip disappears + the card returns to active colours
+// the moment all required connectors are configured (the caller stops passing
+// `configurationNeeds`).
+describe("InstalledExtensionCard — post-install needs-review strip", () => {
+  const NEEDS = [
+    {
+      packageName: "@cinatra-ai/linkedin-oauth-connector",
+      displayName: "LinkedIn",
+      slug: "linkedin-oauth-connector",
+      settingsHref: "/connectors/cinatra-ai/linkedin-oauth-connector/setup",
+    },
+    {
+      packageName: "@cinatra-ai/apollo-connector",
+      displayName: "Apollo",
+      slug: "apollo-connector",
+      settingsHref: "/connectors/cinatra-ai/apollo-connector/setup",
+    },
+  ];
+
+  function renderNeedsReview(
+    configurationNeeds: typeof NEEDS | undefined,
+    accentColor: "green" = "green",
+  ): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="List Curator Agent"
+        accentColor={accentColor}
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Builds and enriches lead lists."
+        actions={<Button type="button">Run</Button>}
+        configurationNeeds={configurationNeeds}
+      />,
+    );
+  }
+
+  it("renders the strip listing each unconfigured connector's displayName + deep-link", () => {
+    const html = renderNeedsReview(NEEDS);
+    // The strip's conformance id + copy.
+    expect(html).toContain('data-conformance="install-config-needs-callout"');
+    expect(html).toContain("Set up connections first:");
+    // Each connector's HUMAN-READABLE displayName is the label…
+    expect(html).toContain(">LinkedIn<");
+    expect(html).toContain(">Apollo<");
+    // …deep-linked to its own setup page, tagged as the manifest.displayName field.
+    expect(html).toContain('href="/connectors/cinatra-ai/linkedin-oauth-connector/setup"');
+    expect(html).toContain('href="/connectors/cinatra-ai/apollo-connector/setup"');
+    expect(html).toContain('data-field="manifest.displayName"');
+  });
+
+  it("flips the card into the greyed archived treatment (marks needs-review, mutes zones)", () => {
+    const html = renderNeedsReview(NEEDS);
+    // Distinct cannot-run marker — NOT the archived lifecycle marker.
+    expect(html).toContain("data-needs-review");
+    expect(html).not.toContain("data-archived");
+    // Greyed treatment reused: muted mark + muted zones (opacity-70), and the
+    // accent hex must not paint the greyed banner/tile.
+    expect(html).toContain("data-muted");
+    expect(html).toContain("opacity-70");
+    expect(html).not.toContain(ACCENT_PALETTE.green.bg);
+  });
+
+  it("omits the strip and keeps the active treatment when nothing is unconfigured", () => {
+    const html = renderNeedsReview(undefined);
+    expect(html).not.toContain("install-config-needs-callout");
+    expect(html).not.toContain("Set up connections first:");
+    expect(html).not.toContain("data-needs-review");
+    // Active card keeps its category colour and unmuted zones.
+    expect(html).toContain(ACCENT_PALETTE.green.bg);
+    expect(html).not.toContain("opacity-70");
+  });
+
+  it("treats an empty configurationNeeds array as nothing-to-configure (active card)", () => {
+    const html = renderNeedsReview([]);
+    expect(html).not.toContain("install-config-needs-callout");
+    expect(html).not.toContain("data-needs-review");
+    expect(html).toContain(ACCENT_PALETTE.green.bg);
+  });
+
+  it("leaves a non-affected extension's active card byte-identical (no strip, no greying)", () => {
+    const withProp = renderNeedsReview(undefined);
+    const withoutProp = renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="List Curator Agent"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Builds and enriches lead lists."
+        actions={<Button type="button">Run</Button>}
+      />,
+    );
+    // Passing an absent/omitted `configurationNeeds` is byte-identical to never
+    // passing it — a non-affected card is untouched.
+    expect(withProp).toBe(withoutProp);
+  });
+});

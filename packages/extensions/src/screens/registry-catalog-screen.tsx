@@ -40,7 +40,13 @@ import {
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
-import { resolveConfigurationNeedsByBatch } from "@/lib/configuration-needs.server";
+// Register the built-in per-connector readiness probes (side effect) — the
+// SAME import the /connectors grid + setup routes carry (connector-setup-badge
+// pins it). Without it a cold extensions-page load would probe unregistered
+// connectors as default "not connected", falsely flagging configured agents as
+// needing setup (cinatra #1057).
+import "@/lib/connector-readiness.server";
+import { resolveConfigurationNeedsForAgents } from "@/lib/configuration-needs.server";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -101,15 +107,28 @@ export async function RegistryCatalogScreen({
   });
 
   // Post-install "needs configuration" affordance (cinatra #1057): for each
-  // FINALIZED batch, probe the connectors it installed (root + auto-installed
-  // connector deps) through each connector's own readiness probe and surface
-  // the unconfigured ones as deep-linked "Configure" links. User-scoped to the
-  // current viewer (same probe the /connectors card grid + setup badge read),
-  // so the affordance reflects this operator's connection state. Best-effort:
-  // a resolution failure degrades to no affordance, never blanking the panel.
-  const configurationNeedsByBatch = await resolveConfigurationNeedsByBatch(recentBatches, {
-    userId: session.user?.id ?? null,
-  }).catch((err: unknown) => {
+  // installed AGENT whose REQUIRED connector dependencies are not yet
+  // configured, probe each connector's own readiness (same probe the
+  // /connectors card grid + setup badge read) and surface the unconfigured ones
+  // on the agent's card — the greyed archived treatment + a needs-review strip.
+  // Only agent-kind rows are considered (owner ruling #1057 (a)); a non-agent
+  // never gates on configuration. User-scoped to the current viewer, so the
+  // affordance reflects this operator's connection state. Best-effort: a
+  // resolution failure degrades to no affordance, never blanking the list.
+  const configurationNeedsByPackage = await resolveConfigurationNeedsForAgents(
+    activeRows.flatMap((row) =>
+      row.kind === "agent" && row.canonical
+        ? [
+            {
+              packageName: row.packageName,
+              kind: row.kind,
+              dependencies: row.canonical.dependencies,
+            },
+          ]
+        : [],
+    ),
+    { userId: session.user?.id ?? null },
+  ).catch((err: unknown) => {
     console.warn(
       "[registry-catalog] could not resolve post-install configuration needs (affordance omitted):",
       err instanceof Error ? err.message : err,
@@ -224,6 +243,13 @@ export async function RegistryCatalogScreen({
       // category ground → light grey, muted logo tile, all text/status/actions
       // muted. Active cards keep their category colour.
       archived={isArchived}
+      // Post-install "needs configuration" (cinatra#1057): an active agent with
+      // unconfigured required connectors wears the same greyed treatment + a
+      // needs-review strip. Only active rows carry it — an archived card is
+      // already greyed and unrunnable.
+      configurationNeeds={
+        isArchived ? undefined : configurationNeedsByPackage[row.packageName]?.needs
+      }
     />
   );
 
@@ -268,10 +294,7 @@ export async function RegistryCatalogScreen({
                 router.refresh() so the server snapshot below stays live
                 (cinatra #851 finding 3). */}
             <InstallBatchLiveRefresh active={hasActiveInstallBatch(recentBatches)} />
-            <InstallBatchPanel
-              batches={recentBatches}
-              configurationNeedsByBatch={configurationNeedsByBatch}
-            />
+            <InstallBatchPanel batches={recentBatches} />
             {activeRows.length === 0 ? (
               <ActiveEmptyState />
             ) : (

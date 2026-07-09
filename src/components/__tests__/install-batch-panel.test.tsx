@@ -106,63 +106,8 @@ describe("InstallBatchPanel", () => {
     expect(html).toContain("@scope/dep");
   });
 
-  // cinatra #1057 — post-install "needs configuration" affordance.
-  it("renders deep-linked Configure affordances for unconfigured connectors", () => {
-    const html = renderToStaticMarkup(
-      <InstallBatchPanel
-        batches={[
-          batch({
-            batchId: "b-cfg",
-            rootPackage: "@cinatra-ai/list-curator-agent",
-            phase: "finalized",
-            members: [
-              member({ packageName: "@cinatra-ai/linkedin-oauth-connector", status: "installed" }),
-              member({ packageName: "@cinatra-ai/list-curator-agent", status: "installed" }),
-            ],
-          }),
-        ]}
-        configurationNeedsByBatch={{
-          "b-cfg": {
-            needs: [
-              {
-                packageName: "@cinatra-ai/linkedin-oauth-connector",
-                displayName: "LinkedIn",
-                slug: "linkedin-oauth-connector",
-                settingsHref: "/connectors/cinatra-ai/linkedin-oauth-connector/setup",
-                isRoot: false,
-              },
-            ],
-            hasConnectors: true,
-            allConfigured: false,
-          },
-        }}
-      />,
-    );
-    expect(html).toContain("Finish setting up these connectors");
-    // The HUMAN-READABLE manifest displayName is the primary label (owner
-    // review #1234) — never only the package name.
-    expect(html).toContain("LinkedIn");
-    // The package name still renders, but only as muted secondary text.
-    expect(html).toContain("@cinatra-ai/linkedin-oauth-connector");
-    expect(html).toContain('href="/connectors/cinatra-ai/linkedin-oauth-connector/setup"');
-    expect(html).toContain("batch-configuration-needs");
-  });
-
-  it("renders no configuration affordance when everything is configured", () => {
-    const html = renderToStaticMarkup(
-      <InstallBatchPanel
-        batches={[
-          batch({
-            batchId: "b-ok",
-            rootPackage: "@cinatra-ai/root",
-            phase: "finalized",
-            members: [member({ packageName: "@cinatra-ai/root", status: "installed" })],
-          }),
-        ]}
-        configurationNeedsByBatch={{ "b-ok": { needs: [], hasConnectors: true, allConfigured: true } }}
-      />,
-    );
-    expect(html).not.toContain("Finish setting up these connectors");
-    expect(html).not.toContain("batch-configuration-needs");
-  });
+  // The post-install "needs configuration" affordance (cinatra #1057) no longer
+  // lives in this panel — it moved to the affected agent's Extensions-page card
+  // (see installed-extension-card.test.tsx). This panel renders no
+  // configuration follow-up at all.
 });
