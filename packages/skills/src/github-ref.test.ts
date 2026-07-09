@@ -436,8 +436,10 @@ describe("installSkillPackageFromGitHub (clobber guard)", () => {
 
   it("refuses to overwrite when an existing marker points at a different packageId", async () => {
     // Stage a marker that claims the slug belongs to a different repo.
-    const slug = "owner-repo";
-    const targetDir = path.join(tmpRoot, "data", "skills", slug);
+    // GitHub installs land in the ownership-first layout
+    // (getSkillsDataRootPath()/workspace/<owner>/<repo>), so the clobber guard
+    // inspects THAT directory — stage the pre-existing state there.
+    const targetDir = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
     await mkdir(targetDir, { recursive: true });
     await writeFile(
       path.join(targetDir, ".cinatra-skill-source.json"),
@@ -453,8 +455,10 @@ describe("installSkillPackageFromGitHub (clobber guard)", () => {
   });
 
   it("allows reinstalling when the existing marker matches the same packageId", async () => {
-    const slug = "owner-repo";
-    const targetDir = path.join(tmpRoot, "data", "skills", slug);
+    // GitHub installs land in the ownership-first layout
+    // (getSkillsDataRootPath()/workspace/<owner>/<repo>), so the clobber guard
+    // inspects THAT directory — stage the pre-existing state there.
+    const targetDir = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
     await mkdir(targetDir, { recursive: true });
     await writeFile(
       path.join(targetDir, ".cinatra-skill-source.json"),
@@ -467,8 +471,10 @@ describe("installSkillPackageFromGitHub (clobber guard)", () => {
   });
 
   it("refuses to install when a malformed marker cannot prove package provenance", async () => {
-    const slug = "owner-repo";
-    const targetDir = path.join(tmpRoot, "data", "skills", slug);
+    // GitHub installs land in the ownership-first layout
+    // (getSkillsDataRootPath()/workspace/<owner>/<repo>), so the clobber guard
+    // inspects THAT directory — stage the pre-existing state there.
+    const targetDir = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
     await mkdir(targetDir, { recursive: true });
     await writeFile(path.join(targetDir, ".cinatra-skill-source.json"), "{not-valid-json", "utf8");
 
@@ -479,8 +485,10 @@ describe("installSkillPackageFromGitHub (clobber guard)", () => {
   });
 
   it("refuses to install when a manually staged target dir is non-empty and has no marker", async () => {
-    const slug = "owner-repo";
-    const targetDir = path.join(tmpRoot, "data", "skills", slug);
+    // GitHub installs land in the ownership-first layout
+    // (getSkillsDataRootPath()/workspace/<owner>/<repo>), so the clobber guard
+    // inspects THAT directory — stage the pre-existing state there.
+    const targetDir = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
     await mkdir(targetDir, { recursive: true });
     await writeFile(path.join(targetDir, "SOMETHING.md"), "manual content", "utf8");
 
@@ -491,8 +499,10 @@ describe("installSkillPackageFromGitHub (clobber guard)", () => {
   });
 
   it("proceeds when target dir exists but is empty (half-finished install)", async () => {
-    const slug = "owner-repo";
-    const targetDir = path.join(tmpRoot, "data", "skills", slug);
+    // GitHub installs land in the ownership-first layout
+    // (getSkillsDataRootPath()/workspace/<owner>/<repo>), so the clobber guard
+    // inspects THAT directory — stage the pre-existing state there.
+    const targetDir = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
     await mkdir(targetDir, { recursive: true });
     // No files dropped — dir is empty.
 
