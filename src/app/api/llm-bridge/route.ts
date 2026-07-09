@@ -35,6 +35,11 @@ import {
   deriveOboCeilingChain,
   oboCeilingContains,
 } from "@cinatra-ai/mcp-server/obo-ceiling";
+import { resolveAgentRunCinatraMcpAllowedTools } from "@cinatra-ai/mcp-server/in-admin-cms-tool-policy";
+// #1214 — WHICH agent packages are in-admin CMS content editors is resolved by
+// the host from the generated `relayAgentPackage` bindings (no extension
+// instance named in the mcp-server policy module — core→extension coupling ban).
+import { isInAdminCmsContentEditorPackage } from "@/lib/widget-stream-agents.server";
 // Bridge resolver ports support the WayFlow text-only user envelope.
 // resolveEntryAttachments() in the orchestration layer consumes the
 // ports; without the run.orgId we cannot scope cache/blob reads so
@@ -1038,10 +1043,21 @@ export async function POST(req: Request): Promise<Response> {
               ) {
                 return null;
               }
+              // #1214 — pin the cinatra self-MCP tool allowlist for in-admin
+              // CMS content-editor agent runs (wordpress-agent / drupal-agent)
+              // to the MCP-backed CMS primitives, so a dispatched content
+              // editor cannot reach the neighbouring WordPress primitives that
+              // remain direct-REST-backed (status/list/delete/media/draft/meta).
+              // Any other agent run resolves to `null` (unrestricted, unchanged).
+              const cinatraMcpAllowedTools =
+                resolveAgentRunCinatraMcpAllowedTools(
+                  isInAdminCmsContentEditorPackage(template?.packageName),
+                );
               return buildLlmMcpServerToolForAgentRun(
                 resolvedRuntime.provider as "openai" | "anthropic",
                 { ...actor, oboCeiling: runForPorts.oboCeiling! },
                 issueAgentRunMcpActorToken,
+                cinatraMcpAllowedTools,
               );
             }
           : undefined;
