@@ -32,12 +32,12 @@ function decl(mode: "default" | "only", scope: string) {
 
 function policyOf(visibility: string, seeded = false): AgentAuthPolicy {
   return {
-    runListVisibility: visibility,
-    runDataVisibility: visibility,
-    runExecuteVisibility: visibility,
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
     allowRunSharing: false,
     ...(seeded ? { seededDefault: true } : {}),
-  } as AgentAuthPolicy;
+  } as unknown as AgentAuthPolicy;
 }
 
 describe("decideConnectionShareSurface — only:* locks", () => {

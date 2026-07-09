@@ -27,6 +27,13 @@ import {
   type ConnectorPolicyMode,
 } from "@/lib/connector-policy";
 
+// A `connectorDependencies` map value (cinatra#1056). Structurally identical to
+// `ConnectorDepValue` / `ConnectorDependencyMap` on `@cinatra-ai/agents/store`
+// (the persisted shape) — declared locally so this leaf host module needs no
+// cross-package import; TS structural typing keeps the two compatible.
+type ConnectorDepValue = { range: string; requirement: "required" | "optional" };
+type ConnectorDependencyMap = Record<string, string | ConnectorDepValue>;
+
 export type AgentRunEnqueueOptions = Pick<
   JobsOptions,
   "jobId" | "priority" | "delay" | "attempts" | "backoff"
@@ -38,11 +45,12 @@ export type AgentRunEnqueueOptions = Pick<
    */
   actorContext?: ActorContext;
   /**
-   * Per-template connector dependency map (the `connectorDependencies`
-   * Record<packageId, semverRange> persisted on agent_templates).
-   * Empty/undefined means "no connector preflight needed".
+   * Per-template connector dependency map persisted on agent_templates. A value
+   * is either a bare semver range (legacy shape) or `{ range, requirement }`
+   * (cinatra#1056 — the projected canonical edge's requirement). Empty/undefined
+   * means "no connector preflight needed".
    */
-  connectorDependencies?: Record<string, string>;
+  connectorDependencies?: ConnectorDependencyMap;
   /**
    * Caller hint — when true, the preflight runs but failures are logged
    * as warnings rather than thrown. Used by the dev-preview path so an
@@ -71,27 +79,36 @@ export class ConnectorNotConfiguredError extends Error {
   }
 }
 
-async function runConnectorPreflight(
-  connectorDependencies: Record<string, string> | undefined,
+export async function runConnectorPreflight(
+  connectorDependencies: ConnectorDependencyMap | undefined,
   actor: ActorContext | undefined,
   mode: ConnectorPolicyMode,
 ): Promise<void> {
   if (!connectorDependencies) return;
-  for (const packageId of Object.keys(connectorDependencies)) {
+  for (const [packageId, rawValue] of Object.entries(connectorDependencies)) {
+    // cinatra#1056: carry the projected edge's requirement through instead of
+    // hardcoding "required". A bare-string (legacy) value normalizes to
+    // "required". W1 still fail-closes on any deny for BOTH requirements — the
+    // optional-dependency SKIP behavior (skip-step-audit) is a later wave; this
+    // change only threads the requirement so that wave has it (and so the audit
+    // event records the real requirement).
+    const requirement: "required" | "optional" =
+      typeof rawValue === "string" ? "required" : rawValue.requirement;
     if (actor) {
       // Run-start connector authority. Route through the canonical helper so
-      // every connector decision emits a structured audit event. Policy: each
-      // declared dependency is treated as required and fail-closes on deny.
-      // Required-vs-optional handling is deferred until the connector-
-      // dependency manifest can express a requirement level.
+      // every connector decision emits a structured audit event carrying the
+      // real requirement.
       const { requireConnectorAuthority } = await import("@/lib/connector-authority");
-      const decision = await requireConnectorAuthority(packageId, actor, { mode, requirement: "required" });
+      const decision = await requireConnectorAuthority(packageId, actor, { mode, requirement });
       if (!decision.allowed) {
         throw new ConnectorNotConfiguredError(packageId, decision.reason);
       }
     } else {
-      // No actor to attribute (system / cookieless path) — keep the
-      // un-audited synchronous gate and preserve current behavior.
+      // No actor to attribute — un-audited synchronous gate. With a non-empty
+      // map this branch fail-closes on `no_actor` for every dep, so
+      // `enqueueAgentRun` derives a run actor BEFORE calling us whenever a map is
+      // present (see the self-heal in enqueueAgentRun); this branch remains only
+      // as a last-resort guard for a direct caller.
       const decision = enforceConnectorPolicy(packageId, actor, mode);
       if (!decision.allowed) {
         throw new ConnectorNotConfiguredError(packageId, decision.reason);
@@ -117,15 +134,55 @@ export async function enqueueAgentRun(
     ...jobOptions
   } = options;
 
-  try {
-    await runConnectorPreflight(connectorDependencies, actorContext, "use");
-  } catch (err) {
-    if (softPreflight && err instanceof ConnectorNotConfiguredError) {
+  // Connector preflight (cinatra#1056). The gate needs a real actor: with a
+  // populated `connectorDependencies` map and NO actor, the connector policy
+  // fail-closes on `no_actor` for EVERY dep, which would break every legitimate
+  // connector-dependent run. So when a map is present but the caller passed no
+  // `actorContext`, derive a LOCAL preflight actor from the run row — used ONLY
+  // for this preflight, NOT threaded to the worker (so the worker's
+  // `__actorContext` propagation is unchanged). If the actor can't be resolved
+  // (missing/corrupt run), SKIP the preflight rather than false-deny a run on an
+  // infra hiccup — the connector is still authorized at step time (the
+  // pre-#1056 behavior). This also makes the existing MCP run path — which
+  // passes the map but no actor — safe automatically once the column is
+  // populated.
+  const hasConnectorDeps =
+    !!connectorDependencies && Object.keys(connectorDependencies).length > 0;
+  let preflightActor = actorContext;
+  if (hasConnectorDeps && !preflightActor) {
+    try {
+      const [{ readAgentRunById }, { buildActorContextFromRun }] = await Promise.all([
+        import("@cinatra-ai/agents/store"),
+        import("@/lib/authz/build-actor-context-from-run"),
+      ]);
+      const run = await readAgentRunById(record.runId);
+      if (run?.orgId) {
+        preflightActor = await buildActorContextFromRun({
+          id: run.id,
+          runBy: run.runBy ?? null,
+          orgId: run.orgId,
+        });
+      }
+    } catch (err) {
       console.warn(
-        `[agent-run-enqueue] soft-preflight: ${err.message} (settings: ${err.settingsHref})`,
+        `[agent-run-enqueue] connector preflight actor could not be resolved for run ${record.runId}; ` +
+          `skipping preflight (connector still checked at step time): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
       );
-    } else {
-      throw err;
+    }
+  }
+
+  if (hasConnectorDeps && preflightActor) {
+    try {
+      await runConnectorPreflight(connectorDependencies, preflightActor, "use");
+    } catch (err) {
+      if (softPreflight && err instanceof ConnectorNotConfiguredError) {
+        console.warn(
+          `[agent-run-enqueue] soft-preflight: ${err.message} (settings: ${err.settingsHref})`,
+        );
+      } else {
+        throw err;
+      }
     }
   }
 

@@ -27,7 +27,7 @@ import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 // auth-policy.ts treats unknown visibility strings as the fallthrough
 // "org" case, so malformed input could otherwise widen access rather
 // than fail closed.
-import { AgentAuthPolicySchema } from "@cinatra-ai/agents/auth-policy";
+import { AgentAuthPolicySchema, isExactlyOwner } from "@cinatra-ai/agents/auth-policy";
 
 import {
   type ExtensionKind,
@@ -188,9 +188,9 @@ async function assertAgentRunPolicyContainedByTemplate(
     // scope, so reject any non-owner write. The caller's resourceExists
     // gate should have already short-circuited; this is defense-in-depth.
     if (
-      policy.runListVisibility !== "owner" ||
-      policy.runDataVisibility !== "owner" ||
-      policy.runExecuteVisibility !== "owner"
+      !isExactlyOwner(policy.runListVisibility) ||
+      !isExactlyOwner(policy.runDataVisibility) ||
+      !isExactlyOwner(policy.runExecuteVisibility)
     ) {
       return { ok: false };
     }
@@ -208,9 +208,9 @@ async function assertAgentRunPolicyContainedByTemplate(
   // pre-filter (which uses the same field) cannot disagree.
   const template = await readAgentTemplateById(run.templateId);
   const parentPolicy: AgentAuthPolicy = template?.agentAuthPolicy ?? {
-    runListVisibility: "owner",
-    runDataVisibility: "owner",
-    runExecuteVisibility: "owner",
+    runListVisibility: ["owner"],
+    runDataVisibility: ["owner"],
+    runExecuteVisibility: ["owner"],
     allowRunSharing: false,
   };
 
@@ -545,8 +545,8 @@ export async function addExtensionCoOwner(
     const run = await readAgentRunById(resourceId);
     if (run?.templateId) {
       const parentPolicy = await readExtensionAccessPolicy("agent_template", run.templateId);
-      const parentList = parentPolicy?.runListVisibility ?? "owner";
-      if (parentList === "owner") {
+      const parentList = parentPolicy?.runListVisibility ?? (["owner"] as const);
+      if (isExactlyOwner(parentList)) {
         return { ok: false, error: "scope_exceeds_parent" };
       }
     }

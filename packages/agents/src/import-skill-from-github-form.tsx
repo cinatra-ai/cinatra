@@ -41,9 +41,9 @@ type RepoMetadata = Extract<FetchGitHubSkillRepoMetadataResult, { ok: true }>["m
 // "Configure access & ownership" panel. Mirrors the skill-package detail
 // page's fallback.
 const DEFAULT_DRAFT_POLICY: AgentAuthPolicy = {
-  runListVisibility: "owner",
-  runDataVisibility: "owner",
-  runExecuteVisibility: "owner",
+  runListVisibility: ["owner"],
+  runDataVisibility: ["owner"],
+  runExecuteVisibility: ["owner"],
   allowRunSharing: true,
 };
 

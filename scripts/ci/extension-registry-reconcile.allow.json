@@ -1,0 +1,14 @@
+{
+  "_comment": "Recorded exclusions for scripts/ci/extension-registry-reconcile.mjs (cinatra#1120). Public cinatra-ai repos that are intentionally NOT part of the installable-extension dev-install registry (cinatra.devExtensions). Listing them keeps the reconciliation COMPLETE without being noisy: if any of these later gains a root package.json `cinatra.kind` block it still stays out of the MISSING report. Add an entry (repo + reason) when a new public repo is intentionally unbundled; do NOT use this to hide a genuinely-unregistered extension.",
+  "exclusions": [
+    { "repo": ".github", "reason": "Org meta / community-health repo — not an extension." },
+    { "repo": "ci", "reason": "Shared reusable CI composite actions/workflows — not an extension." },
+    { "repo": "cinatra", "reason": "The host application repo itself (owns cinatra.devExtensions); has cinatra.* config but no cinatra.kind." },
+    { "repo": "cinatra-cli", "reason": "The end-user CLI package — not a host-installed extension." },
+    { "repo": "claude-plugin", "reason": "Public Claude plugin (contributor tooling) — not a host-installed extension." },
+    { "repo": "docs", "reason": "Documentation site — not an extension." },
+    { "repo": "drupal-module", "reason": "First-party Drupal glue module (installed into Drupal, not into the host) — never a marketplace/dev-install extension." },
+    { "repo": "wordpress-plugin", "reason": "First-party WordPress glue plugin (installed into WordPress, not into the host) — never a marketplace/dev-install extension." },
+    { "repo": "a2a-servers-dev", "reason": "A2A dev peer-agent fixtures (opt-in a2a-peers compose profile) — test peers, not installable extensions." }
+  ]
+}
