@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./marketplace": "./src/marketplace.ts",
+    "./connector-setup-page": "./src/connector-setup-page.tsx",
     "./tabs": "./src/ui/tabs.tsx",
     "./section-header": "./src/section-header.tsx",
     "./nango": "./src/nango.ts",
