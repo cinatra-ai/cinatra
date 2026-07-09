@@ -1,15 +1,20 @@
 // Zero-visual-regression guard for the #1219 (S3) renderer extraction.
 //
-// `/chat` swapped its content-renderer imports from the deep module paths
+// The content renderer is exposed as a reusable embed entry (`./renderer`) that
+// the Cinatra-served conversation-view (S5's iframe target) mounts. `/chat`
+// keeps importing the content-renderer modules directly by their deep paths
 // (`./markdown-render`, `./chart-embed`, `./mermaid-block`, `./syntax-highlight`,
-// `./chart-schema`) to the extracted public embed entry (`./renderer`). The
-// extraction is a PURE re-export boundary, so this must hold for EVERY input:
+// `./chart-schema`) — routing `/chat` through the barrel would add a module to
+// its locked route-graph budget for no runtime benefit. Because the extraction
+// is a PURE re-export boundary, the embed entry and `/chat` render identically
+// by construction, and this must hold for EVERY input:
 //
 //   1. Reference identity — the symbol re-exported from `./renderer` is the SAME
-//      function/component instance the deep module exports. `/chat` therefore
-//      runs byte-for-byte the same code; the barrel adds no wrapper, no behavior.
+//      function/component instance the deep module exports — the instance `/chat`
+//      imports directly. The embed entry therefore runs byte-for-byte the code
+//      `/chat` runs; the barrel adds no wrapper, no behavior.
 //   2. Byte identity — rendering a rich fixture conversation through the public
-//      entry yields output identical to the pre-extraction path.
+//      entry yields output identical to the direct (`/chat`) path.
 //
 // If a future edit turns the barrel into anything other than a pure re-export
 // (a wrapper, a transform, a divergent copy), this goes red — locking the
@@ -27,7 +32,7 @@ const noWidgets = () => [];
 
 describe("renderer extraction parity (#1219 S3 — zero regression)", () => {
   it("re-exports the SAME instance for every content-renderer symbol", () => {
-    // Reference identity == /chat runs the identical code through the barrel.
+    // Reference identity == the embed entry runs the identical code /chat imports directly.
     expect(barrel.renderMarkdown).toBe(directRenderMarkdown);
     expect(barrel.detectCharts).toBe(directDetectCharts);
     expect(barrel.detectMermaidBlocks).toBe(directDetectMermaid);
