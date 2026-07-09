@@ -31,8 +31,13 @@ import "server-only";
 //    appended in lexicographic order with a loud warning — the per-member
 //    forward install gate stays the enforcement boundary.
 
-import { satisfiesVersionRange, dependencyScopePrefixesFor } from "@cinatra-ai/registries";
+import { satisfiesVersionRange, dependencyScopePrefixesFor, comparePluginVersions } from "@cinatra-ai/registries";
 import type { ExtensionDependency, InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import {
+  assertUpdateDoesNotBreakDependents,
+  DependencyClosureError,
+  installedVersionOfRow,
+} from "@cinatra-ai/extensions/dependency-closure";
 
 /** One exact-pinned closure member ({name, version}) — structurally identical
  *  to the marketplace authorize closure entries (the vendored
@@ -208,6 +213,112 @@ function assertPinSatisfiesConstraint(
   }
 }
 
+/**
+ * Classification of a member already installed at a version DIFFERENT from the
+ * pin the current install requires (the `INSTALLED_VERSION_CONFLICT` site).
+ * This is the DEDUPE-UPWARD eligibility analysis (#1039): it decides whether
+ * the conflict is a clean upward-dedupe opportunity, a disjoint refusal, or an
+ * out-of-scope newer/downgrade case — and CARRIES the computed evidence
+ * (conflicting or admitting dependents) so the refusal names them.
+ *
+ * PURE over its inputs (no I/O) and independent of the install path, so it is
+ * unit-testable in isolation and reusable by the dependency-batch executor.
+ *
+ *  - `installed-newer`: the live version is NEWER than the required pin — a
+ *    downgrade / side-by-side concern, explicitly out of scope here.
+ *  - `disjoint-dependents`: the live version is OLDER (an upgrade would dedupe
+ *    upward) BUT at least one live dependent's install-blocking edge would be
+ *    VIOLATED by the pin — no common admissible version exists. `dependents`
+ *    names them; `detail` is the closure engine's dependent+constraint message.
+ *  - `upgradable-needs-own-deps`: OLDER + every live dependent admits the pin,
+ *    BUT the new version's own required closure is NOT already satisfied by
+ *    present rows (`unmetDeps`) — an upward-dedupe would have to install/upgrade
+ *    the dep's own dependencies, which is not self-satisfiable in place.
+ *  - `upgradable-clean`: OLDER + every live dependent admits the pin + the new
+ *    version's required closure is already satisfied in place — a clean upward
+ *    dedupe (the new version is a valid, non-breaking, self-satisfiable state).
+ */
+export type InstalledVersionConflictClass =
+  | { kind: "installed-newer" }
+  | { kind: "disjoint-dependents"; dependents: string[]; detail: string }
+  | { kind: "upgradable-needs-own-deps"; unmetDeps: string[] }
+  | { kind: "upgradable-clean" };
+
+/**
+ * Compute the dedupe-upward eligibility of an installed-version conflict. See
+ * {@link InstalledVersionConflictClass}. `newEdges` are the NEW (pin) version's
+ * manifest dependency edges; `installedRows` is the pre-install canonical
+ * snapshot; `isAutoInstallableEdge` is the shared required-edge predicate.
+ *
+ * `orgId` is the scope of the RESOLVED conflict row (the row actually
+ * installed) — NOT necessarily the requesting install's org: a scope-aware
+ * install check resolves the org's own row first, else the platform row, so an
+ * org install can conflict with a PLATFORM row. Dependent-admissibility and
+ * self-satisfiability are both evaluated at this resolved scope (a platform
+ * conflict is checked against platform dependents/rows).
+ */
+export function classifyInstalledVersionConflict(args: {
+  packageName: string;
+  installedVersion: string;
+  pin: string;
+  newEdges: ExtensionDependency[];
+  installedRows: InstalledExtension[];
+  orgId: string | null;
+  isAutoInstallableEdge: (dep: ExtensionDependency) => boolean;
+}): InstalledVersionConflictClass {
+  const { packageName, installedVersion, pin, newEdges, installedRows, orgId, isAutoInstallableEdge } =
+    args;
+
+  // NEWER (or equal — equal never reaches here) installed than required: a
+  // downgrade / side-by-side concern, out of dedupe-upward scope.
+  if (comparePluginVersions(installedVersion, pin) !== "update-available") {
+    return { kind: "installed-newer" };
+  }
+
+  // OLDER installed → an upgrade would dedupe upward. (i) ADMISSIBILITY: does
+  // every live dependent's install-blocking edge admit the pin? Reuse the
+  // canonical update gate — its error already NAMES the dependents + the exact
+  // violated constraints (the conflict evidence outcome 5 requires).
+  try {
+    assertUpdateDoesNotBreakDependents(packageName, pin, installedRows, { organizationId: orgId });
+  } catch (err) {
+    if (err instanceof DependencyClosureError && err.code === "UPDATE_BREAKS_DEPENDENTS") {
+      return { kind: "disjoint-dependents", dependents: err.dependents, detail: err.message };
+    }
+    throw err;
+  }
+
+  // (ii) TRANSITIVE SELF-SATISFIABILITY: every REQUIRED (auto-installable) edge
+  // of the NEW version must ALREADY resolve to a present row at an admissible
+  // version — no new install, no chained update. (One level here; the planner's
+  // BFS enforces the deeper transitive closure by the same predicate when a
+  // dedupe-upward member is actually emitted.)
+  const unmetDeps: string[] = [];
+  for (const edge of newEdges) {
+    if (!isAutoInstallableEdge(edge)) continue;
+    const depRow = findLiveRow(installedRows, edge.packageName, orgId);
+    if (!depRow) {
+      unmetDeps.push(edge.packageName);
+      continue;
+    }
+    const depVersion = installedVersionOfRow(depRow);
+    // A dev/local-sourced row (no registry version) is presence-only — it
+    // satisfies the edge (the planner never auto-reinstalls over it).
+    const satisfied =
+      depVersion === null
+        ? true
+        : edge.versionConstraint.kind === "semver-range"
+          ? edge.versionConstraint.range === "*" ||
+            satisfiesVersionRange(depVersion, edge.versionConstraint.range)
+          : edge.versionConstraint.kind === "exact"
+            ? edge.versionConstraint.version === depVersion
+            : false; // git-ref: not satisfiable against a registry version
+    if (!satisfied) unmetDeps.push(edge.packageName);
+  }
+  if (unmetDeps.length > 0) return { kind: "upgradable-needs-own-deps", unmetDeps };
+  return { kind: "upgradable-clean" };
+}
+
 export type PlanDependencyInstallInput = {
   root: { packageName: string; version: string };
   orgId: string | null;
@@ -351,13 +462,63 @@ export async function planDependencyInstall(
           ? (row.source as { version: string }).version
           : null;
       if (row && installedVersion && installedVersion !== pin) {
-        throw new DependencyPlanError(
-          "INSTALLED_VERSION_CONFLICT",
+        // DEDUPE-UPWARD analysis (#1039): classify the conflict and CARRY the
+        // computed evidence into the refusal. Auto-EXECUTING the upgrade (an
+        // `action:"update"` batch member) is deferred pending the durable
+        // prior-state compensation contract; the refusal here is unchanged in
+        // behavior (INSTALLED_VERSION_CONFLICT on every path) but now names the
+        // conflicting or admitting dependents so the operator knows WHY and
+        // whether an explicit update resolves it.
+        const conflict = classifyInstalledVersionConflict({
+          packageName,
+          installedVersion,
+          pin,
+          newEdges: edges,
+          installedRows,
+          // The conflict is about the ROW ACTUALLY INSTALLED, which `findLiveRow`
+          // may have resolved to the PLATFORM row (org fell back). Admissibility
+          // + self-satisfiability MUST be evaluated at THAT row's scope, not the
+          // requested `orgId`: a platform-scoped conflict is checked against
+          // platform dependents/rows (an org-scoped check would see no target
+          // and miss platform dependents, or satisfy new deps from org rows a
+          // platform install cannot use).
+          orgId: row.organizationId ?? null,
+          isAutoInstallableEdge: deps.isAutoInstallableEdge,
+        });
+        const requestedFrom = requestedBy?.from ?? root.packageName;
+        const base =
           `${packageName} is already installed at ${installedVersion}, but ` +
-            `${requestedBy?.from ?? root.packageName} needs it at ${pin} — refusing to ` +
-            `silently change an installed version. To proceed, update ${packageName} to ` +
-            `${pin} explicitly (extensions_update ${packageName}@${pin}) and retry this install.`,
-        );
+          `${requestedFrom} needs it at ${pin} — refusing to silently change an installed version.`;
+        let detail: string;
+        switch (conflict.kind) {
+          case "disjoint-dependents":
+            detail =
+              ` The installed version is OLDER, but upgrading it to ${pin} would break ` +
+              `installed dependent(s) whose declared ranges do not admit ${pin}: ` +
+              `${conflict.detail} Update the named dependent(s) to versions that admit ` +
+              `${pin} first, or keep ${packageName} at a satisfying version.`;
+            break;
+          case "upgradable-needs-own-deps":
+            detail =
+              ` The installed version is OLDER and every installed dependent admits ${pin}, ` +
+              `but ${packageName}@${pin} needs dependencies not yet installed in a satisfying ` +
+              `state (${conflict.unmetDeps.join(", ")}). Install those first, then update ` +
+              `${packageName} to ${pin} (extensions_update ${packageName}@${pin}) and retry.`;
+            break;
+          case "upgradable-clean":
+            detail =
+              ` The installed version is OLDER, every installed dependent admits ${pin}, and ` +
+              `${packageName}@${pin} needs no new dependencies — update ${packageName} to ${pin} ` +
+              `explicitly (extensions_update ${packageName}@${pin}) and retry this install.`;
+            break;
+          case "installed-newer":
+            detail =
+              ` The installed version is NEWER than ${pin} — refusing to downgrade. Pin ` +
+              `${requestedFrom} to a range that admits ${installedVersion}, or remove ` +
+              `${packageName} first if a downgrade is truly intended.`;
+            break;
+        }
+        throw new DependencyPlanError("INSTALLED_VERSION_CONFLICT", base + detail);
       }
       if (row && (installedVersion === null || installedVersion === pin)) {
         // A live row with no verdaccio version (dev/local source) counts as

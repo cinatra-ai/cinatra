@@ -154,6 +154,7 @@ export function enforceConnectorPolicy(
         : { allowed: false, reason: "manage_requires_admin", visibility };
     }
     const decision = evaluateExtensionAccess({
+      kind: "connector",
       policy: effectivePolicy,
       coOwnerUserIds: access.coOwnerUserIds,
       installedByUserId: access.installedByUserId,
