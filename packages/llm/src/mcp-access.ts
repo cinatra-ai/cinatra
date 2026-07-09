@@ -15,6 +15,7 @@ import {
 import { buildSingleExternalMcpTool } from "@/lib/external-mcp-registry";
 import { buildAllToolboxProviderTools } from "@/lib/llm-toolbox-providers";
 import { getPublicMcpServerUrl, getLlmMcpCredentials, getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
+import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 // Re-export so existing callers don't need to change their imports.
 export { getPublicMcpServerUrl, getLlmMcpCredentials, hasLlmMcpAccess, getLlmMcpAccessStatus } from "@cinatra-ai/mcp-server/credentials";
@@ -49,6 +50,13 @@ export type AgentRunMcpActor = {
   orgId: string;
   runId: string;
   platformRole: "platform_admin" | "member";
+  /**
+   * The agent's anchored scope-ceiling CHAIN (see @cinatra-ai/mcp-server/
+   * obo-ceiling). Derived at dispatch, persisted on the run, re-derived +
+   * containment-checked at mint, then minted into the OBO token. Structurally
+   * mirrors the app-layer `AgentRunMcpActor` (agent-run-mcp-actor-token.ts).
+   */
+  oboCeiling: OboCeilingChain;
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
