@@ -373,6 +373,7 @@
     { "alias": "@cinatra-ai/chat/actions", "target": "./packages/chat/src/actions.ts" },
     { "alias": "@cinatra-ai/chat/module", "target": "./packages/chat/src/integration/module.ts" },
     { "alias": "@cinatra-ai/chat/mcp-handlers", "target": "./packages/chat/src/mcp/handlers.ts" },
+    { "alias": "@cinatra-ai/chat/renderer", "target": "./packages/chat/src/renderer/index.ts" },
     { "alias": "@cinatra-ai/skills/mcp-client", "target": "./packages/skills/src/mcp/client/deterministic-client.ts" },
     { "alias": "@cinatra-ai/skills/extension-handler", "target": "./packages/skills/src/extension-handler.ts" },
     { "alias": "@cinatra-ai/skills/llm-matching/constants", "target": "./packages/skills/src/llm-matching/constants.ts" },

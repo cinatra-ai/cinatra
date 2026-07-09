@@ -7,7 +7,10 @@
 //   2. raw inline/block HTML must be escaped, not passed through,
 //   3. link hrefs must be scheme-allowlisted (no javascript:/data:/etc.).
 import { describe, expect, it } from "vitest";
-import { renderMarkdown } from "../markdown-render";
+// Import through the reusable renderer module boundary (cinatra#1219, S3) so the
+// XSS suite pins the hardening of the PUBLIC extracted entry, not just the
+// internal module.
+import { renderMarkdown } from "../renderer";
 
 // detectWidgets is required by renderMarkdown; a no-op detector keeps the test
 // focused on the markdown→HTML escaping behavior.
