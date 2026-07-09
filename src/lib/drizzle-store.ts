@@ -2873,6 +2873,7 @@ END $$` },
     // any reader that encounters owner_id='' MUST treat it the same as
     // legacy NULL-org rows (no implicit access).
     { text: `UPDATE "${schemaName.replaceAll('"', '""')}"."agent_templates" SET owner_level = 'organization', owner_id = COALESCE(org_id, '') WHERE owner_level IS NULL` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS obo_ceiling text` }, // additive nullable JSON-as-text OBO scope-ceiling; written at run creation, re-derived + containment-checked at mint (fail closed). Pre-existing rows backfilled by migrations/core/core__0017_backfill-agent-run-obo-ceiling.mjs (fresh installs ledger-fake it).
     // usage_events provider-routing telemetry.
     // requested_provider: what cinatra_llm.preferredProvider asked for (NULL when no preference).
     // effective_provider: the provider that actually dispatched.
