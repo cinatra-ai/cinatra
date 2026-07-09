@@ -21,6 +21,14 @@ import { REPO_ROOT, baseUse, desktopChrome, repoPath, suitePath } from "./base";
 const PORT = Number(process.env.E2E_AGENTS_RUN_PORT ?? 3000);
 const BASE_URL = process.env.E2E_AGENTS_RUN_BASE_URL ?? `http://localhost:${PORT}`;
 
+// When E2E_REUSE_SERVER=1, Playwright attaches to an already-running server
+// (or, for the static `tunnel-wiring` invariant project, needs no server at
+// all) instead of booting its own `pnpm dev`. Mirrors the render-smoke config.
+// The live agent-execution projects (preflight, agents-run, chat-*) still need
+// the canonical long-lived schema + WayFlow + real credentials and are not run
+// under this path.
+const EXTERNAL_SERVER = process.env.E2E_REUSE_SERVER === "1";
+
 export default defineConfig({
   testDir: suitePath("agents-run"),
   outputDir: repoPath("test-results"),
@@ -51,21 +59,23 @@ export default defineConfig({
   // `pnpm dev`. The agents-run config defaults to `reuseExistingServer:
   // true` because the canonical schema can never be created on demand —
   // it lives in long-lived dev infrastructure.
-  webServer: {
-    // POSTGRES_SYNC_TIMEOUT_MS=90s: `pnpm dev` (Turbopack) + sustained
-    // suite load starves the synchronous Postgres worker thread; the
-    // production 30s ceiling false-positives mid-test ("Timed out while
-    // executing Postgres query" → 500 → no redirect → waitForURL fails).
-    // 90s absorbs the dev-load pathology. Only the test webServer gets
-    // this; production stays at the 30s default.
-    command: `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
-    cwd: REPO_ROOT,
-    url: BASE_URL,
-    timeout: 240_000,
-    reuseExistingServer: !process.env.CI,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
+  webServer: EXTERNAL_SERVER
+    ? undefined
+    : {
+        // POSTGRES_SYNC_TIMEOUT_MS=90s: `pnpm dev` (Turbopack) + sustained
+        // suite load starves the synchronous Postgres worker thread; the
+        // production 30s ceiling false-positives mid-test ("Timed out while
+        // executing Postgres query" → 500 → no redirect → waitForURL fails).
+        // 90s absorbs the dev-load pathology. Only the test webServer gets
+        // this; production stays at the 30s default.
+        command: `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
+        cwd: REPO_ROOT,
+        url: BASE_URL,
+        timeout: 240_000,
+        reuseExistingServer: !process.env.CI,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
 
   projects: [
     {

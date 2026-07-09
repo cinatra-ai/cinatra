@@ -27,7 +27,7 @@ import {
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import {
-  agentPackageManifestSchema,
+  parseAgentPackageManifestForInstall,
   CINATRA_AGENT_PACKAGE_TYPE,
   CINATRA_AGENT_MANIFEST_VERSION,
 } from "./verdaccio/package-contract";
@@ -243,8 +243,15 @@ async function _installAgentFromPackageImpl(
   // skill-registration compensation flow, re-enter without deadlock.
   return withInstallLock(extracted.packageName, async () => {
   try {
-    // Plugin-system returns raw manifest/payload; re-apply agent-specific validation.
-    const manifest = agentPackageManifestSchema.parse(extracted.manifest);
+    // Plugin-system returns raw manifest/payload; re-apply agent-specific
+    // validation. A contract violation throws a STRUCTURED, per-package/per-field
+    // AgentPackageContractViolationError (not a raw ZodError → opaque 500); on a
+    // closure member the batch saga re-throws it raw and the MCP install surface
+    // renders it as a structured result.
+    const manifest = parseAgentPackageManifestForInstall(
+      extracted.manifest,
+      extracted.packageName,
+    );
 
     if (manifest.cinatra.packageType !== CINATRA_AGENT_PACKAGE_TYPE) {
       throw new Error(`Unsupported package type: ${manifest.cinatra.packageType}`);

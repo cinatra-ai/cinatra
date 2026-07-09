@@ -299,6 +299,7 @@ export async function decideConnectionUse(input: {
     : actor;
 
   const clamped = evaluateExtensionAccess({
+    kind: "connection",
     policy: clampedPolicy,
     coOwnerUserIds: clampedCoOwners,
     installedByUserId: clampedInstaller,
@@ -312,6 +313,7 @@ export async function decideConnectionUse(input: {
   // re-evaluation with the raw inputs — no extra I/O) for the actionable
   // error + audit metadata.
   const raw = evaluateExtensionAccess({
+    kind: "connection",
     policy: basePolicy,
     coOwnerUserIds,
     installedByUserId: installedBy,
