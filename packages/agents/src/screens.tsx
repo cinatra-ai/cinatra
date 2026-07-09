@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { redirect, notFound } from "next/navigation";
 import { format } from "date-fns";
 import { TriangleAlert } from "lucide-react";
@@ -48,7 +47,6 @@ import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { ImportAgentForm } from "./import-form";
 import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
 // InstallScopeDialog + server-side picker target builder (shared with the
@@ -59,20 +57,6 @@ import { buildInstallTargetPickerContext } from "./install-target-picker";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// Codes-only flash island config for the approval decision result. The decision
-// actions redirect with `?status=<code>` (success) / `?error=<code>` (failure);
-// each maps to a STATIC message (the raw MCP error is logged server-side).
-const APPROVAL_DECISION_TOASTS: SearchParamToastConfig[] = [
-  { param: "status", value: "approved", message: "The proposal was approved and published (private-scoped).", variant: "success" },
-  { param: "status", value: "rejected", message: "The proposal was rejected; the author can edit and resubmit.", variant: "success" },
-  { param: "status", value: "published", message: "The held proposal was re-published.", variant: "success" },
-  { param: "error", value: "unauthorized", message: "Unauthorized — an admin session is required.", variant: "error" },
-  { param: "error", value: "no-active-org", message: "No active organization.", variant: "error" },
-  { param: "error", value: "reason-required", message: "A rejection reason is required.", variant: "error" },
-  { param: "error", value: "decision-failed", message: "The decision could not be recorded. See server logs for details.", variant: "error" },
-  { param: "error", value: "publish-failed", message: "The proposal could not be re-published. See server logs for details.", variant: "error" },
-];
 
 /**
  * Risk-class badge palette — 4-tier visual distinction.
@@ -258,9 +242,6 @@ export async function AgentApprovalDetailScreen({
         description={`Proposal from ${req.authorId} — status ${req.status}`}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <Suspense fallback={null}>
-          <SearchParamToast toasts={APPROVAL_DECISION_TOASTS} />
-        </Suspense>
         <div className="soft-panel rounded-card px-6 py-4">
           <div className="text-xs text-muted-foreground font-mono">request {req.id}</div>
           <div className="text-xs text-muted-foreground font-mono">snapshotHash {req.snapshotHash.slice(0, 16)}…</div>

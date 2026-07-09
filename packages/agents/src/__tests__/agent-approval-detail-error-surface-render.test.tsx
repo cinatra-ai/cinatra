@@ -3,12 +3,14 @@
  * DOM-render proof that a decision outcome surfaces as a TOAST via the codes-only
  * <SearchParamToast> island (cinatra#391 → #1109), not a silent reload.
  *
- * AgentApprovalDetailScreen (screens.tsx) is an async server component whose full
- * module graph cannot be imported in isolation here. The sibling source-invariant
- * test pins that the screen MOUNTS the island with APPROVAL_DECISION_TOASTS and
- * that the decision codes exist. This test renders the REAL island (from sdk-ui)
- * with a representative slice of that config and mocked next/navigation + toast,
- * and asserts the mapped STATIC message toasts — never the raw URL value.
+ * The decision island is mounted at the host PAGE
+ * (src/app/configuration/agents/approvals/[id]/page.tsx) with the co-located
+ * APPROVAL_DECISION_TOASTS map (approval-decision-flash.ts) — NOT inside the
+ * async server screen, which the server API routes reach. The sibling
+ * source-invariant test pins that page mount + the co-located codes. This test
+ * renders the REAL island (from sdk-ui) with a representative slice of that
+ * config and mocked next/navigation + toast, and asserts the mapped STATIC
+ * message toasts — never the raw URL value.
  */
 import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";

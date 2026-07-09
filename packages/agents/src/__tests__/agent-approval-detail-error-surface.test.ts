@@ -4,21 +4,43 @@
  *
  * A failed approve/reject/retry redirects to
  * `/configuration/agents/approvals/<id>?error=<code>` and a success to
- * `?status=<code>` (see the decision actions). The screen mounts
- * <SearchParamToast toasts={APPROVAL_DECISION_TOASTS}>, which maps each code to a
- * STATIC message and toasts it — no inline Alert, and the host route no longer
- * threads the params (the island reads them from the URL client-side).
+ * `?status=<code>` (see the decision actions). The island is mounted at the HOST
+ * PAGE (src/app/configuration/agents/approvals/[id]/page.tsx) with the co-located
+ * APPROVAL_DECISION_TOASTS map (approval-decision-flash.ts), which maps each code
+ * to a STATIC message and toasts it — no inline Alert.
  *
- * Strategy: file-grep assertions scoped to the AgentApprovalDetailScreen source
- * block, matching this package's render-test pattern (the async server component
- * can't be imported in isolation — its module graph transitively reaches the
- * generated extension wiring).
+ * Crucially the island is mounted at the PAGE, NOT inside the @cinatra-ai/agents
+ * screen: screens.tsx is reachable from the server API routes (/api/mcp,
+ * /api/a2a, /api/llm-bridge) and /chat, so importing the client toast island
+ * there leaks it onto those routes' first-party graph (the route-graph ratchet).
+ * This test pins that invariant — the screen must NOT reference the island.
+ *
+ * Strategy: file-grep assertions scoped to the relevant source blocks, matching
+ * this package's render-test pattern (the async server component can't be
+ * imported in isolation — its module graph transitively reaches the generated
+ * extension wiring).
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 
 const screensPath = path.resolve(__dirname, "..", "screens.tsx");
+
+const appDir = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "..",
+  "src",
+  "app",
+  "configuration",
+  "agents",
+  "approvals",
+  "[id]",
+);
+const pagePath = path.resolve(appDir, "page.tsx");
+const flashPath = path.resolve(appDir, "approval-decision-flash.ts");
 
 function readScreens(): string {
   return readFileSync(screensPath, "utf8");
@@ -38,21 +60,32 @@ function detailScreen(): string {
 }
 
 describe("AgentApprovalDetailScreen decision surfacing (#391 → toast)", () => {
-  it("mounts the codes-only <SearchParamToast> island for decision outcomes", () => {
-    const body = detailScreen();
-    expect(body).toMatch(/<SearchParamToast\s+toasts=\{APPROVAL_DECISION_TOASTS\}/);
+  it("mounts the codes-only <SearchParamToast> island at the host PAGE (not the screen)", () => {
+    const page = readFileSync(pagePath, "utf8");
+    expect(page).toMatch(/<SearchParamToast\s+toasts=\{APPROVAL_DECISION_TOASTS\}/);
+    expect(page).toMatch(/from "\.\/approval-decision-flash"/);
   });
 
-  it("maps the success + error decision codes to STATIC messages", () => {
+  it("keeps the client toast island OUT of the @cinatra-ai/agents screen graph (route-graph ratchet)", () => {
+    // screens.tsx is reachable from the server API routes; importing/mounting the
+    // client island here would leak +2 first-party modules onto /api/mcp,
+    // /api/a2a, /api/llm-bridge and /chat.
     const src = readScreens();
+    expect(src).not.toMatch(/SearchParamToast/);
+    expect(src).not.toMatch(/search-param-toast/);
+    expect(src).not.toMatch(/APPROVAL_DECISION_TOASTS/);
+  });
+
+  it("maps the success + error decision codes to STATIC messages (co-located flash map)", () => {
+    const flash = readFileSync(flashPath, "utf8");
     // status success codes
-    expect(src).toMatch(/value:\s*"approved"/);
-    expect(src).toMatch(/value:\s*"rejected"/);
-    expect(src).toMatch(/value:\s*"published"/);
+    expect(flash).toMatch(/value:\s*"approved"/);
+    expect(flash).toMatch(/value:\s*"rejected"/);
+    expect(flash).toMatch(/value:\s*"published"/);
     // error codes (the raw MCP error is logged server-side, never toasted)
-    expect(src).toMatch(/value:\s*"decision-failed"/);
-    expect(src).toMatch(/value:\s*"unauthorized"/);
-    expect(src).toMatch(/value:\s*"reason-required"/);
+    expect(flash).toMatch(/value:\s*"decision-failed"/);
+    expect(flash).toMatch(/value:\s*"unauthorized"/);
+    expect(flash).toMatch(/value:\s*"reason-required"/);
   });
 
   it("no longer renders an inline decision Alert (the outcome is a toast)", () => {
@@ -64,21 +97,6 @@ describe("AgentApprovalDetailScreen decision surfacing (#391 → toast)", () => 
 });
 
 describe("the host route no longer threads searchParams into the screen (#391 → toast)", () => {
-  const pagePath = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "..",
-    "..",
-    "src",
-    "app",
-    "configuration",
-    "agents",
-    "approvals",
-    "[id]",
-    "page.tsx",
-  );
-
   it("renders the screen with only the id (the island reads the URL params)", () => {
     const src = readFileSync(pagePath, "utf8");
     expect(src).toMatch(/<AgentApprovalDetailScreen\s+id=\{id\}\s*\/>/);
