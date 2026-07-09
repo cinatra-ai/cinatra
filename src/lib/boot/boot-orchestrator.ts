@@ -23,6 +23,7 @@ import { schemaVersionPreconditionPhases } from "@/lib/boot/phases/schema-versio
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
+import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
@@ -135,6 +136,14 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // skips in-progress drafts (see the phase module). `degraded`: a failure logs
   // and boot continues (an unrepairable agent stays gated, as it did pre-#418).
   await run(agentMarkerBackfillPhases());
+
+  // ── agent runtime-dependency projection backfill (cinatra#1056) ──────────────
+  // Re-project each installed template's canonical dependency edges onto the two
+  // runtime-gate columns the run layer reads (connector preflight + orchestrator
+  // readiness). AFTER the extension activation + agent-mount phases above so the
+  // canonical rows are loaded. `retryable`: a backfill failure logs and boot
+  // continues (the pass is idempotent and retries next boot).
+  await run(agentRuntimeDepBackfillPhases());
 
   // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────
   // Original interleave point: right after install-op cleanup, before the

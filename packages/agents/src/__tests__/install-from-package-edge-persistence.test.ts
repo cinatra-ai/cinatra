@@ -35,6 +35,11 @@ vi.mock("@cinatra-ai/extensions/manifest-dependencies", () => ({
   }),
   resolveLiveCanonicalEdgeTargets: (...a: unknown[]) => resolveTargets(...(a as [])),
   writeDependencyEdgesToCanonicalRows: (...a: unknown[]) => writeEdges(...(a as [])),
+  // cinatra#1056: the install path now derives the runtime-gate columns from the
+  // canonical edges via this helper. EDGES here is kind-less, so the projection
+  // is a no-op for this suite; the export just has to exist for the destructure.
+  versionConstraintToRange: (vc: { kind: string; range?: string; version?: string; ref?: string }) =>
+    vc.kind === "semver-range" ? vc.range! : vc.kind === "exact" ? vc.version! : vc.ref!,
 }));
 
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
