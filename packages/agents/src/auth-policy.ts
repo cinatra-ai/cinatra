@@ -49,7 +49,11 @@ export type {
   AgentAuthPolicyVisibilitySelection,
 } from "./auth-policy-types";
 import { AgentAuthPolicySchema, DEFAULT_AGENT_AUTH_POLICY } from "./auth-policy-types";
-import type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "./auth-policy-types";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
+} from "./auth-policy-types";
 
 // ---------------------------------------------------------------------------
 // Operation → Permission mapping
@@ -374,17 +378,13 @@ export async function actorContextFromMcpRequest(
   });
 }
 
-/**
- * Pure helper: maps an AgentAuthPolicyVisibility value to the locked UI-SPEC
- * §C copy strings.
- *
- * Returns null for "owner" and undefined (no element rendered for those).
- */
-export function buildScopeReason(
-  visibility: AgentAuthPolicyVisibility | undefined,
+/** Per-token scope-reason copy (UI-SPEC §C). Returns null for "owner" (owner
+ * access is implicit) and any unrecognized token. */
+function scopeReasonForToken(
+  visibility: AgentAuthPolicyVisibility,
   context: { orgName?: string; teamName?: string; projectName?: string },
 ): string | null {
-  if (!visibility || visibility === "owner") return null;
+  if (visibility === "owner") return null;
   if (visibility.startsWith("team:"))
     return `You can see this because you're a member of ${context.teamName ?? "a team"}.`;
   if (visibility === "org" || visibility.startsWith("org:"))
@@ -394,6 +394,37 @@ export function buildScopeReason(
   if (visibility === "workspace") return "Visible to everyone in the workspace.";
   if (visibility === "admin") return "Visible to platform admins only.";
   return null;
+}
+
+/**
+ * Pure helper: maps an AgentAuthPolicyVisibility value — a single token OR a
+ * NON-EMPTY selection array (multi-scope W2) — to the locked UI-SPEC §C copy.
+ *
+ * A selection joins its DISTINCT per-token reasons (a union of grants). A
+ * scalar (or single-token array) reduces to the exact pre-array single reason,
+ * so existing single-token callers are unchanged. `owner` tokens contribute no
+ * reason; an all-`owner`, empty, or undefined input returns null. `context`
+ * carries one org/team/project name set — a multi-token selection spanning
+ * several concrete loci reuses those names (richer per-token naming is the W3
+ * picker's wiring).
+ */
+export function buildScopeReason(
+  visibility:
+    | AgentAuthPolicyVisibility
+    | readonly AgentAuthPolicyVisibility[]
+    | undefined,
+  context: { orgName?: string; teamName?: string; projectName?: string },
+): string | null {
+  if (!visibility) return null;
+  const tokens: readonly AgentAuthPolicyVisibility[] = Array.isArray(visibility)
+    ? visibility
+    : [visibility];
+  const reasons: string[] = [];
+  for (const t of tokens) {
+    const r = scopeReasonForToken(t, context);
+    if (r && !reasons.includes(r)) reasons.push(r);
+  }
+  return reasons.length > 0 ? reasons.join(" ") : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -508,28 +539,27 @@ export function policyAllows(
   // kernel semantic: platform_admin bypasses org-guard and
   // resource-guard alike.
   if (actor.platformRole === "platform_admin") return true;
-  // TRANSITIONAL (multi-scope W1): each visibility field is now a NON-EMPTY
-  // array (union of grants). This matcher still consults the FIRST token to
-  // preserve today's single-token semantics — the any-match lift (iterate
-  // every token; admit if ANY token admits the actor) is the enforcement-lift
-  // issue (W2). All writers produce single-token arrays until the multi-select
-  // picker ships (W3, which lands after W2), so `[0]` is behavior-identical to
-  // the pre-array scalar read and cannot over-grant.
-  let visibility: AgentAuthPolicyVisibility;
+  // Multi-scope W2: each visibility field is a NON-EMPTY array (a union of
+  // grants). The matcher is ANY-MATCH — the actor is admitted iff SOME token in
+  // the selected field admits them (`matchRunVisibilityToken` is the per-token
+  // decision). A single-token field (every writer until the W3 multi-select
+  // picker) reduces to the exact pre-array scalar decision, so this can neither
+  // over- nor under-grant an existing policy.
+  let tokens: AgentAuthPolicyVisibilitySelection;
   switch (op) {
     case "list":
-      visibility = policy.runListVisibility[0];
+      tokens = policy.runListVisibility;
       break;
     case "read":
     case "editOutput":
-      visibility = policy.runDataVisibility[0];
+      tokens = policy.runDataVisibility;
       break;
     case "execute":
     case "approveHitl":
     case "respondToHitl":
     case "cancel":
       // cancel is an execute-tier op (mutates run state).
-      visibility = policy.runExecuteVisibility[0];
+      tokens = policy.runExecuteVisibility;
       break;
     case "share":
       // share is gated by allowRunSharing first; if the policy
@@ -537,62 +567,76 @@ export function policyAllows(
       // Otherwise it surfaces run data to a wider audience and follows
       // runDataVisibility (read-tier).
       if (!policy.allowRunSharing) return false;
-      visibility = policy.runDataVisibility[0];
+      tokens = policy.runDataVisibility;
       break;
     default: {
-      // Exhaustive guard. When RunAccessOperation gains a new variant
-      // (e.g. "share" for the future allowRunSharing surface), this line
-      // fails tsgo and forces an explicit decision
-      // about which visibility tier governs the new op. Without the
-      // guard, `visibility` would be uninitialized and the post-switch
-      // comparisons would throw "Cannot read properties of undefined".
+      // Exhaustive guard. When RunAccessOperation gains a new variant this
+      // line fails tsgo and forces an explicit decision about which visibility
+      // tier governs the new op.
       const _exhaustive: never = op;
       throw new Error(
         `policyAllows: unhandled RunAccessOperation: ${String(_exhaustive)}`,
       );
     }
   }
-  // ---------------------------------------------------------------------------
-  // Widened visibility branches. Order: workspace bare literal,
-  // then team:<id> prefix, then project:<id> prefix. The existing "admin" /
-  // "owner" / "org" tail stays unchanged below.
-  // ---------------------------------------------------------------------------
+  // Any-match: admit if ANY token in the field admits the actor.
+  return tokens.some((visibility) => matchRunVisibilityToken(visibility, actor));
+}
 
+/**
+ * Per-token run-visibility decision — the single-token predicate the any-match
+ * matcher in {@link policyAllows} folds over each field's token array. Runs
+ * ONLY for non-platform-admin actors (platform_admin is short-circuited in
+ * policyAllows before any token is consulted) and AFTER the kernel `can()`
+ * cross-org guard.
+ *
+ * Tiers (run path). NOTE: `"admin"` here is platform-admin-only — it DIVERGES
+ * from the owner-aware `"admin"` in the extension matcher
+ * (`packages/extensions/src/enforce-extension-access.ts`); each matcher keeps
+ * its own admin semantics.
+ *   workspace    → every same-org member (guard already passed) → allow
+ *   org:<id>     → actor's active org equals <id>
+ *   team:<id>    → actor is a member of <id>
+ *   project:<id> → actor holds a grant on <id>
+ *   admin        → deny (platform_admin already returned true upstream)
+ *   owner        → deny (owner is short-circuited above the policy gate)
+ *   org (legacy) → allow (kernel cross-org guard already applied)
+ */
+function matchRunVisibilityToken(
+  visibility: AgentAuthPolicyVisibility,
+  actor: ActorContext,
+): boolean {
   if (visibility === "workspace") {
-    // "Workspace: All" means EVERY workspace user can use the resource —
-    // not just org_admin/org_owner — matching the UI label
-    // "Whole Workspace / All".
-    // Safe here because policyAllows() runs AFTER enforceRunAccess() +
-    // the kernel can() cross-org guard for non-owners
-    // (src/lib/authz/enforce.ts) — an anonymous/missing actor is already
-    // rejected upstream and a different-org actor is already blocked by
-    // the org guard, so this is "every same-org member of this run's org"
-    // for runs. Manage/grant of workspace visibility stays admin-only
-    // (canGrantWorkspace +
+    // "Workspace: All" means EVERY workspace user can use the resource — not
+    // just org_admin/org_owner — matching the UI label "Whole Workspace / All".
+    // Safe here because policyAllows() runs AFTER enforceRunAccess() + the
+    // kernel can() cross-org guard for non-owners (src/lib/authz/enforce.ts):
+    // an anonymous/missing actor is already rejected upstream and a
+    // different-org actor is already blocked by the org guard. Manage/grant of
+    // workspace visibility stays admin-only (canGrantWorkspace +
     // requireResourceAccess mode:"manage").
     return true;
   }
   if (typeof visibility === "string" && visibility.startsWith("org:")) {
-    const orgId = visibility.slice("org:".length);
-    return Boolean(actor.organizationId === orgId);
+    return actor.organizationId === visibility.slice("org:".length);
   }
   if (typeof visibility === "string" && visibility.startsWith("team:")) {
-    const teamId = visibility.slice("team:".length);
-    return Boolean(actor.teamIds?.includes(teamId));
+    return Boolean(actor.teamIds?.includes(visibility.slice("team:".length)));
   }
   if (typeof visibility === "string" && visibility.startsWith("project:")) {
-    const projectId = visibility.slice("project:".length);
-    return Boolean(actor.projectIds?.includes(projectId));
+    return Boolean(
+      actor.projectIds?.includes(visibility.slice("project:".length)),
+    );
   }
-  // "admin" tier with non-admin actor: deny (admin bypass already returned
-  // above for platform_admin === true).
+  // "admin" tier with a non-admin actor: deny (platform_admin bypass already
+  // returned true in policyAllows).
   if (visibility === "admin") return false;
-  // "owner" tier never allows here — owner is short-circuited above the
-  // policy gate. Any non-owner reaching this code with visibility="owner"
-  // is denied. "org" tier defers to the kernel's already-passed allow
-  // decision (which has applied the cross-org guard).
+  // "owner" tier never allows here — owner is short-circuited above the policy
+  // gate. Any non-owner reaching this code with visibility="owner" is denied.
   if (visibility === "owner") return false;
-  return true; // "org"
+  // "org" (legacy bare token) defers to the kernel's already-passed allow
+  // decision (which has applied the cross-org guard).
+  return true;
 }
 
 /**

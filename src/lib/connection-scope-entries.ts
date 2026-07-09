@@ -26,7 +26,10 @@
 //                  auto-shares): treated exactly like an "owner" grant.
 // ---------------------------------------------------------------------------
 
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+} from "@cinatra-ai/agents/auth-policy";
 import type { NormalizedResourceScope } from "@/lib/scope-filter";
 
 /** The slice of the identity row this module needs (keeps the fold pure). */
@@ -36,6 +39,36 @@ export type ConnectionScopeRow = {
   organizationId: string | null;
   ownerUserId: string;
 };
+
+/**
+ * Map ONE grant token to its scope-filter entry, or null when the token
+ * contributes no locus (owner-only, a broad `workspace` grant, or an unknown
+ * shape — all fail-closed to "no entry"). The share-locus projection reads the
+ * "use" tier (`runDataVisibility`).
+ */
+function scopeEntryForToken(
+  row: ConnectionScopeRow,
+  visibility: AgentAuthPolicyVisibility,
+): NormalizedResourceScope | null {
+  if (visibility === "owner") return null; // owner-only: nothing beyond personal
+  if (visibility === "workspace") return null; // broad grant — default view only
+  if (visibility === "admin") return { locus: "workspace", adminOnly: true };
+  if (visibility === "org") {
+    // Legacy bare token: binds to the row's own org; null-org rows contribute
+    // nothing (locusId undefined matches nothing — fail-closed).
+    return { locus: "organization", locusId: row.organizationId ?? undefined };
+  }
+  if (visibility.startsWith("org:")) {
+    return { locus: "organization", locusId: visibility.slice("org:".length) };
+  }
+  if (visibility.startsWith("team:")) {
+    return { locus: "team", locusId: visibility.slice("team:".length) };
+  }
+  if (visibility.startsWith("project:")) {
+    return { locus: "project", locusId: visibility.slice("project:".length) };
+  }
+  return null; // unknown token shape — fail-closed
+}
 
 /**
  * Fold the actor-visible connection rows + their grant rows into per-connector
@@ -61,48 +94,16 @@ export function buildConnectionScopeEntries(
     // shared it as.
     if (isOwn) push(row.connectorPackageId, { locus: "personal" });
 
-    // Multi-scope W1: runDataVisibility is a token array. This share-locus
-    // projection reads the FIRST token to preserve single-token behavior; the
-    // per-token fan-out (one locus entry per token) is the enforcement-lift
-    // issue (W2). Single-token writes until the multi-select picker (W3).
-    const visibility = policies.get(row.id)?.runDataVisibility?.[0] ?? "owner";
-    if (visibility === "owner") continue; // owner-only: nothing beyond personal
-    if (visibility === "workspace") continue; // broad grant — default view only
-    if (visibility === "admin") {
-      push(row.connectorPackageId, { locus: "workspace", adminOnly: true });
-      continue;
+    // Multi-scope W2: runDataVisibility is a NON-EMPTY token array (a union of
+    // grants). FAN OUT one locus entry per token — a connection shared with
+    // both team:X and project:P appears under each. Tokens are already deduped
+    // at write time (normalizeVisibilitySelection). A single-token field emits
+    // exactly one entry (pre-array behavior).
+    const selection = policies.get(row.id)?.runDataVisibility ?? ["owner"];
+    for (const visibility of selection) {
+      const entry = scopeEntryForToken(row, visibility);
+      if (entry) push(row.connectorPackageId, entry);
     }
-    if (visibility === "org") {
-      // Legacy bare token: binds to the row's own org; null-org rows
-      // contribute nothing (locusId undefined matches nothing — fail-closed).
-      push(row.connectorPackageId, {
-        locus: "organization",
-        locusId: row.organizationId ?? undefined,
-      });
-      continue;
-    }
-    if (visibility.startsWith("org:")) {
-      push(row.connectorPackageId, {
-        locus: "organization",
-        locusId: visibility.slice("org:".length),
-      });
-      continue;
-    }
-    if (visibility.startsWith("team:")) {
-      push(row.connectorPackageId, {
-        locus: "team",
-        locusId: visibility.slice("team:".length),
-      });
-      continue;
-    }
-    if (visibility.startsWith("project:")) {
-      push(row.connectorPackageId, {
-        locus: "project",
-        locusId: visibility.slice("project:".length),
-      });
-      continue;
-    }
-    // Unknown token shape: contribute nothing (fail-closed).
   }
   return out;
 }

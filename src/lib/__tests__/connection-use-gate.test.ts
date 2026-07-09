@@ -346,3 +346,58 @@ describe("enforceConnectionUse — audit ordering + mapping", () => {
     ).rejects.toMatchObject({ statusCode: 401 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-scope W2 — PER-TOKEN ceiling clamp. The `only` ceiling filters each
+// field's tokens; an in-ceiling token survives even when a sibling token is
+// dropped, and a field left empty falls back to ["owner"] (fail-closed).
+// ---------------------------------------------------------------------------
+const multiPolicy = (tokens: string[]) => ({
+  runListVisibility: tokens,
+  runDataVisibility: tokens,
+  runExecuteVisibility: tokens,
+  allowRunSharing: false,
+});
+
+describe("only-clamp ceiling — per-token clamp (multi-scope W2)", () => {
+  it("keeps an in-ceiling token while dropping an out-of-ceiling sibling (only:team)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([declaration("only", "team")]);
+    // workspace is outside the team ceiling and is dropped; team:team-9 survives.
+    // The old scalar clamp read only the first token (workspace) → owner → deny;
+    // the per-token clamp admits the team-9 member via the surviving token.
+    readExtensionAccessPolicy.mockResolvedValue(multiPolicy(["workspace", "team:team-9"]));
+    const d = await decideConnectionUse({
+      identity,
+      actor: human(MEMBER, { teamIds: ["team-9"] }),
+      subjectUserId: MEMBER,
+    });
+    expect(d.allowed).toBe(true);
+  });
+
+  it("fails closed to owner-only when EVERY token is outside the ceiling (only:team)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([declaration("only", "team")]);
+    // Both workspace and org:<id> are outside the team ceiling → clamped to
+    // ["owner"] → a non-owner member is denied; the visibility clamp is flagged.
+    readExtensionAccessPolicy.mockResolvedValue(multiPolicy(["workspace", `org:${ORG}`]));
+    const d = await decideConnectionUse({
+      identity,
+      actor: human(MEMBER),
+      subjectUserId: MEMBER,
+    });
+    expect(d.allowed).toBe(false);
+    expect((d as { clampApplied?: string[] }).clampApplied).toContain("visibility");
+  });
+
+  it("a fully in-ceiling multi-token field is not clamped (no visibility flag)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([declaration("only", "workspace")]);
+    // org:<id> and team:<id> are both within the workspace ceiling → nothing
+    // dropped; a team member is admitted with no visibility clamp.
+    readExtensionAccessPolicy.mockResolvedValue(multiPolicy([`org:${ORG}`, "team:team-9"]));
+    const d = await decideConnectionUse({
+      identity,
+      actor: human(MEMBER, { teamIds: ["team-9"] }),
+      subjectUserId: MEMBER,
+    });
+    expect(d.allowed).toBe(true);
+  });
+});

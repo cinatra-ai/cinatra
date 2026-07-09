@@ -349,3 +349,52 @@ describe("connection allowSharing — person-grant writes under the ceiling", ()
     expect(await sharing()).toBe("sharing_disabled");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multi-scope W2 — the write veto iterates EVERY token across all three
+// fields. A policy is accepted only when every token is within the ceiling AND
+// a real actor-held locus; any single bad token rejects the whole write.
+// ---------------------------------------------------------------------------
+describe("connection validatePolicyWrite — multi-scope token arrays (W2)", () => {
+  const multi = (
+    list: string[],
+    data: string[] = list,
+    exec: string[] = list,
+  ): AgentAuthPolicy =>
+    ({
+      runListVisibility: list,
+      runDataVisibility: data,
+      runExecuteVisibility: exec,
+      allowRunSharing: false,
+    }) as unknown as AgentAuthPolicy;
+
+  it("only:team — a field mixing an in-ceiling team token with an out-of-ceiling workspace token is REJECTED", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue(
+      declarationRow(decl("only", "team")),
+    );
+    expect(await validate(multi(["team:team-1", "workspace"], ["team:team-1"], ["team:team-1"]))).toBe(
+      "scope_locked_by_connector",
+    );
+  });
+
+  it("default mode — a multi-token array passes only when EVERY token is a real actor-held locus", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue(
+      declarationRow(decl("default", "workspace")),
+    );
+    // team-1 (real) + proj-1 (real) → every locus valid.
+    expect(await validate(multi(["team:team-1", "project:proj-1"], ["team:team-1"], ["team:team-1"]))).toBeNull();
+    // team-1 (real) + team-stranger (NOT held) → one bad token fails the write.
+    expect(
+      await validate(multi(["team:team-1", "team:team-stranger"], ["team:team-1"], ["team:team-1"])),
+    ).toBe("invalid_locus");
+  });
+
+  it("owner mixed with a real locus normalizes away for the owner-only fast path but still validates the locus", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue(
+      declarationRow(decl("default", "workspace")),
+    );
+    // ["owner","team:team-1"] is NOT owner-only, so the real-loci check runs on
+    // team-1 (held) → accepted.
+    expect(await validate(multi(["owner", "team:team-1"], ["team:team-1"], ["team:team-1"]))).toBeNull();
+  });
+});

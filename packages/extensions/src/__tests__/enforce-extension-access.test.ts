@@ -449,12 +449,67 @@ describe("evaluateExtensionAccess — kind-aware admin standing (P1)", () => {
 });
 
 describe("evaluateExtensionAccess — unknown visibility fails closed", () => {
-  it("denies a member when the stored visibility is an unrecognized value", () => {
+  it("denies a member when a stored token is an unrecognized value", () => {
     const actor = human("m", { orgRole: "member" });
-    const bogus = { ...policy(), runDataVisibility: "galaxy:42" } as unknown as ReturnType<typeof policy>;
+    // Multi-scope W2: fields are token arrays (read-normalization guarantees
+    // this). The any-match matcher folds visibilityAllows over each token; an
+    // unrecognized token fails closed (no tier admits it).
+    const bogus = {
+      ...policy(),
+      runDataVisibility: ["galaxy:42"],
+    } as unknown as ReturnType<typeof policy>;
     expect(evaluateExtensionAccess(base({ actor, op: "read", policy: bogus }))).toEqual({
       allowed: false,
       reason: "not_visible",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-scope W2 — any-match visibility tier. Each op's field is a NON-EMPTY
+// token array (a union of grants); the actor is admitted iff SOME token admits
+// them. The extension matcher's "admin" tier stays OWNER-AWARE (diverges from
+// the run path), even inside a union.
+// ---------------------------------------------------------------------------
+describe("evaluateExtensionAccess — any-match token arrays (multi-scope W2)", () => {
+  it("admits via ANY token in the op's selection; denies when no token matches", () => {
+    const p = policy({ runDataVisibility: ["team:team-9", "project:p-1"] });
+    const teamMember = human("tm", { orgRole: "member", teamIds: ["team-9"] });
+    const projMember = human("pm", { orgRole: "member", projectIds: ["p-1"] });
+    const neither = human("nn", { orgRole: "member", teamIds: ["team-x"], projectIds: ["p-x"] });
+    expect(evaluateExtensionAccess(base({ actor: teamMember, policy: p })).allowed).toBe(true);
+    expect(evaluateExtensionAccess(base({ actor: projMember, policy: p })).allowed).toBe(true);
+    expect(evaluateExtensionAccess(base({ actor: neither, policy: p }))).toEqual({
+      allowed: false,
+      reason: "not_visible",
+    });
+  });
+
+  it("owner-aware admin token in a union admits an owning-org admin (per-matcher admin semantics)", () => {
+    // The union [admin, team:team-9]. The extension matcher's admin tier is
+    // owner-aware: an owning-org admin is admitted by the admin token even
+    // without team-9. A plain member matches neither token.
+    const p = policy({ runDataVisibility: ["admin", "team:team-9"] });
+    const orgAdmin = human("oa", { orgRole: "org_admin" });
+    const plainMember = human("m", { orgRole: "member", teamIds: ["team-x"] });
+    expect(evaluateExtensionAccess(base({ actor: orgAdmin, policy: p })).allowed).toBe(true);
+    expect(evaluateExtensionAccess(base({ actor: plainMember, policy: p })).allowed).toBe(false);
+  });
+
+  it("cross-org token mix cannot bypass the cross-org guard", () => {
+    // A same-org member holding one locus in the union is admitted; a
+    // different-org actor is denied at the guard regardless of the union.
+    const p = policy({ runDataVisibility: ["team:team-9", "project:p-2"] });
+    const sameOrgProj = human("m", { orgRole: "member", projectIds: ["p-2"] });
+    const crossOrg = human("x", {
+      organizationId: OTHER_ORG,
+      orgRole: "org_admin",
+      projectIds: ["p-2"],
+    });
+    expect(evaluateExtensionAccess(base({ actor: sameOrgProj, policy: p })).allowed).toBe(true);
+    expect(evaluateExtensionAccess(base({ actor: crossOrg, policy: p }))).toEqual({
+      allowed: false,
+      reason: "cross_org",
     });
   });
 });

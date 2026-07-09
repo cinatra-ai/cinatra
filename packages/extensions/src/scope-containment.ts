@@ -176,15 +176,28 @@ export async function policyContainedBy(
   | { ok: false; field: "runListVisibility" | "runDataVisibility" | "runExecuteVisibility" | "allowRunSharing"; child: AgentAuthPolicyVisibility | boolean; parent: AgentAuthPolicyVisibility | boolean }
 > {
   for (const field of ["runListVisibility", "runDataVisibility", "runExecuteVisibility"] as const) {
-    // TRANSITIONAL (multi-scope W1): fields are token arrays. Containment is
-    // checked on the FIRST token to preserve today's single-token subset
-    // relation; the pointwise lift (every child token ⊆ SOME parent token) is
-    // the enforcement-lift issue (W2). Writers are single-token until the
-    // multi-select picker (W3), so `[0]` matches the pre-array behavior.
-    const c = child[field][0];
-    const p = parent[field][0];
-    if (!(await visibilityContainedBy(c, p, lookups))) {
-      return { ok: false, field, child: c, parent: p };
+    // Multi-scope W2: fields are NON-EMPTY token arrays. POINTWISE containment
+    // — the child selection is ⊆ the parent selection iff EVERY child token is
+    // covered by SOME parent token (the per-pair `visibilityContainedBy` cover
+    // relation is unchanged). A single-token field reduces exactly to the
+    // pre-array subset check. Fail-closed: the FIRST uncovered child token
+    // rejects the whole policy.
+    const childTokens = child[field];
+    const parentTokens = parent[field];
+    for (const c of childTokens) {
+      let coveredBySomeParent = false;
+      for (const p of parentTokens) {
+        if (await visibilityContainedBy(c, p, lookups)) {
+          coveredBySomeParent = true;
+          break;
+        }
+      }
+      if (!coveredBySomeParent) {
+        // `child`/`parent` are diagnostic only (the write path maps any !ok to
+        // "scope_exceeds_parent"): report the offending child token and a
+        // representative parent token (the field's first).
+        return { ok: false, field, child: c, parent: parentTokens[0] };
+      }
     }
   }
   if (child.allowRunSharing && !parent.allowRunSharing) {
