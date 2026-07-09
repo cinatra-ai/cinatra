@@ -24,6 +24,7 @@ import {
   deleteConnectorConfig,
   readOpenAIConnectionFromDatabase,
   readAnthropicConnectionFromDatabase,
+  readAnthropicSkillSyncEnabledFromDatabase,
 } from "@/lib/database";
 import {
   decodeCursor,
@@ -319,6 +320,39 @@ export function registerHostConnectorServices(): void {
     // preserving the actor-free webhook-verify secret read (see the note above
     // this function).
     resolveEnvOverrides: resolveConnectorConfigEnvOverrides,
+  });
+
+  // The Anthropic "Skills" opt-in (`anthropic_skill_sync_enabled`) is migrating
+  // out of the core /configuration/llm page onto the anthropic-connector's own
+  // Skills tab (cinatra#1104 pairs with anthropic-connector#44). The connector
+  // resolves THIS capability by id and calls `write(enabled)` from its
+  // Skills-tab Save; the host owns the full write path so the connector stays a
+  // thin caller:
+  //  - read():  the canonical fail-closed opt-in reader (`=== true`) that the
+  //             core consumers already read, so the connector renders a
+  //             read-backed toggle from the same value.
+  //  - write(): admin-gated (fail-closed — the host owns the authorization
+  //             boundary), persists the primitive boolean to the canonical key,
+  //             then runs the SAME eager catalog-sync + stale-GC orchestration
+  //             (admin-notify on failure, save never rolled back, inert when
+  //             OFF) that core's own settings save runs.
+  // A NEW host-local capability id (deliberately NOT a
+  // `HOST_CONNECTOR_SERVICE_CAPABILITIES` / sdk-extensions entry):
+  // `registerCapabilityProvider` accepts an arbitrary string id, so this stays a
+  // core-only, non-ABI registration. Dormant until a connector release that
+  // resolves it is installed. The core UI/writer removal is DEFERRED to the
+  // paired landing (see cinatra#1104) so this migration never strands the
+  // setting.
+  const ANTHROPIC_SKILL_CONFIG_CAPABILITY = "@cinatra-ai/host:anthropic-skill-config";
+  register(ANTHROPIC_SKILL_CONFIG_CAPABILITY, {
+    read: (): boolean => readAnthropicSkillSyncEnabledFromDatabase(),
+    // Lazy dynamic import so THIS boot binder never statically pulls the skill
+    // sync/GC + auth graph (the write impl + its deps load only when an admin
+    // actually writes). The connector's `write(enabled)` runs the full path.
+    write: (enabled: boolean): Promise<void> =>
+      import("@/lib/anthropic-skill-config-service").then((m) =>
+        m.writeAnthropicSkillConfig(enabled),
+      ),
   });
 
   // BLOCKING nango connection-save materializers (linkedin account row +

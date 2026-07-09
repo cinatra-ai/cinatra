@@ -397,6 +397,21 @@ describe("host connector-config service (Stage-0 delete member)", () => {
   });
 });
 
+describe("anthropic-skill-config capability (cinatra#1104 — connector-owned Skills tab)", () => {
+  it("publishes @cinatra-ai/host:anthropic-skill-config with the { read, write } shape the connector structurally resolves", () => {
+    // A host-LOCAL id (deliberately NOT a HOST_CONNECTOR_SERVICE_CAPABILITIES /
+    // sdk-extensions entry) that the anthropic-connector's `tryAnthropicSkillConfig`
+    // resolves by this exact string and guards on BOTH members being functions
+    // before use (anthropic-connector#44). Pin the id + shape so a refactor can't
+    // silently break the connector's resolution.
+    const cap = resolveSingle<{ read: unknown; write: unknown }>(
+      "@cinatra-ai/host:anthropic-skill-config",
+    );
+    expect(typeof cap.read).toBe("function");
+    expect(typeof cap.write).toBe("function");
+  });
+});
+
 describe("nango-connection-materializer capability (blocking save-path hooks)", () => {
   it("materializes a wordpress save (site URL required, fail-loud when missing)", async () => {
     const m = resolveSingle<NangoConnectionMaterializer>(
