@@ -54,7 +54,7 @@ import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
-import { humanizeFieldName } from "./humanize-field-name";
+import { resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
 export type SerializedAgentRunMessage = {
@@ -726,7 +726,7 @@ export function AgenticRunPanel({
       const entries = Object.entries(suggestions);
       if (entries.length > 0) {
         const assistantMsg = entries.map(([k, v]) => {
-          const label = schemaProps[k]?.title ?? humanizeFieldName(k);
+          const label = resolveFieldLabel(k, schemaProps[k]?.title);
           return `${label}: "${String(v)}"`;
         }).join("\n");
         setConversation(prev => [...prev, { id: ++convIdRef.current, role: "assistant", content: assistantMsg }]);

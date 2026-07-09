@@ -630,6 +630,19 @@ export async function installExtensionWithDependencies(
       if ((cause as { code?: unknown } | null)?.code === "REQUIRES_REBUILD") {
         throw cause;
       }
+      // AGENT_PACKAGE_CONTRACT_VIOLATION: a closure MEMBER failed the
+      // fail-closed agent metadata contract. Compensation has run; rethrow the
+      // RAW structured error (naming the offending package + exact fields) so
+      // the MCP install surface renders a structured 4xx-shaped result instead
+      // of the wrapped error becoming an opaque 500. Same raw-rethrow contract
+      // as REQUIRES_REBUILD above (string-literal code — no cross-package
+      // import). cinatra#1163.
+      if (
+        (cause as { code?: unknown } | null)?.code ===
+        "AGENT_PACKAGE_CONTRACT_VIOLATION"
+      ) {
+        throw cause;
+      }
       throw new BatchMemberInstallError(
         `Installing ${input.packageName}@${rootVersion} failed at dependency ${failedMember}: ` +
           `${cause instanceof Error ? cause.message : String(cause)}. ` +

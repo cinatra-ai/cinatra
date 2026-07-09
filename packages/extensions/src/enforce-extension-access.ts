@@ -14,6 +14,14 @@ import "server-only";
 //   • `enforceExtensionAccess(...)` / `canExtensionAccess(...)` resolve the
 //     policy + co-owners + installer via permissions-store, then call the pure
 //     evaluator.
+//   • Kind-aware ADMIN-STANDING short-circuit: an admin of the extension's
+//     owning scope (`hasAdminStandingOverExtension`) is admitted INDEPENDENT of
+//     the stored visibility tier / installer pointer — automatically, by role,
+//     so a newly-promoted admin needs no per-row grant and a demotion reverts
+//     it. Carve-outs: `connection` excludes use/execute (using another user's
+//     credential stays an explicit owner share; the per-connection use-gate's
+//     vendor `only` ceiling clamp governs use), and `agent_run` is manage-only
+//     (run data stays owner-private).
 //
 // CORRECTNESS NOTE: the `"admin"` visibility
 // tier here is OWNER-AWARE — for an org-owned extension it allows the owning
@@ -93,6 +101,13 @@ export type ExtensionAccessDecision =
  * this from the polymorphic store; tests can construct it directly.
  */
 export type EvaluateExtensionAccessInput = {
+  /**
+   * The extension kind — selects the kind-aware admin-standing op set
+   * (connection excludes use/execute; agent_run is manage-only; every other
+   * kind grants full parity). Threaded through from the async wrappers'
+   * {@link ExtensionAccessResource.kind}.
+   */
+  kind: ExtensionKind;
   policy: AgentAuthPolicy;
   coOwnerUserIds: string[];
   installedByUserId: string | null;
@@ -147,12 +162,23 @@ function isPlatformAdmin(actor: ActorContext): boolean {
 }
 
 /**
- * Owner-aware admin predicate. True for platform admins, and for org
- * owner/admin of the EXTENSION's owning organization (org-owned extensions).
- * For workspace/platform-owned extensions with no organization, only platform
- * admins qualify (there is no org to be an admin of).
+ * Shared ADMIN-STANDING predicate — "does this actor hold admin standing over
+ * the extension's owning scope?". True for platform admins (every extension in
+ * the instance), and for the org_owner/org_admin of the EXTENSION's owning
+ * organization. Org-anchored user / team / organization owner levels all carry
+ * that org on `owner.organizationId` (the M1 org-anchor backfill), so keying on
+ * `organizationId` covers all three. For a workspace/platform-owned extension
+ * with NO organization, only platform admins qualify (there is no org to be an
+ * admin of) — fail closed.
+ *
+ * This is the role-derived standing the evaluator short-circuits on: it is
+ * independent of the installer pointer, the stored visibility tier, and
+ * co-owner grants, so it applies automatically to a newly-promoted admin (no
+ * per-row grant writes) and reverts on demotion. Exported so the write-surface
+ * callers (permission actions, skills page-data, the connection kind hook)
+ * apply the identical standing rule.
  */
-function isAdminOfOwner(
+export function hasAdminStandingOverExtension(
   actor: ActorContext,
   owner: ExtensionOwnerContext,
 ): boolean {
@@ -165,6 +191,56 @@ function isAdminOfOwner(
     return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Kind-aware admin-standing op sets.
+//
+// Which ops ADMIN STANDING grants directly, per kind, as a short-circuit AFTER
+// the cross-org guard (independent of the stored visibility tier / installer
+// pointer):
+//   • every kind EXCEPT the two below → all six ops (full parity).
+//   • connection → list / read / manage ONLY, never use/execute: using another
+//     user's credential stays an explicit owner share, and the per-connection
+//     use-gate's vendor `only` ceiling clamp governs use.
+//   • agent_run → manage ONLY: run data (chat/execution content) stays
+//     owner-private; an admin never gains read/use/execute over another user's
+//     run.
+// `manage` is in every set, so the manage branch is unchanged by kind.
+// ---------------------------------------------------------------------------
+
+const ALL_ADMIN_STANDING_OPS: ReadonlySet<ExtensionAccessOp> = new Set([
+  "list",
+  "read",
+  "use",
+  "execute",
+  "share",
+  "manage",
+]);
+const CONNECTION_ADMIN_STANDING_OPS: ReadonlySet<ExtensionAccessOp> = new Set([
+  "list",
+  "read",
+  "manage",
+]);
+const AGENT_RUN_ADMIN_STANDING_OPS: ReadonlySet<ExtensionAccessOp> = new Set([
+  "manage",
+]);
+
+/**
+ * The ops admin standing grants for a kind (see the table above). A pure lookup
+ * — the cross-org / owner-private carve-outs are encoded in the returned set.
+ */
+export function adminStandingOps(
+  kind: ExtensionKind,
+): ReadonlySet<ExtensionAccessOp> {
+  switch (kind) {
+    case "connection":
+      return CONNECTION_ADMIN_STANDING_OPS;
+    case "agent_run":
+      return AGENT_RUN_ADMIN_STANDING_OPS;
+    default:
+      return ALL_ADMIN_STANDING_OPS;
+  }
 }
 
 function visibilityFieldForOp(
@@ -223,7 +299,7 @@ function visibilityAllows(
       actor.projectIds?.includes(visibility.slice("project:".length)),
     );
   }
-  if (visibility === "admin") return isAdminOfOwner(actor, owner); // OWNER-AWARE
+  if (visibility === "admin") return hasAdminStandingOverExtension(actor, owner); // OWNER-AWARE
   if (visibility === "org") return true; // any same-org member (guard passed)
   // Fail closed on any unrecognized visibility value. Stored policies are
   // zod-validated at write time (setExtensionInstallAccess), so an unknown
@@ -239,7 +315,8 @@ function visibilityAllows(
 export function evaluateExtensionAccess(
   input: EvaluateExtensionAccessInput,
 ): ExtensionAccessDecision {
-  const { policy, coOwnerUserIds, installedByUserId, owner, actor, op } = input;
+  const { kind, policy, coOwnerUserIds, installedByUserId, owner, actor, op } =
+    input;
 
   if (!actor) return { allowed: false, reason: "no_actor" };
 
@@ -250,8 +327,8 @@ export function evaluateExtensionAccess(
   // extension unless their org matches (same rule the kernel can() applies).
   // An actor with NO organizationId is denied on an org-owned extension — fail
   // closed, matching the kernel (undefined org != owner org). This runs BEFORE
-  // the owner/co-owner short-circuit so a cross-org (or org-less) installer /
-  // co-owner cannot slip past the guard.
+  // the admin-standing / owner / co-owner short-circuits so a cross-org (or
+  // org-less) admin / installer / co-owner cannot slip past the guard.
   if (owner.organizationId && actor.organizationId !== owner.organizationId) {
     return { allowed: false, reason: "cross_org" };
   }
@@ -262,16 +339,30 @@ export function evaluateExtensionAccess(
     (uid === installedByUserId ||
       (owner.ownerLevel === "user" && uid === owner.ownerId));
   const coOwnerMatch = uid != null && coOwnerUserIds.includes(uid);
-  const adminMatch = isAdminOfOwner(actor, owner);
+  const adminStanding = hasAdminStandingOverExtension(actor, owner);
+  const adminOps = adminStandingOps(kind);
 
-  // manage: editing the access policy / granting co-owners. Allowed for
-  // platform/org admins, the installer (primary owner), and co-owners.
-  // Preserves the legacy connector "manage requires org admin" property while
-  // also letting the installer manage their own extension.
+  // manage: editing the access policy / granting co-owners. Allowed for an
+  // admin with standing (every kind grants admins `manage`), the installer
+  // (primary owner), and co-owners. Preserves the legacy connector "manage
+  // requires org admin" property while also letting the installer manage their
+  // own extension.
   if (op === "manage") {
-    if (adminMatch || ownerMatch || coOwnerMatch) return { allowed: true };
+    if ((adminStanding && adminOps.has("manage")) || ownerMatch || coOwnerMatch) {
+      return { allowed: true };
+    }
     return { allowed: false, reason: "manage_requires_admin" };
   }
+
+  // ADMIN-STANDING short-circuit (kind-aware, role-derived). An admin of the
+  // extension's owning scope gets admin-level access INDEPENDENT of the stored
+  // visibility tier and the installer pointer — the automatic parity this epic
+  // delivers, so a same-org admin is admitted on OWNER-default (and
+  // team/project/org-restricted) rows they did not install. The kind carve-outs
+  // live in adminStandingOps: `connection` omits use/execute, `agent_run` grants
+  // nothing here (its `manage` was handled above), every other kind grants
+  // list/read/use/execute/share.
+  if (adminStanding && adminOps.has(op)) return { allowed: true };
 
   // Owner / co-owner short-circuit for list/read/use/execute/share. These are
   // the resource's trusted parties (share ∈ COOWNER_OPS in the agent model),
@@ -280,16 +371,18 @@ export function evaluateExtensionAccess(
   // wrongly blocked when allowRunSharing=false.
   if (ownerMatch || coOwnerMatch) return { allowed: true };
 
-  // share by a non-owner/co-owner is gated by allowRunSharing first. Owning-org
-  // admins (and platform admins, already bypassed at the top) may share even
-  // when allowRunSharing=false; a plain member cannot.
-  if (op === "share" && !policy.allowRunSharing && !adminMatch) {
+  // share by a non-owner / non-co-owner / non-admin-with-share-standing is gated
+  // by allowRunSharing. An admin WITH share standing (most kinds) was already
+  // admitted by the short-circuit above; a connection/agent_run admin has no
+  // share standing and is gated here exactly like a plain member.
+  if (op === "share" && !policy.allowRunSharing) {
     return { allowed: false, reason: "not_visible" };
   }
 
-  // Remaining ops (incl. an admin's read/use/execute and an allowed share) are
-  // subject to the visibility tier — the owner-aware "admin" tier in
-  // visibilityAllows() is where owning-org admins are granted.
+  // Remaining ops (a member's list/read/use/execute, an allowed share, and the
+  // read/use/execute of a carve-out kind's admin) are subject to the visibility
+  // tier — the owner-aware "admin" tier in visibilityAllows() still admits an
+  // owning-org admin where a policy explicitly stores "admin".
   const visibility = visibilityFieldForOp(op, policy);
   if (visibilityAllows(visibility, actor, owner)) return { allowed: true };
   return { allowed: false, reason: "not_visible" };
@@ -310,6 +403,7 @@ async function resolveDecision(
     readExtensionInstalledBy(resource.kind, resource.resourceId),
   ]);
   return evaluateExtensionAccess({
+    kind: resource.kind,
     policy:
       policy ?? resource.fallbackPolicy ?? DEFAULT_EXTENSION_ACCESS_POLICY,
     coOwnerUserIds: coOwners.map((c) => c.userId),

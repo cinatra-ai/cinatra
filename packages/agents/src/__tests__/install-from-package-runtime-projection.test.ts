@@ -93,6 +93,7 @@ vi.mock("@cinatra-ai/registries", () => ({
 
 vi.mock("../verdaccio/package-contract", () => ({
   agentPackageManifestSchema: { parse: (x: unknown) => x },
+  parseAgentPackageManifestForInstall: (x: unknown) => x,
   CINATRA_AGENT_PACKAGE_TYPE: "agent-package",
   CINATRA_AGENT_MANIFEST_VERSION: "1",
 }));

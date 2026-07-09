@@ -97,11 +97,11 @@ import "@/lib/register-objects-provider";
 // capability.)
 import "@/lib/register-crm-providers";
 
-// Bind the SDK PM (project-management) provider registry's external resolver to
-// the host capability registry (cinatra#317), so a PM provider extension
-// (plane-connector) registering behind the `pm-provider` capability is resolved
-// lazily by the schedule↔PM-task sync bridge. Mirrors register-crm-providers.
+// Bind the SDK PM provider + PM WORK-ITEM STORE resolvers to the host capability
+// registry (cinatra#317, cinatra#1031): a `pm-provider` schedule↔task mirror and a
+// SEPARATE `pm-work-store` typed CRUD store (W2) resolve lazily. Cf register-crm.
 import "@/lib/register-pm-providers";
+import "@/lib/register-pm-work-store-providers";
 
 // Publish the host-side blog ROUTING services (`@cinatra-ai/host:blog-routing`)
 // and keep the SDK blog-connector slot bound (routing into the `blog-connector`

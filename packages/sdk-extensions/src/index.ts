@@ -184,6 +184,30 @@ export {
   _resetPmProviderRegistry,
 } from "./pm-provider-registry-contract";
 
+// PM WORK-ITEM STORE contract (the "PmConnector v2" typed CRUD surface;
+// cinatra#1031, EPIC #1030): the provider-agnostic work-item CRUD types + the
+// host-shared work-store provider registry. A SEPARATE capability/registry from
+// the trigger-mirror `PmConnector` above, so the two PM seams evolve
+// independently and a CRUD-only provider need not implement the mirror.
+export type {
+  PmWorkStore,
+  PmWorkStoreId,
+  PmWorkItem,
+  PmWorkItemStatus,
+  PmWorkItemDraft,
+  PmWorkItemPatch,
+  PmWorkItemComment,
+  PmWorkStoreError,
+  PmWorkStoreErrorCode,
+} from "./pm-work-store-contract";
+export {
+  registerPmWorkStore,
+  lookupPmWorkStore,
+  listPmWorkStores,
+  setPmWorkStoreExternalResolver,
+  _resetPmWorkStoreRegistry,
+} from "./pm-work-store-registry-contract";
+
 export {
   setExtensionConnectorConfigStore,
   getExtensionConnectorConfig,

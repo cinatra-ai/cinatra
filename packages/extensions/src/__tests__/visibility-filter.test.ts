@@ -22,8 +22,14 @@ const READ_PATHS = [
     needs: "storefront-sourced browse (loadMarketplaceBrowse) — visibility enforced storefront-side (published products only), admin-gated; no direct registry read",
   },
   {
-    file: "packages/extensions/src/screens/registry-catalog-screen.tsx",
-    needs: "visibility filter on listAgentPackages result (config already injected)",
+    // The installed-extension reads + hydration moved out of
+    // registry-catalog-screen.tsx into installed-rows.ts (cinatra#1114) so the
+    // §V Settings page resolves the SAME rows the card does; the screen now
+    // only delegates to loadInstalledCardRows, which carries the visibility
+    // filter (viewerScope on listExtensionPackages + manifestVisibleToScope on
+    // the canonical rows).
+    file: "packages/extensions/src/screens/installed-rows.ts",
+    needs: "visibility filter on the installed-extension reads (viewerScope + manifestVisibleToScope)",
   },
   {
     file: "src/app/configuration/environment/page.tsx",

@@ -116,6 +116,7 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
   it("team-scoped policy admits a member of the selected team and denies other same-org members", () => {
     const policy = accessTargetToInstallPolicy({ level: "team", id: TEAM_ID })!;
     const base = {
+      kind: "skill" as const,
       policy,
       coOwnerUserIds: [],
       installedByUserId: "installer-1",
@@ -142,6 +143,7 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
       id: PROJECT_ID,
     })!;
     const base = {
+      kind: "skill" as const,
       policy,
       coOwnerUserIds: [],
       installedByUserId: "installer-1",
@@ -166,6 +168,7 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
     const policy = accessTargetToInstallPolicy({ level: "team", id: TEAM_ID })!;
     expect(
       evaluateExtensionAccess({
+        kind: "skill",
         policy,
         coOwnerUserIds: [],
         installedByUserId: "user-member",
