@@ -100,8 +100,9 @@ export default async function AdministrationApprovalsPage({
   const sources = await availableSources(viewer);
 
   // Actionable counts across available sources (soft-fail per source). Feeds the
-  // smart default direction and the direction-tab pills. (The sidebar badge
-  // stays on pendingApprovalsCount() until it moves to the registry.)
+  // smart default direction and the direction-tab pills. The sidebar badge sums
+  // the SAME per-source Inbox counts from this registry (summarizeApprovalsNav),
+  // so the pill total equals this Inbox-tab total by construction.
   const countsList = await Promise.all(
     sources.map((s) => s.counts(viewer).catch(() => ({ inbox: 0, mine: 0 }) as SourceCounts)),
   );

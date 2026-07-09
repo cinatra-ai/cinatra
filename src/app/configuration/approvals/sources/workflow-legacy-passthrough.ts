@@ -65,6 +65,13 @@ export const workflowLegacyPassthroughSource: ApprovalSource = {
   id: WORKFLOW_SOURCE_ID,
   title: "Workflow approvals",
 
+  // Read-only mirror: rows are decided on the workflow detail page (no inline
+  // action; the decide() below benign-refuses). So this source renders as an
+  // Inbox section for any org member but does NOT light the sidebar Approvals
+  // nav on its own — keeping v1 nav admin-only (only the actionable agent
+  // source lights it, for admins). Removed whole by #1035.
+  inboxActionable: false,
+
   availability() {
     return "ready";
   },

@@ -143,6 +143,18 @@ export interface ApprovalSource {
    *  footer, instead of each rendering an independent section. Ungrouped (the v1
    *  local sources) render standalone as before. */
   group?: string;
+  /**
+   * Whether this source's Inbox is ACTIONABLE (a viewer it applies to can
+   * decide a row) versus a read-only mirror whose rows are decided elsewhere.
+   * OMITTED / `true` — actionable (the default; e.g. inline approve/reject).
+   * `false` — read-only passthrough (e.g. the workflow legacy source, decided
+   *   on the workflow detail page): it still renders as a section, but does NOT
+   *   on its own light the sidebar Approvals nav item. This is what keeps nav
+   *   visibility availability-driven yet admin-only in v1, and lets a future
+   *   source that grants a non-admin an actionable Inbox surface the nav with
+   *   no sidebar edit. It does NOT affect row rendering, counts, or decide.
+   */
+  inboxActionable?: boolean;
   /** Coarse existence gate — see {@link Availability}. */
   availability(viewer: ApprovalViewer): Availability | Promise<Availability>;
   /** OPTIONAL per-direction credential gate, distinct from {@link appliesTo}
