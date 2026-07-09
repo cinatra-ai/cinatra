@@ -38,9 +38,16 @@ import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 export {
   AgentAuthPolicySchema,
   AgentAuthPolicyVisibilitySchema,
+  AgentAuthPolicyVisibilitySelectionSchema,
   DEFAULT_AGENT_AUTH_POLICY,
+  normalizeVisibilitySelection,
+  isExactlyOwner,
 } from "./auth-policy-types";
-export type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "./auth-policy-types";
+export type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
+} from "./auth-policy-types";
 import { AgentAuthPolicySchema, DEFAULT_AGENT_AUTH_POLICY } from "./auth-policy-types";
 import type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "./auth-policy-types";
 
@@ -501,21 +508,28 @@ export function policyAllows(
   // kernel semantic: platform_admin bypasses org-guard and
   // resource-guard alike.
   if (actor.platformRole === "platform_admin") return true;
+  // TRANSITIONAL (multi-scope W1): each visibility field is now a NON-EMPTY
+  // array (union of grants). This matcher still consults the FIRST token to
+  // preserve today's single-token semantics — the any-match lift (iterate
+  // every token; admit if ANY token admits the actor) is the enforcement-lift
+  // issue (W2). All writers produce single-token arrays until the multi-select
+  // picker ships (W3, which lands after W2), so `[0]` is behavior-identical to
+  // the pre-array scalar read and cannot over-grant.
   let visibility: AgentAuthPolicyVisibility;
   switch (op) {
     case "list":
-      visibility = policy.runListVisibility;
+      visibility = policy.runListVisibility[0];
       break;
     case "read":
     case "editOutput":
-      visibility = policy.runDataVisibility;
+      visibility = policy.runDataVisibility[0];
       break;
     case "execute":
     case "approveHitl":
     case "respondToHitl":
     case "cancel":
       // cancel is an execute-tier op (mutates run state).
-      visibility = policy.runExecuteVisibility;
+      visibility = policy.runExecuteVisibility[0];
       break;
     case "share":
       // share is gated by allowRunSharing first; if the policy
@@ -523,7 +537,7 @@ export function policyAllows(
       // Otherwise it surfaces run data to a wider audience and follows
       // runDataVisibility (read-tier).
       if (!policy.allowRunSharing) return false;
-      visibility = policy.runDataVisibility;
+      visibility = policy.runDataVisibility[0];
       break;
     default: {
       // Exhaustive guard. When RunAccessOperation gains a new variant

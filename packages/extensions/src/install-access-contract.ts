@@ -36,26 +36,28 @@ import {
 // pipeline / boot registration BEFORE this contract runs.
 // ---------------------------------------------------------------------------
 
+// Multi-scope W1: visibility fields are non-empty token arrays. Inner arrays
+// frozen too — these are shared-by-reference defaults.
 const WORKSPACE_DEFAULT: AgentAuthPolicy = Object.freeze({
-  runListVisibility: "workspace",
-  runDataVisibility: "workspace",
-  runExecuteVisibility: "workspace",
+  runListVisibility: Object.freeze(["workspace"]),
+  runDataVisibility: Object.freeze(["workspace"]),
+  runExecuteVisibility: Object.freeze(["workspace"]),
   allowRunSharing: false,
-}) as AgentAuthPolicy;
+}) as unknown as AgentAuthPolicy;
 
 const ADMIN_DEFAULT: AgentAuthPolicy = Object.freeze({
-  runListVisibility: "admin",
-  runDataVisibility: "admin",
-  runExecuteVisibility: "admin",
+  runListVisibility: Object.freeze(["admin"]),
+  runDataVisibility: Object.freeze(["admin"]),
+  runExecuteVisibility: Object.freeze(["admin"]),
   allowRunSharing: false,
-}) as AgentAuthPolicy;
+}) as unknown as AgentAuthPolicy;
 
 const OWNER_DEFAULT: AgentAuthPolicy = Object.freeze({
-  runListVisibility: "owner",
-  runDataVisibility: "owner",
-  runExecuteVisibility: "owner",
+  runListVisibility: Object.freeze(["owner"]),
+  runDataVisibility: Object.freeze(["owner"]),
+  runExecuteVisibility: Object.freeze(["owner"]),
   allowRunSharing: false,
-}) as AgentAuthPolicy;
+}) as unknown as AgentAuthPolicy;
 
 const KIND_DEFAULT_ACCESS_POLICY: Record<
   Exclude<ExtensionKind, "connector">,

@@ -16,7 +16,12 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+// Import the schema from the client-safe types module (zod only) rather than
+// the server auth-policy barrel — a VALUE import of the barrel would drag its
+// server-only enforcement graph (authz, mcp-server) across the package
+// boundary. This module needs the schema solely to coerce a stored scalar
+// visibility field to a non-empty array on read.
+import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
 import type { ExtensionKind } from "./permissions-kind-hooks";
 
@@ -118,17 +123,24 @@ export async function readExtensionAccessPolicies(
   });
   type Row = { resource_id: string; policy: AgentAuthPolicy | string };
   for (const r of (result?.rows ?? []) as Row[]) {
-    let policy: AgentAuthPolicy | null;
+    let raw: unknown;
     if (typeof r.policy === "string") {
       try {
-        policy = JSON.parse(r.policy) as AgentAuthPolicy;
+        raw = JSON.parse(r.policy);
       } catch {
-        policy = null;
+        raw = null;
       }
     } else {
-      policy = r.policy;
+      raw = r.policy;
     }
-    if (policy) out.set(r.resource_id, policy);
+    if (raw == null) continue;
+    // Multi-scope W1: coerce stored SCALAR visibility fields to non-empty
+    // arrays on read via the canonical schema (its z.union transform). Legacy
+    // rows persisted one token per field; without this a downstream `field[0]`
+    // read would index into the string. A schema-invalid row is treated as
+    // absent (fail-closed — the caller applies the kind's default).
+    const parsed = AgentAuthPolicySchema.safeParse(raw);
+    if (parsed.success) out.set(r.resource_id, parsed.data);
   }
   return out;
 }
@@ -280,10 +292,11 @@ export async function setExtensionInstalledBy(
   // install_by pointer has somewhere to land. The default is "owner"
   // visibility + sharing enabled — same defaults the loader applies for
   // resources without a stored policy.
+  // Multi-scope W1: seed the default in array form (all writes are arrays).
   const defaultPolicy = JSON.stringify({
-    runListVisibility: "owner",
-    runDataVisibility: "owner",
-    runExecuteVisibility: "owner",
+    runListVisibility: ["owner"],
+    runDataVisibility: ["owner"],
+    runExecuteVisibility: ["owner"],
     allowRunSharing: true,
   });
   runPostgresQueriesSync({

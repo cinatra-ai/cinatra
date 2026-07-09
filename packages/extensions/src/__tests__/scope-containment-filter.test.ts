@@ -10,7 +10,10 @@ import {
   filterAvailableScopesForParentPolicy,
   type FilterableAvailableScopes,
 } from "../scope-containment-filter";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+} from "@cinatra-ai/agents/auth-policy";
 
 const ORG_A = "00000000-0000-0000-0000-00000000000a";
 const ORG_B = "00000000-0000-0000-0000-00000000000b";
@@ -29,11 +32,11 @@ const baseScopes: FilterableAvailableScopes = {
   canGrantWorkspace: true,
 };
 
-function policy(v: AgentAuthPolicy["runListVisibility"]): AgentAuthPolicy {
+function policy(v: AgentAuthPolicyVisibility): AgentAuthPolicy {
   return {
-    runListVisibility: v,
-    runDataVisibility: v,
-    runExecuteVisibility: v,
+    runListVisibility: [v],
+    runDataVisibility: [v],
+    runExecuteVisibility: [v],
     allowRunSharing: false,
   };
 }
@@ -100,9 +103,9 @@ describe("filterAvailableScopesForParentPolicy", () => {
     // admitted entity AND Org A is admitted by Data). canGrantWorkspace is
     // false because Data and Execute are not workspace.
     const mixed: AgentAuthPolicy = {
-      runListVisibility: "workspace",
-      runDataVisibility: `org:${ORG_A}`,
-      runExecuteVisibility: `team:${TEAM_X_IN_A}`,
+      runListVisibility: ["workspace"],
+      runDataVisibility: [`org:${ORG_A}`],
+      runExecuteVisibility: [`team:${TEAM_X_IN_A}`],
       allowRunSharing: false,
     };
     const result = filterAvailableScopesForParentPolicy(baseScopes, mixed, ORG_A);
@@ -127,9 +130,9 @@ describe("filterAvailableScopesForParentPolicy", () => {
     // Result is empty — because List=owner doesn't admit ANY scope, no
     // higher tier can pass containment against it.
     const mixed: AgentAuthPolicy = {
-      runListVisibility: "owner",
-      runDataVisibility: `org:${ORG_A}`,
-      runExecuteVisibility: `team:${TEAM_Y_IN_B}`,
+      runListVisibility: ["owner"],
+      runDataVisibility: [`org:${ORG_A}`],
+      runExecuteVisibility: [`team:${TEAM_Y_IN_B}`],
       allowRunSharing: false,
     };
     const result = filterAvailableScopesForParentPolicy(baseScopes, mixed, ORG_A);

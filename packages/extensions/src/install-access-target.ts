@@ -75,9 +75,10 @@ export function accessTargetToInstallPolicy(
       ? (`team:${target.id}` as const)
       : (`project:${target.id}` as const);
   return {
-    runListVisibility: visibility,
-    runDataVisibility: visibility,
-    runExecuteVisibility: visibility,
+    // Multi-scope W1: non-empty token array (single install target).
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
     allowRunSharing: false,
   };
 }

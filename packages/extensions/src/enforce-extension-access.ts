@@ -127,11 +127,12 @@ export type ExtensionAccessResource = {
  * override per kind.
  */
 export const DEFAULT_EXTENSION_ACCESS_POLICY: AgentAuthPolicy = Object.freeze({
-  runListVisibility: "workspace",
-  runDataVisibility: "workspace",
-  runExecuteVisibility: "workspace",
+  // Multi-scope W1: non-empty token arrays; inner arrays frozen (shared default).
+  runListVisibility: Object.freeze(["workspace"]),
+  runDataVisibility: Object.freeze(["workspace"]),
+  runExecuteVisibility: Object.freeze(["workspace"]),
   allowRunSharing: false,
-}) as AgentAuthPolicy;
+}) as unknown as AgentAuthPolicy;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -170,18 +171,24 @@ function visibilityFieldForOp(
   op: Exclude<ExtensionAccessOp, "manage">,
   policy: AgentAuthPolicy,
 ): AgentAuthPolicyVisibility {
+  // TRANSITIONAL (multi-scope W1): fields are now token arrays. This returns
+  // the FIRST token to preserve today's single-token matcher semantics in
+  // visibilityAllows(); the any-match lift (return the whole array, admit if
+  // ANY token admits) is the enforcement-lift issue (W2). Writers are
+  // single-token until the multi-select picker (W3), so `[0]` is identical to
+  // the pre-array scalar and cannot over-grant.
   switch (op) {
     case "list":
-      return policy.runListVisibility;
+      return policy.runListVisibility[0];
     case "read":
     case "use":
-      return policy.runDataVisibility;
+      return policy.runDataVisibility[0];
     case "execute":
-      return policy.runExecuteVisibility;
+      return policy.runExecuteVisibility[0];
     case "share":
       // share follows runDataVisibility AFTER the allowRunSharing gate (handled
       // by the caller); reaching here means sharing is allowed.
-      return policy.runDataVisibility;
+      return policy.runDataVisibility[0];
     default: {
       const _exhaustive: never = op;
       throw new Error(

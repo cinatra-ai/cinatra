@@ -57,7 +57,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
       teams: [TEAM_ENG, TEAM_OPS],
       projects: [PROJ_Q1, PROJ_TEAM],
     });
-    expect(targets.find((t) => t.value === "org")?.disabled).toBe(false);
+    expect(targets.find((t) => t.value === `org:${ACTIVE_ORG}`)?.disabled).toBe(false);
     expect(targets.find((t) => t.value === "team:team-eng")?.disabled).toBe(false);
     expect(targets.find((t) => t.value === "team:team-ops")?.disabled).toBe(false);
     expect(targets.find((t) => t.value === "project:proj-q1")?.disabled).toBe(false);
@@ -76,7 +76,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
       teams: [TEAM_ENG],
       projects: [PROJ_TEAM],
     });
-    expect(targets.find((t) => t.value === "org")?.disabled).toBe(false);
+    expect(targets.find((t) => t.value === `org:${ACTIVE_ORG}`)?.disabled).toBe(false);
     // M5 contract: org_admin x team-target => DENY unless also team_admin of THAT team
     expect(targets.find((t) => t.value === "team:team-eng")?.disabled).toBe(true);
     // PROJ_TEAM is team-owned (Eng), and alice is NOT team_admin of Eng.
@@ -95,7 +95,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
       teams: [TEAM_ENG],
       projects: [],
     });
-    expect(targets.find((t) => t.value === "org")?.disabled).toBe(false);
+    expect(targets.find((t) => t.value === `org:${ACTIVE_ORG}`)?.disabled).toBe(false);
     expect(targets.find((t) => t.value === "team:team-eng")?.disabled).toBe(true);
   });
 
@@ -111,7 +111,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
       teams: [TEAM_ENG],
       projects: [],
     });
-    expect(targets.find((t) => t.value === "org")?.disabled).toBe(true);
+    expect(targets.find((t) => t.value === `org:${ACTIVE_ORG}`)?.disabled).toBe(true);
     expect(targets.find((t) => t.value === "team:team-eng")?.disabled).toBe(true);
   });
 
@@ -128,7 +128,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
       teams: [TEAM_ENG, TEAM_OPS],
       projects: [PROJ_TEAM],
     });
-    expect(targets.find((t) => t.value === "org")?.disabled).toBe(true);
+    expect(targets.find((t) => t.value === `org:${ACTIVE_ORG}`)?.disabled).toBe(true);
     expect(targets.find((t) => t.value === "team:team-eng")?.disabled).toBe(false);
     expect(targets.find((t) => t.value === "team:team-ops")?.disabled).toBe(true);
     // PROJ_TEAM is team-owned (Eng), and alice is team_admin of Eng, so it is enabled.
@@ -149,7 +149,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
     });
     expect(targets.find((t) => t.value === "project:proj-q1")?.disabled).toBe(false);
     expect(targets.find((t) => t.value === "team:team-eng")?.disabled).toBe(true);
-    expect(targets.find((t) => t.value === "org")?.disabled).toBe(true);
+    expect(targets.find((t) => t.value === `org:${ACTIVE_ORG}`)?.disabled).toBe(true);
   });
 
   it("M7 (non-owner non-team-admin): project disabled", () => {
@@ -199,7 +199,7 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
       teams: [TEAM_ENG],
       projects: [PROJ_Q1],
     });
-    const orgRow = targets.find((t) => t.value === "org");
+    const orgRow = targets.find((t) => t.value === `org:${ACTIVE_ORG}`);
     expect(orgRow?.level).toBe("organization");
     expect(orgRow?.id).toBe(ACTIVE_ORG);
     const teamRow = targets.find((t) => t.value === "team:team-eng");
@@ -219,7 +219,7 @@ describe("pickDefaultPickerValue", () => {
       pickDefaultPickerValue(
         [
           {
-            value: "org",
+            value: `org:${ACTIVE_ORG}`,
             label: "Acme",
             level: "organization",
             id: ACTIVE_ORG,
@@ -235,7 +235,7 @@ describe("pickDefaultPickerValue", () => {
   it("prefers the project row when currentProjectId matches and is enabled", async () => {
     const { pickDefaultPickerValue } = await import("../install-targets");
     const targets = [
-      { value: "org", label: "Acme", level: "organization" as const, id: ACTIVE_ORG, disabled: false },
+      { value: `org:${ACTIVE_ORG}`, label: "Acme", level: "organization" as const, id: ACTIVE_ORG, disabled: false },
       { value: "team:team-eng", label: "Engineering", level: "team" as const, id: "team-eng", disabled: false },
       { value: "project:proj-q1", label: "Q1 Launch", level: "project" as const, id: "proj-q1", disabled: false },
     ];
@@ -245,7 +245,7 @@ describe("pickDefaultPickerValue", () => {
   it("falls back to first enabled team when project row is disabled or absent", async () => {
     const { pickDefaultPickerValue } = await import("../install-targets");
     const targets = [
-      { value: "org", label: "Acme", level: "organization" as const, id: ACTIVE_ORG, disabled: false },
+      { value: `org:${ACTIVE_ORG}`, label: "Acme", level: "organization" as const, id: ACTIVE_ORG, disabled: false },
       { value: "team:team-eng", label: "Engineering", level: "team" as const, id: "team-eng", disabled: false },
     ];
     expect(pickDefaultPickerValue(targets, undefined)).toBe("team:team-eng");
@@ -254,9 +254,9 @@ describe("pickDefaultPickerValue", () => {
   it("falls back to org when no team is enabled", async () => {
     const { pickDefaultPickerValue } = await import("../install-targets");
     const targets = [
-      { value: "org", label: "Acme", level: "organization" as const, id: ACTIVE_ORG, disabled: false },
+      { value: `org:${ACTIVE_ORG}`, label: "Acme", level: "organization" as const, id: ACTIVE_ORG, disabled: false },
       { value: "team:team-eng", label: "Engineering", level: "team" as const, id: "team-eng", disabled: true, reason: "x" },
     ];
-    expect(pickDefaultPickerValue(targets, undefined)).toBe("org");
+    expect(pickDefaultPickerValue(targets, undefined)).toBe(`org:${ACTIVE_ORG}`);
   });
 });

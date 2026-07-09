@@ -29,6 +29,7 @@ import {
   readNangoConnectionByNaturalKey,
   type NangoConnectionIdentity,
 } from "@cinatra-ai/extensions/connection-identity-store";
+import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { defaultAccessPolicyForKind } from "@cinatra-ai/extensions/install-access-contract";
 import { seedExtensionAccessPolicyIfAbsent } from "@cinatra-ai/extensions/permissions-store";
 import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
@@ -176,12 +177,12 @@ export async function registerSavedConnectionIdentity(input: {
   // even re-choosing owner-only — durably clears the marker and the picker
   // thereafter always shows the stored choice. Readers of the policy consume
   // named fields only; the extra key is inert to evaluation.
-  const basePolicy =
+  const basePolicy: AgentAuthPolicy =
     effectiveSeed === "workspace"
       ? {
-          runListVisibility: "workspace" as const,
-          runDataVisibility: "workspace" as const,
-          runExecuteVisibility: "workspace" as const,
+          runListVisibility: ["workspace"],
+          runDataVisibility: ["workspace"],
+          runExecuteVisibility: ["workspace"],
           allowRunSharing: false,
         }
       : defaultAccessPolicyForKind("connection");

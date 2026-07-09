@@ -28,9 +28,9 @@ const baseRun = {
 // default owner-only policy denies independently and masks whether the
 // cross-org guard fired.
 const ORG_TIER_POLICY: AgentAuthPolicy = {
-  runListVisibility: "org",
-  runDataVisibility: "org",
-  runExecuteVisibility: "org",
+  runListVisibility: ["org"],
+  runDataVisibility: ["org"],
+  runExecuteVisibility: ["org"],
   allowRunSharing: false,
 };
 

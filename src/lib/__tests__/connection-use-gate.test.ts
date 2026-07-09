@@ -81,10 +81,13 @@ function declaration(mode: "default" | "only", scope: string) {
   };
 }
 
+// Mirrors what `readExtensionAccessPolicy` returns after multi-scope W1: the
+// stored policy is schema-parsed, so each visibility field is a non-empty
+// token array (a stored scalar coerces to a one-element array on read).
 const policy = (vis: string) => ({
-  runListVisibility: vis,
-  runDataVisibility: vis,
-  runExecuteVisibility: vis,
+  runListVisibility: [vis],
+  runDataVisibility: [vis],
+  runExecuteVisibility: [vis],
   allowRunSharing: false,
 });
 

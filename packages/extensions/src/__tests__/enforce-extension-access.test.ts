@@ -6,7 +6,11 @@ import {
   type ExtensionOwnerContext,
 } from "../enforce-extension-access";
 import type { ActorContext } from "@/lib/authz";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
+} from "@cinatra-ai/agents/auth-policy";
 
 // ---------------------------------------------------------------------------
 // Pure evaluator coverage. No I/O — exercises the access
@@ -37,13 +41,30 @@ const orgOwnerCtx: ExtensionOwnerContext = {
   organizationId: ORG,
 };
 
-function policy(over: Partial<AgentAuthPolicy> = {}): AgentAuthPolicy {
+// Multi-scope W1: each visibility field is a token array. This builder accepts
+// a scalar token OR an array per field (keeping the many single-token call
+// sites terse) and coerces to the canonical array shape.
+type VisArg = AgentAuthPolicyVisibility | AgentAuthPolicyVisibilitySelection;
+function policy(
+  over: {
+    runListVisibility?: VisArg;
+    runDataVisibility?: VisArg;
+    runExecuteVisibility?: VisArg;
+    allowRunSharing?: boolean;
+    description?: string;
+  } = {},
+): AgentAuthPolicy {
+  const sel = (
+    v: VisArg | undefined,
+    fallback: AgentAuthPolicyVisibility,
+  ): AgentAuthPolicyVisibilitySelection =>
+    v === undefined ? [fallback] : Array.isArray(v) ? v : [v];
   return {
-    runListVisibility: "workspace",
-    runDataVisibility: "workspace",
-    runExecuteVisibility: "workspace",
-    allowRunSharing: false,
-    ...over,
+    runListVisibility: sel(over.runListVisibility, "workspace"),
+    runDataVisibility: sel(over.runDataVisibility, "workspace"),
+    runExecuteVisibility: sel(over.runExecuteVisibility, "workspace"),
+    allowRunSharing: over.allowRunSharing ?? false,
+    ...(over.description !== undefined ? { description: over.description } : {}),
   };
 }
 
