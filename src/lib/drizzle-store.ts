@@ -2228,10 +2228,12 @@ $body$` },
     // authPolicy on agent_runs: per-run override (JSON-as-text; nullable = use template's agentAuthPolicy or DEFAULT_AGENT_AUTH_POLICY).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_auth_policy text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS auth_policy text` },
-    // agent_runs.org_id: org-scoping for run lists.
-    // Nullable; existing rows remain NULL (visible only to platform-admin
-    // cross-org reads via skipOrgFilter). No automatic backfill — document
-    // as admin task.
+    // Interaction axis (#1037 P1): agent_kind ('assistant'|'task', default 'task', ORTHOGONAL to `type`) + typed assistant_config sidecar; invariant CHECKs (assistant⇒config, task⇒none). Shape + write-time twin in src/lib/assistant-config.ts; transformational half in migration core__0019.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'task', ADD COLUMN IF NOT EXISTS assistant_config text` },
+    { text: `DO $$ BEGIN ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_check", `CHECK (agent_kind IN ('assistant', 'task'))`)} ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_config_check", `CHECK ((agent_kind = 'assistant' AND assistant_config IS NOT NULL) OR (agent_kind = 'task' AND assistant_config IS NULL))`)} END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_templates_agent_kind_idx ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (agent_kind)` },
+    // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
+    // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` },
     // agent_runs.project_id inheritance
@@ -2241,12 +2243,9 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS project_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (project_id, created_at DESC) WHERE project_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_project_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (project_id, status, created_at DESC) WHERE project_id IS NOT NULL` },
-    // agent_runs.org_id NOT NULL. Drops legacy NULL rows; no backfill.
-    // PoC mode (no production data preservation). Idempotent: DELETE matches zero
-    // rows on subsequent boots once the column is NOT NULL, and ALTER on an
-    // already-NOT-NULL column is a no-op in Postgres.
-    // Order matters: DELETE must precede ALTER — PG rejects SET NOT NULL on a
-    // column with NULL rows.
+    // agent_runs.org_id NOT NULL. Drops legacy NULL rows (PoC mode, no prod data
+    // preservation) then SET NOT NULL. Order matters (DELETE before ALTER — PG
+    // rejects SET NOT NULL with NULL rows) and both are idempotent no-ops after.
     { text: `DELETE FROM "${schemaName.replaceAll('"', '""')}"."agent_runs" WHERE org_id IS NULL` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ALTER COLUMN org_id SET NOT NULL` },
     // Backfill NULL package_name rows with deterministically-unique
