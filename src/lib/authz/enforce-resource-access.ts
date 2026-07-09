@@ -27,6 +27,12 @@ import type { Permission } from "./permissions";
 import type { ResourceRef, OwnerLevel, OwnerType, Visibility } from "./resource-ref";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { ActorRoleHints } from "./build-actor-context";
+// Agent-run OBO scope-ceiling enforcement (W2/#1051). The helper + types come
+// from the PURE `obo-ceiling` subpath (no runtime tier-restricting deps).
+import {
+  resourceWithinCeiling,
+  type CeilingResource,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 
 /**
  * Resource envelope consumed by the helper. The `resourceType` union
@@ -52,6 +58,19 @@ export type ResourceForAccessCheck = {
    * resources that have no co-ownership concept (objects).
    */
   coOwnerUserIds?: string[];
+  /**
+   * Optional PROJECT-axis identity of the resource, consumed ONLY by the
+   * agent-run OBO scope-ceiling gate (W2/#1051). This is the resource's
+   * project refinement:
+   *   - objects: `objects.project_id` (nullable);
+   *   - projects: the project row's OWN id (a project IS its project axis);
+   *   - a create envelope / a resource with no project refinement: omit.
+   * A project-tier ceiling denies any resource whose `projectId` does not
+   * match (undefined never matches), which is the correct fail-closed
+   * confinement for a project-anchored agent. Absent for every non-ceiling
+   * call path (behaviorally inert when `actor.oboCeiling` is undefined).
+   */
+  projectId?: string | null;
 };
 
 /**
@@ -74,6 +93,24 @@ const RESOURCE_COOWNER_OPS: ReadonlySet<Permission> = new Set<Permission>([
   "object.read",
   "object.update",
 ]);
+
+/**
+ * Lift a `ResourceForAccessCheck` into the pure `CeilingResource` facets the
+ * OBO scope-ceiling helper compares (W2/#1051). `OwnerLevel` is exactly the
+ * four owner-axis tiers (user/team/organization/workspace) — the same set
+ * `CeilingResource.owner.tier` accepts — so the owner element is always mapped
+ * concretely. The project axis is carried separately via `resource.projectId`
+ * (objects: `objects.project_id`; projects: the project's own id). A resource
+ * with no project refinement leaves `projectId` null, so a project-tier ceiling
+ * (which requires an exact projectId match) fails closed for it.
+ */
+function toCeilingResource(resource: ResourceForAccessCheck): CeilingResource {
+  return {
+    orgId: resource.organizationId,
+    owner: { tier: resource.ownerLevel, id: resource.ownerId },
+    projectId: resource.projectId ?? null,
+  };
+}
 
 /**
  * Map an OwnerLevel onto the kernel's ResourceRef.ownerType.
@@ -237,6 +274,42 @@ export async function enforceResourceAccess(
       statusCode: 403,
       reason: "forbidden",
       message: "Access denied.",
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // 0. Agent-run OBO scope-ceiling gate (W2/#1051) — enforced FIRST, BEFORE the
+  //    owner / co-owner / team-admin short-circuits AND the kernel `can()`
+  //    call, so a delegated agent run cannot reach a resource outside its
+  //    anchored scope even when the invoking user (including a platform-admin)
+  //    could. The ceiling is a HARD upper bound (`invoker authority ∩ agent
+  //    anchor`); no ownership short-circuit below may widen past it.
+  //
+  //    Fires ONLY when the actor carries `oboCeiling` — set exclusively for
+  //    agent-run-OBO delegated actors. A valid agent-run token always carries a
+  //    non-empty chain (the W1 verifier fails closed on a missing one), so a
+  //    present value is authoritative; every human / session / machine caller
+  //    has `oboCeiling === undefined` and is unaffected.
+  //
+  //    RUNS ARE EXCLUDED here: `enforceRunAccess` performs the authoritative run
+  //    ceiling check against the run's LOCKED TEMPLATE ANCHOR at its top (before
+  //    its own owner/co-owner short-circuits), then delegates to this helper
+  //    with a probe whose owner is `runBy` (NOT the anchor) and no projectId —
+  //    re-running the ceiling on that probe would compare the wrong facets and
+  //    could false-deny/allow. `resourceType !== "run"` keeps this gate off that
+  //    delegated path.
+  if (
+    actor.oboCeiling &&
+    resource.resourceType !== "run" &&
+    !resourceWithinCeiling(toCeilingResource(resource), actor.oboCeiling)
+  ) {
+    // Mirror the kernel-deny status policy below: hide existence on reads so a
+    // confined agent cannot enumerate ids; 403 on mutating ops.
+    const hideExistence = op.endsWith(".read");
+    throw new AuthzError({
+      statusCode: hideExistence ? 404 : 403,
+      reason: hideExistence ? "hidden" : "forbidden",
+      message: hideExistence ? "Not found." : "Access denied.",
     });
   }
 
