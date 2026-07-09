@@ -16,11 +16,7 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
-import {
-  deriveOboCeilingChain,
-  parseOboCeilingChain,
-  type OboCeilingChain,
-} from "@cinatra-ai/mcp-server/obo-ceiling";
+import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   agentTemplates,
   agentVersions,
@@ -48,50 +44,15 @@ import type { ExtensionOrigin, ConnectorDependencyMap } from "./schema";
 import type { AgentAuthPolicy, ActorRoleHints } from "./auth-policy";
 import {
   enforceRunAccess,
-  AgentAuthPolicySchema,
   DEFAULT_AGENT_AUTH_POLICY,
   resolveEffectivePolicy,
 } from "./auth-policy";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-
-// ---------------------------------------------------------------------------
-// Defensive AgentAuthPolicy JSON parser.
-//
-// JSON.parse on an unguarded raw column can throw on malformed input
-// (direct SQL writes, partial migrations, dev tools), and a static `as
-// AgentAuthPolicy` cast lies about the runtime shape — `JSON.parse("null")`
-// returns null, and `{"runListVisibility":"EVIL"}` typechecks but is
-// semantically broken. Wrap parse + zod validation with try/catch so a
-// bad row degrades gracefully to null (which downstream code treats as
-// "no override; inherit from template / use DEFAULT_AGENT_AUTH_POLICY").
-//
-// This intentionally does NOT touch the existing compiledPlan /
-// approvalPolicy / gatedSteps parses — those predate this parser and are
-// out of scope unless parser symmetry is needed.
-// ---------------------------------------------------------------------------
-function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null {
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    const result = AgentAuthPolicySchema.safeParse(parsed);
-    if (!result.success) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[agent-builder/store] AgentAuthPolicy row failed zod validation; treating as null override",
-        { issues: result.error.issues },
-      );
-      return null;
-    }
-    return result.data;
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[agent-builder/store] AgentAuthPolicy row failed JSON.parse; treating as null override",
-      { error: err instanceof Error ? err.message : String(err) },
-    );
-    return null;
-  }
-}
+import {
+  parseAuthPolicySafe,
+  deserializeRun,
+  deriveRunOboCeilingJson,
+} from "./agent-run-serde";
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -1341,40 +1302,6 @@ export async function createAgentVersion(
 // CRUD — agent_runs
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Persist-at-dispatch: derive the agent-run OBO scope-ceiling chain from the
-// run's LOCKED template owner anchor + org + (optional) project launch, and
-// return it JSON-serialized for the agent_runs.obo_ceiling column. Called by
-// EVERY run-creation path (createAgentRun / createAgentRunPendingInput) so all
-// origins — interactive, A2A, widget, workflow-child, recurring-trigger clone —
-// record the exact chain the mint path re-derives and compares against.
-//
-// Returns null ONLY for a corrupt partial anchor (a known non-org owner tier
-// with a missing id); the run then fails closed at mint. A null / null (pre-
-// backfill) anchor derives the organization floor — NOT the fail-closed case.
-// ---------------------------------------------------------------------------
-async function deriveRunOboCeilingJson(input: {
-  templateId: string;
-  orgId: string;
-  projectId: string | null | undefined;
-}): Promise<string | null> {
-  const [tmpl] = await db
-    .select({
-      ownerLevel: agentTemplates.ownerLevel,
-      ownerId: agentTemplates.ownerId,
-    })
-    .from(agentTemplates)
-    .where(eq(agentTemplates.id, input.templateId))
-    .limit(1);
-  const chain = deriveOboCeilingChain({
-    ownerLevel: tmpl?.ownerLevel ?? null,
-    ownerId: tmpl?.ownerId ?? null,
-    orgId: input.orgId,
-    projectId: input.projectId ?? null,
-  });
-  return chain ? JSON.stringify(chain) : null;
-}
-
 export async function createAgentRun(
   input: CreateAgentRunInput,
 ): Promise<AgentRunRecord> {
@@ -2068,50 +1995,6 @@ export async function readAgentRunsByTemplateRaw(
   }
 
   return { items, total };
-}
-
-function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunRecord {
-  return {
-    id: row.id,
-    templateId: row.templateId,
-    versionId: row.versionId,
-    runBy: row.runBy,
-    status: row.status,
-    inputParams: JSON.parse(row.inputParams) as Record<string, unknown>,
-    stepResults: row.stepResults ? (JSON.parse(row.stepResults) as unknown[]) : null,
-    startedAt: row.startedAt,
-    completedAt: row.completedAt,
-    error: row.error,
-    title: row.title,
-    createdAt: row.createdAt,
-    sourceType: row.sourceType,
-    sourceId: row.sourceId,
-    packageVersion: row.packageVersion ?? null,
-    a2aTaskId: row.a2aTaskId ?? null,
-    a2aContextId: row.a2aContextId ?? null,
-    parentRunId: row.parentRunId ?? null,
-    agUiEnabled: row.agUiEnabled ?? null,
-    lgThreadId: row.lgThreadId ?? null,
-    traceId: row.traceId ?? null,
-    timeoutSeconds: row.timeoutSeconds ?? null,
-    streamedText: row.streamedText ?? null,
-    // per-run override; null when not set.
-    // Defensive parse — see parseAuthPolicySafe definition above.
-    authPolicy: parseAuthPolicySafe(row.authPolicy ?? null),
-    // orgId from agent_runs.org_id; column is NOT NULL after the
-    // DDL migration.
-    orgId: row.orgId,
-    // nullable project refinement (
-    // DDL). Drizzle returns the typed column directly.
-    projectId: row.projectId ?? null,
-    // idempotent agent-task dispatch provenance.
-    idempotencyKey: row.idempotencyKey ?? null,
-    workflowId: row.workflowId ?? null,
-    workflowTaskId: row.workflowTaskId ?? null,
-    // persisted OBO scope-ceiling chain (JSON-as-text). Defensive parse — a
-    // malformed / empty stored value becomes null (fails closed at mint).
-    oboCeiling: parseOboCeilingChain(row.oboCeiling ?? null),
-  };
 }
 
 // ---------------------------------------------------------------------------

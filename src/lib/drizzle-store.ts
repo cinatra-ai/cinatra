@@ -2873,17 +2873,7 @@ END $$` },
     // any reader that encounters owner_id='' MUST treat it the same as
     // legacy NULL-org rows (no implicit access).
     { text: `UPDATE "${schemaName.replaceAll('"', '""')}"."agent_templates" SET owner_level = 'organization', owner_id = COALESCE(org_id, '') WHERE owner_level IS NULL` },
-    // agent_runs OBO scope-ceiling chain column (obo_ceiling, JSON-as-text).
-    // ADDITIVE on the bootstrap path (a new nullable column). It is written at
-    // run creation from the LOCKED template owner anchor + org + project launch,
-    // then re-derived + containment-checked at MCP-token mint (fail closed).
-    // The one-time backfill of PRE-EXISTING runs is a data change, so it ships
-    // as the core migration artifact
-    // migrations/core/core__0017_backfill-agent-run-obo-ceiling.mjs (recorded in
-    // migrations/manifest.json) — NOT here in the idempotent bootstrap. A fresh
-    // install is born at this shape and ledger-fakes that chain (no rows to
-    // backfill); db migrate executes it on an existing deployment.
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS obo_ceiling text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS obo_ceiling text` }, // additive nullable JSON-as-text OBO scope-ceiling; written at run creation, re-derived + containment-checked at mint (fail closed). Pre-existing rows backfilled by migrations/core/core__0017_backfill-agent-run-obo-ceiling.mjs (fresh installs ledger-fake it).
     // usage_events provider-routing telemetry.
     // requested_provider: what cinatra_llm.preferredProvider asked for (NULL when no preference).
     // effective_provider: the provider that actually dispatched.

@@ -31,8 +31,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, type DelegatedMcpActor } from "./request-context";
-import type { OboCeilingChain } from "./obo-ceiling";
+import { mcpRequestContextStorage, type DelegatedMcpActor, type McpRequestContext } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -1226,20 +1225,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     const requestAgentSpecVersion =
       registryCtx?.agentSpecVersion ??
       request.headers.get("x-cinatra-agent-spec-version") ?? undefined;
-    const requestStore: {
-      clientId?: string;
-      orgId?: string | null;
-      userId?: string | null;
-      runId?: string;
-      agentId?: string;
-      packageVersion?: string;
-      agentSpecVersion?: string;
-      platformRole?: "platform_admin" | "member";
-      orgRole?: "org_owner" | "org_admin" | "member";
-      delegatedActor?: DelegatedMcpActor | null;
-      delegatedRestricted?: boolean;
-      oboCeiling?: OboCeilingChain;
-    } = {
+    const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
       userId: resolvedUserId,
