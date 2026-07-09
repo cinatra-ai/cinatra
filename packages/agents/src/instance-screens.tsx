@@ -10,7 +10,7 @@ import {
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
-import { resolveEffectivePolicy, buildScopeReason } from "./auth-policy";
+import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import { AuthzError } from "@/lib/authz";
@@ -79,8 +79,13 @@ async function shouldShowTriggerTabForRun(runId: string | null): Promise<boolean
 
 async function resolveTemplateForActor(agentId: string) {
   const session = await getAuthSession();
-  const actorUserId = session?.user?.id ?? null;
-  return readAgentTemplateBySlug(agentId, { actorUserId, includeNonPublished: true });
+  // admin-parity P4 (cinatra#1129): resolve the actor's admin-standing bag so a
+  // platform_admin / owning-org admin can open a non-published template, not
+  // just its creator.
+  return readAgentTemplateBySlug(
+    agentId,
+    await resolveTemplateVisibilityActor(session),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +161,11 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const setupActor: PrimitiveActorContext = { actorType: "human", source: "ui", userId: actorUserId ?? undefined };
   const setupRoles: ActorRoleHints = {
     platformRole: isAdmin ? "platform_admin" : "member",
+    // admin-parity P4 (cinatra#1129): thread the actor's active-org role so the
+    // owner-aware run "admin" visibility tier recognizes an org admin/owner.
+    orgRole: session
+      ? await resolveOrgRoleForSession({ user: { id: session.user.id }, session: session.session })
+      : undefined,
     actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
   };
   let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
@@ -373,6 +383,11 @@ export async function RunScreen({ agentId, instanceId }: ScreenProps) {
   const runScreenActor: PrimitiveActorContext = { actorType: "human", source: "ui", userId: actorUserId ?? undefined };
   const runScreenRoles: ActorRoleHints = {
     platformRole: isAdmin ? "platform_admin" : "member",
+    // admin-parity P4 (cinatra#1129): thread the actor's active-org role so the
+    // owner-aware run "admin" visibility tier recognizes an org admin/owner.
+    orgRole: session
+      ? await resolveOrgRoleForSession({ user: { id: session.user.id }, session: session.session })
+      : undefined,
     actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
   };
   let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
@@ -491,6 +506,11 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   const permActor: PrimitiveActorContext = { actorType: "human", source: "ui", userId: actorUserId ?? undefined };
   const permRoles: ActorRoleHints = {
     platformRole: isAdmin ? "platform_admin" : "member",
+    // admin-parity P4 (cinatra#1129): thread the actor's active-org role so the
+    // owner-aware run "admin" visibility tier recognizes an org admin/owner.
+    orgRole: session
+      ? await resolveOrgRoleForSession({ user: { id: session.user.id }, session: session.session })
+      : undefined,
     actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
   };
   let run: Awaited<ReturnType<typeof readAgentRunById>>;
@@ -718,6 +738,11 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const triggerActor: PrimitiveActorContext = { actorType: "human", source: "ui", userId: actorUserId ?? undefined };
   const triggerRoles: ActorRoleHints = {
     platformRole: isAdmin ? "platform_admin" : "member",
+    // admin-parity P4 (cinatra#1129): thread the actor's active-org role so the
+    // owner-aware run "admin" visibility tier recognizes an org admin/owner.
+    orgRole: session
+      ? await resolveOrgRoleForSession({ user: { id: session.user.id }, session: session.session })
+      : undefined,
     actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
   };
   let run: Awaited<ReturnType<typeof readAgentRunById>> = null;
