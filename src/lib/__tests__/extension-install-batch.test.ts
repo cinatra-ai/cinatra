@@ -64,6 +64,7 @@ function makeHarness(opts: {
   authorize?: () => Promise<GatekeptInstallResolution>;
   installFail?: string | ((pkg: string) => boolean);
   installRequiresRebuild?: string;
+  installContractViolation?: string;
   activeBatches?: InstallBatch[];
   preInstalled?: string[];
   now?: () => number;
@@ -127,6 +128,20 @@ function makeHarness(opts: {
         throw Object.assign(new Error(`${m.packageName} requires a host rebuild`), {
           code: "REQUIRES_REBUILD",
         });
+      }
+      if (opts.installContractViolation === m.packageName) {
+        events.push(`install-CONTRACT:${m.packageName}`);
+        throw Object.assign(
+          new Error(
+            `Agent package "${m.packageName}" fails the metadata contract — ` +
+              `missing or invalid required field(s): cinatra.riskLevel, cinatra.toolAccess.`,
+          ),
+          {
+            code: "AGENT_PACKAGE_CONTRACT_VIOLATION",
+            packageName: m.packageName,
+            missingFields: ["cinatra.riskLevel", "cinatra.toolAccess"],
+          },
+        );
       }
       events.push(`install:${m.packageName}`);
     }),
@@ -741,6 +756,44 @@ describe("installExtensionWithDependencies — REQUIRES_REBUILD is a REFUSAL (no
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.phase).toBe("compensated");
     expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual(["uninstall:@cinatra-ai/dep-a"]);
+  });
+});
+
+describe("installExtensionWithDependencies — AGENT_PACKAGE_CONTRACT_VIOLATION is rethrown RAW (cinatra#1163)", () => {
+  it("a closure MEMBER's metadata-contract violation propagates raw (not wrapped) AFTER newly-installed deps are compensated, so the MCP surface renders it structured", async () => {
+    const h = makeHarness({
+      plan: [
+        member("@cinatra-ai/dep-a"),
+        member("@cinatra-ai/dep-b"),
+        member(ROOT),
+      ],
+      installContractViolation: "@cinatra-ai/dep-b",
+    });
+    try {
+      await installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor },
+        h.deps,
+      );
+      expect.unreachable("a member contract violation must propagate");
+    } catch (e) {
+      // RAW (un-wrapped) so the MCP surface keeps its { contractViolation } result
+      // instead of an opaque 500.
+      expect((e as { code?: string }).code).toBe("AGENT_PACKAGE_CONTRACT_VIOLATION");
+      expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      expect((e as { packageName?: string }).packageName).toBe("@cinatra-ai/dep-b");
+      expect((e as { missingFields?: string[] }).missingFields).toEqual([
+        "cinatra.riskLevel",
+        "cinatra.toolAccess",
+      ]);
+    }
+    // dep-a installed before the failing member → compensated; nothing durable,
+    // ROOT never installed.
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.phase).toBe("compensated");
+    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([
+      "uninstall:@cinatra-ai/dep-a",
+    ]);
+    expect(h.events).not.toContain(`install:${ROOT}`);
   });
 });
 
