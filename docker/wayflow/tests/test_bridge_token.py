@@ -31,7 +31,10 @@ def test_bridge_token_no_op_when_env_unset(monkeypatch, capsys):
 
 def test_bridge_token_injects_header_when_env_set(monkeypatch):
     """When CINATRA_BRIDGE_TOKEN is set, _execute_request is wrapped to inject
-    the X-Cinatra-Bridge-Token header on every request.
+    the X-Cinatra-Bridge-Token header on an INTERNAL-host request.
+
+    #1192: the token is host-anchored, so the driven URL must target the default
+    CINATRA_BASE_URL (host.docker.internal:3000) for the token to be injected.
     """
     recorded: Dict[str, Any] = {}
 
@@ -50,14 +53,17 @@ def test_bridge_token_injects_header_when_env_set(monkeypatch):
     monkeypatch.setitem(sys.modules, "wayflowcore.steps", fake_steps_module)
 
     monkeypatch.setenv("CINATRA_BRIDGE_TOKEN", "test-token-abc-123")
+    monkeypatch.delenv("CINATRA_BASE_URL", raising=False)
 
     from agent_loader import _patch_api_call_step_bridge_token
 
     _patch_api_call_step_bridge_token()
 
-    # Drive the patched method directly on the FakeApiCallStep class.
+    # Drive the patched method with an internal-host URL (matches CINATRA_BASE_URL).
     instance = FakeApiCallStep()
-    request: Dict[str, Any] = {}
+    request: Dict[str, Any] = {
+        "url": "http://host.docker.internal:3000/api/llm-bridge"
+    }
     result = asyncio.run(instance._execute_request(request))
 
     assert result == "ok"
