@@ -238,6 +238,21 @@
       "line": 18
     },
     {
+      "primitiveName": "approvals_decide",
+      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "line": 329
+    },
+    {
+      "primitiveName": "approvals_get",
+      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "line": 324
+    },
+    {
+      "primitiveName": "approvals_list",
+      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "line": 319
+    },
+    {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
       "line": 304
