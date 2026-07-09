@@ -92,23 +92,33 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
   // Extension-registered MCP tools (register(ctx) → ctx.mcp.registerTool) are not
   // in the host's static PRIMITIVE_CLASSIFICATIONS inventory. When the host has NO
   // classification AND the name is an EFFECTIVELY-registered extension tool,
-  // synthesize an "unenforced" classification: shadow-audited + allowed, with the
-  // extension's own handler responsible for fine-grained authz — the same posture
-  // as the host's own un-migrated primitives. NOT an unknown-tool bypass: it keys
-  // on the EFFECTIVE set (tools the server build actually replayed, EXCLUDING names
-  // skipped due to a static/reserved host collision), so an extension cannot unlock
-  // a host tool (e.g. an unclassified built-in like `system_screen_lookup`) by
-  // registering its name. Host classifications always win (the static lookup above);
-  // NEVER synthesized on the delegated-chat perimeter (extension tools aren't on
-  // that allowlist). Declared-enforced classification is a freeze follow-up.
+  // synthesize an ENFORCED `platform/execute` classification so the coarse
+  // deny-by-default boundary applies (platform_admin allowed; an unauthenticated /
+  // org-less caller is blocked; an authenticated org member is allowed through with
+  // the fine-grained permission audited-but-deferred to the extension's own
+  // handler — execute-effect semantics). This closes the prior shadow-allow posture
+  // where an extension tool that does not self-gate executed for ANY caller the
+  // transport let through: extension tools are now no weaker than the host's own
+  // enforced tools. NOT an unknown-tool bypass: it keys on the EFFECTIVE set (tools
+  // the server build actually replayed, EXCLUDING names skipped due to a
+  // static/reserved host collision), so an extension cannot unlock a host tool
+  // (e.g. an unclassified built-in like `system_screen_lookup`) by registering its
+  // name. Host classifications always win (the static lookup above); NEVER
+  // synthesized on the delegated-chat perimeter (extension tools aren't on that
+  // allowlist).
   let extensionClassificationPackage: string | undefined;
   if (!classification && !req.delegatedRestricted) {
     const effTool = getEffectiveExtensionMcpTool(req.primitiveName);
     if (effTool) {
-      classification = { resourceType: "platform", action: "execute", status: "unenforced" } satisfies PrimitiveClassification;
+      classification = { resourceType: "platform", action: "execute", status: "enforced" } satisfies PrimitiveClassification;
       extensionClassificationPackage = effTool.packageName;
     }
   }
+  // Owning-package provenance for extension-tool audit rows, threaded into the
+  // enforced-path audit metadata below (empty for host primitives).
+  const extProvenance: Record<string, string> = extensionClassificationPackage
+    ? { classificationSource: "extension_mcp_registry", packageName: extensionClassificationPackage }
+    : {};
 
   if (!classification) {
     // Unclassified primitives are blocked in enforce mode (static checks cover
@@ -205,13 +215,13 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
 
   // (1) platform admin bypass.
   if (req.ctx?.platformRole === "platform_admin") {
-    await audit(req, classification.resourceType, "allowed", { mode: "enforced", boundary: perimeter, via: "platform_admin" });
+    await audit(req, classification.resourceType, "allowed", { mode: "enforced", boundary: perimeter, via: "platform_admin", ...extProvenance });
     return { allowed: true };
   }
 
   // (2) deny-by-default: authenticated org member required.
   if (!req.ctx?.userId || !req.ctx?.orgId) {
-    await audit(req, classification.resourceType, "denied", { mode: "enforced", boundary: perimeter, reason: "not_org_member" });
+    await audit(req, classification.resourceType, "denied", { mode: "enforced", boundary: perimeter, reason: "not_org_member", ...extProvenance });
     return { allowed: false, reason: "not_org_member", shouldBlock: block };
   }
 
@@ -273,6 +283,7 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
     requiredPermission: reg.requiredAccess.requiredPermission,
     permittedAtBoundary: permitted,
     deferredToHandler: !permitted,
+    ...extProvenance,
   });
   return { allowed: true };
 }

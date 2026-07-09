@@ -17,7 +17,7 @@ import {
 import { jsonSchemaToZod } from "./json-schema-to-zod";
 import { SchemaFieldRenderer } from "./schema-field-renderer";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
-import { humanizeFieldName } from "./humanize-field-name";
+import { resolveFieldLabel } from "./humanize-field-name";
 
 // ---------------------------------------------------------------------------
 // Registry condition — strict equality so mid-run HITL xRenderers never match.
@@ -173,8 +173,10 @@ export function GroupedSetupFormRenderer(props: FieldRendererProps) {
             {ordered.map((fieldName, idx) => {
               const fieldSchema = properties[fieldName] ?? {};
               const isRequired = required.includes(fieldName);
-              const label =
-                (fieldSchema as { title?: string }).title ?? humanizeFieldName(fieldName);
+              const label = resolveFieldLabel(
+                fieldName,
+                (fieldSchema as { title?: string }).title
+              );
               const description = (fieldSchema as { description?: string })
                 .description;
 

@@ -1,4 +1,5 @@
 export { RegistryCatalogScreen } from "./registry-catalog-screen";
+export { ExtensionSettingsScreen } from "./extension-settings-screen";
 export { MarketplaceDetailModal } from "./marketplace-detail-modal";
 export type {
   MarketplaceDetailModalProps,
