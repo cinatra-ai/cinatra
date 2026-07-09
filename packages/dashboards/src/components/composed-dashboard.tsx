@@ -23,9 +23,17 @@
  *     subscription must live under it to see the flags. It wraps all the
  *     pieces so the focus trap contains the inline-rendered modal DOM.
  *
- * Toolbar/filter bar render only for non-empty dashboards — same gating as
- * upstream's back-compat assembly (the empty state carries its own
- * "Add text" / "Add portlet" affordances).
+ * Empty state (cinatra#1119): the assembly keeps the grey toolbar frame
+ * mounted whether or not the dashboard has portlets, and swaps drizzle-cube's
+ * own raw "No Portlets" placeholder (`<DashboardGridSurface>`'s zero-portlet
+ * branch — an off-column, library-styled screen) for the app-consistent
+ * `<DashboardEmptyState>`. Emptiness is read LIVE from
+ * `useDashboardContext().config` — the SAME signal `<DashboardGridSurface>`
+ * uses internally — so adding the first card flips the count and hands
+ * rendering straight back to the real grid surface (and removing the last
+ * card returns to the app empty state). The toolbar self-hides for a
+ * read-only surface with no route actions, so read-only embedded analytics
+ * grids are unaffected.
  */
 import type { ComponentProps } from "react";
 import {
@@ -34,9 +42,11 @@ import {
   DashboardModals,
   DashboardProvider,
   useCubeFeatures,
+  useDashboardContext,
 } from "drizzle-cube/client";
 
 import { CinatraDashboardToolbar } from "./cinatra-dashboard-toolbar";
+import { DashboardEmptyState } from "./dashboard-empty-state";
 import { useDashboardFilterBarVisible } from "./dashboard-filter-bar-visibility";
 import { DcModalA11yScope } from "./dc-modal-a11y-scope";
 
@@ -67,17 +77,34 @@ export type ComposedDashboardProps = Omit<
   "children" | "dashboardModes" | "hideToolbar"
 >;
 
+/**
+ * Body of the composition, mounted INSIDE `<DashboardProvider>` so it can read
+ * the live dashboard state. Emptiness is derived from the context `config`
+ * (the store-published config), identical to the check `<DashboardGridSurface>`
+ * makes before it would paint its own placeholder — so this stays in lockstep
+ * with the grid as cards are added/removed within an edit session.
+ */
+function ComposedDashboardBody() {
+  const { config } = useDashboardContext();
+  const isEmpty = !config.portlets || config.portlets.length === 0;
+
+  return (
+    <>
+      <CinatraDashboardToolbar />
+      {!isEmpty && <DashboardFilterBarSlot />}
+      {isEmpty ? <DashboardEmptyState /> : <DashboardGridSurface />}
+      <DashboardModals />
+    </>
+  );
+}
+
 export function ComposedDashboard(props: ComposedDashboardProps) {
   const { dashboardModes } = useCubeFeatures();
-  const isEmpty = !props.config.portlets || props.config.portlets.length === 0;
 
   return (
     <DashboardProvider {...props} dashboardModes={dashboardModes}>
       <DcModalA11yScope>
-        {!isEmpty && <CinatraDashboardToolbar />}
-        {!isEmpty && <DashboardFilterBarSlot />}
-        <DashboardGridSurface />
-        <DashboardModals />
+        <ComposedDashboardBody />
       </DcModalA11yScope>
     </DashboardProvider>
   );
