@@ -12,12 +12,13 @@ Cinatra-design-strict React composition primitives — the page-chrome layer tha
 - ✓ Background-process modals + status banners
 - ✓ HITL assist field, prompt field, inline page title
 - ✓ Widget shell + data hooks
+- ✓ `<Tabs>` — the shared, accessible design-system underline tablist for connector setup pages (Setup / custom / always-last Help), exported from its own `/tabs` subpath
 
 ## Works with
 
 - `@cinatra-ai/design` (CSS tokens, fonts, utilities — required)
 - React 19 + Tailwind v4
-- shadcn/ui primitives (not bundled — consumers add via `pnpm dlx shadcn@latest add ...`)
+- shadcn/ui primitives (not bundled — consumers add via `pnpm dlx shadcn@latest add ...`; the one exception is the shared `Tabs` primitive, see below)
 
 ## Quick start
 
@@ -60,12 +61,22 @@ The `/marketplace` subpath is the consumer-portable surface — every import in 
 
 ## What is NOT in this package
 
-This package intentionally ships only Cinatra-specific composition. The underlying shadcn primitives (`Button`, `Input`, `Select`, `Dialog`, `Table`, `Tabs`, `Sidebar`, `Tooltip`, `Avatar`, etc.) are NOT vendored here — every Cinatra-design-strict consumer should run `pnpm dlx shadcn@latest add ...` against its own `components.json` so the consumer owns its primitive copies and can update them independently.
+This package intentionally ships only Cinatra-specific composition. The underlying shadcn primitives (`Button`, `Input`, `Select`, `Dialog`, `Table`, `Sidebar`, `Tooltip`, `Avatar`, etc.) are NOT vendored here — every Cinatra-design-strict consumer should run `pnpm dlx shadcn@latest add ...` against its own `components.json` so the consumer owns its primitive copies and can update them independently.
 
 Why this split:
 - Maintaining 14+ duplicate shadcn primitives across the cinatra-app and sdk-ui guarantees design drift.
 - shadcn's value is "source code in the consumer repo, not a black-box dependency"; re-shipping the primitives breaks that contract.
 - The Cinatra design tokens + utility classes in `@cinatra-ai/design` are what make a shadcn primitive Cinatra-design-strict. Wire those imports first, run `shadcn add`, and the primitives inherit the palette.
+
+### The one deliberately-exported primitive: `Tabs`
+
+`Tabs` is the sole exception, exported from its own `@cinatra-ai/sdk-ui/tabs` subpath. Connector setup pages that ship their own bundled React (github, gmail, google-calendar, wordpress-assistant) all render the SAME design-system tablist — the underline tabs that host each connector's Setup / custom / always-last Help tabs. Here the split logic inverts: a `shadcn add tabs` per extension would create N independently-drifting copies of the one tablist users read as a single component across every connector, which is exactly the drift the split guards against. So this primitive is shared, not copied. It is pure accessible UI infra (Radix tab semantics + the design-system underline) with no connector behaviour, layout, or Help-tab policy — the extension still owns its content and composition.
+
+It ships from a **dedicated subpath** (not the `/marketplace` barrel) on purpose: re-exporting it from `/marketplace` would pull it onto the reachable-module graph of every app route that transitively imports that barrel, tripping the route-graph no-new-rot ratchet. Import it directly:
+
+```tsx
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@cinatra-ai/sdk-ui/tabs";
+```
 
 ## TypeScript exports
 

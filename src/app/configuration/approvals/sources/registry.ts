@@ -2,18 +2,30 @@ import "server-only";
 
 import { agentCreationRequestsSource } from "./agent-creation-requests";
 import { workflowLegacyPassthroughSource } from "./workflow-legacy-passthrough";
+import { marketplaceSubmissionModerationSource } from "./marketplace-submission-moderation";
+import { marketplaceVendorAppModerationSource } from "./marketplace-vendor-app-moderation";
+import { marketplaceMySubmissionsSource } from "./marketplace-my-submissions";
+import { marketplaceVendorAppStatusSource } from "./marketplace-vendor-app-status";
 import type { ApprovalSource, ApprovalViewer } from "./types";
 
 // ---------------------------------------------------------------------------
-// Ordered approval-source registry. Local sources first; the marketplace
-// sources append here in a later slice. The array order is the section render
-// order within each direction tab. A source is removed by deleting its adapter
-// file + its entry here (the workflow passthrough is deleted whole by #1035).
+// Ordered approval-source registry. Local sources first, then the marketplace
+// group. The array order is the section render order within each direction tab:
+//   Inbox         → agent, workflow, submission-moderation, vendor-app-moderation
+//   Your requests → agent, my-submissions, vendor-app-status
+// A source is removed by deleting its adapter file + its entry here (the
+// workflow passthrough is deleted whole by #1035). The four marketplace sources
+// share `group: "marketplace"` so the page collapses them into ONE "not
+// connected" state + ONE footer when no marketplace credential resolves.
 // ---------------------------------------------------------------------------
 
 export const approvalSourceRegistry: ApprovalSource[] = [
   agentCreationRequestsSource,
   workflowLegacyPassthroughSource,
+  marketplaceSubmissionModerationSource,
+  marketplaceVendorAppModerationSource,
+  marketplaceMySubmissionsSource,
+  marketplaceVendorAppStatusSource,
 ];
 
 /**
