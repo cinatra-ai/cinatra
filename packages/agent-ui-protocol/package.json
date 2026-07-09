@@ -11,7 +11,8 @@
   "dependencies": {
     "@cinatra-ai/a2a": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",
-    "ioredis": "^5.11.1"
+    "ioredis": "^5.11.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@a2ui/web_core": "0.10.0",

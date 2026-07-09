@@ -54,3 +54,22 @@ export {
 // host supplies its widget catalog's detector so a missing catalog is a compile
 // error, not a silently-dead widget surface.
 export type { DetectedWidget } from "../widget-runtime";
+
+// --- Renderable views (S4, #1220) --------------------------------------------
+// First-class assistant-specific views carried as typed `DATA_PART` payloads on
+// the one wire (change-diff / content_change_proposal, artifact previews,
+// citation groups, change history). `RenderableViewCard` is the single dispatch
+// entry: it validates+sanitizes a raw payload via the S1/S4 schema registry and
+// renders the registered component, or a safe fallback for an unknown/invalid
+// view. Registering a view is a schema entry (@cinatra-ai/agent-ui-protocol) +
+// a component entry — no surface forks. NOTE: display-only in this slice; the
+// no-reload APPLY capability is gated on #1214 / #1037 P4.1.
+export {
+  RenderableViewCard,
+  RenderableViewFallback,
+  RENDERABLE_VIEW_COMPONENTS,
+  ContentChangeProposalCard,
+  ArtifactPreviewCard,
+  CitationGroupCard,
+  ChangeHistoryCard,
+} from "../renderable-views/index";

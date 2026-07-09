@@ -34,6 +34,8 @@ describe("renderer module public surface (#1219 S3)", () => {
     expect(typeof ChartError).toBe("function");
     expect(typeof MermaidBlock).toBe("function");
     // Guard against accidental extra runtime exports creeping into the embed API.
+    // Includes the S4 (#1220) renderable-view surface: the dispatcher, the
+    // fallback, the component map, and each registered view card.
     const runtimeExports = Object.keys(renderer).sort();
     expect(runtimeExports).toEqual(
       [
@@ -46,6 +48,14 @@ describe("renderer module public surface (#1219 S3)", () => {
         "highlightCodeAsync",
         "renderMarkdown",
         "validateChart",
+        // S4 renderable views (#1220).
+        "RenderableViewCard",
+        "RenderableViewFallback",
+        "RENDERABLE_VIEW_COMPONENTS",
+        "ContentChangeProposalCard",
+        "ArtifactPreviewCard",
+        "CitationGroupCard",
+        "ChangeHistoryCard",
       ].sort(),
     );
   });
