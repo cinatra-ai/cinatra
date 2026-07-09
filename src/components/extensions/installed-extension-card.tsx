@@ -75,6 +75,19 @@ export type InstalledExtensionCardProps = {
    * category colour.
    */
   archived?: boolean;
+  /**
+   * cinatra#1121 — /agents All-Agents accent affordance. `accentDetailHref` makes
+   * the LEFT accent panel a pointer-cursor click target (an `<a>` whose href is
+   * the no-JS full-page-detail fallback; `onAccentActivate` opens the §V detail
+   * modal in place). `accentInert` renders the panel inert with a default cursor
+   * for agent rows that have no listing (external A2A / unscoped). Every other
+   * caller (§VI installed extensions, marketplace) omits all four → the accent
+   * stays a presentational panel, byte-identical.
+   */
+  accentDetailHref?: string;
+  onAccentActivate?: () => void;
+  accentLabel?: string;
+  accentInert?: boolean;
   className?: string;
 };
 
@@ -136,6 +149,10 @@ export function InstalledExtensionCard({
   archived = false,
   className,
   descriptionLineClamp = 2,
+  accentDetailHref,
+  onAccentActivate,
+  accentLabel,
+  accentInert = false,
 }: InstalledExtensionCardProps) {
   const { bg } = ACCENT_PALETTE[accentColor];
   return (
@@ -157,6 +174,10 @@ export function InstalledExtensionCard({
         iconUrl={iconUrl}
         muted={archived}
         className="p-4 md:w-[340px] md:shrink-0"
+        detailHref={accentDetailHref}
+        onActivate={onAccentActivate}
+        activateLabel={accentLabel}
+        inert={accentInert}
       />
 
       {/* MIDDLE — byline, description, version + status. */}

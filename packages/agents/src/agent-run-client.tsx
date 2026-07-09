@@ -38,18 +38,12 @@
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
-import Link from "next/link";
-import { Play } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Toolbar,
   ToolbarSearchGroup,
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
-import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
-import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
-import { extensionKindEmblem } from "@/components/extension-kind-emblem";
-import { deriveExtensionAccent } from "@/lib/extension-accent";
+import { AgentAllCard } from "@/components/extensions/agent-all-card";
 
 export type AgentRunRowModel = {
   key: string;
@@ -106,59 +100,12 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
       </Toolbar>
 
       <section className="grid grid-cols-1 gap-4">
-        {filtered.map((row) => {
-          const vendor = row.host === "local" ? "Cinatra" : row.host;
-          return (
-            <InstalledExtensionCard
-              key={row.key}
-              name={row.name}
-              accentColor={deriveExtensionAccent(row.key)}
-              emblem={extensionKindEmblem("agent")}
-              kindIcon={extensionKindEmblem("agent", "size-3.5")}
-              kindLabel="Agent"
-              vendor={vendor}
-              description={row.description || undefined}
-              descriptionLineClamp={2}
-              // No `version` / `status` — design#25 §VIII derives the Agent
-              // card from §VI minus the version + Active/Archived indicator.
-              actions={
-                <>
-                  <Button asChild size="sm">
-                    <Link href={row.runHref}>
-                      {/* Solid play icon (design#25 §VIII: fill="currentColor",
-                          no outline) — fill-current fills the lucide glyph. */}
-                      <Play
-                        data-icon="inline-start"
-                        aria-hidden="true"
-                        className="fill-current"
-                      />
-                      Run
-                    </Link>
-                  </Button>
-                  {/* design#25 §VIII (owner ruling, 2026-07-06): "More details"
-                      opens the §V detail modal IN PLACE — the same
-                      <MarketplaceDetailModal> the §VI installed-extensions card
-                      uses, DETAILS-ONLY (no footer props → no install CTA). The
-                      `linkTrigger` renders the §VI link-styled "More details"
-                      anchor; its `href` is the full-page detail (no-JS
-                      fallback), JS intercepts the click to open the modal. The
-                      loader is the MEMBER-gated getAgentMarketplaceDetailAction
-                      (same access as /agents), not the admin-gated browse
-                      action. Rendered only for a scoped listing; A2A / unscoped
-                      agents (packageName + detailHref null) show Run only. */}
-                  {row.detailHref && row.packageName && (
-                    <AgentDetailModal
-                      name={row.name}
-                      description={row.description}
-                      packageName={row.packageName}
-                      detailHref={row.detailHref}
-                    />
-                  )}
-                </>
-              }
-            />
-          );
-        })}
+        {/* Each row is its own client component (cinatra#1121): it lifts the §V
+            detail-modal open state so the card's coloured accent panel and its
+            "More details" link open the SAME modal. */}
+        {filtered.map((row) => (
+          <AgentAllCard key={row.key} row={row} />
+        ))}
         {filtered.length === 0 && q.length > 0 && (
           <p className="col-span-full py-8 text-center text-sm text-muted-foreground">
             No agents match &ldquo;{query}&rdquo;.

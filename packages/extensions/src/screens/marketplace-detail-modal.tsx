@@ -18,7 +18,7 @@
 // is the browse-card "More details" experience only.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
@@ -130,6 +130,17 @@ export interface MarketplaceDetailModalProps {
    * page. The browse card omits this and keeps its `<DialogTrigger>` button.
    */
   linkTrigger?: { variant: "link" | "ghost"; href: string };
+  /**
+   * Controlled open state (cinatra#1121). Optional: when provided the modal is
+   * externally controlled — the /agents All-Agents card lifts `open` so the SAME
+   * modal instance is opened by TWO sibling hit-areas (the coloured accent panel
+   * AND the "More details" link) that live in far-apart card subtrees and so
+   * cannot share one Radix Dialog context. Omitted by the marketplace browse
+   * cards and the §VI installed-extensions cards, which stay uncontrolled with
+   * byte-identical behaviour.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function MarketplaceDetailModal({
@@ -142,8 +153,16 @@ export function MarketplaceDetailModal({
   trigger,
   initialLoad,
   linkTrigger,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
 }: MarketplaceDetailModalProps) {
-  const [open, setOpen] = useState(false);
+  // cinatra#1121 — opt-in controlled open. When `controlledOpen` is passed the
+  // Dialog is externally controlled and the lifted setter is the single source
+  // of truth for both hit-areas; otherwise the modal owns its own open state
+  // exactly as before.
+  const isControlled = controlledOpen !== undefined;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
   const [status, setStatus] = useState<LoadStatus>(initialLoad?.status ?? "idle");
   const [detail, setDetail] = useState<MarketplaceDetailView | null>(
     initialLoad?.status === "loaded" ? initialLoad.detail : null,
@@ -177,15 +196,36 @@ export function MarketplaceDetailModal({
 
   const onOpenChange = useCallback(
     (next: boolean) => {
-      setOpen(next);
-      // Fetch on first open (and never again once loaded — reviews/specs are a
-      // point-in-time read). Retry re-drives load() from the error state.
-      if (next && !pinned && status !== "loaded" && status !== "loading") {
+      if (isControlled) {
+        controlledOnOpenChange?.(next);
+      } else {
+        setUncontrolledOpen(next);
+      }
+      // Uncontrolled callers fetch on first open here (and never again once
+      // loaded — reviews/specs are a point-in-time read; retry re-drives load()
+      // from the error state). Controlled callers open via a lifted setter that
+      // never reaches this Radix handler, so their fetch is driven by the effect
+      // below instead.
+      if (!isControlled && next && !pinned && status !== "loaded" && status !== "loading") {
         void load();
       }
     },
-    [pinned, status, load],
+    [isControlled, controlledOnOpenChange, pinned, status, load],
   );
+
+  // Controlled mode only (cinatra#1121): an external open (the accent panel or
+  // the "More details" link, both setting the lifted `open`) bypasses Radix's
+  // onOpenChange, so the lazy detail fetch is driven off the open transition
+  // here. `prevOpen` fires load exactly once per open — it never re-fires when a
+  // notfound/error status change re-runs this effect while the modal stays open.
+  const prevOpen = useRef(false);
+  useEffect(() => {
+    if (!isControlled) return;
+    if (open && !prevOpen.current && !pinned && status !== "loaded" && status !== "loading") {
+      void load();
+    }
+    prevOpen.current = open;
+  }, [isControlled, open, pinned, status, load]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

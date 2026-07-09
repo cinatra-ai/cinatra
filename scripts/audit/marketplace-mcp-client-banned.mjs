@@ -150,6 +150,26 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // workspace-phantom-deps gate enforces this); the manifest edge moves to the
   // published contract alongside the rest of the swap.
   "packages/extensions/package.json",
+  // Unified approvals inbox — the marketplace ApprovalSource adapters + their
+  // non-redirecting decide helpers + shared plumbing (#1045). Same swap-PR
+  // migration story as the drill-down surfaces they federate (already
+  // allowlisted above: submissions/actions.ts, submissions/{page,admin/page},
+  // vendor-applications/{page,actions}, vendor-application-actions.ts): the
+  // vendored package is the ONLY typed surface for createHttpMarketplaceMcpClient
+  // + MarketplaceMcpError + the extension_submission_* / vendor_application_*
+  // methods and types until the published @cinatra-ai/marketplace-mcp-contract
+  // ships. These move to the contract import alongside the rest of the swap.
+  "src/app/configuration/approvals/sources/marketplace-shared.ts",
+  "src/app/configuration/approvals/sources/marketplace-submission-moderation.tsx",
+  "src/app/configuration/approvals/sources/marketplace-vendor-app-moderation.tsx",
+  "src/app/configuration/approvals/sources/marketplace-my-submissions.tsx",
+  "src/app/configuration/approvals/sources/marketplace-vendor-app-status.tsx",
+  "src/app/configuration/approvals/marketplace-decision-helpers.ts",
+  // Test mocks mirroring the above vendored imports (test-only, not new
+  // production coupling; move to the contract import with the swap).
+  "src/app/configuration/approvals/__tests__/marketplace-decision-helpers.test.ts",
+  "src/app/configuration/approvals/sources/__tests__/marketplace-shared.test.ts",
+  "src/app/configuration/approvals/sources/__tests__/marketplace-sources.test.ts",
 ]);
 
 /** Files / directories the scanner skips entirely (perf + accuracy).
