@@ -37,6 +37,33 @@ export type ConnectorDepRequirement = "required" | "optional";
 export type ConnectorDepValue = { range: string; requirement: ConnectorDepRequirement };
 export type ConnectorDependencyMap = Record<string, string | ConnectorDepValue>;
 
+// Per-sub-agent dependency value carried on the agent_templates.agent_dependencies
+// column (JSON-as-text). Widened from a bare `Record<pkg, rangeString>` (cinatra#1058)
+// so a projected canonical AGENT edge carries its `requirement` alongside the range —
+// the orchestrator-readiness gate needs it to route a missing OPTIONAL sub-agent to
+// stop-run-hitl instead of hard-failing the run. The column stays a UNION for backward
+// compatibility: legacy rows and REQUIRED edges remain bare `string` members, read as
+// `requirement: "required"`; only OPTIONAL edges are persisted as `{ range, requirement }`.
+export type AgentDepRequirement = "required" | "optional";
+export type AgentDepValue = { range: string; requirement: AgentDepRequirement };
+export type AgentDependencyMap = Record<string, string | AgentDepValue>;
+
+/**
+ * Flatten an {@link AgentDependencyMap} to bare `package → range` strings — the
+ * shape the published packument's `cinatra.agentDependencies` and the A2A agent
+ * card carry. Only the RUN-TIME orchestrator-readiness gate needs the union's
+ * `requirement`; every EXPORT boundary flattens so the packument / resolver /
+ * agent-card contract stays a plain range map (the `requirement` is carried by
+ * canonical `cinatra.dependencies`, not this legacy field). (cinatra#1058)
+ */
+export function flattenAgentDependencyRanges(
+  map: AgentDependencyMap,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(map).map(([k, v]) => [k, typeof v === "string" ? v : v.range]),
+  );
+}
+
 const cinatraSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 
 // ---------------------------------------------------------------------------

@@ -36,7 +36,7 @@ import {
 import type { GatedStep } from "./trigger-infer-side-effects";
 // ExtensionOrigin included in AgentTemplateRecord so callers
 // can read origin.visibility without a separate readAgentTemplateOrigin call.
-import type { ExtensionOrigin, ConnectorDependencyMap } from "./schema";
+import type { ExtensionOrigin, ConnectorDependencyMap, AgentDependencyMap } from "./schema";
 // AgentAuthPolicy persisted as JSON-as-text in
 // agent_templates.agent_auth_policy and (per-run override) agent_runs.auth_policy.
 // enforceRunAccess is the policy enforcer; PrimitiveActorContext is the actor
@@ -108,7 +108,7 @@ export type AgentTemplateRecord = {
   packageVersion?: string | null;            // semantic version string
   currentVersionId: string | null;           // pointer to the active version (null = latest)
   hitlScreens: string[] | null;              // namespaced x-renderer IDs this template produces as HITL states
-  agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; optional ({} or absent when none)
+  agentDependencies?: AgentDependencyMap; // @cinatra/* dep ranges (+requirement); optional ({} or absent when none)
   connectorDependencies?: ConnectorDependencyMap; // @cinatra-ai/<x>-connector dep ranges (+requirement); optional
   ioSpec?: AgentIOSpec | null; // declared I/O contract; null when not yet set
   hitlRequired: boolean;
@@ -226,7 +226,7 @@ export type CreateAgentTemplateInput = {
   packageName?: string;                        // stable package identity (one-time set)
   packageVersion?: string;                     // semantic version string
   hitlScreens?: string[] | null;              // namespaced x-renderer IDs this template produces as HITL states
-  agentDependencies?: Record<string, string>;  // @cinatra/* dep ranges; omit or {} to write SQL NULL
+  agentDependencies?: AgentDependencyMap;  // @cinatra/* dep ranges (+requirement); omit or {} to write SQL NULL
   connectorDependencies?: ConnectorDependencyMap; // @cinatra-ai/<x>-connector dep ranges (+requirement); omit or {} to write SQL NULL
   ioSpec?: AgentIOSpec | null; // pass null to clear; omit to leave unchanged
   hitlRequired?: boolean;                                               // defaults to false
@@ -433,7 +433,7 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     currentVersionId: row.currentVersionId ?? null,
     hitlScreens: row.hitlScreens ? (JSON.parse(row.hitlScreens) as string[]) : null,
     agentDependencies: row.agentDependencies
-      ? (JSON.parse(row.agentDependencies) as Record<string, string>)
+      ? (JSON.parse(row.agentDependencies) as AgentDependencyMap)
       : {},
     connectorDependencies: row.connectorDependencies
       ? (JSON.parse(row.connectorDependencies) as ConnectorDependencyMap)
@@ -498,7 +498,7 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
 // Substring detection over-detects by design (fail-safe), so we must
 // conservatively serialize whenever any of those three is written.
 function templateWriteCreatesDependentEdge(v: {
-  agentDependencies?: Record<string, string> | null;
+  agentDependencies?: AgentDependencyMap | null;
   compiledPlan?: unknown;
   approvalPolicy?: unknown;
 }): boolean {
