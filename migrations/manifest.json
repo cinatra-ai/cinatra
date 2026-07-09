@@ -200,6 +200,15 @@
       "tables": [
         "agent_runs"
       ]
+    },
+    {
+      "seq": "0019",
+      "file": "core/core__0019_agent-run-token-hash.mjs",
+      "summary": "Run-token spine persistence (cinatra-ai/cinatra#1193, W1 of the run-identity-spine epic #1192): add agent_runs.run_token_hash (text, nullable) holding ONLY the sha256-hex of the random per-run credential minted at dispatch, plus a PARTIAL UNIQUE INDEX agent_runs_run_token_hash_uniq (run_token_hash) WHERE run_token_hash IS NOT NULL so a single server verifier resolves the run from a presented token with no newest-wins tie-break. The raw token is never stored — it rides only the WayFlow initial message (and, in a later wave, first-party callbacks). Adding a UNIQUE index to an existing table is destructive per migrations/README.md (artifact required), but cannot collide here: the column is brand-new so every pre-existing row is NULL and the partial predicate excludes all of them (the index is built over zero rows) — mirroring the notifications.dedupe_key precedent (core__0001). ADDITIVE + idempotent (ADD COLUMN IF NOT EXISTS + CREATE UNIQUE INDEX IF NOT EXISTS), rides the bootstrap DDL (buildCreateStoreSchemaQueries adds the same column + index this PR) — no-op on a bootstrap-seeded schema, ledger-faked on a fresh install, executed by db migrate on an existing deployment. No noTransaction (the partial index over an all-NULL column is instant, not CONCURRENTLY). The resume/clone no-copy invariant is enforced in code (every agent_runs insert uses an explicit column whitelist; the hash is written only by the dispatcher's setAgentRunTokenHash before the blocking sendTask). down() drops the index then the column, restoring the pre-0019 shape (no data loss — the raw token was never persisted).",
+      "destructive": true,
+      "tables": [
+        "agent_runs"
+      ]
     }
   ]
 }

@@ -227,6 +227,15 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // anchor (fails closed at mint) or a pre-backfill row. The DDL + backfill are
   // owned by src/lib/drizzle-store.ts.
   oboCeiling: text("obo_ceiling"),
+  // run_token_hash: sha256-hex of the dispatch-minted per-run credential
+  // (#1193 run-token spine). WRITE-ONLY at the store layer — deserializeRun
+  // never surfaces it onto AgentRunRecord, and every run-creation path uses an
+  // explicit column whitelist, so a resumed/cloned/child run never inherits a
+  // parent's hash. Set only by the dispatcher (setAgentRunTokenHash) before the
+  // blocking sendTask. Unique per run via the partial index below.
+  // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0019
+  //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
+  runTokenHash: text("run_token_hash"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -259,6 +268,14 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   workflowIdIdx: index("agent_runs_workflow_id_idx")
     .on(t.workflowId)
     .where(sql`workflow_id IS NOT NULL`),
+  // Partial UNIQUE index — mirrors the SQL DDL in src/lib/drizzle-store.ts
+  // (`agent_runs_run_token_hash_uniq` WHERE run_token_hash IS NOT NULL). One
+  // run per credential; a new all-NULL column cannot collide on existing rows.
+  // Name MUST match the DDL so drizzle-kit introspection treats them as
+  // congruent and does not drop/recreate.
+  runTokenHashIdx: uniqueIndex("agent_runs_run_token_hash_uniq")
+    .on(t.runTokenHash)
+    .where(sql`run_token_hash IS NOT NULL`),
 }));
 
 // ---------------------------------------------------------------------------
