@@ -132,3 +132,77 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
     expect(html).toContain(">Run<");
   });
 });
+
+describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)", () => {
+  function renderAccent(props: {
+    accentDetailHref?: string;
+    onAccentActivate?: () => void;
+    accentLabel?: string;
+    accentInert?: boolean;
+  }): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="Research Assistant"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Gathers sources, summarises, and cites answers."
+        actions={<Button type="button">Run</Button>}
+        {...props}
+      />,
+    );
+  }
+
+  // Extract just the accent panel's OPENING tag so tag/attr assertions target
+  // the banner, not the whole card.
+  function bannerTag(html: string): string {
+    return (
+      html.match(/<(a|div)\b[^>]*data-slot="extension-card-banner"[^>]*>/)?.[0] ??
+      ""
+    );
+  }
+
+  it("interactive accent renders the panel as a pointer-cursor detail anchor", () => {
+    const html = renderAccent({
+      accentDetailHref: "/configuration/marketplace/@scope/name",
+      onAccentActivate: () => {},
+      accentLabel: "View details for Research Assistant",
+    });
+    const banner = bannerTag(html);
+    // A real anchor (keyboard-focusable; its href is the no-JS fallback).
+    expect(banner.startsWith("<a")).toBe(true);
+    expect(banner).toContain('href="/configuration/marketplace/@scope/name"');
+    expect(banner).toContain('aria-haspopup="dialog"');
+    expect(banner).toContain('aria-label="View details for Research Assistant"');
+    expect(banner).toContain("data-accent-detail");
+    // The reported bug was a text (I-beam) cursor; the fix is a pointer.
+    expect(banner).toContain("cursor-pointer");
+    // Focus ring painted INSIDE the panel (the card clips overflow).
+    expect(banner).toContain("focus-visible:ring-inset");
+    // The hover wash overlay renders only for the interactive accent.
+    expect(html).toContain('data-slot="extension-card-accent-hover"');
+  });
+
+  it("inert accent (no listing) renders a non-anchor panel with a default cursor", () => {
+    const html = renderAccent({ accentInert: true });
+    const banner = bannerTag(html);
+    expect(banner.startsWith("<div")).toBe(true);
+    expect(banner).toContain("cursor-default");
+    expect(banner).not.toContain("cursor-pointer");
+    expect(banner).not.toContain("data-accent-detail");
+    expect(banner).not.toContain("aria-haspopup");
+    expect(html).not.toContain('data-slot="extension-card-accent-hover"');
+  });
+
+  it("default caller (no accent props) leaves the panel untouched — no cursor override, not an anchor", () => {
+    const html = renderAccent({});
+    const banner = bannerTag(html);
+    // §VI installed-extensions + marketplace callers are byte-identical: a plain
+    // presentational <div> with no cursor override added.
+    expect(banner.startsWith("<div")).toBe(true);
+    expect(banner).not.toContain("cursor-pointer");
+    expect(banner).not.toContain("cursor-default");
+    expect(banner).not.toContain("data-accent-detail");
+  });
+});

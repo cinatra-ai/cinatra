@@ -1,4 +1,5 @@
 import * as React from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 // cn: intentionally the EXTENDED tailwind-merge from sdk-ui, not "@/lib/utils".
 // The default app cn strips the custom design-token size utilities
@@ -266,6 +267,10 @@ export function ExtensionCardListingBanner({
   badges,
   className,
   muted = false,
+  detailHref,
+  onActivate,
+  activateLabel,
+  inert = false,
 }: {
   name: string;
   accentColor: ExtensionAccent;
@@ -280,19 +285,53 @@ export function ExtensionCardListingBanner({
    * inactive at a glance. Active cards keep their category colour.
    */
   muted?: boolean;
+  /**
+   * cinatra#1121 — /agents accent-panel detail affordance. When set, the panel
+   * root renders as an `<a href={detailHref}>` (a pointer-cursor click target
+   * with a subtle hover wash + focus-visible ring). `href` is the no-JS
+   * full-page-detail fallback; `onActivate` (when provided) intercepts the click
+   * to open the §V detail modal IN PLACE. Only the /agents All-Agents card
+   * passes this — the marketplace listing card and the §VI installed-extensions
+   * card omit it and the panel stays a presentational `<div>`, byte-identical.
+   */
+  detailHref?: string;
+  onActivate?: () => void;
+  /** Accessible name for the accent link, e.g. `View details for {name}`. */
+  activateLabel?: string;
+  /**
+   * No detail target (external A2A / unscoped agents): render the panel inert
+   * but drop the default text (I-beam) cursor the coloured `<div>` would show.
+   * Only the /agents card passes this; every other caller leaves the panel
+   * untouched.
+   */
+  inert?: boolean;
 }) {
   const { bg, fg } = ACCENT_PALETTE[accentColor];
-  return (
-    <div
-      data-slot="extension-card-banner"
-      data-muted={muted ? "" : undefined}
-      className={cn(
-        "relative flex min-h-[96px] items-center gap-3 p-[14px]",
-        muted && "bg-muted text-muted-foreground",
-        className,
+  const interactive = detailHref != null;
+  const commonClassName = cn(
+    "relative flex min-h-[96px] items-center gap-3 p-[14px]",
+    muted && "bg-muted text-muted-foreground",
+    // Interactive accent (cinatra#1121): pointer cursor, a focus-visible ring
+    // painted INSIDE the panel (the card clips overflow, so an outset ring would
+    // be cropped), and a `group` so the hover wash below can react.
+    interactive &&
+      "group/accent cursor-pointer outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset",
+    inert && !interactive && "cursor-default",
+    className,
+  );
+  const style = muted ? undefined : { background: bg, color: fg };
+  const inner = (
+    <>
+      {/* Hover wash for the interactive accent — a token-tinted overlay that
+          reads on any category ground. `pointer-events-none` so clicks pass to
+          the anchor; the content below is `relative` so it paints above it. */}
+      {interactive && (
+        <span
+          aria-hidden
+          data-slot="extension-card-accent-hover"
+          className="pointer-events-none absolute inset-0 bg-foreground/5 opacity-0 transition-opacity duration-150 group-hover/accent:opacity-100"
+        />
       )}
-      style={muted ? undefined : { background: bg, color: fg }}
-    >
       {/* Square icon tile — 46×46, 11px radius, white ground, soft shadow,
           icon colour matching the banner (spec §IV). A hosted icon image
           renders cover-fit inside the tile (degrading to the kind/vendor
@@ -304,6 +343,9 @@ export function ExtensionCardListingBanner({
         data-slot="extension-card-icon"
         className={cn(
           "grid h-[46px] w-[46px] shrink-0 place-items-center overflow-hidden rounded-[11px] bg-surface-strong shadow-sm",
+          // `relative` only when the hover wash exists, so it paints behind the
+          // tile — non-interactive callers stay byte-identical (no extra class).
+          interactive && "relative",
           muted && "text-muted-foreground",
         )}
         style={muted ? undefined : { color: bg }}
@@ -323,6 +365,9 @@ export function ExtensionCardListingBanner({
         data-slot="extension-card-name"
         className={cn(
           "line-clamp-3 min-w-0 font-display text-listing-title font-extrabold italic",
+          // `relative` only in the interactive case (so the name paints above the
+          // hover wash); non-interactive callers stay byte-identical.
+          interactive && "relative",
           // Reserve room for the top-right badge overlay so a long, line-clamped
           // name never runs underneath the badges.
           badges && "pr-20",
@@ -335,6 +380,47 @@ export function ExtensionCardListingBanner({
           {badges}
         </div>
       )}
+    </>
+  );
+
+  // Interactive accent → a real Next <Link> anchor: natively keyboard-focusable
+  // and Enter-activatable, and its `href` is the no-JS full-page-detail fallback
+  // (JS intercepts the click to open the §V modal in place — the same pattern as
+  // the modal's own "More details" link trigger). No interactive descendants
+  // live inside the panel, so this nests no controls illegally.
+  if (interactive) {
+    return (
+      <Link
+        href={detailHref}
+        data-slot="extension-card-banner"
+        data-accent-detail=""
+        data-muted={muted ? "" : undefined}
+        aria-label={activateLabel}
+        aria-haspopup="dialog"
+        className={commonClassName}
+        style={style}
+        onClick={
+          onActivate
+            ? (event) => {
+                event.preventDefault();
+                onActivate();
+              }
+            : undefined
+        }
+      >
+        {inner}
+      </Link>
+    );
+  }
+
+  return (
+    <div
+      data-slot="extension-card-banner"
+      data-muted={muted ? "" : undefined}
+      className={commonClassName}
+      style={style}
+    >
+      {inner}
     </div>
   );
 }

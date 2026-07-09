@@ -289,6 +289,11 @@ describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harnes
     expect(isNext(res)).toBe(true);
   });
 
+  it("/design-fixtures/agents-card is public in non-production (accent-hotspot harness, cinatra#1121)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures/agents-card"));
+    expect(isNext(res)).toBe(true);
+  });
+
   it("CONTROL: an arbitrary /design-fixtures/* sibling is NOT public (exact-path list, no prefix wildcard)", async () => {
     const res = await guardAppRoute(fakeRequest("/design-fixtures/anything-else"));
     expect(res.status).toBe(307);
