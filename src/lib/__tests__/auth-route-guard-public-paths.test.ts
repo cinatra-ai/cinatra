@@ -294,6 +294,11 @@ describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harnes
     expect(isNext(res)).toBe(true);
   });
 
+  it("/design-fixtures/header-rule is public in non-production (page-header section-rule harness, cinatra#1101)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures/header-rule"));
+    expect(isNext(res)).toBe(true);
+  });
+
   it("CONTROL: an arbitrary /design-fixtures/* sibling is NOT public (exact-path list, no prefix wildcard)", async () => {
     const res = await guardAppRoute(fakeRequest("/design-fixtures/anything-else"));
     expect(res.status).toBe(307);
