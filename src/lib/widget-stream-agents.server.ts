@@ -133,3 +133,39 @@ export function resolveContentEditorRelay(
     agentUrl: process.env[relayA2aUrlEnvKey(agentSlug)] ?? defaultUrl,
   };
 }
+
+/**
+ * The set of in-admin CMS content-editor agent packages (#1214) — every
+ * `relayAgentPackage` declared by a widget-stream agent entry. Data-driven from
+ * the generated manifest (`cinatra.widgetStream.relayAgentPackage`), so core
+ * names NO specific extension instance (core→extension instance-coupling ban):
+ * an in-admin CMS content editor IS, by definition, the relay target of an
+ * in-admin content-editor widget.
+ */
+export function inAdminCmsContentEditorAgentPackages(): ReadonlySet<string> {
+  const packages = new Set<string>();
+  for (const entry of Object.values(GENERATED_WIDGET_STREAM_AGENTS)) {
+    if (entry.relayAgentPackage) packages.add(entry.relayAgentPackage);
+  }
+  return packages;
+}
+
+/**
+ * True when a dispatched agent run's template package is an in-admin CMS
+ * content-editor agent — i.e. the relay target of an in-admin content-editor
+ * widget — so its cinatra self-MCP access must be pinned to the MCP-backed CMS
+ * primitives (#1214). Fail-closed on an empty / unknown package (a general
+ * agent is never accidentally restricted; the tool allowlist itself fails
+ * closed for the matched agents). The host feeds this boolean into
+ * `resolveAgentRunCinatraMcpAllowedTools` — no extension package is named in
+ * the mcp-server policy module.
+ */
+export function isInAdminCmsContentEditorPackage(
+  packageName: string | null | undefined,
+): boolean {
+  return (
+    typeof packageName === "string" &&
+    packageName.length > 0 &&
+    inAdminCmsContentEditorAgentPackages().has(packageName)
+  );
+}
