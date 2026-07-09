@@ -91,8 +91,10 @@ export function decideConnectionShareSurface(input: {
   const { identity, declaration, unresolved, storedPolicy, scopes } = input;
   if (unresolved) return { surface: "hidden" };
 
+  // Multi-scope W1: runListVisibility is a token array; read the first token
+  // for the single-select share surface (W3 renders the multi-scope summary).
   const stored: AgentAuthPolicyVisibility =
-    storedPolicy?.runListVisibility ?? "owner";
+    storedPolicy?.runListVisibility?.[0] ?? "owner";
 
   if (declaration?.mode === "only") {
     if (declaration.scope === "user") return { surface: "hidden" };

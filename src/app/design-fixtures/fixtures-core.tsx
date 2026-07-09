@@ -90,7 +90,7 @@ export function CorePrimitives() {
       <PrimitiveRow name="Sheet" spec="@/components/ui/sheet" conformance="Full-height; right-side default; dim overlay.">
         <Sheet>
           <SheetTrigger asChild>
-            <Button variant="outline">Open sheet</Button>
+            <Button variant="outline" data-testid="sheet-fixture-open">Open sheet</Button>
           </SheetTrigger>
           <SheetContent>
             <SheetHeader>

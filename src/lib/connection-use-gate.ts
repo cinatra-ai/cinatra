@@ -277,11 +277,16 @@ export async function decideConnectionUse(input: {
     storedPolicy ?? defaultAccessPolicyForKind("connection");
   const coOwnerUserIds = coOwners.map((c) => c.userId);
 
+  // TRANSITIONAL (multi-scope W1): fields are token arrays. The ceiling clamp
+  // is applied to the FIRST token of each field, re-wrapped as a single-token
+  // array; the per-token clamp (clamp every token, drop those outside the
+  // ceiling) is the enforcement-lift issue (W2). Writers are single-token until
+  // the multi-select picker (W3), so this matches the pre-array behavior.
   const clampedPolicy: AgentAuthPolicy = {
     ...basePolicy,
-    runListVisibility: clampVisibility(basePolicy.runListVisibility, scope, identity.organizationId),
-    runDataVisibility: clampVisibility(basePolicy.runDataVisibility, scope, identity.organizationId),
-    runExecuteVisibility: clampVisibility(basePolicy.runExecuteVisibility, scope, identity.organizationId),
+    runListVisibility: [clampVisibility(basePolicy.runListVisibility[0], scope, identity.organizationId)],
+    runDataVisibility: [clampVisibility(basePolicy.runDataVisibility[0], scope, identity.organizationId)],
+    runExecuteVisibility: [clampVisibility(basePolicy.runExecuteVisibility[0], scope, identity.organizationId)],
   };
   const personGrantsSurvive = personGrantsWithinCeiling(scope, actor, owner);
   const clampedCoOwners = personGrantsSurvive ? coOwnerUserIds : [];
@@ -318,7 +323,8 @@ export async function decideConnectionUse(input: {
   const clampApplied: ClampedMaterial[] = [];
   if (stripPlatformAdmin) clampApplied.push("platformAdminBypass");
   if (
-    basePolicy.runDataVisibility !== clampedPolicy.runDataVisibility
+    // Compare the clamped token (arrays are single-token in W1).
+    basePolicy.runDataVisibility[0] !== clampedPolicy.runDataVisibility[0]
   ) {
     clampApplied.push("visibility");
   }

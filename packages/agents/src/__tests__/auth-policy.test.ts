@@ -28,9 +28,10 @@ import type { RunAccessOperation } from "../auth-policy";
 describe("DEFAULT_AGENT_AUTH_POLICY", () => {
   it("A1: deep-equals the locked default (all visibility=owner, allowRunSharing=false, no description)", () => {
     expect(DEFAULT_AGENT_AUTH_POLICY).toEqual({
-      runListVisibility: "owner",
-      runDataVisibility: "owner",
-      runExecuteVisibility: "owner",
+      // Multi-scope W1: visibility fields are non-empty token arrays.
+      runListVisibility: ["owner"],
+      runDataVisibility: ["owner"],
+      runExecuteVisibility: ["owner"],
       allowRunSharing: false,
     });
     expect(Object.prototype.hasOwnProperty.call(DEFAULT_AGENT_AUTH_POLICY, "description")).toBe(false);
@@ -53,17 +54,22 @@ describe("DEFAULT_AGENT_AUTH_POLICY", () => {
 // ---------------------------------------------------------------------------
 
 describe("AgentAuthPolicySchema", () => {
-  it("B1: parses a valid object", () => {
+  it("B1: parses a valid object (stored scalars coerce to arrays)", () => {
     const input = {
       runListVisibility: "owner",
       runDataVisibility: "org",
       runExecuteVisibility: "admin",
       allowRunSharing: true,
     };
-    expect(AgentAuthPolicySchema.parse(input)).toEqual(input);
+    expect(AgentAuthPolicySchema.parse(input)).toEqual({
+      runListVisibility: ["owner"],
+      runDataVisibility: ["org"],
+      runExecuteVisibility: ["admin"],
+      allowRunSharing: true,
+    });
   });
 
-  it("B2: preserves an optional description", () => {
+  it("B2: preserves an optional description (scalars coerce to arrays)", () => {
     const input = {
       runListVisibility: "owner",
       runDataVisibility: "org",
@@ -71,7 +77,13 @@ describe("AgentAuthPolicySchema", () => {
       allowRunSharing: true,
       description: "x",
     };
-    expect(AgentAuthPolicySchema.parse(input)).toEqual(input);
+    expect(AgentAuthPolicySchema.parse(input)).toEqual({
+      runListVisibility: ["owner"],
+      runDataVisibility: ["org"],
+      runExecuteVisibility: ["admin"],
+      allowRunSharing: true,
+      description: "x",
+    });
   });
 
   it("B3: rejects a disallowed visibility value", () => {
@@ -446,9 +458,9 @@ describe("enforceRunAccess (admin override, no can() mock)", () => {
           runBy: "u1",
           orgId: "o1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },
@@ -477,9 +489,9 @@ describe("enforceRunAccess (admin override, no can() mock)", () => {
           runBy: "u1",
           orgId: "o1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },
@@ -524,9 +536,9 @@ describe("enforceRunAccess (admin override, no can() mock)", () => {
           runBy: "u1",
           orgId: "o1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },
@@ -584,9 +596,9 @@ function buildActor(overrides: Partial<ActorContext> = {}): ActorContext {
 
 function policyOf(v: AgentAuthPolicyVisibility): AgentAuthPolicy {
   return {
-    runListVisibility: v,
-    runDataVisibility: v,
-    runExecuteVisibility: v,
+    runListVisibility: [v],
+    runDataVisibility: [v],
+    runExecuteVisibility: [v],
     allowRunSharing: false,
   };
 }
@@ -741,11 +753,11 @@ describe("enforceRunAccess — co-owner branch", () => {
       // Restrictive policy: owner-only across the board. Without the co-owner
       // branch, every read attempt would deny — co-owner branch must override.
       effectivePolicy: {
-        runListVisibility: "owner",
-        runDataVisibility: "owner",
-        runExecuteVisibility: "owner",
+        runListVisibility: ["owner"],
+        runDataVisibility: ["owner"],
+        runExecuteVisibility: ["owner"],
         allowRunSharing: true,
-      } as const,
+      } satisfies AgentAuthPolicy,
     };
 
     const actor = {
@@ -781,11 +793,11 @@ describe("enforceRunAccess — co-owner branch", () => {
       orgId: ORG_ID,
       coOwnerUserIds: [COOWNER],
       effectivePolicy: {
-        runListVisibility: "owner",
-        runDataVisibility: "owner",
-        runExecuteVisibility: "owner",
+        runListVisibility: ["owner"],
+        runDataVisibility: ["owner"],
+        runExecuteVisibility: ["owner"],
         allowRunSharing: true,
-      } as const,
+      } satisfies AgentAuthPolicy,
     };
 
     const actor = {
@@ -812,11 +824,11 @@ describe("enforceRunAccess — co-owner branch", () => {
       orgId: ORG_ID,
       coOwnerUserIds: [COOWNER],
       effectivePolicy: {
-        runListVisibility: "owner",
-        runDataVisibility: "owner",
-        runExecuteVisibility: "owner",
+        runListVisibility: ["owner"],
+        runDataVisibility: ["owner"],
+        runExecuteVisibility: ["owner"],
         allowRunSharing: true,
-      } as const,
+      } satisfies AgentAuthPolicy,
     };
 
     const actor = {
@@ -839,11 +851,11 @@ describe("enforceRunAccess — co-owner branch", () => {
       // been updated yet must still see the same enforcement behavior
       // (i.e. kernel decides via can()).
       effectivePolicy: {
-        runListVisibility: "owner",
-        runDataVisibility: "owner",
-        runExecuteVisibility: "owner",
+        runListVisibility: ["owner"],
+        runDataVisibility: ["owner"],
+        runExecuteVisibility: ["owner"],
         allowRunSharing: false,
-      } as const,
+      } satisfies AgentAuthPolicy,
     };
 
     const actor = {
@@ -880,9 +892,9 @@ describe("enforceRunAccess — non-human actor owner short-circuit (mcp-run-acce
           runBy: "svc-client-1",
           orgId: "org-1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },
@@ -900,9 +912,9 @@ describe("enforceRunAccess — non-human actor owner short-circuit (mcp-run-acce
           runBy: "ext-agent-42",
           orgId: "org-1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },
@@ -921,9 +933,9 @@ describe("enforceRunAccess — non-human actor owner short-circuit (mcp-run-acce
           runBy: "svc-client-1",
           orgId: "org-1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },
@@ -943,9 +955,9 @@ describe("enforceRunAccess — non-human actor owner short-circuit (mcp-run-acce
           runBy: "svc-client-1",
           orgId: "org-1",
           effectivePolicy: {
-            runListVisibility: "owner",
-            runDataVisibility: "owner",
-            runExecuteVisibility: "owner",
+            runListVisibility: ["owner"],
+            runDataVisibility: ["owner"],
+            runExecuteVisibility: ["owner"],
             allowRunSharing: false,
           },
         },

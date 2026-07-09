@@ -90,10 +90,14 @@ export function filterAvailableScopesForParentPolicy(
     return a;
   }
 
+  // TRANSITIONAL (multi-scope W1): fields are token arrays. The UX pre-filter
+  // reads the FIRST token per field; the per-field union (admit the union of
+  // every token's admitted set) is the enforcement-lift issue (W2). Writers are
+  // single-token until the multi-select picker (W3).
   const fields = [
-    admitsFor(parentPolicy.runListVisibility),
-    admitsFor(parentPolicy.runDataVisibility),
-    admitsFor(parentPolicy.runExecuteVisibility),
+    admitsFor(parentPolicy.runListVisibility[0]),
+    admitsFor(parentPolicy.runDataVisibility[0]),
+    admitsFor(parentPolicy.runExecuteVisibility[0]),
   ];
 
   // Intersection. Workspace is "anything below" — intersected with a

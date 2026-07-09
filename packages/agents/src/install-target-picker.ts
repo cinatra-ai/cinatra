@@ -173,7 +173,9 @@ export async function buildInstallTargetPickerContext(args: {
     currentProjectId,
   });
   const ownerEntityNames: Record<string, string> = {
-    org: orgName,
+    // Multi-scope W1: key the org label on the id-carrying token (matches the
+    // install-target row value `org:<activeOrgId>`); the bare "org" key retired.
+    [`org:${activeOrgId ?? ""}`]: orgName,
     ...Object.fromEntries(userTeams.map((t) => [`team:${t.id}`, t.name])),
     ...Object.fromEntries(
       projectsForPicker.map((p) => [`project:${p.id}`, p.name]),

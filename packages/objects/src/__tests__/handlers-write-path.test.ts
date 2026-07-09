@@ -176,6 +176,11 @@ describe("objects_update handler — Postgres-primary", () => {
 describe("objects_delete handler — Postgres-primary", () => {
   beforeEach(() => {
     mockSoftDelete.mockReset();
+    // softDeleteObject returns the legacy change_set id the handler surfaces as
+    // MutationResult.changeSetId (NULL on a no-op delete). The handler
+    // destructures `{ changeSetId }` off the return, so the mock must yield the
+    // real `{ changeSetId }` shape rather than the default `undefined`.
+    mockSoftDelete.mockReturnValue({ changeSetId: "cs_legacy_test" });
     mockShadow.mockReset();
     mockAdd.mockReset();
     mockDel.mockReset();

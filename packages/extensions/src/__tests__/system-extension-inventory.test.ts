@@ -15,6 +15,10 @@ import {
   SYSTEM_EXTENSIONS,
   isSystemExtension,
   readSystemExtensions,
+  assertCanRemoveExtension,
+  SystemExtensionRemovalError,
+  SYSTEM_EXTENSION_REMOVAL_MESSAGE,
+  type ExtensionRemovalIntent,
 } from "../system-extension-inventory";
 import { readRequiredInProdPackages, _resetCachedRequiredForTesting } from "../required-in-prod";
 
@@ -101,5 +105,54 @@ describe("system-extension inventory", () => {
       expect([...set]).toEqual(["@cinatra-ai/a-pkg", "@cinatra-ai/b-pkg"]);
       expect(Object.isFrozen(set)).toBe(true);
     });
+  });
+});
+
+// cinatra#1036 — the removal choke-point. System extensions can be UPDATED but
+// never removed from the live runtime; this is the single kind-agnostic gate.
+describe("assertCanRemoveExtension — removal choke-point", () => {
+  const INTENTS: ExtensionRemovalIntent[] = [
+    "uninstall",
+    "force_delete",
+    "archive",
+    "disable",
+    "purge",
+    "registry_remove",
+  ];
+
+  it("throws SystemExtensionRemovalError with the exact copy for a system package (every intent)", () => {
+    // Uses a REAL system package name from the host declaration so the test
+    // exercises the actual inventory, not a fixture.
+    const systemPkg = SYSTEM_EXTENSIONS[0];
+    expect(isSystemExtension(systemPkg)).toBe(true);
+    for (const intent of INTENTS) {
+      let thrown: unknown;
+      try {
+        assertCanRemoveExtension(systemPkg, intent);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(SystemExtensionRemovalError);
+      expect((thrown as SystemExtensionRemovalError).message).toBe(
+        "System extension — can be updated but not deleted.",
+      );
+      expect((thrown as SystemExtensionRemovalError).message).toBe(SYSTEM_EXTENSION_REMOVAL_MESSAGE);
+      expect((thrown as SystemExtensionRemovalError).code).toBe("SYSTEM_EXTENSION_PROTECTED");
+      expect((thrown as SystemExtensionRemovalError).packageName).toBe(systemPkg);
+      expect((thrown as SystemExtensionRemovalError).intent).toBe(intent);
+    }
+  });
+
+  it("guards nango-connector specifically (the issue's motivating example)", () => {
+    expect(() => assertCanRemoveExtension("@cinatra-ai/nango-connector", "uninstall")).toThrow(
+      SystemExtensionRemovalError,
+    );
+  });
+
+  it("is a no-op (no throw) for a non-system package — update/uninstall of a normal ext is unaffected", () => {
+    expect(isSystemExtension("@acme/not-a-system-ext")).toBe(false);
+    for (const intent of INTENTS) {
+      expect(() => assertCanRemoveExtension("@acme/not-a-system-ext", intent)).not.toThrow();
+    }
   });
 });

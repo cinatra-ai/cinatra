@@ -135,19 +135,43 @@ describe("filterMatchRowsByVisibility integration regression", () => {
     expect(visible.sort()).toEqual(["skill-project-A", "skill-project-B"]);
   });
 
-  it("workspace-level row is hidden for non-admin regardless of any scope match", () => {
+  it("workspace-level row is visible to a full-identity workspace user, but hidden if either identity half is missing", () => {
     const rows = [row("skill-ws-1")];
     const skills = new Map<string, VisibilitySkillMeta>([
-      ["skill-ws-1", { level: "workspace", scope: "any" }],
+      // Real workspace skills carry no owner scope (scope: undefined); the
+      // "Workspace: All" tier is identity-gated, not owner-scope-gated, so the
+      // fixture must not lean on a scope value to pass.
+      ["skill-ws-1", { level: "workspace", scope: undefined }],
     ]);
-    const actor: VisibilityActor = {
+    // "Workspace: All" — every authenticated workspace user (userId + orgId)
+    // may READ/use the resource; the org-admin MANAGE gate is enforced by
+    // requireResourceAccess(..., "manage"), not by this read-visibility filter.
+    const workspaceUser: VisibilityActor = {
       userId: "user-1",
       teamIds: ["team-A"],
       projectIds: ["project-X"],
       orgId: "org-1",
       platformRole: "member",
     };
-    expect(filterMatchRowsByVisibility(rows, skills, actor)).toHaveLength(0);
+    expect(filterMatchRowsByVisibility(rows, skills, workspaceUser).map((r) => r.skillId)).toEqual([
+      "skill-ws-1",
+    ]);
+    // Both halves of the `actor.orgId && actor.userId` gate are required —
+    // an actor missing EITHER identity field must not pass workspace rows.
+    const orgLessActor: VisibilityActor = {
+      userId: "user-1",
+      teamIds: [],
+      projectIds: [],
+      platformRole: "member",
+    };
+    expect(filterMatchRowsByVisibility(rows, skills, orgLessActor)).toHaveLength(0);
+    const userlessActor: VisibilityActor = {
+      orgId: "org-1",
+      teamIds: [],
+      projectIds: [],
+      platformRole: "member",
+    };
+    expect(filterMatchRowsByVisibility(rows, skills, userlessActor)).toHaveLength(0);
   });
 
   it("platform_admin sees all rows in a mixed-level batch, including workspace and uninstalled-skill rows", () => {

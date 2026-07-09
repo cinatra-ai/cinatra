@@ -46,16 +46,16 @@ const hasDb =
   !dbUrl.includes("unused:unused@localhost:5432/unused");
 
 const VALID_POLICY: AgentAuthPolicy = {
-  runListVisibility: "owner",
-  runDataVisibility: "org",
-  runExecuteVisibility: "admin",
+  runListVisibility: ["owner"],
+  runDataVisibility: ["org"],
+  runExecuteVisibility: ["admin"],
   allowRunSharing: true,
 };
 
 const NEW_POLICY: AgentAuthPolicy = {
-  runListVisibility: "admin",
-  runDataVisibility: "admin",
-  runExecuteVisibility: "admin",
+  runListVisibility: ["admin"],
+  runDataVisibility: ["admin"],
+  runExecuteVisibility: ["admin"],
   allowRunSharing: false,
   description: "stricter override",
 };

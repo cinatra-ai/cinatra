@@ -7,7 +7,11 @@
 //   - its committed published marker's oasSha256 matches the OAS bytes (so the
 //     read-only-mounted loader accepts it without backfill);
 //   - the orchestrator declares exactly the six designed arms and rejects an
-//     unknown WORKS_AFTER_ONLY value.
+//     unknown WORKS_AFTER_ONLY value;
+//   - the works-after:gate entrypoint enforces the fail-closed gate contract
+//     (forced gate mode, explicit --arms, documented exit codes, and it refuses
+//     a zero-arm selection so it can never false-green) and its ALL_ARMS stays
+//     in lockstep with the orchestrator (cinatra#1147).
 //
 // Run: node --test scripts/ci/works-after/__tests__/
 
@@ -15,6 +19,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -80,4 +85,60 @@ test("each arm script exists and is referenced by the orchestrator", () => {
   for (const arm of ["redis", "verdaccio", "nango", "wayflow", "graphiti", "postgres"]) {
     assert.ok(existsSync(resolve(armsDir, `${arm}.sh`)), `missing arm script ${arm}.sh`);
   }
+});
+
+// ── gate entrypoint (cinatra#1147) ───────────────────────────────────────────
+
+test("the works-after gate entrypoint enforces the fail-closed contract", () => {
+  const gatePath = resolve(REPO_ROOT, "scripts/ci/works-after-gate.sh");
+  assert.ok(existsSync(gatePath), "missing scripts/ci/works-after-gate.sh");
+  const gate = readFileSync(gatePath, "utf8");
+  // Wraps the orchestrator in forced gate mode (a SKIP is a FAIL).
+  assert.match(gate, /works-after-proof\.sh/, "gate must delegate to the proof orchestrator");
+  assert.match(gate, /WORKS_AFTER_GATE_MODE=1/, "gate must force gate mode");
+  // Requires an explicit arm selection (no silent default) + documents exit codes.
+  assert.match(gate, /--arms/, "gate must accept an explicit --arms selection");
+  assert.match(gate, /MISCONFIGURED/, "gate must report a misconfiguration path");
+  for (const code of ["0", "1", "2"]) {
+    assert.match(gate, new RegExp(`exit ${code}\\b`), `gate must define exit ${code}`);
+  }
+});
+
+test("the gate's ALL_ARMS is in lockstep with the orchestrator", () => {
+  const armsOf = (src) => {
+    const m = src.match(/ALL_ARMS="([^"]+)"/);
+    assert.ok(m, "could not find ALL_ARMS");
+    return m[1].split(/\s+/).sort();
+  };
+  const orch = armsOf(readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after-proof.sh"), "utf8"));
+  const gate = armsOf(readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after-gate.sh"), "utf8"));
+  assert.deepEqual(gate, orch, "works-after-gate.sh ALL_ARMS drifted from the orchestrator");
+});
+
+test("package.json exposes the works-after:gate script", () => {
+  const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.scripts?.["works-after:gate"], "bash scripts/ci/works-after-gate.sh");
+});
+
+// Fail-closed edge cases: the gate must NEVER run zero arms and report success,
+// and a malformed invocation must be a MISCONFIGURED (exit 2) — not a silent
+// pass and not an exit-1 masquerading as a real proof failure. These spawn bash
+// but touch NO container (they all bail during argument validation, before the
+// orchestrator is invoked).
+const GATE_PATH = resolve(REPO_ROOT, "scripts/ci/works-after-gate.sh");
+function gateExit(args, extraEnv = {}) {
+  // Force WORKS_AFTER_GATE_ARMS empty by default so an inherited value can't
+  // change the outcome; a case overrides it explicitly when testing the env.
+  const env = { ...process.env, WORKS_AFTER_GATE_ARMS: "", ...extraEnv };
+  return spawnSync("bash", [GATE_PATH, ...args], { encoding: "utf8", env }).status;
+}
+
+test("gate is fail-closed: malformed/empty arm selections exit 2 (never a false green)", () => {
+  assert.equal(gateExit([]), 2, "no arm selection");
+  assert.equal(gateExit(["--arms"]), 2, "trailing --arms with no value");
+  assert.equal(gateExit(["--arms", ","]), 2, "comma-only resolves to zero arms");
+  assert.equal(gateExit(["--arms", "  "]), 2, "whitespace-only resolves to zero arms");
+  assert.equal(gateExit(["--arms", "bogus"]), 2, "unknown arm");
+  assert.equal(gateExit(["--nope"]), 2, "unknown flag");
+  assert.equal(gateExit([], { WORKS_AFTER_GATE_ARMS: "," }), 2, "comma-only via env");
 });

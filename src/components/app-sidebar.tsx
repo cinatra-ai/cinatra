@@ -243,18 +243,18 @@ function ChatNavItem() {
     <Collapsible asChild open={open} onOpenChange={setOpen} className="group/collapsible">
       <SidebarMenuItem>
         <SidebarMenuButton asChild isActive={isActive} tooltip="Chat">
-          <Link href="/chat" onClick={handleChatLinkClick}>
+          <Link href="/chat" onClick={handleChatLinkClick} data-testid="sidebar-chat-label">
             <MessageSquare className="h-4 w-4 shrink-0" />
             <span>Chat</span>
           </Link>
         </SidebarMenuButton>
         <CollapsibleTrigger asChild>
-          <SidebarMenuAction>
+          <SidebarMenuAction data-testid="sidebar-chat-chevron">
             <ChevronRight className="transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90 rtl:rotate-180" />
           </SidebarMenuAction>
         </CollapsibleTrigger>
         <CollapsibleContent className="CollapsibleContent">
-          <SidebarMenuSub>
+          <SidebarMenuSub data-testid="sidebar-chat-subitems">
             {subItems.map((sub) => (
               <SidebarMenuSubItem key={sub.title}>
                 {sub.current ? (

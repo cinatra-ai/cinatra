@@ -110,29 +110,31 @@ export async function assertNoLockedCanonicalRow(
   packageName: string,
   op: "archive" | "uninstall" | "force_delete" | "purge" | "registry_remove",
 ): Promise<void> {
-  // Fail CLOSED for system extensions even when the canonical store read
-  // fails. A system extension must never be
-  // archivable/uninstallable just because the manifest table is unreachable.
-  const { isSystemExtension } = await import("./system-extension-inventory");
+  // System extensions: the canonical, typed refusal (cinatra#1036). Delegated to
+  // the single membership choke-point so EVERY removal surface — this dispatcher
+  // backstop and the user-facing actions — throws the SAME message. Runs BEFORE
+  // the canonical-store read, so a system package is refused regardless of the
+  // store's reachability or the row's current status (fail-closed: the inventory
+  // is read fail-loud at module load). This is the safety net for callers that
+  // reach the primitive directly (MCP / CLI / install-batch compensation); the
+  // user-facing actions gate the same intent up front.
+  const { assertCanRemoveExtension } = await import("./system-extension-inventory");
+  assertCanRemoveExtension(packageName, op);
   const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
   let rows: Awaited<ReturnType<typeof readInstalledExtensionsByPackageName>> | null = null;
   try {
     rows = await readInstalledExtensionsByPackageName(packageName);
   } catch {
     // Canonical store not reachable (e.g. canonical table not yet provisioned
-    // for this schema). Fall back to the static system-extension inventory so
-    // locked system packages stay protected; non-system packages take the
-    // legacy path (no manifest row yet → nothing to enforce).
-    if (isSystemExtension(packageName)) {
-      throw new Error(
-        `Cannot ${op} ${packageName} — system extension (locked); manifest unreachable, refusing fail-open.`,
-      );
-    }
+    // for this schema). A system package was already refused above; a non-system
+    // package with no readable manifest row takes the legacy path (nothing to
+    // enforce).
     return;
   }
+  // Non-system locked rows (e.g. a required-in-prod lock) are refused too.
   const locked = rows.find((r) => r.status === "locked");
-  if (locked || isSystemExtension(packageName)) {
-    const requiredInProd = locked?.requiredInProd ?? false;
+  if (locked) {
+    const requiredInProd = locked.requiredInProd ?? false;
     throw new Error(
       `Cannot ${op} ${packageName} — extension is locked${requiredInProd ? " (required-in-prod)" : ""}. Update is permitted; archive/uninstall is not.`,
     );

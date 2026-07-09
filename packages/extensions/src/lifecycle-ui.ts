@@ -157,17 +157,34 @@ export type LifecycleAction = "archive" | "activate" | "uninstall" | "force_dele
 export function disabledActionReason(
   ext: InstalledExtension,
   action: LifecycleAction,
+  opts?: {
+    /**
+     * The row belongs to the host-declared system-extension set
+     * (`SYSTEM_EXTENSIONS`). When known, the copy is the exact, authoritative
+     * "can be updated but not deleted" message; otherwise a locked row gets a
+     * correct-but-generic refusal (this pure module cannot itself read the
+     * server-only inventory to decide).
+     */
+    isSystem?: boolean;
+  },
 ): string | null {
   const destructive: LifecycleAction[] = ["archive", "uninstall", "force_delete", "purge"];
   if (ext.status === "locked" && destructive.includes(action)) {
-    if (ext.requiredInProd) {
-      return action === "archive"
-        ? "Cannot archive — required-in-prod"
-        : `Cannot ${action.replace("_", " ")} — locked & required-in-prod`;
+    // cinatra#1036 — a system extension can be UPDATED/reinstalled but never
+    // removed from the live runtime. Mirrors SYSTEM_EXTENSION_REMOVAL_MESSAGE
+    // (inlined: lifecycle-ui.ts is the pure, client-renderable layer and must
+    // not import the `server-only` system-extension inventory).
+    if (opts?.isSystem) {
+      return "System extension — can be updated but not deleted.";
     }
-    return action === "uninstall"
-      ? "Cannot uninstall — locked; archive instead"
-      : `Cannot ${action.replace("_", " ")} — locked`;
+    // Other locked rows (e.g. a required-in-prod lock with no system signal at
+    // hand): every destructive affordance is still refused, but do not over-claim
+    // "system extension". The earlier "archive instead" copy was wrong — archive
+    // is blocked on a locked row too.
+    const verb = action.replace("_", " ");
+    return ext.requiredInProd
+      ? `Cannot ${verb} — locked (required-in-prod); update is permitted.`
+      : `Cannot ${verb} — locked; update is permitted.`;
   }
   if (ext.status === "archived" && action === "archive") {
     return "Already archived";

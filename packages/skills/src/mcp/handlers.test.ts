@@ -69,6 +69,24 @@ vi.mock("@/lib/better-auth-db", () => ({
 vi.mock("@cinatra-ai/agents/auth-policy", () => ({
   requireResourceAccess: vi.fn(),
   actorContextFromMcpRequest: vi.fn(),
+  // handlers.ts now routes every per-row/skill authz check through the
+  // auth-policy resource-ref builder. Mirror the real buildSkillResourceRef
+  // shape (agents/src/auth-policy.ts) so the requireResourceAccess mocks below,
+  // which branch on `resource.level` / `resource.ownerId`, receive the fields
+  // they expect. Without it every row throws and the list collapses to [].
+  buildSkillResourceRef: (skill: {
+    id: string;
+    level?: string;
+    scope?: string | null;
+    isWidgetChatSkill?: boolean;
+  }) => ({
+    resourceType: "skill",
+    resourceId: skill.id,
+    level: skill.level,
+    ownerId: skill.scope ?? undefined,
+    organizationId: skill.level === "organization" ? (skill.scope ?? undefined) : undefined,
+    isWidgetChatSkill: skill.isWidgetChatSkill ?? false,
+  }),
 }));
 
 import { libraryListSchema, createSkillsPrimitiveHandlers } from "./handlers";
