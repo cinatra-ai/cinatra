@@ -19,6 +19,7 @@
     "./manifest": "./src/manifest.ts",
     "./access-config": "./src/access-config.ts",
     "./dependencies": "./src/dependencies.ts",
+    "./flash-href": "./src/flash-href.ts",
     "./social-contract": "./src/social-media-connector-contract.ts",
     "./blog-contract": "./src/blog-connector-contract.ts",
     "./mcp-contract": "./src/mcp-connector-contract.ts",

@@ -11,6 +11,8 @@
     "./marketplace": "./src/marketplace.ts",
     "./section-header": "./src/section-header.tsx",
     "./nango": "./src/nango.ts",
+    "./toast": "./src/toast.ts",
+    "./search-param-toast": "./src/search-param-toast.tsx",
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/extension-accent": "./src/lib/extension-accent.ts"
   },
@@ -36,5 +38,8 @@
     "react": "^19.2.7",
     "react-dom": "19.2.7",
     "tailwind-merge": "^3.6.0"
+  },
+  "peerDependencies": {
+    "sonner": "^2.0.7"
   }
 }

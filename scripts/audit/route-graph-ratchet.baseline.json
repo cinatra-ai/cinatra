@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 133,
-    "/api/mcp": 1343,
-    "/chat": 1381,
-    "/api/a2a": 1348,
-    "/api/llm-bridge": 1353
+    "/api/mcp": 1344,
+    "/chat": 1382,
+    "/api/a2a": 1349,
+    "/api/llm-bridge": 1354
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1346,
-      "to": 1348,
-      "reason": "PR #1154: the chat MCP handlers (chat_thread_get / chat_thread_pause_assistant / chat_thread_resume_assistant and the chat_thread_send existing-thread continuation) now enforce per-thread ownership by reusing the canonical chat-thread access decision (src/lib/chat-thread-access.ts) and the tenant-scoped team-membership lookup (src/lib/chat-thread-store.ts) rather than duplicating the logic. Both are net-new reachable first-party leaves on every locked route that reaches the shared chat MCP handler graph, so each such route grows by exactly two first-party modules. Delta measured by CI with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 1346->1348.",
-      "pr": 1154
+      "from": 1348,
+      "to": 1349,
+      "reason": "PR #1182 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Delta measured by CI (Perpetual system loops invariants) with the companion extension repos cloned pinned. Absorbed raise 1348->1349.",
+      "pr": 1182
     },
     "/api/llm-bridge": {
-      "from": 1352,
-      "to": 1353,
-      "reason": "PR #1167: the connector-preflight actor self-heal at the run-enqueue chokepoint (src/lib/agent-run-enqueue.ts; cinatra#1056) dynamically imports @/lib/authz/build-actor-context-from-run to derive the run actor when a connector-dependency map reaches the chokepoint without a caller-supplied actor, so a populated connector_dependencies column cannot no_actor-break a legitimate run. That helper was previously reachable only from the a2a/passthrough/auditor routes; each run-triggering locked route that reaches the enqueue chokepoint now gains exactly that one first-party module (its transitive deps were already reachable). Delta reported by CI route-graph-ratchet on this PR head (missingCount 0). Absorbed raise 1352->1353.",
-      "pr": 1167
+      "from": 1353,
+      "to": 1354,
+      "reason": "PR #1182 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Delta measured by CI (Perpetual system loops invariants) with the companion extension repos cloned pinned. Absorbed raise 1353->1354.",
+      "pr": 1182
     },
     "/api/mcp": {
-      "from": 1342,
-      "to": 1343,
-      "reason": "PR #1167: the connector-preflight actor self-heal at the run-enqueue chokepoint (src/lib/agent-run-enqueue.ts; cinatra#1056) dynamically imports @/lib/authz/build-actor-context-from-run to derive the run actor when a connector-dependency map reaches the chokepoint without a caller-supplied actor, so a populated connector_dependencies column cannot no_actor-break a legitimate run. That helper was previously reachable only from the a2a/passthrough/auditor routes; each run-triggering locked route that reaches the enqueue chokepoint now gains exactly that one first-party module (its transitive deps were already reachable). Delta reported by CI route-graph-ratchet on this PR head (missingCount 0). Absorbed raise 1342->1343.",
-      "pr": 1167
+      "from": 1343,
+      "to": 1344,
+      "reason": "PR #1182 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Delta measured by CI (Perpetual system loops invariants) with the companion extension repos cloned pinned. Absorbed raise 1343->1344.",
+      "pr": 1182
     },
     "/chat": {
-      "from": 1380,
-      "to": 1381,
-      "reason": "PR #1167: the connector-preflight actor self-heal at the run-enqueue chokepoint (src/lib/agent-run-enqueue.ts; cinatra#1056) dynamically imports @/lib/authz/build-actor-context-from-run to derive the run actor when a connector-dependency map reaches the chokepoint without a caller-supplied actor, so a populated connector_dependencies column cannot no_actor-break a legitimate run. That helper was previously reachable only from the a2a/passthrough/auditor routes; each run-triggering locked route that reaches the enqueue chokepoint now gains exactly that one first-party module (its transitive deps were already reachable). Delta reported by CI route-graph-ratchet on this PR head (missingCount 0). Absorbed raise 1380->1381.",
-      "pr": 1167
+      "from": 1381,
+      "to": 1382,
+      "reason": "PR #1182 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Delta measured by CI (Perpetual system loops invariants) with the companion extension repos cloned pinned. Absorbed raise 1381->1382.",
+      "pr": 1182
     },
     "/sign-in": {
       "from": 132,
