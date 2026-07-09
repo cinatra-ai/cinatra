@@ -16,11 +16,11 @@ const PKG = "@cinatra-ai/gmail-connector";
 
 function policyOf(visibility: string): AgentAuthPolicy {
   return {
-    runListVisibility: visibility,
-    runDataVisibility: visibility,
-    runExecuteVisibility: visibility,
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
     allowRunSharing: false,
-  } as AgentAuthPolicy;
+  } as unknown as AgentAuthPolicy;
 }
 
 function row(id: string, ownerUserId: string, organizationId: string | null = ORG) {

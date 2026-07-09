@@ -1,6 +1,6 @@
 import { redirect, notFound } from "next/navigation";
-import { format, formatDistanceToNow } from "date-fns";
-import { TriangleAlert, Upload } from "lucide-react";
+import { format } from "date-fns";
+import { TriangleAlert } from "lucide-react";
 import semver from "semver";
 import Link from "next/link";
 import {
@@ -34,14 +34,6 @@ import type { VerdaccioConfig } from "@cinatra-ai/registries";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { RegistryVersionHistoryList, type RegistryVersionRow } from "./registry-version-history-list";
 import { RecompileForm } from "./recompile-form";
-import {
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { PaginatedTable } from "@/components/ui/paginated-table";
 import { Badge } from "@/components/ui/badge";
 import { RiskBadge } from "@/components/risk-badge";
 import { Button } from "@/components/ui/button";
@@ -52,8 +44,7 @@ import { MarketplaceReadmeMarkdownSection } from "@/components/marketplace-readm
 import { RequiredDependenciesSection } from "@/components/extensions/required-dependencies-section";
 import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
-import { Tabs, TabsContent, TabsList, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { ImportAgentForm } from "./import-form";
 import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
@@ -191,156 +182,6 @@ export async function AgentBuilderRunScreen({ templateId }: { templateId: string
   const template = await readAgentTemplateById(templateId);
   if (!template) notFound();
   redirect(`/agents/${template.id}/new`);
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers for approval screens
-// ---------------------------------------------------------------------------
-
-function riskVariant(riskClass: string): "default" | "secondary" | "destructive" | "outline" {
-  if (["send_external_message", "delete", "financial_commitment"].includes(riskClass)) {
-    return "destructive";
-  }
-  if (riskClass === "draft_create") return "outline";
-  return "secondary";
-}
-
-// ---------------------------------------------------------------------------
-// AgentApprovalInboxBody
-// ---------------------------------------------------------------------------
-//
-// Body-only renderer (no Main / PageHeader / requireAdminSession). The caller
-// is responsible for the page chrome and the admin gate. Used by the unified
-// /configuration/approvals tabbed page.
-
-export async function AgentApprovalInboxBody({
-  statusFilter,
-  filterBaseHref,
-}: {
-  statusFilter: string;
-  /**
-   * Base href for the status-filter pill links. The caller passes the URL
-   * fragment up to (but not including) the `&status=...` portion — e.g.
-   * `/configuration/approvals?tab=agents`. The body appends `&status=<value>`.
-   */
-  filterBaseHref: string;
-}) {
-  const session = await getAuthSession();
-  const orgId = session?.session?.activeOrganizationId ?? null;
-  type ApprovalInboxTask = {
-    id: string;
-    runId: string;          // repurposed: shows request id prefix
-    title: string;          // repurposed: packageName@version
-    riskClass: string;      // repurposed: status as risk pill
-    itemCount: number;      // repurposed: rejection-cycle count or 0
-    status: string;
-    createdAt: Date;        // when the creation request was filed
-  };
-  let tasks: ApprovalInboxTask[] = [];
-  if (orgId) {
-    const { listAgentCreationRequests } = await import(
-      "@/lib/agent-creation-requests-store"
-    );
-    const rows = listAgentCreationRequests({
-      orgId,
-      status: statusFilter === "all" ? "all" :
-        (["pending"].includes(statusFilter) ? "proposed" :
-        (["approved", "rejected", "published", "draft"].includes(statusFilter)
-          ? (statusFilter as "approved" | "rejected" | "published" | "draft")
-          : "proposed")),
-    });
-    tasks = rows.map((r) => ({
-      id: r.id,
-      runId: r.id,
-      title: `${r.packageName}@${r.packageVersion}`,
-      riskClass: r.status === "proposed" ? "medium" : r.status === "rejected" ? "high" : "low",
-      itemCount: r.rejectionReason ? 1 : 0,
-      status: r.status,
-      createdAt: new Date(r.createdAt),
-    }));
-  }
-
-  // Filter -> agent_creation_request.status mapping. Real statuses are
-  // draft | proposed | approved | rejected | published. "Expired" had no
-  // backing status (the previous pill silently fell through to "proposed",
-  // duplicating Pending) and is dropped.
-  const filterOptions = [
-    { label: "All", value: "all" },
-    { label: "Pending", value: "pending" },
-    { label: "Approved", value: "approved" },
-    { label: "Rejected", value: "rejected" },
-  ];
-  const activeTab = filterOptions.some((o) => o.value === statusFilter)
-    ? statusFilter
-    : "pending";
-
-  return (
-    <Tabs value={activeTab}>
-      <Card>
-        <CardHeader className="border-b border-line">
-          <TabsList>
-            {filterOptions.map((opt) => (
-              <TabsTrigger key={opt.value} value={opt.value} asChild>
-                <Link href={`${filterBaseHref}&status=${opt.value}`} scroll={false}>
-                  {opt.label}
-                </Link>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </CardHeader>
-        <CardContent className="p-0">
-          {tasks.length === 0 ? (
-            <div className="flex items-center justify-center py-16">
-              <p className="text-muted-foreground text-sm">
-                No {statusFilter} approval requests
-              </p>
-            </div>
-          ) : (
-            <PaginatedTable>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Task</TableHead>
-                  <TableHead>Risk</TableHead>
-                  <TableHead>Items</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Requested</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tasks.map((task) => (
-                  <TableRow key={task.id}>
-                    <TableCell>
-                      <Link
-                        href={`/configuration/agents/approvals/${task.id}`}
-                        className="font-medium text-foreground hover:underline"
-                      >
-                        {task.title}
-                      </Link>
-                      <div className="text-xs text-muted-foreground font-mono">
-                        run {task.runId.slice(0, 8)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={riskVariant(task.riskClass)}>
-                        {task.riskClass.replace(/_/g, " ")}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{task.itemCount}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{task.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {formatDistanceToNow(new Date(task.createdAt), { addSuffix: true })}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </PaginatedTable>
-          )}
-        </CardContent>
-      </Card>
-    </Tabs>
-  );
 }
 
 // ---------------------------------------------------------------------------

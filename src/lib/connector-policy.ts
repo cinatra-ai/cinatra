@@ -56,14 +56,16 @@ export function isOrgAdmin(actor: ActorContext): boolean {
 // ConnectorVisibility surfaced in the decision (connectors only ever store
 // workspace|admin).
 function visibilityFromPolicy(policy: AgentAuthPolicy | null): ConnectorVisibility {
-  return policy?.runDataVisibility === "admin" ? "admin" : "workspace";
+  // Connectors only ever store a single token (workspace|admin); read the
+  // first token of the array (multi-scope W1).
+  return policy?.runDataVisibility?.[0] === "admin" ? "admin" : "workspace";
 }
 
 function policyFromVisibility(visibility: ConnectorVisibility): AgentAuthPolicy {
   return {
-    runListVisibility: visibility,
-    runDataVisibility: visibility,
-    runExecuteVisibility: visibility,
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
     allowRunSharing: false,
   };
 }
@@ -152,6 +154,7 @@ export function enforceConnectorPolicy(
         : { allowed: false, reason: "manage_requires_admin", visibility };
     }
     const decision = evaluateExtensionAccess({
+      kind: "connector",
       policy: effectivePolicy,
       coOwnerUserIds: access.coOwnerUserIds,
       installedByUserId: access.installedByUserId,

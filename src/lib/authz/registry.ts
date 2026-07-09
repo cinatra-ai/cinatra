@@ -134,6 +134,12 @@ export const CLASSIFICATION_ENTRIES: readonly ClassificationEntry[] = [
   { resourceType: "audit_log",      action: "read",   effect: "read",  requiredAccess: { requiredPermission: "audit.read" } },
   { resourceType: "audit_log",      action: "list",   effect: "read",  requiredAccess: { requiredPermission: "audit.read" } },
   { resourceType: "platform",       action: "read",   effect: "read",  requiredAccess: { requiredPermission: "settings.read" } },
+  // Coarse least-privilege cell for effective extension-registered MCP tools
+  // (register(ctx) -> ctx.mcp.registerTool), synthesized ENFORCED in the boundary.
+  // execute-effect: the boundary hard-gates on org membership (deny-by-default)
+  // and defers the fine-grained permission (audited, not hard-blocked) to the
+  // extension's own handler; the permission below is the audit baseline only.
+  { resourceType: "platform",       action: "execute", effect: "execute", requiredAccess: { requiredPermission: "settings.read" } },
   // ----- operations (operator console / background-job ops) -----
   { resourceType: "operations",     action: "read",    effect: "read",    requiredAccess: { requiredPermission: "operations.read" } },
   { resourceType: "operations",     action: "list",    effect: "read",    requiredAccess: { requiredPermission: "operations.read" } },

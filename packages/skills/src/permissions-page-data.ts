@@ -68,9 +68,9 @@ export type SkillPackagePermissionsContext = {
  */
 function buildDefaultPolicy(): AgentAuthPolicy {
   return {
-    runListVisibility: "owner",
-    runDataVisibility: "owner",
-    runExecuteVisibility: "owner",
+    runListVisibility: ["owner"],
+    runDataVisibility: ["owner"],
+    runExecuteVisibility: ["owner"],
     allowRunSharing: true,
   };
 }

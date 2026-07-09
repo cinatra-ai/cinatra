@@ -51,9 +51,9 @@ function makeLookups(opts?: { legacyOrg?: string | null }): ContainmentLookups {
 
 function policy(v: AgentAuthPolicyVisibility): AgentAuthPolicy {
   return {
-    runListVisibility: v,
-    runDataVisibility: v,
-    runExecuteVisibility: v,
+    runListVisibility: [v],
+    runDataVisibility: [v],
+    runExecuteVisibility: [v],
     allowRunSharing: false,
   };
 }
@@ -171,9 +171,9 @@ describe("scope-containment / policyContainedBy (full policy)", () => {
 
   it("rejected with field surfaced when any one visibility exceeds parent", async () => {
     const child: AgentAuthPolicy = {
-      runListVisibility: "owner",
-      runDataVisibility: `org:${ORG_B}`,
-      runExecuteVisibility: "owner",
+      runListVisibility: ["owner"],
+      runDataVisibility: [`org:${ORG_B}`],
+      runExecuteVisibility: ["owner"],
       allowRunSharing: false,
     };
     const parent = policy(`org:${ORG_A}`);
@@ -201,15 +201,15 @@ describe("scope-containment / policyContainedBy (full policy)", () => {
 
   it("allowRunSharing widening is rejected (child=true requires parent=true)", async () => {
     const parent: AgentAuthPolicy = {
-      runListVisibility: `org:${ORG_A}`,
-      runDataVisibility: `org:${ORG_A}`,
-      runExecuteVisibility: `org:${ORG_A}`,
+      runListVisibility: [`org:${ORG_A}`],
+      runDataVisibility: [`org:${ORG_A}`],
+      runExecuteVisibility: [`org:${ORG_A}`],
       allowRunSharing: false,
     };
     const child: AgentAuthPolicy = {
-      runListVisibility: `org:${ORG_A}`,
-      runDataVisibility: `org:${ORG_A}`,
-      runExecuteVisibility: `org:${ORG_A}`,
+      runListVisibility: [`org:${ORG_A}`],
+      runDataVisibility: [`org:${ORG_A}`],
+      runExecuteVisibility: [`org:${ORG_A}`],
       allowRunSharing: true,
     };
     const result = await policyContainedBy(child, parent, lookups);

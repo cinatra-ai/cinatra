@@ -29,9 +29,9 @@ describe("accessTargetToInstallPolicy", () => {
 
   it("team target → all three visibility tiers scoped to team:<id>, sharing off", () => {
     expect(accessTargetToInstallPolicy({ level: "team", id: TEAM_ID })).toEqual({
-      runListVisibility: `team:${TEAM_ID}`,
-      runDataVisibility: `team:${TEAM_ID}`,
-      runExecuteVisibility: `team:${TEAM_ID}`,
+      runListVisibility: [`team:${TEAM_ID}`],
+      runDataVisibility: [`team:${TEAM_ID}`],
+      runExecuteVisibility: [`team:${TEAM_ID}`],
       allowRunSharing: false,
     });
   });
@@ -40,9 +40,9 @@ describe("accessTargetToInstallPolicy", () => {
     expect(
       accessTargetToInstallPolicy({ level: "project", id: PROJECT_ID }),
     ).toEqual({
-      runListVisibility: `project:${PROJECT_ID}`,
-      runDataVisibility: `project:${PROJECT_ID}`,
-      runExecuteVisibility: `project:${PROJECT_ID}`,
+      runListVisibility: [`project:${PROJECT_ID}`],
+      runDataVisibility: [`project:${PROJECT_ID}`],
+      runExecuteVisibility: [`project:${PROJECT_ID}`],
       allowRunSharing: false,
     });
   });
@@ -116,6 +116,7 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
   it("team-scoped policy admits a member of the selected team and denies other same-org members", () => {
     const policy = accessTargetToInstallPolicy({ level: "team", id: TEAM_ID })!;
     const base = {
+      kind: "skill" as const,
       policy,
       coOwnerUserIds: [],
       installedByUserId: "installer-1",
@@ -142,6 +143,7 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
       id: PROJECT_ID,
     })!;
     const base = {
+      kind: "skill" as const,
       policy,
       coOwnerUserIds: [],
       installedByUserId: "installer-1",
@@ -166,6 +168,7 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
     const policy = accessTargetToInstallPolicy({ level: "team", id: TEAM_ID })!;
     expect(
       evaluateExtensionAccess({
+        kind: "skill",
         policy,
         coOwnerUserIds: [],
         installedByUserId: "user-member",

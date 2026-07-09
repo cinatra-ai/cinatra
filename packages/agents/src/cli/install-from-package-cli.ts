@@ -6,6 +6,7 @@
 import {
   CINATRA_AGENT_PACKAGE_TYPE,
   CINATRA_AGENT_MANIFEST_VERSION,
+  parseAgentPackageManifestForInstall,
 } from "../verdaccio/package-contract";
 import {
   extractAgentPackageCli,
@@ -59,6 +60,14 @@ export async function installAgentFromPackage(
     packageVersion: input.packageVersion,
   });
   try {
+    // Validate the fail-closed metadata contract FIRST: a missing/invalid
+    // required field throws a STRUCTURED AgentPackageContractViolationError
+    // naming the package + exact fields — not a raw TypeError from reading a
+    // missing `cinatra` block — so the CLI prints an actionable message.
+    parseAgentPackageManifestForInstall(
+      extracted.manifest,
+      extracted.packageName,
+    );
     if (extracted.manifest.cinatra.packageType !== CINATRA_AGENT_PACKAGE_TYPE) {
       throw new Error(
         `Unsupported package type: ${extracted.manifest.cinatra.packageType}`,

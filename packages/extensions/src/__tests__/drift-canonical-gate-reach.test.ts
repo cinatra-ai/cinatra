@@ -162,6 +162,13 @@ describe("canonical lifecycle status reachability guard", () => {
         // would refuse to recreate under CURRENT semantics, then prove the
         // demotion migration preserves it. Confined to its own per-test schema.
         "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+        // Org-anchor backfill migration test (cinatra#1125): its FIXTURE seeds
+        // pre-migration org-less rows with raw INSERTs to reproduce the legacy
+        // DB state the canonical primitive would refuse to recreate under
+        // CURRENT semantics, then runs the real migration up() (raw
+        // UPDATE/DELETE by design — a migration is the sanctioned schema/data-
+        // evolution path). Confined to its own per-test schema.
+        "src/lib/__tests__/integration/org-anchor-backfill.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(

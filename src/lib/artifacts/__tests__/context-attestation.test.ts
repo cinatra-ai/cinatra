@@ -221,6 +221,203 @@ describe("resolveContextNodeProvenance", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#1151 regression — REAL-grammar parity + the marker-present-but-drifted
+// fail-closed boundary.
+//
+// The synthetic orchestratorOas() above is hand-built to MATCH the verifier, so
+// by construction it cannot catch a divergence between the real OAS COMPILER's
+// output grammar and what the re-anchor expects — which is exactly the class of
+// failure #1151 hit at runtime: a run whose INSTALLED OAS was a stale/drifted
+// build that STILL carried the 3 `author-placed-context-resolution-for-<slot>`
+// markers and the `ctx-<slot>-resolve_context` node, yet 403'd with
+// `attestation_node_unrecognized`.
+//
+// Root cause (grounded in #1151): a STALE/DRIFTED installed OAS, NOT a verifier
+// bug — the current canonical build re-anchors cleanly, and the fail-closed
+// rejection of a drifted build is the intended #907 security boundary (the
+// durable structural fix is the loader-owned context-subflow injection redesign,
+// tracked in the run-identity-spine epic #1192; the immediate unblock is a
+// re-import of a current build). This suite is a REGRESSION GUARD for that
+// boundary, not a change to product behavior:
+//   1. `blogPipelineCompiledOas()` mirrors the REAL compiled grammar (the actual
+//      `<child-agent>__context-<slot>-subflow` def naming, the marker sibling in
+//      the child subflow, `{{CINATRA_BASE_URL}}` url templating, 3 composed
+//      children) so a future verifier over-tightening that breaks the shipped
+//      build is caught here.
+//   2. The two "drift" cases assert that a build which STILL carries all 3
+//      markers + the node but whose marker->subflow binding has drifted (a
+//      renamed `$component_ref`, or a duplicated inline of the ctx node) STILL
+//      fails closed with `attestation_node_unrecognized` — locking the boundary
+//      against a future fail-OPEN regression (which would let a composed child
+//      resolve a sibling's slot on any marker-bearing build).
+// ---------------------------------------------------------------------------
+function blogPipelineCompiledOas(): Record<string, unknown> {
+  // Real composed children, faithful to blog-pipeline-agent's compiled OAS.
+  const children: Array<{ agent: string; slot: string }> = [
+    { agent: "blog-idea-generator-agent", slot: "ideaContext" },
+    { agent: "blog-draft-writer-agent", slot: "draftContext" },
+    { agent: "blog-image-prompt-agent", slot: "imagePromptContext" },
+  ];
+  const apiNode = (agent: string, slot: string, suffix: string, kind: "resolve" | "finalize") => ({
+    component_type: "ApiNode",
+    id: `ctx-${slot}-${suffix}`,
+    url:
+      kind === "resolve"
+        ? "{{CINATRA_BASE_URL}}/api/context-resolve"
+        : "{{CINATRA_BASE_URL}}/api/context-finalize",
+    metadata: { cinatra: { agent } },
+  });
+  const refs: Record<string, unknown> = {};
+  for (const { agent, slot } of children) {
+    const ctxDefId = `${agent}__context-${slot}-subflow`;
+    refs[`${agent}-subflow`] = {
+      component_type: "Flow",
+      id: `${agent}-subflow`,
+      start_node: `${agent}-start`,
+      $referenced_components: {
+        // the context-resolution subflow DEF (holds the 3 ctx ApiNodes)
+        [ctxDefId]: {
+          component_type: "Flow",
+          id: ctxDefId,
+          start_node: `ctx-${slot}-start`,
+          $referenced_components: {
+            [`ctx-${slot}-resolve_context`]: apiNode(agent, slot, "resolve_context", "resolve"),
+            [`ctx-${slot}-finalize_interactive`]: apiNode(agent, slot, "finalize_interactive", "finalize"),
+            [`ctx-${slot}-finalize_autonomous`]: apiNode(agent, slot, "finalize_autonomous", "finalize"),
+          },
+        },
+        // the author-placed marker FlowNode -> the ctx subflow def above
+        [`${agent}__context_${slot}`]: {
+          component_type: "FlowNode",
+          id: `${agent}__context_${slot}`,
+          subflow: { $component_ref: ctxDefId },
+          metadata: {
+            cinatra: { purpose: `author-placed-context-resolution-for-${slot}` },
+          },
+        },
+      },
+    };
+    // the outer FlowNode carrying the child PACKAGE identity
+    refs[`${slot}_flow`] = {
+      component_type: "FlowNode",
+      id: `${slot}_flow`,
+      subflow: { $component_ref: `${agent}-subflow` },
+      metadata: { cinatra: { packageName: `@cinatra-ai/${agent}` } },
+    };
+  }
+  return {
+    component_type: "Flow",
+    id: "blog-pipeline-agent",
+    start_node: "start",
+    metadata: { cinatra: { packageName: "@cinatra-ai/blog-pipeline-agent" } },
+    $referenced_components: refs,
+  };
+}
+
+describe("cinatra#1151 — real-grammar re-anchor + drifted-build fail-closed boundary", () => {
+  it("re-anchors every context node of the canonical blog-pipeline grammar", () => {
+    const oas = blogPipelineCompiledOas();
+    for (const slot of ["ideaContext", "draftContext", "imagePromptContext"]) {
+      expect(resolveContextNodeProvenance(oas, `ctx-${slot}-resolve_context`)).toEqual({
+        slotId: slot,
+        kind: "resolve",
+      });
+      expect(resolveContextNodeProvenance(oas, `ctx-${slot}-finalize_interactive`)).toEqual({
+        slotId: slot,
+        kind: "finalize",
+      });
+      expect(resolveContextNodeProvenance(oas, `ctx-${slot}-finalize_autonomous`)).toEqual({
+        slotId: slot,
+        kind: "finalize",
+      });
+    }
+  });
+
+  it("#1151: markers PRESENT but the marker->subflow ref DRIFTED still fails closed (never fail-open)", () => {
+    // The exact #1151 stale-install symptom: the build STILL carries all 3
+    // author-placed markers + the node, but the compiled marker `$component_ref`
+    // no longer names the def that encloses the ctx node (a grammar drift
+    // between the installed build and the verifier's ground truth). The re-anchor
+    // MUST reject it — accepting a marker-bearing-but-unanchorable build would
+    // reopen the #907 sibling-slot hole.
+    const oas = blogPipelineCompiledOas();
+    let markerCount = 0;
+    const severRefs = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(severRefs);
+      if (typeof node !== "object" || node === null) return;
+      const rec = node as Record<string, unknown>;
+      const purpose = (rec["metadata"] as { cinatra?: { purpose?: unknown } } | undefined)?.cinatra
+        ?.purpose;
+      if (
+        typeof purpose === "string" &&
+        purpose.startsWith("author-placed-context-resolution-for-")
+      ) {
+        const sf = rec["subflow"] as Record<string, unknown> | undefined;
+        if (sf && typeof sf["$component_ref"] === "string") {
+          sf["$component_ref"] = `${sf["$component_ref"]}__RENAMED_BY_STALE_BUILD`;
+          markerCount += 1;
+        }
+      }
+      for (const v of Object.values(rec)) severRefs(v);
+    };
+    severRefs(oas);
+    expect(markerCount).toBe(3); // the markers are all still there
+    expect(resolveContextNodeProvenance(oas, "ctx-ideaContext-resolve_context")).toBeNull();
+
+    const nodeId = "ctx-ideaContext-resolve_context";
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: nodeId,
+      attestationHeader: `v1:${computeContextAttestation(KEY, CTX, nodeId)}`,
+      runOas: oas,
+      slotId: "ideaContext",
+      expectedKind: "resolve",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("attestation_node_unrecognized");
+  });
+
+  it("#1151: a duplicated inline of the ctx node across defs fails closed", () => {
+    // An older/drifted build that inlined the context subflow at a SECOND
+    // call-site (rather than sharing one $referenced_components def) makes the
+    // ctx node id occur in two enclosing defs — an id-collision the re-anchor
+    // must reject as ambiguous.
+    const oas = blogPipelineCompiledOas();
+    const refs = oas["$referenced_components"] as Record<string, unknown>;
+    const orig = (refs["blog-idea-generator-agent-subflow"] as Record<string, unknown>)[
+      "$referenced_components"
+    ] as Record<string, unknown>;
+    const dupDef = JSON.parse(
+      JSON.stringify(orig["blog-idea-generator-agent__context-ideaContext-subflow"]),
+    ) as Record<string, unknown>;
+    dupDef["id"] = "some-other-agent__context-ideaContext-subflow"; // different def id, SAME ctx node id inside
+    refs["duplicate-inline-subflow"] = {
+      component_type: "Flow",
+      id: "duplicate-inline-subflow",
+      start_node: "dup-start",
+      $referenced_components: { "some-other-agent__context-ideaContext-subflow": dupDef },
+    };
+    expect(resolveContextNodeProvenance(oas, "ctx-ideaContext-resolve_context")).toBeNull();
+
+    // Assert the PUBLIC decision too, not just the internal re-anchor: a
+    // duplicated-node build must 403 with attestation_node_unrecognized.
+    const nodeId = "ctx-ideaContext-resolve_context";
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: nodeId,
+      attestationHeader: `v1:${computeContextAttestation(KEY, CTX, nodeId)}`,
+      runOas: oas,
+      slotId: "ideaContext",
+      expectedKind: "resolve",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("attestation_node_unrecognized");
+  });
+});
+
 describe("evaluateContextAttestation — fail-closed matrix", () => {
   function goodInput(slot: string, expectedKind: "resolve" | "finalize") {
     const nodeId =

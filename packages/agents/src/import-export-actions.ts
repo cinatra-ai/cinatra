@@ -65,6 +65,14 @@ export type LocalAgentTemplateSeed = {
    * tracked as a follow-up milestone.)
    */
   agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; undefined when manifest had no value
+  /**
+   * Connector-dependency map projected from the canonical `cinatra.dependencies`
+   * `kind: "connector"` edges (cinatra#1056). Each value carries the edge's
+   * `requirement` so the run-enqueue connector preflight gates on the real
+   * requirement. UNION value for back-compat: a bare string range (legacy
+   * publish path) normalizes to `{ range, requirement: "required" }` downstream.
+   */
+  connectorDependencies?: Record<string, string | { range: string; requirement: "required" | "optional" }>;
   type?: "leaf" | "proxy" | "orchestrator" | "parallel" | "supervisor" | "iterative" | "flow" | "node"; // defaults to "leaf" if omitted
   // Namespaced x-renderer IDs the agent declares as HITL states. Threaded into
   // createAgentTemplate so a fresh registry install seeds hitlScreens with the
@@ -158,6 +166,7 @@ export async function createLocalAgentTemplateVersion(input: {
     packageName: input.seed.packageName,
     packageVersion: input.seed.packageVersion,
     agentDependencies: input.seed.agentDependencies,
+    connectorDependencies: input.seed.connectorDependencies,
     hitlScreens: input.seed.hitlScreens,
     type: input.seed.type, // serializer defaults to "leaf" when undefined
     lgGraphCode: input.seed.lgGraphCode ?? null,

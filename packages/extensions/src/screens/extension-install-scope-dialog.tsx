@@ -73,6 +73,11 @@ function pickerValueToTarget(
   value: string,
   activeOrgId: string,
 ): { level: "organization" | "team" | "project"; id: string } | null {
+  // Multi-scope W1: the picker now emits the id-carrying "org:<id>" token; the
+  // bare "org" branch is kept as a defensive fallback (matchers still accept it).
+  if (value.startsWith("org:")) {
+    return { level: "organization", id: value.slice("org:".length) };
+  }
   if (value === "org") return { level: "organization", id: activeOrgId };
   if (value.startsWith("team:")) {
     return { level: "team", id: value.slice("team:".length) };

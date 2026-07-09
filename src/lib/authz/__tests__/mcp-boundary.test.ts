@@ -147,16 +147,33 @@ describe("enforceMcpBoundary", () => {
   describe("extension-registered MCP tools (register(ctx) → ctx.mcp)", () => {
     afterEach(() => _resetExtensionMcpForTests());
 
-    it("shadow-allows an EFFECTIVELY-registered extension tool + audits provenance", async () => {
+    it("ENFORCES an effective extension tool: allows an org member (deferred to the handler) + audits provenance", async () => {
       markEffectiveExtensionMcpTools([{ name: "x_ext_only_tool", packageName: "@cinatra-ai/x" }]);
       const d = await enforceMcpBoundary({ primitiveName: "x_ext_only_tool", ctx: memberCtx(), delegatedRestricted: false });
       expect(d.allowed).toBe(true);
       const call = auditSpy.mock.calls.find((c) => (c[0] as { operation?: string })?.operation === "x_ext_only_tool");
       expect((call?.[0] as { metadata?: Record<string, unknown> })?.metadata).toMatchObject({
-        mode: "shadow",
+        mode: "enforced",
+        effect: "execute",
         classificationSource: "extension_mcp_registry",
         packageName: "@cinatra-ai/x",
       });
+    });
+
+    it("BLOCKS an org-less / unauthenticated caller of an extension tool (closes the shadow-allow bypass)", async () => {
+      markEffectiveExtensionMcpTools([{ name: "x_ext_only_tool", packageName: "@cinatra-ai/x" }]);
+      const d = await enforceMcpBoundary({
+        primitiveName: "x_ext_only_tool",
+        ctx: { orgId: null, userId: null, platformRole: undefined as never },
+        delegatedRestricted: false,
+      });
+      expect(d).toMatchObject({ allowed: false, reason: "not_org_member", shouldBlock: true });
+    });
+
+    it("ALLOWS a platform admin to invoke an extension tool", async () => {
+      markEffectiveExtensionMcpTools([{ name: "x_ext_only_tool", packageName: "@cinatra-ai/x" }]);
+      const d = await enforceMcpBoundary({ primitiveName: "x_ext_only_tool", ctx: adminCtx(), delegatedRestricted: false });
+      expect(d.allowed).toBe(true);
     });
 
     it("still HARD-BLOCKS a truly-unknown primitive (not effective)", async () => {

@@ -73,6 +73,10 @@ import type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
 } from "@cinatra-ai/agents/auth-policy";
+// Client-safe module (zod only): this is a "use client" component, so the
+// value import must NOT come from the server auth-policy barrel — that barrel
+// carries `import "server-only"`, which the bundler rejects in client code.
+import { normalizeVisibilitySelection } from "@cinatra-ai/agents/auth-policy-types";
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -240,7 +244,9 @@ export function PermissionsForm({
   // Access form (locksteps runListVisibility / runDataVisibility /
   // runExecuteVisibility to a single value)
   // -------------------------------------------------------------------------
-  const effectiveAccessValue = accessValueOverride ?? initialPolicy.runListVisibility;
+  // Multi-scope W1: this single-select grant surface (replaced by the checkbox
+  // multi-select picker in W3) reads the first token of the array.
+  const effectiveAccessValue = accessValueOverride ?? initialPolicy.runListVisibility[0];
   const [isSavingPolicy, startSavePolicy] = useTransition();
   const { control, handleSubmit, reset: resetAccessForm } = useForm<AccessFormValues>({
     resolver: zodResolver(AccessFormSchema),
@@ -260,10 +266,13 @@ export function PermissionsForm({
   const onSubmit = (values: AccessFormValues) => {
     startSavePolicy(async () => {
       const access = values.access as AgentAuthPolicyVisibility;
+      // Multi-scope W1: normalize the (currently single-token) selection to its
+      // canonical array form before the server write.
+      const selection = normalizeVisibilitySelection([access]);
       const policy: AgentAuthPolicy = {
-        runListVisibility: access,
-        runDataVisibility: access,
-        runExecuteVisibility: access,
+        runListVisibility: selection,
+        runDataVisibility: selection,
+        runExecuteVisibility: selection,
         allowRunSharing: initialPolicy.allowRunSharing,
       };
       const result = await actions.savePolicy(policy);
@@ -503,7 +512,7 @@ export function PermissionsForm({
           ) : (
             <span className="text-sm text-foreground">
               {resolveAccessLabel(
-                initialPolicy.runListVisibility,
+                initialPolicy.runListVisibility[0],
                 availableScopes,
               )}
             </span>

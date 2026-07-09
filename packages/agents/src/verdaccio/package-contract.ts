@@ -208,6 +208,99 @@ export function isAgentPackageManifest(input: unknown): input is AgentPackageMan
 }
 
 // ---------------------------------------------------------------------------
+// Install-time metadata-contract violation — a STRUCTURED, actionable error.
+//
+// The install path (install-from-package.ts) validates every closure member's
+// `package.json#cinatra` block against the fail-closed metadata contract. A
+// member missing a required field (packageType, manifestVersion, riskLevel,
+// hasApprovalGates, toolAccess, ownerOrgId, and the source* fields) used to
+// throw a raw ZodError that surfaced as an OPAQUE HTTP 500, forcing operators
+// to read server stacks to learn which package/field was at fault. This typed
+// error carries the offending package name + the exact failing contract fields
+// so every surface (MCP result, CLI, operator log) can name them precisely.
+//
+// `code` is a STABLE string literal (mirrors the REQUIRES_REBUILD convention):
+// the batch saga re-throws it RAW past its BatchMemberInstallError wrapping and
+// the MCP install surface keys on it to return a structured result (not a 500)
+// — both WITHOUT importing this module, so no new cross-package edge is added.
+// `statusCode` (422) marks the failure as invalid PACKAGE CONTENT, not a server
+// fault, for any HTTP surface that maps a thrown error's statusCode.
+// ---------------------------------------------------------------------------
+
+export const AGENT_PACKAGE_CONTRACT_VIOLATION_CODE =
+  "AGENT_PACKAGE_CONTRACT_VIOLATION" as const;
+
+export class AgentPackageContractViolationError extends Error {
+  readonly code = AGENT_PACKAGE_CONTRACT_VIOLATION_CODE;
+  readonly statusCode: number;
+  readonly packageName: string;
+  /**
+   * The exact contract fields that failed, as dotted paths (e.g.
+   * `cinatra.riskLevel`). Named for the dominant/observed case (the fields are
+   * ABSENT), but includes any field that fails the contract — a present-but-
+   * malformed value appears here too, and the message reads "missing or
+   * invalid" accordingly.
+   */
+  readonly missingFields: readonly string[];
+
+  constructor(opts: {
+    packageName: string;
+    missingFields: readonly string[];
+    statusCode?: number;
+  }) {
+    super(
+      `Agent package "${opts.packageName}" fails the metadata contract — ` +
+        `missing or invalid required field(s): ` +
+        `${opts.missingFields.length > 0 ? opts.missingFields.join(", ") : "(unknown)"}. ` +
+        `Republish the package with these fields populated.`,
+    );
+    this.name = "AgentPackageContractViolationError";
+    this.statusCode = opts.statusCode ?? 422;
+    this.packageName = opts.packageName;
+    this.missingFields = opts.missingFields;
+  }
+}
+
+/**
+ * Validate an extracted agent package manifest at install time. On success
+ * returns the parsed manifest (identical to `agentPackageManifestSchema.parse`).
+ * On failure throws a STRUCTURED {@link AgentPackageContractViolationError}
+ * naming `packageName` and the EXACT failing contract fields — never a raw
+ * ZodError.
+ *
+ * Field precision: the required `cinatra` block IS the metadata contract, so it
+ * is re-validated against the raw block (or `{}` when the block is entirely
+ * absent). This enumerates EVERY missing/invalid nested field — a top-level
+ * parse alone would report only the bare `cinatra` path for an absent block,
+ * hiding which fields are required.
+ */
+export function parseAgentPackageManifestForInstall(
+  raw: unknown,
+  packageName: string,
+): AgentPackageManifest {
+  const parsed = agentPackageManifestSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+
+  const rawObj =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  const blockParse = cinatraAgentPackageMetadataSchema.safeParse(rawObj.cinatra ?? {});
+  const cinatraFields = blockParse.success
+    ? []
+    : blockParse.error.issues.map((issue) =>
+        ["cinatra", ...issue.path].map(String).join("."),
+      );
+  // Non-`cinatra` top-level contract failures (name, version, the top-level
+  // `dependencies` refusal) keep their own paths.
+  const topFields = parsed.error.issues
+    .filter((issue) => issue.path[0] !== "cinatra")
+    .map((issue) => issue.path.map(String).join("."));
+  const missingFields = [...new Set([...cinatraFields, ...topFields])].sort();
+  throw new AgentPackageContractViolationError({ packageName, missingFields });
+}
+
+// ---------------------------------------------------------------------------
 // Layer 2 — publish-time artifact-produces materialization contract (cinatra#924).
 //
 // A package that declares `cinatra.produces` must actually materialize each

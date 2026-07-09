@@ -470,11 +470,15 @@ export {
   checkConnectorAccess,
   DEFAULT_AGENT_AUTH_POLICY,
   AgentAuthPolicySchema,
+  AgentAuthPolicyVisibilitySelectionSchema,
+  normalizeVisibilitySelection,
+  isExactlyOwner,
   OPERATION_PERMISSION,
 } from "./auth-policy";
 export type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
   RunAccessOperation,
   RunForAccessCheck,
   ActorRoleHints,

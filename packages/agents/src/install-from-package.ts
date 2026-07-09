@@ -27,7 +27,7 @@ import {
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import {
-  agentPackageManifestSchema,
+  parseAgentPackageManifestForInstall,
   CINATRA_AGENT_PACKAGE_TYPE,
   CINATRA_AGENT_MANIFEST_VERSION,
 } from "./verdaccio/package-contract";
@@ -243,8 +243,15 @@ async function _installAgentFromPackageImpl(
   // skill-registration compensation flow, re-enter without deadlock.
   return withInstallLock(extracted.packageName, async () => {
   try {
-    // Plugin-system returns raw manifest/payload; re-apply agent-specific validation.
-    const manifest = agentPackageManifestSchema.parse(extracted.manifest);
+    // Plugin-system returns raw manifest/payload; re-apply agent-specific
+    // validation. A contract violation throws a STRUCTURED, per-package/per-field
+    // AgentPackageContractViolationError (not a raw ZodError → opaque 500); on a
+    // closure member the batch saga re-throws it raw and the MCP install surface
+    // renders it as a structured result.
+    const manifest = parseAgentPackageManifestForInstall(
+      extracted.manifest,
+      extracted.packageName,
+    );
 
     if (manifest.cinatra.packageType !== CINATRA_AGENT_PACKAGE_TYPE) {
       throw new Error(`Unsupported package type: ${manifest.cinatra.packageType}`);
@@ -316,9 +323,8 @@ async function _installAgentFromPackageImpl(
       }
     }
 
-    const rawDeps = (manifest.cinatra as { agentDependencies?: Record<string, string> })
-      .agentDependencies;
-    const agentDependencies: Record<string, string> = rawDeps ?? {};
+    const legacyAgentDependencies: Record<string, string> =
+      (manifest.cinatra as { agentDependencies?: Record<string, string> }).agentDependencies ?? {};
 
     // DEPENDENCY-EDGE DUAL-READ (#180): the agent path is a MATERIALIZING
     // install path, so its canonical row must carry the
@@ -334,7 +340,7 @@ async function _installAgentFromPackageImpl(
     // mutated — the edges are then WRITTEN below, at the
     // finalize seams, against these pre-resolved targets.
     // Dynamic import: @cinatra-ai/agents -> @cinatra-ai/extensions is a static cycle.
-    const { parseManifestDependencyEdges, resolveLiveCanonicalEdgeTargets, writeDependencyEdgesToCanonicalRows } = await import(
+    const { parseManifestDependencyEdges, resolveLiveCanonicalEdgeTargets, writeDependencyEdgesToCanonicalRows, versionConstraintToRange } = await import(
       "@cinatra-ai/extensions/manifest-dependencies"
     );
     const dependencyEdges = parseManifestDependencyEdges(extracted.manifest, {
@@ -343,6 +349,41 @@ async function _installAgentFromPackageImpl(
     const dependencyEdgeTargets = await resolveLiveCanonicalEdgeTargets({
       packageName: extracted.packageName,
     });
+
+    // RUNTIME-GATE PROJECTION (cinatra#1056): derive the two runtime-gate
+    // columns the template row carries from ONE truth source — the canonical
+    // `cinatra.dependencies` edges (read alongside the legacy dual-read map):
+    //   - `kind: "connector"` edges → connector_dependencies, each carrying its
+    //     `requirement` so the run-enqueue connector preflight gates on the real
+    //     requirement instead of a hardcoded one (the optional-skip BEHAVIOR is
+    //     a later wave; W1 projects the value, both requirements still fail
+    //     closed at the preflight).
+    //   - REQUIRED `kind: "agent"` edges → merged into agent_dependencies (the
+    //     orchestrator-readiness source). ONLY required agent edges: the
+    //     agent_dependencies map is requirement-less and the readiness gate
+    //     hard-fails on every entry, so projecting an optional agent edge would
+    //     wrongly hard-block a run (optional-agent behavior is a later wave).
+    // Kind-LESS edges (a legacy-only manifest that projected through
+    // `parseManifestDependencyEdges` with no kind) are NOT projected here — the
+    // legacy `agentDependencies` map already carries those, so dual-read gating
+    // is preserved for an artifact that only declares the legacy vocabulary.
+    const connectorDependencies: Record<string, { range: string; requirement: "required" | "optional" }> =
+      Object.fromEntries(
+        dependencyEdges
+          .filter((e) => e.kind === "connector")
+          .map((e) => [
+            e.packageName,
+            { range: versionConstraintToRange(e.versionConstraint), requirement: e.requirement },
+          ]),
+      );
+    const agentDependencies: Record<string, string> = {
+      ...legacyAgentDependencies,
+      ...Object.fromEntries(
+        dependencyEdges
+          .filter((e) => e.kind === "agent" && e.requirement === "required")
+          .map((e) => [e.packageName, versionConstraintToRange(e.versionConstraint)]),
+      ),
+    };
 
     // Canonical agent type for the template row. Sourced from the OAS-compile
     // result (compiled.type), falling back to manifest.cinatra.type, with the
@@ -410,6 +451,8 @@ async function _installAgentFromPackageImpl(
         executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
+        connectorDependencies:
+          Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
         hitlScreens: seed.hitlScreens ?? undefined,
         status: input.status ?? existing.status,
         // Org + owner tier must follow the install target on re-install too.
@@ -506,6 +549,8 @@ async function _installAgentFromPackageImpl(
       packageVersion: extracted.packageVersion,
       agentDependencies:
         Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
+      connectorDependencies:
+        Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
       // hitlScreens flows through the seed into createAgentTemplate so a fresh
       // install seeds the SAME value the upsert/race branches write. Pass the
       // array verbatim (even when empty) so all three branches persist an
@@ -547,6 +592,8 @@ async function _installAgentFromPackageImpl(
         executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
+        connectorDependencies:
+          Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
         hitlScreens: seed.hitlScreens ?? undefined,
         status: input.status ?? raceExisting.status,
       });

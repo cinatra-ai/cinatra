@@ -360,6 +360,58 @@ describe("extensions MCP tool handlers", () => {
     });
   });
 
+  it("extensions_install surfaces an AGENT_PACKAGE_CONTRACT_VIOLATION as a structured { contractViolation:true } result naming the package + fields (not a 500) — cinatra#1163", async () => {
+    getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: "1.0.0", manifest: { cinatra: { kind: "agent" } } });
+    // The batch saga re-throws a closure member's contract violation RAW, so it
+    // arrives at the MCP surface naming the offending package + exact fields.
+    const violation = Object.assign(
+      new Error(
+        'Agent package "@cinatra/dep-agent" fails the metadata contract — missing or invalid required field(s): cinatra.riskLevel, cinatra.toolAccess. Republish the package with these fields populated.',
+      ),
+      {
+        code: "AGENT_PACKAGE_CONTRACT_VIOLATION",
+        packageName: "@cinatra/dep-agent",
+        missingFields: ["cinatra.riskLevel", "cinatra.toolAccess"],
+      },
+    );
+    installBatchMock.mockRejectedValueOnce(violation);
+    const handlers = createExtensionsPrimitiveHandlers();
+    const result = await handlers.extensions_install(
+      { packageName: "@cinatra/root-agent", packageVersion: "1.0.0" },
+      makeActor(),
+    );
+    expect(result).toMatchObject({
+      success: false,
+      contractViolation: true,
+      packageName: "@cinatra/dep-agent",
+      packageVersion: "1.0.0",
+      missingFields: ["cinatra.riskLevel", "cinatra.toolAccess"],
+    });
+    expect((result as { message: string }).message).toContain("cinatra.riskLevel");
+  });
+
+  it("extensions_install unwraps a contract violation nested under error.cause (defensive) — cinatra#1163", async () => {
+    getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: "1.0.0", manifest: { cinatra: { kind: "agent" } } });
+    const violation = Object.assign(new Error("member contract violation"), {
+      code: "AGENT_PACKAGE_CONTRACT_VIOLATION",
+      packageName: "@cinatra/dep-agent",
+      missingFields: ["cinatra.ownerOrgId"],
+    });
+    const wrapped = Object.assign(new Error("outer wrapper"), { cause: violation });
+    installBatchMock.mockRejectedValueOnce(wrapped);
+    const handlers = createExtensionsPrimitiveHandlers();
+    const result = await handlers.extensions_install(
+      { packageName: "@cinatra/root-agent", packageVersion: "1.0.0" },
+      makeActor(),
+    );
+    expect(result).toMatchObject({
+      success: false,
+      contractViolation: true,
+      packageName: "@cinatra/dep-agent",
+      missingFields: ["cinatra.ownerOrgId"],
+    });
+  });
+
   it("extensions_install re-throws a NON-rebuild error (no false success)", async () => {
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "connector", resolvedVersion: "1.0.0", manifest: { cinatra: { kind: "connector" } } });
     installBatchMock.mockRejectedValueOnce(new Error("pipeline did not finalize"));

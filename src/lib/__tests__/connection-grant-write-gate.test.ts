@@ -69,11 +69,11 @@ const identity: NangoConnectionIdentity = {
 
 function policyOf(visibility: string): AgentAuthPolicy {
   return {
-    runListVisibility: visibility,
-    runDataVisibility: visibility,
-    runExecuteVisibility: visibility,
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
     allowRunSharing: false,
-  } as AgentAuthPolicy;
+  } as unknown as AgentAuthPolicy;
 }
 
 function declarationRow(declaration: unknown, organizationId: string | null = ORG) {
@@ -143,7 +143,7 @@ describe("connection validatePolicyWrite — the only-ceiling write rejection", 
     );
     const mixed = {
       ...policyOf("admin"),
-      runExecuteVisibility: "workspace",
+      runExecuteVisibility: ["workspace"],
     } as AgentAuthPolicy;
     expect(await validate(mixed)).toBe("scope_locked_by_connector");
   });

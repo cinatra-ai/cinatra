@@ -6,7 +6,11 @@ import {
   type ExtensionOwnerContext,
 } from "../enforce-extension-access";
 import type { ActorContext } from "@/lib/authz";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
+} from "@cinatra-ai/agents/auth-policy";
 
 // ---------------------------------------------------------------------------
 // Pure evaluator coverage. No I/O — exercises the access
@@ -37,18 +41,38 @@ const orgOwnerCtx: ExtensionOwnerContext = {
   organizationId: ORG,
 };
 
-function policy(over: Partial<AgentAuthPolicy> = {}): AgentAuthPolicy {
+// Multi-scope W1: each visibility field is a token array. This builder accepts
+// a scalar token OR an array per field (keeping the many single-token call
+// sites terse) and coerces to the canonical array shape.
+type VisArg = AgentAuthPolicyVisibility | AgentAuthPolicyVisibilitySelection;
+function policy(
+  over: {
+    runListVisibility?: VisArg;
+    runDataVisibility?: VisArg;
+    runExecuteVisibility?: VisArg;
+    allowRunSharing?: boolean;
+    description?: string;
+  } = {},
+): AgentAuthPolicy {
+  const sel = (
+    v: VisArg | undefined,
+    fallback: AgentAuthPolicyVisibility,
+  ): AgentAuthPolicyVisibilitySelection =>
+    v === undefined ? [fallback] : Array.isArray(v) ? v : [v];
   return {
-    runListVisibility: "workspace",
-    runDataVisibility: "workspace",
-    runExecuteVisibility: "workspace",
-    allowRunSharing: false,
-    ...over,
+    runListVisibility: sel(over.runListVisibility, "workspace"),
+    runDataVisibility: sel(over.runDataVisibility, "workspace"),
+    runExecuteVisibility: sel(over.runExecuteVisibility, "workspace"),
+    allowRunSharing: over.allowRunSharing ?? false,
+    ...(over.description !== undefined ? { description: over.description } : {}),
   };
 }
 
 function base(over: Partial<EvaluateExtensionAccessInput> = {}): EvaluateExtensionAccessInput {
   return {
+    // Default to a "most kinds" kind (full admin-standing parity). Kind-specific
+    // carve-outs (connection, agent_run) are pinned in their own describe below.
+    kind: "skill",
     policy: policy(),
     coOwnerUserIds: [],
     installedByUserId: null,
@@ -149,16 +173,40 @@ describe("evaluateExtensionAccess — owner-aware admin tier", () => {
     });
   });
 
-  it("for a USER-owned extension, admin tier excludes a non-owner org_admin (only owner/platform-admin)", () => {
-    const userOwner: ExtensionOwnerContext = {
+  it("an ORG-LESS user-owned extension (organizationId=null) excludes a non-owner org_admin — no org to be admin of", () => {
+    const orgLessUserOwner: ExtensionOwnerContext = {
       ownerLevel: "user",
       ownerId: "owner-user",
       organizationId: null,
     };
     const orgAdmin = human("oa", { orgRole: "org_admin", organizationId: ORG });
     expect(
-      evaluateExtensionAccess(base({ owner: userOwner, actor: orgAdmin, policy: adminPolicy, op: "read" })).allowed,
+      evaluateExtensionAccess(
+        base({ owner: orgLessUserOwner, actor: orgAdmin, policy: adminPolicy, op: "read" }),
+      ).allowed,
     ).toBe(false);
+  });
+
+  it("an ORG-ANCHORED user-owned extension admits a non-installer org_admin even with OWNER visibility (admin standing)", () => {
+    // Post-M1 backfill: an org-anchored user install carries its org on
+    // organizationId. A non-installer org_admin gets admin standing regardless
+    // of the stored (owner-only) tier — the core of the epic.
+    const orgAnchoredUserOwner: ExtensionOwnerContext = {
+      ownerLevel: "user",
+      ownerId: "some-other-user",
+      organizationId: ORG,
+    };
+    const orgAdmin = human("oa", { orgRole: "org_admin", organizationId: ORG });
+    expect(
+      evaluateExtensionAccess(
+        base({
+          owner: orgAnchoredUserOwner,
+          actor: orgAdmin,
+          policy: policy({ runDataVisibility: "owner" }),
+          op: "read",
+        }),
+      ).allowed,
+    ).toBe(true);
   });
 });
 
@@ -281,13 +329,16 @@ describe("evaluateExtensionAccess — org-less actor on an org-owned extension (
   });
 });
 
-describe("evaluateExtensionAccess — admin does NOT over-broaden", () => {
-  it("an owning-org admin is NOT auto-allowed on a team:-restricted extension they aren't on", () => {
+describe("evaluateExtensionAccess — admin standing short-circuits the visibility tier", () => {
+  it("an owning-org admin IS allowed on a team:-restricted extension they aren't on (standing overrides the tier)", () => {
+    // NEW CONTRACT (P1): admin standing is role-derived and independent of the
+    // stored visibility tier, so a same-org admin is admitted even on a
+    // team:-restricted row they are not a member of. (Was denied pre-P1.)
     const orgAdmin = human("oa", { orgRole: "org_admin", teamIds: [] });
     expect(
       evaluateExtensionAccess(base({ actor: orgAdmin, op: "read", policy: policy({ runDataVisibility: "team:team-9" }) }))
         .allowed,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("an owning-org admin IS allowed on an admin-tier extension (owner-aware)", () => {
@@ -296,6 +347,104 @@ describe("evaluateExtensionAccess — admin does NOT over-broaden", () => {
       evaluateExtensionAccess(base({ actor: orgAdmin, op: "read", policy: policy({ runDataVisibility: "admin" }) }))
         .allowed,
     ).toBe(true);
+  });
+
+  it("a DIFFERENT-org admin still does NOT over-broaden (cross-org guard wins)", () => {
+    const crossOrgAdmin = human("oa", { organizationId: OTHER_ORG, orgRole: "org_admin", teamIds: [] });
+    expect(
+      evaluateExtensionAccess(
+        base({ actor: crossOrgAdmin, op: "read", policy: policy({ runDataVisibility: "workspace" }) }),
+      ),
+    ).toEqual({ allowed: false, reason: "cross_org" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1: kind-aware admin-standing short-circuit. A non-installer admin of the
+// owning org gets role-derived access to OWNER-default rows (no installer
+// pointer needed) — EXCEPT connection use/execute and agent_run run-data.
+// ---------------------------------------------------------------------------
+
+describe("evaluateExtensionAccess — kind-aware admin standing (P1)", () => {
+  const ownerDefault = policy({
+    runListVisibility: "owner",
+    runDataVisibility: "owner",
+    runExecuteVisibility: "owner",
+  });
+  const orgAdmin = human("oa", { orgRole: "org_admin" });
+  const orgOwner = human("oo", { orgRole: "org_owner" });
+
+  it("most kinds: a non-installer org_admin is allowed on an OWNER-default row for every op", () => {
+    for (const op of ["list", "read", "use", "execute", "share", "manage"] as const) {
+      expect(
+        evaluateExtensionAccess(
+          base({ kind: "skill", actor: orgAdmin, op, policy: ownerDefault, installedByUserId: null }),
+        ).allowed,
+      ).toBe(true);
+    }
+  });
+
+  it("most kinds: an org_owner too (role-derived, no per-row grant seeded)", () => {
+    expect(
+      evaluateExtensionAccess(base({ kind: "artifact", actor: orgOwner, op: "use", policy: ownerDefault })).allowed,
+    ).toBe(true);
+  });
+
+  it("parity holds when the installer pointer is NULL (FK set-null after the installer is deleted)", () => {
+    expect(
+      evaluateExtensionAccess(
+        base({ kind: "skill", actor: orgAdmin, op: "execute", policy: ownerDefault, installedByUserId: null }),
+      ).allowed,
+    ).toBe(true);
+  });
+
+  it("connection: admin standing grants list/read/manage", () => {
+    for (const op of ["list", "read", "manage"] as const) {
+      expect(
+        evaluateExtensionAccess(base({ kind: "connection", actor: orgAdmin, op, policy: ownerDefault })).allowed,
+      ).toBe(true);
+    }
+  });
+
+  it("connection: admin standing does NOT grant use/execute (credential use stays an owner share)", () => {
+    for (const op of ["use", "execute"] as const) {
+      expect(
+        evaluateExtensionAccess(base({ kind: "connection", actor: orgAdmin, op, policy: ownerDefault })),
+      ).toEqual({ allowed: false, reason: "not_visible" });
+    }
+  });
+
+  it("connection: admin standing does NOT grant share on an owner-default connection", () => {
+    expect(
+      evaluateExtensionAccess(base({ kind: "connection", actor: orgAdmin, op: "share", policy: ownerDefault })).allowed,
+    ).toBe(false);
+  });
+
+  it("agent_run: admin standing grants manage only; list/read/use/execute/share stay owner-private", () => {
+    expect(
+      evaluateExtensionAccess(base({ kind: "agent_run", actor: orgAdmin, op: "manage", policy: ownerDefault })).allowed,
+    ).toBe(true);
+    for (const op of ["list", "read", "use", "execute", "share"] as const) {
+      expect(
+        evaluateExtensionAccess(base({ kind: "agent_run", actor: orgAdmin, op, policy: ownerDefault })).allowed,
+      ).toBe(false);
+    }
+  });
+
+  it("a plain member gets NO admin standing on any kind (owner-default row stays denied)", () => {
+    const member = human("m", { orgRole: "member" });
+    for (const kind of ["skill", "connection", "agent_run"] as const) {
+      expect(
+        evaluateExtensionAccess(base({ kind, actor: member, op: "read", policy: ownerDefault })).allowed,
+      ).toBe(false);
+    }
+  });
+
+  it("a cross-org admin is denied on an owner-default row of another org (guard wins)", () => {
+    const crossOrgAdmin = human("oa", { organizationId: OTHER_ORG, orgRole: "org_admin" });
+    expect(
+      evaluateExtensionAccess(base({ kind: "skill", actor: crossOrgAdmin, op: "read", policy: ownerDefault })),
+    ).toEqual({ allowed: false, reason: "cross_org" });
   });
 });
 
