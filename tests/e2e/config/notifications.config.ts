@@ -23,6 +23,12 @@ import { baseUse, desktopChrome, suitePath, REPO_ROOT, repoPath } from "./base";
 const PORT = Number(process.env.E2E_PORT ?? 3100);
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 
+// When a CI workflow has already booted a production server on this port
+// (E2E_REUSE_SERVER=1), Playwright must reuse it and NOT silently fall back to
+// `pnpm dev` — a dev fallback would mask a real failure and cold-boot Turbopack.
+// Mirrors the render-smoke suite config.
+const EXTERNAL_SERVER = process.env.E2E_REUSE_SERVER === "1";
+
 export default defineConfig({
   testDir: suitePath("notifications"),
   outputDir: repoPath("test-results"),
@@ -41,15 +47,17 @@ export default defineConfig({
     ...baseUse,
   },
 
-  webServer: {
-    command: `PORT=${PORT} pnpm dev`,
-    cwd: REPO_ROOT,
-    url: BASE_URL,
-    timeout: 240_000,
-    reuseExistingServer: !process.env.CI,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
+  webServer: EXTERNAL_SERVER
+    ? undefined
+    : {
+        command: `PORT=${PORT} pnpm dev`,
+        cwd: REPO_ROOT,
+        url: BASE_URL,
+        timeout: 240_000,
+        reuseExistingServer: !process.env.CI,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
 
   projects: [
     {

@@ -1,0 +1,499 @@
+name: App e2e suites (render-smoke, notifications, agents invariants)
+
+# ---------------------------------------------------------------------------
+# CI runners for three Playwright suites that previously had no runner at all
+# (they were only invocable by hand against a local dev server):
+#
+#   - render-smoke      : visits every STATIC app route under a platform-admin
+#                         session and asserts a no-500 / no-error-boundary floor.
+#   - notifications     : the notifications-flyout + workflow-approval UATs,
+#                         which seed their rows directly via pg.
+#   - agents invariants : the STATIC `tunnel-wiring` OAS invariant from the
+#                         agents-run suite (every /api/llm-bridge ApiNode
+#                         declares data.cinatra_llm). No server / DB / browser.
+#
+# The two browser suites reuse the SAME shape the RBAC / Workflows browser
+# e2e jobs in build-image.yml already use — production build + standalone
+# server + Postgres/Redis service containers + public-schema provisioning —
+# so they run against a fast, steady prod server instead of a cold-compiling
+# `pnpm dev` (the reason render-smoke "timed out locally"). Rationale for each
+# step is documented on those jobs and kept identical here.
+#
+# TRIGGER SCOPE — deliberate split:
+#   - agents-run-invariants runs on every PR / push / merge_group: it is a pure
+#     static check and is genuinely green on a hermetic runner.
+#   - render-smoke-e2e and notifications-e2e run on `workflow_dispatch` ONLY.
+#     The wiring is correct and proven (they build, boot the prod server, run,
+#     and upload artifacts), but on a BARE CI instance the suites themselves are
+#     not yet green — they encode expectations that only hold on a fully-seeded
+#     local dev instance. Their first real CI run surfaced genuine failures:
+#       * render-smoke: `/configuration/extensions` and
+#         `/connectors/cinatra-ai/twenty-connector/setup` return HTTP 500 on a
+#         fresh instance (2 of ~90 routes).
+#       * notifications: the flyout tabs (All / Unread / In progress) do not
+#         render on a fresh instance (the pg seed runs, but the tabs are absent).
+#     Auto-triggering them now would paint every PR red for pre-existing product
+#     state, not for the PR's own change. They are left as opt-in manual runs
+#     until those are fixed or the suites learn to seed the missing state — an
+#     explicit follow-up decision. Flip the `if:` on each job back to the detect
+#     gate (and add the build-image docs-only green-STUB if made required) to
+#     auto-enable them once green.
+#
+# NON-REQUIRED by design: none of these are required status checks. Promoting
+# one to required additionally needs the docs-only green-STUB pattern from
+# build-image.yml so a docs-only PR reports green rather than "skipped".
+#
+# The live agent-execution projects (preflight, agents-run, chat-*) are
+# intentionally NOT wired here: they need the canonical long-lived schema, a
+# running WayFlow runtime, real OAuth tokens, and paid model credentials — none
+# of which a hermetic CI job can provide. Only the static invariant runs in CI.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-app-suites-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # detect — compute a single `skip` boolean: docs-only OR draft. The heavy
+  # browser jobs gate their whole run on it so a docs-only / draft PR does not
+  # pay a ~20-minute production build. No checkout: dorny reads the PR's changed
+  # files from the REST API. On push / merge_group / dispatch the dorny step is
+  # skipped, draft is N/A, and `skip` defaults to false (a real run).
+  # -------------------------------------------------------------------------
+  detect:
+    name: Detect skip — docs-only or draft (e2e-app-suites)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ github.event_name == 'pull_request' && (github.event.pull_request.draft == true || steps.filter.outputs.code != 'true') }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!AGENTS.md'
+              - '!CLAUDE.md'
+
+  # -------------------------------------------------------------------------
+  # render-smoke-e2e — every static route renders without a 500 / error
+  # boundary under a platform-admin session. Same prod-build + standalone
+  # server + service-container shape as the RBAC browser e2e job.
+  # -------------------------------------------------------------------------
+  render-smoke-e2e:
+    name: Render-smoke browser e2e
+    needs: detect
+    # workflow_dispatch ONLY — see the TRIGGER SCOPE note in the header. The
+    # wiring is proven, but the suite is not yet green on a bare CI instance
+    # (2 routes 500). Change back to `needs.detect.outputs.skip != 'true'` to
+    # auto-enable once those routes are fixed / seeded.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+      BETTER_AUTH_SECRET: render-smoke-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxxxx
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      OPENAI_API_KEY: sk-test-placeholder
+      CINATRA_RUNTIME_MODE: development
+      A2A_DEV_BYPASS: "true"
+      # A fresh CI instance has no instance-identity / Nango / OpenAI setup rows,
+      # which would redirect every authenticated route to /setup. The suite tests
+      # app surfaces, not the wizard — skip the setup gate.
+      CINATRA_E2E_SETUP_BYPASS: "true"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Cache Next.js build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .next/cache
+          key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-
+            nextjs-prod-${{ runner.os }}-
+
+      - name: Provision Better Auth tables (public schema)
+        # Better Auth's public.* tables (user/session/member/...) are managed
+        # separately from the cinatra schema; a fresh CI Postgres needs them
+        # provisioned before the server's first query. Same step as the RBAC job.
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Add CI build swap (default-runner only)
+        # Best-effort 4G swap on the default ubuntu-latest path only (see the RBAC
+        # e2e job in build-image.yml for the full rationale). Skipped on a larger
+        # CI_BUILD_RUNNER; a swap-setup failure never fails the build.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
+
+      - name: Build app (production)
+        # Run against a production build, not `pnpm dev`: Turbopack dev compiles
+        # each route cold on first hit, which is exactly why render-smoke timed
+        # out locally. A prebuilt standalone server serves routes instantly with
+        # low, steady memory. See the RBAC e2e build step for the memory notes.
+        timeout-minutes: 20
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: pnpm build
+
+      - name: Start production server on port 3000
+        # next.config sets output: "standalone", so run server.js exactly like the
+        # Dockerfile (static/public copied alongside it).
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js > /tmp/dev.log 2>&1) &
+          echo "prod server launched as PID $!"
+
+      - name: Wait for server ready (prod boot + DB schema provisioning)
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::server did not become ready in 5 min"
+          tail -200 /tmp/dev.log
+          exit 1
+
+      - name: Run render-smoke Playwright e2e
+        # E2E_REUSE_SERVER=1 tells the render-smoke config to reuse our already-
+        # booted server instead of managing its own. Wrapped in `timeout` so a
+        # hung suite can't burn the whole job; the exit code is asserted below so
+        # the job still fails on a real test failure.
+        id: e2e
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_PORT: "3000"
+          E2E_REUSE_SERVER: "1"
+        run: |
+          set +e
+          timeout --kill-after=60 780 pnpm test:e2e:render-smoke
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: render-smoke-playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+      - name: Upload server log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: render-smoke-server-log
+          path: /tmp/dev.log
+          retention-days: 7
+
+      - name: Assert render-smoke e2e passed
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::render-smoke e2e failed or timed out (exit ${code})"
+            exit 1
+          fi
+          echo "render-smoke e2e passed"
+
+  # -------------------------------------------------------------------------
+  # notifications-e2e — the notifications-flyout + workflow-approval UATs.
+  # Both seed their rows directly via pg, so the standard Postgres + Redis
+  # service containers are all the infra they need. Same prod-build shape.
+  # -------------------------------------------------------------------------
+  notifications-e2e:
+    name: Notifications browser e2e
+    needs: detect
+    # workflow_dispatch ONLY — see the TRIGGER SCOPE note in the header. The
+    # wiring is proven, but the suite is not yet green on a bare CI instance
+    # (the flyout tabs do not render). Change back to
+    # `needs.detect.outputs.skip != 'true'` to auto-enable once that is fixed.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+      BETTER_AUTH_SECRET: notifications-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxx
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      OPENAI_API_KEY: sk-test-placeholder
+      CINATRA_RUNTIME_MODE: development
+      A2A_DEV_BYPASS: "true"
+      CINATRA_E2E_SETUP_BYPASS: "true"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Cache Next.js build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .next/cache
+          key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-
+            nextjs-prod-${{ runner.os }}-
+
+      - name: Provision Better Auth tables (public schema)
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Add CI build swap (default-runner only)
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
+
+      - name: Build app (production)
+        timeout-minutes: 20
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: pnpm build
+
+      - name: Start production server on port 3000
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js > /tmp/dev.log 2>&1) &
+          echo "prod server launched as PID $!"
+
+      - name: Wait for server ready (prod boot + DB schema provisioning)
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::server did not become ready in 5 min"
+          tail -200 /tmp/dev.log
+          exit 1
+
+      - name: Run notifications Playwright e2e
+        # Point the (port-3100-by-default) notifications config at our port-3000
+        # standalone server and reuse it (E2E_REUSE_SERVER=1).
+        id: e2e
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_PORT: "3000"
+          E2E_REUSE_SERVER: "1"
+        run: |
+          set +e
+          timeout --kill-after=60 780 pnpm test:e2e:notifications
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notifications-playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+      - name: Upload server log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notifications-server-log
+          path: /tmp/dev.log
+          retention-days: 7
+
+      - name: Assert notifications e2e passed
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::notifications e2e failed or timed out (exit ${code})"
+            exit 1
+          fi
+          echo "notifications e2e passed"
+
+  # -------------------------------------------------------------------------
+  # agents-run-invariants — the STATIC `tunnel-wiring` OAS invariant only.
+  # Pure fs reads over the cloned agent OAS files; no server, DB, browser, or
+  # credentials. E2E_REUSE_SERVER=1 keeps the agents-run config from booting a
+  # dev server. The companion agent repos are cloned first because their OAS
+  # files are the subject of the invariant (and are gitignored in this tree).
+  # -------------------------------------------------------------------------
+  agents-run-invariants:
+    name: Agents-run static invariants (tunnel-wiring)
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run agents-run tunnel-wiring invariant
+        env:
+          E2E_REUSE_SERVER: "1"
+        run: pnpm exec playwright test -c tests/e2e/config/agents-run.config.ts --project tunnel-wiring
