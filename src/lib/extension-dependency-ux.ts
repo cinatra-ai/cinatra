@@ -290,3 +290,90 @@ export function summarizeBatchOutcome(batch: InstallBatch): BatchOutcomeSummary 
 export function hasActiveInstallBatch(batches: readonly InstallBatch[]): boolean {
   return batches.some((batch) => !summarizeBatchOutcome(batch).terminal);
 }
+
+// ---------------------------------------------------------------------------
+// 4. Post-install "needs configuration" affordance (cinatra #1057)
+// ---------------------------------------------------------------------------
+
+/**
+ * One connector's readiness as resolved by its OWN per-connector probe. The
+ * `connected` boolean is the connector's INDEPENDENT readiness — this module
+ * never derives it from another connector's state (see the chaining decision
+ * on {@link summarizeConfigurationNeeds}).
+ */
+export type ConnectorReadinessRow = {
+  packageName: string;
+  slug: string;
+  /** The connector's OWN readiness-probe result. */
+  connected: boolean;
+  /** Deep-link to the connector's setup surface, or null when unresolved. */
+  settingsHref: string | null;
+  /** True when this connector is the batch root (the just-installed extension). */
+  isRoot: boolean;
+};
+
+/** A single "Configure <connector>" affordance row. */
+export type ConfigurationNeed = {
+  packageName: string;
+  slug: string;
+  settingsHref: string | null;
+  isRoot: boolean;
+};
+
+export type ConfigurationNeedsSummary = {
+  /** Installed connectors that are present but NOT yet configured (ordered). */
+  needs: ConfigurationNeed[];
+  /** True when at least one connector readiness row was considered. */
+  hasConnectors: boolean;
+  /** True when every considered connector is configured (nothing to surface). */
+  allConfigured: boolean;
+};
+
+/**
+ * Bucket the connectors an install touched (the installed extension AND its
+ * connector dependencies), each with its OWN resolved readiness, into ordered
+ * "Configure <connector>" affordances for the not-yet-configured ones.
+ *
+ * READINESS-CHAINING DECISION (cinatra #1057, ratified — per-connector probes
+ * are AUTHORITATIVE): a required connector-dependency's readiness is surfaced
+ * as its OWN independent row, NEVER folded into a facade/consumer connector's
+ * readiness boolean. Rationale grounded in the live surface:
+ *   - the base dependencies (social-media / *-oauth / email / crm connectors)
+ *     register no readiness probe and default to not-connected, so folding
+ *     would make every facade perpetually not-ready;
+ *   - the leaf/facade probe already reflects the real chained end-state (a
+ *     saved connection cannot exist unless its required base is satisfied);
+ *   - the card grid and the setup-page badge are documented lock-step on the
+ *     SAME single per-connector probe — folding would break that invariant.
+ * This derivation therefore treats each row's `connected` as that connector's
+ * own probe result and never cross-references rows: a facade whose own probe
+ * reports connected is NOT re-surfaced because a dependency is unconfigured;
+ * that dependency appears as its own row instead.
+ *
+ * Deterministic order: the root first, then dependencies lexicographically.
+ * PURE — the caller resolves readiness + settingsHref (server probes); this
+ * only reshapes for display, performing no I/O.
+ */
+export function summarizeConfigurationNeeds(
+  rows: readonly ConnectorReadinessRow[],
+): ConfigurationNeedsSummary {
+  const needs: ConfigurationNeed[] = rows
+    .filter((r) => !r.connected)
+    .map((r) => ({
+      packageName: r.packageName,
+      slug: r.slug,
+      settingsHref: r.settingsHref,
+      isRoot: r.isRoot,
+    }));
+
+  needs.sort((a, b) => {
+    if (a.isRoot !== b.isRoot) return a.isRoot ? -1 : 1;
+    return a.packageName.localeCompare(b.packageName);
+  });
+
+  return {
+    needs,
+    hasConnectors: rows.length > 0,
+    allConfigured: needs.length === 0,
+  };
+}

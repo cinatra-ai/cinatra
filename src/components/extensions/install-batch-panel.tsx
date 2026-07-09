@@ -8,14 +8,17 @@
 // `toMemberProgressRows` / `summarizeBatchOutcome`; this component is a pure
 // presenter. Server component — shadcn primitives + semantic tokens only.
 
+import Link from "next/link";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import { Alert, AlertTitle } from "@/components/ui/alert";
-import { CircleCheck, TriangleAlert, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { CircleCheck, Settings2, TriangleAlert, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   summarizeBatchOutcome,
   toMemberProgressRows,
   type BatchOutcomeTone,
+  type ConfigurationNeedsSummary,
   type MemberProgressTone,
 } from "@/lib/extension-dependency-ux";
 import type { InstallBatch } from "@/lib/extension-install-batch-ops";
@@ -61,8 +64,56 @@ function BatchOutcomeAlert({ tone, headline }: { tone: BatchOutcomeTone; headlin
   );
 }
 
+/**
+ * Post-install "needs configuration" affordance (cinatra #1057). Lists the
+ * installed connectors that are present but NOT yet configured, each
+ * deep-linked to its own setup surface. Per the ratified readiness-chaining
+ * decision, each connector is an INDEPENDENT row (the installed extension and
+ * every required connector dependency surface separately, driven by each
+ * connector's own readiness probe). Renders nothing when there is nothing to
+ * configure — install never blocks on configuration.
+ */
+function ConfigurationNeedsBlock({ summary }: { summary: ConfigurationNeedsSummary }) {
+  if (summary.needs.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="batch-configuration-needs">
+      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+        <Settings2 className="size-3.5" aria-hidden />
+        Needs configuration before use:
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {summary.needs.map((need) => (
+          <li
+            key={need.packageName}
+            className="flex items-center gap-2 text-sm"
+            data-testid="configuration-need-row"
+          >
+            <code className="font-mono text-xs text-foreground">{need.packageName}</code>
+            {need.settingsHref ? (
+              <Button asChild variant="link" className="h-auto p-0 text-xs font-medium">
+                <Link href={need.settingsHref} data-testid="configuration-need-link">
+                  Configure
+                </Link>
+              </Button>
+            ) : (
+              <span className="text-xs text-muted-foreground">Configure in connector settings</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** One batch card: outcome headline, compensation detail, per-member progress. */
-function InstallBatchCard({ batch }: { batch: InstallBatch }) {
+function InstallBatchCard({
+  batch,
+  configurationNeeds,
+}: {
+  batch: InstallBatch;
+  configurationNeeds?: ConfigurationNeedsSummary;
+}) {
   const outcome = summarizeBatchOutcome(batch);
   const rows = toMemberProgressRows(batch);
 
@@ -122,6 +173,11 @@ function InstallBatchCard({ batch }: { batch: InstallBatch }) {
           </li>
         ))}
       </ul>
+
+      {/* Post-install configuration follow-up (cinatra #1057) — the installed
+          connectors that still need configuring, each deep-linked. Present
+          only for a finalized batch that carries unconfigured connectors. */}
+      {configurationNeeds && <ConfigurationNeedsBlock summary={configurationNeeds} />}
     </div>
   );
 }
@@ -133,8 +189,20 @@ function InstallBatchCard({ batch }: { batch: InstallBatch }) {
  * when there are no batches (a single-package install never wrote a ledger
  * row, so an instance that only ever installed depless extensions shows
  * nothing — no empty pane).
+ *
+ * `configurationNeedsByBatch` (cinatra #1057) carries, per finalized batch, the
+ * connectors that installed but are not yet configured — resolved server-side
+ * from each connector's own readiness probe and rendered as deep-linked
+ * "Configure" affordances. Optional: omitting it simply renders no
+ * configuration follow-up.
  */
-export function InstallBatchPanel({ batches }: { batches: InstallBatch[] }) {
+export function InstallBatchPanel({
+  batches,
+  configurationNeedsByBatch,
+}: {
+  batches: InstallBatch[];
+  configurationNeedsByBatch?: Record<string, ConfigurationNeedsSummary>;
+}) {
   if (batches.length === 0) return null;
 
   return (
@@ -142,7 +210,11 @@ export function InstallBatchPanel({ batches }: { batches: InstallBatch[] }) {
       <h2 className="text-sm font-semibold text-foreground">Recent dependency installs</h2>
       <div className="flex flex-col gap-3">
         {batches.map((batch) => (
-          <InstallBatchCard key={batch.batchId} batch={batch} />
+          <InstallBatchCard
+            key={batch.batchId}
+            batch={batch}
+            configurationNeeds={configurationNeedsByBatch?.[batch.batchId]}
+          />
         ))}
       </div>
     </section>

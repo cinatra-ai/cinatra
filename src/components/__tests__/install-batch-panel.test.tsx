@@ -105,4 +105,59 @@ describe("InstallBatchPanel", () => {
     expect(html).toContain("manual cleanup");
     expect(html).toContain("@scope/dep");
   });
+
+  // cinatra #1057 — post-install "needs configuration" affordance.
+  it("renders deep-linked Configure affordances for unconfigured connectors", () => {
+    const html = renderToStaticMarkup(
+      <InstallBatchPanel
+        batches={[
+          batch({
+            batchId: "b-cfg",
+            rootPackage: "@cinatra-ai/list-curator-agent",
+            phase: "finalized",
+            members: [
+              member({ packageName: "@cinatra-ai/linkedin-oauth-connector", status: "installed" }),
+              member({ packageName: "@cinatra-ai/list-curator-agent", status: "installed" }),
+            ],
+          }),
+        ]}
+        configurationNeedsByBatch={{
+          "b-cfg": {
+            needs: [
+              {
+                packageName: "@cinatra-ai/linkedin-oauth-connector",
+                slug: "linkedin-oauth-connector",
+                settingsHref: "/connectors/cinatra-ai/linkedin-oauth-connector/setup",
+                isRoot: false,
+              },
+            ],
+            hasConnectors: true,
+            allConfigured: false,
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("Needs configuration before use");
+    expect(html).toContain("@cinatra-ai/linkedin-oauth-connector");
+    expect(html).toContain('href="/connectors/cinatra-ai/linkedin-oauth-connector/setup"');
+    expect(html).toContain("batch-configuration-needs");
+  });
+
+  it("renders no configuration affordance when everything is configured", () => {
+    const html = renderToStaticMarkup(
+      <InstallBatchPanel
+        batches={[
+          batch({
+            batchId: "b-ok",
+            rootPackage: "@cinatra-ai/root",
+            phase: "finalized",
+            members: [member({ packageName: "@cinatra-ai/root", status: "installed" })],
+          }),
+        ]}
+        configurationNeedsByBatch={{ "b-ok": { needs: [], hasConnectors: true, allConfigured: true } }}
+      />,
+    );
+    expect(html).not.toContain("Needs configuration before use");
+    expect(html).not.toContain("batch-configuration-needs");
+  });
 });

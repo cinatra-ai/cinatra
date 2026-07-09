@@ -40,6 +40,7 @@ import {
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
+import { resolveConfigurationNeedsByBatch } from "@/lib/configuration-needs.server";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -97,6 +98,23 @@ export async function RegistryCatalogScreen({
       err instanceof Error ? err.message : err,
     );
     return [] as Awaited<ReturnType<typeof listRecentInstallBatches>>;
+  });
+
+  // Post-install "needs configuration" affordance (cinatra #1057): for each
+  // FINALIZED batch, probe the connectors it installed (root + auto-installed
+  // connector deps) through each connector's own readiness probe and surface
+  // the unconfigured ones as deep-linked "Configure" links. User-scoped to the
+  // current viewer (same probe the /connectors card grid + setup badge read),
+  // so the affordance reflects this operator's connection state. Best-effort:
+  // a resolution failure degrades to no affordance, never blanking the panel.
+  const configurationNeedsByBatch = await resolveConfigurationNeedsByBatch(recentBatches, {
+    userId: session.user?.id ?? null,
+  }).catch((err: unknown) => {
+    console.warn(
+      "[registry-catalog] could not resolve post-install configuration needs (affordance omitted):",
+      err instanceof Error ? err.message : err,
+    );
+    return {} as Record<string, never>;
   });
 
   // -------------------------------------------------------------------------
@@ -250,7 +268,10 @@ export async function RegistryCatalogScreen({
                 router.refresh() so the server snapshot below stays live
                 (cinatra #851 finding 3). */}
             <InstallBatchLiveRefresh active={hasActiveInstallBatch(recentBatches)} />
-            <InstallBatchPanel batches={recentBatches} />
+            <InstallBatchPanel
+              batches={recentBatches}
+              configurationNeedsByBatch={configurationNeedsByBatch}
+            />
             {activeRows.length === 0 ? (
               <ActiveEmptyState />
             ) : (
