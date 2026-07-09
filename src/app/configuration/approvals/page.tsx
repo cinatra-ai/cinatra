@@ -16,7 +16,17 @@ import {
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 
 import { availableSources } from "./sources/registry";
-import type { ApprovalViewer, Direction, SourceCounts } from "./sources/types";
+import type { ApprovalSource, ApprovalViewer, Direction, SourceCounts } from "./sources/types";
+import { planApprovalSections, isEmptyPlan } from "./sources/section-plan";
+import {
+  anyMarketplaceCredential,
+  MARKETPLACE_CONNECT_HREF,
+  MARKETPLACE_GROUP,
+} from "./sources/marketplace-shared";
+import {
+  MarketplaceNotConnectedGroup,
+  MarketplaceSourcesFooter,
+} from "./marketplace-group-views";
 import { resolveApprovalsActiveView } from "./resolve-active-view";
 import { SourceSection, SourceSkeleton } from "./source-section";
 
@@ -107,9 +117,25 @@ export default async function AdministrationApprovalsPage({
 
   const opts = status ? { status } : undefined;
 
+  // Pure, LOCAL (no network) marketplace connectivity — decided once. Drives the
+  // group-level "not connected" collapse so the disconnected state fires zero
+  // remote marketplace calls (each source's counts()/fetch guards on this too).
+  const marketplaceConnected = anyMarketplaceCredential();
+
+  const renderSection = (s: ApprovalSource, dir: Direction) => (
+    <Suspense key={s.id} fallback={<SourceSkeleton title={s.title} />}>
+      <SourceSection source={s} viewer={viewer} direction={dir} opts={opts} />
+    </Suspense>
+  );
+
   const renderSections = (dir: Direction) => {
     const applicable = sources.filter((s) => s.appliesTo(viewer, dir));
-    if (applicable.length === 0) {
+    const plan = planApprovalSections(applicable, viewer, dir, {
+      tag: MARKETPLACE_GROUP,
+      connected: marketplaceConnected,
+    });
+
+    if (isEmptyPlan(plan)) {
       return (
         <Empty className="border-line">
           <EmptyHeader>
@@ -125,11 +151,17 @@ export default async function AdministrationApprovalsPage({
         </Empty>
       );
     }
-    return applicable.map((s) => (
-      <Suspense key={s.id} fallback={<SourceSkeleton title={s.title} />}>
-        <SourceSection source={s} viewer={viewer} direction={dir} opts={opts} />
-      </Suspense>
-    ));
+
+    return (
+      <>
+        {plan.local.map((s) => renderSection(s, dir))}
+        {plan.showGroupEmpty ? (
+          <MarketplaceNotConnectedGroup connectHref={MARKETPLACE_CONNECT_HREF} />
+        ) : null}
+        {plan.groupReady.map((s) => renderSection(s, dir))}
+        <MarketplaceSourcesFooter hidden={plan.groupHidden} connectHref={MARKETPLACE_CONNECT_HREF} />
+      </>
+    );
   };
 
   return (
