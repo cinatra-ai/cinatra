@@ -1,4 +1,11 @@
 import type { OwnershipLevel } from "../spec/types";
+// Pure OBO scope-ceiling helper (zero-dep subpath — no @/lib, no transport
+// runtime; keeps this package a leaf).
+import {
+  resourceWithinCeiling,
+  type OboCeilingChain,
+  type CeilingResource,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 
 // Scope scaffold. The release-workflows package stays a
 // leaf: it defines the resource-ref shape + read-visibility filter + a
@@ -33,7 +40,36 @@ export type WorkflowActor = {
   /** Better Auth org role — gates manage on org/workspace-owned rows. */
   orgRole?: string | null;
   platformRole?: string | null;
+  /**
+   * Agent-run OBO scope-ceiling CHAIN — the agent's anchored-scope upper bound.
+   * Set ONLY for agent-run OBO delegated actors (threaded from the MCP request
+   * frame by the workflows registry/handler); undefined for every session /
+   * human caller. When present, a row must fall WITHIN the chain or both
+   * isReadable/canManage deny — checked BEFORE the platform_admin short-circuit.
+   */
+  oboCeiling?: OboCeilingChain;
 };
+
+/**
+ * Map a scoped row onto the shared `CeilingResource` facets consumed by
+ * `resourceWithinCeiling`: the org tenant, the 4-tier owner anchor (only when
+ * `ownerLevel` is a real owner tier AND `ownerId` is present — otherwise no
+ * owner element, which fails a narrower owner ceiling closed), and the project
+ * refinement.
+ */
+function scopedRowToCeilingFacets(row: ScopedRow): CeilingResource {
+  let owner: CeilingResource["owner"] = null;
+  if (
+    row.ownerId &&
+    (row.ownerLevel === "user" ||
+      row.ownerLevel === "team" ||
+      row.ownerLevel === "organization" ||
+      row.ownerLevel === "workspace")
+  ) {
+    owner = { tier: row.ownerLevel, id: row.ownerId };
+  }
+  return { orgId: row.orgId, owner, projectId: row.projectId ?? null };
+}
 
 /**
  * ADMIN STANDING (P3) over a workflow/template row whose org the caller has
@@ -63,6 +99,12 @@ export function buildWorkflowResourceRef(row: ScopedRow): WorkflowResourceRef {
  * project-access grant — layered by the handler on top of this base filter.
  */
 export function isReadable(row: ScopedRow, actor: WorkflowActor): boolean {
+  // OBO scope-ceiling containment — BEFORE the platform_admin AND org-admin-standing
+  // short-circuits below, so a delegated agent run stays confined to the agent's
+  // anchored scope even when the invoker is a platform admin or an owning-org admin.
+  // No-op for non-OBO (session) actors.
+  if (actor.oboCeiling && !resourceWithinCeiling(scopedRowToCeilingFacets(row), actor.oboCeiling))
+    return false;
   if (actor.platformRole === "platform_admin") return true;
   if (!actor.organizationId || row.orgId !== actor.organizationId) return false;
   // ADMIN STANDING (P3): an org_owner/org_admin of the row's org reads every
@@ -102,6 +144,10 @@ export function filterReadable<T extends ScopedRow>(rows: readonly T[], actor: W
  * a precondition the caller should also enforce.
  */
 export function canManage(row: ScopedRow, actor: WorkflowActor): boolean {
+  // OBO scope-ceiling containment — BEFORE the platform_admin AND org-admin-standing
+  // short-circuits (same load-bearing ordering as isReadable). No-op for non-OBO actors.
+  if (actor.oboCeiling && !resourceWithinCeiling(scopedRowToCeilingFacets(row), actor.oboCeiling))
+    return false;
   if (actor.platformRole === "platform_admin") return true;
   if (!actor.organizationId || row.orgId !== actor.organizationId) return false;
   // ADMIN STANDING (P3): an org_owner/org_admin manages every workflow/template

@@ -7,12 +7,17 @@
  * remount-safe behavior the detail-page delete-race fix depends on: a
  * server-side redirect sets ?deleted=1 (and ?saved=1), and this island shows
  * the toast exactly once, then strips the consumed param.
+ *
+ * The island moved into @cinatra-ai/sdk-ui (cinatra#1108) so extension packages
+ * can mount it; the source-text assertions read the sdk-ui module, and the
+ * `import * as` below proves the host path (`@/components/search-param-toast`)
+ * still re-exports the symbol.
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import * as SearchParamToastMod from "@/components/search-param-toast";
 
-const SOURCE = readFileSync("src/components/search-param-toast.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/search-param-toast.tsx", "utf-8");
 
 describe("SearchParamToast", () => {
   it("module loads and exports the SearchParamToast component", () => {

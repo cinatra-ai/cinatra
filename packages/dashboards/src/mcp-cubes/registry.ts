@@ -77,10 +77,19 @@ export function registerDashboardCubePrimitives(server: McpRuntimeToolServer): v
       // closure site can never drift from the first. drizzle-cube's
       // getSecurityContext accepts a Promise; the membership + role queries
       // run inside the same ALS context as identity resolution.
+      //
+      // Agent-run OBO (epic #1049 / W4 #1053): `oboCeiling` is present on the
+      // frame iff the caller is an agent-run OBO delegation (the transport
+      // stamps it only for `delegation === "agent_run"`). The shared MCP
+      // boundary already DENIES a non-org ceiling on this surface; this pins the
+      // surviving org-only-ceiling case so a delegated run's cube read can never
+      // widen the security context beyond the run's own org.
+      const agentRunObo = !!mcpRequestContextStorage.getStore()?.oboCeiling;
       const sc = await buildDashboardCubeMcpSecurityContext(
         identity,
         listAccessibleOrgIdsForUser,
         readUserIsPlatformAdmin,
+        { agentRunObo },
       );
       if (!sc) {
         throw new Error(

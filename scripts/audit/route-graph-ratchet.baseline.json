@@ -1,41 +1,41 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 133,
-    "/api/mcp": 1349,
-    "/chat": 1387,
-    "/api/a2a": 1354,
-    "/api/llm-bridge": 1359
+    "/api/mcp": 1354,
+    "/chat": 1392,
+    "/api/a2a": 1359,
+    "/api/llm-bridge": 1363
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1353,
-      "to": 1354,
-      "reason": "cinatra-ai/cinatra#1104 (PR #1245): the anthropic Skills opt-in migrates to a host capability. A new dependency-light first-party module src/lib/anthropic-skill-config-service.ts (the orchestrateAnthropicSkillSync extraction plus the createAnthropicSkillConfigCapability factory for the @cinatra-ai/host:anthropic-skill-config capability) becomes reachable via the host connector-services boot binder (a lazy dynamic import) on every locked route that reaches it. Exactly one net-new first-party module per route; its transitive deps were already reachable. Delta measured locally vs origin/main (uniform missingCount, so the +1 is exact) and confirmed by CI. Absorbed raise 1353 to 1354 (on top of the prior #1172 + #1061 raises).",
-      "pr": 1245
-    },
-    "/api/llm-bridge": {
       "from": 1358,
       "to": 1359,
-      "reason": "cinatra-ai/cinatra#1104 (PR #1245): the anthropic Skills opt-in migrates to a host capability. A new dependency-light first-party module src/lib/anthropic-skill-config-service.ts (the orchestrateAnthropicSkillSync extraction plus the createAnthropicSkillConfigCapability factory for the @cinatra-ai/host:anthropic-skill-config capability) becomes reachable via the host connector-services boot binder (a lazy dynamic import) on every locked route that reaches it. Exactly one net-new first-party module per route; its transitive deps were already reachable. Delta measured locally vs origin/main (uniform missingCount, so the +1 is exact) and confirmed by CI. Absorbed raise 1358 to 1359 (on top of the prior #1172 + #1061 raises).",
-      "pr": 1245
+      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1358->1359.",
+      "pr": 1186
+    },
+    "/api/llm-bridge": {
+      "from": 1362,
+      "to": 1363,
+      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1362->1363.",
+      "pr": 1186
     },
     "/api/mcp": {
-      "from": 1348,
-      "to": 1349,
-      "reason": "cinatra-ai/cinatra#1104 (PR #1245): the anthropic Skills opt-in migrates to a host capability. A new dependency-light first-party module src/lib/anthropic-skill-config-service.ts (the orchestrateAnthropicSkillSync extraction plus the createAnthropicSkillConfigCapability factory for the @cinatra-ai/host:anthropic-skill-config capability) becomes reachable via the host connector-services boot binder (a lazy dynamic import) on every locked route that reaches it. Exactly one net-new first-party module per route; its transitive deps were already reachable. Delta measured locally vs origin/main (uniform missingCount, so the +1 is exact) and confirmed by CI. Absorbed raise 1348 to 1349 (on top of the prior #1172 + #1061 raises).",
-      "pr": 1245
+      "from": 1353,
+      "to": 1354,
+      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1353->1354.",
+      "pr": 1186
     },
     "/chat": {
-      "from": 1386,
-      "to": 1387,
-      "reason": "cinatra-ai/cinatra#1104 (PR #1245): the anthropic Skills opt-in migrates to a host capability. A new dependency-light first-party module src/lib/anthropic-skill-config-service.ts (the orchestrateAnthropicSkillSync extraction plus the createAnthropicSkillConfigCapability factory for the @cinatra-ai/host:anthropic-skill-config capability) becomes reachable via the host connector-services boot binder (a lazy dynamic import) on every locked route that reaches it. Exactly one net-new first-party module per route; its transitive deps were already reachable. Delta measured locally vs origin/main (uniform missingCount, so the +1 is exact) and confirmed by CI. Absorbed raise 1386 to 1387 (on top of the prior #1172 + #1061 raises).",
-      "pr": 1245
+      "from": 1391,
+      "to": 1392,
+      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1391->1392.",
+      "pr": 1186
     },
     "/sign-in": {
       "from": 132,
       "to": 133,
-      "reason": "cinatra#1135 (PR #1137): the one-shot initial-admin bootstrap decision was extracted into a new dependency-free policy module src/lib/initial-admin-bootstrap-policy.ts (pure decision core, unit-testable without the server-only auth graph; same pattern as closed-registration-gate.ts), imported by src/lib/auth.ts — one new reachable first-party leaf on every route that reaches the auth core. Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). Absorbed raise 132->133.",
+      "reason": "cinatra#1135 (PR #1137): the one-shot initial-admin bootstrap decision was extracted into a new dependency-free policy module src/lib/initial-admin-bootstrap-policy.ts (pure decision core, unit-testable without the server-only auth graph; same pattern as closed-registration-gate.ts), imported by src/lib/auth.ts \u2014 one new reachable first-party leaf on every route that reaches the auth core. Delta verified locally vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). Absorbed raise 132->133.",
       "pr": 1137
     }
   }
