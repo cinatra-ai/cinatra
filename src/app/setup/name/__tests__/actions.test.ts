@@ -192,7 +192,8 @@ describe("saveInstanceIdentityAction Verdaccio PUT", () => {
     );
     expect(url).not.toBeNull();
     expect(url).toMatch(/error=/);
-    expect(url?.toLowerCase()).toMatch(/already.*taken|already.*registered/);
+    // Codes-only flash protocol (cinatra#1108): the 409 maps to a stable code.
+    expect(url).toContain("error=namespace-taken");
   });
 
   it("defers registry provisioning in production when no registry/marketplace env is configured", async () => {
@@ -261,7 +262,7 @@ describe("saveInstanceIdentityAction CINATRA_ENCRYPTION_KEY pre-check", () => {
     );
     expect(url).not.toBeNull();
     expect(url).toMatch(/error=/);
-    expect(url?.toUpperCase()).toContain("CINATRA_ENCRYPTION_KEY");
+    expect(url).toContain("error=encryption-key-missing");
   });
 });
 
@@ -348,7 +349,7 @@ describe("saveInstanceIdentityAction pre-provisioned token path (locked-down reg
     const url = await captureRedirect(() => saveInstanceIdentityAction(buildValidFormData()));
 
     expect(url).toMatch(/error=/);
-    expect(url).toContain("CINATRA_AGENT_REGISTRY_URL");
+    expect(url).toContain("error=registry-url-missing");
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
   });
@@ -361,7 +362,7 @@ describe("saveInstanceIdentityAction pre-provisioned token path (locked-down reg
     const url = await captureRedirect(() => saveInstanceIdentityAction(buildValidFormData()));
 
     expect(url).toMatch(/error=/);
-    expect(url?.toLowerCase()).toMatch(/scope/);
+    expect(url).toContain("error=registry-scope-mismatch");
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
   });
@@ -374,7 +375,7 @@ describe("saveInstanceIdentityAction pre-provisioned token path (locked-down reg
     const url = await captureRedirect(() => saveInstanceIdentityAction(buildValidFormData()));
 
     expect(url).toMatch(/error=/);
-    expect(url?.toLowerCase()).toMatch(/malformed|whitespace/);
+    expect(url).toContain("error=registry-token-malformed");
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
   });
