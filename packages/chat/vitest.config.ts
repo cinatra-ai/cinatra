@@ -26,6 +26,11 @@ export default defineConfig({
         root,
         "packages/agents/src/index.ts",
       ),
+      // S4 renderable-view schema registry subpath (mirrors tsconfig.json).
+      "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/index.ts",
+      ),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",

@@ -151,6 +151,12 @@ export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
         if (orgId) actorBase.orgId = orgId;
         if (platformRole) actorBase.platformRole = platformRole;
         if (orgRole) actorBase.orgRole = orgRole;
+        // Forward the agent-run OBO scope-ceiling chain from the request frame
+        // (W1 stamps it onto `McpRequestContext.oboCeiling` for agent-run-OBO
+        // delegations only; undefined for chat/session/machine callers). The
+        // objects kernel `enforceResourceAccess` consults `actor.oboCeiling` to
+        // confine the delegated run to its anchored scope (W2/#1051).
+        if (requestCtx?.oboCeiling) actorBase.oboCeiling = requestCtx.oboCeiling;
 
         const result = await handler({
           primitiveName: name,

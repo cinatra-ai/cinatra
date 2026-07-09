@@ -3,6 +3,8 @@ import {
   deriveOboCeilingChain,
   oboCeilingContains,
   resourceWithinCeiling,
+  composeOboCeilingChain,
+  OboCeilingCompositionError,
   isOboCeiling,
   isOboCeilingChain,
   parseOboCeilingChain,
@@ -258,5 +260,166 @@ describe("isOboCeiling / isOboCeilingChain / parseOboCeilingChain", () => {
     expect(parseOboCeilingChain(null)).toBeNull();
     expect(parseOboCeilingChain(undefined)).toBeNull();
     expect(parseOboCeilingChain('[{"tier":"bad","id":"x"}]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Child-run composition (epic W5): child effective chain = child anchor ∪
+// parent chain (satisfy-all), incomparable axes carried, same-axis/cross-org
+// disjoint pre-denies.
+// ---------------------------------------------------------------------------
+describe("composeOboCeilingChain — child = child anchor ∪ parent chain", () => {
+  const orgFloor = { tier: "organization", id: ORG } as const;
+
+  // Helper: assert an ok chain contains exactly the expected member set (order-
+  // insensitive) with no duplicates.
+  function expectChainMembers(
+    result: ReturnType<typeof composeOboCeilingChain>,
+    expected: OboCeilingChain,
+  ) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.chain).toEqual(expect.arrayContaining(expected));
+    expect(result.chain).toHaveLength(expected.length);
+  }
+
+  it("SAME-tier equal ids dedup to a single element (identical chains)", () => {
+    const chain: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    expectChainMembers(composeOboCeilingChain(chain, chain), [
+      { tier: "team", id: "t1" },
+      orgFloor,
+    ]);
+  });
+
+  it("org-only parent + user child → user anchor kept + shared org floor", () => {
+    const parent: OboCeilingChain = [orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    expectChainMembers(composeOboCeilingChain(parent, child), [
+      { tier: "user", id: "u1" },
+      orgFloor,
+    ]);
+  });
+
+  it("INCOMPARABLE owner-axis pair (parent team T, child user U) → BOTH carried un-collapsed", () => {
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    expectChainMembers(composeOboCeilingChain(parent, child), [
+      { tier: "user", id: "u1" },
+      { tier: "team", id: "t1" },
+      orgFloor,
+    ]);
+  });
+
+  it("INCOMPARABLE cross-axis pair (parent project P, child team T) → BOTH carried", () => {
+    const parent: OboCeilingChain = [{ tier: "project", id: "p1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    expectChainMembers(composeOboCeilingChain(parent, child), [
+      { tier: "team", id: "t1" },
+      { tier: "project", id: "p1" },
+      orgFloor,
+    ]);
+  });
+
+  it("SAME-axis disjoint teams (parent T1, child T2) → pre-deny disjoint_axis", () => {
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "team", id: "t2" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("disjoint_axis");
+    expect(result.tier).toBe("team");
+    expect(result.ids).toEqual(["t2", "t1"]);
+  });
+
+  it("SAME-axis disjoint projects (parent P1, child P2) → pre-deny disjoint_axis", () => {
+    const parent: OboCeilingChain = [{ tier: "project", id: "p1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "project", id: "p2" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("disjoint_axis");
+    expect(result.tier).toBe("project");
+  });
+
+  it("CROSS-ORG (parent org O1, child org O2) → pre-deny cross_org on the org floor", () => {
+    const parent: OboCeilingChain = [{ tier: "organization", id: "org-A" }];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, { tier: "organization", id: "org-B" }];
+    const result = composeOboCeilingChain(parent, child);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("cross_org");
+    expect(result.tier).toBe("organization");
+  });
+
+  it("SAME-axis disjoint user anchors (parent U1, child U2) → pre-deny", () => {
+    const parent: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u2" }, orgFloor];
+    expect(composeOboCeilingChain(parent, child).ok).toBe(false);
+  });
+
+  it("SAME-axis disjoint workspace anchors → pre-deny", () => {
+    const parent: OboCeilingChain = [{ tier: "workspace", id: "w1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "workspace", id: "w2" }, orgFloor];
+    expect(composeOboCeilingChain(parent, child).ok).toBe(false);
+  });
+
+  it("TRANSITIVE grandchild: compose(compose(gp,parent),child) ⊇ every ancestor element (never widens)", () => {
+    const grandparent: OboCeilingChain = [{ tier: "project", id: "pj" }, orgFloor];
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "user", id: "u1" }, orgFloor];
+
+    const gpParent = composeOboCeilingChain(grandparent, parent);
+    expect(gpParent.ok).toBe(true);
+    if (!gpParent.ok) return;
+
+    const grand = composeOboCeilingChain(gpParent.chain, child);
+    expect(grand.ok).toBe(true);
+    if (!grand.ok) return;
+
+    // Grandchild chain carries every ancestor ceiling (satisfy-all → ⊇ parent chain).
+    expect(grand.chain).toEqual(
+      expect.arrayContaining([
+        { tier: "user", id: "u1" },
+        { tier: "team", id: "t1" },
+        { tier: "project", id: "pj" },
+        orgFloor,
+      ]),
+    );
+    expect(grand.chain).toHaveLength(4);
+  });
+
+  it("composed child chain PASSES mint containment; a tampered chain (missing a child element) FAILS closed", () => {
+    // Child anchor freshly derived at mint = team T1 + org floor.
+    const childAnchor = deriveOboCeilingChain({
+      ownerLevel: "team",
+      ownerId: "t1",
+      orgId: ORG,
+      projectId: null,
+    })!;
+    const parent: OboCeilingChain = [{ tier: "project", id: "parent-pj" }, orgFloor];
+    const composed = composeOboCeilingChain(parent, childAnchor);
+    expect(composed.ok).toBe(true);
+    if (!composed.ok) return;
+
+    // The mint path re-derives ONLY the child anchor and checks containment.
+    expect(oboCeilingContains(composed.chain, childAnchor)).toBe(true);
+
+    // Tamper: drop the child's own team element → mint no longer contains the
+    // re-derived anchor → fail closed.
+    const tampered = composed.chain.filter((c) => c.tier !== "team");
+    expect(oboCeilingContains(tampered, childAnchor)).toBe(false);
+  });
+
+  it("OboCeilingCompositionError carries the structured denial + stable code", () => {
+    const parent: OboCeilingChain = [{ tier: "team", id: "t1" }, orgFloor];
+    const child: OboCeilingChain = [{ tier: "team", id: "t2" }, orgFloor];
+    const result = composeOboCeilingChain(parent, child);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const err = new OboCeilingCompositionError(result);
+    expect(err.code).toBe("AGENT_OBO_CEILING_DISJOINT");
+    expect(err.denial.reason).toBe("disjoint_axis");
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("disjoint");
   });
 });
