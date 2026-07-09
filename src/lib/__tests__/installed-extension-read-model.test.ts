@@ -112,6 +112,22 @@ describe("buildInstalledExtensionReadModel — actor-scoped status derivation", 
     expect(rm.status).toBe("active");
   });
 
+  it("platform_admin: the active-org row wins over a cross-org row with a better status (same-org preference, P3)", async () => {
+    const platformAdmin: ActorContext = { ...actor, platformRole: "platform_admin" };
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", platformAdmin, {
+      ...baseDeps,
+      // The cross-org row is ACTIVE (better status) but must NOT out-rank the
+      // admin's OWN-org locked row — the read-model metadata stays in the actor's
+      // active org rather than bleeding an arbitrary other org's install.
+      readRows: async () => [
+        row({ status: "active", id: "cross", organizationId: "org-OTHER" }),
+        row({ status: "locked", id: "mine", organizationId: "org-1" }),
+      ],
+    });
+    expect(rm.status).toBe("locked");
+    expect(rm.actorVisible).toBe(true);
+  });
+
   it("an owner-less user row fails closed (not addressable) → absent", async () => {
     const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
       ...baseDeps,

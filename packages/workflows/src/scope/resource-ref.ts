@@ -35,6 +35,18 @@ export type WorkflowActor = {
   platformRole?: string | null;
 };
 
+/**
+ * ADMIN STANDING (P3) over a workflow/template row whose org the caller has
+ * ALREADY confirmed matches the actor's active org. An org_owner/org_admin holds
+ * admin standing over every workflow/template of their org — the mirror of the
+ * P1 evaluator's `hasAdminStandingOverExtension` (org-anchored branch). Callers
+ * MUST gate on the org match before consulting this (it is role-only); the
+ * cross-org boundary stays enforced by that preceding guard.
+ */
+function isOrgAdminOfMatchedOrg(actor: WorkflowActor): boolean {
+  return actor.orgRole === "org_admin" || actor.orgRole === "org_owner";
+}
+
 export function buildWorkflowResourceRef(row: ScopedRow): WorkflowResourceRef {
   return {
     level: (row.ownerLevel as WorkflowResourceRef["level"]) ?? undefined,
@@ -53,6 +65,13 @@ export function buildWorkflowResourceRef(row: ScopedRow): WorkflowResourceRef {
 export function isReadable(row: ScopedRow, actor: WorkflowActor): boolean {
   if (actor.platformRole === "platform_admin") return true;
   if (!actor.organizationId || row.orgId !== actor.organizationId) return false;
+  // ADMIN STANDING (P3): an org_owner/org_admin of the row's org reads every
+  // workflow/template of that org — INCLUDING project sealed-room, team, and
+  // user-owned rows — so admin catalog/list/detail parity does not depend on the
+  // acting admin's personal project/team/user ownership. The org boundary is
+  // already enforced by the guard above, so this is cross-org safe. Confined to
+  // workflow/template ScopedRow; linked run/artifact content stays separately gated.
+  if (isOrgAdminOfMatchedOrg(actor)) return true;
   // Project-scoped rows (sealed-room) are visible ONLY to actors with a
   // project-access grant — fail-closed, independent of ownership level. The
   // caller must populate actor.projectIds from project_access.
@@ -85,6 +104,13 @@ export function filterReadable<T extends ScopedRow>(rows: readonly T[], actor: W
 export function canManage(row: ScopedRow, actor: WorkflowActor): boolean {
   if (actor.platformRole === "platform_admin") return true;
   if (!actor.organizationId || row.orgId !== actor.organizationId) return false;
+  // ADMIN STANDING (P3): an org_owner/org_admin manages every workflow/template
+  // of their org regardless of project/team/user ownership — manage parity stops
+  // depending on the acting admin's personal ownership. Placed BEFORE the
+  // project-grant gate so a sealed-room row is manageable by an owning-org admin.
+  // Org already matched above ⇒ cross-org safe. (Also subsumes the org/workspace
+  // admin branches in the switch below, which stay correct for non-admins.)
+  if (isOrgAdminOfMatchedOrg(actor)) return true;
   if (row.projectId && !actor.projectIds?.includes(row.projectId)) return false;
   switch (row.ownerLevel) {
     case "user":

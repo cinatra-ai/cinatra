@@ -20,6 +20,7 @@ import { isConnectorInstalledFromRuntime } from "@cinatra-ai/extensions/connecto
 import {
   pickActiveInstallId,
   isInstallRowAddressableByActor,
+  buildActorScopeForPick,
   type InstallRowForPick,
 } from "@/lib/extension-install-resolution";
 import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
@@ -148,11 +149,7 @@ export async function isConnectorInstalledForActor(
   let hasAddressableCanonicalRowForActor = false;
   try {
     const rows = await readRows(packageId);
-    const scope = {
-      organizationId: actor.organizationId ?? null,
-      ownerId: actor.principalId ?? null,
-      teamIds: actor.teamIds ?? [],
-    };
+    const scope = buildActorScopeForPick(actor);
     // status-agnostic: ANY addressable row (live or archived) — distinguishes a
     // legitimate "no row" (bundled fallback applies) from an explicit archive
     // (bundled fallback must NOT resurrect it).
