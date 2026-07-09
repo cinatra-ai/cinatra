@@ -117,14 +117,31 @@ function matchesTarget(row: InstalledExtension, target: TargetRow): boolean {
   );
 }
 
-async function installTargetRow(store: Store, target: TargetRow): Promise<void> {
+// Per-run fixture organization id for connector-kind seed rows. The connector
+// org-anchor invariant (cinatra#1125, enforced in installExtensionManifest)
+// rejects a connector install that is neither a static-bundle platform/
+// workspace anchor NOR organization-anchored (owner_level='organization' with
+// owner_id = organization_id). The seeded kit carries a connector row
+// (seed-data.ts `ledger-link`) whose verdaccio provenance is not a static-
+// bundle anchor, so it must be org-anchored — which also mirrors production,
+// where every real connector install is org-anchored. Namespaced per run to
+// stay inside the run's isolation boundary; organization_id is a free-text
+// column (no FK), so no organization row needs to pre-exist.
+function seededOrgAnchorId(runId: string): string {
+  return `design-conformance--${runId}--org`;
+}
+
+async function installTargetRow(store: Store, target: TargetRow, runId: string): Promise<void> {
+  // Connectors are organization-anchored to satisfy the org-anchor invariant;
+  // every other kind keeps the platform anchor (ownerId/organizationId null).
+  const orgId = target.kind === "connector" ? seededOrgAnchorId(runId) : null;
   await store.installExtensionManifest(
     {
       id: target.id,
       packageName: target.packageName,
-      ownerLevel: "platform",
-      ownerId: null,
-      organizationId: null,
+      ownerLevel: orgId ? "organization" : "platform",
+      ownerId: orgId,
+      organizationId: orgId,
       kind: target.kind,
       source: {
         type: "verdaccio",
@@ -186,7 +203,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // duplicate-key error means the row now exists with the SAME
       // deterministic content — that IS the converged state, not a failure.
       try {
-        await installTargetRow(store, target);
+        await installTargetRow(store, target, runId);
         installed += 1;
       } catch (err) {
         const code = (err as { code?: string } | null)?.code;
