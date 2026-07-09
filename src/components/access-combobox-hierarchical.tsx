@@ -373,27 +373,34 @@ export function AccessComboboxHierarchical(
 
   return (
     <Popover open={open} onOpenChange={(next) => !disabled && setOpen(next)}>
-      <PopoverTrigger asChild>
-        {/* N>1 selections surface the full list in a tooltip on the trigger. */}
-        {multiple && multiSelection.length > 1 ? (
-          <TooltipProvider>
-            <Tooltip>
+      {/* N>1 selections surface the full list in a tooltip on the trigger.
+          BOTH triggers must compose onto the SAME real DOM node: PopoverTrigger's
+          asChild Slot forwards its open handler + ref to its direct child, and
+          TooltipTrigger's asChild Slot forwards its own onto the Button beneath.
+          Nesting PopoverTrigger around <TooltipProvider> (which renders no DOM
+          node and forwards nothing) silently dropped the popover's open handler,
+          so an "N scopes" trigger could never open (cinatra#1261). Keeping
+          PopoverTrigger → TooltipTrigger → Button chains both onto the Button. */}
+      {multiple && multiSelection.length > 1 ? (
+        <TooltipProvider>
+          <Tooltip>
+            <PopoverTrigger asChild>
               <TooltipTrigger asChild>{triggerButton}</TooltipTrigger>
-              <TooltipContent align="start" className="max-w-xs">
-                <ul className="flex flex-col gap-0.5">
-                  {multiSelection.map((v) => (
-                    <li key={v} className="text-xs whitespace-nowrap">
-                      {resolveAccessLabel(v as AgentAuthPolicyVisibility, scopes)}
-                    </li>
-                  ))}
-                </ul>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ) : (
-          triggerButton
-        )}
-      </PopoverTrigger>
+            </PopoverTrigger>
+            <TooltipContent align="start" className="max-w-xs">
+              <ul className="flex flex-col gap-0.5">
+                {multiSelection.map((v) => (
+                  <li key={v} className="text-xs whitespace-nowrap">
+                    {resolveAccessLabel(v as AgentAuthPolicyVisibility, scopes)}
+                  </li>
+                ))}
+              </ul>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : (
+        <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
+      )}
       <PopoverContent
         align="start"
         className="w-auto min-w-[var(--radix-popover-trigger-width)] max-w-[min(28rem,calc(100vw-2rem))] p-0 bg-surface-strong"
