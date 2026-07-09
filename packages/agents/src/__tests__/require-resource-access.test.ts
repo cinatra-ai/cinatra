@@ -422,6 +422,36 @@ describe("buildScopeReason", () => {
   it("returns admin copy for 'admin'", () => {
     expect(buildScopeReason("admin", {})).toBe("Visible to platform admins only.");
   });
+
+  // Multi-scope W2: buildScopeReason accepts a token-array selection and joins
+  // the DISTINCT per-token reasons. A single-token array is identical to the
+  // scalar; existing scalar callers are unchanged.
+  it("a single-token array yields the same reason as the scalar", () => {
+    expect(buildScopeReason(["team:t1"], { teamName: "Acme Team" })).toBe(
+      "You can see this because you're a member of Acme Team.",
+    );
+  });
+
+  it("joins DISTINCT reasons across a multi-token selection", () => {
+    expect(
+      buildScopeReason(["team:t1", "project:p1"], { teamName: "Acme Team", projectName: "Alpha" }),
+    ).toBe(
+      "You can see this because you're a member of Acme Team. You can see this because you're part of Alpha.",
+    );
+  });
+
+  it("owner tokens contribute no reason; an all-owner selection is null", () => {
+    expect(buildScopeReason(["owner"], {})).toBeNull();
+    expect(buildScopeReason(["owner", "team:t1"], { teamName: "Acme Team" })).toBe(
+      "You can see this because you're a member of Acme Team.",
+    );
+  });
+
+  it("dedupes repeated reasons (two teams share the copy)", () => {
+    expect(buildScopeReason(["team:t1", "team:t2"], { teamName: "Acme Team" })).toBe(
+      "You can see this because you're a member of Acme Team.",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
