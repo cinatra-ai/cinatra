@@ -188,6 +188,14 @@ export function registerProjectsPrimitives(server: McpRuntimeToolServer) {
         // deriveRoleHints' direct fallback (enforce-resource-access.ts)
         // consumes it so org-admin decisions evaluate natively over MCP.
         if (requestCtx?.orgRole) actorBase.orgRole = requestCtx.orgRole;
+        // Forward the agent-run OBO scope-ceiling chain from the request frame
+        // (W1 stamps `McpRequestContext.oboCeiling` for agent-run-OBO
+        // delegations only). Both the kernel gate (`projects_get/update/create`
+        // via `enforceResourceAccess`) and the non-kernel project ops
+        // (`assertResourceWithinCeiling` before `assertProjectGrantRole` /
+        // `assertProjectWritable`, and the `projects_list` filter) consult
+        // `actor.oboCeiling` to confine the delegated run (W2/#1051).
+        if (requestCtx?.oboCeiling) actorBase.oboCeiling = requestCtx.oboCeiling;
 
         // Forward Better Auth role hints (platform admin flag,
         // team/project membership) into the actor envelope.

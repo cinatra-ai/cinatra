@@ -1921,6 +1921,11 @@ export async function readAgentRunsByTemplate(
             orgId: run.orgId,
             effectivePolicy,
             coOwnerUserIds,
+            // Carry the run's persisted OBO ceiling so this per-row list filter
+            // confines an agent-run-OBO actor to runs within its scope
+            // (W2/#1051). A partial literal that dropped it would skip the
+            // ceiling on this list path.
+            oboCeiling: run.oboCeiling,
           },
           opts.actor,
           "list",
