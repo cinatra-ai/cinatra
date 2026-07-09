@@ -20,16 +20,21 @@ import {
 import { KIND_LABEL } from "./installed-rows";
 import type { ExtensionKind } from "../canonical-types";
 import {
+  ArchiveActionForm,
   ConfirmActionButton,
   DisabledActionButton,
   ForceDeleteDialog,
 } from "./extension-settings-actions";
+import type { RemovalActionResult } from "../removal-failure";
 
 const REGISTRIES_HREF = "/configuration/environment?tab=registries";
 
 export type ExtensionSettingsActions = {
   update: () => void | Promise<void>;
-  archive: () => void | Promise<void>;
+  // cinatra#1061: archive RETURNS the classified removal refusal (dependents /
+  // system) on failure so the client can surface it; it still redirects on
+  // success (a returned value always means failure).
+  archive: () => void | Promise<RemovalActionResult | void>;
   activate: () => void | Promise<void>;
   reinstall: () => void | Promise<void>;
   publish: () => void | Promise<void>;
@@ -50,6 +55,13 @@ export type ExtensionSettingsViewProps = {
   activateDisabled: string | null;
   reinstallDisabled: string | null;
   forceDeleteDisabled: string | null;
+  /**
+   * cinatra#1061 req 4: package names of ACTIVE dependents that require this
+   * extension — the same predicate the archive/uninstall closure gate refuses
+   * on. Rendered as a pre-submit preview under the Archive affordance so an
+   * operator sees the blockers BEFORE clicking, not just after the refusal.
+   */
+  archiveDependents?: string[];
   isPublic: boolean;
   isRegisteredVendor: boolean;
   canPublish: boolean;
@@ -71,6 +83,7 @@ export function ExtensionSettingsView({
   activateDisabled,
   reinstallDisabled,
   forceDeleteDisabled,
+  archiveDependents,
   isPublic,
   isRegisteredVendor,
   canPublish,
@@ -212,11 +225,11 @@ export function ExtensionSettingsView({
               archiveDisabled ? (
                 <DisabledActionButton label="Archive" variant="outline" reason={archiveDisabled} />
               ) : (
-                <form action={actions.archive}>
-                  <Button type="submit" variant="outline" className="flex-none">
-                    Archive
-                  </Button>
-                </form>
+                <ArchiveActionForm
+                  action={actions.archive}
+                  displayName={displayName}
+                  dependents={archiveDependents}
+                />
               )
             }
           />

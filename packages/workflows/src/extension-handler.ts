@@ -175,7 +175,18 @@ async function listVisibleTemplatesForManifests(
   const visibleFor = (orgId: string): Set<string> => {
     let set = visibleByOrg.get(orgId);
     if (!set) {
-      set = visibleManifestPackageNames(manifests, { ...scope, organizationId: orgId });
+      // Strip platformRole from the SYNTHETIC per-org scope. manifestVisibleToScope
+      // now short-circuits a platform_admin to `true` for EVERY manifest, which
+      // would defeat this per-org liveness partition (an org-2-owned live manifest
+      // would make an org-1 template's package look live-in-org-1). The platform
+      // admin's ACCESS to any surfaced row is still granted by filterReadable
+      // below; orgRole is KEPT because it is org-keyed and correctly counts the
+      // acting org-admin's own team/user manifests as live in their org.
+      set = visibleManifestPackageNames(manifests, {
+        ...scope,
+        organizationId: orgId,
+        platformRole: undefined,
+      });
       visibleByOrg.set(orgId, set);
     }
     return set;
@@ -194,6 +205,10 @@ async function listVisibleTemplatesForManifests(
       teamIds: scope.teamIds,
       projectIds: scope.projectIds,
       platformRole: scope.platformRole,
+      // Thread orgRole so an org_owner/org_admin's admin-standing read reaches
+      // isReadable — without it the facet would drop admin parity for workflow
+      // templates the acting admin does not personally own.
+      orgRole: scope.orgRole,
     });
     if (!readable) continue;
     const key = `${t.orgId}::${t.id}`;

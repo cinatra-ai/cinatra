@@ -85,7 +85,10 @@ export async function ExtensionSettingsScreen({
   }
   async function archiveAction() {
     "use server";
-    await archiveExtensionPackageFormAction({ packageName, packageVersion });
+    // cinatra#1061: RETURN (not await-and-drop) so the classified removal
+    // refusal — which NAMES the blocking dependents — reaches the client, which
+    // renders it instead of a Next.js-masked thrown error.
+    return archiveExtensionPackageFormAction({ packageName, packageVersion });
   }
   async function activateAction() {
     "use server";
@@ -108,6 +111,23 @@ export async function ExtensionSettingsScreen({
       reason,
       confirmDestructive: true,
     });
+  }
+
+  // cinatra#1061 req 4: pre-compute the ACTIVE dependents that would block an
+  // archive/uninstall of this extension, for the pre-submit preview under the
+  // Archive affordance. Uses the SAME predicate the closure gate refuses on
+  // (`listArchiveClosureBlockers`) so the preview and the refusal never
+  // disagree. Best-effort for the PREVIEW only — a read failure just omits the
+  // hint; the server gate is still fail-closed and authoritative.
+  let archiveDependents: string[] = [];
+  try {
+    const { listInstalledExtensions } = await import("../canonical-store");
+    const { listArchiveClosureBlockers } = await import("../dependency-closure");
+    const allRows = await listInstalledExtensions({});
+    const target = allRows.find((r) => r.packageName === packageName);
+    if (target) archiveDependents = listArchiveClosureBlockers(target, allRows);
+  } catch {
+    // preview omitted — the gate still refuses on the real removal.
   }
 
   // Marketplace vendor status (best-effort — a marketplace read failure must
@@ -196,6 +216,7 @@ export async function ExtensionSettingsScreen({
       activateDisabled={activateDisabled}
       reinstallDisabled={reinstallDisabled}
       forceDeleteDisabled={forceDeleteDisabled}
+      archiveDependents={archiveDependents}
       isPublic={isPublic}
       isRegisteredVendor={isRegisteredVendor}
       canPublish={canPublish}

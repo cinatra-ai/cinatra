@@ -162,4 +162,71 @@ describe("skill handler listActive (true-IoC reader facet)", () => {
     });
     expect(adminResult).toHaveLength(1);
   });
+
+  describe("admin standing (P3)", () => {
+    it("platform_admin sees another user's personal skill even behind a user-level manifest", async () => {
+      // Pre-P3 the manifest gate had no platform_admin bypass, so a user-owned
+      // manifest hid the package name from a platform admin. Surface 1 fixes the
+      // gate; skillVisibleToScope already admits platform_admin ⇒ full parity.
+      vi.mocked(listInstalledSkills).mockResolvedValue([
+        skill({ id: "theirs", packageName: "@cinatra-ai/personal-pack", level: "personal", scope: "u2" }),
+      ]);
+      const result = (await handler.listActive!({
+        actor,
+        scope: scope({ userId: "u1", organizationId: "org-1", platformRole: "platform_admin" }),
+        manifests: [
+          manifest({
+            packageName: "@cinatra-ai/personal-pack",
+            ownerLevel: "user",
+            ownerId: "u2",
+            organizationId: "org-1",
+          }),
+        ],
+      })) as Array<{ id: string }>;
+      expect(result.map((s) => s.id)).toEqual(["theirs"]);
+    });
+
+    it("org_admin does NOT see another user's personal skill via the facet (org carve-out deferred; no leak)", async () => {
+      // The org-admin skills-facet carve-out is deferred pending a per-skill org
+      // anchor (skill rows carry no org; package names can collide across orgs).
+      // The per-row predicate stays authoritative for org admins.
+      vi.mocked(listInstalledSkills).mockResolvedValue([
+        skill({ id: "mine", packageName: "@cinatra-ai/personal-pack", level: "personal", scope: "u1" }),
+        skill({ id: "theirs", packageName: "@cinatra-ai/personal-pack", level: "personal", scope: "u2" }),
+      ]);
+      const result = (await handler.listActive!({
+        actor,
+        scope: scope({ userId: "u1", organizationId: "org-1", orgRole: "org_admin" }),
+        manifests: [
+          manifest({
+            packageName: "@cinatra-ai/personal-pack",
+            ownerLevel: "user",
+            ownerId: "u1",
+            organizationId: "org-1",
+          }),
+        ],
+      })) as Array<{ id: string }>;
+      // sees only their OWN personal row, not u2's.
+      expect(result.map((s) => s.id)).toEqual(["mine"]);
+    });
+
+    it("an org admin never sees another org's package via the manifest gate (cross-org safe)", async () => {
+      vi.mocked(listInstalledSkills).mockResolvedValue([
+        skill({ id: "org2secret", packageName: "@acme/org2-pack", level: "personal", scope: "u9" }),
+      ]);
+      const result = await handler.listActive!({
+        actor,
+        scope: scope({ userId: "u1", organizationId: "org-1", orgRole: "org_admin" }),
+        manifests: [
+          manifest({
+            packageName: "@acme/org2-pack",
+            ownerLevel: "user",
+            ownerId: "u9",
+            organizationId: "org-2",
+          }),
+        ],
+      });
+      expect(result).toHaveLength(0);
+    });
+  });
 });

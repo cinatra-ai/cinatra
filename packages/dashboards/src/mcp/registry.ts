@@ -94,6 +94,11 @@ export function registerDashboardPrimitives(server: McpRuntimeToolServer): void 
         // Transport-resolved org-membership role — coherent with the
         // userId/orgId stamped from the same request-context frame above.
         if (requestCtx?.orgRole) actorBase.orgRole = requestCtx.orgRole;
+        // Agent-run OBO scope-ceiling chain forwarded from the same request
+        // frame — carries the delegated agent's anchored-scope upper bound so
+        // resolveDashboardAccess can confine the read/write. Undefined for
+        // non-agent-run callers.
+        if (requestCtx?.oboCeiling) actorBase.oboCeiling = requestCtx.oboCeiling;
 
         const result = await handler({
           primitiveName: name,

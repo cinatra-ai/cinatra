@@ -57,6 +57,14 @@ export type ExtensionDiscoveryScope = {
   /** npm vendor scope whose private rows the actor may see (e.g. "@acme-private"). */
   vendorScope?: string | null;
   platformRole?: "platform_admin" | "member";
+  /**
+   * The actor's Better Auth role in their active org. Threaded through so the
+   * manifest gate admits an org_owner/org_admin to EVERY row anchored to their
+   * org (organization / team / user owner levels) — the catalog/list-side mirror
+   * of the P1 evaluator's `hasAdminStandingOverExtension`. Absent ⇒ treated as a
+   * plain member (fail closed: no admin standing).
+   */
+  orgRole?: "org_owner" | "org_admin" | "member";
 };
 
 export interface ExtensionTypeHandler {
@@ -150,8 +158,39 @@ export interface ExtensionTypeHandler {
 // ---------------------------------------------------------------------------
 
 /**
+ * Does `scope` hold ADMIN STANDING over a manifest owned by `manifestOrgId`?
+ * The catalog-side mirror of the P1 evaluator's `hasAdminStandingOverExtension`
+ * (`@cinatra-ai/extensions`), expressed purely over the leaf
+ * `ExtensionDiscoveryScope` so this package imports no server code:
+ *   - a `platform_admin` holds standing over every manifest; and
+ *   - an `org_owner`/`org_admin` holds standing over every manifest anchored to
+ *     THEIR active org.
+ * Keyed on the MANIFEST's own org (not merely the actor's), so it is cross-org
+ * safe: an admin of org A never gains standing over an org-B manifest. A manifest
+ * with no org (platform/workspace) yields standing only for a platform admin —
+ * there is no org to be an admin of (fail closed).
+ */
+export function scopeHasAdminStandingOverManifest(
+  scope: ExtensionDiscoveryScope,
+  manifestOrgId: string | null,
+): boolean {
+  if (scope.platformRole === "platform_admin") return true;
+  return (
+    manifestOrgId != null &&
+    scope.organizationId != null &&
+    manifestOrgId === scope.organizationId &&
+    (scope.orgRole === "org_owner" || scope.orgRole === "org_admin")
+  );
+}
+
+/**
  * True iff `manifest`'s owner scope is visible to `scope`.
  *
+ * - ADMIN STANDING (checked first): a platform admin, or an org_owner/org_admin
+ *   of the manifest's owning org, sees EVERY row of that org regardless of owner
+ *   level — so two admins of the same org see the identical catalog. Independent
+ *   of the installer pointer / owner level, role-derived (a newly-promoted admin
+ *   needs no per-row grant; a demotion reverts it).
  * - `platform` / `workspace`: deployment-wide rows (e.g. bundled, locked
  *   extensions, or the implicit Workspace tier) — visible to every actor.
  * - `organization`: visible only when the actor's active org matches.
@@ -164,6 +203,20 @@ export function manifestVisibleToScope(
   manifest: ActiveExtensionManifest,
   scope: ExtensionDiscoveryScope,
 ): boolean {
+  // platform_admin sees every row (mirrors the P1 evaluator's isPlatformAdmin
+  // short-circuit, which admits platform admins ahead of every tier check).
+  if (scope.platformRole === "platform_admin") return true;
+
+  // org_owner/org_admin standing over the manifest's OWN org. Applied ONLY
+  // inside the org-anchored owner levels below (team / user) — an unknown or
+  // corrupt owner level stays fail-closed even for an admin (the default case).
+  // For `organization` rows the standing is redundant (every same-org member
+  // already sees them), so the org-match branch carries it.
+  const orgAdminStanding = scopeHasAdminStandingOverManifest(
+    scope,
+    manifest.organizationId,
+  );
+
   switch (manifest.ownerLevel) {
     case "platform":
     case "workspace":
@@ -178,17 +231,19 @@ export function manifestVisibleToScope(
       );
     case "team":
       return (
-        manifest.organizationId != null &&
-        scope.organizationId != null &&
-        manifest.organizationId === scope.organizationId &&
-        manifest.ownerId != null &&
-        scope.teamIds.includes(manifest.ownerId)
+        orgAdminStanding ||
+        (manifest.organizationId != null &&
+          scope.organizationId != null &&
+          manifest.organizationId === scope.organizationId &&
+          manifest.ownerId != null &&
+          scope.teamIds.includes(manifest.ownerId))
       );
     case "user":
       return (
-        manifest.ownerId != null &&
-        scope.userId != null &&
-        manifest.ownerId === scope.userId
+        orgAdminStanding ||
+        (manifest.ownerId != null &&
+          scope.userId != null &&
+          manifest.ownerId === scope.userId)
       );
     default:
       return false;

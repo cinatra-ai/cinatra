@@ -1,6 +1,6 @@
 import "server-only";
 
-import { isPlatformAdmin } from "@/lib/auth-session";
+import { isPlatformAdmin, resolveOrgRoleForSession } from "@/lib/auth-session";
 import { readTeamsForUser } from "@/lib/better-auth-db";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
 import type { Actor, ExtensionDiscoveryScope } from "@cinatra-ai/extension-types";
@@ -40,13 +40,22 @@ export async function resolveExtensionDiscoveryContext(
 ): Promise<{ actor: Actor; scope: ExtensionDiscoveryScope }> {
   const userId = session.user.id;
   const orgId = session.session?.activeOrganizationId ?? null;
-  const teamRows = userId && orgId ? await readTeamsForUser(userId, orgId) : [];
+  // Resolve team membership + the active-org role in parallel. `orgRole` admits
+  // an org_owner/org_admin to every catalog row anchored to their org (the P3
+  // catalog-side mirror of the P1 evaluator's admin standing) — without it, the
+  // manifest gate can only see the platform-admin axis. Fail closed: an org-less
+  // session (no activeOrganizationId) resolves undefined ⇒ no admin standing.
+  const [teamRows, orgRole] = await Promise.all([
+    userId && orgId ? readTeamsForUser(userId, orgId) : Promise.resolve([]),
+    resolveOrgRoleForSession(session),
+  ]);
   const scope: ExtensionDiscoveryScope = {
     userId: userId ?? null,
     organizationId: orgId,
     teamIds: teamRows.map((t) => t.id),
     vendorScope: vendorScope ?? null,
     platformRole: isPlatformAdmin(session) ? "platform_admin" : "member",
+    ...(orgRole ? { orgRole } : {}),
   };
   const actor = actorFromSession(session) as Actor;
   return { actor, scope };

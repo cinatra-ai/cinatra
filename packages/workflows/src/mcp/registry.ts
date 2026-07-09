@@ -27,6 +27,10 @@ function buildActorFromMcpContext(): Record<string, unknown> {
   // comes from a2aActorContext (potentially a different user/org) — stamping
   // it there would cross identities.
   const orgRole = ctx?.orgRole;
+  // Agent-run OBO scope-ceiling chain from the request frame (present only for
+  // agent_run delegations, which build the MODEL actor below). Stamped so
+  // isReadable/canManage can confine the delegated run to its anchored scope.
+  const oboCeiling = ctx?.oboCeiling;
   if (a2a) {
     return {
       actorType: "a2a",
@@ -45,6 +49,7 @@ function buildActorFromMcpContext(): Record<string, unknown> {
     ...(orgId ? { orgId } : {}),
     ...(platformRole ? { platformRole } : {}),
     ...(orgRole ? { orgRole } : {}),
+    ...(oboCeiling ? { oboCeiling } : {}),
   };
 }
 

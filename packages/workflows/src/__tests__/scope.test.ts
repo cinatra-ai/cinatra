@@ -66,6 +66,42 @@ describe("read-visibility (cross-tenant safety)", () => {
   });
 });
 
+describe("read-visibility — admin standing (P3)", () => {
+  it("an org_admin reads team/user rows of their org without membership/ownership", () => {
+    const admin = actor({ orgRole: "org_admin", teamIds: [], userId: "user-1" });
+    expect(isReadable({ orgId: "org-1", ownerLevel: "team", ownerId: "team-z" }, admin)).toBe(true);
+    expect(isReadable({ orgId: "org-1", ownerLevel: "user", ownerId: "user-2" }, admin)).toBe(true);
+  });
+
+  it("an org_admin pierces the workflow project sealed-room without a grant (P3)", () => {
+    const admin = actor({ orgRole: "org_admin", projectIds: [] });
+    expect(
+      isReadable({ orgId: "org-1", ownerLevel: "organization", projectId: "proj-x" }, admin),
+    ).toBe(true);
+  });
+
+  it("org_owner has the same read standing", () => {
+    const owner = actor({ orgRole: "org_owner", teamIds: [], userId: "user-1" });
+    expect(isReadable({ orgId: "org-1", ownerLevel: "user", ownerId: "user-2" }, owner)).toBe(true);
+  });
+
+  it("admin standing never crosses orgs (cross-tenant safety holds)", () => {
+    const admin = actor({ orgRole: "org_admin" });
+    expect(isReadable({ orgId: "org-2", ownerLevel: "user", ownerId: "user-9" }, admin)).toBe(false);
+    expect(
+      isReadable({ orgId: "org-2", ownerLevel: "organization", projectId: "p" }, admin),
+    ).toBe(false);
+  });
+
+  it("a same-org non-admin member still cannot read a sealed-room/other-user row", () => {
+    const member = actor({ orgRole: "member", teamIds: [], userId: "user-1", projectIds: [] });
+    expect(isReadable({ orgId: "org-1", ownerLevel: "user", ownerId: "user-2" }, member)).toBe(false);
+    expect(
+      isReadable({ orgId: "org-1", ownerLevel: "organization", projectId: "proj-x" }, member),
+    ).toBe(false);
+  });
+});
+
 describe("resource ref + project gate", () => {
   it("builds a resource ref from a row", () => {
     expect(
@@ -210,22 +246,35 @@ describe("manage-authorization (canManage)", () => {
       expected: true,
     },
     {
-      name: "team-owned row: a non-member cannot manage (org_admin does not grant team rows)",
+      // P3 admin standing: an org_admin of the row's org manages team rows even
+      // when NOT on the owning team (parity stops depending on personal team
+      // membership). A non-admin non-member is still covered by the case above.
+      name: "team-owned row: an org_admin of the org manages it without team membership (P3)",
       row: { orgId: "org-1", ownerLevel: "team", ownerId: "team-z" },
       actor: actor({ orgRole: "org_admin" }),
+      expected: true,
+    },
+    {
+      name: "team-owned row: a same-org non-admin non-member still cannot manage",
+      row: { orgId: "org-1", ownerLevel: "team", ownerId: "team-z" },
+      actor: actor(),
       expected: false,
     },
     {
-      name: "project-scoped row requires a project grant to manage",
+      // P3 admin standing: an org_admin pierces the workflow/template project
+      // sealed-room WITHOUT a personal project grant (issue #1128: manage stops
+      // depending on the acting admin's personal project ownership). Scoped to
+      // workflow/template rows only; linked run/artifact content stays gated.
+      name: "project-scoped row: an org_admin manages it without a project grant (P3)",
       row: { orgId: "org-1", ownerLevel: "organization", projectId: "proj-x" },
       actor: actor({ orgRole: "org_admin" }),
-      expected: false,
+      expected: true,
     },
     {
-      name: "project-scoped row is manageable with the grant + org_admin",
+      name: "project-scoped row: a same-org non-admin without a grant cannot manage",
       row: { orgId: "org-1", ownerLevel: "organization", projectId: "proj-x" },
-      actor: actor({ orgRole: "org_admin", projectIds: ["proj-x"] }),
-      expected: true,
+      actor: actor(),
+      expected: false,
     },
     {
       name: "unset ownership level fails closed unless org_admin",

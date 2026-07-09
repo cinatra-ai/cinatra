@@ -23,6 +23,84 @@ import { findCarveOut, type BoundaryPerimeter } from "./carve-out";
 import { logAuditEvent } from "./audit";
 import { can } from "./enforce";
 import type { ActorContext } from "./actor-context";
+import type { OboCeilingChain, OboCeilingTier } from "@cinatra-ai/mcp-server/obo-ceiling";
+
+// ---------------------------------------------------------------------------
+// Agent OBO "cannot-express" surface classifier (epic #1049 / W4 #1053).
+//
+// Some MCP surfaces never resolve a target resource's owner (ownerType/ownerId),
+// so they cannot honor a sub-organization OBO scope ceiling. For an AGENT-RUN
+// OBO token whose ceiling chain is narrower than the org floor, those surfaces
+// deny fail-closed (see enforceMcpBoundary). Kept INLINE in this boundary
+// module — its sole consumer — rather than a separate leaf module, so it adds
+// no node to any route's reachable first-party graph (the /sign-in route-graph
+// ratchet). Exported for unit tests.
+// ---------------------------------------------------------------------------
+
+/** The cannot-express W4 surface classes (epic #1049 surface class 3). */
+export type CannotExpressSurface =
+  | "connector"
+  | "trigger"
+  | "metrics"
+  | "permissions"
+  | "notifications"
+  | "dashboard_cube";
+
+// The standalone trigger-config primitives (the trigger module's own tools).
+// The sibling agent_run_trigger_* primitives share resourceType "trigger" but
+// resolve run ownership (kernel wave W2) and MUST be excluded — hence trigger is
+// matched by NAME here, not by resourceType.
+const TRIGGER_CONFIG_PRIMITIVES: ReadonlySet<string> = new Set([
+  "trigger_config_get",
+  "trigger_config_set",
+  "trigger_config_delete",
+]);
+
+// Dashboard-cube name prefix — matched by name so the shared resourceType
+// "dashboard" does not drag in the dashboards_* proper tools (ad-hoc wave W3).
+const DASHBOARD_CUBE_PREFIX = "dashboards_cube_";
+
+/**
+ * Which cannot-express W4 surface a primitive belongs to, or `null` when it is
+ * not a W4 cannot-express surface. The five resource types matched by type are
+ * EXCLUSIVELY W4 surfaces; the trigger/dashboard members are matched by name
+ * because those resource types are shared with sibling waves.
+ */
+export function cannotExpressSurface(args: {
+  primitiveName: string;
+  resourceType: string;
+}): CannotExpressSurface | null {
+  const { primitiveName, resourceType } = args;
+  if (resourceType === "connector_instance") return "connector";
+  if (resourceType === "administration") return "permissions";
+  if (resourceType === "metric_cost" || resourceType === "metric_usage") return "metrics";
+  if (resourceType === "notification") return "notifications";
+  if (TRIGGER_CONFIG_PRIMITIVES.has(primitiveName)) return "trigger";
+  if (primitiveName.startsWith(DASHBOARD_CUBE_PREFIX)) return "dashboard_cube";
+  return null;
+}
+
+/**
+ * The NON-organization ceiling tiers present in a chain (deduped, order-stable).
+ * Empty ⇒ the chain is org-only (only the mandatory org floor), which these
+ * surfaces CAN express. A `null`/`undefined` chain yields `[]` — the caller
+ * gates on the ceiling's PRESENCE (⟺ agent-run OBO) separately, never treating
+ * absence as a non-org bound.
+ */
+export function oboCeilingNonOrgTiers(
+  chain: OboCeilingChain | null | undefined,
+): OboCeilingTier[] {
+  if (!chain || chain.length === 0) return [];
+  const seen = new Set<OboCeilingTier>();
+  const out: OboCeilingTier[] = [];
+  for (const c of chain) {
+    if (c.tier !== "organization" && !seen.has(c.tier)) {
+      seen.add(c.tier);
+      out.push(c.tier);
+    }
+  }
+  return out;
+}
 
 export type McpBoundaryDecision =
   | { allowed: true; reason?: never; shouldBlock?: never }
@@ -53,6 +131,12 @@ export type McpBoundaryRequest = {
      */
     runId?: string;
     projectContext?: { projectId?: string | null };
+    /**
+     * Agent-run OBO scope-ceiling chain forwarded from the delegated actor
+     * (`McpRequestContext.oboCeiling`). Carried onto the synthetic actor so the
+     * enforcement wave can consult it; no boundary decision reads it yet.
+     */
+    oboCeiling?: OboCeilingChain;
   };
   /** When true, dispatch is via the chat-bridge token (delegated_chat_token perimeter). */
   delegatedRestricted: boolean;
@@ -82,6 +166,9 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
         ? undefined
         : ctx?.orgRole ?? (isMember ? "member" : undefined),
     platformRole: ctx?.platformRole ?? undefined,
+    // Carry the agent-run OBO ceiling onto the synthetic actor (carrier only —
+    // no boundary decision consults it yet). Undefined for non-agent-run callers.
+    ...(ctx?.oboCeiling ? { oboCeiling: ctx.oboCeiling } : {}),
     ...(extraRoles && extraRoles.length > 0 ? ({ roles: extraRoles } as Partial<ActorContext>) : {}),
   } as ActorContext;
 }
@@ -136,6 +223,42 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
       metadata: { reason: "unclassified_primitive" },
     });
     return { allowed: false, reason: "unclassified_primitive", shouldBlock: true };
+  }
+
+  // ── W4 (#1053): cannot-express surfaces under agent-run OBO ───────────────
+  // Surfaces that never resolve a target's owner (`ownerType/ownerId`) cannot
+  // honor a sub-organization scope ceiling (epic #1049 surface class 3). For an
+  // AGENT-RUN OBO token whose ceiling chain is NARROWER than the org floor, deny
+  // fail-closed HERE — before the carve-out, the unenforced-status shadow-skip,
+  // and the owner/platform-admin short-circuits below — so a platform-admin
+  // invoker can never nullify the ceiling for a delegated run (the same ordering
+  // the kernel-wave ceiling uses). `req.ctx.oboCeiling` is present iff the caller
+  // is an agent-run OBO delegation (the transport stamps it only for
+  // `delegation === "agent_run"`); session / dev-bypass / A2A / chat-delegated
+  // callers carry no chain here, so this gate is a no-op for them. A dashboard-
+  // cube ORG-only ceiling is intentionally allowed through and instead confined
+  // at the cube SecurityContext (`accessibleOrgIds` pinned to the run org) — the
+  // coarse boundary can only deny, not pin.
+  const cannotExpress = cannotExpressSurface({
+    primitiveName: req.primitiveName,
+    resourceType: classification.resourceType,
+  });
+  if (cannotExpress && req.ctx?.oboCeiling) {
+    const unhonoredCeilingTiers = oboCeilingNonOrgTiers(req.ctx.oboCeiling);
+    if (unhonoredCeilingTiers.length > 0) {
+      await audit(req, classification.resourceType, "denied", {
+        mode: "enforced",
+        boundary: "mcp_handler_dispatch",
+        reason: "agent_run_obo_scope_unsupported",
+        oboSurface: cannotExpress,
+        unhonoredCeilingTiers,
+      });
+      return {
+        allowed: false,
+        reason: `agent_run_obo_scope_unsupported:${cannotExpress}`,
+        shouldBlock: true,
+      };
+    }
   }
 
   const perimeter: BoundaryPerimeter = req.delegatedRestricted

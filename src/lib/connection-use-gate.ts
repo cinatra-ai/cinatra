@@ -45,7 +45,11 @@ import {
   logAuditEvent,
   logDeniedAuditEventStrictWithCooldown,
 } from "@/lib/authz/audit";
-import type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "@cinatra-ai/agents/auth-policy";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
+} from "@cinatra-ai/agents/auth-policy";
 import type { NangoConnectionIdentity } from "@cinatra-ai/extensions/connection-identity-store";
 import {
   evaluateExtensionAccess,
@@ -197,14 +201,33 @@ function personGrantsWithinCeiling(
   }
 }
 
-function clampVisibility(
-  visibility: AgentAuthPolicyVisibility,
+/**
+ * Clamp a visibility SELECTION to the declared ceiling (multi-scope W2).
+ * Filters out every token outside the ceiling; an empty result falls back to
+ * the scalar clamp target `["owner"]` (fail-closed — owner is within every
+ * ceiling). A single-token selection reduces exactly to the pre-array
+ * `[clampVisibility(field[0])]`: an in-ceiling token stays, an out-of-ceiling
+ * token collapses to `["owner"]`.
+ */
+function clampVisibilitySelection(
+  selection: AgentAuthPolicyVisibilitySelection,
   scope: ResolvedConnectorAccessDeclaration["scope"],
   owningOrganizationId: string | null,
-): AgentAuthPolicyVisibility {
-  return visibilityWithinCeiling(visibility, scope, owningOrganizationId)
-    ? visibility
-    : "owner";
+): AgentAuthPolicyVisibilitySelection {
+  const kept = selection.filter((v) =>
+    visibilityWithinCeiling(v, scope, owningOrganizationId),
+  );
+  return kept.length > 0
+    ? (kept as AgentAuthPolicyVisibilitySelection)
+    : ["owner"];
+}
+
+/** Content-equality of two visibility selections (order-preserving). */
+function sameSelection(
+  a: readonly AgentAuthPolicyVisibility[],
+  b: readonly AgentAuthPolicyVisibility[],
+): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 // ---------------------------------------------------------------------------
@@ -277,16 +300,15 @@ export async function decideConnectionUse(input: {
     storedPolicy ?? defaultAccessPolicyForKind("connection");
   const coOwnerUserIds = coOwners.map((c) => c.userId);
 
-  // TRANSITIONAL (multi-scope W1): fields are token arrays. The ceiling clamp
-  // is applied to the FIRST token of each field, re-wrapped as a single-token
-  // array; the per-token clamp (clamp every token, drop those outside the
-  // ceiling) is the enforcement-lift issue (W2). Writers are single-token until
-  // the multi-select picker (W3), so this matches the pre-array behavior.
+  // Multi-scope W2: fields are NON-EMPTY token arrays. The ceiling clamp is
+  // PER-TOKEN — every token outside the ceiling is dropped; a field left empty
+  // falls back to `["owner"]` (fail-closed). A single-token field reduces to
+  // the pre-array `[clampVisibility(field[0])]`.
   const clampedPolicy: AgentAuthPolicy = {
     ...basePolicy,
-    runListVisibility: [clampVisibility(basePolicy.runListVisibility[0], scope, identity.organizationId)],
-    runDataVisibility: [clampVisibility(basePolicy.runDataVisibility[0], scope, identity.organizationId)],
-    runExecuteVisibility: [clampVisibility(basePolicy.runExecuteVisibility[0], scope, identity.organizationId)],
+    runListVisibility: clampVisibilitySelection(basePolicy.runListVisibility, scope, identity.organizationId),
+    runDataVisibility: clampVisibilitySelection(basePolicy.runDataVisibility, scope, identity.organizationId),
+    runExecuteVisibility: clampVisibilitySelection(basePolicy.runExecuteVisibility, scope, identity.organizationId),
   };
   const personGrantsSurvive = personGrantsWithinCeiling(scope, actor, owner);
   const clampedCoOwners = personGrantsSurvive ? coOwnerUserIds : [];
@@ -325,8 +347,10 @@ export async function decideConnectionUse(input: {
   const clampApplied: ClampedMaterial[] = [];
   if (stripPlatformAdmin) clampApplied.push("platformAdminBypass");
   if (
-    // Compare the clamped token (arrays are single-token in W1).
-    basePolicy.runDataVisibility[0] !== clampedPolicy.runDataVisibility[0]
+    // The "use" op reads runDataVisibility; flag "visibility" when the
+    // per-token clamp changed that selection (dropped a token or collapsed the
+    // field to the ["owner"] fail-closed fallback).
+    !sameSelection(basePolicy.runDataVisibility, clampedPolicy.runDataVisibility)
   ) {
     clampApplied.push("visibility");
   }

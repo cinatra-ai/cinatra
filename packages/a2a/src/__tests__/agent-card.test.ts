@@ -11,6 +11,8 @@ function makeTemplate(overrides: Partial<AgentTemplateRecord> & { hitlScreens?: 
   return {
     id: "tpl_1",
     orgId: null,
+    ownerLevel: null,
+    ownerId: null,
     creatorId: null,
     name: "Email Outreach",
     description: "Send outbound email campaigns",

@@ -31,7 +31,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, type DelegatedMcpActor } from "./request-context";
+import { mcpRequestContextStorage, type DelegatedMcpActor, type McpRequestContext } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -1225,19 +1225,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     const requestAgentSpecVersion =
       registryCtx?.agentSpecVersion ??
       request.headers.get("x-cinatra-agent-spec-version") ?? undefined;
-    const requestStore: {
-      clientId?: string;
-      orgId?: string | null;
-      userId?: string | null;
-      runId?: string;
-      agentId?: string;
-      packageVersion?: string;
-      agentSpecVersion?: string;
-      platformRole?: "platform_admin" | "member";
-      orgRole?: "org_owner" | "org_admin" | "member";
-      delegatedActor?: DelegatedMcpActor | null;
-      delegatedRestricted?: boolean;
-    } = {
+    const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
       userId: resolvedUserId,
@@ -1261,6 +1249,13 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // `enforceMcpBoundary` still gate the rest.
       delegatedActor,
       delegatedRestricted: delegatedActor?.delegation === "chat",
+      // Forward the agent-run OBO scope-ceiling chain onto the request frame so
+      // the boundary can read it. Only agent-run delegations carry a ceiling;
+      // chat / session / machine callers leave it undefined.
+      oboCeiling:
+        delegatedActor?.delegation === "agent_run"
+          ? delegatedActor.oboCeiling
+          : undefined,
     };
     const response = await mcpRequestContextStorage.run(
       requestStore,

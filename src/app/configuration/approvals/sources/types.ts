@@ -134,9 +134,25 @@ export type DecideResult =
 export interface ApprovalSource {
   id: string;
   title: string;
-  viewAllHref?: (dir: Direction) => string;
+  /** Optional section-header "View all" link target for a direction. Returns
+   *  `undefined` for a direction that has no drill-down (e.g. a single-direction
+   *  marketplace source in its OFF direction); the section renders no link then. */
+  viewAllHref?: (dir: Direction) => string | undefined;
+  /** OPTIONAL group tag. Sources sharing a group (e.g. the marketplace sources)
+   *  collapse into ONE group-level "not connected" `Empty` + a single sources
+   *  footer, instead of each rendering an independent section. Ungrouped (the v1
+   *  local sources) render standalone as before. */
+  group?: string;
   /** Coarse existence gate — see {@link Availability}. */
   availability(viewer: ApprovalViewer): Availability | Promise<Availability>;
+  /** OPTIONAL per-direction credential gate, distinct from {@link appliesTo}
+   *  (which is about whether the VIEWER can participate). A grouped source whose
+   *  own per-direction credential is absent returns `false` here so the page
+   *  HIDES that section and surfaces a one-line footer hint instead of firing a
+   *  doomed remote call — "misconfiguration is never silently masked". A LOCAL
+   *  read only (env / identity); it must not touch the network. Absent ⇒ the
+   *  section is always considered configured. */
+  sectionConfigured?(viewer: ApprovalViewer, direction: Direction): boolean;
   /** Cheap per-direction section-visibility gate — decided WITHOUT a privileged
    *  fetch so a section the viewer can't participate in is never rendered (e.g.
    *  the agent Inbox is admin-only; the workflow passthrough has no "Your

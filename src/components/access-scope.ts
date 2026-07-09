@@ -60,3 +60,20 @@ export function resolveAccessLabel(
   const parts = resolveAccessParts(visibility, scopes);
   return parts.type ? `${parts.type}: ${parts.name}` : parts.name;
 }
+
+/**
+ * Summarize a visibility SELECTION for a compact trigger label (multi-scope
+ * W2): a single token renders as its full `Type: Name` label; N>1 tokens
+ * render as an `N scopes` summary. An empty selection falls back to the owner
+ * label. Additive — the single-token `resolveAccessParts` / `resolveAccessLabel`
+ * are unchanged (the W3 picker wires this into the trigger).
+ */
+export function resolveAccessSummary(
+  selection: readonly AgentAuthPolicyVisibility[],
+  scopes: AvailableScopes,
+): string {
+  if (selection.length <= 1) {
+    return resolveAccessLabel(selection[0] ?? "owner", scopes);
+  }
+  return `${selection.length} scopes`;
+}

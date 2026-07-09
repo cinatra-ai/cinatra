@@ -45,3 +45,10 @@ export {
 } from "./lib/extension-accent";
 export type { AccentTone } from "./lib/extension-accent";
 export { cn } from "./lib/utils";
+
+// NOTE: the accessible design-system `Tabs` primitive is deliberately NOT
+// re-exported here — it ships only from its own `@cinatra-ai/sdk-ui/tabs`
+// subpath. Re-exporting it from this barrel would pull it onto the reachable
+// module graph of every app route that transitively imports `/marketplace`
+// (via a connector), tripping the route-graph no-new-rot ratchet. Extension
+// setup pages import it directly: `import { Tabs } from "@cinatra-ai/sdk-ui/tabs"`.

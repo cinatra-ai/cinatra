@@ -47,7 +47,59 @@ export type ActorScopeForPick = {
   ownerId: string | null;
   /** The team ids the actor is a member of (a team-owned row is addressable iff its ownerId is in here). */
   teamIds: readonly string[];
+  /**
+   * ADMIN-STANDING inputs (P3 catalog/list parity). A `platform_admin` addresses
+   * every install row instance-wide; an `org_owner`/`org_admin` addresses every
+   * row anchored to their active org regardless of user/team owner level — the
+   * install-row mirror of the P1 evaluator's `hasAdminStandingOverExtension`.
+   * Absent ⇒ a plain member (no admin standing). Callers MUST populate these
+   * from the actor (see {@link buildActorScopeForPick}).
+   */
+  platformRole?: "platform_admin" | "member";
+  orgRole?: "org_owner" | "org_admin" | "member";
 };
+
+/**
+ * Build the pick scope from an actor, threading the ADMIN-STANDING role fields.
+ * Every `isInstallRowAddressableByActor` / `pickActiveInstallId` caller resolves
+ * its scope through here so a construction can never silently drop the role
+ * inputs (which would revert an admin to plain-member addressability).
+ */
+export function buildActorScopeForPick(actor: {
+  organizationId?: string | null;
+  principalId?: string | null;
+  teamIds?: readonly string[];
+  platformRole?: "platform_admin" | "member";
+  orgRole?: "org_owner" | "org_admin" | "member";
+}): ActorScopeForPick {
+  return {
+    organizationId: actor.organizationId ?? null,
+    ownerId: actor.principalId ?? null,
+    teamIds: actor.teamIds ?? [],
+    platformRole: actor.platformRole,
+    orgRole: actor.orgRole,
+  };
+}
+
+/**
+ * Does the actor hold ADMIN STANDING over an install row owned by `rowOrgId`?
+ * Mirrors `hasAdminStandingOverExtension` (`@cinatra-ai/extensions`) purely over
+ * the pick scope: platform_admin over every row; org_owner/org_admin over every
+ * row anchored to THEIR active org. Keyed on the row's own org (cross-org safe);
+ * an org-less row yields standing only for a platform admin.
+ */
+function actorHasAdminStandingOverRow(
+  actor: ActorScopeForPick,
+  rowOrgId: string | null,
+): boolean {
+  if (actor.platformRole === "platform_admin") return true;
+  return (
+    rowOrgId != null &&
+    actor.organizationId != null &&
+    rowOrgId === actor.organizationId &&
+    (actor.orgRole === "org_owner" || actor.orgRole === "org_admin")
+  );
+}
 
 /**
  * Pure SCOPE predicate (status-agnostic): whether `row` is addressable in the
@@ -71,6 +123,15 @@ export function isInstallRowAddressableByActor(
   row: InstallRowForPick,
   actor: ActorScopeForPick,
 ): boolean {
+  // ADMIN-STANDING short-circuit (P3): a platform_admin addresses every row
+  // (any org); an org_owner/org_admin addresses every row anchored to their
+  // active org, regardless of user/team owner level. Checked BEFORE the
+  // org/owner scoping so an admin is never blocked by not being the owning user
+  // or a member of the owning team — the automatic, role-derived parity the
+  // epic delivers. Cross-org safety for org admins is preserved: standing is
+  // keyed on the row's own org matching the actor's.
+  if (actorHasAdminStandingOverRow(actor, row.organizationId)) return true;
+
   // Org scoping: a row with an org must match the actor's active org; a row
   // with no org (workspace-level) is addressable by any authenticated actor.
   if (row.organizationId !== null && row.organizationId !== actor.organizationId) {
@@ -98,12 +159,23 @@ export function pickActiveInstallId(
   rows: readonly InstallRowForPick[],
   actor: ActorScopeForPick,
 ): string | null {
-  for (const row of rows) {
-    if (!LIVE_STATUSES.has(row.status)) continue;
-    if (!isInstallRowAddressableByActor(row, actor)) continue;
-    return row.id;
-  }
-  return null;
+  const live = rows.filter(
+    (row) =>
+      LIVE_STATUSES.has(row.status) && isInstallRowAddressableByActor(row, actor),
+  );
+  if (live.length === 0) return null;
+  // DETERMINISM (P3): now that a platform_admin also addresses cross-org rows,
+  // a bare "first addressable" pick could point setup actions at an arbitrary
+  // OTHER org's install. Prefer a row in the actor's active org (or an org-less
+  // workspace row) over a cross-org one; within that preferred set the original
+  // array order is preserved, so the non-admin path (all rows already same-org
+  // or workspace) is byte-for-byte unchanged.
+  const isCrossOrg = (row: InstallRowForPick): boolean =>
+    row.organizationId !== null &&
+    actor.organizationId !== null &&
+    row.organizationId !== actor.organizationId;
+  const preferred = live.filter((row) => !isCrossOrg(row));
+  return (preferred[0] ?? live[0]).id;
 }
 
 /**
@@ -117,14 +189,10 @@ export async function resolveActiveInstallIdForActor(
 ): Promise<string | null> {
   if (!actor) return null;
   const rows = await readInstalledExtensionsByPackageName(packageName);
-  return pickActiveInstallId(rows, {
-    organizationId: actor.organizationId ?? null,
-    ownerId: actor.principalId ?? null,
-    // The actor's team memberships — a team-owned install surfaces to every team
-    // member. `ActorContext.teamIds` is the resolved membership the rest of the
-    // app authorizes against; `[]` when the actor is in no team / unresolved.
-    teamIds: actor.teamIds ?? [],
-  });
+  // buildActorScopeForPick threads the actor's team memberships AND the
+  // admin-standing role fields (platformRole/orgRole) so an admin resolves the
+  // install id of a row they do not personally own.
+  return pickActiveInstallId(rows, buildActorScopeForPick(actor));
 }
 
 // ---------------------------------------------------------------------------

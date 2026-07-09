@@ -24,6 +24,7 @@ import "server-only";
 import {
   pickActiveInstallId,
   isInstallRowAddressableByActor,
+  buildActorScopeForPick,
   resolveRuntimeConnectorCardRecord,
   type RuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
@@ -70,11 +71,7 @@ export async function resolveInstalledCatalogConnectorIds(
     return installed;
   }
 
-  const scope = {
-    organizationId: actor.organizationId ?? null,
-    ownerId: actor.principalId ?? null,
-    teamIds: actor.teamIds ?? [],
-  };
+  const scope = buildActorScopeForPick(actor);
 
   let rowsByPackage: Map<string, Awaited<ReturnType<typeof readInstalledExtensionsByPackageNames>> extends Map<string, infer V> ? V : never> | null = null;
   try {
@@ -144,11 +141,7 @@ export async function listRuntimeOnlyConnectorCards(
     return [];
   }
 
-  const scope = {
-    organizationId: actor.organizationId ?? null,
-    ownerId: actor.principalId ?? null,
-    teamIds: actor.teamIds ?? [],
-  };
+  const scope = buildActorScopeForPick(actor);
 
   // Candidate package names: a connector with NO catalog descriptor that has a
   // LIVE addressable row for the actor. Deduplicate (multiple rows per package).

@@ -41,8 +41,7 @@ import { saveDevExtensionsSettings } from "@/lib/dev-extensions";
 import { clearAllProviderLogEntries, saveAnthropicLoggingSettings } from "@/lib/logging";
 import { saveMcpLoggingSettings } from "@/lib/mcp-logging";
 import { createNotification } from "@/lib/notifications";
-import { syncCatalogSkillsToAnthropic } from "@/lib/anthropic-skill-sync-service";
-import { reclaimStaleAnthropicSkills } from "@/lib/anthropic-skill-gc-service";
+import { orchestrateAnthropicSkillSync } from "@/lib/anthropic-skill-config-service";
 import {
   importNangoConnection,
   ensureNangoIntegration,
@@ -312,67 +311,13 @@ export async function setDefaultProvidersAction(formData: FormData) {
     throw new Error("Invalid Anthropic skill sync value.");
   }
 
-  // Pre-sync at admin-save time, not lazily on first agent run. The settings
-  // write above is already persisted; a sync failure must not roll the save
-  // back, but it must be visible through an admin notification rather than
-  // silent best-effort. Inert when the opt-in is OFF because the service returns
-  // immediately on a non-true global flag.
-  try {
-    const result = await syncCatalogSkillsToAnthropic();
-    if (!result.ok) {
-      const detail =
-        result.namespaceError ??
-        result.preflightError?.message ??
-        "Anthropic skill sync reported a configuration error.";
-      await createNotification({
-        title: "Anthropic skill sync configuration error",
-        body: detail,
-        kind: "error",
-      });
-    }
-  } catch (err) {
-    await createNotification({
-      title: "Anthropic skill sync failed",
-      body:
-        "Anthropic skill sync did not complete. The provider settings were " +
-        "saved. " +
-        (err instanceof Error ? err.message : String(err)),
-      kind: "error",
-    });
-  }
-
-  // Leased/refcounted remote GC is an explicit maintenance step, not the hot
-  // agent-run path. Runs after the pre-sync above: sync marks catalog-removed
-  // or excluded rows stale; GC then reclaims remote skills that have aged past
-  // the grace window with zero in-flight leases. The same governance opt-in
-  // controls it, so it is inert when OFF. A GC failure must not roll the settings
-  // save back, but it must be visible through an admin notification.
-  try {
-    const gc = await reclaimStaleAnthropicSkills();
-    if (!gc.ok) {
-      const detail =
-        gc.namespaceError ??
-        (gc.errors.length > 0
-          ? gc.errors
-              .map((e) => `${e.anthropicSkillId}: ${e.message}`)
-              .join("; ")
-          : "Anthropic skill GC reported an error.");
-      await createNotification({
-        title: "Anthropic skill GC error",
-        body: detail,
-        kind: "error",
-      });
-    }
-  } catch (err) {
-    await createNotification({
-      title: "Anthropic skill GC failed",
-      body:
-        "Anthropic skill garbage collection did not complete. The provider " +
-        "settings were saved and no skill was over-deleted. " +
-        (err instanceof Error ? err.message : String(err)),
-      kind: "error",
-    });
-  }
+  // Eager catalog-sync then stale-GC after the opt-in persist above. Extracted
+  // to `orchestrateAnthropicSkillSync` (a host capability the connector-owned
+  // Skills tab runs identically — cinatra#1104): admin-notify on failure, the
+  // save is never rolled back, both steps inert when OFF. Unchanged behavior,
+  // now single-sourced. Runs unconditionally (even for a legacy caller that
+  // omitted the field) exactly as before.
+  await orchestrateAnthropicSkillSync();
 
   redirect("/configuration/llm");
 }

@@ -44,6 +44,7 @@ import type { ActorContext } from "@/lib/authz";
 import type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
 } from "@cinatra-ai/agents/auth-policy";
 
 import type { ExtensionKind } from "./permissions-kind-hooks";
@@ -246,25 +247,25 @@ export function adminStandingOps(
 function visibilityFieldForOp(
   op: Exclude<ExtensionAccessOp, "manage">,
   policy: AgentAuthPolicy,
-): AgentAuthPolicyVisibility {
-  // TRANSITIONAL (multi-scope W1): fields are now token arrays. This returns
-  // the FIRST token to preserve today's single-token matcher semantics in
-  // visibilityAllows(); the any-match lift (return the whole array, admit if
-  // ANY token admits) is the enforcement-lift issue (W2). Writers are
-  // single-token until the multi-select picker (W3), so `[0]` is identical to
-  // the pre-array scalar and cannot over-grant.
+): AgentAuthPolicyVisibilitySelection {
+  // Multi-scope W2: fields are NON-EMPTY token arrays (a union of grants). This
+  // returns the whole selection; the caller admits the actor if ANY token
+  // admits them (`tokens.some(visibilityAllows)`). A single-token field (every
+  // writer until the W3 multi-select picker) reduces to the exact pre-array
+  // scalar decision, so this can neither over- nor under-grant an existing
+  // policy.
   switch (op) {
     case "list":
-      return policy.runListVisibility[0];
+      return policy.runListVisibility;
     case "read":
     case "use":
-      return policy.runDataVisibility[0];
+      return policy.runDataVisibility;
     case "execute":
-      return policy.runExecuteVisibility[0];
+      return policy.runExecuteVisibility;
     case "share":
       // share follows runDataVisibility AFTER the allowRunSharing gate (handled
       // by the caller); reaching here means sharing is allowed.
-      return policy.runDataVisibility[0];
+      return policy.runDataVisibility;
     default: {
       const _exhaustive: never = op;
       throw new Error(
@@ -275,10 +276,13 @@ function visibilityFieldForOp(
 }
 
 /**
- * Does the visibility tier admit this actor? Runs AFTER the cross-org guard +
- * owner/co-owner short-circuits, so an anonymous or different-org actor never
- * reaches here. Mirrors the agent `policyAllows()` tiers EXCEPT the
- * owner-aware `"admin"` branch (see file header).
+ * Per-token visibility predicate — the single-token `matchOne` the any-match
+ * matcher in {@link evaluateExtensionAccess} folds over each op's token
+ * selection (`tokens.some(visibilityAllows)`). Does this ONE tier admit the
+ * actor? Runs AFTER the cross-org guard + owner/co-owner short-circuits, so an
+ * anonymous or different-org actor never reaches here. Mirrors the agent
+ * `policyAllows()` tiers EXCEPT the owner-aware `"admin"` branch (see file
+ * header).
  */
 function visibilityAllows(
   visibility: AgentAuthPolicyVisibility,
@@ -381,10 +385,14 @@ export function evaluateExtensionAccess(
 
   // Remaining ops (a member's list/read/use/execute, an allowed share, and the
   // read/use/execute of a carve-out kind's admin) are subject to the visibility
-  // tier — the owner-aware "admin" tier in visibilityAllows() still admits an
-  // owning-org admin where a policy explicitly stores "admin".
-  const visibility = visibilityFieldForOp(op, policy);
-  if (visibilityAllows(visibility, actor, owner)) return { allowed: true };
+  // tier. ANY-MATCH (multi-scope W2): the actor is admitted iff SOME token in
+  // the op's selection admits them. The owner-aware "admin" tier in
+  // visibilityAllows() still admits an owning-org admin where a policy
+  // explicitly stores "admin".
+  const tokens = visibilityFieldForOp(op, policy);
+  if (tokens.some((v) => visibilityAllows(v, actor, owner))) {
+    return { allowed: true };
+  }
   return { allowed: false, reason: "not_visible" };
 }
 
