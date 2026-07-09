@@ -24,6 +24,11 @@ import type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
 } from "@cinatra-ai/agents/auth-policy";
+import type { ActorContext } from "@/lib/authz";
+import {
+  hasAdminStandingOverExtension,
+  type ExtensionOwnerContext,
+} from "./enforce-extension-access";
 
 export type ExtensionKind =
   | "agent_run"
@@ -72,6 +77,24 @@ export type ExtensionKindHooks = {
   resourceExists: (resourceId: string) => Promise<boolean>;
 
   /**
+   * Resolve the extension's OWNER CONTEXT (owner_level / owner_id /
+   * organization_id) so the generic permission actions can build the
+   * evaluator's owner-aware resource and delegate the `manage` decision to
+   * `canExtensionAccess` — the single source of truth that admits owning-org
+   * admins (admin-parity P2), the installer, and co-owners uniformly.
+   *
+   * Return `null` when the kind has no cleanly-resolvable owner anchor; the
+   * caller then FALLS BACK to the legacy installer / co-owner / platform-admin
+   * gate (no behavioural change for that kind). Implemented for the
+   * installed-extension-anchored kinds (connector / artifact / workflow, whose
+   * resource_id is the canonical installed_extension.id) and `connection` (the
+   * nango identity row); other kinds resolve the same anchor as they gain one.
+   */
+  resolveOwnerContext?: (
+    resourceId: string,
+  ) => Promise<ExtensionOwnerContext | null>;
+
+  /**
    * Return ADDITIONAL editor user ids beyond what the polymorphic
    * extension_co_owners table already grants. Examples:
    *   - skill: the parent skill_package's installer + its co-owners
@@ -104,7 +127,12 @@ export type ExtensionKindHooks = {
   validatePolicyWrite?: (
     resourceId: string,
     policy: AgentAuthPolicy,
-    ctx: { userId: string },
+    // `actor` carries admin-standing context (admin-parity P2): when the saving
+    // actor holds admin standing over the resource's org, collective loci are
+    // validated by the resource's org-containment rather than the actor's
+    // personal memberships. Absent/undefined actor → the non-admin membership
+    // path (unchanged behaviour).
+    ctx: { userId: string; actor?: ActorContext | null },
   ) => Promise<string | null | undefined>;
 
   /**
@@ -359,6 +387,18 @@ function installedExtensionAnchoredHooks(
         const row = await readInstalledExtensionById(id);
         return row !== null && row.kind === expectedKind;
       },
+      // Owner context IS the canonical installed_extension row for these kinds
+      // (resource_id === installed_extension.id). Kind-mismatched or missing
+      // rows resolve to null → the caller falls back to the legacy gate.
+      resolveOwnerContext: async (id) => {
+        const row = await readInstalledExtensionById(id);
+        if (row === null || row.kind !== expectedKind) return null;
+        return {
+          ownerLevel: row.ownerLevel,
+          ownerId: row.ownerId,
+          organizationId: row.organizationId,
+        };
+      },
       selfRemoveRedirect,
     };
   };
@@ -395,6 +435,19 @@ async function connectionHooks(): Promise<ExtensionKindHooks> {
     resourceExists: async (id) => {
       const row = await readNangoConnectionById(id);
       return row !== null;
+    },
+    // A connection is an owner-bound (user-level) entity anchored to its org.
+    // The org anchor is what admits an owning-org admin's `manage` standing
+    // (admin-parity P2 — see/re-scope/revoke, but never `use`, per the
+    // evaluator's connection carve-out).
+    resolveOwnerContext: async (id) => {
+      const row = await readNangoConnectionById(id);
+      if (row === null) return null;
+      return {
+        ownerLevel: "user",
+        ownerId: row.ownerUserId,
+        organizationId: row.organizationId,
+      };
     },
     extraEditors: async (id) => {
       const row = await readNangoConnectionById(id);
@@ -436,17 +489,31 @@ async function connectionHooks(): Promise<ExtensionKindHooks> {
       }
       if (ownerOnly) return null; // narrowing to owner-only is always a real locus
 
-      // 2. REAL-LOCI validation (all modes): every collective token must name
-      // a concrete locus of the identity's own org that the SAVING actor
-      // actually holds (org membership / team membership / project access) —
-      // grants are issued against real loci, never invented ids (codex
-      // round-0 findings 2+4: project org-containment via readProjectById +
-      // actor access via the membership union; bare legacy "org" and
-      // `workspace`-on-null-org are refused).
+      // 2. REAL-LOCI validation (all modes): every collective token must name a
+      // concrete locus of the identity's own org. For a NON-admin actor the
+      // locus must be one the SAVING actor actually holds (org / team / project
+      // membership). For an actor with ADMIN STANDING over the connection's org
+      // (admin-parity P2), the locus is validated by ORG-CONTAINMENT of the
+      // connection's own org instead of the admin's personal memberships — an
+      // admin re-scopes any org-anchored connection to any locus of that org
+      // without first being a member. The `only` ceiling above still clamps the
+      // admin (vendor ceilings are not overridden by admin standing). Bare
+      // legacy "org" and `workspace`-on-null-org are refused in BOTH branches.
       const collective = [...new Set(visibilities.filter((v) => v !== "owner"))];
-      const needsMemberships = collective.some(
-        (v) => v.startsWith("org:") || v.startsWith("team:") || v.startsWith("project:"),
-      );
+
+      const connectionOwner: ExtensionOwnerContext = {
+        ownerLevel: "user",
+        ownerId: identity.ownerUserId,
+        organizationId: identity.organizationId,
+      };
+      const adminStanding =
+        ctx.actor != null && hasAdminStandingOverExtension(ctx.actor, connectionOwner);
+
+      const needsMemberships =
+        !adminStanding &&
+        collective.some(
+          (v) => v.startsWith("org:") || v.startsWith("team:") || v.startsWith("project:"),
+        );
       let actorOrgs: Array<{ id: string; teams: Array<{ id: string }> }> = [];
       let actorProjectIds = new Set<string>();
       if (needsMemberships) {
@@ -475,20 +542,35 @@ async function connectionHooks(): Promise<ExtensionKindHooks> {
           if (identity.organizationId === null || orgId !== identity.organizationId) {
             return "invalid_locus";
           }
-          if (!actorOrgs.some((o) => o.id === orgId)) return "invalid_locus";
+          // Admin standing is over THIS org, so containment is already proven;
+          // a non-admin must additionally be a member of the org.
+          if (!adminStanding && !actorOrgs.some((o) => o.id === orgId)) {
+            return "invalid_locus";
+          }
           continue;
         }
         if (v.startsWith("team:")) {
           const teamId = v.slice("team:".length);
-          // readOrgsWithTeamsForUser joins team.organizationId, so a hit under
-          // the identity's org proves BOTH containment and actor membership.
-          const owningOrg = actorOrgs.find((o) => o.teams.some((t) => t.id === teamId));
-          if (!owningOrg || owningOrg.id !== identity.organizationId) return "invalid_locus";
+          if (adminStanding) {
+            // Org-containment only: the team must belong to the connection's org.
+            if (identity.organizationId === null) return "invalid_locus";
+            const { readTeamForOrg } = await import("@/lib/better-auth-db");
+            if (!(await readTeamForOrg(teamId, identity.organizationId))) {
+              return "invalid_locus";
+            }
+          } else {
+            // readOrgsWithTeamsForUser joins team.organizationId, so a hit under
+            // the identity's org proves BOTH containment and actor membership.
+            const owningOrg = actorOrgs.find((o) => o.teams.some((t) => t.id === teamId));
+            if (!owningOrg || owningOrg.id !== identity.organizationId) return "invalid_locus";
+          }
           continue;
         }
         if (v.startsWith("project:")) {
           const projectId = v.slice("project:".length);
-          if (!actorProjectIds.has(projectId)) return "invalid_locus";
+          // Non-admin: the actor must hold the project. Admin standing skips the
+          // personal-access requirement but STILL requires org-containment below.
+          if (!adminStanding && !actorProjectIds.has(projectId)) return "invalid_locus";
           const { readProjectById } = await import("@/lib/projects-store");
           const project = await readProjectById(projectId);
           if (!project || project.organizationId !== identity.organizationId) {
