@@ -23,6 +23,15 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/cinatra-toast";
+import { isRedirectError } from "./is-redirect-error";
+// cinatra#1061: the removal (uninstall/archive) returned-refusal contract. A
+// server-action RETURN survives Next.js production (a THROWN one is masked), so
+// the dependents/system message reaches the user here.
+import {
+  removalFailureCopy,
+  type RemovalActionResult,
+} from "../removal-failure";
 
 type ButtonVariant = ComponentProps<typeof Button>["variant"];
 
@@ -108,6 +117,74 @@ export function ConfirmActionButton({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * Archive affordance (cinatra#1061). Archiving a connector required by an
+ * installed agent (or any active dependent) is refused by the closure gate; a
+ * system extension is refused by the #1036 guard. The bound archive server
+ * action RETURNS the classified refusal instead of throwing, so — unlike the
+ * previous raw `<form action>` that discarded the return — this reads it and
+ * shows the reason-mapped copy (which NAMES the blocking dependents) inline +
+ * as a toast, keeping the user on the page. `dependents` (when known) renders a
+ * pre-submit preview from the SAME predicate the gate uses, so the preview and
+ * the refusal never disagree.
+ */
+export function ArchiveActionForm({
+  action,
+  displayName,
+  dependents,
+}: {
+  /** Bound archive server action; redirects on success, RETURNS the refusal on failure. */
+  action: () => void | Promise<RemovalActionResult | void>;
+  displayName: string;
+  dependents?: string[];
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const hasDependents = Array.isArray(dependents) && dependents.length > 0;
+  async function handleArchive() {
+    setError(null);
+    try {
+      const result = await action();
+      // A returned value always means failure (success redirect()s, which throws
+      // the NEXT_REDIRECT sentinel handled below).
+      if (result && result.ok === false) {
+        const copy = removalFailureCopy(result, "archive", displayName);
+        setError(copy);
+        toast.error(copy);
+      }
+    } catch (err) {
+      if (isRedirectError(err)) throw err; // success — let Next.js navigate.
+      // Defense in depth: an unexpected THROWN failure (masked in production) —
+      // show the generic non-technical copy rather than crash.
+      const copy = removalFailureCopy({ ok: false, reason: "error" }, "archive", displayName);
+      setError(copy);
+      toast.error(copy);
+    }
+  }
+  return (
+    <div className="flex flex-none flex-col items-end gap-1.5">
+      {hasDependents ? (
+        <p
+          data-slot="archive-dependents-preview"
+          className="max-w-xs text-right text-xs text-muted-foreground"
+        >
+          Required by {dependents!.join(", ")} — archive or detach{" "}
+          {dependents!.length === 1 ? "it" : "them"} first.
+        </p>
+      ) : null}
+      <form action={handleArchive}>
+        <Button type="submit" variant="outline" className="flex-none">
+          Archive
+        </Button>
+      </form>
+      {error ? (
+        <p data-slot="archive-error" role="alert" className="max-w-xs text-right text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

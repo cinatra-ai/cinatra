@@ -62,6 +62,23 @@ vi.mock("../store", () => ({
   createAgentRun: vi.fn(),
   deleteAgentRun: vi.fn(),
   readAgentTemplatesByOrg: vi.fn(),
+  // cinatra#1061: the agent-catalog removal gate (assertAgentTemplateRemovable),
+  // now invoked by the agent_delete handler before deleteAgentTemplate for a
+  // package-keyed template, reads the legacy reverse-dependents here. No
+  // dependents ⇒ the gate permits the delete (the modern-packageName case).
+  readAgentTemplatesDependingOn: vi.fn().mockResolvedValue([]),
+}));
+
+// cinatra#1061: the removal gate also reads the canonical store to run the
+// dependency-closure check before a package-keyed delete. Mock it so the
+// modern-packageName delete below has no installed dependents and PASSES the
+// gate — an unmocked store would throw and the gate would (correctly) fail
+// CLOSED, blocking the delete this test asserts proceeds. handlers.ts does not
+// import canonical-store itself; only the gate does (listInstalledExtensions +
+// readEffectiveStatusByPackageNames), so this partial mock is complete.
+vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
+  listInstalledExtensions: vi.fn().mockResolvedValue([]),
+  readEffectiveStatusByPackageNames: vi.fn().mockResolvedValue(new Map()),
 }));
 
 vi.mock("../auth-policy", () => ({

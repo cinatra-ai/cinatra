@@ -387,6 +387,28 @@ export class DependencyClosureError extends Error {
 }
 
 /**
+ * Thrown when a removal's dependency-closure gate CANNOT be evaluated because
+ * the canonical store (the authoritative installed-extension status store) is
+ * unreachable. cinatra#1061 ratified the removal closure gate as FAIL-CLOSED:
+ * a destructive uninstall/archive we cannot prove closure-safe is REFUSED, not
+ * silently permitted. (Before #1061 this path was fail-OPEN — "closure check is
+ * opportunistic" — a mid-migration allowance retired now that the canonical
+ * manifest is the only status store; see #1036's fail-closed direction for the
+ * system set.) Distinct from DependencyClosureError, which names concrete
+ * blockers; here we simply could not check, so no dependents are named and the
+ * user-facing copy is the generic retryable "try again" message.
+ */
+export class ClosureCheckUnavailableError extends Error {
+  readonly code = "CLOSURE_CHECK_UNAVAILABLE";
+  constructor(public readonly packageName: string) {
+    super(
+      `Cannot verify dependents for ${packageName} — the extension manifest store is unreachable; refusing removal until it can be checked.`,
+    );
+    this.name = "ClosureCheckUnavailableError";
+  }
+}
+
+/**
  * UPDATE GATE (#180 item 6): refuse updating `packageName` to `newVersion`
  * when any LIVE dependent's install-blocking edge on it would be violated —
  * NAMING the dependents and their constraints. Scope-aware: a dependent's
@@ -530,14 +552,18 @@ export function assertInstallClosure(
 }
 
 /**
- * Archive/uninstall closure gate: refuse when archiving the target would break
- * a REQUIRED edge from a still-active dependent. `allRows` is the full
- * manifest snapshot; `target` is the package about to be archived/uninstalled.
+ * The PURE list-half of the archive/uninstall closure gate: the package names of
+ * still-ACTIVE dependents that hold an install-blocking REQUIRED edge on the
+ * target (so archiving/uninstalling it would break their closure). Empty = safe.
+ *
+ * Factored out of `assertArchiveDoesNotBreakClosure` so the pre-confirm
+ * dependents PREVIEW (cinatra#1061) and the refusal that ACTUALLY blocks read
+ * from ONE predicate — the preview and the refusal can never disagree.
  */
-export function assertArchiveDoesNotBreakClosure(
+export function listArchiveClosureBlockers(
   target: InstalledExtension,
   allRows: InstalledExtension[],
-): void {
+): string[] {
   const blockingDependents: string[] = [];
   for (const row of allRows) {
     if (row.packageName === target.packageName) continue;
@@ -558,6 +584,19 @@ export function assertArchiveDoesNotBreakClosure(
     );
     if (requiresTarget) blockingDependents.push(row.packageName);
   }
+  return blockingDependents;
+}
+
+/**
+ * Archive/uninstall closure gate: refuse when archiving the target would break
+ * a REQUIRED edge from a still-active dependent. `allRows` is the full
+ * manifest snapshot; `target` is the package about to be archived/uninstalled.
+ */
+export function assertArchiveDoesNotBreakClosure(
+  target: InstalledExtension,
+  allRows: InstalledExtension[],
+): void {
+  const blockingDependents = listArchiveClosureBlockers(target, allRows);
   if (blockingDependents.length > 0) {
     throw new DependencyClosureError(
       "ARCHIVE_BREAKS_CLOSURE",

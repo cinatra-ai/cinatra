@@ -73,7 +73,18 @@ function getActor(actor: PrimitiveActorContext): DashboardActor | null {
   const orgRole = normalizeOrgRole(ext["orgRole"]);
   const teamRoles =
     (ext["teamRoles"] as Record<string, "admin" | "member"> | undefined) ?? {};
-  return { userId, organizationId: orgId, teamIds, orgRole, teamRoles };
+  // Agent-run OBO scope-ceiling chain (stamped by the dashboards MCP registry
+  // from the request frame). Threaded onto the resolver actor so the ceiling
+  // gate in resolveDashboardAccess runs for delegated agent tool calls.
+  const oboCeiling = ext["oboCeiling"] as DashboardActor["oboCeiling"];
+  return {
+    userId,
+    organizationId: orgId,
+    teamIds,
+    orgRole,
+    teamRoles,
+    ...(oboCeiling ? { oboCeiling } : {}),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────

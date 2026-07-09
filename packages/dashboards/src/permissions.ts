@@ -20,6 +20,12 @@
  * workspace ownership can split when the Workspace tier lands.
  */
 import type { DashboardRow, OwnerLevel, Visibility } from "./store/schema";
+// Pure OBO scope-ceiling helper (zero-dep subpath — no transport runtime pulled).
+import {
+  resourceWithinCeiling,
+  type OboCeilingChain,
+  type CeilingResource,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 
 /** Actor envelope. Subset of PrimitiveActorContext to keep this module Cinatra-decoupled. */
 export type DashboardActor = {
@@ -32,12 +38,37 @@ export type DashboardActor = {
   readonly orgRole?: "owner" | "admin" | "member";
   /** Team-admin role per team id (only populated when known). */
   readonly teamRoles?: Readonly<Record<string, "admin" | "member">>;
+  /**
+   * Agent-run OBO scope-ceiling CHAIN — the agent's anchored-scope upper bound.
+   * Set ONLY for agent-run OBO delegated actors (threaded from the MCP request
+   * frame by the dashboards registry/handler); undefined for every human /
+   * session caller. When present, a dashboard row must fall WITHIN the chain or
+   * access is denied outright — checked before the owner/member/visibility gates.
+   */
+  readonly oboCeiling?: OboCeilingChain;
 };
 
 export type DashboardAccess = {
   readonly canRead: boolean;
   readonly canWrite: boolean;
 };
+
+/**
+ * Map a dashboard row onto the shared `CeilingResource` facets consumed by
+ * `resourceWithinCeiling`. Dashboards carry a native 4-tier owner axis
+ * (`owner_level`/`owner_id`, CHECK-constrained to user/team/organization/
+ * workspace) plus an optional `project_id` refinement — a direct mapping.
+ */
+function dashboardRowToCeilingFacets(row: DashboardRow): CeilingResource {
+  return {
+    orgId: row.organizationId,
+    owner: {
+      tier: row.ownerLevel as "user" | "team" | "organization" | "workspace",
+      id: row.ownerId,
+    },
+    projectId: row.projectId ?? null,
+  };
+}
 
 /** Internal: a row's "owner" check — does the actor have owner-level authority? */
 function isOwner(row: DashboardRow, actor: DashboardActor): boolean {
@@ -83,6 +114,18 @@ export function resolveDashboardAccess(
   row: DashboardRow,
   actor: DashboardActor,
 ): DashboardAccess {
+  // OBO scope-ceiling containment — evaluated FIRST, before the cross-org gate
+  // and every owner/member/visibility short-circuit below, so a delegated agent
+  // run cannot read/write a dashboard outside the agent's anchored scope even
+  // when the invoking user is the row's owner. Set only for agent-run OBO actors;
+  // undefined ⇒ no-op for human/session callers.
+  if (
+    actor.oboCeiling &&
+    !resourceWithinCeiling(dashboardRowToCeilingFacets(row), actor.oboCeiling)
+  ) {
+    return { canRead: false, canWrite: false };
+  }
+
   // Cross-org check is the first gate — no further evaluation needed.
   if (row.organizationId !== actor.organizationId) {
     return { canRead: false, canWrite: false };
