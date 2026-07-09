@@ -16,6 +16,9 @@ import { eq } from "drizzle-orm";
 import {
   deriveOboCeilingChain,
   parseOboCeilingChain,
+  composeOboCeilingChain,
+  OboCeilingCompositionError,
+  type OboCeilingChain,
 } from "@cinatra-ai/mcp-server/obo-ceiling";
 import { db } from "./db";
 import { agentTemplates, agentRuns } from "./schema";
@@ -117,11 +120,24 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
 // Returns null ONLY for a corrupt partial anchor (a known non-org owner tier
 // with a missing id); the run then fails closed at mint. A null / null (pre-
 // backfill) anchor derives the organization floor — NOT the fail-closed case.
+//
+// Child-run composition (epic W5): when the caller supplies `parentOboCeiling`
+// (a genuine child dispatch — the parent RUN's persisted chain, read from the
+// dispatching run's actor frame), the child's OWN anchor is STILL freshly
+// derived here — never copied — and the parent chain is folded in on top via the
+// shared `composeOboCeilingChain` primitive (satisfy-all → never wider than the
+// parent; transitive across grandchildren). A provably-disjoint composition
+// (same-axis id conflict or cross-org) THROWS `OboCeilingCompositionError` so the
+// dispatch fails closed and no child run is inserted. Top-level and recurring-
+// clone paths pass no parent chain and derive the un-composed child anchor,
+// which is exactly the copy-trap-safe behavior (the clone re-derives, never
+// carries a stale chain).
 // ---------------------------------------------------------------------------
 export async function deriveRunOboCeilingJson(input: {
   templateId: string;
   orgId: string;
   projectId: string | null | undefined;
+  parentOboCeiling?: OboCeilingChain | null;
 }): Promise<string | null> {
   const [tmpl] = await db
     .select({
@@ -131,11 +147,21 @@ export async function deriveRunOboCeilingJson(input: {
     .from(agentTemplates)
     .where(eq(agentTemplates.id, input.templateId))
     .limit(1);
-  const chain = deriveOboCeilingChain({
+  const childChain = deriveOboCeilingChain({
     ownerLevel: tmpl?.ownerLevel ?? null,
     ownerId: tmpl?.ownerId ?? null,
     orgId: input.orgId,
     projectId: input.projectId ?? null,
   });
-  return chain ? JSON.stringify(chain) : null;
+  // Corrupt partial anchor → persist SQL NULL, fail closed at mint (W1 contract).
+  // Unchanged even under a child dispatch: nothing to compose onto.
+  if (!childChain) return null;
+  // Genuine child dispatch → fold the parent chain in on top of the freshly
+  // derived child anchor (never copy the parent as the child's own anchor).
+  if (input.parentOboCeiling && input.parentOboCeiling.length > 0) {
+    const composed = composeOboCeilingChain(input.parentOboCeiling, childChain);
+    if (!composed.ok) throw new OboCeilingCompositionError(composed);
+    return JSON.stringify(composed.chain);
+  }
+  return JSON.stringify(childChain);
 }

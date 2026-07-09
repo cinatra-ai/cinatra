@@ -272,6 +272,14 @@ export type CreateAgentRunInput = {
   a2aTaskId?: string;    // A2A task id (when run created via A2A path)
   parentRunId?: string | null; // orchestrator parent run id; only accepted at create time.
                                // updateAgentRun* helpers refuse to mutate it.
+  // Child-run OBO ceiling composition (epic W5). When a dispatch site creates a
+  // CHILD run under an active agent run it passes the PARENT run's persisted
+  // ceiling chain (read from the dispatching run's actor frame). The store folds
+  // it into the freshly-derived child anchor via the shared compose primitive
+  // (satisfy-all). Omitted by top-level and recurring-clone paths → the child
+  // anchor is derived un-composed (copy-trap-safe). A provably-disjoint
+  // composition throws OboCeilingCompositionError → the dispatch fails closed.
+  parentOboCeiling?: OboCeilingChain | null;
   timeoutSeconds?: number | null; // server-side timeout (seconds); null = no timeout
   // org id resolved by every entry point before insert.
   // Required at the store layer; runtime PG NOT NULL enforces.
@@ -1309,6 +1317,10 @@ export async function createAgentRun(
     templateId: input.templateId,
     orgId: input.orgId,
     projectId: input.projectId,
+    // Child-run composition (W5): folds the parent run's chain onto the freshly
+    // derived child anchor. Throws OboCeilingCompositionError on a provably-
+    // disjoint chain BEFORE any insert → the dispatch creates no child run.
+    parentOboCeiling: input.parentOboCeiling ?? null,
   });
   const values = {
     id: input.id,
