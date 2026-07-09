@@ -385,6 +385,7 @@
       "@cinatra-ai/chat/actions": ["./packages/chat/src/actions.ts"],
       "@cinatra-ai/chat/module": ["./packages/chat/src/integration/module.ts"],
       "@cinatra-ai/chat/mcp-handlers": ["./packages/chat/src/mcp/handlers.ts"],
+      "@cinatra-ai/chat/renderer": ["./packages/chat/src/renderer/index.ts"],
       "@cinatra-ai/skills/mcp-client": ["./packages/skills/src/mcp/client/deterministic-client.ts"],
       "@cinatra-ai/skills/extension-handler": ["./packages/skills/src/extension-handler.ts"],
       "@cinatra-ai/skills/llm-matching/constants": ["./packages/skills/src/llm-matching/constants.ts"],
