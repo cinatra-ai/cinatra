@@ -833,15 +833,6 @@ export {
 // the SAME delegated-chat gate the live transport's `policedRegisterTool` does.
 export { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
 
-// #1214 in-admin CMS content-editor tool policy — re-exported so the
-// /api/llm-bridge agent-run tool build can pin the cinatra self-MCP
-// `allowedTools` to the MCP-backed CMS primitives for content-editor runs.
-export {
-  IN_ADMIN_CMS_MCP_ALLOWED_TOOLS,
-  isInAdminCmsMcpToolAllowed,
-  resolveAgentRunCinatraMcpAllowedTools,
-} from "./in-admin-cms-tool-policy";
-
 export function createMcpServerAuthPlugins(
   options: CreateMcpServerAuthPluginsOptions = {},
 ): McpAuthPlugins {
