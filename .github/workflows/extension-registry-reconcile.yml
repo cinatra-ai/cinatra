@@ -1,0 +1,63 @@
+# Installable-extension registry reconciliation (cinatra#1120).
+#
+# Every OTHER extension drift check (extension-head-canary.yml,
+# dev-lock-auto-bump.yml, extension-pin-divergence-report.mjs) iterates the
+# ALREADY-DECLARED cinatra.devExtensions list to catch SHA-pin drift — none of
+# them notice a repo that was never registered, or a declared entry whose repo
+# no longer exists. This canary is that missing backstop: it reconciles the
+# org's PUBLIC installable-extension repos against the registry and reports
+#   - MISSING: a public repo that IS an installable extension (root
+#     package.json has `cinatra.kind`) but is absent from cinatra.devExtensions;
+#   - ORPHAN:  a cinatra.devExtensions entry whose repo no longer resolves.
+# Intentional exclusions are recorded in
+# scripts/ci/extension-registry-reconcile.allow.json.
+#
+# NON-GATING BY DESIGN (report-only): runs on a schedule, on manual dispatch,
+# and on PRs that touch the root package.json (where the registry lives). A red
+# here means "a new extension repo needs registering, or a stale entry needs
+# removing" — never "main is broken". Escalate to a required check (scoped to
+# the package.json path) once it is stable and false-positive-free.
+#
+# LOG-SAFETY: the script scopes org enumeration to `type=public`, so non-public
+# repo names never enter the job and can never reach this public Actions log.
+name: extension-registry-reconcile
+
+on:
+  schedule:
+    # Daily, offset from the other extension canaries (head-canary 05:23).
+    - cron: '37 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      # The registry lives in the root package.json (cinatra.devExtensions).
+      - 'package.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-registry-reconcile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    name: Reconcile installable-extension repos vs the dev-install registry (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      # Report-only (exit 0): findings surface as ::warning annotations + a
+      # summary, never as a failure. GITHUB_TOKEN reads only org repo metadata
+      # (listing scoped to type=public; a per-repo visibility probe for orphan
+      # candidates) and public package.json manifests — no elevated scope is
+      # required, and non-public names are never emitted (see the script header).
+      - name: Reconcile registry vs org installable-extension repos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/extension-registry-reconcile.mjs
