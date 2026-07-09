@@ -530,6 +530,12 @@ export type {
   OasCinatraLlm,
 } from "./llm-provider-policy";
 
+// Read an installed agent's declared LLM-provider requirement (the OAS
+// `metadata.cinatra.llm` block) from the runtime mount — the ratified
+// LLM-provider dependency vocabulary consumed by the host run-enqueue preflight
+// (cinatra#1062).
+export { readLlmRequirementFromMount } from "./read-llm-requirement-from-mount";
+
 // ---------------------------------------------------------------------------
 // Re-export deterministic scanners so `/api/oas-lint/scan-all` can run them on
 // behalf of `@cinatra-ai/lint-policy-agent`. Re-export normalizeReviewFindings

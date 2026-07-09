@@ -1443,6 +1443,9 @@ importers:
       ioredis:
         specifier: 5.11.1
         version: 5.11.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@a2ui/web_core':
         specifier: 0.10.0
@@ -1535,6 +1538,9 @@ importers:
 
   packages/chat:
     dependencies:
+      '@cinatra-ai/agent-ui-protocol':
+        specifier: workspace:*
+        version: link:../agent-ui-protocol
       '@cinatra-ai/agents':
         specifier: workspace:*
         version: link:../agents
@@ -1998,6 +2004,9 @@ importers:
       react-dom:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0

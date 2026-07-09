@@ -1,7 +1,8 @@
 "use server";
 import { requireAuthSession } from "@/lib/auth-session";
-import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
+import { asActionablePreflightError } from "./actionable-preflight-error";
 import {
   readAgentRunById,
   readAgentTemplateBySlug,
@@ -32,7 +33,10 @@ export type TriggerAgentRunArgs = {
 
 export type TriggerAgentRunResult =
   | { ok: true }
-  | { ok: false; error: string };
+  // `code`/`settingsHref` carry an actionable run-preflight failure
+  // (a missing/unconfigured connector or LLM provider) so the UI can
+  // deep-link the fix instead of showing a generic "enqueue failed".
+  | { ok: false; error: string; code?: string; settingsHref?: string };
 
 export async function triggerAgentRun(
   args: TriggerAgentRunArgs,
@@ -90,10 +94,9 @@ export async function triggerAgentRun(
   try {
     await enqueueAgentRun(
       { runId: args.runId },
-      // cinatra#1056: carry the template's connector dependencies so the
-      // run-start connector preflight fires (the chokepoint derives the run
-      // actor). Populated from the canonical connector edges at install.
-      { jobId: args.runId, connectorDependencies: template.connectorDependencies },
+      // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity,
+      // projected so the run-start connector + LLM-provider preflights both fire.
+      { jobId: args.runId, ...enqueueDepsForTemplate(template) },
     );
   } catch (err) {
     // Compensation: undo the queued transition. We use the conditional
@@ -111,6 +114,10 @@ export async function triggerAgentRun(
         err,
       );
     });
+    // Surface an actionable connector/LLM-provider preflight failure to the
+    // user (cinatra#1056/#1062) instead of a generic "enqueue failed".
+    const actionable = asActionablePreflightError(err);
+    if (actionable) return { ok: false, ...actionable };
     return { ok: false, error: "enqueue failed" };
   }
 
@@ -123,7 +130,8 @@ export type CreatePendingRunArgs = {
 
 export type CreatePendingRunResult =
   | { ok: true; runId: string }
-  | { ok: false; error: string };
+  // See TriggerAgentRunResult — actionable preflight failure fields.
+  | { ok: false; error: string; code?: string; settingsHref?: string };
 
 /**
  * Creates an empty `pending_input` run for any template. The dispatcher's
@@ -195,12 +203,10 @@ async function createAndTriggerRunCore(
   try {
     await enqueueAgentRun(
       { runId: created.id },
-      // cinatra#1056: carry the template's connector dependencies so the
-      // run-start connector preflight fires (the chokepoint derives the run
-      // actor). Populated from the canonical connector edges at install.
-      { jobId: created.id, connectorDependencies: template.connectorDependencies },
+      // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
+      { jobId: created.id, ...enqueueDepsForTemplate(template) },
     );
-  } catch {
+  } catch (enqueueErr) {
     // Revert to pending_input so the user can retry via the Run button.
     // Discriminate the compensation catch so illegal_transition (programmer
     // error) surfaces loudly while stale_from_status (benign race — worker
@@ -223,6 +229,11 @@ async function createAndTriggerRunCore(
       );
       // Do not rethrow — the enqueue error is the user-facing error.
     });
+    // An actionable connector/LLM-provider preflight failure won't fix on retry
+    // — surface it so the user can configure the provider (cinatra#1056/#1062),
+    // rather than reporting a false success with a silently-pending run.
+    const actionable = asActionablePreflightError(enqueueErr);
+    if (actionable) return { ok: false, ...actionable };
   }
 
   return { ok: true, runId: created.id };

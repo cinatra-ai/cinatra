@@ -108,10 +108,60 @@ export function buildOwnershipFilter(actor: ActorContext): OwnershipFilterFragme
     clauses.push(`visibility = 'admin'`);
   }
 
+  const visibilitySql = `(${clauses.join(" OR ")})`;
+
+  // OBO scope-ceiling narrowing (agent-run delegated actors ONLY). When the
+  // actor carries an anchored-scope ceiling CHAIN (`actor.oboCeiling`), the row
+  // must ALSO satisfy EVERY ceiling element (satisfy-all) — the ad-hoc-resolvable
+  // adoption of the shared `resourceWithinCeiling` semantics, expressed in SQL.
+  // It is AND-ed on top of the visibility OR-set, so it can only NARROW, never
+  // widen: even the widened `workspace`/`admin` clauses a platform-admin invoker
+  // gets above stay ceiling-bounded (the load-bearing ordering — the ceiling is
+  // NOT written into the OR-set). Non-OBO actors (no oboCeiling) are unaffected.
+  // Shared with objects-store.ts (intentional double-cover with the #1051 kernel
+  // surface; conflicting edits to this function are not).
+  const ceilingSql = buildCeilingClause(actor.oboCeiling, ph);
   return {
-    sql: `(${clauses.join(" OR ")})`,
+    sql: ceilingSql ? `(${visibilitySql} AND ${ceilingSql})` : visibilitySql,
     params,
   };
+}
+
+/**
+ * Translate an OBO ceiling CHAIN into a satisfy-ALL SQL predicate over the
+ * derived-store ownership columns, mirroring `resourceWithinCeiling`
+ * (@cinatra-ai/mcp-server/obo-ceiling) element-for-element:
+ *
+ *   - organization → `org_id = <id>`                 (tenancy floor)
+ *   - user/team/workspace → `owner_level = <tier> AND owner_id = <id>`
+ *                                                     (owner-axis anchor)
+ *   - project → `visibility = 'project:<id>'`         (project refinement — this
+ *                                                     store expresses project via
+ *                                                     the visibility column, not a
+ *                                                     separate project_id, per the
+ *                                                     context-resolver invariant)
+ *
+ * Elements are AND-joined (a resource must satisfy every applicable ceiling).
+ * Returns null when there is no ceiling so callers keep their exact pre-ceiling
+ * SQL. `actor.oboCeiling`, when set, is a validated NON-EMPTY chain.
+ */
+function buildCeilingClause(
+  chain: ActorContext["oboCeiling"],
+  ph: (v: unknown) => string,
+): string | null {
+  if (!chain || chain.length === 0) return null;
+  const parts: string[] = [];
+  for (const c of chain) {
+    if (c.tier === "organization") {
+      parts.push(`org_id = ${ph(c.id)}`);
+    } else if (c.tier === "project") {
+      parts.push(`visibility = ${ph(`project:${c.id}`)}`);
+    } else {
+      // user | team | workspace — owner-axis anchor.
+      parts.push(`(owner_level = ${ph(c.tier)} AND owner_id = ${ph(c.id)})`);
+    }
+  }
+  return parts.length > 0 ? `(${parts.join(" AND ")})` : null;
 }
 
 // ---------------------------------------------------------------------------

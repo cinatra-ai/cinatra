@@ -78,6 +78,24 @@ It ships from a **dedicated subpath** (not the `/marketplace` barrel) on purpose
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@cinatra-ai/sdk-ui/tabs";
 ```
 
+### Connection-status + multi-connection setup primitives
+
+The same reasoning extends to the connector setup page's **connection(s) status card**, the **Connections** list, and the **two-column setup body** (`design/specs/app-connectors.html` §II). Every connector setup page — schema-config or bundled-react — renders the SAME right-column status card and, where a connector holds many connections, the SAME Connections-tab rows and roll-up. They are pure, portable, presentational compositions (no `@/` app alias, no Radix, only design tokens + `lucide-react`), so like `Tabs` they are **shared, not copied**, and each ships from its own dedicated subpath (kept off the `/marketplace` route graph):
+
+```tsx
+import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
+import { ConnectionStatusCard, ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card";
+import { ConnectionStatusBadge } from "@cinatra-ai/sdk-ui/connection-status-badge";
+import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list";
+```
+
+- **`ConnectorSetupColumns`** — the `minmax(0,1fr) 236px` body (fields left, status card right; emits `connector-setup` / `connector-multi-setup`), collapsing to one column on narrow viewports.
+- **`ConnectionStatusCard`** (single) / **`ConnectionsStatusCard`** (multi roll-up: one count badge per status in play, an "All connections" link, no Check).
+- **`ConnectionStatusBadge`** — the solid green/red plug/unplug chip + the transient indigo **Checking…** state, in visual lockstep with the `@cinatra-ai/connectors` `ConnectorBadge`.
+- **`ConnectionsList` / `ConnectionRow`** — the Connections tab's stacked per-connection cards (name, URL, badge, per-row status-following action).
+
+The interactive controls (Check, All connections, Connect/Disconnect, the disconnect confirm dialog) are passed in as slots, so the primitives stay server-safe and the consuming connector owns the probe, navigation, and connection-level confirm copy.
+
 ## TypeScript exports
 
 ```ts

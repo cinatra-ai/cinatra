@@ -9,7 +9,7 @@
  *     without it agents/MCP would ALWAYS see zero llm_usage rows), and
  *   - fails closed (isPlatformAdmin=false) when the role lookup throws.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildDashboardCubeMcpSecurityContext } from "../security-context";
 
@@ -57,5 +57,48 @@ describe("buildDashboardCubeMcpSecurityContext", () => {
     expect(sc!.isPlatformAdmin).toBe(false);
     // org widening still applied.
     expect(sc!.accessibleOrgIds).toContain("org-a");
+  });
+
+  // ─── W4 (#1053): agent-run OBO confinement ─────────────────────────────
+  describe("agentRunObo (delegated-run confinement)", () => {
+    it("pins accessibleOrgIds to the run org and drops isPlatformAdmin — WITHOUT calling the resolvers", async () => {
+      const getOrgIds = vi.fn(async () => ["org-a", "org-b", "org-c"]);
+      const getIsAdmin = vi.fn(async () => true);
+      const sc = await buildDashboardCubeMcpSecurityContext(
+        identity, // u-admin / org-a — would otherwise widen + be admin
+        getOrgIds,
+        getIsAdmin,
+        { agentRunObo: true },
+      );
+      expect(sc).not.toBeNull();
+      // Confined to the run org only — the invoker's other memberships never widen it.
+      expect(sc!.accessibleOrgIds).toEqual(["org-a"]);
+      // The ceiling is honored BEFORE the admin short-circuit — no admin cube visibility.
+      expect(sc!.isPlatformAdmin).toBe(false);
+      // Neither widening nor admin lookup runs for a delegated run.
+      expect(getOrgIds).not.toHaveBeenCalled();
+      expect(getIsAdmin).not.toHaveBeenCalled();
+    });
+
+    it("returns null when identity is incomplete (still fails closed)", async () => {
+      const sc = await buildDashboardCubeMcpSecurityContext(
+        { userId: "", organizationId: "" },
+        async () => ["org-a"],
+        async () => true,
+        { agentRunObo: true },
+      );
+      expect(sc).toBeNull();
+    });
+
+    it("agentRunObo:false keeps the widening + admin decoration (unchanged path)", async () => {
+      const sc = await buildDashboardCubeMcpSecurityContext(
+        identity,
+        async () => ["org-a", "org-b"],
+        async () => true,
+        { agentRunObo: false },
+      );
+      expect(new Set(sc!.accessibleOrgIds)).toEqual(new Set(["org-a", "org-b"]));
+      expect(sc!.isPlatformAdmin).toBe(true);
+    });
   });
 });
