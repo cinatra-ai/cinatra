@@ -6,14 +6,16 @@
 // (grid surface / modals / filter bar) are stubbed because their chart and
 // modal internals are irrelevant to the assembly contract under test:
 //
-//   - empty dashboards render no toolbar/filter bar (the empty-state surface
-//     carries its own add affordances) — mirrors upstream's back-compat
-//     `<DashboardGrid>` gating;
-//   - non-empty dashboards mount the Cinatra toolbar (owner labels); the
-//     filter bar mounts inside `<DashboardFilterBarSlot>` — the
-//     child-toolbar wrapper (design spec §Nested toolbar, cinatra#65) —
-//     only when upstream's own gating would paint it (editable AND
-//     (edit mode OR saved dashboard filters)).
+//   - empty dashboards keep the grey toolbar frame mounted and swap
+//     drizzle-cube's raw "No Portlets" placeholder for the app-consistent
+//     `<DashboardEmptyState>` (cinatra#1119); an editable empty surface
+//     carries the "Add card" primary action, a read-only one shows the
+//     message alone; the filter bar stays hidden while empty;
+//   - non-empty dashboards mount the Cinatra toolbar (owner labels) and the
+//     real grid surface; the filter bar mounts inside
+//     `<DashboardFilterBarSlot>` — the child-toolbar wrapper (design spec
+//     §Nested toolbar, cinatra#65) — only when upstream's own gating would
+//     paint it (editable AND (edit mode OR saved dashboard filters)).
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
 //     src/components/__tests__/composed-dashboard.test.tsx
@@ -66,15 +68,63 @@ const ONE_PORTLET_CONFIG = {
 } as unknown as Config;
 
 describe("ComposedDashboard — assembly gating", () => {
-  test("empty dashboard: no toolbar, no filter bar; surface + modals still mount", () => {
+  test("empty editable dashboard: keeps the toolbar, swaps the raw grid placeholder for the app empty state (with Add-card CTA); filter bar hidden; modals mount (cinatra#1119)", () => {
     render(<ComposedDashboard config={EMPTY_CONFIG} editable />);
 
+    // The grey toolbar frame stays mounted on an empty surface (owner label),
+    // so an empty dashboard reads as the same surface type as its peers.
+    expect(
+      document.querySelector("[data-cinatra-dashboard-toolbar]"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Edit dashboard" }),
+    ).toBeTruthy();
+
+    // The app empty state replaces drizzle-cube's raw "No Portlets" screen:
+    // the (stubbed) grid surface must NOT mount while empty.
+    expect(screen.getByTestId("dashboard-empty-state")).toBeTruthy();
+    expect(screen.queryByTestId("grid-surface")).toBeNull();
+
+    // Single primary action, wired to the same add-portlet handler the
+    // toolbar uses (app design spec: an empty state always carries one).
+    expect(screen.getByRole("button", { name: "Add card" })).toBeTruthy();
+
+    // No filter bar while empty; modals always mount.
+    expect(screen.queryByTestId("filter-bar")).toBeNull();
+    expect(
+      document.querySelector("[data-cinatra-dashboard-filter-bar]"),
+    ).toBeNull();
+    expect(screen.getByTestId("modals")).toBeTruthy();
+  });
+
+  test("empty read-only dashboard: app empty state with NO add affordance; toolbar self-hides; grid surface stays swapped out", () => {
+    render(<ComposedDashboard config={EMPTY_CONFIG} editable={false} />);
+
+    expect(screen.getByTestId("dashboard-empty-state")).toBeTruthy();
+    expect(screen.queryByTestId("grid-surface")).toBeNull();
+    // Read-only surface with no route actions: the toolbar renders nothing,
+    // and the empty state offers no add button.
     expect(
       document.querySelector("[data-cinatra-dashboard-toolbar]"),
     ).toBeNull();
-    expect(screen.queryByTestId("filter-bar")).toBeNull();
-    expect(screen.getByTestId("grid-surface")).toBeTruthy();
-    expect(screen.getByTestId("modals")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add card" })).toBeNull();
+  });
+
+  test("the empty-state Add-card CTA opens the add-portlet picker without prematurely swapping in the grid surface", () => {
+    render(<ComposedDashboard config={EMPTY_CONFIG} editable />);
+
+    // Starts on the app empty state (no real grid surface).
+    expect(screen.getByTestId("dashboard-empty-state")).toBeTruthy();
+    expect(screen.queryByTestId("grid-surface")).toBeNull();
+
+    // The CTA opens the add-portlet modal via the SAME handler the toolbar
+    // uses — it must not throw, and (since no card is committed yet) the empty
+    // state stays put and the grid surface does NOT swap in. The full
+    // add-card → live-count-flip → grid-surface transition is exercised on the
+    // real surface in tests/e2e/dashboards/personal.spec.ts.
+    fireEvent.click(screen.getByRole("button", { name: "Add card" }));
+    expect(screen.getByTestId("dashboard-empty-state")).toBeTruthy();
+    expect(screen.queryByTestId("grid-surface")).toBeNull();
   });
 
   test("non-empty dashboard: mounts the Cinatra toolbar (owner label); filter bar stays hidden in view mode without saved filters", () => {
