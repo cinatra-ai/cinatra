@@ -96,8 +96,9 @@ export function ExtensionSettingsView({
   return (
     <main data-surface-id="extension-settings" className="min-h-screen">
       <div className="mx-auto w-full max-w-[576px] px-6 py-8 sm:py-10">
-        {/* §II detail header — nothing in the top-right. */}
-        <div className="flex items-start gap-4.5">
+        {/* §V settings header — the §II detail header (name + byline CENTRED
+            vertically against the logo, 0.5.0), with nothing in the top-right. */}
+        <div className="flex items-center gap-4.5">
           <div
             data-slot="extension-settings-tile"
             className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-[15px] border border-line bg-surface-strong shadow-sm"

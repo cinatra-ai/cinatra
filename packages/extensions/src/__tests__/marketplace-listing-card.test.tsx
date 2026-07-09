@@ -95,6 +95,55 @@ describe("MarketplaceListingCard — footer-meta compat verdict is plain text, n
   });
 });
 
+describe("MarketplaceListingCard — 0.5.0 §I byline in the banner (cinatra#1246)", () => {
+  // The banner (coloured ground) is everything up to the body block; the body
+  // starts at the `flex flex-1 flex-col px-[14px]` column. Split there so we can
+  // assert WHICH region the publisher byline lands in.
+  function splitBanner(html: string): { banner: string; body: string } {
+    const bodyAt = html.indexOf("flex flex-1 flex-col px-[14px]");
+    return { banner: html.slice(0, bodyAt), body: html.slice(bodyAt) };
+  }
+
+  it("renders the {Kind} by {Vendor} byline INSIDE the banner, not in the body block", () => {
+    const html = renderCard({
+      vendor: { name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" },
+    });
+    const { banner, body } = splitBanner(html);
+    // The publisher slot is a banner descendant now (0.5.0), never in the body.
+    expect(banner).toContain('data-slot="extension-card-publisher"');
+    expect(body).not.toContain('data-slot="extension-card-publisher"');
+    // …and it reads white via text-current (inherits the banner ground), so it
+    // recolours to match the name rather than pinning the ink/primary token.
+    const byline = banner.match(/<div data-slot="extension-card-publisher"[^>]*>/)?.[0];
+    expect(byline).toContain("text-current");
+    expect(byline).not.toContain("text-muted-foreground");
+    expect(byline).not.toContain("text-foreground");
+  });
+
+  it("clamps the banner name at 2 lines (0.5.0 §I) and reserves a 62px body block", () => {
+    const html = renderCard();
+    const { banner, body } = splitBanner(html);
+    const nameDiv = banner.match(/<div data-slot="extension-card-name"[^>]*>/)?.[0];
+    expect(nameDiv).toContain("line-clamp-2");
+    expect(nameDiv).not.toContain("line-clamp-3");
+    // Body reserves 62px (was 86); the description stays 3-line-clamped.
+    expect(body).toContain("min-h-[62px]");
+    expect(body).not.toContain("min-h-[86px]");
+    expect(body).toContain("line-clamp-3");
+  });
+
+  it("shows the VERIFIED check only for a catalog-carried vendor, and the vendor links out", () => {
+    const withVendor = renderCard({
+      vendor: { name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" },
+    });
+    expect(withVendor).toContain('data-slot="extension-card-verified"');
+    expect(withVendor).toContain('href="https://marketplace.cinatra.ai/store/foundry"');
+    // A derived package-scope namespace (no vendor block) is NOT verified.
+    const noVendor = renderCard({ vendor: null });
+    expect(noVendor).not.toContain('data-slot="extension-card-verified"');
+  });
+});
+
 describe("MarketplaceListingCard — rating stars use the dedicated rating-star colour tokens", () => {
   it("uses text-rating-star / text-rating-star-muted, not the semantic ink/muted tokens", () => {
     const html = renderCard({ rating: { average: 4, count: 12 } });
