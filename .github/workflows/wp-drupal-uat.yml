@@ -258,6 +258,17 @@ jobs:
         # and the Playwright webServer `pnpm dev` inherits it for the app-side
         # bridge check. THROWAWAY crypto minted per run — never an ops secret.
         run: echo "CINATRA_BRIDGE_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Derive CINATRA_CONTEXT_ATTEST_KEY (throwaway, per-run)
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        # Symmetric with the bridge token: the wayflow boot preflight
+        # (agent_loader.py) also EXITS non-zero without the per-node context-
+        # attestation key, so the container restart-loops and the widget-stream
+        # relay scenarios fail. Same plumbing — one derivation into the job env
+        # reaches BOTH the container (scripts/gen-wayflow-env.mjs writes it into
+        # docker/wayflow/.wayflow.env, which already lists this key) and the
+        # app-side `pnpm dev`, so app and container share the SAME key (a
+        # mismatch would 403 composed-child context resolution). THROWAWAY.
+        run: echo "CINATRA_CONTEXT_ATTEST_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
         if: needs.changed-paths.outputs.run_uat == 'true'
         # Env-presence guard ONLY (runs in the caller, BEFORE the composite
@@ -363,6 +374,13 @@ jobs:
         # docker/wayflow/.wayflow.env via scripts/gen-wayflow-env.mjs) and the
         # Playwright webServer `pnpm dev`. THROWAWAY crypto minted per run.
         run: echo "CINATRA_BRIDGE_TOKEN=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Derive CINATRA_CONTEXT_ATTEST_KEY (throwaway, per-run)
+        # Same rationale as the uat-gate job's step: the wayflow boot preflight
+        # also refuses to start without the per-node context-attestation key. One
+        # derivation into the job env reaches BOTH the container (via
+        # scripts/gen-wayflow-env.mjs -> docker/wayflow/.wayflow.env) and the app
+        # (`pnpm dev`), sharing the SAME key. THROWAWAY crypto minted per run.
+        run: echo "CINATRA_CONTEXT_ATTEST_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
         # Env-presence guard ONLY (runs in the caller, BEFORE the composite
         # action installs `pg`). Postgres reachability is already guaranteed by
