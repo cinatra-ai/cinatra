@@ -102,6 +102,129 @@ const CORPUS: Array<{ label: string; raw: unknown }> = [
   { label: "number step<=0", raw: { fields: [{ kind: "number", key: "n", label: "N", step: 0 }] } },
   { label: "free-list missing key", raw: { fields: [{ kind: "free-list", label: "L" }] } },
   { label: "expansion carrier-key smuggle", raw: { fields: [{ kind: "boolean", key: "b", label: "B", onClick: "x" }] } },
+  // ---- cinatra#1239 tab groups (valid + each invalid family) — locks the
+  // generator's `tabs` grammar to parseTabs in extension-schema-config.ts so the
+  // third grammar copy can never silently drift from the authoritative parser ----
+  {
+    label: "tabs: setup + custom + help last",
+    raw: {
+      title: "Tabbed",
+      fields: [{ kind: "nango-connect", label: "Connect", providerConfigKey: "p" }],
+      tabs: [
+        {
+          id: "shell",
+          label: "Local shell",
+          fields: [{ kind: "boolean", key: "allowNetwork", label: "Allow network", defaultValue: false }],
+        },
+        {
+          id: "help",
+          label: "Help",
+          fields: [
+            { kind: "advisory", label: "Docs", tone: "info", probeActionId: "probe", whenReady: "Ready", whenNotReady: "Not ready" },
+          ],
+        },
+      ],
+    },
+  },
+  { label: "tabs: empty array is valid (renders flat)", raw: { fields: [{ kind: "text", key: "host", label: "Host" }], tabs: [] } },
+  { label: "tabs: not an array", raw: { fields: [{ kind: "text", key: "host", label: "Host" }], tabs: { id: "x" } } },
+  {
+    label: "tabs: carrier-key smuggle on a tab",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [{ id: "t", label: "T", fields: [{ kind: "text", key: "k", label: "K" }], onClick: "x" }],
+    },
+  },
+  {
+    label: "tabs: invalid tab id (regex)",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [{ id: "1bad", label: "T", fields: [{ kind: "text", key: "k", label: "K" }] }],
+    },
+  },
+  {
+    label: "tabs: missing tab label",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [{ id: "t", fields: [{ kind: "text", key: "k", label: "K" }] }],
+    },
+  },
+  {
+    label: "tabs: empty tab fields",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [{ id: "t", label: "T", fields: [] }],
+    },
+  },
+  {
+    label: "tabs: duplicate tab id",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [
+        { id: "t", label: "One", fields: [{ kind: "text", key: "a", label: "A" }] },
+        { id: "t", label: "Two", fields: [{ kind: "text", key: "b", label: "B" }] },
+      ],
+    },
+  },
+  {
+    label: "tabs: field key collides with a BASE field key (shared submit namespace)",
+    raw: {
+      fields: [{ kind: "text", key: "shared", label: "Base" }],
+      tabs: [{ id: "t", label: "T", fields: [{ kind: "secret", key: "shared", label: "Tab" }] }],
+    },
+  },
+  {
+    label: "tabs: field key collides ACROSS two tabs (shared submit namespace)",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [
+        { id: "a", label: "A", fields: [{ kind: "text", key: "dup", label: "One" }] },
+        { id: "b", label: "B", fields: [{ kind: "text", key: "dup", label: "Two" }] },
+      ],
+    },
+  },
+  // ---- field-validator drift closed alongside cinatra#1239 (found in Codex
+  // convergence): the generator previously did NOT reject duplicate select
+  // option values or duplicate banner variant names, while the runtime parser
+  // always did. Locked at the base level AND inside a tab (the tab subtree
+  // delegates to the SAME per-field validator) ----
+  {
+    label: "select: distinct option values valid",
+    raw: {
+      fields: [
+        { kind: "select", key: "region", label: "Region", options: [{ value: "us", label: "US" }, { value: "eu", label: "EU" }], defaultValue: "us" },
+      ],
+    },
+  },
+  {
+    label: "select: duplicate option values",
+    raw: {
+      fields: [{ kind: "select", key: "region", label: "Region", options: [{ value: "us", label: "US" }, { value: "us", label: "US again" }] }],
+    },
+  },
+  {
+    label: "banner: distinct variant names valid",
+    raw: {
+      fields: [
+        { kind: "banner", label: "B", variants: [{ name: "ok", tone: "success", message: "Good" }, { name: "bad", tone: "destructive", message: "Nope" }] },
+      ],
+    },
+  },
+  {
+    label: "banner: duplicate variant names",
+    raw: {
+      fields: [{ kind: "banner", label: "B", variants: [{ name: "dup", tone: "success", message: "One" }, { name: "dup", tone: "warning", message: "Two" }] }],
+    },
+  },
+  {
+    label: "tabs: select with duplicate option values inside a tab",
+    raw: {
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      tabs: [
+        { id: "t", label: "T", fields: [{ kind: "select", key: "region", label: "Region", options: [{ value: "x", label: "X" }, { value: "x", label: "X2" }] }] },
+      ],
+    },
+  },
 ];
 
 describe("generator validateConfigSchema ⇄ parseSchemaConfig parity", () => {
