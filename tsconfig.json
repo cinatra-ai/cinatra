@@ -396,6 +396,7 @@
       "@cinatra-ai/agent-ui-protocol/server": ["./packages/agent-ui-protocol/src/server.ts"],
       "@cinatra-ai/agent-ui-protocol/stream": ["./packages/agent-ui-protocol/src/stream.ts"],
       "@cinatra-ai/agent-ui-protocol/renderable-views": ["./packages/agent-ui-protocol/src/renderable-views/index.ts"],
+      "@cinatra-ai/agent-ui-protocol/conformance": ["./packages/agent-ui-protocol/src/conformance-entry.ts"],
       "@cinatra-ai/objects": ["./packages/objects/src/index.ts"],
       "@cinatra-ai/artifacts": ["./packages/artifacts/src/index.ts"],
       "@cinatra-ai/default-artifact": ["./extensions/cinatra-ai/default-artifact/src/index.ts"],

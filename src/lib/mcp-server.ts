@@ -7,6 +7,7 @@ import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
+import { createApprovalsMcpModule } from "@/app/configuration/approvals/approvals-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
 import { createBlogContentModule } from "@/lib/blog/integration/module";
 import { createDashboardsModule } from "@cinatra-ai/dashboards/module";
@@ -61,6 +62,10 @@ const postConnectorPlatformModules = [
   createMetricCostMcpModule(),
   createMetricUsageMcpModule(),
   createAgentsModule(),
+  // Unified approvals_* (list/get/decide) over the ApprovalSource registry —
+  // federates agent creation requests, the workflow legacy passthrough, and
+  // (once they join the registry) the marketplace sources. Agent-adjacent slot.
+  createApprovalsMcpModule(),
   createExtensionsModule(),
   createChatModule(),
   createTriggerModule(),

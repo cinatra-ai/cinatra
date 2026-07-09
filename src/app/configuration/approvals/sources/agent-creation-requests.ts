@@ -83,6 +83,10 @@ function toRow(r: AgentCreationRequestRow, isOwnRequest: boolean): ApprovalRow {
     createdAt: r.createdAt,
     href: `/configuration/agents/approvals/${r.id}`,
     ...(isOwnRequest ? { isOwnRequest: true } : {}),
+    // PUBLIC CAS token — mirrors the adapter-private raw.snapshotHash so the
+    // MCP get/decide round-trip preserves the edit-after-view guard exactly as
+    // the inline UI does by capturing raw.snapshotHash at render.
+    version: r.snapshotHash,
     raw,
   };
 }
