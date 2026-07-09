@@ -975,7 +975,7 @@ const SCHEMA_CONFIG_FIELD_KEYS = {
   ]),
   "free-list": new Set(["kind", "key", "label", "itemLabel", "placeholder", "description"]),
 };
-const SCHEMA_CONFIG_ROOT_KEYS = new Set(["title", "description", "fields"]);
+const SCHEMA_CONFIG_ROOT_KEYS = new Set(["title", "description", "fields", "tabs"]);
 const SCHEMA_CONFIG_BADGE_VARIANTS = new Set([
   "outline", "secondary", "destructive", "success", "warning", "info", "ghost", "muted",
 ]);
@@ -1063,6 +1063,10 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
         errors.push(`${optAt}: requires string "value" and "label"`);
         return;
       }
+      if (seenValues.has(opt.value)) {
+        errors.push(`${optAt}: duplicate value ${JSON.stringify(opt.value)}`);
+        return;
+      }
       seenValues.add(opt.value);
     });
     if (nonEmptyStr(raw.defaultValue) && !seenValues.has(raw.defaultValue)) {
@@ -1101,6 +1105,7 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
     if (!Array.isArray(variants) || variants.length === 0) {
       errors.push(`${at}: banner requires a non-empty "variants"`);
     } else {
+      const seenNames = new Set();
       variants.forEach((v, j) => {
         const vAt = `${at}.variants[${j}]`;
         if (!isObj(v) || !rejectUnknownConfigKeys(v, new Set(["name", "tone", "message"]), vAt, errors)) {
@@ -1108,7 +1113,13 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
           errors.push(`${vAt}: must be an object`);
           return;
         }
-        if (!nonEmptyStr(v.name) || !SCHEMA_CONFIG_KEY_RE.test(v.name)) errors.push(`${vAt}: requires a valid "name"`);
+        if (!nonEmptyStr(v.name) || !SCHEMA_CONFIG_KEY_RE.test(v.name)) {
+          errors.push(`${vAt}: requires a valid "name"`);
+        } else if (seenNames.has(v.name)) {
+          errors.push(`${vAt}: duplicate variant name ${JSON.stringify(v.name)}`);
+        } else {
+          seenNames.add(v.name);
+        }
         if (!nonEmptyStr(v.tone) || !SCHEMA_CONFIG_BANNER_TONES.has(v.tone)) errors.push(`${vAt}: invalid tone`);
         if (!nonEmptyStr(v.message)) errors.push(`${vAt}: requires a "message"`);
       });
@@ -1150,17 +1161,22 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
   }
   // free-list: only key + label (both already validated above); no extra rules.
 }
-export function validateConfigSchema(raw) {
-  if (!isObj(raw)) return ["configSchema must be an object"];
-  const errors = [];
-  rejectUnknownConfigKeys(raw, SCHEMA_CONFIG_ROOT_KEYS, "configSchema", errors);
-  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
-    errors.push("configSchema.fields must be a non-empty array");
-    return errors;
-  }
-  const seenKeys = new Set();
-  raw.fields.forEach((field, i) => {
-    const at = `fields[${i}]`;
+// Exact key allowlist for a tab GROUP (fail-closed, mirrors
+// src/lib/extension-schema-config.ts's TAB_KEY_ALLOWLIST): a tab carries ONLY an
+// `id`, a `label`, and a nested `fields` array — never an executable/HTML carrier
+// key. The reserved Help-last ORDERING is a render-time concern (the runtime
+// parseSchemaConfig sorts the reserved help tab last); the generator emits
+// `configSchema` verbatim, so here it validates STRUCTURE only.
+const SCHEMA_CONFIG_TAB_KEYS = new Set(["id", "label", "fields"]);
+
+// Validate a raw field array into `errors`, threading `seenKeys` so a field key
+// stays unique across the whole surface (the base `fields` AND every tab share
+// one flat submit namespace). Mirrors parseFieldList in
+// src/lib/extension-schema-config.ts. Extracted so the base list and each tab's
+// `fields` run the identical per-field validation.
+function validateConfigSchemaFieldList(rawFields, atPrefix, errors, seenKeys) {
+  rawFields.forEach((field, i) => {
+    const at = `${atPrefix}[${i}]`;
     if (!isObj(field)) {
       errors.push(`${at}: must be an object`);
       return;
@@ -1171,6 +1187,63 @@ export function validateConfigSchema(raw) {
     }
     validateConfigSchemaField(field.kind, field, at, errors, seenKeys);
   });
+}
+
+// Validate the optional `tabs` root key (cinatra#1239). Fail-closed: rejects a
+// non-array, unknown per-tab keys, an invalid/missing `id` or `label`, an empty
+// `fields`, and duplicate tab ids; field keys thread through `seenKeys` so they
+// stay unique across the whole surface. Mirrors parseTabs in
+// src/lib/extension-schema-config.ts (minus the render-time Help-last sort).
+function validateConfigSchemaTabs(raw, errors, seenKeys) {
+  if (!Array.isArray(raw)) {
+    errors.push("configSchema.tabs must be an array");
+    return;
+  }
+  const seenTabIds = new Set();
+  raw.forEach((tab, i) => {
+    const at = `tabs[${i}]`;
+    if (!isObj(tab)) {
+      errors.push(`${at}: must be an object`);
+      return;
+    }
+    // Fail-closed: reject any key outside the tab allowlist FIRST.
+    if (!rejectUnknownConfigKeys(tab, SCHEMA_CONFIG_TAB_KEYS, at, errors)) return;
+    if (!nonEmptyStr(tab.id) || !SCHEMA_CONFIG_KEY_RE.test(tab.id)) {
+      errors.push(`${at}: invalid or missing "id"`);
+      return;
+    }
+    if (seenTabIds.has(tab.id)) {
+      errors.push(`${at}: duplicate tab id ${JSON.stringify(tab.id)}`);
+      return;
+    }
+    seenTabIds.add(tab.id);
+    if (!nonEmptyStr(tab.label)) {
+      errors.push(`${at}: missing "label"`);
+      return;
+    }
+    if (!Array.isArray(tab.fields) || tab.fields.length === 0) {
+      errors.push(`${at}: tab requires a non-empty "fields" array`);
+      return;
+    }
+    validateConfigSchemaFieldList(tab.fields, `${at}.fields`, errors, seenKeys);
+  });
+}
+export function validateConfigSchema(raw) {
+  if (!isObj(raw)) return ["configSchema must be an object"];
+  const errors = [];
+  rejectUnknownConfigKeys(raw, SCHEMA_CONFIG_ROOT_KEYS, "configSchema", errors);
+  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
+    errors.push("configSchema.fields must be a non-empty array");
+    return errors;
+  }
+  const seenKeys = new Set();
+  validateConfigSchemaFieldList(raw.fields, "fields", errors, seenKeys);
+  // Optional tab groups (cinatra#1239). Validated with the SAME `seenKeys` so a
+  // field key is unique across the base `fields` AND every tab. Absent → the
+  // surface stays flat (back-compat). Mirrors parseSchemaConfig's tabs pass.
+  if (raw.tabs !== undefined) {
+    validateConfigSchemaTabs(raw.tabs, errors, seenKeys);
+  }
   return errors;
 }
 
