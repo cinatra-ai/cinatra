@@ -6,7 +6,7 @@
  * with the host's DB / actor / mcp / fs / pg deps mocked, proving: create →
  * idempotent re-run skip → user-edit skip → ungranted-port fail-loud.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { decideFixtureAction, checksumOf } from "@/lib/dev-fixture-seeder";
 
 // ---- pure decision matrix ----
@@ -124,11 +124,28 @@ function installFixtureExtension(opts: { ports?: string[]; version?: number; val
   ];
 }
 
+const ACTIVATION_ENV_KEYS = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE", "CINATRA_DEV_FIXTURES"] as const;
+
 describe("runDevFixtureSeeder — end-to-end", () => {
+  let savedEnv: Record<string, string | undefined>;
   beforeEach(() => {
     kv.clear();
     actorOrg.current = "orgDev";
     fsMock.extensions = [];
+    // Snapshot + enable seeding by default (demo profile in a development runtime)
+    // so the create / idempotency / user-edit / grant cases below exercise the
+    // seeding path. The activation guard itself is covered by the two cases at
+    // the end of this block and by install-profile.test.ts.
+    savedEnv = Object.fromEntries(ACTIVATION_ENV_KEYS.map((k) => [k, process.env[k]]));
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    process.env.CINATRA_INSTALL_PROFILE = "demo";
+    delete process.env.CINATRA_DEV_FIXTURES;
+  });
+  afterEach(() => {
+    for (const k of ACTIVATION_ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
   });
 
   it("skips when no dev user/org is resolvable", async () => {
@@ -181,5 +198,25 @@ describe("runDevFixtureSeeder — end-to-end", () => {
 
   it("computes a stable checksum insensitive to object key order", () => {
     expect(checksumOf({ a: 1, b: 2 })).toBe(checksumOf({ b: 2, a: 1 }));
+  });
+
+  // ── fixtures relocation (cinatra-cli#122): demo-mandatory / dev-opt-in ──────
+  it("SKIPS entirely (activation guard) on a plain dev boot — no profile, no opt-in", async () => {
+    process.env.CINATRA_INSTALL_PROFILE = "dev";
+    delete process.env.CINATRA_DEV_FIXTURES;
+    installFixtureExtension({ value: "month" });
+    const r = await runDevFixtureSeeder();
+    expect(r.status).toBe("skipped");
+    expect(r.created).toBe(0);
+    expect(kv.has(`${SETTING_KEY_PREFIX}pref`)).toBe(false); // never seeded
+  });
+
+  it("SEEDS on a plain dev boot when opted in via CINATRA_DEV_FIXTURES=1", async () => {
+    process.env.CINATRA_INSTALL_PROFILE = "dev";
+    process.env.CINATRA_DEV_FIXTURES = "1";
+    installFixtureExtension({ value: "month" });
+    const r = await runDevFixtureSeeder();
+    expect(r.created).toBe(1);
+    expect(kv.get(`${SETTING_KEY_PREFIX}pref`)).toBe("month");
   });
 });
