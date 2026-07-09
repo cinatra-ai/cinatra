@@ -21,9 +21,43 @@ const pkg = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")) as {
 describe("sdk-ui Tabs primitive — module load", () => {
   it("loads in node without throwing and exports the four parts", async () => {
     const mod = await import("../ui/tabs");
-    for (const name of ["Tabs", "TabsList", "TabsTrigger", "TabsContent"]) {
+    for (const name of ["Tabs", "TabsList", "TabsListRow", "TabsTrigger", "TabsContent"]) {
       expect(typeof (mod as Record<string, unknown>)[name]).toBe("function");
     }
+  });
+});
+
+describe("sdk-ui Tabs primitive — under-header paired rule (design spec §Tabs)", () => {
+  it("exports TabsListRow — the tablist row that pairs with the etched rule", () => {
+    expect(tabsSrc).toMatch(/function TabsListRow/);
+    expect(tabsSrc).toMatch(/export \{[^}]*\bTabsListRow\b[^}]*\}/);
+  });
+
+  it("lays the row out as tabs-left / rule-right (grid auto,1fr) and drops the list hairline", () => {
+    // The tablist takes the left (auto) portion; the rule fills the 1fr to the
+    // page edge. In the row the list drops its own bottom hairline so only the
+    // etched paired-line reads (spec §Dividers: never stack two rules).
+    expect(tabsSrc).toContain("grid-cols-[auto_1fr]");
+    expect(tabsSrc).toMatch(/TabsList className=\{cn\("border-b-0"/);
+  });
+
+  it("draws the rule with the design etched paired-line, not a plain hairline", () => {
+    expect(tabsSrc).toContain("divider-etched");
+  });
+
+  it("keeps the rule decorative (role=none / aria-hidden — it is not a tab stop)", () => {
+    expect(tabsSrc).toMatch(/role="none"/);
+    expect(tabsSrc).toMatch(/aria-hidden/);
+  });
+
+  it("stays dependency-light: the rule is inlined, NOT the host `@/` Separator", () => {
+    // Portability contract for bundled-react connectors — the host composes
+    // TabsListRow from a Separator component (an `@/components/ui/separator`
+    // import), which this package cannot reach. The etched utility is inlined,
+    // so there is no such import and no rendered <Separator/> JSX element (a
+    // rendered one would require the forbidden import guarded here).
+    expect(tabsSrc).not.toMatch(/from ["']@\/components\/ui\/separator["']/);
+    expect(tabsSrc).not.toMatch(/<Separator[ />]/);
   });
 });
 

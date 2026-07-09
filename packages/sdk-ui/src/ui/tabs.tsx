@@ -14,7 +14,9 @@
 // slate inactive). NO connector-specific behaviour, layout, or Help-tab policy
 // lives here (the consuming extension owns its content + composition, incl. the
 // always-last Help tab). The class list is kept in lockstep with the host app's
-// `src/components/ui/tabs.tsx` so both render the identical design-system Tabs.
+// `src/components/ui/tabs.tsx` so both render the identical design-system Tabs —
+// including `TabsListRow`, the under-header row that pairs the tablist with the
+// etched section rule to the right of the last tab (design spec §Tabs).
 
 import * as React from "react"
 import { Tabs as TabsPrimitive } from "radix-ui"
@@ -86,4 +88,40 @@ function TabsContent({
   )
 }
 
-export { Tabs, TabsList, TabsTrigger, TabsContent }
+// design spec §Tabs + §Dividers — when the tablist sits directly under a
+// PageHeader, the etched paired-line rule begins to the RIGHT of the last tab
+// and stretches to the page edge: the tablist takes the left portion of the
+// row, the rule the right (never overlap the rule with a tab, never stack two
+// rules). Use TabsListRow in place of TabsList for that row, and pair it with a
+// header that renders no divider so the rule does not stack with a header rule
+// above.
+//
+// Host parity: `src/components/ui/tabs.tsx` composes this from a Separator
+// (`major`) component. To keep the primitive dependency-light (no host
+// Separator import, no `@/`
+// app-local alias — portability is a hard contract for bundled-react
+// connectors), the etched rule here is the decorative `.divider-etched` utility
+// (from `@cinatra-ai/design/utilities.css`, already imported by every Cinatra
+// surface) on a `role="none"` element — the identical rendered paired-line.
+function TabsListRow({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.List>) {
+  return (
+    <div className="grid grid-cols-[auto_1fr] items-end gap-7">
+      <TabsList className={cn("border-b-0", className)} {...props}>
+        {children}
+      </TabsList>
+      <div
+        role="none"
+        aria-hidden
+        data-slot="separator"
+        data-major
+        className="divider-etched mb-[11px] self-end bg-transparent"
+      />
+    </div>
+  )
+}
+
+export { Tabs, TabsList, TabsListRow, TabsTrigger, TabsContent }
