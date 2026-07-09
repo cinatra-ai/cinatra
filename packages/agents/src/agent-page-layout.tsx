@@ -41,6 +41,33 @@ export function getAutoRunNumber(runName: string, templateName: string): number 
   return /^\d+$/.test(digits) ? Number(digits) : null;
 }
 
+/**
+ * Per-tab base content width (cinatra#1161 — owner decision: option 1, per-tab
+ * widths). The design system uses a GRADED content-width scale, not one
+ * universal width (Application Design system, §VII "Content widths"):
+ *
+ *   run     → Full   max-w-7xl (1280px) — run-detail is an entity-detail + data-output
+ *                    surface; §VII Full covers "dashboards, lists, tables, settings,
+ *                    entity detail". Matches PageContent (every other surface).
+ *   setup   → Medium max-w-2xl (672px)  — §VII Medium is literally "the /setup ·
+ *                    onboarding column".
+ *   trigger → Narrow max-w-xl  (576px)  — a single-column schedule/control form;
+ *                    §VII Narrow is "single-column forms and control stacks".
+ *   permissions / overview → Wide max-w-3xl (768px) — UNCHANGED from the prior
+ *                    single-shell default; these tabs are outside the #1161 ruling.
+ *
+ * The output-HITL widen (`data-hitl-output`) is preserved on EVERY tab below so
+ * wide approval output still gets room (symmetric, centred) regardless of the
+ * per-tab base width — the run/HITL surface keeps the existing widen behaviour.
+ */
+export const TAB_CONTENT_MAX_WIDTH: Record<AgentInstanceNavProps["activeTab"], string> = {
+  run: "max-w-7xl",
+  setup: "max-w-2xl",
+  trigger: "max-w-xl",
+  permissions: "max-w-3xl",
+  overview: "max-w-3xl",
+};
+
 export function AgentPageLayout({
   agentId,
   instanceId,
@@ -59,6 +86,7 @@ export function AgentPageLayout({
   const [runName, setRunName] = useState(initialRunName);
   const titleRef = useRef<InlinePageTitleHandle>(null);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
+  const contentMaxWidth = TAB_CONTENT_MAX_WIDTH[activeTab];
 
   // Listen for cross-component name updates from HitlApprovalCard:
   //   "cinatra:agent:name-set"  — auto-generated or confirmed name; update displayed value
@@ -94,17 +122,21 @@ export function AgentPageLayout({
   return (
     <>
       {/*
-        Outer width-controlling shell. Default narrow width matches the
-        per-section caps. When ANY descendant carries `data-hitl-output="true"`
-        (set by HitlApprovalCard for `:output` / `-output` renderers), the shell
-        widens symmetrically — `mx-auto` keeps it centered, `w-fit` keeps the
-        box only as wide as its content needs, and the `min-w-[min(48rem,100%)]`
-        floor prevents the title row + tab nav from reflowing narrower than the
-        existing 768px shell on wide viewports.
+        Outer width-controlling shell. The base max-width is chosen PER TAB from
+        the design system's graded content-width scale (TAB_CONTENT_MAX_WIDTH,
+        §VII — cinatra#1161): run → Full (7xl), setup → Medium (2xl), trigger →
+        Narrow (xl), permissions/overview → Wide (3xl). When ANY descendant
+        carries `data-hitl-output="true"` (set by HitlApprovalCard for `:output`
+        / `-output` renderers), the shell widens symmetrically regardless of tab
+        — `mx-auto` keeps it centered, `w-fit` keeps the box only as wide as its
+        content needs, and the `min-w-[min(48rem,100%)]` floor prevents the title
+        row + tab nav from reflowing narrower than the 768px reading shell on
+        wide viewports.
       */}
       <div
+        data-active-tab={activeTab}
         className={[
-          "mx-auto w-full max-w-3xl px-5 sm:px-8 lg:px-0",
+          `mx-auto w-full ${contentMaxWidth} px-5 sm:px-8 lg:px-0`,
           "transition-[max-width] duration-200 ease-out",
           "[&:has([data-hitl-output='true'])]:max-w-[min(100%,1400px)]",
           "[&:has([data-hitl-output='true'])]:w-fit",
