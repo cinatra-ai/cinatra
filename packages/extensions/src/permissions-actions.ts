@@ -18,8 +18,14 @@
 import { revalidatePath } from "next/cache";
 import { and, eq, ilike, isNull, notInArray, or } from "drizzle-orm";
 
-import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
+import { getActorContext, requireAuthSession } from "@/lib/auth-session";
+import type { ActorContext } from "@/lib/authz";
 import { betterAuthDb, betterAuthUsers } from "@/lib/better-auth-db";
+
+import {
+  canExtensionAccess,
+  hasAdminStandingOverExtension,
+} from "./enforce-extension-access";
 
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 // Never trust the TS-typed `policy` argument at runtime. Every save path
@@ -70,22 +76,49 @@ export type ExtensionPermissionsSearchResult =
 // Auth gate
 // ---------------------------------------------------------------------------
 
+function humanUid(actor: ActorContext): string | undefined {
+  return actor.principalType === "HumanUser" ? actor.principalId : undefined;
+}
+
+/**
+ * The "who can manage this extension's access" gate. Delegates to the uniform
+ * evaluator's `manage` op when the kind resolves an owner context — admitting
+ * platform admins, the OWNING-ORG admins (admin-parity P2), the installer, and
+ * co-owners uniformly (the evaluator's cross-org guard also denies a
+ * different-org admin). Kinds with no resolvable owner anchor fall back to the
+ * legacy installer / co-owner / platform-admin gate (unchanged behaviour). The
+ * per-kind `extraEditors` (parent-package for skills, runBy for agent_run,
+ * creator for agent_template) — not modelled in the evaluator — are unioned in
+ * for every kind.
+ */
 async function canEditExtension(
   kind: ExtensionKind,
   resourceId: string,
-  callerUserId: string,
-  isAdmin: boolean,
+  actor: ActorContext,
 ): Promise<boolean> {
-  if (isAdmin) return true;
-  const installedBy = await readExtensionInstalledBy(kind, resourceId);
-  if (installedBy === callerUserId) return true;
-  const coOwners = await readExtensionCoOwners(kind, resourceId);
-  if (coOwners.some((c) => c.userId === callerUserId)) return true;
-  // Per-kind extra editors (e.g. skill consults parent-package; agent_run
-  // checks runBy; agent_template checks creator_id).
+  const uid = humanUid(actor);
   const hooks = await getExtensionKindHooks(kind);
-  const extras = (await hooks.extraEditors?.(resourceId)) ?? [];
-  return extras.includes(callerUserId);
+
+  const owner = (await hooks.resolveOwnerContext?.(resourceId)) ?? null;
+  if (owner) {
+    const decision = await canExtensionAccess({ kind, resourceId, owner }, actor, "manage");
+    if (decision.allowed) return true;
+  } else {
+    // Legacy fallback for kinds without an owner anchor yet (agent/skill).
+    if (actor.platformRole === "platform_admin") return true;
+    if (uid != null) {
+      const installedBy = await readExtensionInstalledBy(kind, resourceId);
+      if (installedBy === uid) return true;
+      const coOwners = await readExtensionCoOwners(kind, resourceId);
+      if (coOwners.some((c) => c.userId === uid)) return true;
+    }
+  }
+
+  if (uid != null) {
+    const extras = (await hooks.extraEditors?.(resourceId)) ?? [];
+    if (extras.includes(uid)) return true;
+  }
+  return false;
 }
 
 function assertKind(kind: string): kind is ExtensionKind {
@@ -247,17 +280,16 @@ export async function saveExtensionAccessPolicy(
   if (!parsed.success) return { ok: false, error: "invalid" };
   const validatedPolicy = parsed.data;
 
-  const session = await requireAuthSession().catch(() => null);
-  const userId = session?.user?.id ?? null;
-  if (!userId) return { ok: false, error: "unauthorized" };
+  const actor = await getActorContext();
+  const userId = actor && actor.principalType === "HumanUser" ? actor.principalId : null;
+  if (!actor || !userId) return { ok: false, error: "unauthorized" };
 
   const hooks = await getExtensionKindHooks(kind);
   if (!(await hooks.resourceExists(resourceId))) {
     return { ok: false, error: "not_found" };
   }
 
-  const isAdmin = isPlatformAdmin(session);
-  if (!(await canEditExtension(kind, resourceId, userId, isAdmin))) {
+  if (!(await canEditExtension(kind, resourceId, actor))) {
     return { ok: false, error: "forbidden" };
   }
 
@@ -281,6 +313,7 @@ export async function saveExtensionAccessPolicy(
   // disabled picker rows are an affordance; this veto is the enforcement.
   const writeVeto = await hooks.validatePolicyWrite?.(resourceId, validatedPolicy, {
     userId,
+    actor,
   });
   if (writeVeto) return { ok: false, error: writeVeto };
 
@@ -312,13 +345,17 @@ export async function saveExtensionAccessPolicy(
 
 /**
  * Set or clear the primary owner (installed_by_user_id) for a resource.
- * Admin-only: this is a privileged transfer-of-ownership surface.
- * Callers from install / import flows pass the session user as
- * installedByUserId; admin tools may pass null to release the slot.
+ * Admin-standing surface (admin-parity P2): a platform admin over any resource,
+ * or the OWNING-ORG admin of a resource whose owner context resolves (kinds
+ * with no resolvable owner anchor stay platform-admin-only). This is a
+ * privileged transfer-of-ownership surface. Callers from install / import flows
+ * pass the session user as installedByUserId; admin tools may pass null to
+ * release the slot.
  *
  * Self-enforces authorization and target validation instead of relying on
  * caller discipline:
- *   - requireAdminSession()
+ *   - admin standing (platform admin OR owning-org admin via the evaluator
+ *     predicate)
  *   - hooks.resourceExists(resourceId)
  *   - betterAuth users.id existence check when installedByUserId !== null
  */
@@ -329,17 +366,22 @@ export async function setExtensionInstaller(
 ): Promise<ExtensionPermissionsResult> {
   if (!assertKind(kind)) return { ok: false, error: "invalid_kind" };
 
-  const { requireAdminSession } = await import("@/lib/auth-session");
-  try {
-    await requireAdminSession();
-  } catch {
-    return { ok: false, error: "unauthorized" };
-  }
+  const actor = await getActorContext();
+  if (!actor) return { ok: false, error: "unauthorized" };
 
   const hooks = await getExtensionKindHooks(kind);
   if (!(await hooks.resourceExists(resourceId))) {
     return { ok: false, error: "not_found" };
   }
+
+  // Admin-standing gate (admin-parity P2): a platform admin over any resource,
+  // or the OWNING-ORG admin of a resource whose owner context resolves. Kinds
+  // without a resolvable owner anchor stay platform-admin-only (no regression).
+  const owner = (await hooks.resolveOwnerContext?.(resourceId)) ?? null;
+  const hasStanding =
+    actor.platformRole === "platform_admin" ||
+    (owner != null && hasAdminStandingOverExtension(actor, owner));
+  if (!hasStanding) return { ok: false, error: "unauthorized" };
 
   if (installedByUserId !== null) {
     // Same humans-only predicate as addExtensionCoOwner.
@@ -396,25 +438,25 @@ export async function searchExtensionCoOwnerCandidates(
 ): Promise<ExtensionPermissionsSearchResult> {
   if (!assertKind(kind)) return { ok: false, error: "invalid_kind" };
 
-  const session = await requireAuthSession().catch(() => null);
-  const userId = session?.user?.id ?? null;
-  if (!userId) return { ok: false, error: "unauthorized" };
+  const actor = await getActorContext();
+  const userId = actor && actor.principalType === "HumanUser" ? actor.principalId : null;
+  if (!actor || !userId) return { ok: false, error: "unauthorized" };
 
-  const activeOrganizationId = session?.session?.activeOrganizationId ?? null;
+  const activeOrganizationId = actor.organizationId ?? null;
   if (!activeOrganizationId) return { ok: false, error: "no_active_org" };
 
-  const isAdmin = isPlatformAdmin(session);
-
   // When resourceId is null the caller is in the upload flow (the resource
-  // doesn't exist yet); admin-only gate. When set, the regular edit gate.
+  // doesn't exist yet); platform-admin-only gate (pre-install, no owner
+  // context to anchor org-admin standing to). When set, the regular edit gate,
+  // which now admits owning-org admins via canEditExtension.
   if (resourceId === null) {
-    if (!isAdmin) return { ok: false, error: "forbidden" };
+    if (actor.platformRole !== "platform_admin") return { ok: false, error: "forbidden" };
   } else {
     const hooks = await getExtensionKindHooks(kind);
     if (!(await hooks.resourceExists(resourceId))) {
       return { ok: false, error: "not_found" };
     }
-    if (!(await canEditExtension(kind, resourceId, userId, isAdmin))) {
+    if (!(await canEditExtension(kind, resourceId, actor))) {
       return { ok: false, error: "forbidden" };
     }
   }
@@ -501,17 +543,16 @@ export async function addExtensionCoOwner(
 ): Promise<ExtensionPermissionsResult> {
   if (!assertKind(kind)) return { ok: false, error: "invalid_kind" };
 
-  const session = await requireAuthSession().catch(() => null);
-  const userId = session?.user?.id ?? null;
-  if (!userId) return { ok: false, error: "unauthorized" };
+  const actor = await getActorContext();
+  const userId = actor && actor.principalType === "HumanUser" ? actor.principalId : null;
+  if (!actor || !userId) return { ok: false, error: "unauthorized" };
 
   const hooks = await getExtensionKindHooks(kind);
   if (!(await hooks.resourceExists(resourceId))) {
     return { ok: false, error: "not_found" };
   }
 
-  const isAdmin = isPlatformAdmin(session);
-  if (!(await canEditExtension(kind, resourceId, userId, isAdmin))) {
+  if (!(await canEditExtension(kind, resourceId, actor))) {
     return { ok: false, error: "forbidden" };
   }
 
@@ -576,17 +617,16 @@ export async function removeExtensionCoOwner(
 ): Promise<ExtensionPermissionsResult> {
   if (!assertKind(kind)) return { ok: false, error: "invalid_kind" };
 
-  const session = await requireAuthSession().catch(() => null);
-  const userId = session?.user?.id ?? null;
-  if (!userId) return { ok: false, error: "unauthorized" };
+  const actor = await getActorContext();
+  const userId = actor && actor.principalType === "HumanUser" ? actor.principalId : null;
+  if (!actor || !userId) return { ok: false, error: "unauthorized" };
 
   const hooks = await getExtensionKindHooks(kind);
   if (!(await hooks.resourceExists(resourceId))) {
     return { ok: false, error: "not_found" };
   }
 
-  const isAdmin = isPlatformAdmin(session);
-  if (!(await canEditExtension(kind, resourceId, userId, isAdmin))) {
+  if (!(await canEditExtension(kind, resourceId, actor))) {
     return { ok: false, error: "forbidden" };
   }
 
