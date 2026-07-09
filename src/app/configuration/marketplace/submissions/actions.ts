@@ -25,10 +25,7 @@ import { redirect } from "next/navigation";
 
 import { requireAdminSession } from "@/lib/auth-session";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-import {
-  enqueueBackgroundJob,
-  BACKGROUND_JOB_NAMES,
-} from "@/lib/background-jobs";
+import { enqueueCatalogSyncForApprovedSubmission } from "./catalog-sync-enqueue";
 
 const VENDOR_LIST_PATH = "/configuration/marketplace/submissions";
 const ADMIN_LIST_PATH  = "/configuration/marketplace/submissions/admin";
@@ -120,86 +117,14 @@ export async function approveSubmissionAction(formData: FormData): Promise<void>
   }
 
   // Fast-freshness catalog reconcile: enqueue a single-package
-  // MARKETPLACE_CATALOG_SYNC job for the just-approved target so the
-  // marketplace catalog table picks up the new package without waiting
-  // for the next hourly full-sweep tick.
-  //
-  // Enqueue regardless of `promotion_state` because the saga is async —
-  // even a `complete`-on-approve result can flip to `failed` after the
-  // round-trip verify, and an `in_flight` result eventually settles. The
-  // job uses attempts/backoff so it retries if the package isn't in
-  // Verdaccio yet by the time it runs (the saga is still finishing on
-  // the marketplace side). A small initial delay gives the saga
-  // breathing room before the first attempt.
-  //
-  // Skip only on terminal-failure states where there's no package to
-  // sync (rejected / withdrawn / approved+failed-with-no-retry-yet).
-  // Best-effort: a failed enqueue doesn't roll back the approval.
-  // Enqueue only on EXPLICIT on-track states. The terminal failure case
-  // (`approved + failed`) is a row stuck mid-saga; the operator must
-  // hit "Retry promotion" before there's anything in Verdaccio to sync.
-  // Enqueuing on a failed row would just thrash the retry budget for no
-  // benefit.
-  const isOnTrack =
-    approveResult.target_final_identity !== "" &&
-    (approveResult.status === "promoted" ||
-      approveResult.promotion_state === "complete" ||
-      (approveResult.status === "approved" &&
-        approveResult.promotion_state === "in_flight"));
-  if (isOnTrack) {
-    const parsed = parseTargetFinalIdentity(approveResult.target_final_identity);
-    if (parsed !== null) {
-      try {
-        await enqueueBackgroundJob(
-          BACKGROUND_JOB_NAMES.MARKETPLACE_CATALOG_SYNC,
-          { packageName: parsed.packageName, packageVersion: parsed.version },
-          {
-            // Per-package job id so it doesn't collide with the recurring loop.
-            jobId: `marketplace-catalog-sync:${parsed.packageName}@${parsed.version}`,
-            // 30s initial delay gives the marketplace's 9-step saga time
-            // to land the package in Verdaccio before the sync worker
-            // tries to fetch it. attempts=4 yields the canonical retry
-            // window: initial + ~30s + ~60s + ~120s ≈ 3.5min total before
-            // the periodic full-sweep takes over.
-            delay: 30_000,
-            attempts: 4,
-            backoff: { type: "exponential", delay: 30_000 },
-            overwriteIfStale: true,
-          },
-        );
-      } catch (enqueueErr) {
-        // Non-fatal — log and let the periodic sweep handle it.
-        console.warn(
-          "[marketplace-catalog-sync] post-approve single-package enqueue failed:",
-          enqueueErr instanceof Error ? enqueueErr.message : enqueueErr,
-        );
-      }
-    }
-  }
+  // MARKETPLACE_CATALOG_SYNC for the just-approved target so the marketplace
+  // catalog table picks up the new package without waiting for the next hourly
+  // full-sweep tick. Shared with the unified-inbox decision helper so both
+  // approve paths reconcile identically. Best-effort (never rolls back approval).
+  await enqueueCatalogSyncForApprovedSubmission(approveResult);
 
   revalidatePath(ADMIN_LIST_PATH);
   redirect(adminRedirect(formData, { ok: "approve", id: encodeURIComponent(submissionId) }));
-}
-
-/**
- * Parse `@<scope>/<name>@<version>` into the marketplace-catalog-sync
- * payload shape. Returns null on malformed input — the enqueue is best-
- * effort and a malformed identity just means the periodic sweep handles
- * the package on its next tick.
- */
-function parseTargetFinalIdentity(
-  identity: string,
-): { packageName: string; version: string } | null {
-  // Find the LAST "@" — the version separator. The first "@" belongs to
-  // the scope (`@<scope>/...`).
-  const at = identity.lastIndexOf("@");
-  if (at <= 0) return null;
-  const packageName = identity.slice(0, at);
-  const version = identity.slice(at + 1);
-  if (!packageName.startsWith("@") || !packageName.includes("/") || version === "") {
-    return null;
-  }
-  return { packageName, version };
 }
 
 /** Admin rejects a pending submission with a non-empty reason. */
