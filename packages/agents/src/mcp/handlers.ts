@@ -853,6 +853,25 @@ async function handleAgentBuilderRun(
   if (notRunnable) return notRunnable;
 
   const actor = request.actor as PrimitiveActorContext;
+
+  // CONFIGURATION-NEEDS RUN GATE (cinatra #1057 ruling (b)): fail-CLOSED when the
+  // agent declares REQUIRED connector dependencies that are not yet configured
+  // for THIS caller. The shared predicate (src/lib/agent-run-readiness) consumes
+  // the post-install derivation and returns a structured error naming each
+  // unconfigured connector (displayName + package id). Install is never blocked —
+  // only running is gated; this is ADDITIVE to the runtime-lifecycle gate above.
+  // Dynamic import mirrors the established @/lib boundary break used elsewhere in
+  // this handler (require-access / agent-project-access).
+  {
+    const { assertAgentRunReadyByPackage } = await import("@/lib/agent-run-readiness");
+    const notConfigured = await assertAgentRunReadyByPackage(
+      template.packageName,
+      identifierForError,
+      { userId: actor.userId ?? null },
+    );
+    if (notConfigured) return notConfigured;
+  }
+
   const roles = await resolveRoleHintsFromSession();
   const probeRun = {
     id: "probe",
