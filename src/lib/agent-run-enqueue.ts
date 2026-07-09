@@ -57,6 +57,14 @@ export type AgentRunEnqueueOptions = Pick<
    * operator can preview an agent that isn't yet wired to its connectors.
    */
   softPreflight?: boolean;
+  /**
+   * Agent package identity so the LLM-provider availability preflight
+   * (cinatra#1062) can read the agent's declared OAS `metadata.cinatra.llm`
+   * requirement from the runtime mount and gate the run on provider
+   * availability. Omitted by callers that don't carry it → no LLM preflight
+   * (the provider is still enforced at the `/api/llm-bridge` step).
+   */
+  agentPackage?: { name: string; version?: string | null };
 };
 
 export class ConnectorNotConfiguredError extends Error {
@@ -131,6 +139,7 @@ export async function enqueueAgentRun(
     actorContext,
     connectorDependencies,
     softPreflight = false,
+    agentPackage,
     ...jobOptions
   } = options;
 
@@ -182,6 +191,37 @@ export async function enqueueAgentRun(
         );
       } else {
         throw err;
+      }
+    }
+  }
+
+  // LLM-provider availability preflight (cinatra#1062). When the caller supplies
+  // the agent package identity, read the agent's declared OAS
+  // `metadata.cinatra.llm` requirement from the runtime mount and gate the run on
+  // provider availability — mirroring the `/api/llm-bridge` dispatch so a
+  // missing/unconfigured provider surfaces BEFORE the run instead of deep at the
+  // bridge step. Dynamically imported + gated on `agentPackage` so a run with no
+  // llm requirement pays neither the mount I/O nor the LLM package load. Honors
+  // `softPreflight` (dev-preview) exactly like the connector gate above.
+  if (agentPackage?.name) {
+    const { readLlmRequirementFromMount } = await import("@cinatra-ai/agents");
+    const requirement = await readLlmRequirementFromMount(
+      agentPackage.name,
+      agentPackage.version ?? null,
+    );
+    if (requirement) {
+      const { assertLlmProviderAvailableForRun, LlmProviderNotConfiguredError } =
+        await import("@/lib/agent-llm-preflight");
+      try {
+        await assertLlmProviderAvailableForRun(requirement);
+      } catch (err) {
+        if (softPreflight && err instanceof LlmProviderNotConfiguredError) {
+          console.warn(
+            `[agent-run-enqueue] soft-preflight: ${err.message} (settings: ${err.settingsHref})`,
+          );
+        } else {
+          throw err;
+        }
       }
     }
   }
