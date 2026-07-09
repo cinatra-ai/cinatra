@@ -77,6 +77,16 @@ export type SchemaConfigConnectorFormProps = {
   initialValues?: Record<string, string>;
   /** Optional override for the Nango connect handler (default: host nango flow). */
   onConnect?: (providerConfigKey: string) => void;
+  /**
+   * Field kinds the host renders ELSEWHERE and therefore wants suppressed from
+   * the form column. The Model-A setup page (design/specs/app-connectors.html
+   * §II) lifts the connector's `status-probe` into the right-column
+   * `ConnectionStatusCard`, so it passes `omitFieldKinds={["status-probe"]}` to
+   * stop the same probe rendering twice. Filtering is generic and applies to
+   * both the flat fields and every tab panel; a suppressed kind carries no form
+   * input, so `collectFormInputs()` submission is unaffected.
+   */
+  omitFieldKinds?: SchemaConfigField["kind"][];
 };
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
@@ -116,7 +126,12 @@ export function SchemaConfigConnectorForm({
   isAdmin = false,
   initialValues = {},
   onConnect,
+  omitFieldKinds,
 }: SchemaConfigConnectorFormProps) {
+  // Kinds the host suppresses from the form column (Model-A lifts `status-probe`
+  // into the right-column status card). A Set for O(1) membership; empty/absent
+  // omits nothing.
+  const omit = omitFieldKinds && omitFieldKinds.length > 0 ? new Set(omitFieldKinds) : null;
   // Shared form-level state driven by action RESULTS:
   //  - `bannerName`: the active banner variant name (a create/delete result sets it).
   //  - `listEpoch`: bumped to force every record-list to re-fetch after a write.
@@ -140,7 +155,7 @@ export function SchemaConfigConnectorForm({
   // `key`s are globally unique (parser invariant), so row keys never collide.
   const renderGroup = (fields: SchemaConfigField[]) => (
     <FieldGroup>
-      {fields.map((field, i) => (
+      {(omit ? fields.filter((f) => !omit.has(f.kind)) : fields).map((field, i) => (
         <SchemaConfigFieldRow
           key={fieldKey(field, i)}
           field={field}

@@ -340,4 +340,33 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     const hidden = container.querySelector<HTMLInputElement>('input[name="hosts"]');
     expect(JSON.parse(hidden!.value)).toEqual(["example.com"]);
   });
+
+  it("omitFieldKinds: a suppressed kind (Model-A status-probe → status card) is not rendered, others stay", async () => {
+    const surface = surfaceOf({
+      fields: [
+        { kind: "status-probe", label: "Connection", actionId: "connectionStatus" },
+        { kind: "secret", key: "apiKey", label: "API key" },
+      ],
+    });
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      omitFieldKinds: ["status-probe"],
+    });
+    // The status-probe row (its only affordance is a "Check" button) is gone…
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.some((b) => b.textContent?.trim() === "Check")).toBe(false);
+    // …but the rest of the form still renders.
+    expect(container.querySelector('input[name="apiKey"]')).toBeTruthy();
+  });
+
+  it("without omitFieldKinds the status-probe still renders inline (back-compat)", async () => {
+    const surface = surfaceOf({
+      fields: [{ kind: "status-probe", label: "Connection", actionId: "connectionStatus" }],
+    });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.some((b) => b.textContent?.trim() === "Check")).toBe(true);
+  });
 });

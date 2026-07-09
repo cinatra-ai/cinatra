@@ -41,13 +41,34 @@ import {
   resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { requiresRebuildState } from "@/lib/extension-schema-config";
+import type { SchemaConfigSurface } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
+import { ConnectorStatusProbeCard } from "@/components/extensions/connector-status-probe-card";
 import { InstallActivateCta } from "@/components/extensions/install-activate-cta";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
+import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
+
+/**
+ * The connector's declared `status-probe` action id, if any. Model-A lifts that
+ * probe into the right-column status card (design §II), so the page reads the
+ * SAME action id the inline row would have used ("connectionStatus" for the
+ * key-based connectors) — the host never invents a probe id. Scans the flat
+ * fields first, then tab panels; the first status-probe wins.
+ */
+function findStatusProbeActionId(surface: SchemaConfigSurface): string | undefined {
+  const scan = (fields: SchemaConfigSurface["fields"]) => {
+    for (const f of fields) {
+      if (f.kind === "status-probe") return f.actionId;
+    }
+    return undefined;
+  };
+  return scan(surface.fields) ?? surface.tabs?.map((t) => scan(t.fields)).find(Boolean);
+}
 
 export const dynamic = "force-dynamic";
 
@@ -186,6 +207,66 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // installed/active for the actor's workspace, show an explicit Install /
     // Activate CTA instead of letting action POSTs 404 opaquely.
     const installId = await resolveActiveInstallIdForActor(packageId, actor);
+    // Model-A applies ONLY to a single-connection connector that declares a real
+    // `status-probe` — a connection whose connected/disconnected state the right-
+    // column status card can represent (the two key-based connectors openai +
+    // anthropic, and any other schema-config connector that declares one). A
+    // schema-config connector WITHOUT a status-probe (e.g. the record-list
+    // mcp-server connector, which holds many servers and has no single connection
+    // status / readiness probe) keeps the ORIGINAL single-column body: a single
+    // "Connection status: Disconnected" card would MISREPRESENT such a surface
+    // (gpt-5.5 convergence finding). So the presence of a declared probe is the
+    // gate between the two layouts.
+    const statusProbeActionId = findStatusProbeActionId(render.surface);
+    if (statusProbeActionId) {
+      // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
+      // the connection-status badge that once sat top-right of the header now
+      // lives in the right-column status card, so `ConnectorSetupPage` carries NO
+      // header actions. The declared status-probe is lifted into that card (its
+      // Check runs the connector's own `connectionStatus` action), and the form
+      // column suppresses the inline probe row so the same probe never renders
+      // twice. No plug/unplug Connect/Disconnect pair is built here — for a
+      // key-based connector the real actions are the schema's own Save/Clear named
+      // actions in the fields column, and whether such connectors also get the
+      // canonical plug/unplug pair is a spec-interpretation question still pending
+      // the owner (epic #1101).
+      return (
+        <ConnectorSetupPage
+          title={displayName}
+          description="Connector setup"
+          className="flex flex-col gap-6 pb-8"
+        >
+          {installId ? (
+            <ConnectorSetupColumns
+              conformanceId="connector-setup"
+              fields={
+                <SchemaConfigConnectorForm
+                  installId={installId}
+                  packageName={packageId}
+                  surface={render.surface}
+                  isAdmin={isAdmin}
+                  omitFieldKinds={["status-probe"]}
+                />
+              }
+              aside={
+                <ConnectorStatusProbeCard
+                  installId={installId}
+                  actionId={statusProbeActionId}
+                  initialConnected={badgeState.connected}
+                  connectedLabel={badgeState.connectedLabel}
+                />
+              }
+            />
+          ) : (
+            <InstallActivateCta displayName={displayName} />
+          )}
+          {sharingSection}
+        </ConnectorSetupPage>
+      );
+    }
+    // Probe-less schema-config connector: unchanged single-column body with the
+    // header status badge (this lane rescopes Model-A to the status-probe shape
+    // only; the multi-connection / record-list layouts are separate epic items).
     return (
       <Main className="min-h-screen">
         <PageHeader
