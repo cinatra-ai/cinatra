@@ -47,6 +47,14 @@ describe("workflow extension package validation (BPMN sidecar shape)", () => {
     expect(r.valid, r.errors.join("; ")).toBe(true);
   });
 
+  it("permits the platform-standard cinatra.displayName human-name key", () => {
+    const r = validateWorkflowExtensionPackage({
+      name: "@cinatra-ai/x-workflow",
+      cinatra: { kind: "workflow", workflowVersion: 1, displayName: "Example Workflow" },
+    });
+    expect(r.valid, r.errors.join("; ")).toBe(true);
+  });
+
   it("rejects a non-suffixed package name + wrong kind", () => {
     expect(
       validateWorkflowExtensionPackage({ name: "@cinatra-ai/not-suffixed", cinatra: { kind: "workflow", workflowVersion: 1 } }).valid,

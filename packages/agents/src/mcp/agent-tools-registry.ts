@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
+import { OboCeilingCompositionError } from "@cinatra-ai/mcp-server/obo-ceiling";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import {
   readPublishedAgentTemplates,
@@ -196,12 +197,27 @@ async function invokePublishedAgentTool(
     );
   }
 
-  await createAgentRun({
-    id: runId,
-    templateId,
-    inputParams,
-    orgId,
-  });
+  // Child-run OBO ceiling composition (epic W5). Agent-as-tool is a genuine
+  // child dispatch: this agent run invokes another agent. The callback carries
+  // no parentRunId, so the parent's ceiling chain comes from the SAME ALS frame
+  // that is the org trust anchor above — `ctx.oboCeiling` is set only for an
+  // agent-run OBO actor (a human/session invoker has none → no composition).
+  // createAgentRun folds it onto the freshly-derived child anchor and throws
+  // OboCeilingCompositionError (caught below) on a provably-disjoint chain.
+  try {
+    await createAgentRun({
+      id: runId,
+      templateId,
+      inputParams,
+      orgId,
+      parentOboCeiling: ctx?.oboCeiling ?? null,
+    });
+  } catch (err) {
+    if (err instanceof OboCeilingCompositionError) {
+      return { error: err.message, code: err.code, runId };
+    }
+    throw err;
+  }
 
   const { enqueueAgentRun } = await import("@/lib/agent-run-enqueue");
   await enqueueAgentRun({ runId });
