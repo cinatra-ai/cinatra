@@ -44,6 +44,47 @@ function surfaceRequiresRebuild(
   };
 }
 
+// A closure member whose `package.json#cinatra` block fails the fail-closed
+// agent metadata contract raises a TYPED AgentPackageContractViolationError
+// (`code === "AGENT_PACKAGE_CONTRACT_VIOLATION"`, carrying `packageName` +
+// `missingFields`). The batch saga re-throws it RAW past its member-error
+// wrapping, so it arrives here naming the offending package + exact fields.
+// Surface it as a CLEAR structured result (not an opaque 500), mirroring
+// surfaceRequiresRebuild. Detection is by the stable string `code` plus a
+// defensive `cause` unwrap (no cross-package import); package identity + fields
+// are read structurally off the error. cinatra#1163.
+function surfaceContractViolation(
+  err: unknown,
+  input: { packageName: string; packageVersion: string },
+): {
+  success: false;
+  contractViolation: true;
+  packageName: string;
+  packageVersion: string;
+  missingFields: string[];
+  message: string;
+} | null {
+  let node: unknown = err;
+  for (let depth = 0; depth < 5 && node != null; depth++) {
+    if ((node as { code?: unknown }).code === "AGENT_PACKAGE_CONTRACT_VIOLATION") {
+      const viol = node as { packageName?: unknown; missingFields?: unknown };
+      return {
+        success: false,
+        contractViolation: true,
+        packageName:
+          typeof viol.packageName === "string" ? viol.packageName : input.packageName,
+        packageVersion: input.packageVersion,
+        missingFields: Array.isArray(viol.missingFields)
+          ? viol.missingFields.filter((f): f is string => typeof f === "string")
+          : [],
+        message: node instanceof Error ? node.message : String(node),
+      };
+    }
+    node = (node as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
 /**
  * The extensions_install body — runs INSIDE the grant context on the gatekept
  * path (the handler wrapper authorized the root exactly once). Module-level
@@ -56,6 +97,14 @@ type ExtensionsInstallResult =
       requiresRebuild: true;
       packageName: string;
       packageVersion: string;
+      message: string;
+    }
+  | {
+      success: false;
+      contractViolation: true;
+      packageName: string;
+      packageVersion: string;
+      missingFields: string[];
       message: string;
     };
 
@@ -100,6 +149,11 @@ async function extensionsInstallBody(
     // any newly-installed dependencies) — surface it instead of throwing.
     const surfaced = surfaceRequiresRebuild(err, input);
     if (surfaced) return surfaced;
+    // Metadata-contract violation on a closure member (cinatra#1163): a
+    // structured refusal naming the offending package + exact missing fields —
+    // surface it instead of throwing an opaque 500.
+    const contractViolation = surfaceContractViolation(err, input);
+    if (contractViolation) return contractViolation;
     throw err;
   }
   return {
