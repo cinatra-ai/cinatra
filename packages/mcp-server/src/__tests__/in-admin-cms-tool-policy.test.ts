@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   IN_ADMIN_CMS_MCP_ALLOWED_TOOLS,
-  IN_ADMIN_CMS_CONTENT_EDITOR_PACKAGES,
-  isInAdminCmsContentEditorPackage,
   isInAdminCmsMcpToolAllowed,
   resolveAgentRunCinatraMcpAllowedTools,
 } from "../in-admin-cms-tool-policy";
@@ -70,57 +68,26 @@ describe("in-admin CMS tool policy — allowlist membership", () => {
   });
 });
 
-describe("in-admin CMS tool policy — content-editor package predicate", () => {
-  it("recognises the two in-admin CMS content-editor agent packages", () => {
-    expect([...IN_ADMIN_CMS_CONTENT_EDITOR_PACKAGES].sort()).toEqual(
-      ["@cinatra-ai/drupal-agent", "@cinatra-ai/wordpress-agent"],
-    );
-    expect(isInAdminCmsContentEditorPackage("@cinatra-ai/wordpress-agent")).toBe(
-      true,
-    );
-    expect(isInAdminCmsContentEditorPackage("@cinatra-ai/drupal-agent")).toBe(
-      true,
-    );
-  });
-
-  it("does not treat any other agent (or an absent package) as a content editor", () => {
-    for (const pkg of [
-      "@cinatra-ai/apollo-prospecting-agent",
-      "@cinatra-ai/blog-pipeline-agent",
-      "@cinatra-ai/wordpress-mcp-connector", // the connector, not the agent
-      "wordpress-agent", // unscoped — not the real package name
-      "",
-      null,
-      undefined,
-    ]) {
-      expect(isInAdminCmsContentEditorPackage(pkg)).toBe(false);
-    }
-  });
-});
-
+// NOTE: WHICH agent packages are in-admin CMS content editors is resolved by
+// the HOST from the generated `relayAgentPackage` bindings (core→extension
+// instance-coupling ban — this policy module names no extension). That
+// predicate + its data-driven binding are covered by
+// src/lib/__tests__/widget-stream-agents-content-editor.test.ts. Here the
+// resolver takes the already-decided boolean.
 describe("resolveAgentRunCinatraMcpAllowedTools", () => {
   it("returns the explicit allowlist for a content-editor run, null otherwise", () => {
-    expect(
-      resolveAgentRunCinatraMcpAllowedTools("@cinatra-ai/wordpress-agent"),
-    ).toEqual([...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS]);
-    expect(
-      resolveAgentRunCinatraMcpAllowedTools("@cinatra-ai/drupal-agent"),
-    ).toEqual([...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS]);
-    // Unrestricted (unchanged) for every other agent run + absent package.
-    expect(
-      resolveAgentRunCinatraMcpAllowedTools("@cinatra-ai/apollo-prospecting-agent"),
-    ).toBeNull();
-    expect(resolveAgentRunCinatraMcpAllowedTools(null)).toBeNull();
-    expect(resolveAgentRunCinatraMcpAllowedTools(undefined)).toBeNull();
+    expect(resolveAgentRunCinatraMcpAllowedTools(true)).toEqual([
+      ...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS,
+    ]);
+    // Unrestricted (unchanged) for every other agent run.
+    expect(resolveAgentRunCinatraMcpAllowedTools(false)).toBeNull();
   });
 
   it("returns a fresh mutable copy each call (no shared-array aliasing)", () => {
-    const a = resolveAgentRunCinatraMcpAllowedTools("@cinatra-ai/wordpress-agent");
-    const b = resolveAgentRunCinatraMcpAllowedTools("@cinatra-ai/wordpress-agent");
+    const a = resolveAgentRunCinatraMcpAllowedTools(true);
+    const b = resolveAgentRunCinatraMcpAllowedTools(true);
     expect(a).not.toBe(b);
     a!.push("mutated");
-    expect(
-      resolveAgentRunCinatraMcpAllowedTools("@cinatra-ai/wordpress-agent"),
-    ).not.toContain("mutated");
+    expect(resolveAgentRunCinatraMcpAllowedTools(true)).not.toContain("mutated");
   });
 });

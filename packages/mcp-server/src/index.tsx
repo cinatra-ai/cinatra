@@ -838,8 +838,6 @@ export { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
 // `allowedTools` to the MCP-backed CMS primitives for content-editor runs.
 export {
   IN_ADMIN_CMS_MCP_ALLOWED_TOOLS,
-  IN_ADMIN_CMS_CONTENT_EDITOR_PACKAGES,
-  isInAdminCmsContentEditorPackage,
   isInAdminCmsMcpToolAllowed,
   resolveAgentRunCinatraMcpAllowedTools,
 } from "./in-admin-cms-tool-policy";

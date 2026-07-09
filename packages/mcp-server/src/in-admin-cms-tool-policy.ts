@@ -35,18 +35,18 @@
 //
 // Dependency-free on purpose: imported by both packages/mcp-server and
 // app-layer code/tests (the bridge), so it must not pull in DB or Next deps.
+//
+// TRUE-IoC (core→extension instance-coupling ban): this policy names NO
+// specific extension package. WHICH dispatched agent runs are in-admin CMS
+// content editors is resolved by the HOST from the generated
+// `relayAgentPackage` bindings — the same manifest-driven source
+// (`cinatra.widgetStream.relayAgentPackage`) the widget-stream relay already
+// uses (see src/lib/widget-stream-agents.server.ts,
+// `isInAdminCmsContentEditorPackage`). The host passes the resolved boolean
+// into {@link resolveAgentRunCinatraMcpAllowedTools}; this module only owns the
+// TOOL allowlist (tool names, not extension instances) and its enforcement
+// predicate.
 // ---------------------------------------------------------------------------
-
-/**
- * The npm package names of the in-admin CMS content-editor agents. A dispatched
- * agent run whose template package is one of these is an in-admin CMS assistant
- * and is pinned to {@link IN_ADMIN_CMS_MCP_ALLOWED_TOOLS} on the cinatra
- * self-MCP tool. Any other agent run is unaffected (unrestricted, unchanged).
- */
-export const IN_ADMIN_CMS_CONTENT_EDITOR_PACKAGES: readonly string[] = [
-  "@cinatra-ai/wordpress-agent",
-  "@cinatra-ai/drupal-agent",
-] as const;
 
 /**
  * The MCP-backed cinatra-mcp primitives the in-admin CMS content-editor agents
@@ -89,28 +89,6 @@ export const IN_ADMIN_CMS_MCP_ALLOWED_TOOLS: readonly string[] = [
 const ALLOWED_TOOL_SET: ReadonlySet<string> = new Set(
   IN_ADMIN_CMS_MCP_ALLOWED_TOOLS,
 );
-const CONTENT_EDITOR_PACKAGE_SET: ReadonlySet<string> = new Set(
-  IN_ADMIN_CMS_CONTENT_EDITOR_PACKAGES,
-);
-
-/**
- * True when the given agent template package is an in-admin CMS content-editor
- * agent, i.e. its cinatra self-MCP access must be pinned to
- * {@link IN_ADMIN_CMS_MCP_ALLOWED_TOOLS}. Fail-closed: an empty / unknown
- * package is NOT treated as a content editor (so this predicate never
- * accidentally restricts a general agent — the restriction is opt-in by
- * explicit package match, and the allowlist itself is what fails closed for the
- * matched agents).
- */
-export function isInAdminCmsContentEditorPackage(
-  packageName: string | null | undefined,
-): boolean {
-  return (
-    typeof packageName === "string" &&
-    packageName.length > 0 &&
-    CONTENT_EDITOR_PACKAGE_SET.has(packageName)
-  );
-}
 
 /**
  * True when an in-admin CMS content-editor agent may reach the named
@@ -123,16 +101,15 @@ export function isInAdminCmsMcpToolAllowed(name: string): boolean {
 }
 
 /**
- * Resolve the cinatra self-MCP `allowedTools` value for a dispatched agent run,
- * given its template package. Returns the explicit in-admin CMS allowlist (a
- * fresh mutable copy for the `LlmMcpServerTool.allowedTools` field) when the run
- * is an in-admin CMS content editor, or `null` (unrestricted — unchanged
- * behavior) for every other agent run.
+ * Resolve the cinatra self-MCP `allowedTools` value for a dispatched agent run.
+ * `isInAdminCmsContentEditor` is decided by the HOST from the generated
+ * `relayAgentPackage` bindings (no extension package is named here — see the
+ * module header). Returns the explicit in-admin CMS allowlist (a fresh mutable
+ * copy for the `LlmMcpServerTool.allowedTools` field) for an in-admin CMS
+ * content-editor run, or `null` (unrestricted — unchanged behavior) otherwise.
  */
 export function resolveAgentRunCinatraMcpAllowedTools(
-  packageName: string | null | undefined,
+  isInAdminCmsContentEditor: boolean,
 ): string[] | null {
-  return isInAdminCmsContentEditorPackage(packageName)
-    ? [...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS]
-    : null;
+  return isInAdminCmsContentEditor ? [...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS] : null;
 }
