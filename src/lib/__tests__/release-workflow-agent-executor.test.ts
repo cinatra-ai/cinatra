@@ -34,7 +34,21 @@ vi.mock("@cinatra-ai/agents", () => ({
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   readEffectiveStatusByPackageNames: mocks.readEffectiveStatusByPackageNames,
 }));
-vi.mock("@/lib/agent-run-enqueue", () => ({ enqueueAgentRun: mocks.enqueueAgentRun }));
+vi.mock("@/lib/agent-run-enqueue", () => ({
+  enqueueAgentRun: mocks.enqueueAgentRun,
+  // Real projection (mirrors src/lib/agent-run-enqueue.ts) so the executor
+  // threads the #1056 connector edges + #1062 agentPackage into the enqueue opts.
+  enqueueDepsForTemplate: (t: {
+    connectorDependencies?: unknown;
+    packageName?: string | null;
+    packageVersion?: string | null;
+  } | null | undefined) => ({
+    connectorDependencies: t?.connectorDependencies,
+    agentPackage: t?.packageName
+      ? { name: t.packageName, version: t.packageVersion ?? null }
+      : undefined,
+  }),
+}));
 
 import {
   buildWorkflowAgentTaskExecutor,

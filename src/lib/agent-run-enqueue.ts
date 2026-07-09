@@ -67,6 +67,32 @@ export type AgentRunEnqueueOptions = Pick<
   agentPackage?: { name: string; version?: string | null };
 };
 
+/**
+ * Project a template's run-enqueue dependency inputs into enqueueAgentRun
+ * options — the cinatra#1056 canonical connector edges AND the cinatra#1062
+ * LLM-provider package identity (whose OAS `metadata.cinatra.llm` requirement the
+ * enqueue preflight reads). One shared projection for every run-start call site,
+ * so the connector gate and the LLM-provider gate fire identically wherever a run
+ * is enqueued from an installed template.
+ */
+export function enqueueDepsForTemplate(
+  template:
+    | {
+        connectorDependencies?: ConnectorDependencyMap;
+        packageName?: string | null;
+        packageVersion?: string | null;
+      }
+    | null
+    | undefined,
+): Pick<AgentRunEnqueueOptions, "connectorDependencies" | "agentPackage"> {
+  return {
+    connectorDependencies: template?.connectorDependencies,
+    agentPackage: template?.packageName
+      ? { name: template.packageName, version: template.packageVersion ?? null }
+      : undefined,
+  };
+}
+
 export class ConnectorNotConfiguredError extends Error {
   override readonly name = "ConnectorNotConfiguredError";
   readonly code = "CONNECTOR_NOT_CONFIGURED" as const;

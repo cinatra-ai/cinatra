@@ -1,6 +1,6 @@
 "use server";
 import { requireAuthSession } from "@/lib/auth-session";
-import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
 import {
@@ -94,18 +94,9 @@ export async function triggerAgentRun(
   try {
     await enqueueAgentRun(
       { runId: args.runId },
-      // cinatra#1056: carry the template's connector dependencies so the
-      // run-start connector preflight fires (the chokepoint derives the run
-      // actor). Populated from the canonical connector edges at install.
-      // cinatra#1062: carry the package identity so the LLM-provider preflight
-      // reads the agent's OAS llm requirement and gates on provider availability.
-      {
-        jobId: args.runId,
-        connectorDependencies: template.connectorDependencies,
-        agentPackage: template.packageName
-          ? { name: template.packageName, version: template.packageVersion ?? null }
-          : undefined,
-      },
+      // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity,
+      // projected so the run-start connector + LLM-provider preflights both fire.
+      { jobId: args.runId, ...enqueueDepsForTemplate(template) },
     );
   } catch (err) {
     // Compensation: undo the queued transition. We use the conditional
@@ -212,17 +203,8 @@ async function createAndTriggerRunCore(
   try {
     await enqueueAgentRun(
       { runId: created.id },
-      // cinatra#1056: carry the template's connector dependencies so the
-      // run-start connector preflight fires (the chokepoint derives the run
-      // actor). Populated from the canonical connector edges at install.
-      // cinatra#1062: carry the package identity for the LLM-provider preflight.
-      {
-        jobId: created.id,
-        connectorDependencies: template.connectorDependencies,
-        agentPackage: template.packageName
-          ? { name: template.packageName, version: template.packageVersion ?? null }
-          : undefined,
-      },
+      // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
+      { jobId: created.id, ...enqueueDepsForTemplate(template) },
     );
   } catch (enqueueErr) {
     // Revert to pending_input so the user can retry via the Run button.

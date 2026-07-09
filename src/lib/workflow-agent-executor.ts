@@ -33,7 +33,7 @@ import {
 } from "@cinatra-ai/agents";
 import { isAgentRuntimeRunnable } from "@cinatra-ai/agents/runtime-install-gate";
 import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
-import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type {
   Executor,
   ExecutorInput,
@@ -194,17 +194,12 @@ export function buildWorkflowAgentTaskExecutor(): Executor {
       // as a run failure at execution (captured by retry/dead-letter), not a hard
       // enqueue block.
       if (run.id === runId || run.status === "queued") {
+        // cinatra#1056 connector edges + cinatra#1062 LLM-provider package
+        // identity, under the delegated-reconciler softPreflight so a missing
+        // provider surfaces at execution, not a hard enqueue block.
         await enqueueAgentRun(
           { runId: run.id },
-          {
-            connectorDependencies: template.connectorDependencies,
-            // cinatra#1062: carry the package identity so the LLM-provider
-            // preflight fires here too (parity with the #1056 connector gate).
-            agentPackage: template.packageName
-              ? { name: template.packageName, version: template.packageVersion ?? null }
-              : undefined,
-            softPreflight: true,
-          },
+          { ...enqueueDepsForTemplate(template), softPreflight: true },
         );
       }
 
