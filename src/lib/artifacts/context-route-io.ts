@@ -19,6 +19,10 @@ import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
 import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
 import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
+import {
+  deriveOboCeilingChain,
+  oboCeilingContains,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
 import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db";
 import { resolveContextSlot } from "./context-resolver";
 import { getInstalledExtensionDescriptors } from "./context-mcp";
@@ -320,6 +324,26 @@ export async function deriveContextRouteContext(
       projectGrants,
     },
   ) as unknown as ActorContext;
+
+  // Carry the agent's OBO scope-ceiling on this actor (same derivation as the
+  // bridge mint path). Re-derive from the run's LOCKED template anchor + project
+  // launch; prefer the run's PERSISTED chain when it contains the re-derived
+  // elements (superset-safe for composed-child parent elements), else the fresh
+  // derivation. A corrupt anchor derives null → no ceiling carried. No surface
+  // enforces it yet; this path attaches (never hard-fails on this internal
+  // context-resolution seam).
+  const recomputedCeiling = deriveOboCeilingChain({
+    ownerLevel: template?.ownerLevel ?? null,
+    ownerId: template?.ownerId ?? null,
+    orgId: run.orgId,
+    projectId: run.projectId,
+  });
+  if (recomputedCeiling) {
+    actor.oboCeiling =
+      run.oboCeiling && oboCeilingContains(run.oboCeiling, recomputedCeiling)
+        ? run.oboCeiling
+        : recomputedCeiling;
+  }
 
   // projectId: the run's project is authoritative; fall back to the normalized
   // body value. Normalize both (a stored "" must not fail-close the resolver).

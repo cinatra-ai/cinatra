@@ -119,6 +119,7 @@ function makeRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     idempotencyKey: null,
     workflowId: null,
     workflowTaskId: null,
+    oboCeiling: null,
     ...overrides,
   };
 }

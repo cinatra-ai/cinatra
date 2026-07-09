@@ -30,6 +30,7 @@ const {
   buildLlmMcpServerToolForAgentRunMock,
   readAgentRunByContextIdMock,
   readAgentRunByIdMock,
+  readAgentTemplateByIdMock,
   resolveAgentRunMcpActorMock,
   issueAgentRunMcpActorTokenMock,
 } = vi.hoisted(() => ({
@@ -53,6 +54,7 @@ const {
   buildLlmMcpServerToolForAgentRunMock: vi.fn(() => ({ type: "mcp-tool" })),
   readAgentRunByContextIdMock: vi.fn(),
   readAgentRunByIdMock: vi.fn(),
+  readAgentTemplateByIdMock: vi.fn(),
   resolveAgentRunMcpActorMock: vi.fn(),
   issueAgentRunMcpActorTokenMock: vi.fn(() => "obo-token"),
 }));
@@ -98,6 +100,7 @@ vi.mock("@cinatra-ai/agents", async () => {
   return {
     readAgentRunByContextId: readAgentRunByContextIdMock,
     readAgentRunById: readAgentRunByIdMock,
+    readAgentTemplateById: readAgentTemplateByIdMock,
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
     // actionable 503 message resolve without the heavy real barrel.
@@ -162,12 +165,16 @@ let POST: (req: Request) => Promise<Response>;
 const BRIDGE_TOKEN = "test-token-32chars-XYZXYZXYZXYZ";
 const AUTH_SECRET = "test-better-auth-secret-for-binding-unit";
 
-// The honest run that the binding is signed for.
+// The honest run that the binding is signed for. Carries the persisted OBO
+// scope-ceiling chain the mint path re-derives + containment-checks (W1).
 const VICTIM_RUN = {
   id: "run-victim",
   orgId: "org-victim",
   runBy: "user-victim",
   sourceType: null,
+  templateId: "tpl-victim",
+  projectId: null,
+  oboCeiling: [{ tier: "organization", id: "org-victim" }],
 };
 // A different tenant's run an attacker would try to select.
 const TARGET_RUN = {
@@ -175,6 +182,9 @@ const TARGET_RUN = {
   orgId: "org-target",
   runBy: "user-target",
   sourceType: null,
+  templateId: "tpl-target",
+  projectId: null,
+  oboCeiling: [{ tier: "organization", id: "org-target" }],
 };
 
 function makeReq(body: Record<string, unknown>): Request {
@@ -193,6 +203,13 @@ beforeEach(async () => {
   process.env.CINATRA_BRIDGE_TOKEN = BRIDGE_TOKEN;
   process.env.BETTER_AUTH_SECRET = AUTH_SECRET;
   readAgentRunByContextIdMock.mockResolvedValue(null);
+  // Default template anchor: org-owned by the victim's org. deriveOboCeilingChain
+  // → [{organization, org-victim}], which VICTIM_RUN.oboCeiling contains, so the
+  // mint-time containment check passes on the happy paths.
+  readAgentTemplateByIdMock.mockResolvedValue({
+    ownerLevel: "organization",
+    ownerId: "org-victim",
+  });
   resolveAgentRunMcpActorMock.mockResolvedValue({
     delegation: "agent_run",
     userId: VICTIM_RUN.runBy,
@@ -364,6 +381,71 @@ describe("bridge run binding for MCP OBO minting", () => {
     expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
       expect.objectContaining({ runId: VICTIM_RUN.id }),
     );
+  });
+
+  it("W1: mint carries the PERSISTED ceiling chain onto the actor + token", async () => {
+    const binding = issueAgentRunBinding({
+      runId: VICTIM_RUN.id,
+      orgId: VICTIM_RUN.orgId,
+      runBy: VICTIM_RUN.runBy,
+    });
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    expect(res.status).toBe(200);
+    const tool = await invokeOverride();
+    expect(tool).not.toBeNull();
+    // Re-derives from the run's LOCKED template anchor.
+    expect(readAgentTemplateByIdMock).toHaveBeenCalledWith(VICTIM_RUN.templateId);
+    expect(buildLlmMcpServerToolForAgentRunMock).toHaveBeenCalledTimes(1);
+    // The actor handed to the token issuer carries the PERSISTED chain (not the
+    // re-derived subset — superset-safe for composed-child parent elements).
+    // The mock is a zero-arg `vi.fn()` factory, so its call-args infer as an
+    // empty tuple; cast the call record through `unknown[]` to read positional
+    // arg 1 (the actor handed to the token issuer).
+    const actorArg = (
+      buildLlmMcpServerToolForAgentRunMock.mock.calls[0] as unknown[]
+    )[1] as { oboCeiling?: unknown };
+    expect(actorArg.oboCeiling).toEqual(VICTIM_RUN.oboCeiling);
+  });
+
+  it("W1: persisted ceiling MISSING on the run → fail closed (no OBO mint)", async () => {
+    const binding = issueAgentRunBinding({
+      runId: VICTIM_RUN.id,
+      orgId: VICTIM_RUN.orgId,
+      runBy: VICTIM_RUN.runBy,
+    });
+    // A run whose backfill was missed / anchor was corrupt → obo_ceiling NULL.
+    readAgentRunByIdMock.mockResolvedValue({ ...VICTIM_RUN, oboCeiling: null });
+    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    expect(res.status).toBe(200);
+    const override = await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledTimes(1);
+    // Missing persisted chain is never contained → null override → machine-token
+    // fallback (denied at the boundary), never an un-ceilinged OBO mint.
+    expect(override).toBeNull();
+    expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("W1: mint-time ceiling mismatch (persisted does NOT contain re-derived) → fail closed", async () => {
+    const binding = issueAgentRunBinding({
+      runId: VICTIM_RUN.id,
+      orgId: VICTIM_RUN.orgId,
+      runBy: VICTIM_RUN.runBy,
+    });
+    // Persisted chain is org-only ([{organization, org-victim}]).
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    // But the LOCKED template now anchors at USER tier → re-derived chain adds
+    // {user, user-victim}, which the persisted org-only chain does NOT contain.
+    readAgentTemplateByIdMock.mockResolvedValue({
+      ownerLevel: "user",
+      ownerId: "user-victim",
+    });
+    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    expect(res.status).toBe(200);
+    const override = await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledTimes(1);
+    expect(override).toBeNull();
+    expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
   });
 
   it("guards the binding purpose constant against accidental edits", () => {

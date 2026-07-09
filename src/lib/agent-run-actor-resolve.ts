@@ -75,7 +75,12 @@ export async function resolveAgentRunMcpActor(input: {
    * Absent / any other value → unchanged behavior.
    */
   sourceType?: string | null;
-}): Promise<AgentRunMcpActor | null> {
+  // Returns the actor IDENTITY (no `oboCeiling`): the scope-ceiling chain is not
+  // known here — it is re-derived from the run's locked template anchor and
+  // attached by the mint path (llm-bridge route / context-route-io) after a
+  // containment check, before the token is issued. Omit keeps this resolver's
+  // single responsibility (live identity + platform-role) intact.
+}): Promise<Omit<AgentRunMcpActor, "oboCeiling"> | null> {
   if (!input.runBy || !input.orgId || !input.runId) return null;
   const suppressPlatformAdmin =
     typeof input.sourceType === "string" &&
