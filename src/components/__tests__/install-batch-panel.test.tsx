@@ -126,6 +126,7 @@ describe("InstallBatchPanel", () => {
             needs: [
               {
                 packageName: "@cinatra-ai/linkedin-oauth-connector",
+                displayName: "LinkedIn",
                 slug: "linkedin-oauth-connector",
                 settingsHref: "/connectors/cinatra-ai/linkedin-oauth-connector/setup",
                 isRoot: false,
@@ -137,7 +138,11 @@ describe("InstallBatchPanel", () => {
         }}
       />,
     );
-    expect(html).toContain("Needs configuration before use");
+    expect(html).toContain("Finish setting up these connectors");
+    // The HUMAN-READABLE manifest displayName is the primary label (owner
+    // review #1234) — never only the package name.
+    expect(html).toContain("LinkedIn");
+    // The package name still renders, but only as muted secondary text.
     expect(html).toContain("@cinatra-ai/linkedin-oauth-connector");
     expect(html).toContain('href="/connectors/cinatra-ai/linkedin-oauth-connector/setup"');
     expect(html).toContain("batch-configuration-needs");
@@ -157,7 +162,7 @@ describe("InstallBatchPanel", () => {
         configurationNeedsByBatch={{ "b-ok": { needs: [], hasConnectors: true, allConfigured: true } }}
       />,
     );
-    expect(html).not.toContain("Needs configuration before use");
+    expect(html).not.toContain("Finish setting up these connectors");
     expect(html).not.toContain("batch-configuration-needs");
   });
 });

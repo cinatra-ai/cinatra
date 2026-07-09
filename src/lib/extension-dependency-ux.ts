@@ -303,6 +303,13 @@ export function hasActiveInstallBatch(batches: readonly InstallBatch[]): boolean
  */
 export type ConnectorReadinessRow = {
   packageName: string;
+  /**
+   * The connector's HUMAN-READABLE name — the manifest `displayName` the
+   * `/connectors` card grid and the setup-page header already render (e.g.
+   * "LinkedIn", "Gmail"). This is the PRIMARY label; the package name is only
+   * ever muted secondary text. Never the bare `packageName`.
+   */
+  displayName: string;
   slug: string;
   /** The connector's OWN readiness-probe result. */
   connected: boolean;
@@ -315,6 +322,8 @@ export type ConnectorReadinessRow = {
 /** A single "Configure <connector>" affordance row. */
 export type ConfigurationNeed = {
   packageName: string;
+  /** Human-readable manifest displayName — the primary rendered label. */
+  displayName: string;
   slug: string;
   settingsHref: string | null;
   isRoot: boolean;
@@ -361,6 +370,7 @@ export function summarizeConfigurationNeeds(
     .filter((r) => !r.connected)
     .map((r) => ({
       packageName: r.packageName,
+      displayName: r.displayName,
       slug: r.slug,
       settingsHref: r.settingsHref,
       isRoot: r.isRoot,

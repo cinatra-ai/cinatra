@@ -16,6 +16,7 @@ function row(over: Partial<ConnectorReadinessRow> & { packageName: string }): Co
   const slug = over.slug ?? over.packageName.slice(over.packageName.lastIndexOf("/") + 1);
   return {
     slug,
+    displayName: slug,
     connected: false,
     settingsHref: `/connectors/cinatra-ai/${slug}/setup`,
     isRoot: false,

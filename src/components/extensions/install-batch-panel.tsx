@@ -10,7 +10,7 @@
 
 import Link from "next/link";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
-import { Alert, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { CircleCheck, Settings2, TriangleAlert, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -65,44 +65,75 @@ function BatchOutcomeAlert({ tone, headline }: { tone: BatchOutcomeTone; headlin
 }
 
 /**
- * Post-install "needs configuration" affordance (cinatra #1057). Lists the
- * installed connectors that are present but NOT yet configured, each
- * deep-linked to its own setup surface. Per the ratified readiness-chaining
- * decision, each connector is an INDEPENDENT row (the installed extension and
- * every required connector dependency surface separately, driven by each
- * connector's own readiness probe). Renders nothing when there is nothing to
- * configure — install never blocks on configuration.
+ * Post-install "needs configuration" affordance (cinatra #1057; owner-review
+ * rework #1234). Surfaces the installed connectors that are present but NOT yet
+ * configured, each deep-linked to its own setup surface.
+ *
+ * DESIGN — this uses the app design system's **Callout** pattern in its info
+ * variant (see docs.cinatra.ai/references/design), compiled here as the app's
+ * `Alert variant="info"` — the SAME construct the batch-outcome headline one
+ * row up already uses. The installed-extensions surface specifies no
+ * post-install activity block, so the closest governing pattern (the info
+ * Callout) is used deliberately: a tinted info ground, a hairline border, an
+ * icon-led label, and body copy lifted out of the reading flow. Nothing
+ * invented.
+ *
+ * NAME — each row leads with the connector's HUMAN-READABLE manifest
+ * `displayName` (e.g. "LinkedIn"), exactly as the /connectors card grid and the
+ * setup header render it; the package name is muted secondary text only, never
+ * the primary label (owner review #1234).
+ *
+ * SEMANTICS — per the ratified readiness-chaining decision, each connector is
+ * an INDEPENDENT row (the installed extension and every required connector
+ * dependency surface separately, driven by each connector's own readiness
+ * probe). Renders nothing when there is nothing to configure — install never
+ * blocks on configuration.
  */
 function ConfigurationNeedsBlock({ summary }: { summary: ConfigurationNeedsSummary }) {
   if (summary.needs.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-1.5" data-testid="batch-configuration-needs">
-      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-        <Settings2 className="size-3.5" aria-hidden />
-        Needs configuration before use:
-      </p>
-      <ul className="flex flex-col gap-1.5">
-        {summary.needs.map((need) => (
-          <li
-            key={need.packageName}
-            className="flex items-center gap-2 text-sm"
-            data-testid="configuration-need-row"
-          >
-            <code className="font-mono text-xs text-foreground">{need.packageName}</code>
-            {need.settingsHref ? (
-              <Button asChild variant="link" className="h-auto p-0 text-xs font-medium">
-                <Link href={need.settingsHref} data-testid="configuration-need-link">
-                  Configure
-                </Link>
-              </Button>
-            ) : (
-              <span className="text-xs text-muted-foreground">Configure in connector settings</span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <Alert variant="info" data-testid="batch-configuration-needs">
+      <Settings2 />
+      <AlertTitle>Finish setting up these connectors</AlertTitle>
+      <AlertDescription>
+        <p>
+          These connectors were installed, but each one still needs its settings before this
+          extension can use it. Select <span className="font-medium text-foreground">Configure</span>{" "}
+          to set one up.
+        </p>
+        <ul className="mt-2.5 flex flex-col gap-2">
+          {summary.needs.map((need) => (
+            <li
+              key={need.packageName}
+              className="flex items-center justify-between gap-3"
+              data-testid="configuration-need-row"
+            >
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-sm font-medium text-foreground">
+                  {need.displayName}
+                </span>
+                <code className="truncate font-mono text-xs text-muted-foreground">
+                  {need.packageName}
+                </code>
+              </span>
+              {need.settingsHref ? (
+                <Button asChild size="sm" variant="outline" className="shrink-0">
+                  <Link href={need.settingsHref} data-testid="configuration-need-link">
+                    <Settings2 data-icon="inline-start" />
+                    Configure
+                  </Link>
+                </Button>
+              ) : (
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  Set up in connector settings
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
   );
 }
 

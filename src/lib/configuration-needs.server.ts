@@ -68,6 +68,12 @@ export async function resolveBatchConfigurationNeeds(
     const readiness = await resolveConnectorBadgeState(descriptor.packageId, ctx);
     rows.push({
       packageName: member.packageName,
+      // The connector's HUMAN-READABLE manifest name (the SAME `displayName`
+      // the /connectors card grid and the setup-page header render) is the
+      // primary label — never the bare package name (cinatra #1234 owner
+      // review). Catalog descriptors always carry it; fall back to the slug
+      // only if a future descriptor ever omitted it.
+      displayName: descriptor.displayName || slug,
       slug,
       connected: readiness.connected,
       settingsHref: getConnectorSetupHref(slug),
