@@ -37,12 +37,31 @@
 //     gate that consumes the persisted row.
 import "server-only";
 
-import type { ExtensionDependency } from "./canonical-types";
+import type { ExtensionDependency, VersionConstraint } from "./canonical-types";
 import {
   DEPENDENCY_EDGE_TYPES,
   DEPENDENCY_REQUIREMENTS,
   EXTENSION_KINDS,
 } from "./canonical-types";
+
+/**
+ * Flatten a canonical {@link VersionConstraint} to the bare npm-style range
+ * string the runtime template columns (`agent_templates.connector_dependencies`
+ * / `agent_dependencies`) and the legacy dual-read vocabulary use (cinatra#1056).
+ * `semver-range` → its range; `exact` → the bare version (a valid exact-match
+ * range); `git-ref` → the ref verbatim (the runtime readiness check is
+ * warn-only, so a non-semver ref degrades to a warning, never a hard block).
+ */
+export function versionConstraintToRange(vc: VersionConstraint): string {
+  switch (vc.kind) {
+    case "semver-range":
+      return vc.range;
+    case "exact":
+      return vc.version;
+    case "git-ref":
+      return vc.ref;
+  }
+}
 
 export class ManifestDependencyError extends Error {
   constructor(
