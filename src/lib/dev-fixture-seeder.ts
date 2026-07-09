@@ -2,12 +2,18 @@ import "server-only";
 
 // Dev-only extension fixture seeder.
 //
-// On a dev boot, applies each installed/dev extension's declared
-// `cinatra.devFixtures` into the extension's OWN org-scoped surfaces for a
-// host-resolved dev org, so a freshly-installed extension is visible +
-// exercisable without the monolithic `scripts/seed.mjs` hardcoding its demo
-// rows. Mirrors `dev-auto-setup`: gated on `CINATRA_RUNTIME_MODE==="development"`,
-// fire-and-forget, soft-fail (never blocks boot).
+// Applies each installed/dev extension's declared `cinatra.devFixtures` into the
+// extension's OWN org-scoped surfaces for a host-resolved dev org, so a
+// freshly-installed extension is visible + exercisable without the monolithic
+// `scripts/seed.mjs` hardcoding its demo rows. Fire-and-forget, soft-fail (never
+// blocks boot).
+//
+// ACTIVATION (relocated for `cinatra install demo`; cinatra-cli#122): this
+// dataset is demo-MANDATORY / dev-OPT-IN — no longer seeded on every dev boot.
+// `shouldSeedDevFixtures()` (src/lib/install-profile.ts) is the single source of
+// truth: demo ⇒ always; dev ⇒ only when `CINATRA_DEV_FIXTURES` is opted in;
+// prod ⇒ never. The dev boot phase gates the call on it and this seeder
+// self-guards on it too (defense in depth).
 //
 // SCOPE: reads fixtures from the dev `extensions/` checkout
 // (the runtime package store is handled separately) and seeds the `setting`
@@ -38,6 +44,7 @@ import {
 } from "@/lib/database";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import { devFixtureProvenanceKey } from "@/lib/extension-fixture-provenance";
+import { shouldSeedDevFixtures } from "@/lib/install-profile";
 
 export type FixtureProvenance = { pkg: string; id: string; rev: number; checksum: string };
 
@@ -223,6 +230,19 @@ export async function runDevFixtureSeeder(): Promise<DevFixtureSeederResult> {
     objectsDeferred: 0,
     errors: [],
   };
+
+  // Defense-in-depth activation guard (`cinatra install demo`; cinatra-cli#122).
+  // The dev-fixtures dataset is demo-mandatory / dev-opt-in. The boot caller
+  // (dev-boot) already gates on this decision; self-guard here too so no other
+  // caller — a script, a future boot phase, or a prod instance — can seed
+  // fixtures where they do not belong. See src/lib/install-profile.ts.
+  if (!shouldSeedDevFixtures()) {
+    return {
+      ...result,
+      status: "skipped",
+      reason: "dev fixtures not enabled (demo-only, or opt in with CINATRA_DEV_FIXTURES=1)",
+    };
+  }
 
   const actor = resolveDevActor();
   if (!actor) {
