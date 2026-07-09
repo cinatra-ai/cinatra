@@ -1,22 +1,18 @@
 /**
- * Regression: AgentApprovalDetailScreen surfaces ?error= decision failures (#391).
+ * Regression: AgentApprovalDetailScreen surfaces decision outcomes (#391), now
+ * as a TOAST via the codes-only <SearchParamToast> island (cinatra#1109).
  *
- * On the agent approval detail page a failed approve/reject/retry redirects back
- * to `/configuration/agents/approvals/<id>?error=<msg>` (see the decision actions
- * in src/app/configuration/agents/approvals/[id]/actions.ts). The screen
- * previously took only `{ id }` and never read the `error` param, so a failure
- * (e.g. self-approval disallowed) looked like a silent reload — the bug in #391.
- *
- * The fix threads `error`/`status` into AgentApprovalDetailScreen and renders a
- * destructive Alert for `?error=` (and a success Alert for `?status=`), mirroring
- * the Instance-tab surfacing fix in #357.
+ * A failed approve/reject/retry redirects to
+ * `/configuration/agents/approvals/<id>?error=<code>` and a success to
+ * `?status=<code>` (see the decision actions). The screen mounts
+ * <SearchParamToast toasts={APPROVAL_DECISION_TOASTS}>, which maps each code to a
+ * STATIC message and toasts it — no inline Alert, and the host route no longer
+ * threads the params (the island reads them from the URL client-side).
  *
  * Strategy: file-grep assertions scoped to the AgentApprovalDetailScreen source
  * block, matching this package's render-test pattern (the async server component
  * can't be imported in isolation — its module graph transitively reaches the
- * generated extension wiring). A companion jsdom test
- * (agent-approval-detail-error-surface-render.test.tsx) renders the exact Alert
- * markup with the real Alert UI components and asserts the DOM/accessibility.
+ * generated extension wiring).
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -41,31 +37,33 @@ function detailScreen(): string {
   return src.slice(start, next);
 }
 
-describe("AgentApprovalDetailScreen error/status surfacing (#391)", () => {
-  it("accepts error and status search params", () => {
+describe("AgentApprovalDetailScreen decision surfacing (#391 → toast)", () => {
+  it("mounts the codes-only <SearchParamToast> island for decision outcomes", () => {
     const body = detailScreen();
-    // Signature destructures error + status (not just id).
-    expect(body).toMatch(/error\?:\s*string\s*\|\s*string\[\]\s*\|\s*undefined/);
-    expect(body).toMatch(/status\?:\s*string\s*\|\s*string\[\]\s*\|\s*undefined/);
+    expect(body).toMatch(/<SearchParamToast\s+toasts=\{APPROVAL_DECISION_TOASTS\}/);
   });
 
-  it("normalizes the params and renders the ?error= message in a destructive Alert", () => {
-    const body = detailScreen();
-    expect(body).toMatch(/pickSearchParam\(error\)/);
-    expect(body).toMatch(/pickSearchParam\(status\)/);
-    // A destructive Alert renders the error message (not swallowed).
-    expect(body).toMatch(/<Alert\s+variant="destructive"/);
-    expect(body).toMatch(/\{errorMessage\}/);
+  it("maps the success + error decision codes to STATIC messages", () => {
+    const src = readScreens();
+    // status success codes
+    expect(src).toMatch(/value:\s*"approved"/);
+    expect(src).toMatch(/value:\s*"rejected"/);
+    expect(src).toMatch(/value:\s*"published"/);
+    // error codes (the raw MCP error is logged server-side, never toasted)
+    expect(src).toMatch(/value:\s*"decision-failed"/);
+    expect(src).toMatch(/value:\s*"unauthorized"/);
+    expect(src).toMatch(/value:\s*"reason-required"/);
   });
 
-  it("renders a success Alert for a successful ?status= decision", () => {
+  it("no longer renders an inline decision Alert (the outcome is a toast)", () => {
     const body = detailScreen();
-    expect(body).toMatch(/<Alert\s+variant="success"/);
-    expect(body).toMatch(/\{successMessage\}/);
+    expect(body).not.toMatch(/<Alert\s+variant="destructive"/);
+    expect(body).not.toMatch(/errorMessage/);
+    expect(body).not.toMatch(/successMessage/);
   });
 });
 
-describe("the host route threads searchParams into the screen (#391)", () => {
+describe("the host route no longer threads searchParams into the screen (#391 → toast)", () => {
   const pagePath = path.resolve(
     __dirname,
     "..",
@@ -81,10 +79,10 @@ describe("the host route threads searchParams into the screen (#391)", () => {
     "page.tsx",
   );
 
-  it("passes resolved error/status from the URL to AgentApprovalDetailScreen", () => {
+  it("renders the screen with only the id (the island reads the URL params)", () => {
     const src = readFileSync(pagePath, "utf8");
-    expect(src).toMatch(/searchParams\?:\s*Promise<Record<string,\s*string\s*\|\s*string\[\]\s*\|\s*undefined>>/);
-    expect(src).toMatch(/error=\{resolvedSearchParams\.error\}/);
-    expect(src).toMatch(/status=\{resolvedSearchParams\.status\}/);
+    expect(src).toMatch(/<AgentApprovalDetailScreen\s+id=\{id\}\s*\/>/);
+    expect(src).not.toMatch(/error=\{resolvedSearchParams\.error\}/);
+    expect(src).not.toMatch(/status=\{resolvedSearchParams\.status\}/);
   });
 });

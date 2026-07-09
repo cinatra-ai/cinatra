@@ -1,118 +1,108 @@
 // @vitest-environment jsdom
 /**
- * DOM-render proof for AgentApprovalDetailScreen's decision-error banner (#391).
+ * DOM-render proof that a decision outcome surfaces as a TOAST via the codes-only
+ * <SearchParamToast> island (cinatra#391 → #1109), not a silent reload.
  *
  * AgentApprovalDetailScreen (screens.tsx) is an async server component whose full
- * module graph cannot be imported in isolation in this checkout (it transitively
- * reaches generated extension wiring). The companion source-invariant test
- * (agent-approval-detail-error-surface.test.ts) pins that screens.tsx threads the
- * `error`/`status` search params and renders exactly the Alert markup exercised
- * here.
- *
- * This test renders that EXACT markup with the REAL Alert UI components and the
- * same param-normalization the screen uses (pickSearchParam), then asserts the
- * resulting DOM:
- *   - a failed decision (`?error=...`) renders the message in an assertive
- *     destructive alert (role="alert") instead of a silent reload (the #391 bug);
- *   - a successful decision (`?status=approved`) renders a polite status banner
- *     (role="status");
- *   - with neither param, no banner renders (clean page).
+ * module graph cannot be imported in isolation here. The sibling source-invariant
+ * test pins that the screen MOUNTS the island with APPROVAL_DECISION_TOASTS and
+ * that the decision codes exist. This test renders the REAL island (from sdk-ui)
+ * with a representative slice of that config and mocked next/navigation + toast,
+ * and asserts the mapped STATIC message toasts — never the raw URL value.
  */
 import React from "react";
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
-import { TriangleAlert } from "lucide-react";
-import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { render, cleanup } from "@testing-library/react";
 
-afterEach(() => cleanup());
+// vi.mock factories are hoisted above the module body, so any variable they
+// reference EAGERLY must be created via vi.hoisted (also hoisted).
+const { replace, toastError, toastSuccess } = vi.hoisted(() => ({
+  replace: vi.fn(),
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
+let currentParams = new URLSearchParams();
+vi.mock("next/navigation", () => ({
+  // `currentParams` is read lazily (per call) so its top-level reassignment
+  // between tests is observed without hoisting.
+  useSearchParams: () => currentParams,
+  usePathname: () => "/configuration/agents/approvals/req-1",
+  useRouter: () => ({ replace }),
+}));
 
-/** Same normalization the screen applies to a possibly-array search param. */
-function pickSearchParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
+vi.mock("@cinatra-ai/sdk-ui/toast", () => {
+  const t = Object.assign(vi.fn(), {
+    error: toastError,
+    success: toastSuccess,
+    warning: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+  });
+  return { toast: t, cinatraToast: t };
+});
 
-/** Faithful fragment of the AgentApprovalDetailScreen post-decision banner. */
-function DecisionBanner({
-  error,
-  status,
-}: {
-  error?: string | string[] | undefined;
-  status?: string | string[] | undefined;
-}) {
-  const errorMessage = pickSearchParam(error);
-  const statusMessage = pickSearchParam(status);
-  const successCopy: Record<string, string> = {
-    approved: "The proposal was approved and published (private-scoped).",
-    rejected: "The proposal was rejected; the author can edit and resubmit.",
-    published: "The held proposal was re-published.",
-  };
-  const successMessage = statusMessage ? successCopy[statusMessage] : undefined;
+import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
 
-  return (
-    <>
-      {errorMessage ? (
-        <Alert variant="destructive" className="rounded-panel" role="alert">
-          <TriangleAlert className="h-4 w-4 shrink-0" />
-          <AlertTitle>Decision failed</AlertTitle>
-          <AlertDescription className="break-words">{errorMessage}</AlertDescription>
-        </Alert>
-      ) : successMessage ? (
-        <Alert variant="success" className="rounded-panel" role="status">
-          <AlertTitle>Decision recorded</AlertTitle>
-          <AlertDescription>{successMessage}</AlertDescription>
-        </Alert>
-      ) : null}
-    </>
-  );
-}
+// A representative slice of screens.tsx's APPROVAL_DECISION_TOASTS (the sibling
+// source test pins the full set).
+const DECISION_TOASTS = [
+  {
+    param: "status",
+    value: "approved",
+    message: "The proposal was approved and published (private-scoped).",
+    variant: "success" as const,
+  },
+  {
+    param: "error",
+    value: "decision-failed",
+    message: "The decision could not be recorded. See server logs for details.",
+    variant: "error" as const,
+  },
+];
 
-describe("AgentApprovalDetailScreen decision banner render (#391)", () => {
-  it("surfaces a failed decision's ?error= message in an assertive alert", () => {
-    // The exact failure from the issue: a disallowed self-approval.
-    const msg = "self-approval is disallowed (a different admin must decide)";
-    render(<DecisionBanner error={msg} />);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  currentParams = new URLSearchParams();
+});
 
-    const alert = screen.getByRole("alert");
-    expect(alert).toBeTruthy();
-    // The reason text is actually rendered — not swallowed into a silent reload.
-    expect(alert.textContent).toContain("Decision failed");
-    expect(alert.textContent).toContain(msg);
-    // No success banner leaks in on the error path.
-    expect(screen.queryByRole("status")).toBeNull();
+describe("AgentApprovalDetailScreen decision toast render (#391 → #1109)", () => {
+  it("toasts the mapped STATIC error message for a failed decision (?error=<code>)", () => {
+    currentParams = new URLSearchParams("error=decision-failed");
+    render(<SearchParamToast toasts={DECISION_TOASTS} />);
+    expect(toastError).toHaveBeenCalledWith(
+      "The decision could not be recorded. See server logs for details.",
+      expect.anything(),
+    );
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 
-  it("handles an array-valued error param (first value wins)", () => {
-    render(<DecisionBanner error={["stale_proposal", "ignored"]} />);
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("stale_proposal");
-    expect(alert.textContent).not.toContain("ignored");
+  it("NEVER toasts the raw URL value — only the server-trusted static message", () => {
+    currentParams = new URLSearchParams("error=decision-failed");
+    render(<SearchParamToast toasts={DECISION_TOASTS} />);
+    expect(toastError).not.toHaveBeenCalledWith("decision-failed", expect.anything());
   });
 
-  it("shows a polite success banner for ?status=approved", () => {
-    render(<DecisionBanner status="approved" />);
-    const banner = screen.getByRole("status");
-    expect(banner.textContent).toContain("Decision recorded");
-    expect(banner.textContent).toContain("approved and published");
-    // The error (assertive) role must not be present on the success path.
-    expect(screen.queryByRole("alert")).toBeNull();
+  it("toasts the success message for a recorded decision (?status=approved)", () => {
+    currentParams = new URLSearchParams("status=approved");
+    render(<SearchParamToast toasts={DECISION_TOASTS} />);
+    expect(toastSuccess).toHaveBeenCalledWith(
+      "The proposal was approved and published (private-scoped).",
+      expect.anything(),
+    );
+    expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("prefers the error banner when both error and status are present", () => {
-    render(<DecisionBanner error="boom" status="approved" />);
-    expect(screen.getByRole("alert").textContent).toContain("boom");
-    expect(screen.queryByRole("status")).toBeNull();
+  it("fires no toast when no decision param is present (clean page)", () => {
+    render(<SearchParamToast toasts={DECISION_TOASTS} />);
+    expect(toastError).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 
-  it("renders no banner when neither param is present (clean page)", () => {
-    const { container } = render(<DecisionBanner />);
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(container.textContent).toBe("");
-  });
-
-  it("renders no banner for an unknown ?status= value", () => {
-    render(<DecisionBanner status="bogus" />);
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+  it("fires no toast for an unknown ?status= value", () => {
+    currentParams = new URLSearchParams("status=bogus");
+    render(<SearchParamToast toasts={DECISION_TOASTS} />);
+    expect(toastError).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 });

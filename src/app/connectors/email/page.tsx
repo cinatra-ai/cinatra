@@ -1,4 +1,5 @@
 import "server-only";
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -6,9 +7,9 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { ProviderSelect } from "./provider-select";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
@@ -22,16 +23,19 @@ import { setEmailRoutingAction } from "./actions";
 export const metadata: Metadata = { title: "Email | Cinatra" };
 export const dynamic = "force-dynamic";
 
-type SearchParams = Record<string, string | string[] | undefined>;
-function pick(v: string | string[] | undefined) {
-  return Array.isArray(v) ? v[0] : v;
-}
+// Codes-only flash island: the setEmailRoutingAction redirect carries a stable
+// CODE, mapped here to a STATIC message (never toasts the URL-supplied provider
+// id/name). Kept in lockstep with the emitter in ./actions.ts.
+const EMAIL_FLASH_TOASTS: SearchParamToastConfig[] = [
+  { param: "saved", value: "1", message: "Email routing saved.", variant: "success" },
+  { param: "error", value: "invalid-purpose", message: "That email purpose isn't recognized.", variant: "error" },
+  { param: "error", value: "unknown-provider", message: "That email provider isn't recognized.", variant: "error" },
+  { param: "error", value: "provider-not-connected", message: "That provider isn't connected. Connect it first, then assign it.", variant: "error" },
+  { param: "error", value: "provider-no-system-email", message: "That provider can't send platform/system email — choose an instance-level provider like Resend.", variant: "error" },
+];
 
-export default async function EmailConnectorsPage(props: { searchParams?: Promise<SearchParams> }) {
+export default async function EmailConnectorsPage() {
   await requireAdminSession();
-  const sp = (await (props.searchParams ?? Promise.resolve({}))) as SearchParams;
-  const saved = pick(sp.saved) === "1";
-  const error = pick(sp.error);
 
   const providers = await listEmailProvidersWithStatus();
   const routing = getEmailRouting();
@@ -49,16 +53,9 @@ export default async function EmailConnectorsPage(props: { searchParams?: Promis
         description="Choose which provider sends each kind of email. Providers must be connected before they can be assigned."
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        {saved ? (
-          <Alert variant="success" className="rounded-control">
-            <AlertDescription>Email routing saved.</AlertDescription>
-          </Alert>
-        ) : null}
-        {error ? (
-          <Alert variant="destructive" className="rounded-control">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={EMAIL_FLASH_TOASTS} />
+        </Suspense>
 
         {/* Per-purpose provider assignment */}
         <section className="soft-panel rounded-panel p-5">

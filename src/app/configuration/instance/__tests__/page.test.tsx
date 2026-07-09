@@ -28,6 +28,8 @@ import { reconcileFirstPublishedAt } from "@/app/configuration/instance/actions"
 import {
   type InstanceIdentity,
 } from "@/lib/instance-identity-store";
+import { INSTANCE_FLASH_TOASTS } from "@/app/configuration/instance/instance-flash";
+import type { SearchParamToastConfig } from "@/components/search-param-toast";
 
 const PRE_PUBLISH: InstanceIdentity = {
   instanceNamespace: "vendora",
@@ -158,6 +160,23 @@ function collectText(node: unknown): string[] {
   return [];
 }
 
+// Walk the element tree and return every `toasts` prop (a <SearchParamToast>
+// island config), so a test can prove the codes-only flash island is mounted —
+// the island itself is a client component that renders null server-side and
+// toasts from the URL params in the browser (cinatra#1109).
+function collectToasts(node: unknown): SearchParamToastConfig[][] {
+  if (!node || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap(collectToasts);
+  const el = node as Record<string, unknown>;
+  const out: SearchParamToastConfig[][] = [];
+  const props = el["props"] as Record<string, unknown> | undefined;
+  if (props) {
+    if (Array.isArray(props["toasts"])) out.push(props["toasts"] as SearchParamToastConfig[]);
+    if (props["children"]) out.push(...collectToasts(props["children"]));
+  }
+  return out;
+}
+
 const BASE_IDENTITY_223: InstanceIdentity = {
   instanceNamespace: "vendora",
   instanceDisplayName: "Vendor A",
@@ -194,21 +213,26 @@ describe("Environment instance tab — registry destination card moved out", () 
     expect(texts.some((t) => t.includes("Instance namespace"))).toBe(true);
   });
 
-  // cinatra#357 — defect #1: a failed Save redirects back with ?error=<msg>,
-  // which the instance tab must surface (instead of silently reverting).
-  it("renders the ?error= banner so a failed Save is visible, not a silent revert", async () => {
+  // cinatra#357 → #1109: a failed Save redirects back with ?error=<code>, which
+  // the instance tab surfaces via the codes-only <SearchParamToast> island (a
+  // toast), not an inline banner. Prove the island is mounted and its map covers
+  // the failed-Save code.
+  it("mounts the codes-only flash island so a failed Save surfaces via toast", async () => {
     const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
     vi.mocked(readInstanceIdentity).mockReturnValue(BASE_IDENTITY_223 as never);
     const { default: Page } = await import("@/app/configuration/environment/page");
     const tree = await Page({
-      searchParams: Promise.resolve({ tab: "instance", error: "That vendor name is already taken." }),
+      searchParams: Promise.resolve({ tab: "instance", error: "namespace-taken" }),
     });
-    const texts = collectText(tree);
-    expect(texts.some((t) => t.includes("Could not save instance changes"))).toBe(true);
-    expect(texts.some((t) => t.includes("That vendor name is already taken."))).toBe(true);
+    expect(collectToasts(tree)).toContainEqual(INSTANCE_FLASH_TOASTS);
+    expect(INSTANCE_FLASH_TOASTS).toContainEqual(
+      expect.objectContaining({ param: "error", value: "namespace-taken", variant: "error" }),
+    );
+    // The retired inline banner text never renders server-side.
+    expect(collectText(tree).some((t) => t.includes("Could not save instance changes"))).toBe(false);
   });
 
-  it("does not render the error banner when no ?error= param is present", async () => {
+  it("never renders an inline error banner (feedback is a toast)", async () => {
     const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
     vi.mocked(readInstanceIdentity).mockReturnValue(BASE_IDENTITY_223 as never);
     const { default: Page } = await import("@/app/configuration/environment/page");
@@ -217,12 +241,14 @@ describe("Environment instance tab — registry destination card moved out", () 
     expect(texts.some((t) => t.includes("Could not save instance changes"))).toBe(false);
   });
 
-  it("renders the ?saved=1 success banner after a successful Save", async () => {
+  it("mounts the flash island so ?saved=1 surfaces a success toast", async () => {
     const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
     vi.mocked(readInstanceIdentity).mockReturnValue(BASE_IDENTITY_223 as never);
     const { default: Page } = await import("@/app/configuration/environment/page");
     const tree = await Page({ searchParams: Promise.resolve({ tab: "instance", saved: "1" }) });
-    const texts = collectText(tree);
-    expect(texts.some((t) => t.includes("Instance saved"))).toBe(true);
+    expect(collectToasts(tree)).toContainEqual(INSTANCE_FLASH_TOASTS);
+    expect(INSTANCE_FLASH_TOASTS).toContainEqual(
+      expect.objectContaining({ param: "saved", value: "1", variant: "success" }),
+    );
   });
 });

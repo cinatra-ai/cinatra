@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect, notFound } from "next/navigation";
 import { format } from "date-fns";
 import { TriangleAlert } from "lucide-react";
@@ -47,6 +48,7 @@ import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { ImportAgentForm } from "./import-form";
 import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
 // InstallScopeDialog + server-side picker target builder (shared with the
@@ -58,10 +60,19 @@ import { buildInstallTargetPickerContext } from "./install-target-picker";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Normalize a possibly-array search param to its first string value. */
-function pickSearchParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
+// Codes-only flash island config for the approval decision result. The decision
+// actions redirect with `?status=<code>` (success) / `?error=<code>` (failure);
+// each maps to a STATIC message (the raw MCP error is logged server-side).
+const APPROVAL_DECISION_TOASTS: SearchParamToastConfig[] = [
+  { param: "status", value: "approved", message: "The proposal was approved and published (private-scoped).", variant: "success" },
+  { param: "status", value: "rejected", message: "The proposal was rejected; the author can edit and resubmit.", variant: "success" },
+  { param: "status", value: "published", message: "The held proposal was re-published.", variant: "success" },
+  { param: "error", value: "unauthorized", message: "Unauthorized — an admin session is required.", variant: "error" },
+  { param: "error", value: "no-active-org", message: "No active organization.", variant: "error" },
+  { param: "error", value: "reason-required", message: "A rejection reason is required.", variant: "error" },
+  { param: "error", value: "decision-failed", message: "The decision could not be recorded. See server logs for details.", variant: "error" },
+  { param: "error", value: "publish-failed", message: "The proposal could not be re-published. See server logs for details.", variant: "error" },
+];
 
 /**
  * Risk-class badge palette — 4-tier visual distinction.
@@ -191,14 +202,8 @@ export async function AgentBuilderRunScreen({ templateId }: { templateId: string
 
 export async function AgentApprovalDetailScreen({
   id,
-  error,
-  status,
 }: {
   id: string;
-  /** `?error=` from a failed approve/reject/retry redirect (cinatra#391). */
-  error?: string | string[] | undefined;
-  /** `?status=` from a successful approve/reject/retry redirect. */
-  status?: string | string[] | undefined;
 }) {
   await requireAdminSession();
   const session = await getAuthSession();
@@ -237,20 +242,6 @@ export async function AgentApprovalDetailScreen({
   }
   const isPending = req.status === "proposed";
 
-  // Post-decision redirect result (cinatra#391). A failed approve/reject/retry
-  // redirects back here with ?error=<msg>; a successful one with ?status=<state>.
-  // Without rendering them the page just reloads unchanged and a failure looks
-  // like a silent no-op. Rendered server-side (no client island) so it survives
-  // the redirect/refresh. Mirrors the Instance-tab fix in cinatra#357.
-  const errorMessage = pickSearchParam(error);
-  const statusMessage = pickSearchParam(status);
-  const successCopy: Record<string, string> = {
-    approved: "The proposal was approved and published (private-scoped).",
-    rejected: "The proposal was rejected; the author can edit and resubmit.",
-    published: "The held proposal was re-published.",
-  };
-  const successMessage = statusMessage ? successCopy[statusMessage] : undefined;
-
   // Lazy import the server-action module — it lives in the host app and the
   // package can't import directly without a circular dep at the type layer.
   // Render a plain HTML form that POSTs to the server actions (Next App Router
@@ -267,18 +258,9 @@ export async function AgentApprovalDetailScreen({
         description={`Proposal from ${req.authorId} — status ${req.status}`}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        {errorMessage ? (
-          <Alert variant="destructive" className="rounded-panel" role="alert">
-            <TriangleAlert className="h-4 w-4 shrink-0" />
-            <AlertTitle>Decision failed</AlertTitle>
-            <AlertDescription className="break-words">{errorMessage}</AlertDescription>
-          </Alert>
-        ) : successMessage ? (
-          <Alert variant="success" className="rounded-panel" role="status">
-            <AlertTitle>Decision recorded</AlertTitle>
-            <AlertDescription>{successMessage}</AlertDescription>
-          </Alert>
-        ) : null}
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={APPROVAL_DECISION_TOASTS} />
+        </Suspense>
         <div className="soft-panel rounded-card px-6 py-4">
           <div className="text-xs text-muted-foreground font-mono">request {req.id}</div>
           <div className="text-xs text-muted-foreground font-mono">snapshotHash {req.snapshotHash.slice(0, 16)}…</div>

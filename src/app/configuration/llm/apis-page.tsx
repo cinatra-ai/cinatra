@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import type { ComponentType } from "react";
+import { Suspense, type ComponentType } from "react";
 import { NangoManagedApiCard } from "@cinatra-ai/sdk-ui/nango";
 import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango-system";
 import { PageHeader } from "@/components/page-header";
@@ -10,7 +10,7 @@ import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy"
 import { Label } from "@/components/ui/label";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, readAnthropicSkillSyncEnabledFromDatabase, isAgentCreationPinActive } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { SearchParamToast } from "@/components/search-param-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DefaultProvidersCard } from "@/app/configuration/llm/_default-llm-select";
@@ -258,7 +258,6 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
   };
   const configuredOpenAIConnection = (await openai?.getConfiguredOpenAIConnection()) ?? null;
   const anthropicModels = [...(anthropic?.CLAUDE_MODELS ?? [])];
-  const savedIntegration = pickSearchParam(resolvedSearchParams.saved);
   const currentDefaultProvider = readDefaultLlmProviderFromDatabase();
   const openaiConnected = Boolean(configuredOpenAIConnection?.apiKey);
   const anthropicConnected = claudeStatus.status === "connected";
@@ -342,15 +341,15 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
             </Card>
           </section>
 
-          {savedIntegration ? (
-            <Alert variant="success" className="rounded-control">
-              <AlertDescription>
-                {savedIntegration === "openai"
-                  ? "The OpenAI API connection was validated and saved."
-                  : "The API connection was saved."}
-              </AlertDescription>
-            </Alert>
-          ) : null}
+          <Suspense fallback={null}>
+            {/* Codes-only flash: the connector save actions redirect here with
+                ?saved=<provider>. A single static message covers every provider
+                (no value → fires on any non-empty `saved`), so URL-supplied text
+                is never toasted. */}
+            <SearchParamToast
+              toasts={[{ param: "saved", message: "The API connection was saved." }]}
+            />
+          </Suspense>
 
         </PageContent>
       </Main>
