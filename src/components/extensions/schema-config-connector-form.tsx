@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   SchemaConfigField,
   SchemaConfigSurface,
@@ -103,6 +104,11 @@ function bannerNameFromResult(result: unknown): string | null {
   return null;
 }
 
+// The reserved value of the base "Setup" tab. A leading underscore can never be
+// a connector tab id (the schema-config KEY_RE requires a leading letter), so
+// this never collides with a declared tab.
+const SETUP_TAB_VALUE = "__setup";
+
 export function SchemaConfigConnectorForm({
   installId,
   packageName,
@@ -130,25 +136,68 @@ export function SchemaConfigConnectorForm({
     setListEpoch((e) => e + 1);
   }, []);
 
+  // One field group — shared by the flat form and by each tab panel. Field
+  // `key`s are globally unique (parser invariant), so row keys never collide.
+  const renderGroup = (fields: SchemaConfigField[]) => (
+    <FieldGroup>
+      {fields.map((field, i) => (
+        <SchemaConfigFieldRow
+          key={fieldKey(field, i)}
+          field={field}
+          installId={installId}
+          isAdmin={isAdmin}
+          initialValues={initialValues}
+          onConnect={onConnect}
+          bannerName={bannerName}
+          listEpoch={listEpoch}
+          onActionResult={onActionResult}
+        />
+      ))}
+    </FieldGroup>
+  );
+
+  const hasTabs = !!surface.tabs && surface.tabs.length > 0;
+
   return (
     <FieldSet data-testid="schema-config-form" data-package={packageName}>
       {surface.title ? <FieldLegend variant="label">{surface.title}</FieldLegend> : null}
       {surface.description ? <FieldDescription>{surface.description}</FieldDescription> : null}
-      <FieldGroup>
-        {surface.fields.map((field, i) => (
-          <SchemaConfigFieldRow
-            key={fieldKey(field, i)}
-            field={field}
-            installId={installId}
-            isAdmin={isAdmin}
-            initialValues={initialValues}
-            onConnect={onConnect}
-            bannerName={bannerName}
-            listEpoch={listEpoch}
-            onActionResult={onActionResult}
-          />
-        ))}
-      </FieldGroup>
+      {hasTabs ? (
+        // Tabbed setup surface (design spec: app-connectors §II). The base fields
+        // are the reserved "Setup" tab; each declared tab follows, and the parser
+        // has already ordered the reserved Help tab LAST.
+        <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-4">
+          <TabsList>
+            <TabsTrigger value={SETUP_TAB_VALUE}>Setup</TabsTrigger>
+            {surface.tabs!.map((tab) => (
+              <TabsTrigger key={tab.id} value={tab.id}>
+                {tab.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {/* forceMount EVERY panel so collectFormInputs() — a live-DOM scan of
+              the form — still sees inputs on inactive tabs. Radix unmounts
+              inactive tab content by default, which would silently drop those
+              values on submit. With forceMount Radix keeps the panel mounted but
+              no longer sets `hidden`, so we hide the inactive ones ourselves via
+              Radix's own `data-state` (display:none keeps inputs collectable). */}
+          <TabsContent value={SETUP_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
+            {renderGroup(surface.fields)}
+          </TabsContent>
+          {surface.tabs!.map((tab) => (
+            <TabsContent
+              key={tab.id}
+              value={tab.id}
+              forceMount
+              className="data-[state=inactive]:hidden"
+            >
+              {renderGroup(tab.fields)}
+            </TabsContent>
+          ))}
+        </Tabs>
+      ) : (
+        renderGroup(surface.fields)
+      )}
     </FieldSet>
   );
 }
