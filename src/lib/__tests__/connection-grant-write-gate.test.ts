@@ -43,9 +43,11 @@ vi.mock("@/lib/authz/audit", () => ({
 const readOrgsWithTeamsForUser = vi.fn();
 const readProjectsForUser = vi.fn();
 const readProjectById = vi.fn();
+const readTeamForOrg = vi.fn();
 vi.mock("@/lib/better-auth-db", () => ({
   readOrgsWithTeamsForUser: (...a: unknown[]) => readOrgsWithTeamsForUser(...a),
   readProjectsForUser: (...a: unknown[]) => readProjectsForUser(...a),
+  readTeamForOrg: (...a: unknown[]) => readTeamForOrg(...a),
 }));
 vi.mock("@/lib/projects-store", () => ({
   readProjectById: (...a: unknown[]) => readProjectById(...a),
@@ -92,6 +94,11 @@ beforeEach(() => {
   ]);
   readProjectsForUser.mockResolvedValue([{ id: "proj-1", name: "Project One" }]);
   readProjectById.mockResolvedValue({ id: "proj-1", organizationId: ORG });
+  // Org-containment reader (admin branch): team-1 belongs to ORG; anything else
+  // is out-of-org.
+  readTeamForOrg.mockImplementation(async (teamId: string, orgId: string) =>
+    teamId === "team-1" && orgId === ORG ? { id: teamId, organizationId: orgId } : null,
+  );
 });
 
 async function validate(policy: AgentAuthPolicy, userId = OWNER) {
@@ -99,6 +106,37 @@ async function validate(policy: AgentAuthPolicy, userId = OWNER) {
   expect(hooks.validatePolicyWrite).toBeTypeOf("function");
   return hooks.validatePolicyWrite!(identity.id, policy, { userId });
 }
+
+// Admin-standing variant: a saving actor who holds admin standing over the
+// connection's org. `userId` intentionally differs from the connection OWNER so
+// the owner/co-owner short-circuits do NOT fire — parity comes purely from role.
+type Actor = Parameters<
+  NonNullable<
+    Awaited<ReturnType<typeof getExtensionKindHooks>>["validatePolicyWrite"]
+  >
+>[2]["actor"];
+async function validateAsActor(policy: AgentAuthPolicy, actor: Actor, userId = "admin-user") {
+  const hooks = await getExtensionKindHooks("connection");
+  return hooks.validatePolicyWrite!(identity.id, policy, { userId, actor });
+}
+const orgAdminActor = {
+  principalType: "HumanUser",
+  principalId: "admin-user",
+  organizationId: ORG,
+  orgRole: "org_admin",
+} as unknown as Actor;
+const platformAdminActor = {
+  principalType: "HumanUser",
+  principalId: "pa-user",
+  organizationId: "org-somewhere-else",
+  platformRole: "platform_admin",
+} as unknown as Actor;
+const crossOrgAdminActor = {
+  principalType: "HumanUser",
+  principalId: "other-admin",
+  organizationId: "org-other",
+  orgRole: "org_admin",
+} as unknown as Actor;
 
 describe("connection validatePolicyWrite — the only-ceiling write rejection", () => {
   it("rejects widening past only:admin with the TYPED scope_locked_by_connector", async () => {
@@ -218,6 +256,63 @@ describe("connection validatePolicyWrite — REAL-loci validation (default mode)
   it("admits workspace + admin on an org-bound row (no id to validate)", async () => {
     expect(await validate(policyOf("workspace"))).toBeNull();
     expect(await validate(policyOf("admin"))).toBeNull();
+  });
+});
+
+describe("connection validatePolicyWrite — admin standing re-scopes by org-containment (P2)", () => {
+  beforeEach(() => {
+    readInstalledExtensionsByPackageName.mockResolvedValue(
+      declarationRow(decl("default", "workspace")),
+    );
+  });
+
+  it("an owning-org admin re-scopes to a team of the connection's org WITHOUT personal membership", async () => {
+    readOrgsWithTeamsForUser.mockResolvedValue([]); // admin holds no personal teams
+    expect(await validateAsActor(policyOf("team:team-1"), orgAdminActor)).toBeNull();
+    expect(readTeamForOrg).toHaveBeenCalledWith("team-1", ORG);
+  });
+
+  it("an owning-org admin re-scopes to org: / project: of the connection's org without personal membership", async () => {
+    readOrgsWithTeamsForUser.mockResolvedValue([]);
+    readProjectsForUser.mockResolvedValue([]); // no personal projects
+    readProjectById.mockResolvedValue({ id: "proj-1", organizationId: ORG });
+    expect(await validateAsActor(policyOf(`org:${ORG}`), orgAdminActor)).toBeNull();
+    expect(await validateAsActor(policyOf("project:proj-1"), orgAdminActor)).toBeNull();
+  });
+
+  it("a platform admin re-scopes by org-containment too", async () => {
+    readOrgsWithTeamsForUser.mockResolvedValue([]);
+    expect(await validateAsActor(policyOf("team:team-1"), platformAdminActor)).toBeNull();
+  });
+
+  it("admin standing still refuses a locus OUTSIDE the connection's org", async () => {
+    expect(await validateAsActor(policyOf("team:team-stranger"), orgAdminActor)).toBe("invalid_locus");
+    expect(await validateAsActor(policyOf("org:org-other"), orgAdminActor)).toBe("invalid_locus");
+    readProjectById.mockResolvedValue({ id: "proj-1", organizationId: "org-other" });
+    expect(await validateAsActor(policyOf("project:proj-1"), orgAdminActor)).toBe("invalid_locus");
+  });
+
+  it("a CROSS-ORG admin gets NO standing — falls back to personal membership (denied here)", async () => {
+    readOrgsWithTeamsForUser.mockResolvedValue([]); // no membership in ORG
+    readProjectsForUser.mockResolvedValue([]);
+    expect(await validateAsActor(policyOf("team:team-1"), crossOrgAdminActor)).toBe("invalid_locus");
+    expect(await validateAsActor(policyOf(`org:${ORG}`), crossOrgAdminActor)).toBe("invalid_locus");
+  });
+
+  it("the vendor only-ceiling STILL clamps an admin (standing does not override the ceiling)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue(declarationRow(decl("only", "user")));
+    expect(await validateAsActor(policyOf(`org:${ORG}`), orgAdminActor)).toBe("scope_locked_by_connector");
+    expect(await validateAsActor(policyOf("team:team-1"), orgAdminActor)).toBe("scope_locked_by_connector");
+    expect(await validateAsActor(policyOf("owner"), orgAdminActor)).toBeNull();
+  });
+
+  it("a NULL-org connection yields no admin standing (fail closed)", async () => {
+    readNangoConnectionById.mockResolvedValue({ ...identity, organizationId: null });
+    readInstalledExtensionsByPackageName.mockResolvedValue(
+      declarationRow(decl("default", "workspace"), null),
+    );
+    expect(await validateAsActor(policyOf("team:team-1"), orgAdminActor)).toBe("invalid_locus");
+    expect(await validateAsActor(policyOf("workspace"), orgAdminActor)).toBe("invalid_locus");
   });
 });
 
