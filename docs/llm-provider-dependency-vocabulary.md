@@ -93,7 +93,13 @@ mirroring the runtime dispatch so the two cannot drift:
 - `src/lib/agent-run-enqueue.ts` — the enqueue chokepoint runs the LLM preflight
   (alongside the #1056 connector preflight) whenever the caller supplies the
   agent package identity, honoring the existing `softPreflight` (dev-preview)
-  escape hatch.
+  escape hatch. The package identity is threaded from the same run-start call
+  sites that already thread the #1056 connector deps — the two `run-actions.ts`
+  start paths and the MCP `agent_run` handler (hard preflight), plus the
+  workflow-delegation executor (under the delegated-reconciler `softPreflight`,
+  which has no live session actor, so a missing provider surfaces as a run
+  failure at execution rather than a hard enqueue block) — i.e. exact parity with
+  the #1056 connector gate's coverage.
 - `packages/agents/src/run-actions.ts` — the run action results surface the
   actionable preflight error (`LlmProviderNotConfiguredError` and the sibling
   `ConnectorNotConfiguredError`) instead of the generic "enqueue failed", so the
@@ -112,3 +118,11 @@ configuration surfacing tracked in #1057.
   connector states) and install-time surfacing are owned by later waves (#1058,
   #1057); this change supplies the vocabulary and the run-enqueue gate they build
   on.
+- The run-enqueue preflight (both the #1056 connector gate and this LLM gate)
+  fires only on the call sites that thread the template identity into
+  `enqueueAgentRun`. The remaining producers that enqueue with a bare `runId`
+  (`agents/src/actions.ts` registry run, the A2A wrappers, `trigger-release-job`,
+  `agent-tools-registry`, and the agent-builder / dev-child-preview paths) get no
+  run-start preflight for connectors OR LLM providers today; making the chokepoint
+  self-derive the identity from `runId -> template` would close both gaps at once
+  and is a shared follow-up on the #1056 machinery, not specific to this wave.

@@ -1042,6 +1042,11 @@ async function handleAgentBuilderRun(
 
     await enqueueAgentRun({ runId }, {
       connectorDependencies: template?.connectorDependencies,
+      // cinatra#1062: carry the package identity so the LLM-provider preflight
+      // fires for MCP-initiated runs too (parity with the #1056 connector gate).
+      agentPackage: template?.packageName
+        ? { name: template.packageName, version: template.packageVersion ?? null }
+        : undefined,
     });
 
     void logAuditEvent({
