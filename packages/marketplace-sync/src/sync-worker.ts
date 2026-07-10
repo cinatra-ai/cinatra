@@ -50,6 +50,24 @@ export interface SyncWorkerDeps {
    * Tests override this to assert idempotency semantics.
    */
   idempotencyKeyFor?: (metadata: PackageMetadata) => string;
+  /**
+   * Optional: persist the cached "update read model" entry for this package —
+   * the gatekept-instance "update available" source (#1041). Called
+   * per-package after a successful scope check + fetch + map, from the same
+   * manifest already in hand. Best-effort: a write failure is recorded as a
+   * per-package warning and NEVER aborts the sweep nor fails the catalog POST.
+   *
+   * The entry shape is STRUCTURAL (mirrors `@cinatra-ai/registries`
+   * `ExtensionUpdateEntry`, produced by its `buildUpdateEntry`) so this package
+   * need not depend on the read-model storage package — the host wiring
+   * (marketplace-sync-deps) injects the concrete writer.
+   */
+  recordUpdateEntry?: (entry: {
+    packageName: string;
+    latestVersion: string | null;
+    latestSdkAbiRange: string | null;
+    refreshedAt: string;
+  }) => Promise<void>;
 }
 
 export interface PerPackageResult {
@@ -136,6 +154,34 @@ export async function runMarketplaceSync(deps: SyncWorkerDeps): Promise<SyncRunS
       continue;
     }
 
+    // Refresh the cached update read model from the SAME manifest we just
+    // fetched + validated. This runs before the catalog POST and in its own
+    // try/catch so the gatekept-instance update source stays fresh even when
+    // the catalog POST later fails — and a read-model write failure never
+    // aborts the sweep. Only the per-package warnings surface it.
+    const warnings = [...mapped.warnings];
+    if (deps.recordUpdateEntry) {
+      try {
+        const latestVersion =
+          typeof source.packageJson.version === "string" && source.packageJson.version !== ""
+            ? source.packageJson.version
+            : null;
+        const rawAbi = source.packageJson.cinatra?.sdkAbiRange;
+        const latestSdkAbiRange =
+          typeof rawAbi === "string" && rawAbi.trim() !== "" ? rawAbi : null;
+        await deps.recordUpdateEntry({
+          packageName,
+          latestVersion,
+          latestSdkAbiRange,
+          refreshedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        warnings.push(
+          `recordUpdateEntry failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     try {
       await deps.client.packageSyncFromRegistry({
         metadata: mapped.metadata,
@@ -147,7 +193,7 @@ export async function runMarketplaceSync(deps: SyncWorkerDeps): Promise<SyncRunS
         packageName,
         status: "synced",
         rejectionReason: null,
-        warnings: mapped.warnings,
+        warnings,
       });
     } catch (error) {
       syncFailedCount++;
@@ -155,7 +201,7 @@ export async function runMarketplaceSync(deps: SyncWorkerDeps): Promise<SyncRunS
         packageName,
         status: "sync-failed",
         rejectionReason: `client.packageSyncFromRegistry threw: ${error instanceof Error ? error.message : String(error)}`,
-        warnings: mapped.warnings,
+        warnings,
       });
     }
   }

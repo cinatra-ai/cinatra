@@ -227,4 +227,92 @@ describe("runMarketplaceSync", () => {
     expect(failed.status).toBe("map-failed");
     expect(failed.rejectionReason).toContain("no cinatra.kind declared");
   });
+
+  // ---------------------------------------------------------------------------
+  // #1041 outcome 3 — cached update read model population from the sync loop.
+  // ---------------------------------------------------------------------------
+
+  it("populates the update read model from each synced package's manifest (version + sdkAbiRange)", async () => {
+    const client = createMockMarketplaceMcpClient();
+    const recorded: Array<{
+      packageName: string;
+      latestVersion: string | null;
+      latestSdkAbiRange: string | null;
+      refreshedAt: string;
+    }> = [];
+    const summary = await runMarketplaceSync({
+      client,
+      verdaccioPackageNames: async () => ["@acme/withabi", "@acme/noabi"],
+      getPackageSource: async (name) => ({
+        packageJson:
+          name === "@acme/withabi"
+            ? { name, version: "1.5.0", cinatra: { kind: "connector", sdkAbiRange: "^2" } }
+            : { name, version: "0.3.0", cinatra: { kind: "skill" } },
+        readme: null,
+        versions: [{ version: "0.0.0", releasedAt: "2026-05-01T00:00:00Z" }],
+      }),
+      isScopeApproved: async () => true,
+      recordUpdateEntry: async (entry) => {
+        recorded.push(entry);
+      },
+    });
+    expect(summary.syncedCount).toBe(2);
+    expect(recorded).toHaveLength(2);
+
+    const withAbi = recorded.find((e) => e.packageName === "@acme/withabi")!;
+    expect(withAbi.latestVersion).toBe("1.5.0");
+    expect(withAbi.latestSdkAbiRange).toBe("^2");
+    expect(Number.isFinite(Date.parse(withAbi.refreshedAt))).toBe(true);
+
+    const noAbi = recorded.find((e) => e.packageName === "@acme/noabi")!;
+    expect(noAbi.latestVersion).toBe("0.3.0");
+    expect(noAbi.latestSdkAbiRange).toBeNull();
+  });
+
+  it("does NOT record an update entry for scope-rejected / map-failed packages", async () => {
+    const client = createMockMarketplaceMcpClient();
+    const recorded: string[] = [];
+    await runMarketplaceSync({
+      client,
+      verdaccioPackageNames: async () => ["@acme/ok", "@evil/rejected", "@acme/nokind"],
+      getPackageSource: async (name) => ({
+        packageJson:
+          name === "@acme/nokind"
+            ? { name, version: "0.1.0" }
+            : { name, version: "0.1.0", cinatra: { kind: "skill" } },
+        readme: null,
+        versions: [{ version: "0.1.0", releasedAt: "2026-05-01T00:00:00Z" }],
+      }),
+      isScopeApproved: async (scope) => scope === "@acme",
+      recordUpdateEntry: async (entry) => {
+        recorded.push(entry.packageName);
+      },
+    });
+    // Only the fully-valid package reaches the read-model write.
+    expect(recorded).toEqual(["@acme/ok"]);
+  });
+
+  it("treats a read-model write failure as a per-package warning (best-effort, never aborts nor fails the sync)", async () => {
+    const client = createMockMarketplaceMcpClient();
+    const summary = await runMarketplaceSync({
+      client,
+      verdaccioPackageNames: async () => ["@acme/a"],
+      getPackageSource: async (name) => ({
+        packageJson: { name, version: "1.0.0", cinatra: { kind: "agent", sdkAbiRange: "^2" } },
+        readme: null,
+        versions: [{ version: "1.0.0", releasedAt: "2026-05-01T00:00:00Z" }],
+      }),
+      isScopeApproved: async () => true,
+      recordUpdateEntry: async () => {
+        throw new Error("read-model store down");
+      },
+    });
+    // The catalog POST still succeeds — the package is synced, not failed.
+    expect(summary.syncedCount).toBe(1);
+    expect(summary.syncFailedCount).toBe(0);
+    const row = summary.perPackage[0];
+    expect(row.status).toBe("synced");
+    expect(row.warnings.some((w) => w.includes("recordUpdateEntry failed"))).toBe(true);
+    expect(row.warnings.some((w) => w.includes("read-model store down"))).toBe(true);
+  });
 });
