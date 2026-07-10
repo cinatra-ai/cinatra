@@ -24,8 +24,9 @@ import "server-only";
 // is optional-by-construction: a run completes and is useful without the
 // artifact extension; only typed materialization degrades (see
 // `src/lib/artifacts/run-artifact-materializer.ts`). Its FIRST production
-// consumer is `produced-artifact-advisory.ts` (a non-blocking install-time
-// advisory), NOT an install-blocking or auto-install caller. The reverse
+// consumer is the produced-artifact advisory co-located at the bottom of this
+// module (a non-blocking install-time advisory), NOT an install-blocking or
+// auto-install caller. The reverse
 // artifact→agent `agentDependencies` field (the semantic-manifest one, NOT the
 // deprecated legacy agent-package `cinatra.agentDependencies` map) is KEPT as
 // the dormant reverse advisory edge feeding this same graph.
@@ -202,4 +203,95 @@ export function checkAuthoringRecursionBudget(
   };
   if (graph.nodes.has(start)) walk(start, 0, new Set([start]));
   return { withinBudget: maxDepth <= budget, maxDepthReached: maxDepth, budget };
+}
+
+// ---------------------------------------------------------------------------
+// Produced-artifact ADVISORY (cinatra#1059).
+//
+// Posture decision (ratified on #1059, converged with codex): the agent→
+// artifact `cinatra.produces` edge is an ADVISORY (soft) cross-kind edge — it
+// NEVER blocks install and NEVER auto-installs. When an agent's produced
+// artifact extension is absent the run keeps its deliberate DEGRADE posture
+// (visible per-output materialization failure, default-floor typing) — see
+// `src/lib/artifacts/run-artifact-materializer.ts`. These helpers compute, at
+// install-finalize, WHICH produced-artifact extensions are absent so callers
+// can surface a non-blocking advisory (`log-continue`, the canonical artifact
+// optional-missing behavior in `dependency-closure.ts`).
+//
+// They are the FIRST production consumer of the graph above (`resolveInstall`
+// in SOFT mode). Co-located here (rather than a standalone module) so the
+// produced-artifact advisory adds NO new reachable first-party module to the
+// dev-perf-tracked route graphs (the route-graph ratchet already counts this
+// module) while keeping the produces-edge machinery in one place.
+// ---------------------------------------------------------------------------
+
+/** A canonical installed-extension row, narrowed to the fields the advisory
+ *  scope-pick needs (mirror of the `installed_extension` columns read via
+ *  `readInstalledExtensionsByPackageName`). */
+export type InstalledArtifactRowLike = {
+  packageName: string;
+  kind: string;
+  status: string;
+  organizationId: string | null;
+};
+
+/**
+ * The set of artifact package names that have a GOVERNING live install for the
+ * installing org scope. Mirrors the row-pick in
+ * `src/lib/artifacts/artifact-extension-access.ts` EXACTLY so the advisory and
+ * the write-gate agree on "present for this org":
+ *   - only `active|locked` rows govern (archived/removed do NOT);
+ *   - the governing row is the org-owned live row if present, else an ambient
+ *     (platform/workspace, `organizationId == null`) live row;
+ *   - a package whose only live rows belong to OTHER orgs is NOT governing here
+ *     (no cross-org presence bleed) → still counts as missing.
+ */
+export function governingInstalledArtifactSet(
+  rows: readonly InstalledArtifactRowLike[],
+  orgId: string | null | undefined,
+): Set<string> {
+  const byPkg = new Map<string, InstalledArtifactRowLike[]>();
+  for (const r of rows) {
+    if (r.kind !== "artifact") continue;
+    if (r.status !== "active" && r.status !== "locked") continue;
+    const list = byPkg.get(r.packageName);
+    if (list) list.push(r);
+    else byPkg.set(r.packageName, [r]);
+  }
+  const governing = new Set<string>();
+  for (const [pkg, live] of byPkg) {
+    const pick =
+      (orgId != null && live.find((r) => r.organizationId === orgId)) ||
+      live.find((r) => r.organizationId == null) ||
+      null;
+    if (pick) governing.add(pkg);
+  }
+  return governing;
+}
+
+/**
+ * Given an agent package's declared `produces` targets and the set of
+ * scope-governing INSTALLED artifact package names, return the produced
+ * artifact extensions that are ABSENT (the advisory). SOFT: never throws,
+ * never blocks — the result is purely informational.
+ *
+ * Routes through the cross-kind graph (SOFT `resolveInstall`); the produced
+ * artifacts resolve ONLY via `installedArtifacts` (they are not graph nodes),
+ * so an uninstalled-but-registry-known artifact still counts missing. The
+ * returned list is de-duplicated and order-stable.
+ */
+export function computeMissingProducedArtifacts(
+  agentPackageName: string,
+  producesTargets: readonly string[],
+  installedArtifacts: ReadonlySet<string>,
+): string[] {
+  const produces = [...new Set(producesTargets)];
+  if (produces.length === 0) return [];
+  const node: CrossKindNode = { packageName: agentPackageName, kind: "agent", produces };
+  const graph = buildCrossKindGraph([node]);
+  const resolution = resolveInstall(graph, node, {
+    installed: installedArtifacts,
+    mode: "soft",
+  });
+  return resolution.unresolved;
 }

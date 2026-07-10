@@ -722,7 +722,7 @@ async function computeProducedArtifactAdvisory(input: {
     const [{ readAgentProducesFromPackageManifest }, advisory, { readInstalledExtensionsByPackageNames }] =
       await Promise.all([
         import("@cinatra-ai/extensions/agent-produces-reader"),
-        import("@cinatra-ai/extensions/produced-artifact-advisory"),
+        import("@cinatra-ai/extensions/cross-kind-dep-graph"),
         import("@cinatra-ai/extensions/canonical-store"),
       ]);
     const produces = readAgentProducesFromPackageManifest(input.manifest).map((r) => r.extension);

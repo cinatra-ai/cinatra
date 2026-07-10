@@ -25,7 +25,7 @@
     { "alias": "@cinatra-ai/extensions/dependency-closure", "target": "./packages/extensions/src/dependency-closure.ts" },
     { "alias": "@cinatra-ai/extensions/removal-failure", "target": "./packages/extensions/src/removal-failure.ts" },
     { "alias": "@cinatra-ai/extensions/manifest-dependencies", "target": "./packages/extensions/src/manifest-dependencies.ts" },
-    { "alias": "@cinatra-ai/extensions/produced-artifact-advisory", "target": "./packages/extensions/src/produced-artifact-advisory.ts" },
+    { "alias": "@cinatra-ai/extensions/cross-kind-dep-graph", "target": "./packages/extensions/src/cross-kind-dep-graph.ts" },
     { "alias": "@cinatra-ai/extensions/system-extension-inventory", "target": "./packages/extensions/src/system-extension-inventory.ts" },
     { "alias": "@cinatra-ai/extensions/dev-version", "target": "./packages/extensions/src/dev-version.ts" },
     { "alias": "@cinatra-ai/extensions/publish-authority", "target": "./packages/extensions/src/publish-authority.ts" },

@@ -11,7 +11,7 @@ import {
   governingInstalledArtifactSet,
   computeMissingProducedArtifacts,
   type InstalledArtifactRowLike,
-} from "../produced-artifact-advisory";
+} from "../cross-kind-dep-graph";
 
 const AGENT = "@cinatra-ai/blog-draft-writer-agent";
 const ART = "@cinatra-ai/blog-post-artifact";
