@@ -76,13 +76,28 @@ describe("sidebar pill ⇔ page Inbox parity", () => {
     expect(badge.visible).toBe(true); // an actionable admin Inbox source applies
   });
 
-  it("non-admin: badge total equals the page Inbox reduce, and the nav is hidden", async () => {
+  it("non-admin: badge total equals the page Inbox reduce; the nav lights via their own request (option-b)", async () => {
     const badge = await summarizeApprovalsNav(sources, MEMBER);
     const page = await pageInboxTotal(sources, MEMBER);
     // Only the read-only workflow passthrough contributes an Inbox count to a
-    // member; both reducers agree on it, and neither actionable source applies.
-    expect(badge.total).toBe(page); // 0 + 2 + 0
+    // member; both reducers agree on it. No actionable Inbox source applies, but
+    // the member has an own request in flight (agent `mine: 1`), so the nav is
+    // visible via the option-b mine path (owner review #1302 ask 5) — visibility
+    // rides `mine`, independent of the Inbox total.
+    expect(badge.total).toBe(page); // 0 + 2 + 0 (Inbox total unchanged)
     expect(badge.total).toBe(2);
+    expect(badge.visible).toBe(true);
+  });
+
+  it("non-admin with NO own request: nav stays hidden", async () => {
+    const noOwn = sources.map((s) =>
+      s.id === "agent-creation-requests"
+        ? navSource({ id: s.id, appliesInbox: (v) => v.isAdmin, counts: () => ({ inbox: 0, mine: 0 }) })
+        : s,
+    );
+    const badge = await summarizeApprovalsNav(noOwn, MEMBER);
+    const page = await pageInboxTotal(noOwn, MEMBER);
+    expect(badge.total).toBe(page); // 0 + 2 + 0
     expect(badge.visible).toBe(false);
   });
 });

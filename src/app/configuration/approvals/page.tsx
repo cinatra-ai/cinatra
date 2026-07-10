@@ -130,7 +130,7 @@ export default async function AdministrationApprovalsPage({
   const marketplaceConnected = anyMarketplaceCredential();
 
   const renderSection = (s: ApprovalSource, dir: Direction) => (
-    <Suspense key={s.id} fallback={<SourceSkeleton title={s.title} />}>
+    <Suspense key={s.id} fallback={<SourceSkeleton />}>
       <SourceSection source={s} viewer={viewer} direction={dir} opts={opts} />
     </Suspense>
   );
@@ -142,7 +142,23 @@ export default async function AdministrationApprovalsPage({
       connected: marketplaceConnected,
     });
 
-    if (isEmptyPlan(plan)) {
+    // Owner review #1302 asks 2 + 4: the "Marketplace not connected" group Empty
+    // is IRRELEVANT in the Inbox (the Inbox is about decisions to make, not
+    // registry connectivity) — never render it there. It belongs only in "Your
+    // requests" (which tracks this instance's OWN marketplace submissions), and
+    // there it sits at the TOP of the tab content, above the local sections.
+    const showNotConnected = plan.showGroupEmpty && dir === "mine";
+
+    // With the not-connected group suppressed in the Inbox, an Inbox whose ONLY
+    // content would have been that group is now genuinely empty → fall through to
+    // the top-level Empty rather than render a blank tab. (isEmptyPlan reports
+    // false whenever showGroupEmpty is set, so compute Inbox emptiness directly.)
+    const nothingToShow =
+      dir === "inbox"
+        ? plan.local.length === 0 && plan.groupReady.length === 0 && plan.groupHidden.length === 0
+        : isEmptyPlan(plan);
+
+    if (nothingToShow) {
       return (
         <Empty className="border-line">
           <EmptyHeader>
@@ -161,10 +177,10 @@ export default async function AdministrationApprovalsPage({
 
     return (
       <>
-        {plan.local.map((s) => renderSection(s, dir))}
-        {plan.showGroupEmpty ? (
+        {showNotConnected ? (
           <MarketplaceNotConnectedGroup connectHref={MARKETPLACE_CONNECT_HREF} />
         ) : null}
+        {plan.local.map((s) => renderSection(s, dir))}
         {plan.groupReady.map((s) => renderSection(s, dir))}
         <MarketplaceSourcesFooter hidden={plan.groupHidden} connectHref={MARKETPLACE_CONNECT_HREF} />
       </>

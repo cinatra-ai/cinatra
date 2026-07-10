@@ -8,8 +8,9 @@
  *     does), so one source failing never blanks the page;
  *   - an explicit `availability:'error'` envelope renders inline the same way;
  *   - a Next control-flow signal (redirect/notFound) is RE-THROWN untouched;
- *   - rows render through the source's own rowRenderer under a titled, anchored
- *     section with an optional "View all" drill-down.
+ *   - rows render through the source's own rowRenderer under an anchored section
+ *     with NO categorizing heading (owner review #1302 ask 3) and an optional
+ *     "View all" drill-down as the only header-slot affordance.
  *
  * Rendered with react-dom/server so it needs neither a browser nor the full app
  * build (which requires the systemExtension workspace packages) — the live
@@ -59,7 +60,7 @@ async function render(source: ApprovalSource, direction: Direction = "inbox"): P
 }
 
 describe("SourceSection render — spec anatomy", () => {
-  it("renders rows via the source rowRenderer under a titled, anchored section with View all", async () => {
+  it("renders rows via the source rowRenderer under an anchored, HEADING-LESS section with View all", async () => {
     const src = fakeSource(
       {
         availability: "ready",
@@ -78,10 +79,35 @@ describe("SourceSection render — spec anatomy", () => {
     );
     const html = await render(src);
     expect(html).toContain('id="fake"'); // section anchor for legacy ?tab= deep links
-    expect(html).toContain("Fake source"); // section header title
+    // No categorizing section heading (owner review #1302 ask 3) — the source
+    // title never renders as an <h2> label above the card.
+    expect(html).not.toContain("<h2");
+    expect(html).not.toContain(">Fake source<");
     expect(html).toContain("Row A"); // rowRenderer output
-    expect(html).toContain("View all");
+    expect(html).toContain("View all"); // functional drill-down kept
     expect(html).toContain('href="/all"');
+  });
+
+  it("renders NO header slot at all for a source without a View all drill-down (heading-less)", async () => {
+    const src = fakeSource({
+      availability: "ready",
+      rows: [
+        {
+          id: "b",
+          sourceId: "fake",
+          title: "Row B",
+          status: "proposed",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      actions: [],
+    });
+    const html = await render(src);
+    expect(html).toContain('id="fake"');
+    expect(html).not.toContain("<h2");
+    expect(html).not.toContain("View all");
+    expect(html).not.toContain(">Fake source<");
+    expect(html).toContain("Row B");
   });
 
   it("renders the Empty FAMILY (not plain text) for a ready-but-zero-rows envelope", async () => {

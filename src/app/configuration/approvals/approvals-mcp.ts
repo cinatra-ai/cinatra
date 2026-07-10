@@ -143,7 +143,6 @@ function toPublicRow(r: ApprovalRow) {
     status: r.status,
     createdAt: r.createdAt,
     ...(r.href !== undefined ? { href: r.href } : {}),
-    ...(r.isOwnRequest ? { isOwnRequest: true } : {}),
     ...(r.eligibility ? { eligibility: r.eligibility } : {}),
     ...(r.version !== undefined ? { version: r.version } : {}),
   };
