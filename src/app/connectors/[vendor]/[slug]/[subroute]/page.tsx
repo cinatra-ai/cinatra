@@ -36,7 +36,6 @@ import "@/lib/connector-setup-action-references.server";
 import "@/lib/extensions";
 import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
 import { resolveSchemaConfigInitialValues } from "@/lib/extension-config-hydration";
-import { ConnectorBadge } from "@cinatra-ai/connectors/connector-badge";
 import {
   enforceConnectorPolicy,
 } from "@/lib/connector-policy";
@@ -46,6 +45,7 @@ import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 import { chooseConnectorUiRender } from "@/lib/connector-ui-render";
 import {
   resolveActiveInstallForActor,
+  resolveActiveInstallIdForActor,
   resolveRuntimeConnectorUiRecord,
   resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
@@ -60,6 +60,7 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
+import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 
@@ -199,10 +200,15 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // admin-only value from a non-admin).
   const isAdmin = actor?.platformRole === "platform_admin";
 
-  // The HOST injects the connection-status badge top-right on EVERY
-  // setup page — never the extension. State + count come from the SAME readiness
-  // probe that feeds the connector's `/connectors` card badge, so the two stay
-  // identical. Resolution is fail-soft (a throwing/absent probe → "not
+  // The connection-status signal. Per the owner ruling for
+  // wordpress-assistant-connector#36 ask-6 and design/specs/app-connectors.html
+  // §II, the connection-status BADGE no longer sits top-right of any setup page
+  // ("the status badge that once sat top-right now lives in that card" — the
+  // spec shows no top-right badge anywhere). `badgeState` survives only to SEED
+  // the right-column Connection status card (Model-A schema-config path, and the
+  // bundled-react host status card below): state + count come from the SAME
+  // readiness probe that feeds the connector's `/connectors` card badge, so the
+  // two stay identical. Resolution is fail-soft (a throwing/absent probe → "not
   // connected"); for a user-scoped connector the count comes from the actor's
   // own saved connections, so we thread the human user id through.
   const readinessUserId =
@@ -210,12 +216,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   const badgeState = await resolveConnectorBadgeState(packageId, {
     userId: readinessUserId,
   });
-  const statusBadge = (
-    <ConnectorBadge
-      connected={badgeState.connected}
-      label={badgeState.connectedLabel}
-    />
-  );
 
   // HOST-owned per-connection share surface (cinatra#953 W3): rendered on
   // EVERY branch of this route (schema-config, invalid-schema-config, the
@@ -338,15 +338,18 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       );
     }
     // Probe-less schema-config connector: single-column body (no status card to
-    // lift), but the SAME §II Wide shell as every other setup page — "the page
-    // holds to the Wide column and never spans full width" — with the header
-    // status badge kept top-right. A tabbed probe-less surface gets the same
-    // hoisted tablist treatment via the form.
+    // lift), the SAME §II Wide shell as every other setup page — "the page holds
+    // to the Wide column and never spans full width". Per the owner ruling for
+    // wordpress-assistant-connector#36 ask-6 (design/specs/app-connectors.html §II
+    // shows no top-right badge anywhere), the header carries NO status badge.
+    // Model-A (right-column status card) applies only to the status-probe shape;
+    // a probe-less connector would be MISREPRESENTED by a single "Disconnected"
+    // card (gpt-5.5 convergence finding). A tabbed probe-less surface still gets
+    // the hoisted tablist treatment via the form.
     return (
       <ConnectorSetupPage
         title={displayName}
         description="Connector setup"
-        actions={statusBadge}
         divider={headerDivider}
         className="flex flex-col gap-6 pb-8"
       >
@@ -380,7 +383,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         <PageHeader
           title={displayName}
           description="Connector setup"
-          actions={statusBadge}
         />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert variant="destructive">
@@ -408,7 +410,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         <PageHeader
           title={displayName}
           description="Connector setup"
-          actions={statusBadge}
         />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert>
@@ -454,7 +455,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         <PageHeader
           title={displayName}
           description="Connector setup"
-          actions={statusBadge}
         />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert>
@@ -475,24 +475,61 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     resolution: manifest?.resolution,
   });
   // The bundled-react setup page renders its OWN chrome (its own
-  // PageHeader / `<main>`), so the host cannot inject into its actions slot the
-  // way the schema-config branches do. Instead the host floats the SAME
-  // `<ConnectorBadge>` top-right of the page, OVER the extension's chrome, via a
-  // positioned overlay. The overlay is `pointer-events-none` so it never steals
-  // a click from the extension's own header controls during the connector-repo
-  // cleanup window (the extension's own status indicator is removed per repo —
-  // openai-connector is the exemplar). The badge itself stays read-only.
+  // PageHeader / `<main>`). Per the owner ruling (wordpress-assistant-connector#36
+  // ask-6) and design/specs/app-connectors.html §II, the top-right connection
+  // badge that once floated over this chrome is GONE from every setup page — the
+  // spec shows no top-right badge anywhere. Removing that overlay is the
+  // spec-conformant fix for ALL bundled-react connectors.
+  const setupPage = (
+    <SetupPage
+      packageId={packageId}
+      slug={catalogEntry.slug}
+      searchParams={searchParams}
+      ctx={ctx}
+    />
+  );
+
+  // Half two of ask-6: the right-column host-owned "Connection status" card must
+  // render on wp-assistant's Setup tab. A bundled-react extension self-chromes
+  // its whole page (its own <ConnectorSetupPage> header + Tabs), so — unlike the
+  // schema-config Model-A path — the host cannot inject the card INTO the
+  // extension's Setup TabsContent; the SetupPage component exposes no slot. The
+  // spec-EXACT placement (card in the Setup tab's right column, beneath a
+  // full-width header) needs a coordinated SDK slot the frozen extension would
+  // consume; that is a follow-up. Until then the host wraps the whole page in the
+  // shared two-column grid so the card renders in the right column beside the
+  // (default) Setup tab, seeded from the SAME readiness signal the /connectors
+  // grid badge reads. This is GATED to wordpress-assistant-connector — the only
+  // connector the ruling covers — so the other bundled-react setup pages
+  // (github / gmail / google-calendar / twenty / … , several mid-rebuild) are
+  // untouched by this compromise. TEMPORARY / flagged for owner review.
+  const wantsHostStatusCard =
+    catalogEntry.slug === "wordpress-assistant-connector";
+  if (wantsHostStatusCard) {
+    const installId = await resolveActiveInstallIdForActor(packageId, actor);
+    return (
+      <div className="relative">
+        <ConnectorSetupColumns
+          conformanceId="connector-setup"
+          fields={setupPage}
+          aside={
+            installId ? (
+              <ConnectorStatusProbeCard
+                installId={installId}
+                initialConnected={badgeState.connected}
+                connectedLabel={badgeState.connectedLabel}
+              />
+            ) : null
+          }
+        />
+        {sharingSection}
+      </div>
+    );
+  }
+
   return (
     <div className="relative">
-      <div className="pointer-events-none absolute right-4 top-6 z-10 sm:right-8 lg:right-6">
-        {statusBadge}
-      </div>
-      <SetupPage
-        packageId={packageId}
-        slug={catalogEntry.slug}
-        searchParams={searchParams}
-        ctx={ctx}
-      />
+      {setupPage}
       {sharingSection}
     </div>
   );
