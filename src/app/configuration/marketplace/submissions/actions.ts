@@ -6,12 +6,18 @@
  * Each action:
  *   1. requireAdminSession() — cinatra-instance side gate (a cinatra user
  *      who is NOT an admin can never even reach the route that calls this).
- *   2. Build a marketplace MCP client with this instance's marketplace
- *      token. Authority on the marketplace side is enforced separately:
- *      the WP cap `CAP_VENDOR_APPROVE` on the admin actions, vendor
- *      ownership on `extension_submission_withdraw`. If the marketplace
- *      refuses (cap missing, ownership mismatch, etc.), the call returns
- *      an MCP error which we surface via redirect with `?error=`.
+ *   2. Build a marketplace MCP client with the CORRECT marketplace credential
+ *      for the operation (#1224): the `PRINCIPAL_ADMIN`-bound moderation
+ *      actions (approve / reject / promotion-retry) resolve the ADMIN token
+ *      (`MARKETPLACE_ADMIN_TOKEN` via `resolveMarketplaceAdminToken()`), while
+ *      the vendor/self `withdraw` keeps the consumer/instance token
+ *      (`MARKETPLACE_INSTANCE_TOKEN`) — reading the consumer token for an admin
+ *      op is a confused-deputy. An absent admin token FAILS CLOSED with the
+ *      operator-visible `admin-token-missing` flash. Authority on the
+ *      marketplace side is enforced separately: the WP cap `CAP_VENDOR_APPROVE`
+ *      on the admin actions, vendor ownership on `extension_submission_withdraw`.
+ *      If the marketplace refuses (cap missing, ownership mismatch, etc.), the
+ *      call returns an MCP error which we surface via redirect with `?error=`.
  *   3. Call the MCP. On success, revalidate the page and redirect with
  *      `?ok=<op>&id=<submission_id>` so the user sees a result chip.
  *
@@ -25,6 +31,7 @@ import { redirect } from "next/navigation";
 
 import { requireAdminSession } from "@/lib/auth-session";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
+import { resolveMarketplaceAdminToken } from "@/lib/marketplace-credentials";
 import { enqueueCatalogSyncForApprovedSubmission } from "./catalog-sync-enqueue";
 
 const VENDOR_LIST_PATH = "/configuration/marketplace/submissions";
@@ -43,8 +50,25 @@ const ADMIN_FILTER_STATUSES = new Set([
   "superseded",
 ]);
 
-function resolveMarketplaceToken(): string | undefined {
+/** Consumer/instance bearer — used ONLY by the vendor/self `withdraw` path. */
+function resolveInstanceToken(): string | undefined {
   return process.env.MARKETPLACE_INSTANCE_TOKEN;
+}
+
+/**
+ * Admin/moderation bearer for the `PRINCIPAL_ADMIN`-bound actions (approve /
+ * reject / promotion-retry). `resolveMarketplaceAdminToken()` THROWS when
+ * `MARKETPLACE_ADMIN_TOKEN` is unset; we return `undefined` so the caller can
+ * fail closed with the operator-visible `admin-token-missing` flash rather than
+ * a 500 (#1224). There is deliberately NO fallback to the instance token — a
+ * consumer credential must never authenticate an admin operation.
+ */
+function resolveAdminToken(): string | undefined {
+  try {
+    return resolveMarketplaceAdminToken();
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -79,7 +103,7 @@ export async function withdrawSubmissionAction(formData: FormData): Promise<void
   if (submissionId === "") {
     redirect(`${VENDOR_LIST_PATH}?error=missing-id`);
   }
-  const token = resolveMarketplaceToken();
+  const token = resolveInstanceToken();
   if (!token) {
     redirect(`${VENDOR_LIST_PATH}?error=token-missing`);
   }
@@ -101,9 +125,9 @@ export async function approveSubmissionAction(formData: FormData): Promise<void>
   if (submissionId === "") {
     redirect(adminRedirect(formData, { error: "missing-id" }));
   }
-  const token = resolveMarketplaceToken();
+  const token = resolveAdminToken();
   if (!token) {
-    redirect(adminRedirect(formData, { error: "token-missing" }));
+    redirect(adminRedirect(formData, { error: "admin-token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   let approveResult: Awaited<ReturnType<typeof client.extensionSubmissionApprove>>;
@@ -139,9 +163,9 @@ export async function rejectSubmissionAction(formData: FormData): Promise<void> 
   if (reason.length > REJECT_REASON_MAX) {
     redirect(adminRedirect(formData, { error: "reason-too-long" }));
   }
-  const token = resolveMarketplaceToken();
+  const token = resolveAdminToken();
   if (!token) {
-    redirect(adminRedirect(formData, { error: "token-missing" }));
+    redirect(adminRedirect(formData, { error: "admin-token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {
@@ -161,9 +185,9 @@ export async function retryPromotionAction(formData: FormData): Promise<void> {
   if (submissionId === "") {
     redirect(adminRedirect(formData, { error: "missing-id" }));
   }
-  const token = resolveMarketplaceToken();
+  const token = resolveAdminToken();
   if (!token) {
-    redirect(adminRedirect(formData, { error: "token-missing" }));
+    redirect(adminRedirect(formData, { error: "admin-token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {

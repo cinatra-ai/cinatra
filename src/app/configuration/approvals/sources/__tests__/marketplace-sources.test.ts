@@ -122,14 +122,15 @@ describe("availability + appliesTo + sectionConfigured", () => {
   });
 
   it("sectionConfigured tracks each adapter's OWN credential", () => {
-    // submission surfaces → instance token
+    // extension-submission MODERATION → admin token (#1224)
     expect(marketplaceSubmissionModerationSource.sectionConfigured?.(admin, "inbox")).toBe(false);
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
-    expect(marketplaceSubmissionModerationSource.sectionConfigured?.(admin, "inbox")).toBe(true);
-    expect(marketplaceMySubmissionsSource.sectionConfigured?.(admin, "mine")).toBe(true);
-    // vendor-app moderation → admin token
-    expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(false);
     h.adminToken = "admin";
+    expect(marketplaceSubmissionModerationSource.sectionConfigured?.(admin, "inbox")).toBe(true);
+    // my submissions (self) → instance token
+    expect(marketplaceMySubmissionsSource.sectionConfigured?.(admin, "mine")).toBe(false);
+    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    expect(marketplaceMySubmissionsSource.sectionConfigured?.(admin, "mine")).toBe(true);
+    // vendor-app moderation → admin token (already set above)
     expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(true);
     // vendor-app status → vendor token
     expect(marketplaceVendorAppStatusSource.sectionConfigured?.(admin, "mine")).toBe(false);
@@ -152,14 +153,14 @@ describe("submission moderation fetch — 4 states + zero remote when doomed", (
   });
 
   it("some marketplace credential but THIS section's absent → not_configured, no call", async () => {
-    h.adminToken = "admin"; // marketplace is connected, but no INSTANCE token
+    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok"; // marketplace connected, but no ADMIN token (#1224)
     const env = await marketplaceSubmissionModerationSource.fetchInbox(admin);
     expect(env.availability).toBe("not_configured");
     expect(mockClient).not.toHaveBeenCalled();
   });
 
   it("credential present → ready with mapped rows + eligibility passthrough", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     h.adminSubs = [adminSub({ eligibility: { can_approve: false, reason: "SoD" } }), adminSub({ submission_id: "s2" })];
     const env = await marketplaceSubmissionModerationSource.fetchInbox(admin);
     expect(env.availability).toBe("ready");
@@ -171,7 +172,7 @@ describe("submission moderation fetch — 4 states + zero remote when doomed", (
   });
 
   it("a remote failure PROPAGATES (SourceSection renders the inline error)", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     mockClient.mockReturnValueOnce({
       extensionSubmissionListAdmin: vi.fn(async () => {
         throw new Error("marketplace 500");
@@ -188,13 +189,13 @@ describe("capped counts + zero-remote-when-disconnected", () => {
   });
 
   it("submission moderation: non-admin → {0,0} with NO remote call", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     expect(await marketplaceSubmissionModerationSource.counts(member)).toEqual({ inbox: 0, mine: 0 });
     expect(mockClient).not.toHaveBeenCalled();
   });
 
   it("submission moderation: connected → capped inbox count", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     h.adminSubs = Array.from({ length: 25 }, (_, i) => adminSub({ submission_id: `s${i}` }));
     const c = await marketplaceSubmissionModerationSource.counts(admin);
     expect(c.inbox).toBe(9); // REMOTE_COUNT_CAP
