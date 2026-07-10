@@ -43,8 +43,25 @@ const betterAuthDb = vi.hoisted(() => ({
       Array<{ projectId: string; effectiveRole: string; accessSource: string }>
     > => [],
   ),
+  // admin-parity P6 (#1131): platform-admin standing resolver. Fail-closed
+  // (returns false) in production; default the mock to the non-admin floor.
+  readUserIsPlatformAdmin: vi.fn(async (_userId: string): Promise<boolean> => false),
 }));
 vi.mock("@/lib/better-auth-db", () => betterAuthDb);
+
+// admin-parity P6 (#1131): the org-role membership resolver lives in
+// `@/lib/auth-session`. Mock it here so the resolver test never loads that
+// module's server-only / next-navigation runtime deps, and so a test can drive
+// the (orgId, userId) → orgRole mapping directly.
+const authSession = vi.hoisted(() => ({
+  resolveOrgRoleForUser: vi.fn(
+    async (
+      _orgId: string,
+      _userId: string,
+    ): Promise<"org_owner" | "org_admin" | "member" | undefined> => undefined,
+  ),
+}));
+vi.mock("@/lib/auth-session", () => authSession);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -173,5 +190,96 @@ describe("buildActorContextFromRun — organizationId from run.orgId", () => {
     // CRITICAL: must be team-X-only, never team-A-only.
     expect(ctx.teamIds).toEqual(["team-X-only"]);
     expect(ctx.teamIds).not.toContain("team-A-only");
+  });
+});
+
+describe("buildActorContextFromRun — admin standing (platformRole/orgRole) parity (P6 #1131)", () => {
+  it("attaches platformRole:platform_admin when the run user is a platform admin", async () => {
+    betterAuthDb.readOrgsWithTeamsForUser.mockResolvedValueOnce([
+      { id: "org-A", name: "Org A", teams: [] },
+    ]);
+    betterAuthDb.readProjectGrantsForUser.mockResolvedValueOnce([]);
+    betterAuthDb.readUserIsPlatformAdmin.mockResolvedValueOnce(true);
+    authSession.resolveOrgRoleForUser.mockResolvedValueOnce(undefined);
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-pa",
+      runBy: "user-admin",
+      orgId: "org-A",
+    });
+    expect(ctx.platformRole).toBe("platform_admin");
+    // Resolution is scoped to the RUN's org + the run user.
+    expect(betterAuthDb.readUserIsPlatformAdmin).toHaveBeenCalledWith("user-admin");
+    expect(authSession.resolveOrgRoleForUser).toHaveBeenCalledWith("org-A", "user-admin");
+  });
+
+  it("attaches the resolved orgRole (org_admin) for an org admin's run", async () => {
+    betterAuthDb.readOrgsWithTeamsForUser.mockResolvedValueOnce([
+      { id: "org-A", name: "Org A", teams: [] },
+    ]);
+    betterAuthDb.readProjectGrantsForUser.mockResolvedValueOnce([]);
+    betterAuthDb.readUserIsPlatformAdmin.mockResolvedValueOnce(false);
+    authSession.resolveOrgRoleForUser.mockResolvedValueOnce("org_admin");
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-oa",
+      runBy: "user-orgadmin",
+      orgId: "org-A",
+    });
+    // A non-platform org admin: platform floor is member, org standing is admin.
+    expect(ctx.platformRole).toBe("member");
+    expect(ctx.orgRole).toBe("org_admin");
+  });
+
+  it("defaults orgRole to member when the membership resolver returns undefined (mirrors interactive buildActorContext)", async () => {
+    betterAuthDb.readOrgsWithTeamsForUser.mockResolvedValueOnce([
+      { id: "org-A", name: "Org A", teams: [] },
+    ]);
+    betterAuthDb.readProjectGrantsForUser.mockResolvedValueOnce([]);
+    betterAuthDb.readUserIsPlatformAdmin.mockResolvedValueOnce(false);
+    authSession.resolveOrgRoleForUser.mockResolvedValueOnce(undefined);
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-noorg",
+      runBy: "user-plain",
+      orgId: "org-A",
+    });
+    expect(ctx.platformRole).toBe("member");
+    // `opts?.orgRole ?? "member"` parity: an unresolved membership floors at member.
+    expect(ctx.orgRole).toBe("member");
+  });
+
+  it("fails closed to member on both axes when the membership resolver throws", async () => {
+    betterAuthDb.readOrgsWithTeamsForUser.mockResolvedValueOnce([
+      { id: "org-A", name: "Org A", teams: [] },
+    ]);
+    betterAuthDb.readProjectGrantsForUser.mockResolvedValueOnce([]);
+    // A platform admin whose org-role lookup blows up: the failure must NEVER
+    // fabricate elevated standing — both axes floor at member.
+    betterAuthDb.readUserIsPlatformAdmin.mockResolvedValueOnce(true);
+    authSession.resolveOrgRoleForUser.mockRejectedValueOnce(new Error("db down"));
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-err",
+      runBy: "user-admin",
+      orgId: "org-A",
+    });
+    expect(ctx.platformRole).toBe("member");
+    expect(ctx.orgRole).toBe("member");
+  });
+
+  it("worker-originated run (runBy=null) carries NO admin standing — never resolves roles", async () => {
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-worker",
+      runBy: null,
+      orgId: "org-A",
+    });
+    expect(ctx.principalType).toBe("InternalWorker");
+    expect(ctx.platformRole).toBeUndefined();
+    expect(ctx.orgRole).toBeUndefined();
+    // The worker branch touches neither role resolver.
+    expect(betterAuthDb.readUserIsPlatformAdmin).not.toHaveBeenCalled();
+    expect(authSession.resolveOrgRoleForUser).not.toHaveBeenCalled();
   });
 });

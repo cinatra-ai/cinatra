@@ -13,7 +13,7 @@
  *   - 1 HITL by design (context-selector from @cinatra-ai/context-selection-agent integration)
  *   - no toolboxes (no web_search)
  *   - no skill_source_path (autoDiscoverSkillPath via agent_id)
- *   - EndNode declares draft: object + notes: string
+ *   - EndNode declares the structured blog-post outputs (title/excerpt/content+artifact/sourcesUsed/notes)
  * Plus the StartNode invariant (required + hidden cover all 11 inputs).
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/blog-draft-writer-agent-validates.test.ts
@@ -100,7 +100,7 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=['idea'] + hidden covers other 11 inputs including cinatra_run_id, context-slot wiring, contextSlotBindings, and projectId; EndNode declares draft:object + notes:string; 11 DFE + 2 CFE", () => {
+  it("StartNode required=['idea'] + hidden covers other 11 inputs including cinatra_run_id, context-slot wiring, contextSlotBindings, and projectId; EndNode declares the structured blog-post outputs (title/excerpt/content+artifact/sourcesUsed/notes); 18 DFE + 3 CFE", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
@@ -131,11 +131,21 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     expect(end).toBeDefined();
     const outputs = end!.outputs as Array<Record<string, unknown>>;
     const byTitle = new Map(outputs.map((o) => [o.title as string, o.type as string]));
-    expect(byTitle.get("draft")).toBe("object");
+    // The EndNode was reshaped from a monolithic draft:object into the
+    // structured blog-post fields; content carries the declarative
+    // @cinatra-ai/blog-post-artifact binding.
+    expect([...byTitle.keys()].sort()).toEqual(["content", "excerpt", "notes", "sourcesUsed", "title"]);
+    expect(byTitle.get("title")).toBe("string");
+    expect(byTitle.get("excerpt")).toBe("string");
+    expect(byTitle.get("content")).toBe("string");
+    expect(byTitle.get("sourcesUsed")).toBe("array");
     expect(byTitle.get("notes")).toBe("string");
+    const contentOut = outputs.find((o) => o.title === "content");
+    const artifact = (contentOut?.cinatra as { artifact?: Record<string, unknown> } | undefined)?.artifact;
+    expect(artifact?.extension).toBe("@cinatra-ai/blog-post-artifact");
 
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(15);
+    expect(dfc.length).toBe(18);
     const cfc = oas.control_flow_connections as unknown[];
     expect(cfc.length).toBe(3);
   });

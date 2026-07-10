@@ -113,8 +113,12 @@ export type InstallAgentFromPackageResult = {
    * `parseManifestDependencyEdges`). This field is kept during the deprecation
    * window for back-compat; new callers should consume the canonical dependency
    * edges instead. (Removal tracked as a follow-up milestone.)
+   *
+   * cinatra#1058: widened to the requirement-carrying union — an OPTIONAL
+   * projected agent edge is `{ range, requirement: "optional" }`; REQUIRED /
+   * legacy entries stay bare range strings.
    */
-  agentDependencies: Record<string, string>;
+  agentDependencies: Record<string, string | { range: string; requirement: "required" | "optional" }>;
   /** Runtime files materialized to the WayFlow mount. */
   materialized?: {
     targetDir: string;
@@ -358,11 +362,15 @@ async function _installAgentFromPackageImpl(
     //     requirement instead of a hardcoded one (the optional-skip BEHAVIOR is
     //     a later wave; W1 projects the value, both requirements still fail
     //     closed at the preflight).
-    //   - REQUIRED `kind: "agent"` edges → merged into agent_dependencies (the
-    //     orchestrator-readiness source). ONLY required agent edges: the
-    //     agent_dependencies map is requirement-less and the readiness gate
-    //     hard-fails on every entry, so projecting an optional agent edge would
-    //     wrongly hard-block a run (optional-agent behavior is a later wave).
+    //   - `kind: "agent"` edges → merged into agent_dependencies (the
+    //     orchestrator-readiness source), each carrying its `requirement`.
+    //     REQUIRED edges project as a BARE range string (the legacy shape — the
+    //     readiness gate hard-fails on a missing required sub-agent, unchanged);
+    //     OPTIONAL edges project as `{ range, requirement: "optional" }` so the
+    //     readiness gate routes a missing optional sub-agent to stop-run-hitl
+    //     instead of hard-failing the run (cinatra#1058 — the wave #1056
+    //     deferred: #1056 DROPPED optional agent edges entirely to avoid a wrong
+    //     hard-block; this wave wires the real optional behavior).
     // Kind-LESS edges (a legacy-only manifest that projected through
     // `parseManifestDependencyEdges` with no kind) are NOT projected here — the
     // legacy `agentDependencies` map already carries those, so dual-read gating
@@ -376,12 +384,20 @@ async function _installAgentFromPackageImpl(
             { range: versionConstraintToRange(e.versionConstraint), requirement: e.requirement },
           ]),
       );
-    const agentDependencies: Record<string, string> = {
+    const agentDependencies: Record<
+      string,
+      string | { range: string; requirement: "required" | "optional" }
+    > = {
       ...legacyAgentDependencies,
       ...Object.fromEntries(
         dependencyEdges
-          .filter((e) => e.kind === "agent" && e.requirement === "required")
-          .map((e) => [e.packageName, versionConstraintToRange(e.versionConstraint)]),
+          .filter((e) => e.kind === "agent")
+          .map((e) => [
+            e.packageName,
+            e.requirement === "optional"
+              ? { range: versionConstraintToRange(e.versionConstraint), requirement: "optional" as const }
+              : versionConstraintToRange(e.versionConstraint),
+          ]),
       ),
     };
 

@@ -44,13 +44,15 @@ describe("projectCanonicalEdgesOntoRuntimeDeps — pure projection", () => {
       "@cinatra-ai/wordpress-mcp-connector": { range: "^1.0.0", requirement: "required" },
       "@cinatra-ai/apollo-connector": { range: "^1.0.0", requirement: "optional" },
     });
-    // exact constraint flattens to the bare version; optional agent edge dropped.
+    // exact constraint flattens to the bare version (a REQUIRED agent edge).
     expect(next.agentDependencies).toEqual({ "@cinatra-ai/blog-agent": "2.3.4" });
   });
 
-  it("drops OPTIONAL agent edges (the readiness map is requirement-less and hard-fails every entry)", () => {
+  it("projects OPTIONAL agent edges as { range, requirement } (cinatra#1058 — reverses #1056's drop)", () => {
     const { next } = projectCanonicalEdgesOntoRuntimeDeps([agentEdge("@cinatra-ai/opt-agent", "optional")], {});
-    expect(next.agentDependencies).toEqual({});
+    expect(next.agentDependencies).toEqual({
+      "@cinatra-ai/opt-agent": { range: "2.3.4", requirement: "optional" },
+    });
   });
 
   it("ignores kind-LESS edges (a legacy-projected manifest keeps its legacy map only)", () => {
