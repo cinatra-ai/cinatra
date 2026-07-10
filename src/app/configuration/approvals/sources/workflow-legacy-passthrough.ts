@@ -7,17 +7,15 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import {
   listPendingApprovalsForOrg,
-  countPendingWorkflowApprovalsForOrg,
   type PendingApprovalSummary,
 } from "@cinatra-ai/workflows/store";
 
 import { WORKFLOW_SOURCE_ID } from "../resolve-active-view";
+import { workflowLegacyPassthroughContract } from "./workflow-legacy-passthrough.contract";
 import type {
   ApprovalEnvelope,
   ApprovalRow,
   ApprovalSource,
-  Direction,
-  SourceCounts,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -62,17 +60,14 @@ interface WorkflowRowRaw {
 }
 
 export const workflowLegacyPassthroughSource: ApprovalSource = {
-  id: WORKFLOW_SOURCE_ID,
+  // Light nav contract (id / inboxActionable / availability / appliesTo /
+  // counts) — the SAME function references the nav registry consumes. Read-only
+  // mirror: rows are decided on the workflow detail page (no inline action; the
+  // decide() below benign-refuses), so although it applies to every org
+  // member's Inbox it does NOT light the sidebar nav on its own — keeping v1 nav
+  // admin-only. Removed whole by the workflow-tables drop.
+  ...workflowLegacyPassthroughContract,
   title: "Workflow approvals",
-
-  availability() {
-    return "ready";
-  },
-
-  appliesTo(_viewer, direction: Direction) {
-    // Inbox only — a workflow "Your requests" view is out of v1.
-    return direction === "inbox";
-  },
 
   async fetchInbox(viewer): Promise<ApprovalEnvelope> {
     const rows = viewer.orgId ? await listPendingApprovalsForOrg(viewer.orgId) : [];
@@ -81,11 +76,6 @@ export const workflowLegacyPassthroughSource: ApprovalSource = {
 
   async fetchMine(): Promise<ApprovalEnvelope> {
     return { availability: "ready", rows: [], actions: [] };
-  },
-
-  async counts(viewer): Promise<SourceCounts> {
-    const inbox = viewer.orgId ? await countPendingWorkflowApprovalsForOrg(viewer.orgId) : 0;
-    return { inbox, mine: 0 };
   },
 
   rowRenderer(row: ApprovalRow) {

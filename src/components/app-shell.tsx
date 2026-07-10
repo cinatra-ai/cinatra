@@ -145,6 +145,7 @@ export function AppShell({
   singleOrg = false,
   hiddenNavTitles,
   pendingApprovalsTotal = 0,
+  approvalsNavVisible = false,
 }: {
   children: React.ReactNode;
   connectionReady: boolean;
@@ -157,11 +158,17 @@ export function AppShell({
   singleOrg?: boolean;
   hiddenNavTitles?: string[];
   /**
-   * Total of pending workflow approvals + admin-only agent creation
-   * requests visible to the actor. 0 when not signed in or when the count
-   * primitive returns 0; the sidebar pill hides at 0.
+   * Sum of the viewer's Inbox-actionable approval counts across the
+   * ApprovalSource registry. 0 when not signed in or when every source
+   * reports 0; the sidebar pill hides at 0.
    */
   pendingApprovalsTotal?: number;
+  /**
+   * Availability-driven visibility of the Admin → Approvals nav item: true
+   * when the viewer has any available source with an actionable Inbox (v1 →
+   * admins). Resolved server-side in layout.tsx from the registry.
+   */
+  approvalsNavVisible?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -475,6 +482,7 @@ export function AppShell({
         hiddenNavTitles={hiddenNavTitles}
         isAdmin={isAdmin}
         pendingApprovalsTotal={pendingApprovalsTotal}
+        approvalsNavVisible={approvalsNavVisible}
       />
       <SidebarInset>
         {/* Spacer: pushes the sticky header (and all page content) into normal flow
