@@ -48,7 +48,7 @@ export const installedExtensionTable = canonicalSchema.table("installed_extensio
   isDefault: boolean("is_default").notNull().default(true),
   requiredInProd: boolean("required_in_prod").notNull().default(false),
   // NOTE (cinatra#1040 S2): the legacy `dependencies` jsonb column was dropped
-  // by core__0024 — edges live in `extension_dependency_edge` (below) and are
+  // by core__0025 — edges live in `extension_dependency_edge` (below) and are
   // hydrated onto every canonical read.
   manifestHash: text("manifest_hash"),
   // Resolved connector access declaration (cinatra#951) — cached at
@@ -63,7 +63,7 @@ export const installedExtensionTable = canonicalSchema.table("installed_extensio
 // RESOLUTION (which installed row satisfied it, and why). Declared order is
 // preserved via `declared_index` (unique per dependent). Schema DDL lives in
 // src/lib/extension-grant-schema.ts (dependencyEdgeSchemaQueries) +
-// migrations/core/core__0024.
+// migrations/core/core__0025.
 export const extensionDependencyEdgeTable = canonicalSchema.table("extension_dependency_edge", {
   id: text("id").primaryKey(),
   dependentInstallId: text("dependent_install_id").notNull(),
@@ -236,7 +236,7 @@ async function hydrateSingleRow(
 /**
  * Resolve declared edges against the CURRENT live rows for persistence
  * (cinatra#1040 S2) — the single write-time resolution rule, mirrored by the
- * core__0024 backfill and by the closure engine's name-lookup fallback:
+ * core__0025 backfill and by the closure engine's name-lookup fallback:
  * the DECLARING row's own-org live (active|locked) row first, then the
  * platform row (a platform-scoped dependent binds only platform rows);
  * within a scope prefer the DEFAULT version, then deterministic id order.

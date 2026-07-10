@@ -281,7 +281,7 @@ export type InstalledExtension = {
   /**
    * The DECLARED manifest dependency edges. Since cinatra#1040 S2 this is a
    * PROJECTION of `dependencyEdges` (the `extension_dependency_edge` rows,
-   * declared order) — the row jsonb column was dropped by core__0024. Kept
+   * declared order) — the row jsonb column was dropped by core__0025. Kept
    * REQUIRED so every existing consumer (planner dual-read, closure engine,
    * dependents UX, cross-kind graph) is unchanged.
    */

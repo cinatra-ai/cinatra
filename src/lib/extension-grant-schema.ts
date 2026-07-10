@@ -20,7 +20,7 @@
 //     ships with migrations/core/core__0022 — see that function's own note).
 //   - dependencyEdgeSchemaQueries — the cinatra#1040 S2 extension_dependency_edge
 //     table + the jsonb→edge-rows migration mirror (transformational; ships with
-//     migrations/core/core__0024 — see that function's own note).
+//     migrations/core/core__0025 — see that function's own note).
 
 /** DDL for the admin-approved `extension_capability_ownership_grant` table +
  * its anti-squat partial unique indexes. Spread into
@@ -172,16 +172,16 @@ export function versionIdentitySchemaQueries(schemaName: string): { text: string
  * `buildCreateStoreSchemaQueries` AFTER the installed_extension CREATE (the
  * FKs reference it).
  *
- * This bootstrap mirrors migration `migrations/core/core__0024_extension-dependency-edge.mjs`
+ * This bootstrap mirrors migration `migrations/core/core__0025_extension-dependency-edge.mjs`
  * idempotently (the S1 convention): a FRESH database is born at the target
  * shape — edge table present, NO `dependencies` jsonb column (the
  * installed_extension CREATE above no longer declares it) — and ledger-fakes
  * the chain; an UPGRADED database converges through the guarded DO block below
  * (preflight-validate → backfill with per-declaring-row scoped resolution →
- * drop the jsonb column) before the runner executes 0024 as a no-op. The
+ * drop the jsonb column) before the runner executes 0025 as a no-op. The
  * block only runs while the legacy column exists, so re-running on any
  * lineage is a no-op. The change is transformational (a backfill + a column
- * drop over a table that already holds rows), so it ALSO ships the core__0024
+ * drop over a table that already holds rows), so it ALSO ships the core__0025
  * runner module + manifest entry — the schema-migration / upgrade-proof
  * gates' required artifact.
  *
@@ -219,7 +219,7 @@ export function dependencyEdgeSchemaQueries(schemaName: string): { text: string 
     // The archive/GC direction: "which edges resolve to THIS install row".
     { text: `CREATE INDEX IF NOT EXISTS extension_dependency_edge_resolved_idx
   ON "${q}"."extension_dependency_edge" (resolved_install_id)` },
-    // Transformational mirror of core__0024 (guarded: runs ONLY while the
+    // Transformational mirror of core__0025 (guarded: runs ONLY while the
     // legacy jsonb column still exists — i.e. exactly once per upgraded DB).
     { text: `DO $$
 DECLARE bad record;

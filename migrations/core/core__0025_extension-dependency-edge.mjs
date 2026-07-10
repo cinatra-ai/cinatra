@@ -1,4 +1,11 @@
-// core__0024 — EXTENSION DEPENDENCY EDGES move off the row jsonb
+// core__0025 — EXTENSION DEPENDENCY EDGES move off the row jsonb
+//
+// SEQ COORDINATION (open-PR claim ledger at renumber time): core__0023 is
+// claimed by cinatra-ai/cinatra#1304 (assistant threads/turns) and core__0024
+// by cinatra-ai/cinatra#1329 (project dispatch ledger/lease); this migration
+// was renumbered 0024 → 0025 to defuse the double-claim with #1329. The
+// runner tolerates seq gaps until those PRs land.
+//
 // (cinatra-ai/cinatra#1040 S2, the edge-storage half). Dependency edges leave
 // `installed_extension.dependencies` (jsonb ExtensionDependency[]) for a
 // first-class `extension_dependency_edge` table:
@@ -44,7 +51,7 @@
 // runner, which always executes; see migrations/README.md).
 //
 // DEPLOY BOUNDARY (coordinated, NON-rolling — as core__0022/core__0005). A
-// pre-0024 app process reads/writes the `dependencies` column by name; after
+// pre-0025 app process reads/writes the `dependencies` column by name; after
 // the drop those statements FAIL CLOSED (undefined column), never a silent
 // wrong read. Apply with old writers drained (the standard release boundary).
 //

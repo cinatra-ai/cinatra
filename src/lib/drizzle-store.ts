@@ -2648,7 +2648,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // Dependency edges are FIRST-CLASS ROWS since cinatra#1040 S2: the
     // extension_dependency_edge table + the guarded jsonb->edge-rows migration
     // mirror (the legacy `dependencies` jsonb column is GONE from the CREATE
-    // above — a fresh DB is born at the post-core__0024 shape; an upgraded DB
+    // above — a fresh DB is born at the post-core__0025 shape; an upgraded DB
     // converges through the leaf's guarded DO block). Lives in the same
     // pure-strings leaf module (`dependencyEdgeSchemaQueries`).
     ...dependencyEdgeSchemaQueries(schemaName),

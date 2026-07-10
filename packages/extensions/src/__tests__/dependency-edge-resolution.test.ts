@@ -242,7 +242,7 @@ describe("makeScopedManifestLookup default preference", () => {
   it("prefers the DEFAULT version within a scope, deterministic id tie-break", () => {
     // Two live rows of one package in the SAME scope (side-by-side versions,
     // S1): the unresolved-edge fallback must bind the default — the same
-    // preference the write-time resolver and the core__0024 backfill apply.
+    // preference the write-time resolver and the core__0025 backfill apply.
     const nonDefault = ext("d", "active", { id: "id-a-nondefault" });
     (nonDefault as { isDefault?: boolean }).isDefault = false;
     const dflt = ext("d", "active", { id: "id-z-default" });

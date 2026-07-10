@@ -201,7 +201,7 @@ export function makeScopedManifestLookup(
 ): ManifestLookup {
   // Within a scope the DEFAULT version wins, deterministic id tie-break
   // (cinatra#1040 S2) — the same preference the write-time resolver and the
-  // core__0024 backfill apply, so an unresolved edge's name-fallback can never
+  // core__0025 backfill apply, so an unresolved edge's name-fallback can never
   // bind an arbitrary non-default sibling version. A fixture row without
   // `isDefault` counts as default (DB reads always carry the boolean).
   const pickInScope = (live: InstalledExtension[], scopeOrg: string | null) =>
