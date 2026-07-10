@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, X } from "lucide-react";
+import { Check, RefreshCw, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -53,6 +53,27 @@ export type InstalledExtensionCardProps = {
    * ONLY the mono version + this indicator (cinatra#948 reopen, gap 3).
    */
   status?: ReactNode;
+  /**
+   * §III update affordance (cinatra#1041 outcome 3) rendered on the spec line
+   * AFTER the lifecycle status — the blue `UpdateAvailableChip` when a newer
+   * compatible registry version is published. The card is presentational: the
+   * caller derives the chip via `deriveInstalledUpdateChipState`. Absent for
+   * every non-§VI caller (§VII agents, marketplace) and for the up-to-date /
+   * fail-quiet states, so the spec line renders exactly as before.
+   */
+  updateChip?: ReactNode;
+  /**
+   * §III explanatory note (`InstalledUpdateNote`) rendered BELOW the spec line
+   * for the two no-chip-but-explained states: `incompatible` and
+   * `non-comparable`. The fail-quiet state passes nothing.
+   */
+  updateNote?: ReactNode;
+  /**
+   * §III ABI-incompatible greying: mutes the version/status spec-line row
+   * (opacity, the §I ABI-compat treatment) when a newer version exists but
+   * needs a newer Cinatra. The `updateNote` sibling stays at full opacity.
+   */
+  specLineMuted?: boolean;
   /**
    * Right-panel actions — exactly the §VI drawing's two: Settings then More
    * details, ALWAYS both (owner ruling, 2026-07-05). No management actions
@@ -134,6 +155,55 @@ export function InstalledStatusIndicator({
   );
 }
 
+/**
+ * §III "Update available" chip (published design system §III, spec-line update
+ * states). It REUSES the §VI status-indicator badge treatment — the same
+ * `text-badge-2xs`, mono, uppercase, weight-700, 12px-mark kicker style as
+ * `InstalledStatusIndicator` — but in the `--info` (`text-info`) blue action
+ * accent with a circular-arrow glyph, so it reads as timely NEWS, not an
+ * action (the update itself runs from the §II detail-modal footer; the card's
+ * actions stay exactly Settings + More details). It renders ONLY when a newer
+ * COMPATIBLE registry version is published for a registry-comparable source;
+ * the derivation lives in `deriveInstalledUpdateChipState`
+ * (installed-update-chip.ts). `strokeWidth` 2.4 matches the spec's arrow mark.
+ */
+export function UpdateAvailableChip() {
+  return (
+    <span
+      data-slot="status-indicator"
+      data-status="update-available"
+      className={cn(
+        // Mirror InstalledStatusIndicator's canonical badge kicker (named
+        // tokens per the ui-design-system gate; no arbitrary text-[]/tracking-[]).
+        "inline-flex items-center gap-1.5 font-mono text-badge-2xs font-bold uppercase",
+        "text-info",
+      )}
+      title="A newer compatible version is published — update from More details."
+    >
+      <RefreshCw aria-hidden className="size-3 shrink-0" strokeWidth={2.4} />
+      Update available
+    </span>
+  );
+}
+
+/**
+ * §III spec-line explanatory note (published design system §III). A small,
+ * muted mono caption rendered BELOW the version/status line for the two states
+ * that show no chip but DO explain themselves: `incompatible` ("Newer version
+ * needs a newer Cinatra") and `non-comparable` ("No registry version to
+ * compare"). The fail-quiet `none` state renders nothing at all.
+ */
+export function InstalledUpdateNote({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-slot="installed-update-note"
+      className="font-mono text-badge-2xs font-semibold tracking-normal text-muted-foreground"
+    >
+      {children}
+    </div>
+  );
+}
+
 export function InstalledExtensionCard({
   name,
   accentColor,
@@ -145,6 +215,9 @@ export function InstalledExtensionCard({
   description,
   version,
   status,
+  updateChip,
+  updateNote,
+  specLineMuted = false,
   actions,
   archived = false,
   className,
@@ -220,21 +293,29 @@ export function InstalledExtensionCard({
             nor status → the whole spec line is omitted (no empty middle-panel
             row). §VI callers always pass at least the lifecycle indicator, so
             the row renders exactly as before. */}
-        {(version || status) && (
+        {(version || status || updateChip) && (
           <div
             data-slot="installed-extension-spec-line"
             className={cn(
               // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
               "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
               archived && "opacity-70",
+              // §III ABI-incompatible greying — the §I ABI-compat treatment
+              // dims the version/status row (design spec: opacity ≈ 0.55) while
+              // the explanatory note below stays legible.
+              specLineMuted && "opacity-55",
             )}
           >
             {version && (
               <span className="font-mono text-xs text-muted-foreground">{version}</span>
             )}
             {status}
+            {updateChip}
           </div>
         )}
+        {/* §III explanatory note (incompatible / non-comparable) — a sibling of
+            the spec line so it stays at full opacity under the greyed row. */}
+        {updateNote}
       </div>
 
       {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly

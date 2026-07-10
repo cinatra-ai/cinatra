@@ -23,7 +23,11 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InstalledExtensionCard } from "../installed-extension-card";
+import {
+  InstalledExtensionCard,
+  InstalledUpdateNote,
+  UpdateAvailableChip,
+} from "../installed-extension-card";
 import { Button } from "@/components/ui/button";
 import { ACCENT_PALETTE } from "@/lib/extension-accent";
 
@@ -247,5 +251,80 @@ describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)"
     expect(banner).not.toContain("cursor-pointer");
     expect(banner).not.toContain("cursor-default");
     expect(banner).not.toContain("data-accent-detail");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §III update affordance (cinatra#1041 outcome 3): the "Update available"
+// chip, the ABI-incompatible greyed spec line + note, and the fail-quiet /
+// up-to-date states that add nothing.
+// ---------------------------------------------------------------------------
+
+function renderWithUpdate(over: Record<string, unknown>): string {
+  return renderToStaticMarkup(
+    <InstalledExtensionCard
+      name="Web Research Agent"
+      accentColor="green"
+      emblem={<svg data-testid="emblem" />}
+      kindLabel="Agent"
+      description="Stateless schema-driven web research enricher."
+      version="0.4.2"
+      status={<span data-testid="status-slot">status</span>}
+      actions={<Button type="button">More details</Button>}
+      {...over}
+    />,
+  );
+}
+
+describe("UpdateAvailableChip (§III blue action-accent chip)", () => {
+  it("renders the status-indicator badge treatment in the --info blue accent with a data-status hook", () => {
+    const html = renderToStaticMarkup(<UpdateAvailableChip />);
+    expect(html).toContain('data-slot="status-indicator"');
+    expect(html).toContain('data-status="update-available"');
+    expect(html).toContain("Update available");
+    // Blue action accent = --info token, NOT the green success used by Active.
+    expect(html).toContain("text-info");
+    expect(html).not.toContain("text-success");
+    // Reuses the canonical badge kicker (named tokens, no arbitrary utilities).
+    expect(html).toContain("text-badge-2xs");
+  });
+});
+
+describe("InstalledExtensionCard — §III spec-line update states", () => {
+  it("update-available: the chip renders on the spec line; the line is NOT greyed", () => {
+    const html = renderWithUpdate({ updateChip: <UpdateAvailableChip /> });
+    expect(html).toContain('data-slot="installed-extension-spec-line"');
+    expect(html).toContain('data-status="update-available"');
+    expect(html).not.toContain("opacity-55");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+  });
+
+  it("incompatible: the spec line greys (opacity-55) and a full-opacity note explains why — no chip", () => {
+    const html = renderWithUpdate({
+      specLineMuted: true,
+      updateNote: <InstalledUpdateNote>Newer version needs a newer Cinatra</InstalledUpdateNote>,
+    });
+    expect(html).toContain("opacity-55");
+    expect(html).toContain('data-slot="installed-update-note"');
+    expect(html).toContain("Newer version needs a newer Cinatra");
+    expect(html).not.toContain('data-status="update-available"');
+  });
+
+  it("non-comparable: a note renders (no chip, no greying)", () => {
+    const html = renderWithUpdate({
+      updateNote: <InstalledUpdateNote>No registry version to compare</InstalledUpdateNote>,
+    });
+    expect(html).toContain('data-slot="installed-update-note"');
+    expect(html).toContain("No registry version to compare");
+    expect(html).not.toContain("opacity-55");
+    expect(html).not.toContain('data-status="update-available"');
+  });
+
+  it("up-to-date / fail-quiet: no update props → spec line is byte-unchanged (no chip, no note, no greying)", () => {
+    const html = renderWithUpdate({});
+    expect(html).toContain('data-slot="installed-extension-spec-line"');
+    expect(html).not.toContain('data-status="update-available"');
+    expect(html).not.toContain('data-slot="installed-update-note"');
+    expect(html).not.toContain("opacity-55");
   });
 });

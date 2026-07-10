@@ -418,6 +418,7 @@
       "@cinatra-ai/objects/classifier-signals": ["./packages/objects/src/classifier-signals.ts"],
       "@cinatra-ai/registries": ["./packages/registries/src/index.ts"],
       "@cinatra-ai/registries/src/version-compare": ["./packages/registries/src/version-compare.ts"],
+      "@cinatra-ai/registries/src/update-read-model": ["./packages/registries/src/update-read-model.ts"],
       "@cinatra-ai/registries/types": ["./packages/registries/src/types.ts"],
       "@cinatra-ai/registries/install": ["./packages/registries/src/install/install-with-deps.ts"]
     }

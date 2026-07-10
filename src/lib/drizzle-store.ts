@@ -133,6 +133,20 @@ export function createStoreTables(schemaName: string) {
       expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
       createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     }),
+    // Cached "update read model" (cinatra#1041 outcome 3): one row per
+    // installed extension package carrying the latest registry version + its
+    // declared sdkAbiRange, refreshed per-package by the hourly catalog-sync
+    // loop so the §III installed screen can show update-available state without
+    // a per-render packument storm (and on gatekept instances that cannot
+    // enumerate registry versions live). Written via
+    // src/lib/extension-update-read-model-store.ts; declared here so its shape
+    // is visible to the schema-drift guard.
+    extension_update_read_model: schema.table("extension_update_read_model", {
+      packageName: text("package_name").primaryKey(),
+      latestVersion: text("latest_version"),
+      latestSdkAbiRange: text("latest_sdk_abi_range"),
+      refreshedAt: timestamp("refreshed_at", { withTimezone: true }).notNull(),
+    }),
   };
 }
 
@@ -4069,6 +4083,21 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
+    // extension_update_read_model (cinatra#1041 outcome 3): the cached
+    // per-package update read model (latest registry version + declared
+    // sdkAbiRange) the hourly catalog-sync loop refreshes and the §III
+    // installed screen reads. Purely ADDITIVE new table → bootstrap DDL, no
+    // numbered migration (migrations/README.md: the idempotent bootstrap owns
+    // additive evolution; node-pg-migrate is for transformational change to
+    // populated tables). Written via
+    // src/lib/extension-update-read-model-store.ts; the PK on package_name
+    // covers the `package_name = ANY(...)` read, so no extra index.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."extension_update_read_model" (
+      package_name text PRIMARY KEY,
+      latest_version text,
+      latest_sdk_abi_range text,
+      refreshed_at timestamptz NOT NULL
+    )` },
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //
