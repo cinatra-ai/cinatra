@@ -200,8 +200,88 @@ function pkgJsonEntry(pkgDir) {
   return null;
 }
 
+// abs is inside dir (strictly below it), path-wise.
+function isInsideDir(dir, abs) {
+  const rel = path.relative(dir, abs);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+// Pick the resolvable target string from an exports value that is a bare string
+// ("./src/x.ts") or a (possibly nested) conditions object
+// ({ import, default, types, require }). Same condition precedence as
+// pkgJsonEntry so bare-entry and subpath resolution agree; recurses into nested
+// condition objects. Returns the string target or null.
+function pickExportTarget(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    for (const cond of ["import", "default", "types", "require"]) {
+      if (cond in value) {
+        const t = pickExportTarget(value[cond]);
+        if (t) return t;
+      }
+    }
+  }
+  return null;
+}
+
+// Resolve a workspace package's SUBPATH export "./<sub>" from its package.json
+// `exports` map. The repo's exports maps point a subpath at an arbitrary src
+// location that is NOT necessarily src/<sub> — e.g. @cinatra-ai/sdk-ui maps
+// "./tabs" -> "./src/ui/tabs.tsx". When an `exports` map is PRESENT it is the
+// authoritative encapsulation boundary (Node semantics): a subpath it does not
+// name is genuinely unresolved and must NOT be masked by the src/<sub> guess in
+// this fail-closed analyzer. Return shape (a tri-state so the caller can tell
+// "not exported" apart from "no exports map"):
+//   null                -> no (readable) `exports` map → caller uses src/<sub>
+//   { abs }             -> the subpath resolved to an in-package first-party file
+//   { abs: null }       -> `exports` present but this subpath is not exported
+//                          (→ the caller treats it as unresolved, never falls back)
+function pkgJsonSubpathEntry(pkgDir, sub) {
+  let pj;
+  try {
+    pj = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+  } catch {
+    return null; // no / unreadable package.json → legacy fallback
+  }
+  const exp = pj.exports;
+  if (!exp || typeof exp !== "object" || Array.isArray(exp)) return null; // no exports map
+  const key = "./" + sub;
+  // An exports target must resolve to a file INSIDE the package root — reject a
+  // malformed "../other-pkg" escape (tryFile already bounds it to REPO_ROOT).
+  const resolveTarget = (tgt) => {
+    if (typeof tgt !== "string") return null;
+    const abs = tryFile(path.resolve(pkgDir, tgt));
+    return abs && isInsideDir(pkgDir, abs) ? abs : null;
+  };
+  // exact subpath
+  if (Object.prototype.hasOwnProperty.call(exp, key)) {
+    return { abs: resolveTarget(pickExportTarget(exp[key])) };
+  }
+  // "./x/*" wildcard: Node picks the most specific pattern (longest prefix, then
+  // longest suffix) and replaces EVERY "*" in the target with the matched span.
+  let best = null;
+  for (const [pat, value] of Object.entries(exp)) {
+    const star = pat.indexOf("*");
+    if (star === -1 || pat.indexOf("*", star + 1) !== -1) continue; // exactly one *
+    const pre = pat.slice(0, star);
+    const post = pat.slice(star + 1);
+    if (!key.startsWith(pre) || !key.endsWith(post) || key.length < pre.length + post.length) continue;
+    if (best && (best.pre.length > pre.length || (best.pre.length === pre.length && best.post.length >= post.length))) continue;
+    best = { pre, post, value };
+  }
+  if (best) {
+    const mid = key.slice(best.pre.length, key.length - best.post.length);
+    const tgt = pickExportTarget(best.value);
+    return { abs: tgt && tgt.includes("*") ? resolveTarget(tgt.replaceAll("*", mid)) : null };
+  }
+  return { abs: null }; // exports present but subpath not exported → unresolved
+}
+
 // Resolve @cinatra-ai/<pkg>[/sub] across the two workspace roots (packages/ and
-// extensions/cinatra-ai/), honoring package.json exports for the bare entry.
+// extensions/cinatra-ai/), honoring package.json exports for the bare entry AND
+// for enumerated subpaths. When a root's package.json has an `exports` map it is
+// authoritative for subpaths (no src/<sub> masking); the src/<sub> convention is
+// used only for a root that has no exports map.
 function resolveWorkspacePkg(pkg, sub) {
   for (const root of [path.join(REPO_ROOT, "packages", pkg), path.join(REPO_ROOT, "extensions", "cinatra-ai", pkg)]) {
     if (!existsSync(root)) continue;
@@ -209,6 +289,14 @@ function resolveWorkspacePkg(pkg, sub) {
       const entry = pkgJsonEntry(root) || tryFile(path.join(root, "src", "index"));
       if (entry) return entry;
     } else {
+      const viaExports = pkgJsonSubpathEntry(root, sub);
+      if (viaExports) {
+        // exports map present here → authoritative. Resolved → done; not
+        // exported → try the OTHER workspace root, but never src/<sub> here.
+        if (viaExports.abs) return viaExports.abs;
+        continue;
+      }
+      // no exports map → legacy src/<sub> convention.
       const abs = tryFile(path.join(root, "src", sub)) || tryFile(path.join(root, sub));
       if (abs) return abs;
     }
