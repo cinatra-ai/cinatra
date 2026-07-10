@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 133,
-    "/api/mcp": 1372,
-    "/chat": 1410,
-    "/api/a2a": 1377,
-    "/api/llm-bridge": 1383
+    "/api/mcp": 1377,
+    "/chat": 1415,
+    "/api/a2a": 1382,
+    "/api/llm-bridge": 1388
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1376,
-      "to": 1377,
-      "reason": "cinatra#1130 (PR #1275): admin-parity P5 adds one new reachable first-party module to the @cinatra-ai/extensions package graph \u2014 packages/extensions/src/lifecycle-target-resolver.ts (the row-scoped install-row lifecycle resolver + fail-closed standing predicates), imported by the extensions dispatcher (index.ts). It is reachable on every locked route that reaches the extensions barrel (/api/mcp, /api/a2a, /api/llm-bridge, /chat), a uniform +1 per route; /sign-in does not reach the extensions package and stays net-zero. Measured in CI vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). This supersedes the prior 1359->1376 record; the base branch already baked in that raise. Absorbed raise 1376->1377.",
-      "pr": 1275
+      "from": 1377,
+      "to": 1382,
+      "reason": "PR #1028 (the scheduled dev-lock auto-bump): re-pins the companion extension universe to current branch tips (cinatra-dev-extensions.lock.json + pnpm-lock.yaml + regenerated maps). The bumped @cinatra-ai/gmail-connector setup page adopts the @cinatra-ai/sdk-ui Tabs island (\"./tabs\" -> ./src/ui/tabs.tsx, now resolvable after #1274's analyzer exports-map subpath fix) alongside the sdk-ui/marketplace connect primitives, and the bump advances the shared sdk-ui/connector setup subgraph. That subgraph is reachable from every locked route that reaches the connector setup graph, so each such route grows by exactly five net-new first-party modules; /sign-in (which does not reach it) is unchanged, confirming a single shared subgraph. Measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +5 is exact against main's current ceiling. Absorbed raise 1377->1382.",
+      "pr": 1028
     },
     "/api/llm-bridge": {
-      "from": 1382,
-      "to": 1383,
-      "reason": "cinatra#1130 (PR #1275): admin-parity P5 adds one new reachable first-party module to the @cinatra-ai/extensions package graph \u2014 packages/extensions/src/lifecycle-target-resolver.ts (the row-scoped install-row lifecycle resolver + fail-closed standing predicates), imported by the extensions dispatcher (index.ts). It is reachable on every locked route that reaches the extensions barrel (/api/mcp, /api/a2a, /api/llm-bridge, /chat), a uniform +1 per route; /sign-in does not reach the extensions package and stays net-zero. Measured in CI vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). This supersedes the prior 1380->1382 record; the base branch already baked in that raise. Absorbed raise 1382->1383.",
-      "pr": 1275
+      "from": 1383,
+      "to": 1388,
+      "reason": "PR #1028 (the scheduled dev-lock auto-bump): re-pins the companion extension universe to current branch tips (cinatra-dev-extensions.lock.json + pnpm-lock.yaml + regenerated maps). The bumped @cinatra-ai/gmail-connector setup page adopts the @cinatra-ai/sdk-ui Tabs island (\"./tabs\" -> ./src/ui/tabs.tsx, now resolvable after #1274's analyzer exports-map subpath fix) alongside the sdk-ui/marketplace connect primitives, and the bump advances the shared sdk-ui/connector setup subgraph. That subgraph is reachable from every locked route that reaches the connector setup graph, so each such route grows by exactly five net-new first-party modules; /sign-in (which does not reach it) is unchanged, confirming a single shared subgraph. Measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +5 is exact against main's current ceiling. Absorbed raise 1383->1388.",
+      "pr": 1028
     },
     "/api/mcp": {
-      "from": 1371,
-      "to": 1372,
-      "reason": "cinatra#1130 (PR #1275): admin-parity P5 adds one new reachable first-party module to the @cinatra-ai/extensions package graph \u2014 packages/extensions/src/lifecycle-target-resolver.ts (the row-scoped install-row lifecycle resolver + fail-closed standing predicates), imported by the extensions dispatcher (index.ts). It is reachable on every locked route that reaches the extensions barrel (/api/mcp, /api/a2a, /api/llm-bridge, /chat), a uniform +1 per route; /sign-in does not reach the extensions package and stays net-zero. Measured in CI vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). This supersedes the prior 1354->1371 record; the base branch already baked in that raise. Absorbed raise 1371->1372.",
-      "pr": 1275
+      "from": 1372,
+      "to": 1377,
+      "reason": "PR #1028 (the scheduled dev-lock auto-bump): re-pins the companion extension universe to current branch tips (cinatra-dev-extensions.lock.json + pnpm-lock.yaml + regenerated maps). The bumped @cinatra-ai/gmail-connector setup page adopts the @cinatra-ai/sdk-ui Tabs island (\"./tabs\" -> ./src/ui/tabs.tsx, now resolvable after #1274's analyzer exports-map subpath fix) alongside the sdk-ui/marketplace connect primitives, and the bump advances the shared sdk-ui/connector setup subgraph. That subgraph is reachable from every locked route that reaches the connector setup graph, so each such route grows by exactly five net-new first-party modules; /sign-in (which does not reach it) is unchanged, confirming a single shared subgraph. Measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +5 is exact against main's current ceiling. Absorbed raise 1372->1377.",
+      "pr": 1028
     },
     "/chat": {
-      "from": 1409,
-      "to": 1410,
-      "reason": "cinatra#1130 (PR #1275): admin-parity P5 adds one new reachable first-party module to the @cinatra-ai/extensions package graph \u2014 packages/extensions/src/lifecycle-target-resolver.ts (the row-scoped install-row lifecycle resolver + fail-closed standing predicates), imported by the extensions dispatcher (index.ts). It is reachable on every locked route that reaches the extensions barrel (/api/mcp, /api/a2a, /api/llm-bridge, /chat), a uniform +1 per route; /sign-in does not reach the extensions package and stays net-zero. Measured in CI vs origin/main with the companion extension repos cloned pinned (missingCount 0, so the +1 is exact). This supersedes the prior 1392->1409 record; the base branch already baked in that raise. Absorbed raise 1409->1410.",
-      "pr": 1275
+      "from": 1410,
+      "to": 1415,
+      "reason": "PR #1028 (the scheduled dev-lock auto-bump): re-pins the companion extension universe to current branch tips (cinatra-dev-extensions.lock.json + pnpm-lock.yaml + regenerated maps). The bumped @cinatra-ai/gmail-connector setup page adopts the @cinatra-ai/sdk-ui Tabs island (\"./tabs\" -> ./src/ui/tabs.tsx, now resolvable after #1274's analyzer exports-map subpath fix) alongside the sdk-ui/marketplace connect primitives, and the bump advances the shared sdk-ui/connector setup subgraph. That subgraph is reachable from every locked route that reaches the connector setup graph, so each such route grows by exactly five net-new first-party modules; /sign-in (which does not reach it) is unchanged, confirming a single shared subgraph. Measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +5 is exact against main's current ceiling. Absorbed raise 1410->1415.",
+      "pr": 1028
     },
     "/sign-in": {
       "from": 132,

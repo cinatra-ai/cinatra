@@ -419,6 +419,7 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   wordpress_content_editor_run:    { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_instances_list:        { resourceType: "connector_instance", action: "list",    status: "enforced" },
   wordpress_media_upload:          { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  wordpress_pages_list:            { resourceType: "connector_instance", action: "list",    status: "enforced" },
   wordpress_post_create_draft:     { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_post_delete:           { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_post_get:              { resourceType: "connector_instance", action: "execute", status: "enforced" },

@@ -136,7 +136,7 @@ describe("blog-idea-generator-agent OAS validates against L1, LLM-metadata, and 
 
     // Edge counts
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(14);
+    expect(dfc.length).toBe(16);
     const cfc = oas.control_flow_connections as unknown[];
     expect(cfc.length).toBe(3);
   });
