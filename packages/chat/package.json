@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./renderer": "./src/renderer/index.ts",
+    "./renderer/interactive": "./src/renderer/interactive/index.ts",
     "./chat-page": "./src/chat-page.tsx",
     "./actions": "./src/actions.ts",
     "./module": "./src/integration/module.ts",
