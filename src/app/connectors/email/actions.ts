@@ -24,8 +24,12 @@ export async function setEmailRoutingAction(formData: FormData): Promise<void> {
   const purpose = String(formData.get("purpose") ?? "");
   const connectorId = String(formData.get("connectorId") ?? "").trim();
 
+  // Codes-only flash protocol: emit a STABLE code (never URL-derived text — a
+  // provider id / name in the query would be reflected into a toast). The
+  // <SearchParamToast> island on /connectors/email maps each code to a STATIC
+  // message (EMAIL_FLASH_ERROR_MESSAGES).
   if (!VALID_PURPOSES.has(purpose)) {
-    redirectBack({ error: "Unknown email purpose." });
+    redirectBack({ error: "invalid-purpose" });
   }
 
   // Empty selection clears the assignment (falls back to single-connected
@@ -41,18 +45,14 @@ export async function setEmailRoutingAction(formData: FormData): Promise<void> {
   const providers = await listEmailProvidersWithStatus();
   const target = providers.find((p) => p.connectorId === connectorId);
   if (!target) {
-    redirectBack({ error: `Unknown email provider "${connectorId}".` });
+    redirectBack({ error: "unknown-provider" });
   }
   if (target.status !== "connected") {
-    redirectBack({
-      error: `${target.name} is not connected. Configure it at ${target.settingsHref} first.`,
-    });
+    redirectBack({ error: "provider-not-connected" });
   }
   const purposeDef = EMAIL_PURPOSES.find((p) => p.id === purpose);
   if (purposeDef?.requiresSystemEmail && !target.supportsSystemEmail) {
-    redirectBack({
-      error: `${target.name} cannot send platform/system email (it needs a per-user connection). Choose an instance-level provider like Resend.`,
-    });
+    redirectBack({ error: "provider-no-system-email" });
   }
 
   setEmailPurposeProvider(purpose as EmailPurpose, connectorId);

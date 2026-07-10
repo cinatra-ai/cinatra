@@ -19,7 +19,9 @@
  *
  * NangoUserConnectButton must additionally surface the error itself when the
  * caller passes no `onError` — no production call site passes one, so without
- * the fallback the user gets zero feedback even after the modal closes.
+ * the built-in default handler the user gets zero feedback even after the modal
+ * closes. That default now TOASTS the failure (cinatra#1109 toast migration),
+ * replacing the retired inline fallbackError surface.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -65,14 +67,18 @@ describe("NangoUserConnectButton / useNangoUserConnect (#48)", () => {
     expect(BUTTON_SOURCE.match(/connect\?\.close\(\);/g)?.length).toBe(3);
   });
 
-  it("surfaces errors itself when the caller passes no onError (no call site does)", () => {
+  it("surfaces the error itself as a toast when the caller passes no onError (no call site does)", () => {
+    // Toast migration (#48 → cinatra#1109): the built-in default handler now
+    // TOASTS the failure once the orphaned modal closes, instead of the old
+    // inline fallbackError <p> surface. When the caller DOES pass onError it
+    // owns the surface (no toast — avoids double-surfacing).
     expect(BUTTON_SOURCE).toMatch(
-      /onError: onError \?\? \(\(message\) => setFallbackError\(message \|\| null\)\)/,
+      /onError: onError \?\? \(\(message\) => \{ if \(message\) toast\.error\(message\); \}\)/,
     );
-    expect(BUTTON_SOURCE).toMatch(/if \(onError\) \{\s*return button;\s*\}/);
-    expect(BUTTON_SOURCE).toMatch(
-      /\{fallbackError \? <p className="text-sm text-destructive">\{fallbackError\}<\/p> : null\}/,
-    );
+    // The old inline fallback surface is retired — the component returns the
+    // Button directly and never renders a local error paragraph.
+    expect(BUTTON_SOURCE).not.toMatch(/setFallbackError/);
+    expect(BUTTON_SOURCE).not.toMatch(/text-sm text-destructive/);
   });
 });
 

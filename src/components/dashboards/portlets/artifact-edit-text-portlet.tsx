@@ -9,6 +9,7 @@ import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/cinatra-toast";
 import { editArtifactTextAction } from "@/lib/dashboards/portlet-actions";
 import type { PortletComponentProps } from "./types";
 
@@ -19,8 +20,6 @@ export function ArtifactEditTextPortlet({ config, inputs }: PortletComponentProp
 
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [pending, start] = useTransition();
 
   if (!parentObjectField || !refSwapPrimitive) {
@@ -31,8 +30,6 @@ export function ArtifactEditTextPortlet({ config, inputs }: PortletComponentProp
   }
 
   function handleSave() {
-    setError(null);
-    setSaved(false);
     start(async () => {
       const res = await editArtifactTextAction({
         parentObjectId: parentObjectId!,
@@ -42,10 +39,10 @@ export function ArtifactEditTextPortlet({ config, inputs }: PortletComponentProp
         content,
       });
       if (!res.ok) {
-        setError(res.message);
+        toast.error(res.message);
         return;
       }
-      setSaved(true);
+      toast.success("Saved.");
     });
   }
 
@@ -64,9 +61,7 @@ export function ArtifactEditTextPortlet({ config, inputs }: PortletComponentProp
         <Button type="button" onClick={handleSave} disabled={pending || !content.trim()}>
           {pending ? "Saving…" : "Save"}
         </Button>
-        {saved ? <span className="text-sm text-muted-foreground">Saved.</span> : null}
       </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
 }

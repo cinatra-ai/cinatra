@@ -30,13 +30,22 @@ import {
   readProjectGrantsForUser,
   type ProjectGrant,
 } from "@/lib/better-auth-db";
-import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, resolveOrgRoleForUser } from "@/lib/auth-session";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
-// Pure OBO scope-ceiling helper (zero-dep subpath — never the heavy facade).
+// OBO scope-ceiling helpers (pure zero-dep subpath — never the heavy facade).
+//  - `resourceWithinCeiling` + `CeilingResource`: facet form used by the skills
+//    gate (`requireResourceAccess`, #1052) AND the agent-template rows
+//    (`agent_get` / `agent_list`, #1051).
+//  - `oboCeilingContains`: run-chain ⊇ actor-chain containment for
+//    `enforceRunAccess` (#1051) — the run's persisted anchor chain must contain
+//    every element of the accessing agent's ceiling.
 import {
+  oboCeilingContains,
   resourceWithinCeiling,
   type CeilingResource,
+  type OboCeilingChain,
 } from "@cinatra-ai/mcp-server/obo-ceiling";
+import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 
 // Client-safe types and schema live in auth-policy-types.ts so that client
 // components can import them without pulling in this file's server-only guard.
@@ -52,6 +61,7 @@ export type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
   AgentAuthPolicyVisibilitySelection,
+  AgentTemplateVisibilityOptions,
 } from "./auth-policy-types";
 import { AgentAuthPolicySchema, DEFAULT_AGENT_AUTH_POLICY } from "./auth-policy-types";
 import type {
@@ -461,6 +471,64 @@ export async function actorContextFromMcpRequest(
   return built;
 }
 
+/**
+ * Resolve the admin-standing inputs the non-published agent_template visibility
+ * gate (`applyAgentTemplateVisibility` in ./store, admin-parity P4 cinatra#1129)
+ * needs from a Better Auth session: the acting user id, their platform role,
+ * their ACTIVE-org role, and active org id. A `platform_admin` sees every
+ * non-published template; an org admin/owner of a template's OWNING org sees
+ * that org's non-published templates (the store gate compares this active org id
+ * to the template's `orgId`, so an admin of a DIFFERENT org never gains
+ * visibility). Returns `includeNonPublished: true` so callers can spread the
+ * whole bag straight into `readAgentTemplateBySlug`. An anonymous session yields
+ * the legacy behaviour (no admin standing, no user id).
+ *
+ * Lives here (not a standalone module) so it reuses this file's existing
+ * `@/lib/auth-session` edge and adds no new node to the route module graph.
+ * The return shape is structurally the store's `AgentTemplateVisibilityOptions`.
+ */
+export async function resolveTemplateVisibilityActor(
+  session:
+    | {
+        user?: { id?: string | null; role?: string | null } | null;
+        session?: { activeOrganizationId?: string | null } | null;
+      }
+    | null
+    | undefined,
+): Promise<{
+  actorUserId: string | null;
+  includeNonPublished: boolean;
+  actorPlatformRole: "platform_admin" | "member";
+  actorOrgRole: "org_owner" | "org_admin" | "member" | undefined;
+  actorOrganizationId: string | null;
+}> {
+  const actorUserId = session?.user?.id ?? null;
+  if (!actorUserId) {
+    return {
+      actorUserId: null,
+      includeNonPublished: true,
+      actorPlatformRole: "member",
+      actorOrgRole: undefined,
+      actorOrganizationId: null,
+    };
+  }
+  const actorOrganizationId = session?.session?.activeOrganizationId ?? null;
+  const actorPlatformRole = isPlatformAdmin(session) ? "platform_admin" : "member";
+  // platform_admin bypasses the org-anchored branch; only query the membership
+  // row for a non-platform-admin with an active org.
+  const actorOrgRole =
+    actorPlatformRole === "platform_admin" || !actorOrganizationId
+      ? undefined
+      : await resolveOrgRoleForUser(actorOrganizationId, actorUserId);
+  return {
+    actorUserId,
+    includeNonPublished: true,
+    actorPlatformRole,
+    actorOrgRole,
+    actorOrganizationId,
+  };
+}
+
 /** Per-token scope-reason copy (UI-SPEC §C). Returns null for "owner" (owner
  * access is implicit) and any unrecognized token. */
 function scopeReasonForToken(
@@ -550,6 +618,21 @@ export type RunForAccessCheck =
       // editOutput, cancel, share`. `run.managePermissions` stays
       // owner+admin only.
       coOwnerUserIds?: string[];
+      /**
+       * The run's PERSISTED OBO scope-ceiling chain (`agent_runs.obo_ceiling`,
+       * derived at dispatch from the run's LOCKED template anchor + org +
+       * project — W1/#1050). Surfaced onto `AgentRunRecord` by `deserializeRun`,
+       * so every full-row caller (`readAgentRunById`, the run mutation handlers,
+       * the per-row list filters) carries it via `{ ...run }`. The run ceiling
+       * gate (`enforceRunAccess`) treats:
+       *   - `undefined` (a synthetic probe that is NOT a real persisted run:
+       *     the template-execute probe, the connector probe) → SKIP; those gate
+       *     a capability, not access to an existing run row;
+       *   - `null` (a real run whose stored chain is malformed/corrupt) → DENY
+       *     (fail closed);
+       *   - a chain → containment check against the accessing agent's ceiling.
+       */
+      oboCeiling?: OboCeilingChain | null;
     }
   | null
   | undefined;
@@ -662,9 +745,23 @@ export function policyAllows(
       );
     }
   }
-  // Any-match: admit if ANY token in the field admits the actor.
-  return tokens.some((visibility) => matchRunVisibilityToken(visibility, actor));
+  // Any-match: admit if ANY token in the field admits the actor. `op` is
+  // forwarded so the owner-aware "admin" tier can hold the H4 doctrine — it
+  // widens NON-execute ops to org admins but never an execute-tier op (see
+  // matchRunVisibilityToken).
+  return tokens.some((visibility) => matchRunVisibilityToken(visibility, actor, op));
 }
+
+// Execute-tier run ops (mutate run state). These map to runExecuteVisibility in
+// policyAllows. The owner-aware "admin" visibility tier must NOT widen these to
+// org admins: admin EXECUTE-widening, if ever wanted, belongs in the kernel's
+// platform_admin DIRECT_GRANTS (H4 doctrine), never in policyAllows.
+const RUN_EXECUTE_TIER_OPS: ReadonlySet<RunAccessOperation> = new Set([
+  "execute",
+  "approveHitl",
+  "respondToHitl",
+  "cancel",
+]);
 
 /**
  * Per-token run-visibility decision — the single-token predicate the any-match
@@ -673,21 +770,27 @@ export function policyAllows(
  * policyAllows before any token is consulted) and AFTER the kernel `can()`
  * cross-org guard.
  *
- * Tiers (run path). NOTE: `"admin"` here is platform-admin-only — it DIVERGES
- * from the owner-aware `"admin"` in the extension matcher
- * (`packages/extensions/src/enforce-extension-access.ts`); each matcher keeps
- * its own admin semantics.
+ * Tiers (run path). NOTE: `"admin"` here is OWNER-AWARE (admin-parity P4,
+ * cinatra#1129) — it now CONVERGES with the owner-aware `"admin"` in the
+ * extension matcher (`packages/extensions/src/enforce-extension-access.ts`
+ * `hasAdminStandingOverExtension`): platform_admin OR an org admin/owner of the
+ * run's org. platform_admin is short-circuited in policyAllows; an
+ * org_admin/org_owner is admitted here.
  *   workspace    → every same-org member (guard already passed) → allow
  *   org:<id>     → actor's active org equals <id>
  *   team:<id>    → actor is a member of <id>
  *   project:<id> → actor holds a grant on <id>
- *   admin        → deny (platform_admin already returned true upstream)
+ *   admin        → org_admin/org_owner of the run's org for a NON-execute op;
+ *                  execute-tier ops keep the platform-admin-only semantics
+ *                  (H4 doctrine — see below). platform_admin already returned
+ *                  true upstream.
  *   owner        → deny (owner is short-circuited above the policy gate)
  *   org (legacy) → allow (kernel cross-org guard already applied)
  */
 function matchRunVisibilityToken(
   visibility: AgentAuthPolicyVisibility,
   actor: ActorContext,
+  op: RunAccessOperation,
 ): boolean {
   if (visibility === "workspace") {
     // "Workspace: All" means EVERY workspace user can use the resource — not
@@ -711,9 +814,26 @@ function matchRunVisibilityToken(
       actor.projectIds?.includes(visibility.slice("project:".length)),
     );
   }
-  // "admin" tier with a non-admin actor: deny (platform_admin bypass already
-  // returned true in policyAllows).
-  if (visibility === "admin") return false;
+  // "admin" tier — owner-aware (admin-parity P4, cinatra#1129). platform_admin
+  // already returned true in policyAllows above; an org admin/owner of the
+  // run's org is admitted here for LIST / READ / editOutput / share.
+  // matchRunVisibilityToken runs ONLY after enforceRunAccess + the kernel can()
+  // cross-org guard, so a non-owner actor reaching this token is same-org as the
+  // run — an org_admin/org_owner here IS an admin of the run's org (mirrors
+  // hasAdminStandingOverExtension). A plain member is still denied.
+  //
+  // H4 DOCTRINE (execute stays out of policyAllows): the "member" role already
+  // carries run.resume and org_admin inherits member, so a same-org org admin
+  // PASSES the kernel can() gate for execute-tier ops and would reach this
+  // token. We must therefore explicitly refuse to widen an execute-tier op's
+  // "admin" policy to org admins here — otherwise an admin-tier
+  // runExecuteVisibility would silently grant org admins execute. Admin
+  // execute-widening, if ever wanted, belongs in the kernel's platform_admin
+  // DIRECT_GRANTS, never in this matcher.
+  if (visibility === "admin") {
+    if (RUN_EXECUTE_TIER_OPS.has(op)) return false;
+    return actor.orgRole === "org_admin" || actor.orgRole === "org_owner";
+  }
   // "owner" tier never allows here — owner is short-circuited above the policy
   // gate. Any non-owner reaching this code with visibility="owner" is denied.
   if (visibility === "owner") return false;
@@ -789,6 +909,43 @@ export async function enforceRunAccess(
       statusCode: 403,
       reason: "forbidden",
       message: `Run access denied: token scope insufficient (required ${permission}).`,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Agent-run OBO scope-ceiling — a SECOND hard upper bound, enforced HERE
+  // (alongside the token-scope ceiling above) BEFORE the runBy owner / co-owner
+  // short-circuits AND before the delegated kernel `can()` / platform-admin
+  // path (W2/#1051). Otherwise a run-owner or platform-admin invoker would
+  // nullify the ceiling for every delegated run, letting a narrowly-anchored
+  // agent reach a run outside its scope.
+  //
+  // Fires ONLY for agent-run-OBO delegated actors (`actor.oboCeiling` present;
+  // undefined for every human / session / A2A / machine caller → skip). The
+  // run is bounded by its OWN persisted chain (`run.oboCeiling`), which was
+  // derived at dispatch from the run's LOCKED template anchor + org + project —
+  // NOT from `runBy`, so an agent always reads its own run (its run's anchor ==
+  // the agent's anchor) while a team-anchored agent stays confined to
+  // team-anchored runs. `oboCeilingContains(run.oboCeiling, actor.oboCeiling)`
+  // holds iff every element of the agent's ceiling is contained in the run's
+  // chain (agent ⊆ run) — the containment form of "the run is within the
+  // agent's ceiling".
+  //
+  //   - run.oboCeiling === undefined → a synthetic probe (template-execute /
+  //     connector), NOT a real persisted run — SKIP (the probe gates a
+  //     capability, not access to a run row);
+  //   - run.oboCeiling === null      → a real run with a corrupt stored chain
+  //     — DENY (fail closed);
+  //   - a chain that does not contain the agent's chain → DENY.
+  if (
+    actor.oboCeiling &&
+    run.oboCeiling !== undefined &&
+    !oboCeilingContains(run.oboCeiling, actor.oboCeiling)
+  ) {
+    throw new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message: "Run access denied: outside agent scope ceiling.",
     });
   }
 
@@ -877,6 +1034,35 @@ export async function enforceRunAccess(
     return;
   }
 
+  // admin-parity P4 (cinatra#1129): resolve the actor's role in the RUN's org so
+  // the owner-aware run "admin" visibility tier — and the kernel's org grant —
+  // recognize an org admin/owner of the run's org on surfaces that do NOT
+  // pre-resolve it (the MCP role hints). This is the run access layer deriving
+  // orgRole "from userId + the run's organizationId" per the #1129 plan, so
+  // those callers need not thread orgRole.
+  //
+  // SAFETY GUARD — the derivation fires ONLY when the caller declared the
+  // actor's active org (`roles.actorOrganizationId`) AND it equals the run's
+  // org. This binds the derived authority to the org the actor is ALREADY
+  // acting in: it can never grant a multi-org user cross-active-org access, and
+  // a session-backed caller that forgets `actorOrganizationId` degrades to the
+  // pre-P4 deny (never a widening) rather than defaulting the org to run.orgId.
+  // Also excludes owner/co-owner (already returned above) and platform_admin
+  // (bypasses every gate). MUST run BEFORE the kernel probe so an org admin
+  // actually passes `can()` for run.read/list. resolveOrgRoleForUser is
+  // per-request cached, so the list path's per-row calls collapse to one query.
+  let effectiveRoles = roles;
+  if (
+    roles?.orgRole === undefined &&
+    roles?.platformRole !== "platform_admin" &&
+    actor.userId &&
+    run.orgId &&
+    roles?.actorOrganizationId === run.orgId
+  ) {
+    const derivedOrgRole = await resolveOrgRoleForUser(run.orgId, actor.userId);
+    if (derivedOrgRole) effectiveRoles = { ...roles, orgRole: derivedOrgRole };
+  }
+
   // Delegate the owner-short-circuit + kernel can()
   // decision to the generic helper. coOwnerUserIds is intentionally
   // cleared on the delegated probe: runs use a wider co-owner op set
@@ -892,7 +1078,7 @@ export async function enforceRunAccess(
     visibility: null,
   };
   try {
-    await enforceResourceAccess(probe, actor, permission, roles);
+    await enforceResourceAccess(probe, actor, permission, effectiveRoles);
   } catch (err) {
     // Preserve the run-specific deny message contract used by existing
     // tests (handlers-auth-policy + auth-policy-token-scope) while
@@ -914,7 +1100,7 @@ export async function enforceRunAccess(
   const actorContext = buildActorContextFromPrimitive(
     actor,
     run.orgId ?? null,
-    roles,
+    effectiveRoles,
   );
 
   // Token-scope intersection (additive to the kernel role-grant
@@ -1038,8 +1224,41 @@ export async function checkConnectorAccess(
  * caller-supplied tool input. Returns the template on success, or an `{ error }`
  * envelope on denial/miss (the handler forwards either verbatim).
  */
+/**
+ * Facet-based agent-run OBO scope-ceiling test for an agent-template row
+ * (W2/#1051) — shared by `agent_get` (authorizeAgentTemplateRead) and the
+ * `agent_list` per-row filter. Returns `true` when no ceiling applies (a
+ * non-OBO caller: `oboCeiling` undefined). Agent templates carry no project
+ * refinement, so a project-anchored ceiling (a `{project,P}` element under
+ * satisfy-all) always denies — the correct fail-closed confinement. A null
+ * owner anchor normalizes to the organization tier (deny narrower agents).
+ */
+export function agentTemplateWithinOboCeiling(
+  oboCeiling: OboCeilingChain | undefined,
+  template: {
+    orgId?: string | null;
+    ownerLevel?: string | null;
+    ownerId?: string | null;
+  },
+): boolean {
+  if (!oboCeiling) return true;
+  return resourceWithinCeiling(
+    {
+      orgId: template.orgId ?? null,
+      owner: {
+        tier: normalizeOwnerLevel(template.ownerLevel ?? "organization"),
+        id: template.ownerId ?? "",
+      },
+      projectId: null,
+    },
+    oboCeiling,
+  );
+}
+
 export async function authorizeAgentTemplateRead(
-  actor: { userId?: string; actorType?: string; source?: string } | undefined,
+  actor:
+    | { userId?: string; actorType?: string; source?: string; oboCeiling?: OboCeilingChain }
+    | undefined,
   templateId: string,
   organizationId: string | undefined,
   isAdmin: boolean,
@@ -1054,6 +1273,32 @@ export async function authorizeAgentTemplateRead(
   const template = await readAgentTemplateById(templateId);
   if (!template) return { error: `Template not found: ${templateId}` };
   if (!isAdmin && (template as { orgId?: string | null }).orgId !== organizationId) {
+    void logAuditEvent({
+      actorPrincipalId: actor?.userId,
+      actorPrincipalType: (actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
+      authSource: (actor?.source as AuditEventInput["authSource"]) ?? "mcp",
+      resourceType: "agent_template",
+      resourceId: templateId,
+      operation: "read",
+      decision: "denied",
+      policyVersion: POLICY_VERSION,
+    });
+    return { error: `Template not found: ${templateId}` };
+  }
+  // Agent-run OBO scope-ceiling (W2/#1051): confine a delegated agent to
+  // agent-template rows within its anchored scope, checked before the row is
+  // returned (and after the org-tenant guard above). Fires only for
+  // agent-run-OBO actors (`actor.oboCeiling` present); a null anchor normalizes
+  // to the organization tier (deny narrower agents, per the derive convention).
+  // Denials are surfaced as the same 404-equivalent "not found" as the
+  // cross-org guard so a confined agent cannot enumerate template ids.
+  if (
+    actor?.oboCeiling &&
+    !agentTemplateWithinOboCeiling(
+      actor.oboCeiling,
+      template as { orgId?: string | null; ownerLevel?: string | null; ownerId?: string | null },
+    )
+  ) {
     void logAuditEvent({
       actorPrincipalId: actor?.userId,
       actorPrincipalType: (actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",

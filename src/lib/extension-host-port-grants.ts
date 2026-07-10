@@ -495,3 +495,62 @@ export async function restoreGrant(
   if (!rows[0]) throw new Error("extension_host_port_grant restore insert returned no row");
   return rowToGrant(rows[0]);
 }
+
+// ---------------------------------------------------------------------------
+// Install-pipeline integration. Extracted VERBATIM from
+// `extension-install-pipeline.ts`'s default factory (the pipeline is a baselined
+// file-size-ratchet bottleneck: cohesive slices move OUT so its ceiling only
+// shrinks — the same treatment as `extension-install-canonical-row-deps.ts`).
+// Behavior-identical: the SAME four grant-lifecycle adapters over this module's
+// own functions.
+// ---------------------------------------------------------------------------
+
+/**
+ * The host-port grant lifecycle hooks for `makeDefaultInstallPipelineDeps`.
+ * `readGrantForScope` is the hot-UPDATE probe's EXACT-(package, org)-scoped grant
+ * ROW (status + approvedPorts + requestedPortsHash), NO global fallback — the
+ * SAME exact-scope resolution `resolveInstallAnchor` uses; `restoreGrant` re-pins
+ * the OLD grant row on durable rollback.
+ */
+export function makeHostPortGrantInstallDeps(): Pick<
+  import("@/lib/extension-install-pipeline").InstallPipelineDeps,
+  "recordRequestedGrant" | "approveGrant" | "readGrantForScope" | "restoreGrant"
+> {
+  return {
+    recordRequestedGrant: (g) =>
+      recordRequestedGrant({
+        packageName: g.packageName,
+        orgId: g.orgId,
+        requestedPorts: g.requestedPorts as readonly HostPortName[],
+      }).then(() => undefined),
+    approveGrant: (g) =>
+      approveGrant({
+        packageName: g.packageName,
+        orgId: g.orgId,
+        approvedPorts: g.approvedPorts as readonly HostPortName[],
+        requestedPorts: g.requestedPorts as readonly HostPortName[],
+        approvedBy: g.approvedBy,
+      }).then(() => undefined),
+    readGrantForScope: async (packageName, orgId) => {
+      const g = await readGrantForScope({ packageName, orgId });
+      return g
+        ? {
+            orgId: g.orgId,
+            status: g.status,
+            approvedPorts: g.approvedPorts,
+            requestedPortsHash: g.requestedPortsHash,
+            approvedBy: g.approvedBy,
+          }
+        : null;
+    },
+    restoreGrant: (i) =>
+      restoreGrant({
+        packageName: i.packageName,
+        orgId: i.orgId,
+        status: i.status,
+        approvedPorts: i.approvedPorts,
+        requestedPortsHash: i.requestedPortsHash,
+        approvedBy: i.approvedBy,
+      }).then(() => undefined),
+  };
+}

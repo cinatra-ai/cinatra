@@ -50,7 +50,14 @@ services:
       retries: 10
 
   verdaccio:
-    image: verdaccio/verdaccio:6
+    # Upgrade track (inventory + pin-drift first pass): the floating `:6` tag
+    # moved on every pull. Pinned to a CONFIRMED multi-arch (amd64/arm64) OCI
+    # index digest so the pin no longer drifts; `:6` is kept for readability, the
+    # @sha256 is the binding pin. verdaccio 6.7.4 is the latest stable line (no
+    # newer major offered). Dev registry only, ephemeral storage. Re-resolve at
+    # bump time: `docker buildx imagetools inspect verdaccio/verdaccio:6`.
+    # See docs/upgrade-track.md §8.
+    image: verdaccio/verdaccio:6@sha256:e3ac7e335e69504cd0b09616aa52066399868282313c34762d2a77b8169a3575
     ports:
       - "4873:4873"
     volumes:

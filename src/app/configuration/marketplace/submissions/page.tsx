@@ -7,6 +7,7 @@
  * `submissions/admin` route.
  */
 
+import { Suspense } from "react";
 import Link from "next/link";
 
 import { Main } from "@/components/layout/main";
@@ -33,9 +34,10 @@ import { requireAdminSession } from "@/lib/auth-session";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 import type { MarketplaceVendorSubmission } from "@cinatra-ai/marketplace-mcp-client";
 
+import { SearchParamToast } from "@/components/search-param-toast";
 import { SubmissionStatusPill } from "./submission-status-pill";
 import { WithdrawSubmissionButton } from "./withdraw-submission-button";
-import { ResultBanner } from "./result-banner";
+import { FetchErrorBanner, SUBMISSION_FLASH_TOASTS } from "./result-banner";
 
 function resolveMarketplaceToken(): string | undefined {
   return process.env.MARKETPLACE_INSTANCE_TOKEN;
@@ -59,13 +61,8 @@ async function loadSubmissions(): Promise<{
   }
 }
 
-export default async function VendorSubmissionsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ ok?: string; id?: string; error?: string }>;
-}) {
+export default async function VendorSubmissionsPage() {
   await requireAdminSession();
-  const params = await searchParams;
   const { rows, fetchError } = await loadSubmissions();
 
   return (
@@ -80,7 +77,10 @@ export default async function VendorSubmissionsPage({
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <ResultBanner ok={params.ok} error={params.error ?? fetchError} id={params.id} />
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={SUBMISSION_FLASH_TOASTS} />
+        </Suspense>
+        <FetchErrorBanner error={fetchError} />
 
         {fetchError ? null : rows.length === 0 ? (
           <Empty>

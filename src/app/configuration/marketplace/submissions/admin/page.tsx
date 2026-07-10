@@ -11,6 +11,7 @@
  * default is `pending` (the moderator's primary queue).
  */
 
+import { Suspense } from "react";
 import Link from "next/link";
 
 import { Main } from "@/components/layout/main";
@@ -40,8 +41,9 @@ import type {
   MarketplaceExtensionSubmissionListAdminInput,
 } from "@cinatra-ai/marketplace-mcp-client";
 
+import { SearchParamToast } from "@/components/search-param-toast";
 import { SubmissionStatusPill } from "../submission-status-pill";
-import { ResultBanner } from "../result-banner";
+import { FetchErrorBanner, SUBMISSION_FLASH_TOASTS } from "../result-banner";
 import { ApproveButton, RejectButton, RetryPromotionButton } from "./admin-action-buttons";
 import { StatusFilter } from "./status-filter";
 
@@ -90,7 +92,7 @@ async function loadSubmissions(filter: StatusFilterValue): Promise<{
 export default async function AdminSubmissionsQueuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; ok?: string; id?: string; error?: string }>;
+  searchParams: Promise<{ status?: string }>;
 }) {
   await requireAdminSession();
   const params = await searchParams;
@@ -112,7 +114,10 @@ export default async function AdminSubmissionsQueuePage({
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <ResultBanner ok={params.ok} error={params.error ?? fetchError} id={params.id} />
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={SUBMISSION_FLASH_TOASTS} />
+        </Suspense>
+        <FetchErrorBanner error={fetchError} />
 
         {fetchError ? null : rows.length === 0 ? (
           <Empty>

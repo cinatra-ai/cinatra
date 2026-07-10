@@ -52,6 +52,20 @@ export type AgentAuthPolicy = {
   description?: string;
 };
 
+/**
+ * Visibility inputs for a non-published agent_template read; the admin-standing
+ * trio (admin-parity P4, cinatra#1129) is built by
+ * `resolveTemplateVisibilityActor` (./auth-policy) and consumed by the store's
+ * `applyAgentTemplateVisibility`.
+ */
+export type AgentTemplateVisibilityOptions = {
+  actorUserId?: string | null;
+  includeNonPublished?: boolean;
+  actorPlatformRole?: "platform_admin" | "member";
+  actorOrgRole?: "org_owner" | "org_admin" | "member";
+  actorOrganizationId?: string | null;
+};
+
 export const DEFAULT_AGENT_AUTH_POLICY: AgentAuthPolicy = Object.freeze({
   // Inner arrays are frozen too: the default is shared by reference
   // (resolveEffectivePolicy returns it directly), so an accidental in-place

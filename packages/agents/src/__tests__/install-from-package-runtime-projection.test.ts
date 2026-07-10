@@ -44,7 +44,14 @@ const EXPECTED_CONNECTOR = {
   "@cinatra-ai/wordpress-mcp-connector": { range: "^1.0.0", requirement: "required" },
   "@cinatra-ai/apollo-connector": { range: "^2.0.0", requirement: "optional" },
 };
-const EXPECTED_AGENT = { "@cinatra-ai/sub-agent": "3.1.0" };
+// cinatra#1058: REQUIRED agent edges project as a bare range string; OPTIONAL
+// agent edges now project as `{ range, requirement: "optional" }` so the
+// orchestrator-readiness gate can route them to stop-run-hitl (they were
+// DROPPED under #1056's deliberate deferral, which this wave reverses).
+const EXPECTED_AGENT = {
+  "@cinatra-ai/sub-agent": "3.1.0",
+  "@cinatra-ai/opt-agent": { range: "^0.1.0", requirement: "optional" },
+};
 
 vi.mock("@cinatra-ai/extensions/manifest-dependencies", () => ({
   parseManifestDependencyEdges: vi.fn(() => ({ edges: EDGES, source: "canonical" })),
@@ -160,7 +167,7 @@ beforeEach(() => {
 });
 
 describe("installAgentFromPackage — cinatra#1056 runtime-gate projection", () => {
-  it("FRESH branch: seeds connector_dependencies (with requirement) + REQUIRED agent edges into the template seed", async () => {
+  it("FRESH branch: seeds connector_dependencies (with requirement) + agent edges (required bare, optional requirement-carrying) into the template seed", async () => {
     await installAgentFromPackage({ packageName: "@cinatra-ai/pkg" });
     expect(createLocal).toHaveBeenCalledTimes(1);
     const seed = (createLocal.mock.calls[0][0] as { seed: Record<string, unknown> }).seed;

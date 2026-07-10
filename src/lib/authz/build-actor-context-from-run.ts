@@ -4,7 +4,9 @@ import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import {
   readOrgsWithTeamsForUser,
   readProjectGrantsForUser,
+  readUserIsPlatformAdmin,
 } from "@/lib/better-auth-db";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 /**
  * Authoritative ActorContext builder for run-row resolution.
@@ -81,6 +83,44 @@ export async function buildActorContextFromRun(
   const projectGrants = await readProjectGrantsForUser(userId, run.orgId, {
     teamIds,
   });
+  // admin-parity P6 (#1131). Resolve + attach `platformRole`/`orgRole` so a
+  // run-derived actor keeps the SAME admin standing an interactive session
+  // would carry — without this the uniform extension evaluator's kind-aware
+  // admin short-circuit (#1126) is dead off the interactive session, so a
+  // platform/org admin's own run loses admin standing on every downstream
+  // extension check and only the installer/owner-uid match survives.
+  //
+  // This MIRRORS the interactive builder `buildActorContext`
+  // (src/lib/authz/enforce.ts) EXACTLY so the two producers agree — that
+  // parity IS the acceptance criterion (#1131): `platformRole` is the binary
+  // `platform_admin | member`; `orgRole` defaults to `member` when the
+  // membership resolver returns nothing (the interactive builder does
+  // `opts?.orgRole ?? "member"`).
+  //
+  // Fail-closed on resolution error → `member` for BOTH axes: a transient DB
+  // failure never fabricates `platform_admin` / `org_admin`, it floors the
+  // actor at the least-privileged member tier (`readUserIsPlatformAdmin`
+  // already catches internally and returns false; the try/catch here also
+  // covers a throwing membership resolver).
+  //
+  // ACCEPTED STALENESS (documented on #1131, out of scope): delegated-run
+  // snapshots and short-lived OBO tokens replay pre-change roles for their
+  // lifetime, so a demoted admin keeps standing until the run ends / the
+  // token expires. This resolver reads live at build time; it does not
+  // re-check a captured snapshot.
+  let platformRole: "platform_admin" | "member" = "member";
+  let orgRole: "org_owner" | "org_admin" | "member" = "member";
+  try {
+    const [isPlatformAdmin, resolvedOrgRole] = await Promise.all([
+      readUserIsPlatformAdmin(userId),
+      resolveOrgRoleForUser(run.orgId, userId),
+    ]);
+    platformRole = isPlatformAdmin ? "platform_admin" : "member";
+    orgRole = resolvedOrgRole ?? "member";
+  } catch {
+    platformRole = "member";
+    orgRole = "member";
+  }
   return {
     principalType: "HumanUser",
     principalId: userId,
@@ -90,6 +130,8 @@ export async function buildActorContextFromRun(
     projectIds: projectGrants
       .map((g) => g.projectId)
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    platformRole,
+    orgRole,
     authSource: "a2a",
     policyVersion: POLICY_VERSION,
   };
