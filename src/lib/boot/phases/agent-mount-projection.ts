@@ -46,6 +46,13 @@ export function agentMountProjectionPhases(): BootPhase[] {
           (r) =>
             r.kind === "agent" &&
             (r.status === "active" || r.status === "locked") &&
+            // DEFAULT-OWNS-GLOBAL-NAMES (cinatra#1040 S1): the package-keyed mount
+            // tree is a projection of the DEFAULT version only. A row is dropped
+            // ONLY when EXPLICITLY non-default (isDefault === false); a legacy/
+            // single-version row (true, or an unset read) is projected, so this is
+            // behaviorally identical until a later slice writes non-default
+            // versions.
+            r.isDefault !== false &&
             r.source?.type === "verdaccio",
         );
         if (agentRows.length === 0) return { skipped: "no installed agent-kind rows" };
