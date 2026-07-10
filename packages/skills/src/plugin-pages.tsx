@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { ChevronLeft } from "lucide-react";
@@ -22,7 +23,7 @@ import { PageContent } from "@/components/page-content";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ScopeBadge } from "@/components/scope-badge";
 import { DeleteItemForm } from "@/components/data-safety/delete-item-form";
-import { SearchParamToast } from "@cinatra-ai/sdk-ui/search-param-toast";
+import { SearchParamToast, type SearchParamToastConfig } from "@cinatra-ai/sdk-ui/search-param-toast";
 import { getListViewCookieName } from "@/lib/list-view";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { readOrgsWithTeamsForUser, readProjectsForUser } from "@/lib/better-auth-db";
@@ -65,6 +66,18 @@ type SearchParams = Record<string, string | string[] | undefined>;
 function pickSearchParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
+
+// Codes-only flash island config for the skills surfaces. The skill actions
+// (./actions.ts) redirect with `?error=<code>`; each maps to a STATIC message
+// here (the specific Zod/validation message is logged server-side, never
+// reflected into a toast). Mounted on the skills list + the new/edit editor
+// pages; the `saved`/`deleted` success siblings already toast on the list.
+const SKILLS_ERROR_TOASTS: SearchParamToastConfig[] = [
+  { param: "error", value: "source-skill-not-found", message: "Source skill not found.", variant: "error" },
+  { param: "error", value: "save-invalid", message: "Couldn't save the skill — check the name and content.", variant: "error" },
+  { param: "error", value: "agent-unavailable", message: "The selected agent is no longer available.", variant: "error" },
+  { param: "error", value: "skill-not-found", message: "Skill not found.", variant: "error" },
+];
 
 // SkillLevel → ScopeLevel mapping for ScopeBadge rendering.
 // SkillLevel has 8 values; ScopeLevel has 5 (user|team|organization|workspace|project).
@@ -225,6 +238,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
         toasts={[
           { param: "deleted", value: "1", message: "Personal skill deleted" },
           { param: "saved", value: "1", message: "Personal skill saved" },
+          ...SKILLS_ERROR_TOASTS,
         ]}
       />
       <PageHeader title="Skills" divider={false} />
@@ -541,11 +555,9 @@ export async function CreateFromSkillPage({ params }: CreateFromSkillPageProps) 
   );
 }
 
-export async function NewSkillPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
-  const resolvedSearchParams: SearchParams = await (searchParams ?? Promise.resolve({} as SearchParams));
+export async function NewSkillPage() {
   await requireActorContext();
   const agents = selectAttachableAgents(await readAgentsForSkillMatching());
-  const errorMessage = pickSearchParam(resolvedSearchParams.error);
 
   return (
     <Main className="min-h-screen">
@@ -559,9 +571,9 @@ export async function NewSkillPage({ searchParams }: { searchParams?: Promise<Se
           Skills
         </Link>
 
-        {errorMessage ? (
-          <Alert variant="destructive"><AlertDescription>{errorMessage}</AlertDescription></Alert>
-        ) : null}
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={SKILLS_ERROR_TOASTS} />
+        </Suspense>
 
         <Card className="border-line bg-surface backdrop-blur-none p-6">
           <form action={savePersonalSkillAction} className="grid gap-5">
@@ -623,10 +635,9 @@ type EditSkillPageProps = {
   searchParams?: Promise<SearchParams>;
 };
 
-export async function EditSkillPage({ params, searchParams }: EditSkillPageProps) {
-  const [{ skillId }, resolvedSearchParams, actor] = await Promise.all([
+export async function EditSkillPage({ params }: EditSkillPageProps) {
+  const [{ skillId }, actor] = await Promise.all([
     params,
-    (searchParams ?? Promise.resolve({})) as Promise<SearchParams>,
     requireActorContext(),
   ]);
   const [skill, allAgents] = await Promise.all([
@@ -650,8 +661,6 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
   // explicit re-selection via a disabled placeholder.
   const currentAgentIsAttachable = agents.some((agent) => agent.id === skill.agentId);
 
-  const errorMessage = pickSearchParam(resolvedSearchParams.error);
-
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -664,9 +673,9 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
           {skill.name}
         </Link>
 
-        {errorMessage ? (
-          <Alert variant="destructive"><AlertDescription>{errorMessage}</AlertDescription></Alert>
-        ) : null}
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={SKILLS_ERROR_TOASTS} />
+        </Suspense>
 
         <Card className="border-line bg-surface backdrop-blur-none p-6">
           <form action={savePersonalSkillAction} className="grid gap-5">

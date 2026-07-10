@@ -17,9 +17,11 @@
  * `next_cursor` returned by the list call.
  */
 
+import { Suspense } from "react";
 import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -124,42 +126,20 @@ async function loadApplications(
   }
 }
 
-const OK_LABELS: Record<string, string> = {
-  approve: "Vendor application approved",
-  reject: "Vendor application rejected",
-};
-
-function ResultBanner({
-  ok,
-  error,
-  id,
-}: {
-  ok: string | undefined;
-  error: string | null | undefined;
-  id: string | undefined;
-}) {
-  if (error) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>Action failed</AlertTitle>
-        <AlertDescription className="break-words">{error}</AlertDescription>
-      </Alert>
-    );
-  }
-  if (ok && OK_LABELS[ok]) {
-    return (
-      <Alert>
-        <AlertTitle>{OK_LABELS[ok]}</AlertTitle>
-        {id ? (
-          <AlertDescription className="font-mono text-xs break-all">
-            application_id: {id}
-          </AlertDescription>
-        ) : null}
-      </Alert>
-    );
-  }
-  return null;
-}
+// Codes-only flash island: the approve/reject actions redirect with `?ok=<op>`
+// / `?error=<code>`; both map to STATIC messages here (the raw MCP error is
+// logged server-side, never reflected into a toast). A content-LOAD failure is
+// NOT a flash — it stays inline (see fetchError below).
+const VENDOR_APP_FLASH_TOASTS: SearchParamToastConfig[] = [
+  { param: "ok", value: "approve", message: "Vendor application approved.", variant: "success" },
+  { param: "ok", value: "reject", message: "Vendor application rejected.", variant: "success" },
+  { param: "error", value: "missing-id", message: "Missing application id.", variant: "error" },
+  { param: "error", value: "token-missing", message: "Marketplace admin token is not configured.", variant: "error" },
+  { param: "error", value: "reason-required", message: "A reject reason is required.", variant: "error" },
+  { param: "error", value: "reason-too-long", message: "The reject reason is too long.", variant: "error" },
+  { param: "error", value: "approve-failed", message: "Could not approve the application. See server logs for details.", variant: "error" },
+  { param: "error", value: "reject-failed", message: "Could not reject the application. See server logs for details.", variant: "error" },
+];
 
 export const dynamic = "force-dynamic";
 
@@ -169,9 +149,6 @@ export default async function VendorApplicationsAdminPage({
   searchParams: Promise<{
     status?: string;
     cursor?: string;
-    ok?: string;
-    id?: string;
-    error?: string;
   }>;
 }) {
   await requireAdminSession();
@@ -195,7 +172,15 @@ export default async function VendorApplicationsAdminPage({
         actions={<VendorApplicationsStatusFilter current={filter} />}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <ResultBanner ok={params.ok} error={params.error ?? fetchError} id={params.id} />
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={VENDOR_APP_FLASH_TOASTS} />
+        </Suspense>
+        {fetchError ? (
+          <Alert variant="destructive">
+            <AlertTitle>Couldn&apos;t load applications</AlertTitle>
+            <AlertDescription className="break-words">{fetchError}</AlertDescription>
+          </Alert>
+        ) : null}
 
         {fetchError ? null : rows.length === 0 ? (
           <Empty>

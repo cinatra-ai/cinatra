@@ -1,8 +1,12 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
 import { listAgentPackages, listExtensionPackages } from "@cinatra-ai/registries";
 
+import { SearchParamToast } from "@/components/search-param-toast";
+import { INSTANCE_FLASH_TOASTS } from "../instance/instance-flash";
+import { REGISTRIES_FLASH_TOASTS } from "./registries-flash";
 import { SettingsTabNav } from "@/components/settings-tab-nav";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -33,11 +37,6 @@ import { VendorApplicationStatusCard } from "./vendor-application-status-card";
 import { InstanceSaveButton } from "./instance-save-button";
 import { getMarketplaceTermsAcceptance } from "@/lib/marketplace-terms";
 
-/** Normalize a possibly-array search param to its first string value. */
-function firstSearchParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Environment" };
 
@@ -58,7 +57,7 @@ export default async function EnvironmentSettingsPage({
   const { tab, requestedConnections } = resolveEnvTab(rawTab, tabs);
   const activeContent =
     tab === "instance" ? (
-      await InstanceTabContent({ error: params.error, saved: params.saved })
+      await InstanceTabContent()
     ) : tab === "registries" ? (
       <RegistriesTabContent params={params} defaultContactEmail={session.user.email ?? null} />
     ) : (
@@ -165,15 +164,7 @@ function ModeTabContent({
   );
 }
 
-async function InstanceTabContent({
-  error,
-  saved,
-}: {
-  error?: string | string[] | undefined;
-  saved?: string | string[] | undefined;
-} = {}) {
-  const errorMessage = firstSearchParam(error);
-  const savedMessage = firstSearchParam(saved);
+async function InstanceTabContent() {
   const identity = readInstanceIdentity();
 
   if (!identity) {
@@ -220,21 +211,12 @@ async function InstanceTabContent({
   return (
     <NamespaceValidationProvider initialValue={identity.instanceNamespace}>
       <ReconciliationMount />
-      {/* Surface the post-action redirect result (cinatra#357). A failed Save
-          redirects back with ?error=<msg>; without rendering it the form just
-          shows the old values again and the failure looks like a silent revert.
-          Rendered server-side (no client island) so it survives a refresh. */}
-      {errorMessage ? (
-        <Alert variant="destructive" className="rounded-panel">
-          <AlertTitle>Could not save instance changes</AlertTitle>
-          <AlertDescription className="break-words">{errorMessage}</AlertDescription>
-        </Alert>
-      ) : savedMessage ? (
-        <Alert variant="success" className="rounded-panel">
-          <AlertTitle>Instance saved</AlertTitle>
-          <AlertDescription>Your instance identity changes have been saved.</AlertDescription>
-        </Alert>
-      ) : null}
+      {/* Codes-only flash island (cinatra#357 → toast migration): the edit/rename
+          actions redirect back with ?error=<code> / ?saved=1; the island maps
+          each to a STATIC message (./instance-flash) and toasts it. */}
+      <Suspense fallback={null}>
+        <SearchParamToast toasts={INSTANCE_FLASH_TOASTS} />
+      </Suspense>
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
@@ -372,6 +354,13 @@ async function RegistriesTabContent({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Codes-only flash island: the vendor-application, marketplace-publish and
+          network settings actions redirect here with their outcome codes — which
+          nothing rendered before (the 3 orphaned flash groups). The island maps
+          each code to a STATIC message (./registries-flash) and toasts it. */}
+      <Suspense fallback={null}>
+        <SearchParamToast toasts={REGISTRIES_FLASH_TOASTS} />
+      </Suspense>
       <MarketplaceConnectionCard identity={identity} catalogCount={catalogCount} />
       {showBecomeAVendor ? (
         marketplaceWired ? (

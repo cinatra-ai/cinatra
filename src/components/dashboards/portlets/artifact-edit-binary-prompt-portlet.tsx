@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/cinatra-toast";
 import {
   loadArtifactBaselinePortlet,
   loadBinaryGenerationStatusPortlet,
@@ -43,7 +44,6 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
   const [baseline, setBaseline] = useState<PortletArtifactBaseline | null>(null);
   const [status, setStatus] = useState<PortletBinaryGenerationStatus | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RefSnapshot | null>(null);
   const [loading, startLoading] = useTransition();
   const [acting, startActing] = useTransition();
@@ -80,7 +80,6 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
     setBaseline(null);
     setStatus(null);
     setPrompt("");
-    setError(null);
     setSnapshot(null);
     wasRunningRef.current = false;
     if (!objectId) return;
@@ -113,7 +112,6 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
 
   function handleRegenerate() {
     const key = objectId!;
-    setError(null);
     // Manual mode: snapshot the CURRENT pair before starting so the user can
     // revert after the pipeline auto-applies the new image. The first
     // snapshot wins across repeated runs — revert always returns to the
@@ -129,7 +127,7 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
       });
       if (currentKeyRef.current !== key) return;
       if (!res.ok) {
-        setError(res.message);
+        toast.error(res.message);
         return;
       }
       await refreshStatus();
@@ -138,12 +136,11 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
 
   function handleCancel() {
     const key = objectId!;
-    setError(null);
     startActing(async () => {
       const res = await cancelBinaryRegenerationAction({ parentObjectId: key, generationPrimitive });
       if (currentKeyRef.current !== key) return;
       if (!res.ok) {
-        setError(res.message);
+        toast.error(res.message);
         return;
       }
       await refreshStatus();
@@ -152,7 +149,6 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
 
   function handleRevert(snap: RefSnapshot) {
     const key = objectId!;
-    setError(null);
     startActing(async () => {
       const res = await applyBinaryRefSwapAction({
         parentObjectId: key,
@@ -162,7 +158,7 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
       });
       if (currentKeyRef.current !== key) return;
       if (!res.ok) {
-        setError(res.message);
+        toast.error(res.message);
         return;
       }
       setSnapshot(null);
@@ -242,7 +238,6 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
           </Button>
         </div>
       ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
 }

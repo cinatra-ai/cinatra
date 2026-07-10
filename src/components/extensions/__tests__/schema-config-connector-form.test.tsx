@@ -13,6 +13,25 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
+import { toast } from "@/lib/cinatra-toast";
+
+// Action outcomes (the form-level banner variant + per-row Done/error) toast
+// via the canonical wrapper (cinatra#1109) rather than rendering an in-form
+// Alert; mock it so the tests can assert the toasted static message.
+vi.mock("@/lib/cinatra-toast", () => {
+  const base = vi.fn();
+  const t = Object.assign(base, {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+    promise: vi.fn(),
+    loading: vi.fn(),
+    dismiss: vi.fn(),
+  });
+  return { toast: t, cinatraToast: t };
+});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -140,7 +159,8 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/listServers"))).toBe(true);
   });
 
-  it("banner: stays hidden until an action result names a variant", async () => {
+  it("banner: an action result's variant TOASTs its static message (no in-form banner)", async () => {
+    vi.mocked(toast.success).mockClear();
     const surface = surfaceOf({
       fields: [
         {
@@ -155,10 +175,11 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     await renderForm({ installId: "i1", packageName: "@x/y", surface });
-    // No banner before any action.
+    // The banner field renders NOTHING inline — the outcome is a toast.
     expect(container.querySelector('[data-testid="schema-config-banner"]')).toBeNull();
 
-    // Click the named action → result `{ banner: "saved" }` → banner appears.
+    // Click the named action → result `{ banner: "saved" }` → the variant's
+    // STATIC message toasts (success tone), and no inline banner ever appears.
     const btn = [...container.querySelectorAll("button")].find((b) => b.textContent === "Save");
     expect(btn).toBeTruthy();
     await act(async () => {
@@ -166,8 +187,8 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    const banner = container.querySelector('[data-testid="schema-config-banner"]');
-    expect(banner?.textContent).toContain("Saved!");
+    expect(toast.success).toHaveBeenCalledWith("Saved!");
+    expect(container.querySelector('[data-testid="schema-config-banner"]')).toBeNull();
   });
 
   it("advisory: renders whenReady / whenNotReady from the probe verdict", async () => {

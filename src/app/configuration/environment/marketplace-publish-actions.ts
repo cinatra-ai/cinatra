@@ -52,11 +52,14 @@ function resolveInstanceToken(): string | undefined {
   return process.env.MARKETPLACE_INSTANCE_TOKEN;
 }
 
+// Codes-only flash protocol: the caller passes a target already carrying a
+// `<group>_error=env_conflict` code (mapped to a static toast on the registries
+// tab). The conflict reason is logged server-side, never reflected into the URL.
 function abortOnConflict(redirectPath: string): void {
   const conflict = detectMarketplaceEnvConflict();
   if (conflict) {
-    const encoded = encodeURIComponent(conflict.reason.slice(0, 300));
-    redirect(`${redirectPath}&env_conflict=1&detail=${encoded}`);
+    console.error("[marketplace-publish] env conflict:", conflict.reason);
+    redirect(redirectPath);
   }
 }
 
@@ -195,16 +198,16 @@ export async function requestMarketplacePublishAction(formData: FormData): Promi
       return { ok: true, namespace } as const;
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const encoded = encodeURIComponent(message.slice(0, 200));
-    redirect(`/configuration/environment?tab=registries&publish_error=submit_failed&detail=${encoded}`);
+    console.error("[marketplace-publish] submit failed:", error);
+    redirect(`/configuration/environment?tab=registries&publish_error=submit_failed`);
   }
 
   if (!outcome.ok) {
-    redirect(`/configuration/environment?tab=registries&publish_error=${outcome.code}`);
+    console.error("[marketplace-publish] submit outcome not ok:", outcome.code);
+    redirect(`/configuration/environment?tab=registries&publish_error=submit_failed`);
   }
   revalidatePath("/configuration/environment");
-  redirect(`/configuration/environment?tab=registries&publish_ok=1&namespace=${encodeURIComponent(outcome.namespace)}`);
+  redirect(`/configuration/environment?tab=registries&publish_ok=1`);
 }
 
 /**
@@ -281,13 +284,12 @@ export async function setMarketplaceProfileVisibilityAction(formData: FormData):
   try {
     await client.vendorProfileVisibilitySet({ visibility });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const encoded = encodeURIComponent(message.slice(0, 200));
-    redirect(`/configuration/environment?tab=registries&visibility_error=set_failed&detail=${encoded}`);
+    console.error("[marketplace-publish] visibility set failed:", error);
+    redirect(`/configuration/environment?tab=registries&visibility_error=set_failed`);
   }
 
   revalidatePath("/configuration/environment");
-  redirect(`/configuration/environment?tab=registries&visibility_ok=1&visibility=${visibility}`);
+  redirect(`/configuration/environment?tab=registries&visibility_ok=1`);
 }
 
 /**
@@ -373,13 +375,13 @@ export async function rotateMarketplaceRegistryTokenAction(): Promise<void> {
       return { ok: true } as const;
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const encoded = encodeURIComponent(message.slice(0, 200));
-    redirect(`/configuration/environment?tab=registries&rotate_error=rotate_failed&detail=${encoded}`);
+    console.error("[marketplace-publish] token rotate failed:", error);
+    redirect(`/configuration/environment?tab=registries&rotate_error=rotate_failed`);
   }
 
   if (!outcome.ok) {
-    redirect(`/configuration/environment?tab=registries&rotate_error=${outcome.code}`);
+    console.error("[marketplace-publish] rotate outcome not ok:", outcome.code);
+    redirect(`/configuration/environment?tab=registries&rotate_error=rotate_failed`);
   }
   revalidatePath("/configuration/environment");
   redirect("/configuration/environment?tab=registries&rotate_ok=1");

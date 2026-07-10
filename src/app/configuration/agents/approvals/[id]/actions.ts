@@ -4,7 +4,13 @@ import { redirect } from "next/navigation";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { createAgentBuilderPrimitiveHandlers } from "@cinatra-ai/agents/mcp-handlers";
 
-type DecisionResult = { ok: true } | { ok: false; error: string };
+// Codes-only flash protocol: decisions redirect with `?status=<code>` (success)
+// or `?error=<code>` (failure). The <SearchParamToast> island in the detail
+// screen maps each code to a STATIC message — the raw MCP error is logged
+// server-side, never reflected into the redirect URL.
+const APPROVAL_BASE = "/configuration/agents/approvals";
+
+type DecisionResult = { ok: true } | { ok: false; code: string };
 
 async function decide(input: {
   id: string;
@@ -14,10 +20,10 @@ async function decide(input: {
 }): Promise<DecisionResult> {
   const session = await getAuthSession();
   if (!session || !isPlatformAdmin(session)) {
-    return { ok: false, error: "Unauthorized — admin session required." };
+    return { ok: false, code: "unauthorized" };
   }
   const orgId = session.session?.activeOrganizationId ?? null;
-  if (!orgId) return { ok: false, error: "No active organization." };
+  if (!orgId) return { ok: false, code: "no-active-org" };
 
   const handlers = createAgentBuilderPrimitiveHandlers() as Record<
     string,
@@ -48,7 +54,8 @@ async function decide(input: {
   })) as { error?: string };
 
   if (result.error) {
-    return { ok: false, error: result.error };
+    console.error("[agent-approval decide] primitive returned error:", result.error);
+    return { ok: false, code: "decision-failed" };
   }
   return { ok: true };
 }
@@ -58,22 +65,20 @@ export async function approveAgentCreationRequest(formData: FormData): Promise<v
   const snapshotHash = String(formData.get("snapshotHash") ?? "");
   const result = await decide({ id, decision: "approve", expectedSnapshotHash: snapshotHash });
   if (!result.ok) {
-    redirect(`/configuration/agents/approvals/${id}?error=${encodeURIComponent(result.error)}`);
+    redirect(`${APPROVAL_BASE}/${id}?error=${result.code}`);
   }
-  redirect(`/configuration/agents/approvals/${id}?status=approved`);
+  redirect(`${APPROVAL_BASE}/${id}?status=approved`);
 }
 
 export async function retryPublishAgentCreationRequest(formData: FormData): Promise<void> {
   const id = String(formData.get("id") ?? "");
   const session = await getAuthSession();
   if (!session || !isPlatformAdmin(session)) {
-    redirect(
-      `/configuration/agents/approvals/${id}?error=${encodeURIComponent("Unauthorized — admin session required.")}`,
-    );
+    redirect(`${APPROVAL_BASE}/${id}?error=unauthorized`);
   }
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
-    redirect(`/configuration/agents/approvals/${id}?error=${encodeURIComponent("No active organization.")}`);
+    redirect(`${APPROVAL_BASE}/${id}?error=no-active-org`);
   }
   const handlers = createAgentBuilderPrimitiveHandlers() as Record<
     string,
@@ -92,9 +97,10 @@ export async function retryPublishAgentCreationRequest(formData: FormData): Prom
     mode: "deterministic",
   })) as { error?: string };
   if (result.error) {
-    redirect(`/configuration/agents/approvals/${id}?error=${encodeURIComponent(result.error)}`);
+    console.error("[agent-approval retry-publish] primitive returned error:", result.error);
+    redirect(`${APPROVAL_BASE}/${id}?error=publish-failed`);
   }
-  redirect(`/configuration/agents/approvals/${id}?status=published`);
+  redirect(`${APPROVAL_BASE}/${id}?status=published`);
 }
 
 export async function rejectAgentCreationRequest(formData: FormData): Promise<void> {
@@ -102,9 +108,7 @@ export async function rejectAgentCreationRequest(formData: FormData): Promise<vo
   const snapshotHash = String(formData.get("snapshotHash") ?? "");
   const reason = String(formData.get("reason") ?? "").trim();
   if (!reason) {
-    redirect(
-      `/configuration/agents/approvals/${id}?error=${encodeURIComponent("A rejection reason is required.")}`,
-    );
+    redirect(`${APPROVAL_BASE}/${id}?error=reason-required`);
   }
   const result = await decide({
     id,
@@ -113,7 +117,7 @@ export async function rejectAgentCreationRequest(formData: FormData): Promise<vo
     reason,
   });
   if (!result.ok) {
-    redirect(`/configuration/agents/approvals/${id}?error=${encodeURIComponent(result.error)}`);
+    redirect(`${APPROVAL_BASE}/${id}?error=${result.code}`);
   }
-  redirect(`/configuration/agents/approvals/${id}?status=rejected`);
+  redirect(`${APPROVAL_BASE}/${id}?status=rejected`);
 }
