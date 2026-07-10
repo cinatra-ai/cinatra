@@ -352,4 +352,39 @@ describe("InstalledExtensionCard — post-install needs-review strip", () => {
     // passing it — a non-affected card is untouched.
     expect(withProp).toBe(withoutProp);
   });
+
+  // ── main-parity guard (owner review 2026-07-10, cinatra#1234) ─────────────
+  // The §III ACTIVE and ARCHIVED cards are already fixed per the design spec
+  // (#1273). cinatra#1057 must ADD ONLY the needs-review state — it may NOT
+  // restructure the active/archived card. These pins fail loudly if the layout
+  // row is ever moved off the card element (a wrapper regression) for those
+  // two states.
+  const ROW_ON_CARD =
+    "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch";
+  const CARD_AS_COLUMN =
+    "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm\"";
+  const INNER_ROW_WRAPPER = "flex flex-col md:flex-row md:items-stretch";
+
+  it("active card carries the flex row on the card element itself — no layout wrapper (main-parity)", () => {
+    const html = render(false);
+    expect(html).toContain(ROW_ON_CARD);
+    expect(html).not.toContain(INNER_ROW_WRAPPER);
+    expect(html).not.toContain("data-needs-review");
+  });
+
+  it("archived card is likewise a single flex row on the card element (main-parity)", () => {
+    const html = render(true);
+    expect(html).toContain(ROW_ON_CARD);
+    expect(html).not.toContain(INNER_ROW_WRAPPER);
+  });
+
+  it("needs-review card (and ONLY it) moves the row into an inner wrapper, card element becomes a column", () => {
+    const html = renderNeedsReview(NEEDS);
+    // The card element is a column (no row utilities on it)…
+    expect(html).toContain(CARD_AS_COLUMN);
+    expect(html).not.toContain(ROW_ON_CARD);
+    // …with the three panels kept in their own inner row so the strip can span
+    // the full width beneath them.
+    expect(html).toContain(INNER_ROW_WRAPPER);
+  });
 });

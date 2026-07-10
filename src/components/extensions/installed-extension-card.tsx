@@ -9,10 +9,6 @@ import {
   ExtensionCardListingBanner,
   type ExtensionAccent,
 } from "@/components/extension-card";
-// 0.5.0 §III moved the "{Kind} by {Vendor}" byline into the coloured banner
-// panel (recoloured by the banner's own text-current), so this card no longer
-// derives an accent bg for a middle-panel byline — the direct ACCENT_PALETTE
-// import is dropped (the banner still applies it internally).
 import type { ConfigurationNeed } from "@/lib/extension-dependency-ux";
 
 /**
@@ -228,118 +224,149 @@ export function InstalledExtensionCard({
   // lifecycle only (`data-needs-review` marks the distinct cannot-run state).
   const needsReview = (configurationNeeds?.length ?? 0) > 0;
   const greyed = archived || needsReview;
+
+  // The three §VI panels — LEFT mark, MIDDLE body, RIGHT actions — identical
+  // for every state. Only their muted flag is driven by `greyed` (archived OR
+  // needs-review); for an active/archived card `greyed === archived`, so these
+  // render exactly as merged in the §III layout (#1273).
+  const panels = (
+    <>
+      {/* LEFT — the ListingCard mark at listing-card width, carrying the
+          "{Kind} by {Vendor}" byline beneath the name (design spec 0.5.0 §III:
+          byline moved into the coloured panel). The byline inherits the banner
+          ground colour via `text-current` — white on an active card, grey on
+          the muted variant — so it recolours to match the name. A greyed card
+          (archived OR needs-review, cinatra#1057) renders the muted mark, which
+          also greys the byline for free. */}
+      <ExtensionCardListingBanner
+        name={name}
+        accentColor={accentColor}
+        emblem={emblem}
+        iconUrl={iconUrl}
+        muted={greyed}
+        byline={
+          <div
+            data-slot="installed-extension-byline"
+            className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
+          >
+            {kindIcon && (
+              <span aria-hidden className="inline-flex shrink-0 text-current">
+                {kindIcon}
+              </span>
+            )}
+            <span className="overflow-hidden text-ellipsis">
+              <span className="font-medium">{kindLabel}</span>
+              {vendor && (
+                <>
+                  {" by "}
+                  <span className="font-medium">{vendor}</span>
+                </>
+              )}
+            </span>
+          </div>
+        }
+        className="p-4 md:w-[340px] md:shrink-0"
+        detailHref={accentDetailHref}
+        onActivate={onAccentActivate}
+        activateLabel={accentLabel}
+        inert={accentInert}
+      />
+
+      {/* MIDDLE — description, version + status (the byline moved into the
+          coloured panel above in 0.5.0 §III). */}
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
+        {description && (
+          <p
+            className={cn(
+              "text-sm leading-relaxed text-muted-foreground",
+              descriptionLineClamp === 2 ? "line-clamp-2" : "line-clamp-3",
+            )}
+          >
+            {description}
+          </p>
+        )}
+        {/* §VII "Agent card (All Agents)" (cinatra#1007) passes neither version
+            nor status → the whole spec line is omitted (no empty middle-panel
+            row). §VI callers always pass at least the lifecycle indicator, so
+            the row renders exactly as before. */}
+        {(version || status) && (
+          <div
+            data-slot="installed-extension-spec-line"
+            className={cn(
+              // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
+              "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
+              greyed && "opacity-70",
+            )}
+          >
+            {version && (
+              <span className="font-mono text-xs text-muted-foreground">{version}</span>
+            )}
+            {status}
+          </div>
+        )}
+      </div>
+
+      {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly
+          Settings + More details, naturally sized and CENTERED (not
+          stretched full-width) — `align-items: center` on the panel, no
+          per-button width utility. A greyed card mutes the whole panel
+          (cinatra#957) while both actions stay operable. */}
+      {actions && (
+        <div
+          className={cn(
+            // gap-[9px]: the drawing's exact 9px actions-panel gap (a layout
+            // arbitrary, not a color/type one — cinatra#803 convention).
+            "flex flex-col items-center justify-center gap-[9px] border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
+            greyed && "opacity-70",
+          )}
+        >
+          {actions}
+        </div>
+      )}
+    </>
+  );
+
+  // ACTIVE / ARCHIVED (no needs-review): byte-identical to origin/main — the
+  // three panels ARE the card, in a single flex row. cinatra#1057 must NOT
+  // touch this layout (owner review 2026-07-10): the §III active/archived card
+  // is already fixed per the design spec (#1273), so it renders exactly as
+  // before and adds ONLY the needs-review branch below.
+  if (!needsReview) {
+    return (
+      <div
+        data-slot="installed-extension-card"
+        data-accent={accentColor}
+        data-archived={archived ? "" : undefined}
+        className={cn(
+          "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch",
+          className,
+        )}
+      >
+        {panels}
+      </div>
+    );
+  }
+
+  // NEEDS-REVIEW (cinatra#1057): the SAME §III card in the greyed archived
+  // treatment, but the outer card becomes a COLUMN so a full-width needs-review
+  // strip can attach seamlessly to the bottom (design spec §VI). The three
+  // panels keep their own row via an inner wrapper — identical layout to the
+  // active/archived card above. `data-needs-review` marks the distinct
+  // cannot-run state; `data-archived` still reflects true archived lifecycle.
   return (
     <div
       data-slot="installed-extension-card"
       data-accent={accentColor}
       data-archived={archived ? "" : undefined}
-      data-needs-review={needsReview ? "" : undefined}
+      data-needs-review=""
       className={cn(
         "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm",
         className,
       )}
     >
-      {/* The three §VI panels sit in a row; the outer card is a COLUMN so the
-          post-install needs-review strip (cinatra#1057) can span the full card
-          width beneath them. */}
-      <div className="flex flex-col md:flex-row md:items-stretch">
-        {/* LEFT — the ListingCard mark at listing-card width, carrying the
-            "{Kind} by {Vendor}" byline beneath the name (design spec 0.5.0 §III:
-            byline moved into the coloured panel). The byline inherits the banner
-            ground colour via `text-current` — white on an active card, grey on
-            the muted variant — so it recolours to match the name. A greyed card
-            (archived OR needs-review, cinatra#1057) renders the muted mark, which
-            also greys the byline for free. */}
-        <ExtensionCardListingBanner
-          name={name}
-          accentColor={accentColor}
-          emblem={emblem}
-          iconUrl={iconUrl}
-          muted={greyed}
-          byline={
-            <div
-              data-slot="installed-extension-byline"
-              className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
-            >
-              {kindIcon && (
-                <span aria-hidden className="inline-flex shrink-0 text-current">
-                  {kindIcon}
-                </span>
-              )}
-              <span className="overflow-hidden text-ellipsis">
-                <span className="font-medium">{kindLabel}</span>
-                {vendor && (
-                  <>
-                    {" by "}
-                    <span className="font-medium">{vendor}</span>
-                  </>
-                )}
-              </span>
-            </div>
-          }
-          className="p-4 md:w-[340px] md:shrink-0"
-          detailHref={accentDetailHref}
-          onActivate={onAccentActivate}
-          activateLabel={accentLabel}
-          inert={accentInert}
-        />
-
-        {/* MIDDLE — description, version + status (the byline moved into the
-            coloured panel above in 0.5.0 §III). */}
-        <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
-          {description && (
-            <p
-              className={cn(
-                "text-sm leading-relaxed text-muted-foreground",
-                descriptionLineClamp === 2 ? "line-clamp-2" : "line-clamp-3",
-              )}
-            >
-              {description}
-            </p>
-          )}
-          {/* §VII "Agent card (All Agents)" (cinatra#1007) passes neither version
-              nor status → the whole spec line is omitted (no empty middle-panel
-              row). §VI callers always pass at least the lifecycle indicator, so
-              the row renders exactly as before. */}
-          {(version || status) && (
-            <div
-              data-slot="installed-extension-spec-line"
-              className={cn(
-                // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
-                "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
-                greyed && "opacity-70",
-              )}
-            >
-              {version && (
-                <span className="font-mono text-xs text-muted-foreground">{version}</span>
-              )}
-              {status}
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly
-            Settings + More details, naturally sized and CENTERED (not
-            stretched full-width) — `align-items: center` on the panel, no
-            per-button width utility. A greyed card mutes the whole panel
-            (cinatra#957) while both actions stay operable. */}
-        {actions && (
-          <div
-            className={cn(
-              // gap-[9px]: the drawing's exact 9px actions-panel gap (a layout
-              // arbitrary, not a color/type one — cinatra#803 convention).
-              "flex flex-col items-center justify-center gap-[9px] border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
-              greyed && "opacity-70",
-            )}
-          >
-            {actions}
-          </div>
-        )}
-      </div>
-
-      {/* BOTTOM — post-install needs-review strip (cinatra#1057). Rendered only
-          while the affected agent has unconfigured required connectors. */}
-      {needsReview && <NeedsReviewStrip connectors={configurationNeeds!} />}
+      <div className="flex flex-col md:flex-row md:items-stretch">{panels}</div>
+      {/* BOTTOM — post-install needs-review strip (cinatra#1057). */}
+      <NeedsReviewStrip connectors={configurationNeeds!} />
     </div>
   );
 }
