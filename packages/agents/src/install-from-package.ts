@@ -126,6 +126,16 @@ export type InstallAgentFromPackageResult = {
   } | null;
   /** Explanation when materialize was skipped. */
   materializeSkippedReason?: string;
+  /**
+   * ADVISORY (cinatra#1059): the agent's declared `cinatra.produces` artifact
+   * extensions that are NOT installed+governing for the installing org scope.
+   * The `produces` edge is a SOFT cross-kind edge — this is purely
+   * informational (NON-BLOCKING; the run degrades per-output if these stay
+   * uninstalled). Empty when every produced-artifact extension is present (or
+   * the agent declares none). The single authority the follow-on pre-install
+   * "Produces" badge / post-install needs-attention UI consumes.
+   */
+  missingProducedArtifacts?: string[];
 };
 
 export async function installAgentFromPackage(
@@ -401,6 +411,32 @@ async function _installAgentFromPackageImpl(
       ),
     };
 
+    // PRODUCED-ARTIFACT ADVISORY (cinatra#1059): the agent's declared
+    // `cinatra.produces` artifact extensions that are NOT installed+governing
+    // for the installing org scope. `produces` is a SOFT cross-kind edge —
+    // this is NON-BLOCKING (log-continue, the canonical artifact
+    // optional-missing behavior); the run degrades per-output (visible
+    // materialization failure) if these stay uninstalled. Computed once in the
+    // shared window so both finalize branches return it consistently.
+    const missingProducedArtifacts = await computeProducedArtifactAdvisory({
+      agentPackageName: extracted.packageName,
+      manifest: extracted.manifest,
+      // Effective INSTALLING-org scope for the artifact-governance check:
+      // `orgId` on direct/seed callers; the dispatcher-routed install (the
+      // saga-owned fan-out) passes only `anchorOrgId` (== the actor's org, the
+      // scope its canonical rows live at) and omits `orgId`, so fall back to it
+      // — else an artifact active only for that org (no ambient null-org row)
+      // would be falsely reported missing (codex).
+      orgId: input.orgId ?? input.anchorOrgId ?? null,
+    });
+    if (missingProducedArtifacts.length > 0) {
+      console.warn(
+        `[installAgentFromPackage] ${extracted.packageName} declares produces of artifact ` +
+          `extension(s) not installed for this org — typed materialization will degrade ` +
+          `until installed: ${missingProducedArtifacts.join(", ")}`,
+      );
+    }
+
     // Canonical agent type for the template row. Sourced from the OAS-compile
     // result (compiled.type), falling back to manifest.cinatra.type, with the
     // same alias canonicalization the row enum requires — all done inside
@@ -522,6 +558,7 @@ async function _installAgentFromPackageImpl(
         packageName: extracted.packageName,
         packageVersion: extracted.packageVersion,
         agentDependencies,
+        missingProducedArtifacts,
         materialized: materializeResult?.materialized
           ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
           : null,
@@ -639,6 +676,7 @@ async function _installAgentFromPackageImpl(
       packageName: extracted.packageName,
       packageVersion: extracted.packageVersion,
       agentDependencies,
+      missingProducedArtifacts,
       materialized: materializeResult?.materialized
         ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
         : null,
@@ -659,6 +697,47 @@ async function _installAgentFromPackageImpl(
     await cleanupExtractedAgentPackage(extracted.tempDir);
   }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Produced-artifact advisory helper (cinatra#1059)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the agent's declared `cinatra.produces` artifact extensions that are
+ * NOT installed+governing for the installing org scope. SOFT / best-effort:
+ * the `produces` edge is advisory by construction, so a read failure degrades
+ * to "no advisory" and NEVER fails the install. First production caller of the
+ * cross-kind dependency graph (`resolveInstall`, SOFT mode).
+ *
+ * Dynamic imports keep the @cinatra-ai/agents → @cinatra-ai/extensions edge out
+ * of the static graph (same posture as the manifest-dependencies import above).
+ */
+async function computeProducedArtifactAdvisory(input: {
+  agentPackageName: string;
+  manifest: unknown;
+  orgId: string | null | undefined;
+}): Promise<string[]> {
+  try {
+    const [{ readAgentProducesFromPackageManifest }, advisory, { readInstalledExtensionsByPackageNames }] =
+      await Promise.all([
+        import("@cinatra-ai/extensions/agent-produces-reader"),
+        import("@cinatra-ai/extensions/produced-artifact-advisory"),
+        import("@cinatra-ai/extensions/canonical-store"),
+      ]);
+    const produces = readAgentProducesFromPackageManifest(input.manifest).map((r) => r.extension);
+    if (produces.length === 0) return [];
+    const rowsByPkg = await readInstalledExtensionsByPackageNames(produces);
+    const rows = [...rowsByPkg.values()].flat();
+    const installed = advisory.governingInstalledArtifactSet(rows, input.orgId ?? null);
+    return advisory.computeMissingProducedArtifacts(input.agentPackageName, produces, installed);
+  } catch (err) {
+    console.warn(
+      `[installAgentFromPackage] produced-artifact advisory skipped for ${input.agentPackageName}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------

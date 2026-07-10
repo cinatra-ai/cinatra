@@ -18,6 +18,18 @@ import "server-only";
 // Validation posture is **registry-aware SOFT**: a declaration
 // may reference a not-yet-installed extension without failing install
 // (seed packs land later). The soft→STRICT flip is deferred.
+//
+// RATIFIED (cinatra#1059): for the agent→artifact `produces` edge the flip is
+// NOT deferred pending work — it is DECIDED to stay SOFT (advisory). `produces`
+// is optional-by-construction: a run completes and is useful without the
+// artifact extension; only typed materialization degrades (see
+// `src/lib/artifacts/run-artifact-materializer.ts`). Its FIRST production
+// consumer is `produced-artifact-advisory.ts` (a non-blocking install-time
+// advisory), NOT an install-blocking or auto-install caller. The reverse
+// artifact→agent `agentDependencies` field (the semantic-manifest one, NOT the
+// deprecated legacy agent-package `cinatra.agentDependencies` map) is KEPT as
+// the dormant reverse advisory edge feeding this same graph.
+//
 // This module exposes `mode` so the flip is a one-line caller
 // change, never a rewrite.
 // ---------------------------------------------------------------------------
