@@ -7,11 +7,15 @@
 // payload on THE one wire, so `/chat`, the generic embedded view and every CMS
 // iframe draw it through the S3 shared renderer identically.
 //
-// SCOPE (this slice): the schema + typed DATA_PART + a display renderer. The
-// no-reload APPLY half — a surface-registered apply capability that writes the
-// change through the CMS MCP integration under OBO — is OUT of this slice
-// (gated on #1214 + #1037 P4.1 + the per-surface capability/token/OBO model).
-// This view is therefore DISPLAY-ONLY here; it carries no apply-intent wiring.
+// APPLY SEMANTICS (Option A — owner decision 2026-07-10, recorded on #1220):
+// the agents already save the change as a DRAFT during the run, through the
+// CMS MCP integration under OBO (#1214) — the card appears after the draft
+// exists. Accepting performs NO server write: it refreshes the editor in
+// place to the saved draft. This schema carries the correlation ids
+// (`proposalId` / `changeSetId`) linking the card to that draft; the
+// editor-patch consumer (the refresh executor in the CMS widgets) is S5
+// (#1221). The view stays DISPLAY-ONLY on this surface — no apply-intent
+// wiring here.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -39,6 +43,15 @@ export const contentChangeProposalViewSchema = z.object({
   postId: z.string().max(200).optional(),
   /** Drupal node id (the widget's `nodeId`). */
   nodeId: z.string().max(200).optional(),
+  /** Correlation id the producing agent mints for THIS proposal — unique
+   * within the conversation. Ties the card (and the S5 refresh intent) back
+   * to the already-written draft without re-deriving it (Option A). Opaque;
+   * correlation/display only — never an authorization token. */
+  proposalId: z.string().min(1).max(200).optional(),
+  /** Identifier of the already-saved draft/revision this proposal corresponds
+   * to (Option A: the agent wrote the draft during the run), when the write
+   * surface exposes one (e.g. a CMS revision id). Opaque; correlation only. */
+  changeSetId: z.string().min(1).max(200).optional(),
   /** True when the edit is rich content with no field-level diff available
    * (the widget's `fields.length === 0` branch). */
   rich: z.boolean(),
