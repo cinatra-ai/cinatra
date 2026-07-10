@@ -93,8 +93,8 @@ export function ContentChangeProposalCard({
             draft saved
           </span>
           <span className="text-xs text-muted-foreground">
-            Already saved as a draft — applying refreshes the editor to it. The
-            live page is unchanged until you publish.
+            Already saved as a draft — applying refreshes the editor to it. No
+            additional write is performed.
           </span>
         </div>
       )}
