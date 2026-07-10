@@ -33,6 +33,12 @@ const DRUPAL_NODE_TYPES = ["article", "page"];
 const WORDPRESS_POST_TYPES = ["post", "page"];
 const TWENTY_VIEW_OBJECT_TYPES = ["company", "person", "opportunity"];
 const TWENTY_VIEW_TYPES = ["table", "kanban"];
+// Plane work-item priorities are a fixed enum on the CE API; state NAMES are
+// workspace-configurable so we validate the enum only and keep `state` a free
+// label. A Plane project `identifier` is Plane's short uppercase code (e.g.
+// `DEMO`) — 1..12 uppercase letters/digits, matching the CE constraint.
+const PLANE_PRIORITIES = ["urgent", "high", "medium", "low", "none"];
+const PLANE_IDENTIFIER_RE = /^[A-Z0-9]{1,12}$/;
 
 /** Stable SHA-256 over a value with object keys sorted (order-independent). */
 export function checksumOf(value) {
@@ -164,6 +170,42 @@ export function validateDevContentManifest(manifest) {
     if (v.type && !TWENTY_VIEW_TYPES.includes(v.type)) {
       errors.push(`${where}: type must be one of ${TWENTY_VIEW_TYPES.join("|")}`);
     }
+  }
+
+  // ---- Plane ----
+  // Plane has NO headless PAT mint and NO create_project MCP tool (only
+  // list_projects / create_work_item / update_work_item / ...), so the seeder
+  // targets an EXISTING project (resolved by identifier/name) and seeds WORK
+  // ITEMS into it — it never creates the project. The `project` block below is
+  // the EXPECTED target (a resolution hint), not something the seeder mints.
+  const plane = manifest.plane ?? {};
+  if (plane.project !== undefined) {
+    const pj = plane.project ?? {};
+    const where = "plane.project";
+    pushUnique(ids, pj.fixtureId, errors, where);
+    if (!pj.name || typeof pj.name !== "string") errors.push(`${where}: missing name`);
+    if (!pj.identifier || typeof pj.identifier !== "string" || !PLANE_IDENTIFIER_RE.test(pj.identifier)) {
+      errors.push(`${where}: identifier must be 1-12 uppercase letters/digits`);
+    }
+    assertGeneric(pj.name, errors, where);
+    assertGeneric(pj.description, errors, where);
+  }
+  for (const [i, wi] of (plane.workItems ?? []).entries()) {
+    const where = `plane.workItems[${i}]`;
+    pushUnique(ids, wi.fixtureId, errors, where);
+    if (!wi.name || typeof wi.name !== "string") errors.push(`${where}: missing name`);
+    if (wi.priority && !PLANE_PRIORITIES.includes(wi.priority)) {
+      errors.push(`${where}: priority must be one of ${PLANE_PRIORITIES.join("|")}`);
+    }
+    if (wi.state !== undefined && (typeof wi.state !== "string" || !wi.state.trim())) {
+      errors.push(`${where}: state, when present, must be a non-empty string`);
+    }
+    assertGeneric(wi.name, errors, where);
+    assertGeneric(wi.description, errors, where);
+  }
+  // Work items are meaningless without a target project to resolve them into.
+  if ((plane.workItems ?? []).length > 0 && plane.project === undefined) {
+    errors.push("plane.workItems present but plane.project (the resolution target) is missing");
   }
 
   if (errors.length > 0) {

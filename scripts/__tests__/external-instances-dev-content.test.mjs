@@ -22,6 +22,31 @@ describe("external-instances dev-content manifest", () => {
     expect(m.twenty.views.length).toBeGreaterThan(0);
   });
 
+  it("ships a Plane project target + work items (identifier is a valid short code)", () => {
+    const m = base();
+    expect(m.plane.project.identifier).toMatch(/^[A-Z0-9]{1,12}$/);
+    expect(m.plane.project.fixtureId).toBeTruthy();
+    expect(m.plane.workItems.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a Plane work item with an invalid priority", () => {
+    const m = base();
+    m.plane.workItems[0].priority = "critical";
+    expect(() => validateDevContentManifest(m)).toThrow(/priority must be one of/);
+  });
+
+  it("rejects a Plane project identifier that is not a short uppercase code", () => {
+    const m = base();
+    m.plane.project.identifier = "demo project";
+    expect(() => validateDevContentManifest(m)).toThrow(/identifier must be/);
+  });
+
+  it("rejects Plane work items without a resolution target project", () => {
+    const m = base();
+    delete m.plane.project;
+    expect(() => validateDevContentManifest(m)).toThrow(/plane\.project .* is missing/);
+  });
+
   it("declares a PRECISE one-shot OpenCloud cleanup (exact titles, not a bare-word prefix)", () => {
     const m = base();
     const prefixes = m.drupal.legacyCleanup.titlePrefixes;
