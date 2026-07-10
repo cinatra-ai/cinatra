@@ -5,7 +5,7 @@ import { Check, CircleCheck, CircleHelp, Star, TriangleAlert } from "lucide-reac
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
-import { ACCENT_PALETTE, type ExtensionAccent } from "@/lib/extension-accent";
+import { type ExtensionAccent } from "@/lib/extension-accent";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { safeHttpUrl } from "@/lib/marketplace-detail-view";
 import { cn } from "@/lib/utils";
@@ -15,15 +15,14 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 // ---------------------------------------------------------------------------
 // MarketplaceListingCard — the §IV "Extensions" ListingCard (cinatra#988).
 //
-// The full card anatomy of the pinned design spec §IV (docs@b35fdf4), in spec
-// order:
-//   1. Banner: ONLY the 46×46 icon tile + the name (line-clamp 3). Kind and
-//      commerce are NOT banner badges — kind lives in the publisher line,
-//      commerce in the price row.
-//   2. Body top block (min-height 86px): the 3-line-clamped description, then
-//      the "{Type} by {Vendor}" publisher line — 13px kind emblem in the
-//      accent colour, type in ink, vendor as a link in the action colour, and
-//      the circled-check VERIFIED mark when the catalog carried a vendor.
+// The full card anatomy of the design spec 0.5.0 §I, in spec order:
+//   1. Banner: the 46×46 icon tile beside a name (line-clamp 2) + the "{Kind}
+//      by {Vendor}" byline directly beneath the name, ALL on the coloured
+//      ground — the byline recoloured white to match the name (0.5.0 moved it
+//      here off the body). The 13px kind emblem, kind label, vendor link and
+//      circled-check VERIFIED mark (only when the catalog carried a vendor) all
+//      read white. Commerce lives in the price row, not a banner badge.
+//   2. Body top block (min-height 62px): the 3-line-clamped description only.
 //   3. Centred column: the price row ("Free" / "Free, Open Source" / price,
 //      Archivo 700 16px ink), the install CTA, the "More details" link.
 //   4. Footer meta, two columns: LEFT stars + average + (count) with the
@@ -128,55 +127,56 @@ function RatingRow({
 }
 
 /**
- * The "{Type} by {Vendor}" publisher line (spec §IV L468): 13px kind emblem in
- * the accent colour, the type label in ink, the vendor as a link in the action
- * colour (scheme-guarded — a non-http(s) store URL degrades to plain text),
- * and the circled-check VERIFIED mark for a catalog-carried vendor.
+ * The "{Kind} by {Vendor}" publisher line (design spec 0.5.0 §I): rendered
+ * INSIDE the coloured banner, directly beneath the name (0.5.0 relocated it
+ * off the body block). Everything reads WHITE on the category ground — the
+ * kind emblem, the kind label, the vendor and the circled-check VERIFIED mark
+ * all inherit the banner's `currentColor` (the banner sets the white `fg`), so
+ * the byline recolours to match the name. The vendor stays a link out to its
+ * marketplace store (scheme-guarded — a non-http(s) store URL degrades to plain
+ * text); the VERIFIED mark shows only for a catalog-carried vendor (a derived
+ * package-scope namespace is not a verified vendor identity).
  */
-function PublisherLine({
-  card,
-  accentColor,
-}: {
-  card: MarketplaceCardData;
-  accentColor: ExtensionAccent;
-}) {
-  const { bg } = ACCENT_PALETTE[accentColor];
+function PublisherLine({ card }: { card: MarketplaceCardData }) {
   const vendorName = card.vendor?.name ?? scopeFromPackageName(card.packageName);
   const storeUrl = safeHttpUrl(card.vendor?.storeUrl);
   return (
     <div
       data-slot="extension-card-publisher"
-      className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-xs text-muted-foreground"
+      // On the coloured banner: `text-current` so kind/label/vendor/check all
+      // inherit the banner's white (or archived-muted) ground colour. `text-xs`
+      // is the app's sanctioned byline size (named-token/standard-size gate).
+      className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
     >
-      <span className="shrink-0" style={{ color: bg }} aria-hidden="true">
+      <span className="shrink-0 text-current" aria-hidden="true">
         {extensionKindEmblem(card.kindSlug, "size-[13px]")}
       </span>
       <span className="overflow-hidden text-ellipsis">
-        <span className="text-foreground">{card.kindLabel}</span>
+        <span>{card.kindLabel}</span>
         {" by "}
         {storeUrl ? (
           <Link
             href={storeUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="font-semibold text-primary hover:underline"
+            className="font-semibold text-current hover:underline"
           >
             {vendorName}
           </Link>
         ) : (
-          <span className="font-semibold text-primary">{vendorName}</span>
+          <span className="font-semibold text-current">{vendorName}</span>
         )}
       </span>
       {card.vendor && (
-        // The circled-check VERIFIED mark — the pinned spec drawing (§IV L468)
-        // renders the check alone, with no visible "VERIFIED" copy; the
-        // accessible name + native tooltip carry the meaning.
+        // The circled-check VERIFIED mark — the spec drawing renders the check
+        // alone, with no visible "VERIFIED" copy; the accessible name + native
+        // tooltip carry the meaning. White on the banner ground (text-current).
         <span
           data-slot="extension-card-verified"
           className="inline-flex shrink-0"
           title="Verified vendor"
         >
-          <CircleCheck aria-label="Verified vendor" className="size-3 text-primary" />
+          <CircleCheck aria-label="Verified vendor" className="size-3 text-current" />
         </span>
       )}
     </div>
@@ -270,23 +270,25 @@ export function MarketplaceListingCard({
         className,
       )}
     >
-      {/* §IV banner: ONLY the icon tile + name — no badge overlay. */}
+      {/* 0.5.0 §I banner: icon tile + name + the "{Kind} by {Vendor}" byline
+          beneath the name, all on the coloured ground (byline recoloured white). */}
       <ExtensionCardListingBanner
         name={card.displayName}
         accentColor={accentColor}
         emblem={extensionKindEmblem(card.kindSlug)}
         iconUrl={resolveCardIconUrl(card)}
+        byline={<PublisherLine card={card} />}
       />
       <div className="flex flex-1 flex-col px-[14px] py-3">
-        {/* Description block — min-height 86px so card bodies align across the
-            row even when descriptions differ (spec §IV L466). */}
-        <div className="min-h-[86px]">
+        {/* Description block — reserves 62px (0.5.0 §I: was 86) so card bodies
+            align across the row even when descriptions differ; the byline no
+            longer lives here (it moved into the banner). */}
+        <div className="min-h-[62px]">
           {card.description && (
-            <p className="mb-2 line-clamp-3 text-sm leading-normal text-muted-foreground">
+            <p className="line-clamp-3 text-sm leading-normal text-muted-foreground">
               {card.description}
             </p>
           )}
-          <PublisherLine card={card} accentColor={accentColor} />
         </div>
         {/* Centred price + CTA + details column (spec §IV L470–474). */}
         <div className="mt-3 flex flex-col items-center gap-2">

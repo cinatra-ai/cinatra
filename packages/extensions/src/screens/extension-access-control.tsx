@@ -27,16 +27,20 @@ export function ExtensionAccessControl({
   scopes,
   save,
 }: {
-  initialValue: string;
+  // Multi-scope W3: the full token array (non-empty). The single-select shape
+  // is retired here — the extension access picker is a grant surface.
+  initialValue: string[];
   scopes: AvailableScopes;
-  /** Bound server action: persists the picked visibility; returns the outcome. */
-  save: (value: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Bound server action: persists the picked visibility array; returns the outcome. */
+  save: (value: string[]) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const router = useRouter();
-  const [value, setValue] = useState(initialValue);
+  const [value, setValue] = useState<string[]>(initialValue);
   const [pending, startSave] = useTransition();
   const [status, setStatus] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const dirty = value !== initialValue;
+  // Order-insensitive dirty check (the normalized selection preserves
+  // first-seen order, so a plain join is a stable signature here).
+  const dirty = value.join(" ") !== initialValue.join(" ");
 
   return (
     <div className="flex flex-col gap-2">
@@ -44,6 +48,7 @@ export function ExtensionAccessControl({
         Who can access this extension?
       </label>
       <AccessComboboxHierarchical
+        multiple
         id="extension-access-picker"
         value={value}
         onChange={(next) => {

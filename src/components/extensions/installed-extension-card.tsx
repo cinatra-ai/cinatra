@@ -8,7 +8,6 @@ import {
   ExtensionCardListingBanner,
   type ExtensionAccent,
 } from "@/components/extension-card";
-import { ACCENT_PALETTE } from "@/lib/extension-accent";
 
 /**
  * InstalledExtensionCard — the design system's "Installed extensions" card
@@ -16,10 +15,11 @@ import { ACCENT_PALETTE } from "@/lib/extension-accent";
  * card per installed extension, split three ways.
  *
  *   1. LEFT — the ListingCard mark (46px icon tile + italic display name on
- *      the extension's accent ground), reused verbatim from
+ *      the extension's accent ground) with the "{Kind} by {Vendor}" byline
+ *      beneath the name (design spec 0.5.0 §III moved the byline into this
+ *      coloured panel, recoloured white/grey to match the name), reused from
  *      `ExtensionCardListingBanner` at listing-card width (340px).
- *   2. MIDDLE — the "{Kind} by {Vendor}" byline (small kind glyph tinted with
- *      the accent), the description, then the mono version with the lifecycle
+ *   2. MIDDLE — the description, then the mono version with the lifecycle
  *      status indicator beside it.
  *   3. RIGHT — a hairline-divided actions panel carrying EXACTLY the §VI
  *      drawing's two actions — Settings (primary, only where a configuration
@@ -41,7 +41,7 @@ export type InstalledExtensionCardProps = {
   /** Kind (or vendor-brand) emblem for the icon tile; `iconUrl` wins when set. */
   emblem: ReactNode;
   iconUrl?: string | null;
-  /** Small kind glyph for the byline (tinted with the accent color). */
+  /** Small kind glyph for the byline (white on the coloured banner ground). */
   kindIcon?: ReactNode;
   kindLabel: string;
   vendor?: string | null;
@@ -154,7 +154,6 @@ export function InstalledExtensionCard({
   accentLabel,
   accentInert = false,
 }: InstalledExtensionCardProps) {
-  const { bg } = ACCENT_PALETTE[accentColor];
   return (
     <div
       data-slot="installed-extension-card"
@@ -165,14 +164,38 @@ export function InstalledExtensionCard({
         className,
       )}
     >
-      {/* LEFT — the ListingCard mark at listing-card width; archived cards
-          render the muted (light-grey) variant of the mark. */}
+      {/* LEFT — the ListingCard mark at listing-card width, carrying the
+          "{Kind} by {Vendor}" byline beneath the name (design spec 0.5.0 §III:
+          byline moved into the coloured panel). The byline inherits the banner
+          ground colour via `text-current` — white on an active card, grey on
+          the muted (archived) variant — so it recolours to match the name. */}
       <ExtensionCardListingBanner
         name={name}
         accentColor={accentColor}
         emblem={emblem}
         iconUrl={iconUrl}
         muted={archived}
+        byline={
+          <div
+            data-slot="installed-extension-byline"
+            className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
+          >
+            {kindIcon && (
+              <span aria-hidden className="inline-flex shrink-0 text-current">
+                {kindIcon}
+              </span>
+            )}
+            <span className="overflow-hidden text-ellipsis">
+              <span className="font-medium">{kindLabel}</span>
+              {vendor && (
+                <>
+                  {" by "}
+                  <span className="font-medium">{vendor}</span>
+                </>
+              )}
+            </span>
+          </div>
+        }
         className="p-4 md:w-[340px] md:shrink-0"
         detailHref={accentDetailHref}
         onActivate={onAccentActivate}
@@ -180,42 +203,9 @@ export function InstalledExtensionCard({
         inert={accentInert}
       />
 
-      {/* MIDDLE — byline, description, version + status. */}
+      {/* MIDDLE — description, version + status (the byline moved into the
+          coloured panel above in 0.5.0 §III). */}
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {kindIcon && (
-            <span
-              aria-hidden
-              className={cn("inline-flex shrink-0", archived && "text-muted-foreground")}
-              style={archived ? undefined : { color: bg }}
-            >
-              {kindIcon}
-            </span>
-          )}
-          <span className="truncate">
-            <span
-              className={cn(
-                "font-medium",
-                archived ? "text-muted-foreground" : "text-foreground",
-              )}
-            >
-              {kindLabel}
-            </span>
-            {vendor && (
-              <>
-                {" by "}
-                <span
-                  className={cn(
-                    "font-medium",
-                    archived ? "text-muted-foreground" : "text-foreground",
-                  )}
-                >
-                  {vendor}
-                </span>
-              </>
-            )}
-          </span>
-        </div>
         {description && (
           <p
             className={cn(
