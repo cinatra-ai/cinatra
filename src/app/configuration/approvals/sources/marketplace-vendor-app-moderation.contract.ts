@@ -1,8 +1,7 @@
 import "server-only";
 
-import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-
 import {
+  createMarketplaceClient,
   MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID,
   REMOTE_COUNT_CAP,
   cappedCount,
@@ -29,7 +28,7 @@ export const marketplaceVendorAppModerationContract = {
 
   async counts(viewer: ApprovalViewer): Promise<SourceCounts> {
     const inbox = await guardedCount(viewer, resolveAdminToken(), `${SOURCE_ID}:inbox`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
+      const client = createMarketplaceClient(token);
       const out = await client.vendorApplicationListAdmin({
         status: ["applied"],
         limit: REMOTE_COUNT_CAP + 1,

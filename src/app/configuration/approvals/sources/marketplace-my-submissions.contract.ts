@@ -1,8 +1,7 @@
 import "server-only";
 
-import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-
 import {
+  createMarketplaceClient,
   MARKETPLACE_MY_SUBMISSIONS_SOURCE_ID,
   cappedCount,
   guardedCount,
@@ -29,7 +28,7 @@ export const marketplaceMySubmissionsContract = {
   async counts(viewer: ApprovalViewer): Promise<SourceCounts> {
     // "mine" counts the in-flight (still-pending, withdrawable) submissions.
     const mine = await guardedCount(viewer, resolveInstanceToken(), `${SOURCE_ID}:mine`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
+      const client = createMarketplaceClient(token);
       const out = await client.extensionSubmissionListSelf();
       return cappedCount(out.submissions.filter((s) => s.status === "pending").length);
     });

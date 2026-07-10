@@ -1,8 +1,7 @@
 import "server-only";
 
-import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-
 import {
+  createMarketplaceClient,
   MARKETPLACE_VENDOR_APP_STATUS_SOURCE_ID,
   guardedCount,
   marketplaceAvailability,
@@ -29,7 +28,7 @@ export const marketplaceVendorAppStatusContract = {
   async counts(viewer: ApprovalViewer): Promise<SourceCounts> {
     // The instance's application is "in flight" only while `applied`.
     const mine = await guardedCount(viewer, resolveVendorToken(), `${SOURCE_ID}:mine`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
+      const client = createMarketplaceClient(token);
       const status = await client.vendorApplicationStatus();
       return status.state === "applied" ? 1 : 0;
     });

@@ -97,7 +97,9 @@ describe("nav-registry import purity", () => {
     const joined = [...files].join("\n");
     expect(joined).toMatch(/marketplace-shared\.ts$/m);
     expect(joined).toMatch(/agent-creation-requests\.contract\.ts$/m);
-    expect(specifiers.has("@cinatra-ai/marketplace-mcp-client/http-client")).toBe(true);
+    // Reached the workflow contract's package-boundary store import — proves the
+    // walker followed the contract graph out to its bare specifiers.
+    expect([...specifiers].some((s) => s.startsWith("@cinatra-ai/workflows"))).toBe(true);
   });
 
   it("never reaches the agents runtime, decision-helpers, or decision-actions", () => {
