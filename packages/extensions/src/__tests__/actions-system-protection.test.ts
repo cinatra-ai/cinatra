@@ -36,6 +36,25 @@ const registry = vi.hoisted(() => ({
 }));
 vi.mock("../index", () => ({ extensionRegistry: registry }));
 
+// #1039 Option B (update-time): updateExtensionPackage routes through the
+// planner/batch on the dev/non-gatekept path (the `@/lib/gatekept-install`
+// stub reports isGatekeptInstallEnabled()===false here). Mock the batch entry
+// so this suite asserts the update is PERMITTED (routes through) without pulling
+// the real batch's heavy module graph.
+const installBatchMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    rootPackage: "",
+    rootVersion: "",
+    installed: [],
+    updated: [],
+    alreadyInstalled: [],
+    batchId: null,
+  })),
+);
+vi.mock("@/lib/extension-install-batch", () => ({
+  installExtensionWithDependencies: installBatchMock,
+}));
+
 // Deterministic lifecycle resolvers (no marketplace round-trip).
 vi.mock("../utils", () => ({
   deriveTypeId: vi.fn(() => "connector"),
@@ -122,10 +141,18 @@ describe("delete-intent actions refuse a system extension (front door)", () => {
 });
 
 describe("update / reinstall stay functional for a system extension", () => {
-  it("updateExtensionPackage upgrades a system extension in place (update is permitted)", async () => {
+  it("updateExtensionPackage upgrades a system extension in place — permitted, routed through the batch (#1039 dev path)", async () => {
     const res = await updateExtensionPackage(SYSTEM_PKG, "0.1.7", actor);
     expect(res.success).toBe(true);
-    expect(registry.update).toHaveBeenCalledTimes(1);
+    // Update is NOT blocked for a system extension; on the dev path it now
+    // routes through the planner/batch as a committed in-place root update
+    // (rootAction:'update'), never an uninstall.
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: SYSTEM_PKG,
+      version: "0.1.7",
+      actor,
+      rootAction: "update",
+    });
     expect(registry.uninstall).not.toHaveBeenCalled();
   });
 
