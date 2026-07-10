@@ -1,7 +1,7 @@
 // Unit tests for the structured assistant-thread + turn store (cinatra#1037 P2a).
 // The postgres sync leaves are mocked so the pure mappers + query assembly are
 // exercised without a database; the live schema execution is covered by the
-// bootstrap DDL + core__0021 migration test + upgrade-proof.
+// bootstrap DDL + core__0023 migration test + upgrade-proof.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const runPostgresQueriesSync = vi.fn();

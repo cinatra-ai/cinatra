@@ -8,7 +8,7 @@
 // because drizzle-store.ts is a baselined file-size-ratchet bottleneck at its
 // ceiling (the same reason + pattern as `extension-grant-schema.ts`). These are
 // NET-NEW tables (additive), so the fresh-install shape is born here and
-// ledger-fakes core__0021; that migration carries the SAME creates onto the
+// ledger-fakes core__0023; that migration carries the SAME creates onto the
 // operator upgrade path.
 //
 // assistant_turns owns the #1037-P2 side of the unified assistant-stream

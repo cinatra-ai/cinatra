@@ -1,4 +1,4 @@
-// core__0021 — structured assistant threads + assistant_turns (cinatra-ai/cinatra#1037
+// core__0023 — structured assistant threads + assistant_turns (cinatra-ai/cinatra#1037
 // P2a, the assistant-runtime persistence half). Introduces the two typed tables
 // that own the #1037-P2 side of the assistant-stream boundary named in the
 // unified stream contract (@cinatra-ai/agent-ui-protocol, CONTRACT.md §1):
