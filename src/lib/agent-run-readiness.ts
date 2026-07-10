@@ -66,8 +66,20 @@ export type UnconfiguredConnector = {
 export type AgentRunNotReadyError = {
   error: string;
   code: typeof AGENT_RUN_CONNECTIONS_UNCONFIGURED;
-  /** The agent identifier (packageName or template id) the caller passed. */
+  /**
+   * The agent identifier (packageName or template id) the caller passed. Kept
+   * STABLE as the machine-readable secondary id so existing structured / JSON
+   * consumers (409 body, SSE payload) that read `agent` as an identifier do not
+   * break (cinatra #1234).
+   */
   agent: string;
+  /**
+   * The agent's HUMAN-READABLE manifest displayName (cinatra #1234) — the label
+   * the refusal `error` string and every user-facing surface render, resolved
+   * via a descriptor lookup the canonical install row cannot supply. Falls back
+   * to `agent` when no descriptor name resolves.
+   */
+  agentDisplayName: string;
   /** Each required connector still needing configuration (ordered). */
   unconfiguredConnectors: UnconfiguredConnector[];
 };
@@ -83,10 +95,16 @@ export type AgentRunNotReadyError = {
  */
 export function evaluateAgentRunReadiness(input: {
   agentIdentifier: string;
+  /**
+   * The agent's manifest displayName, when resolved (cinatra #1234). When absent
+   * or blank the human label falls back to `agentIdentifier`, so the pure
+   * function stays usable without a descriptor lookup.
+   */
+  agentDisplayName?: string | null;
   summary: ConfigurationNeedsSummary;
 }): AgentRunNotReadyError | null {
   const { summary } = input;
-  if (!summary.hasConnectors || summary.allConfigured || summary.needs.length === 0) {
+  if (isAgentRunnable(summary)) {
     return null;
   }
   const unconfiguredConnectors: UnconfiguredConnector[] = summary.needs.map((n) => ({
@@ -95,12 +113,26 @@ export function evaluateAgentRunReadiness(input: {
     settingsHref: n.settingsHref,
   }));
   const names = unconfiguredConnectors.map((c) => c.displayName).join(", ");
+  // Human name first (cinatra #1234): the refusal names the agent by its
+  // manifest displayName; the raw identifier is only the fallback. `agent`
+  // keeps the stable identifier for machine consumers.
+  const agentDisplayName = input.agentDisplayName?.trim() || input.agentIdentifier;
   return {
     code: AGENT_RUN_CONNECTIONS_UNCONFIGURED,
     agent: input.agentIdentifier,
+    agentDisplayName,
     unconfiguredConnectors,
-    error: `Agent "${input.agentIdentifier}" cannot run until its required connections are configured: ${names}.`,
+    error: `Agent "${agentDisplayName}" cannot run until its required connections are configured: ${names}.`,
   };
+}
+
+/**
+ * The runnable (→ `null`) predicate over a stage-1 summary. Shared so the async
+ * resolver can short-circuit the extra displayName descriptor lookup on the
+ * runnable fast path (out of scope, or every required connector configured).
+ */
+function isAgentRunnable(summary: ConfigurationNeedsSummary): boolean {
+  return !summary.hasConnectors || summary.allConfigured || summary.needs.length === 0;
 }
 
 /** The minimal canonical-row shape the gate reads (kind + package + edges). */
@@ -127,6 +159,13 @@ export type AgentRunReadinessDeps = {
     },
     ctx: ConnectorReadinessContext,
   ) => Promise<ConfigurationNeedsSummary>;
+  /**
+   * Resolve an agent package's human-readable manifest displayName (cinatra
+   * #1234). Defaults to a FAIL-SOFT read of the agent template record's `name`
+   * — the SAME manifest-derived name the Extensions card renders, a value the
+   * canonical install row does not carry. Injected in tests to stay off the DB.
+   */
+  resolveAgentDisplayName?: (packageName: string) => Promise<string | null>;
 };
 
 /**
@@ -168,5 +207,32 @@ export async function assertAgentRunReadyByPackage(
     },
     ctx,
   );
-  return evaluateAgentRunReadiness({ agentIdentifier, summary });
+  // Fast path: runnable → no refusal, so skip the extra descriptor lookup below.
+  if (isAgentRunnable(summary)) return null;
+
+  // Extra descriptor lookup (cinatra #1234): the canonical install row carries
+  // no displayName, so resolve the agent's HUMAN name here — only now that we
+  // are about to REFUSE, so the runnable fast path pays nothing for it. Reads
+  // the agent template record's `name` (the same manifest-derived name the
+  // Extensions card renders); FAIL-SOFT — an unresolved name falls back to the
+  // package-id label inside `evaluateAgentRunReadiness`.
+  const resolveAgentDisplayName =
+    deps.resolveAgentDisplayName ??
+    (async (pkg: string): Promise<string | null> => {
+      try {
+        const { readAgentTemplateByPackageName } = await import(
+          "@cinatra-ai/agents/store"
+        );
+        return (await readAgentTemplateByPackageName(pkg))?.name ?? null;
+      } catch {
+        return null;
+      }
+    });
+  const agentDisplayName = await resolveAgentDisplayName(agentRow.packageName);
+
+  return evaluateAgentRunReadiness({
+    agentIdentifier,
+    agentDisplayName,
+    summary,
+  });
 }

@@ -71,7 +71,10 @@ describe("evaluateAgentRunReadiness (pure)", () => {
     });
     expect(result).not.toBeNull();
     expect(result!.code).toBe(AGENT_RUN_CONNECTIONS_UNCONFIGURED);
+    // No displayName supplied → the human label falls back to the identifier;
+    // the stable `agent` identifier field is unchanged.
     expect(result!.agent).toBe("@cinatra-ai/social-agent");
+    expect(result!.agentDisplayName).toBe("@cinatra-ai/social-agent");
     // displayNames + package ids are carried structurally...
     expect(result!.unconfiguredConnectors).toEqual([
       {
@@ -89,6 +92,39 @@ describe("evaluateAgentRunReadiness (pure)", () => {
     expect(result!.error).toContain("LinkedIn");
     expect(result!.error).toContain("Apollo");
     expect(result!.error).toContain("@cinatra-ai/social-agent");
+  });
+
+  it("names the agent by its manifest displayName; identifier kept as `agent` (cinatra #1234)", () => {
+    const result = evaluateAgentRunReadiness({
+      agentIdentifier: "@cinatra-ai/social-agent",
+      agentDisplayName: "Social Outreach Agent",
+      summary: summary({
+        hasConnectors: true,
+        allConfigured: false,
+        needs: [need("LinkedIn", "@cinatra-ai/linkedin-connector", "linkedin-connector")],
+      }),
+    });
+    expect(result).not.toBeNull();
+    // The HUMAN name is the label the refusal string carries...
+    expect(result!.agentDisplayName).toBe("Social Outreach Agent");
+    expect(result!.error).toContain('Agent "Social Outreach Agent"');
+    expect(result!.error).not.toContain("@cinatra-ai/social-agent");
+    // ...and the bare package id survives only as the stable machine field.
+    expect(result!.agent).toBe("@cinatra-ai/social-agent");
+  });
+
+  it("falls back to the identifier when the resolved displayName is blank", () => {
+    const result = evaluateAgentRunReadiness({
+      agentIdentifier: "@cinatra-ai/social-agent",
+      agentDisplayName: "   ",
+      summary: summary({
+        hasConnectors: true,
+        allConfigured: false,
+        needs: [need("LinkedIn", "@cinatra-ai/linkedin-connector", "linkedin-connector")],
+      }),
+    });
+    expect(result!.agentDisplayName).toBe("@cinatra-ai/social-agent");
+    expect(result!.error).toContain('Agent "@cinatra-ai/social-agent"');
   });
 });
 
@@ -132,7 +168,7 @@ describe("assertAgentRunReadyByPackage (injected deps — no DB / no probes)", (
     expect(resolveNeeds).not.toHaveBeenCalled();
   });
 
-  it("BLOCKS (fail-closed) when the agent has an unconfigured required connector", async () => {
+  it("BLOCKS (fail-closed) and names the agent by its resolved manifest displayName (cinatra #1234)", async () => {
     const readInstalled = vi.fn(async () => [agentRow]);
     const resolveNeeds = vi.fn(async () =>
       summary({
@@ -141,15 +177,24 @@ describe("assertAgentRunReadyByPackage (injected deps — no DB / no probes)", (
         needs: [need("LinkedIn", "@cinatra-ai/linkedin-connector", "linkedin-connector")],
       }),
     );
+    // The descriptor lookup the canonical row cannot supply — injected here so
+    // the unit test never touches the agent-template store / DB.
+    const resolveAgentDisplayName = vi.fn(async () => "Social Outreach Agent");
     const result = await assertAgentRunReadyByPackage(
       "@cinatra-ai/social-agent",
       "@cinatra-ai/social-agent",
       { userId: "u-owner" },
-      { readInstalled, resolveNeeds },
+      { readInstalled, resolveNeeds, resolveAgentDisplayName },
     );
     expect(result).not.toBeNull();
     expect(result!.code).toBe(AGENT_RUN_CONNECTIONS_UNCONFIGURED);
     expect(result!.unconfiguredConnectors.map((c) => c.displayName)).toEqual(["LinkedIn"]);
+    // The human name is resolved from the agent's package name and rendered as
+    // the primary label; the package id survives only as the secondary field.
+    expect(resolveAgentDisplayName).toHaveBeenCalledWith("@cinatra-ai/social-agent");
+    expect(result!.agentDisplayName).toBe("Social Outreach Agent");
+    expect(result!.error).toContain('Agent "Social Outreach Agent"');
+    expect(result!.agent).toBe("@cinatra-ai/social-agent");
     // the readiness ctx (owner userId) is threaded into the derivation.
     expect(resolveNeeds).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "agent", packageName: "@cinatra-ai/social-agent" }),
@@ -157,18 +202,42 @@ describe("assertAgentRunReadyByPackage (injected deps — no DB / no probes)", (
     );
   });
 
-  it("ALLOWS (null) when the agent's required connectors are all configured", async () => {
+  it("falls back to the package-id label when the displayName lookup fails (fail-soft)", async () => {
+    const readInstalled = vi.fn(async () => [agentRow]);
+    const resolveNeeds = vi.fn(async () =>
+      summary({
+        hasConnectors: true,
+        allConfigured: false,
+        needs: [need("LinkedIn", "@cinatra-ai/linkedin-connector", "linkedin-connector")],
+      }),
+    );
+    const resolveAgentDisplayName = vi.fn(async () => null);
+    const result = await assertAgentRunReadyByPackage(
+      "@cinatra-ai/social-agent",
+      "@cinatra-ai/social-agent",
+      { userId: "u-owner" },
+      { readInstalled, resolveNeeds, resolveAgentDisplayName },
+    );
+    expect(result!.agent).toBe("@cinatra-ai/social-agent");
+    expect(result!.agentDisplayName).toBe("@cinatra-ai/social-agent");
+    expect(result!.error).toContain('Agent "@cinatra-ai/social-agent"');
+  });
+
+  it("ALLOWS (null) — and skips the displayName lookup — when all required connectors are configured", async () => {
     const readInstalled = vi.fn(async () => [agentRow]);
     const resolveNeeds = vi.fn(async () =>
       summary({ hasConnectors: true, allConfigured: true, needs: [] }),
     );
+    const resolveAgentDisplayName = vi.fn(async () => "Social Outreach Agent");
     expect(
       await assertAgentRunReadyByPackage(
         "@cinatra-ai/social-agent",
         "@cinatra-ai/social-agent",
         { userId: "u-owner" },
-        { readInstalled, resolveNeeds },
+        { readInstalled, resolveNeeds, resolveAgentDisplayName },
       ),
     ).toBeNull();
+    // Runnable fast path must NOT pay for the extra descriptor lookup.
+    expect(resolveAgentDisplayName).not.toHaveBeenCalled();
   });
 });
