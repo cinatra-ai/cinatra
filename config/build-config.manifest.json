@@ -406,6 +406,7 @@
     { "alias": "@cinatra-ai/objects/classifier-signals", "target": "./packages/objects/src/classifier-signals.ts" },
     { "alias": "@cinatra-ai/registries", "target": "./packages/registries/src/index.ts" },
     { "alias": "@cinatra-ai/registries/src/version-compare", "target": "./packages/registries/src/version-compare.ts" },
+    { "alias": "@cinatra-ai/registries/src/update-read-model", "target": "./packages/registries/src/update-read-model.ts" },
     { "alias": "@cinatra-ai/registries/types", "target": "./packages/registries/src/types.ts" },
     { "alias": "@cinatra-ai/registries/install", "target": "./packages/registries/src/install/install-with-deps.ts" }
   ],

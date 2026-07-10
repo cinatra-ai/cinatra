@@ -3,7 +3,7 @@
 // (marketplace-card-model.ts): a pure function mapping the cached update read
 // model + the installed version to one of the five design-spec render states.
 //
-// The design spec (cinatra-ai/design specs/app-extensions.html §III) defines
+// The design spec §III defines
 // FOUR user-facing states plus a fail-quiet nothing:
 //
 //   • update-available — a newer COMPATIBLE registry version is published →
