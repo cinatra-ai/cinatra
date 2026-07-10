@@ -1765,8 +1765,8 @@ async function seedV64CanonicalDemo(orgMap) {
     await q(
       `INSERT INTO cinatra.installed_extension
          (id, package_name, owner_level, owner_id, organization_id, kind, status,
-          source, required_in_prod, dependencies, manifest_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11)
+          source, required_in_prod, dependencies, manifest_hash, version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11, $12)
        ON CONFLICT DO NOTHING`,
       [
         r.id,
@@ -1780,6 +1780,10 @@ async function seedV64CanonicalDemo(orgMap) {
         r.requiredInProd,
         JSON.stringify(r.deps),
         `seed-v64-${r.id.split("-").pop()}`,
+        // version is NOT NULL since cinatra#1040 S1 (version identity) and has
+        // no DB default. Mirror the backfill floor: a source's own version
+        // (verdaccio rows carry one) else '0.0.0' (github/local sources).
+        r.source?.version ?? "0.0.0",
       ],
     );
     inserted++;

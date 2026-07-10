@@ -188,9 +188,12 @@ describe.skipIf(!hasDb)("core__0017 org-anchor backfill — real Postgres (DB-ga
     kind: string,
   ) => {
     await client.query(
+      // version is NOT NULL since cinatra#1040 S1 (version identity); these
+      // legacy local-source rows carry no source.version, so they floor to
+      // '0.0.0' (the backfill floor for version-less sources).
       `INSERT INTO "${schema}".installed_extension
-        (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash)
-        VALUES ($1,$2,$3,$4,$5,$6,'active',$7::jsonb,$8,'[]'::jsonb,null)`,
+        (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash, version)
+        VALUES ($1,$2,$3,$4,$5,$6,'active',$7::jsonb,$8,'[]'::jsonb,null,'0.0.0')`,
       [id, pkg, ownerLevel, ownerId, orgId, kind, LOCAL_SOURCE(pkg), kind === "connector" && ownerLevel === "platform"],
     );
   };

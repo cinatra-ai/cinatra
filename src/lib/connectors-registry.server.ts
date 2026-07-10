@@ -148,7 +148,13 @@ export async function isConnectorInstalledForActor(
   let hasAddressableLiveCanonicalRowForActor = false;
   let hasAddressableCanonicalRowForActor = false;
   try {
-    const rows = await readRows(packageId);
+    // DEFAULT-OWNS-GLOBAL-NAMES (cinatra#1040 S1): a package's unversioned global
+    // identity — "is this connector installed for the actor" — is owned by the
+    // DEFAULT version's row. A row is dropped ONLY when EXPLICITLY non-default
+    // (isDefault === false); a legacy/single-version row (true, or an unset read)
+    // is kept, so the predicate is behaviorally identical until a later slice
+    // writes non-default versions.
+    const rows = (await readRows(packageId)).filter((r) => r.isDefault !== false);
     const scope = buildActorScopeForPick(actor);
     // status-agnostic: ANY addressable row (live or archived) — distinguishes a
     // legitimate "no row" (bundled fallback applies) from an explicit archive

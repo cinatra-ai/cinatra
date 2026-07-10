@@ -47,10 +47,11 @@ function errorMessage(err: unknown): string {
   return "This section could not be loaded.";
 }
 
-export function SourceSkeleton({ title }: { title: string }) {
+export function SourceSkeleton() {
+  // No categorizing section heading (owner review #1302 ask 3) — the skeleton is
+  // just the card placeholder, matching the header-less loaded section.
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium text-foreground">{title}</h2>
       <Card className="border-line bg-surface">
         <CardContent className="p-4">
           <div className="h-10 animate-pulse rounded-md bg-muted/50" aria-hidden />
@@ -89,16 +90,20 @@ export async function SourceSection({
 
   const viewAllHref = source.viewAllHref?.(direction);
 
-  const header = (
-    <div className="flex items-center justify-between gap-3">
-      <h2 className="text-sm font-medium text-foreground">{source.title}</h2>
-      {viewAllHref ? (
-        <Link href={viewAllHref} className="text-xs text-muted-foreground underline hover:text-foreground">
-          View all
-        </Link>
-      ) : null}
+  // Owner review #1302 ask 3: NO categorizing section heading above the card —
+  // the card and its rows are self-describing, so the "Agent creation requests" /
+  // "Extension submissions" heading labels are dropped (spec §X's 13px section
+  // header is intentionally omitted per this ask). The only affordance kept in
+  // the header slot is the functional "View all" drill-down, right-aligned and
+  // rendered ONLY when the source supplies one (the marketplace queues); a source
+  // without one (agent creation requests) renders card-only, with no header.
+  const header = viewAllHref ? (
+    <div className="flex items-center justify-end gap-3">
+      <Link href={viewAllHref} className="text-xs text-muted-foreground underline hover:text-foreground">
+        View all
+      </Link>
     </div>
-  );
+  ) : null;
 
   let body: React.ReactNode;
   if (envelope.availability === "error") {
