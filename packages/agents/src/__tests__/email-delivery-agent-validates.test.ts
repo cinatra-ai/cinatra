@@ -119,7 +119,7 @@ describe("email-delivery-agent OAS — single-send shape", () => {
   });
 
   it("package.json is at the v0.1.0 standard and drops the trigger-agent dependency", () => {
-    expect(pkg.version).toBe("0.1.0");
+    expect(pkg.version).toBe("0.1.1");
     expect(pkg.cinatra?.agentDependencies).toBeUndefined();
   });
 

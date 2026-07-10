@@ -74,7 +74,7 @@ describe("email-recipient-selection-agent - list-only scope", () => {
   });
 
   it("package.json is at the v0.1.0 standard", () => {
-    expect(pkg.version).toBe("0.1.0");
+    expect(pkg.version).toBe("0.1.1");
   });
 });
 
