@@ -291,43 +291,44 @@ function newEdgeId(): string {
 
 /**
  * REPLACE a dependent's persisted edges (delete + insert, declared order),
- * re-resolving each declared edge at write time. Runs inside a transaction
- * with the dependent row locked (`FOR UPDATE`) so concurrent replaces for the
- * same row serialize instead of interleaving.
+ * re-resolving each declared edge at write time. Runs INSIDE the caller's
+ * transaction with the dependent row locked (`FOR UPDATE`) so concurrent
+ * replaces for the same row serialize instead of interleaving — and so the
+ * row write + edge replacement + hydrated return are ONE atomic unit (a
+ * failed edge write can never leave a committed row without its declared
+ * edges).
  */
-async function replaceDependencyEdges(
-  db: CanonicalDb,
+async function replaceDependencyEdgesInTx(
+  tx: CanonicalDbLike,
   dependentId: string,
   dependencies: readonly ExtensionDependency[],
   organizationId: string | null,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx
-      .select({ id: installedExtensionTable.id })
-      .from(installedExtensionTable)
-      .where(eq(installedExtensionTable.id, dependentId))
-      .for("update");
-    const resolved = await resolveDeclaredEdges(tx, dependencies, organizationId);
-    await tx
-      .delete(extensionDependencyEdgeTable)
-      .where(eq(extensionDependencyEdgeTable.dependentInstallId, dependentId));
-    if (resolved.length > 0) {
-      await tx.insert(extensionDependencyEdgeTable).values(
-        resolved.map((edge, index) => ({
-          id: newEdgeId(),
-          dependentInstallId: dependentId,
-          declaredPackageName: edge.packageName,
-          declaredKind: edge.kind ?? null,
-          edgeType: edge.edgeType,
-          requirement: edge.requirement,
-          versionConstraint: edge.versionConstraint as unknown,
-          declaredIndex: index,
-          resolvedInstallId: edge.resolvedInstallId,
-          resolutionReason: edge.resolutionReason,
-        })),
-      );
-    }
-  });
+  await tx
+    .select({ id: installedExtensionTable.id })
+    .from(installedExtensionTable)
+    .where(eq(installedExtensionTable.id, dependentId))
+    .for("update");
+  const resolved = await resolveDeclaredEdges(tx, dependencies, organizationId);
+  await tx
+    .delete(extensionDependencyEdgeTable)
+    .where(eq(extensionDependencyEdgeTable.dependentInstallId, dependentId));
+  if (resolved.length > 0) {
+    await tx.insert(extensionDependencyEdgeTable).values(
+      resolved.map((edge, index) => ({
+        id: newEdgeId(),
+        dependentInstallId: dependentId,
+        declaredPackageName: edge.packageName,
+        declaredKind: edge.kind ?? null,
+        edgeType: edge.edgeType,
+        requirement: edge.requirement,
+        versionConstraint: edge.versionConstraint as unknown,
+        declaredIndex: index,
+        resolvedInstallId: edge.resolvedInstallId,
+        resolutionReason: edge.resolutionReason,
+      })),
+    );
+  }
 }
 
 export async function readInstalledExtensionById(id: string): Promise<InstalledExtension | null> {
@@ -501,32 +502,37 @@ export async function _internalInsertInstalledExtension(
 ): Promise<InstalledExtension> {
   const db = await getDb();
   const ownerId = platformizeOwnerId(row.ownerLevel, row.ownerId);
-  const result = await db
-    .insert(installedExtensionTable)
-    .values({
-      id: row.id,
-      packageName: row.packageName,
-      ownerLevel: row.ownerLevel,
-      ownerId,
-      organizationId: row.organizationId,
-      kind: row.kind,
-      status: row.status,
-      source: row.source as unknown,
-      version: row.version ?? deriveVersionFromSource(row.source),
-      isDefault: row.isDefault ?? true,
-      requiredInProd: row.requiredInProd,
-      manifestHash: row.manifestHash,
-    })
-    .returning();
-  if (!result[0]) throw new Error("installed_extension insert returned no row");
-  // Dependency edges are FIRST-CLASS rows since cinatra#1040 S2. Most install
-  // writers seed `dependencies: []` (the finalize seam records the real edges
-  // via recordExtensionDependencies); a writer that DOES carry edges persists
-  // them here with write-time resolution.
-  if (row.dependencies.length > 0) {
-    await replaceDependencyEdges(db, result[0].id, row.dependencies, result[0].organizationId);
-  }
-  return hydrateSingleRow(db, result[0]);
+  // ONE transaction for row + edges + hydrated return (cinatra#1040 S2): a
+  // failed edge write rolls the row back too, and the returned shape can never
+  // interleave with a concurrent replace.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .insert(installedExtensionTable)
+      .values({
+        id: row.id,
+        packageName: row.packageName,
+        ownerLevel: row.ownerLevel,
+        ownerId,
+        organizationId: row.organizationId,
+        kind: row.kind,
+        status: row.status,
+        source: row.source as unknown,
+        version: row.version ?? deriveVersionFromSource(row.source),
+        isDefault: row.isDefault ?? true,
+        requiredInProd: row.requiredInProd,
+        manifestHash: row.manifestHash,
+      })
+      .returning();
+    if (!result[0]) throw new Error("installed_extension insert returned no row");
+    // Dependency edges are FIRST-CLASS rows since cinatra#1040 S2. Most install
+    // writers seed `dependencies: []` (the finalize seam records the real edges
+    // via recordExtensionDependencies); a writer that DOES carry edges persists
+    // them here with write-time resolution.
+    if (row.dependencies.length > 0) {
+      await replaceDependencyEdgesInTx(tx, result[0].id, row.dependencies, result[0].organizationId);
+    }
+    return hydrateSingleRow(tx, result[0]);
+  });
 }
 
 export async function _internalUpdateInstalledExtensionStatus(
@@ -534,13 +540,17 @@ export async function _internalUpdateInstalledExtensionStatus(
   status: ExtensionLifecycleStatus,
 ): Promise<InstalledExtension> {
   const db = await getDb();
-  const result = await db
-    .update(installedExtensionTable)
-    .set({ status, updatedAt: new Date() })
-    .where(eq(installedExtensionTable.id, id))
-    .returning();
-  if (!result[0]) throw new Error(`installed_extension ${id} not found for status update`);
-  return hydrateSingleRow(db, result[0]);
+  // Update + hydration in one transaction: the returned edges are the ones
+  // consistent with this write, never a concurrent replace's intermediate.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(installedExtensionTable)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(installedExtensionTable.id, id))
+      .returning();
+    if (!result[0]) throw new Error(`installed_extension ${id} not found for status update`);
+    return hydrateSingleRow(tx, result[0]);
+  });
 }
 
 export async function _internalUpdateInstalledExtensionSource(
@@ -548,13 +558,15 @@ export async function _internalUpdateInstalledExtensionSource(
   source: ExtensionSource,
 ): Promise<InstalledExtension> {
   const db = await getDb();
-  const result = await db
-    .update(installedExtensionTable)
-    .set({ source: source as unknown, updatedAt: new Date() })
-    .where(eq(installedExtensionTable.id, id))
-    .returning();
-  if (!result[0]) throw new Error(`installed_extension ${id} not found for source update`);
-  return hydrateSingleRow(db, result[0]);
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(installedExtensionTable)
+      .set({ source: source as unknown, updatedAt: new Date() })
+      .where(eq(installedExtensionTable.id, id))
+      .returning();
+    if (!result[0]) throw new Error(`installed_extension ${id} not found for source update`);
+    return hydrateSingleRow(tx, result[0]);
+  });
 }
 
 export async function _internalUpdateInstalledExtensionMetadata(
@@ -571,18 +583,22 @@ export async function _internalUpdateInstalledExtensionMetadata(
   if (patch.requiredInProd !== undefined) setClause.requiredInProd = patch.requiredInProd;
   if (patch.manifestHash !== undefined) setClause.manifestHash = patch.manifestHash;
   if (patch.accessDeclaration !== undefined) setClause.accessDeclaration = patch.accessDeclaration;
-  const result = await db
-    .update(installedExtensionTable)
-    .set(setClause)
-    .where(eq(installedExtensionTable.id, id))
-    .returning();
-  if (!result[0]) throw new Error(`installed_extension ${id} not found for metadata update`);
-  // A dependencies patch REPLACES the persisted edge rows (declared order,
-  // write-time resolution) — cinatra#1040 S2.
-  if (patch.dependencies !== undefined) {
-    await replaceDependencyEdges(db, id, patch.dependencies, result[0].organizationId);
-  }
-  return hydrateSingleRow(db, result[0]);
+  // ONE transaction for the row patch + edge replacement + hydrated return
+  // (cinatra#1040 S2): a failed edge write rolls the metadata patch back too.
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(installedExtensionTable)
+      .set(setClause)
+      .where(eq(installedExtensionTable.id, id))
+      .returning();
+    if (!result[0]) throw new Error(`installed_extension ${id} not found for metadata update`);
+    // A dependencies patch REPLACES the persisted edge rows (declared order,
+    // write-time resolution) — cinatra#1040 S2.
+    if (patch.dependencies !== undefined) {
+      await replaceDependencyEdgesInTx(tx, id, patch.dependencies, result[0].organizationId);
+    }
+    return hydrateSingleRow(tx, result[0]);
+  });
 }
 
 export async function _internalDeleteInstalledExtension(id: string): Promise<void> {

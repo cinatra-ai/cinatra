@@ -199,14 +199,26 @@ export function makeScopedManifestLookup(
   rows: readonly InstalledExtension[],
   organizationId: string | null,
 ): ManifestLookup {
+  // Within a scope the DEFAULT version wins, deterministic id tie-break
+  // (cinatra#1040 S2) — the same preference the write-time resolver and the
+  // core__0024 backfill apply, so an unresolved edge's name-fallback can never
+  // bind an arbitrary non-default sibling version. A fixture row without
+  // `isDefault` counts as default (DB reads always carry the boolean).
+  const pickInScope = (live: InstalledExtension[], scopeOrg: string | null) =>
+    live
+      .filter((r) => (scopeOrg === null ? r.organizationId == null : r.organizationId === scopeOrg))
+      .sort(
+        (a, b) =>
+          (a.isDefault === false ? 1 : 0) - (b.isDefault === false ? 1 : 0) ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )[0];
   return (name) => {
     const live = rows.filter(
       (r) => r.packageName === name && PRESENT_STATUSES.has(r.status),
     );
     return (
-      (organizationId != null
-        ? live.find((r) => r.organizationId === organizationId)
-        : undefined) ?? live.find((r) => r.organizationId == null)
+      (organizationId != null ? pickInScope(live, organizationId) : undefined) ??
+      pickInScope(live, null)
     );
   };
 }
@@ -676,9 +688,35 @@ export function listArchiveClosureBlockers(
 }
 
 /**
+ * PACKAGE-LEVEL archive/uninstall blocker list (cinatra#1040 S2): the union of
+ * `listArchiveClosureBlockers` over EVERY row of the package. The dispatcher
+ * and removal gates operate on a package NAME (the exact actor-scoped row is
+ * resolved only AFTER the gate), so they must consider every row the archive
+ * could touch — picking one arbitrary row and applying the resolved-edge
+ * narrowing there would let a dependent pinned to a SIBLING row slip through.
+ * Because a persisted resolution always points at a row of the declared
+ * package, this union is exactly the pre-S2 name-based conservative set; the
+ * per-ROW narrowing in `listArchiveClosureBlockers` becomes operative for
+ * row-scoped callers (version GC, a later slice).
+ */
+export function listArchiveClosureBlockersForPackage(
+  packageName: string,
+  allRows: InstalledExtension[],
+): string[] {
+  const names = new Set<string>();
+  for (const target of allRows) {
+    if (target.packageName !== packageName) continue;
+    for (const n of listArchiveClosureBlockers(target, allRows)) names.add(n);
+  }
+  return [...names];
+}
+
+/**
  * Archive/uninstall closure gate: refuse when archiving the target would break
  * a REQUIRED edge from a still-active dependent. `allRows` is the full
- * manifest snapshot; `target` is the package about to be archived/uninstalled.
+ * manifest snapshot; `target` is the EXACT row about to be archived/uninstalled
+ * (resolved-edge narrowing applies — see listArchiveClosureBlockers). A caller
+ * that only knows the package NAME must use the ForPackage variant below.
  */
 export function assertArchiveDoesNotBreakClosure(
   target: InstalledExtension,
@@ -689,6 +727,25 @@ export function assertArchiveDoesNotBreakClosure(
     throw new DependencyClosureError(
       "ARCHIVE_BREAKS_CLOSURE",
       `Cannot archive/uninstall ${target.packageName} — required by active dependents: ${blockingDependents.join(", ")}. Archive or detach them first.`,
+      blockingDependents,
+    );
+  }
+}
+
+/**
+ * PACKAGE-LEVEL twin of `assertArchiveDoesNotBreakClosure` for the dispatcher /
+ * removal gates, which archive by package name (every row the archive could
+ * touch is gated — see listArchiveClosureBlockersForPackage).
+ */
+export function assertArchivePackageDoesNotBreakClosure(
+  packageName: string,
+  allRows: InstalledExtension[],
+): void {
+  const blockingDependents = listArchiveClosureBlockersForPackage(packageName, allRows);
+  if (blockingDependents.length > 0) {
+    throw new DependencyClosureError(
+      "ARCHIVE_BREAKS_CLOSURE",
+      `Cannot archive/uninstall ${packageName} — required by active dependents: ${blockingDependents.join(", ")}. Archive or detach them first.`,
       blockingDependents,
     );
   }

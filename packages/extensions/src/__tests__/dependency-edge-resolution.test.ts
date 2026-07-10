@@ -19,6 +19,7 @@ import {
   DependencyClosureError,
   edgesOf,
   listArchiveClosureBlockers,
+  listArchiveClosureBlockersForPackage,
   makeScopedManifestLookup,
 } from "../dependency-closure";
 
@@ -218,6 +219,39 @@ describe("listArchiveClosureBlockers narrowing (resolved edges)", () => {
       ],
     });
     expect(listArchiveClosureBlockers(d, [dependent, d])).toEqual(["a"]);
+  });
+
+  it("PACKAGE-LEVEL union: a name-only gate blocks when ANY row of the package is pinned", () => {
+    // The dispatcher/removal gates archive by package NAME (the exact row is
+    // resolved after the gate) — a dependent pinned to ANY row of the package
+    // must block, exactly the pre-S2 conservative name-based set.
+    const d1 = ext("d", "active", { id: "id-d1" });
+    const d2 = ext("d", "active", { id: "id-d2" });
+    const dependent = ext("a", "active", { edges: [reqEdge("d", "id-d2")] });
+    const allRows = [dependent, d1, d2];
+    // Row-level narrowing would clear d1 — but the package-level gate cannot
+    // know which row the archive will touch, so the union blocks.
+    expect(listArchiveClosureBlockers(d1, allRows)).toEqual([]);
+    expect(listArchiveClosureBlockersForPackage("d", allRows)).toEqual(["a"]);
+    // No dependent at all → the package is archivable.
+    expect(listArchiveClosureBlockersForPackage("d", [d1, d2])).toEqual([]);
+  });
+});
+
+describe("makeScopedManifestLookup default preference", () => {
+  it("prefers the DEFAULT version within a scope, deterministic id tie-break", () => {
+    // Two live rows of one package in the SAME scope (side-by-side versions,
+    // S1): the unresolved-edge fallback must bind the default — the same
+    // preference the write-time resolver and the core__0024 backfill apply.
+    const nonDefault = ext("d", "active", { id: "id-a-nondefault" });
+    (nonDefault as { isDefault?: boolean }).isDefault = false;
+    const dflt = ext("d", "active", { id: "id-z-default" });
+    (dflt as { isDefault?: boolean }).isDefault = true;
+    expect(makeScopedManifestLookup([nonDefault, dflt], null)("d")?.id).toBe("id-z-default");
+    // All-default (or fixture rows without the flag): lowest id wins.
+    const f1 = ext("e", "active", { id: "id-1" });
+    const f2 = ext("e", "active", { id: "id-2" });
+    expect(makeScopedManifestLookup([f2, f1], null)("e")?.id).toBe("id-1");
   });
 });
 

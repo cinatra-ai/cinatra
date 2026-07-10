@@ -247,12 +247,15 @@ async function assertCanonicalArchiveClosure(packageName: string): Promise<void>
     const { ClosureCheckUnavailableError } = await import("./dependency-closure");
     throw new ClosureCheckUnavailableError(packageName);
   }
-  const target = allRows.find((r) => r.packageName === packageName);
-  if (!target) return;
-  const { assertArchiveDoesNotBreakClosure } = await import("./dependency-closure");
-  // assertArchiveDoesNotBreakClosure throws DependencyClosureError naming the
-  // blocking dependents; let it propagate as the structured refusal.
-  assertArchiveDoesNotBreakClosure(target, allRows);
+  if (!allRows.some((r) => r.packageName === packageName)) return;
+  const { assertArchivePackageDoesNotBreakClosure } = await import("./dependency-closure");
+  // PACKAGE-LEVEL gate (cinatra#1040 S2): this dispatcher archives by package
+  // name (the exact actor-scoped row is resolved later), so EVERY row of the
+  // package is gated — the per-row resolved-edge narrowing must not let a
+  // dependent pinned to a sibling row slip through an arbitrary first row.
+  // Throws DependencyClosureError naming the blocking dependents; let it
+  // propagate as the structured refusal.
+  assertArchivePackageDoesNotBreakClosure(packageName, allRows);
 }
 
 // Dependency-closure gate at the dispatcher for RESTORE.

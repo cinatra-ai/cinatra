@@ -95,13 +95,28 @@ BEGIN
     SELECT ie.id AS dependent_id, (d.ord - 1)::int AS declared_index INTO bad
     FROM installed_extension ie
     CROSS JOIN LATERAL jsonb_array_elements(ie.dependencies) WITH ORDINALITY AS d(elem, ord)
-    WHERE jsonb_typeof(d.elem) <> 'object'
-       OR jsonb_typeof(d.elem->'packageName') <> 'string'
+    WHERE jsonb_typeof(d.elem) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(d.elem->'packageName') IS DISTINCT FROM 'string'
+       OR coalesce(d.elem->>'packageName', '') = ''
+       OR (d.elem->>'packageName') = ie.package_name
        OR (d.elem->>'edgeType') IS NULL
        OR (d.elem->>'edgeType') NOT IN ('runtime','install-time','peer')
        OR (d.elem->>'requirement') IS NULL
        OR (d.elem->>'requirement') NOT IN ('required','optional')
-       OR jsonb_typeof(d.elem->'versionConstraint') <> 'object'
+       OR (d.elem ? 'kind' AND ((d.elem->>'kind') IS NULL
+           OR (d.elem->>'kind') NOT IN ('agent','connector','artifact','skill','workflow')))
+       OR jsonb_typeof(d.elem->'versionConstraint') IS DISTINCT FROM 'object'
+       OR ((
+            ((d.elem->'versionConstraint'->>'kind') = 'semver-range'
+              AND jsonb_typeof(d.elem->'versionConstraint'->'range') = 'string'
+              AND (d.elem->'versionConstraint'->>'range') <> '')
+         OR ((d.elem->'versionConstraint'->>'kind') = 'exact'
+              AND jsonb_typeof(d.elem->'versionConstraint'->'version') = 'string'
+              AND (d.elem->'versionConstraint'->>'version') <> '')
+         OR ((d.elem->'versionConstraint'->>'kind') = 'git-ref'
+              AND jsonb_typeof(d.elem->'versionConstraint'->'ref') = 'string'
+              AND (d.elem->'versionConstraint'->>'ref') <> '')
+       ) IS NOT TRUE)
     LIMIT 1;
     IF FOUND THEN
       RAISE EXCEPTION 'extension_dependency_edge backfill: malformed dependency edge on installed_extension % (declared index %) — repair the row jsonb before upgrading', bad.dependent_id, bad.declared_index;
