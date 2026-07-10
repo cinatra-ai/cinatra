@@ -65,12 +65,50 @@ export function resolveAccessLabel(
   return parts.type ? `${parts.type}: ${parts.name}` : parts.name;
 }
 
+// Scope-category grouping for the multi-token trigger summary. Every token maps
+// to exactly one category carrying a (singular, plural) noun; categories render
+// in a FIXED order (narrow → broad) so the composed summary is stable regardless
+// of the selection order. `owner`/`workspace` are exclusive singletons — they
+// never co-occur in an N>1 selection — but are classified defensively.
+type ScopeCategory = "project" | "team" | "organization" | "admin" | "workspace" | "owner";
+
+const SCOPE_CATEGORY_ORDER: readonly ScopeCategory[] = [
+  "project",
+  "team",
+  "organization",
+  "admin",
+  "workspace",
+  "owner",
+];
+
+const SCOPE_CATEGORY_NOUNS: Record<ScopeCategory, readonly [string, string]> = {
+  project: ["project", "projects"],
+  team: ["team", "teams"],
+  organization: ["organization", "organizations"],
+  admin: ["admin scope", "admin scopes"],
+  workspace: ["workspace", "workspaces"],
+  owner: ["personal scope", "personal scopes"],
+};
+
+function scopeCategory(visibility: AgentAuthPolicyVisibility): ScopeCategory {
+  if (typeof visibility === "string") {
+    if (visibility.startsWith("project:")) return "project";
+    if (visibility.startsWith("team:")) return "team";
+    if (visibility === "org" || visibility.startsWith("org:")) return "organization";
+    if (visibility === "admin") return "admin";
+    if (visibility === "workspace") return "workspace";
+  }
+  return "owner";
+}
+
 /**
- * Summarize a visibility SELECTION for a compact trigger label (multi-scope
- * W2): a single token renders as its full `Type: Name` label; N>1 tokens
- * render as an `N scopes` summary. An empty selection falls back to the owner
- * label. Additive — the single-token `resolveAccessParts` / `resolveAccessLabel`
- * are unchanged (the W3 picker wires this into the trigger).
+ * Summarize a visibility SELECTION for a compact trigger label. A single token
+ * renders as its full `Type: Name` label; N>1 tokens render as a composed,
+ * pluralised, stable-ordered breakdown BY scope category — e.g. `1 project,
+ * 1 team` or `2 teams, 1 organization` — replacing the earlier opaque
+ * `N scopes` (owner review, cinatra#1261). An empty selection falls back to the
+ * owner label. Additive — the single-token `resolveAccessParts` /
+ * `resolveAccessLabel` are unchanged.
  */
 export function resolveAccessSummary(
   selection: readonly AgentAuthPolicyVisibility[],
@@ -79,7 +117,18 @@ export function resolveAccessSummary(
   if (selection.length <= 1) {
     return resolveAccessLabel(selection[0] ?? "owner", scopes);
   }
-  return `${selection.length} scopes`;
+  const counts = {} as Record<ScopeCategory, number>;
+  for (const token of selection) {
+    const category = scopeCategory(token);
+    counts[category] = (counts[category] ?? 0) + 1;
+  }
+  return SCOPE_CATEGORY_ORDER.filter((category) => (counts[category] ?? 0) > 0)
+    .map((category) => {
+      const n = counts[category];
+      const [singular, plural] = SCOPE_CATEGORY_NOUNS[category];
+      return `${n} ${n === 1 ? singular : plural}`;
+    })
+    .join(", ");
 }
 
 // ---------------------------------------------------------------------------

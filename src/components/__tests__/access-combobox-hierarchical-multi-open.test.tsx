@@ -6,11 +6,12 @@
 // popover actually OPENS (aria-expanded → true, option rows rendered).
 //
 // This is the test that would have caught the shipped blocker: when a
-// multi-selection summarises as "N scopes" (selection.length > 1) the trigger
-// was wrapped `<PopoverTrigger asChild><TooltipProvider>…`, so PopoverTrigger's
-// Slot merged the popover's open handler + ref onto <TooltipProvider> — which
-// renders no DOM node and forwards nothing — and the "N scopes" trigger could
-// never be opened. A source-text/props-shape test cannot see that; only
+// multi-selection summarises to a composed label (selection.length > 1) the
+// trigger was wrapped `<PopoverTrigger asChild><TooltipProvider>…`, so
+// PopoverTrigger's Slot merged the popover's open handler + ref onto
+// <TooltipProvider> — which renders no DOM node and forwards nothing — and the
+// multi-scope trigger could never be opened. A source-text/props-shape test
+// cannot see that; only
 // clicking a rendered 2+-selection trigger and observing the popover does.
 //
 // The single-selection open path (bare PopoverTrigger → Button) is asserted
@@ -47,9 +48,9 @@ const SCOPES: AvailableScopes = {
 afterEach(() => cleanup());
 
 describe("AccessComboboxHierarchical multi-select trigger opens (cinatra#1261)", () => {
-  it("opens the popover from an 'N scopes' trigger (2+ selections)", () => {
+  it("opens the popover from a multi-scope trigger (2+ selections)", () => {
     // selection.length > 1 → the tooltip-wrapped trigger, the shape that was
-    // broken. resolveAccessSummary renders "2 scopes".
+    // broken. resolveAccessSummary renders the composed "1 project, 1 team".
     render(
       <AccessComboboxHierarchical
         multiple
@@ -60,7 +61,7 @@ describe("AccessComboboxHierarchical multi-select trigger opens (cinatra#1261)",
     );
 
     const trigger = screen.getByRole("combobox");
-    expect(trigger.textContent ?? "").toMatch(/2 scopes/i);
+    expect(trigger.textContent ?? "").toMatch(/1 project, 1 team/i);
     // Popover starts closed.
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryAllByRole("option")).toHaveLength(0);

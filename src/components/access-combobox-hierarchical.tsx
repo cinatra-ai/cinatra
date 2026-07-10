@@ -27,8 +27,9 @@
 //     with a broader grant). Downward implication is DISPLAY-ONLY: a checked
 //     org renders its own team rows checked+disabled ("Included via <org>"), a
 //     checked workspace implies every scope row, and projects are never implied
-//     by org/team. The trigger shows one token as "Type: Name" and N>1 as an
-//     "N scopes" summary with the full list in a tooltip. This is the GRANT
+//     by org/team. The trigger shows one token as "Type: Name" and N>1 as a
+//     composed per-category summary ("1 project, 1 team") with the full list in
+//     a tooltip. This is the GRANT
 //     surface shape (permissions form, extension access control).
 // ---------------------------------------------------------------------------
 
@@ -168,6 +169,14 @@ export function AccessComboboxHierarchical(
   const itemClass = (itemValue: string) =>
     cn(
       "rounded-none px-3 py-2 bg-surface-strong hover:bg-surface-muted data-[selected=true]:bg-surface-muted",
+      // Multi mode: cmdk stamps data-[selected]="false" on EVERY row, and the
+      // shared CommandItem base tints any present-[data-selected] row with
+      // bg-primary/8% — greying the whole list (owner review: the access-picker
+      // dropdown background must be WHITE, cinatra#1261). Redeclaring the same
+      // data-selected bg group drops that tint (tailwind-merge) and restores a
+      // white idle row; the active/hover row (data-[selected]="true") keeps the
+      // muted highlight via the !-flagged value-matched variant.
+      multiple && "data-selected:bg-surface-strong data-[selected=true]:!bg-surface-muted",
       !multiple && props.value === itemValue && "bg-surface-muted",
     );
 
@@ -249,9 +258,12 @@ export function AccessComboboxHierarchical(
             aria-checked={multiple ? state.checked : undefined}
             className={cn(
               "rounded-none px-3 py-2 bg-surface-strong",
+              // Same white-dropdown fix as the enabled rows (cinatra#1261):
+              // override cmdk's present-[data-selected] bg-primary/8% tint.
+              multiple && "data-selected:bg-surface-strong",
               // Implied-checked rows keep the selected-row tint; pure locks mute.
               multiple && state.checked
-                ? "bg-surface-muted text-foreground opacity-80"
+                ? "data-selected:bg-surface-muted text-foreground opacity-80"
                 : "text-muted-foreground opacity-60",
             )}
           >
@@ -277,7 +289,9 @@ export function AccessComboboxHierarchical(
         }}
         className={cn(
           itemClass(itemValue),
-          multiple && state.checked && "bg-surface-muted",
+          // Checked rows keep the selected-row tint; use the data-selected group
+          // so it beats the idle white restored above (cinatra#1261).
+          multiple && state.checked && "data-selected:bg-surface-muted",
         )}
       >
         {body}
@@ -379,7 +393,7 @@ export function AccessComboboxHierarchical(
           TooltipTrigger's asChild Slot forwards its own onto the Button beneath.
           Nesting PopoverTrigger around <TooltipProvider> (which renders no DOM
           node and forwards nothing) silently dropped the popover's open handler,
-          so an "N scopes" trigger could never open (cinatra#1261). Keeping
+          so a multi-scope trigger could never open (cinatra#1261). Keeping
           PopoverTrigger → TooltipTrigger → Button chains both onto the Button. */}
       {multiple && multiSelection.length > 1 ? (
         <TooltipProvider>

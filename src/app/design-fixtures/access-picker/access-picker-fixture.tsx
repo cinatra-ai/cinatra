@@ -80,7 +80,7 @@ export function AccessPickerFixture() {
           scopes={SEED_SCOPES}
         />
       </Case>
-      <Case id="picker-multi" label="Trigger: N scopes (tooltip)">
+      <Case id="picker-multi" label="Trigger: multi-scope composition (tooltip)">
         <AccessComboboxHierarchical
           multiple
           value={["team:team-rev", "org:org-beta", "project:proj-atlas"]}
