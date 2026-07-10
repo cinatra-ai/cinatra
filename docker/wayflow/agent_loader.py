@@ -95,6 +95,23 @@ _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_WAYFLOW_CONTEXT_ID", default=""
 )
 
+#: #1193 run-token spine (W2). Holds the RAW dispatch-minted per-run token for
+#: the task currently executing in this asyncio task / coroutine chain. Popped
+#: from the initial A2A message BEFORE it is appended to the WayFlow
+#: conversation (so the bearer never enters prompt/history/persistence), then
+#: read by the patched ApiCallStep._execute_request to attach X-Cinatra-Run-Token
+#: on host-anchored context-resolve/context-finalize callbacks. The server
+#: resolves "which run is calling" from this ONE credential (verifyRunToken →
+#: unique-index row) instead of a body-selected id. Reset to "" between tasks.
+_WAYFLOW_RUN_TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_WAYFLOW_RUN_TOKEN", default=""
+)
+
+#: The reserved initial-message key under which the Cinatra dispatcher embeds the
+#: RAW per-run token. MUST equal CINATRA_RUN_TOKEN_MESSAGE_KEY in
+#: src/lib/agent-run-token.ts — a cross-language ABI with no shared import.
+CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
+
 #: Default HTTP timeout (in seconds) applied to any ApiNode call that does
 #: not declare its own. 24 hours — matches the OpenAI batch API SLA upper
 #: bound. The caller (BullMQ worker / A2A request) imposes its own job
@@ -217,6 +234,55 @@ def _filter_inputs_to_flow_schema(
         return start_inputs
     declared_keys = set(declared.keys())
     return {k: v for k, v in start_inputs.items() if k in declared_keys}
+
+
+def _pop_run_token_from_message(
+    message: Optional[Dict[str, Any]],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Pop the reserved run-token key out of the initial A2A message.
+
+    #1193 run-token spine (W2). The dispatcher embeds the RAW per-run token in
+    the first text part's JSON object under ``CINATRA_RUN_TOKEN_MESSAGE_KEY``.
+    That token is a BEARER credential — it must NEVER survive into WayFlow's
+    conversation, because ``_patched_run_task`` later converts + appends +
+    persists this same message and the history can be replayed to the LLM.
+    Merely filtering it out of the Flow ``start_conversation`` inputs (which the
+    schema filter already does) does NOT scrub the appended message.
+
+    Returns ``(raw_token, scrubbed_message)``: the popped token (``""`` when
+    absent) and a SHALLOW-COPIED message whose first text part re-serialises the
+    JSON object WITHOUT the reserved key — every other key
+    (``cinatra_run_id`` / ``cinatra_run_binding`` / author inputs) is preserved.
+
+    Fails SAFE and never raises: any shape it does not recognise (no message, no
+    text part, non-JSON, non-object, key absent) returns ``("", message)``
+    unchanged so the token stays inert (the schema filter still drops it from
+    Flow inputs). The caller's message dict is never mutated in place.
+    """
+    if not isinstance(message, dict):
+        return "", message
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return "", message
+    p0 = parts[0]
+    if not (
+        isinstance(p0, dict)
+        and p0.get("kind") == "text"
+        and isinstance(p0.get("text"), str)
+    ):
+        return "", message
+    try:
+        parsed = json.loads(p0["text"])
+    except (ValueError, TypeError):
+        return "", message
+    if not isinstance(parsed, dict) or CINATRA_RUN_TOKEN_MESSAGE_KEY not in parsed:
+        return "", message
+    token = parsed.pop(CINATRA_RUN_TOKEN_MESSAGE_KEY)
+    new_p0 = dict(p0)
+    new_p0["text"] = json.dumps(parsed)
+    new_message = dict(message)
+    new_message["parts"] = [new_p0, *parts[1:]]
+    return (token if isinstance(token, str) else ""), new_message
 
 
 # Surface EndNode declared outputs as a structured A2A DataPart so the Cinatra
@@ -512,6 +578,19 @@ def _patch_api_call_step_bridge_token() -> None:
                 or "/auditor/apply" in _ctx_url
             ):
                 request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
+            # #1193 run-token spine (W2): attach the RAW per-run token on the
+            # host-anchored context callbacks (resolve/finalize) so the server
+            # resolves "which run is calling" from the ONE dispatch-minted
+            # credential (verifyRunToken → unique-index row) rather than a
+            # body-selected id. Scoped to the context routes this wave; the
+            # llm-bridge / MCP-tagging consumers move onto it in W3. Read from a
+            # per-task ContextVar the OAS author cannot write, and only ever sent
+            # to the internal host (the _is_internal gate above).
+            _run_tok = _WAYFLOW_RUN_TOKEN.get()
+            if _run_tok and (
+                "context-resolve" in _ctx_url or "context-finalize" in _ctx_url
+            ):
+                request["headers"]["X-Cinatra-Run-Token"] = _run_tok
             # #907/#1192: mint the per-node context-callback attestation for the
             # internal context-resolution ApiNodes. `self` IS the executing
             # compiled step; `self.id` is the inlined context node's id
@@ -786,6 +865,13 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         # Capture task_id BEFORE any await — the outer finally must always
         # be able to notify, even if `storage.load_task` itself raises.
         _task_id_for_notify = params["id"]
+        # #1193 run-token spine (W2): pre-initialise the ContextVar reset tokens
+        # so the outer `finally` can reset UNCONDITIONALLY and SAFELY even if
+        # `load_task` raises before either ContextVar is set. (The prior
+        # `_ctx_token` capture was dead code — set but never reset; this wave
+        # turns it into a real try/finally reset alongside the run token.)
+        _ctx_token = None
+        _rt_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -798,6 +884,20 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 )
 
             await self.storage.update_task(task_id=task["id"], state="working")
+
+            # #1193 run-token spine (W2): pop the RAW per-run token out of the
+            # initial A2A message BEFORE it is parsed for start-inputs OR
+            # converted + appended to the conversation (both below), so the
+            # bearer credential never enters WayFlow prompt/history/persistence.
+            # Reassign params["message"] to the scrubbed copy and hold the raw
+            # token in a per-task ContextVar the patched ApiCallStep reads to
+            # attach X-Cinatra-Run-Token on host-anchored context callbacks.
+            _run_token, _scrubbed_message = _pop_run_token_from_message(
+                params.get("message")
+            )
+            if _scrubbed_message is not None:
+                params["message"] = _scrubbed_message
+            _rt_token = _WAYFLOW_RUN_TOKEN.set(_run_token or "")
 
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
@@ -1002,6 +1102,15 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 )
             raise
         finally:
+            # #1193 run-token spine (W2): reset the per-task ContextVars so the
+            # run token / context id never leak across asyncio tasks reusing this
+            # coroutine chain. Reset ONLY when set (load_task may raise first) —
+            # this is the real try/finally reset the prior dead _ctx_token
+            # capture never performed. Reset the run token first (LIFO wrt set).
+            if _rt_token is not None:
+                _WAYFLOW_RUN_TOKEN.reset(_rt_token)
+            if _ctx_token is not None:
+                _WAYFLOW_CONTEXT_ID.reset(_ctx_token)
             # CINATRA HANG FIX: always notify, regardless of success/failure
             # path. anyio.Event.set() is idempotent, so success paths that
             # already notified are unaffected. This guarantees blocking-mode
