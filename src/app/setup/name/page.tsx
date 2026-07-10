@@ -77,10 +77,10 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
       approvedExactNames={getApprovedInstanceNamespaces()}
     >
     <div className="flex flex-col gap-6">
-      {/* Errors are surfaced as a toast by <SetupToast/> in the setup layout
-          (reads the ?error= redirect param). The `errorMessage` var is still
-          read above to suppress the auto-advance redirect when an error is
-          present. */}
+      {/* Errors are surfaced as a toast by the codes-only <SearchParamToast>
+          island in the setup layout (reads the ?error=<code> redirect param and
+          maps it to a static message). The `errorMessage` var is still read
+          above to suppress the auto-advance redirect when an error is present. */}
 
       <div>
         <p className="text-base font-semibold text-foreground">Name your Cinatra instance</p>

@@ -90,14 +90,31 @@ export function filterAvailableScopesForParentPolicy(
     return a;
   }
 
-  // TRANSITIONAL (multi-scope W1): fields are token arrays. The UX pre-filter
-  // reads the FIRST token per field; the per-field union (admit the union of
-  // every token's admitted set) is the enforcement-lift issue (W2). Writers are
-  // single-token until the multi-select picker (W3).
+  // Multi-scope W2: fields are NON-EMPTY token arrays. The admitted set for a
+  // field is the UNION of every token's admitted set (any-match: a scope the
+  // field admits is one SOME token admits). A single-token field reduces to the
+  // pre-array `admitsFor(field[0])`.
+  function admitsForField(
+    selection: readonly AgentAuthPolicyVisibility[],
+  ): Admitted {
+    const acc = empty();
+    for (const v of selection) {
+      const a = admitsFor(v);
+      for (const id of a.orgIds) acc.orgIds.add(id);
+      for (const id of a.teamIds) acc.teamIds.add(id);
+      for (const id of a.projectIds) acc.projectIds.add(id);
+      acc.admitAnyOrg = acc.admitAnyOrg || a.admitAnyOrg;
+      acc.admitWorkspace = acc.admitWorkspace || a.admitWorkspace;
+    }
+    return acc;
+  }
+
+  // Per-field union; the cross-field INTERSECTION below is unchanged (the form
+  // locksteps all three fields, so a shown scope must pass every field).
   const fields = [
-    admitsFor(parentPolicy.runListVisibility[0]),
-    admitsFor(parentPolicy.runDataVisibility[0]),
-    admitsFor(parentPolicy.runExecuteVisibility[0]),
+    admitsForField(parentPolicy.runListVisibility),
+    admitsForField(parentPolicy.runDataVisibility),
+    admitsForField(parentPolicy.runExecuteVisibility),
   ];
 
   // Intersection. Workspace is "anything below" — intersected with a

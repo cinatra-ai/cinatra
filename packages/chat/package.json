@@ -5,10 +5,19 @@
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./renderer": "./src/renderer/index.ts",
+    "./chat-page": "./src/chat-page.tsx",
+    "./actions": "./src/actions.ts",
+    "./module": "./src/integration/module.ts",
+    "./mcp-handlers": "./src/mcp/handlers.ts"
+  },
   "scripts": {
     "test": "vitest run"
   },
   "dependencies": {
+    "@cinatra-ai/agent-ui-protocol": "workspace:*",
     "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",

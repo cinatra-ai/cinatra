@@ -32,6 +32,20 @@ import {
 } from "@/lib/better-auth-db";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+// OBO scope-ceiling helpers (pure zero-dep subpath — never the heavy facade).
+//  - `resourceWithinCeiling` + `CeilingResource`: facet form used by the skills
+//    gate (`requireResourceAccess`, #1052) AND the agent-template rows
+//    (`agent_get` / `agent_list`, #1051).
+//  - `oboCeilingContains`: run-chain ⊇ actor-chain containment for
+//    `enforceRunAccess` (#1051) — the run's persisted anchor chain must contain
+//    every element of the accessing agent's ceiling.
+import {
+  oboCeilingContains,
+  resourceWithinCeiling,
+  type CeilingResource,
+  type OboCeilingChain,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
+import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 
 // Client-safe types and schema live in auth-policy-types.ts so that client
 // components can import them without pulling in this file's server-only guard.
@@ -49,7 +63,11 @@ export type {
   AgentAuthPolicyVisibilitySelection,
 } from "./auth-policy-types";
 import { AgentAuthPolicySchema, DEFAULT_AGENT_AUTH_POLICY } from "./auth-policy-types";
-import type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "./auth-policy-types";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+  AgentAuthPolicyVisibilitySelection,
+} from "./auth-policy-types";
 
 // ---------------------------------------------------------------------------
 // Operation → Permission mapping
@@ -211,6 +229,20 @@ export function requireResourceAccess(
   // org_admin/org_owner may MANAGE them — the blast-radius guard.
   mode: "read" | "manage" = "read",
 ): void {
+  // OBO scope-ceiling containment — evaluated BEFORE the platform_admin bypass
+  // (and before every owner/level short-circuit below), so a delegated agent run
+  // stays confined to the agent's anchored scope even when the invoking user is a
+  // platform admin OR the resource's own owner. `actor.oboCeiling` is set ONLY for
+  // agent-run OBO delegated actors (threaded from the signed token onto the kernel
+  // actor in actorContextFromMcpRequest); undefined ⇒ no-op for every human /
+  // session / machine caller. Load-bearing ordering, mirrors the #1051 kernel
+  // surfaces and the workflows/dashboards resolvers in this wave.
+  if (
+    actor.oboCeiling &&
+    !resourceWithinCeiling(skillResourceToCeilingFacets(resource, actor), actor.oboCeiling)
+  ) {
+    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
+  }
   // platform_admin bypass — mirrors policyAllows shortcircuit
   if (actor.platformRole === "platform_admin") return;
 
@@ -292,6 +324,60 @@ export function requireResourceAccess(
 }
 
 /**
+ * Map a `SkillResourceRef` onto the shared `CeilingResource` facets consumed by
+ * `resourceWithinCeiling`. The skill catalog's `level`
+ * (system/team/organization/workspace/project/personal/agent) collapses onto the
+ * ceiling's owner axis (user/team/organization/workspace) + project refinement:
+ *
+ *   - system                 → no tenant/owner/project ⇒ outside EVERY org-floored
+ *                              ceiling (a platform-global skill is never within an
+ *                              agent's org/user/team/project anchor → denied).
+ *   - organization           → owner {organization, org}, orgId = the skill's REAL
+ *                              owning org (`resource.organizationId`), so a
+ *                              cross-org org-skill fails the ceiling's org floor.
+ *   - team | workspace       → owner {tier, ownerId}.
+ *   - project                → projectId = ownerId (the project id); no owner element.
+ *   - personal | agent | ⊥   → owner {user, ownerId} (personal clamps to user tier).
+ *
+ * For the grant-scoped levels whose ref does not carry an explicit org
+ * (team/workspace/project/personal), orgId falls back to the invoker's active org.
+ * That is sound: these are org-scoped grants and an agent-run OBO actor shares the
+ * run org that produced the chain's org floor, so the OWNER / PROJECT element does
+ * the real narrowing while the org floor stays satisfied for in-org resources
+ * (genuine cross-org skills are never resolved into the ref on the in-org OBO path).
+ */
+function skillResourceToCeilingFacets(
+  resource: SkillResourceRef,
+  actor: ActorContext,
+): CeilingResource {
+  const level = resource.level;
+  if (level === "system") {
+    return { orgId: null, owner: null, projectId: null };
+  }
+  const orgId = resource.organizationId ?? actor.organizationId ?? null;
+  if (level === "project") {
+    return { orgId, owner: null, projectId: resource.ownerId ?? null };
+  }
+  if (level === "team" || level === "workspace") {
+    return resource.ownerId
+      ? { orgId, owner: { tier: level, id: resource.ownerId }, projectId: null }
+      : { orgId, owner: null, projectId: null };
+  }
+  if (level === "organization") {
+    return {
+      orgId,
+      owner: orgId ? { tier: "organization", id: orgId } : null,
+      projectId: null,
+    };
+  }
+  // personal | agent | undefined ⇒ user-tier owner (personal-skill tools clamp to
+  // the invoking user's tier).
+  return resource.ownerId
+    ? { orgId, owner: { tier: "user", id: resource.ownerId }, projectId: null }
+    : { orgId, owner: null, projectId: null };
+}
+
+/**
  * Async adapter: resolves teamIds and projectIds from the DB, then delegates
  * to buildActorContextFromPrimitive.
  *
@@ -366,25 +452,31 @@ export async function actorContextFromMcpRequest(
 
   // Pass projectGrants (canonical axis); projectIds is derived inside
   // buildActorContextFromPrimitive (single derivation).
-  return buildActorContextFromPrimitive(actor, orgId, {
+  const built = buildActorContextFromPrimitive(actor, orgId, {
     teamIds,
     projectGrants,
     platformRole,
     orgRole,
   });
+
+  // Thread the agent-run OBO scope-ceiling from the transport request frame onto
+  // the kernel actor so `requireResourceAccess` can confine delegated skill reads
+  // to the agent's anchored scope. Present ONLY for agent-run OBO delegations
+  // (stamped on the frame by the MCP boundary from the signed token); undefined
+  // for chat / session / machine callers, leaving their behavior unchanged.
+  if (requestCtx?.oboCeiling) {
+    (built as ActorContext).oboCeiling = requestCtx.oboCeiling;
+  }
+  return built;
 }
 
-/**
- * Pure helper: maps an AgentAuthPolicyVisibility value to the locked UI-SPEC
- * §C copy strings.
- *
- * Returns null for "owner" and undefined (no element rendered for those).
- */
-export function buildScopeReason(
-  visibility: AgentAuthPolicyVisibility | undefined,
+/** Per-token scope-reason copy (UI-SPEC §C). Returns null for "owner" (owner
+ * access is implicit) and any unrecognized token. */
+function scopeReasonForToken(
+  visibility: AgentAuthPolicyVisibility,
   context: { orgName?: string; teamName?: string; projectName?: string },
 ): string | null {
-  if (!visibility || visibility === "owner") return null;
+  if (visibility === "owner") return null;
   if (visibility.startsWith("team:"))
     return `You can see this because you're a member of ${context.teamName ?? "a team"}.`;
   if (visibility === "org" || visibility.startsWith("org:"))
@@ -394,6 +486,37 @@ export function buildScopeReason(
   if (visibility === "workspace") return "Visible to everyone in the workspace.";
   if (visibility === "admin") return "Visible to platform admins only.";
   return null;
+}
+
+/**
+ * Pure helper: maps an AgentAuthPolicyVisibility value — a single token OR a
+ * NON-EMPTY selection array (multi-scope W2) — to the locked UI-SPEC §C copy.
+ *
+ * A selection joins its DISTINCT per-token reasons (a union of grants). A
+ * scalar (or single-token array) reduces to the exact pre-array single reason,
+ * so existing single-token callers are unchanged. `owner` tokens contribute no
+ * reason; an all-`owner`, empty, or undefined input returns null. `context`
+ * carries one org/team/project name set — a multi-token selection spanning
+ * several concrete loci reuses those names (richer per-token naming is the W3
+ * picker's wiring).
+ */
+export function buildScopeReason(
+  visibility:
+    | AgentAuthPolicyVisibility
+    | readonly AgentAuthPolicyVisibility[]
+    | undefined,
+  context: { orgName?: string; teamName?: string; projectName?: string },
+): string | null {
+  if (!visibility) return null;
+  const tokens: readonly AgentAuthPolicyVisibility[] = Array.isArray(visibility)
+    ? visibility
+    : [visibility];
+  const reasons: string[] = [];
+  for (const t of tokens) {
+    const r = scopeReasonForToken(t, context);
+    if (r && !reasons.includes(r)) reasons.push(r);
+  }
+  return reasons.length > 0 ? reasons.join(" ") : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +559,21 @@ export type RunForAccessCheck =
       // editOutput, cancel, share`. `run.managePermissions` stays
       // owner+admin only.
       coOwnerUserIds?: string[];
+      /**
+       * The run's PERSISTED OBO scope-ceiling chain (`agent_runs.obo_ceiling`,
+       * derived at dispatch from the run's LOCKED template anchor + org +
+       * project — W1/#1050). Surfaced onto `AgentRunRecord` by `deserializeRun`,
+       * so every full-row caller (`readAgentRunById`, the run mutation handlers,
+       * the per-row list filters) carries it via `{ ...run }`. The run ceiling
+       * gate (`enforceRunAccess`) treats:
+       *   - `undefined` (a synthetic probe that is NOT a real persisted run:
+       *     the template-execute probe, the connector probe) → SKIP; those gate
+       *     a capability, not access to an existing run row;
+       *   - `null` (a real run whose stored chain is malformed/corrupt) → DENY
+       *     (fail closed);
+       *   - a chain → containment check against the accessing agent's ceiling.
+       */
+      oboCeiling?: OboCeilingChain | null;
     }
   | null
   | undefined;
@@ -508,28 +646,27 @@ export function policyAllows(
   // kernel semantic: platform_admin bypasses org-guard and
   // resource-guard alike.
   if (actor.platformRole === "platform_admin") return true;
-  // TRANSITIONAL (multi-scope W1): each visibility field is now a NON-EMPTY
-  // array (union of grants). This matcher still consults the FIRST token to
-  // preserve today's single-token semantics — the any-match lift (iterate
-  // every token; admit if ANY token admits the actor) is the enforcement-lift
-  // issue (W2). All writers produce single-token arrays until the multi-select
-  // picker ships (W3, which lands after W2), so `[0]` is behavior-identical to
-  // the pre-array scalar read and cannot over-grant.
-  let visibility: AgentAuthPolicyVisibility;
+  // Multi-scope W2: each visibility field is a NON-EMPTY array (a union of
+  // grants). The matcher is ANY-MATCH — the actor is admitted iff SOME token in
+  // the selected field admits them (`matchRunVisibilityToken` is the per-token
+  // decision). A single-token field (every writer until the W3 multi-select
+  // picker) reduces to the exact pre-array scalar decision, so this can neither
+  // over- nor under-grant an existing policy.
+  let tokens: AgentAuthPolicyVisibilitySelection;
   switch (op) {
     case "list":
-      visibility = policy.runListVisibility[0];
+      tokens = policy.runListVisibility;
       break;
     case "read":
     case "editOutput":
-      visibility = policy.runDataVisibility[0];
+      tokens = policy.runDataVisibility;
       break;
     case "execute":
     case "approveHitl":
     case "respondToHitl":
     case "cancel":
       // cancel is an execute-tier op (mutates run state).
-      visibility = policy.runExecuteVisibility[0];
+      tokens = policy.runExecuteVisibility;
       break;
     case "share":
       // share is gated by allowRunSharing first; if the policy
@@ -537,62 +674,76 @@ export function policyAllows(
       // Otherwise it surfaces run data to a wider audience and follows
       // runDataVisibility (read-tier).
       if (!policy.allowRunSharing) return false;
-      visibility = policy.runDataVisibility[0];
+      tokens = policy.runDataVisibility;
       break;
     default: {
-      // Exhaustive guard. When RunAccessOperation gains a new variant
-      // (e.g. "share" for the future allowRunSharing surface), this line
-      // fails tsgo and forces an explicit decision
-      // about which visibility tier governs the new op. Without the
-      // guard, `visibility` would be uninitialized and the post-switch
-      // comparisons would throw "Cannot read properties of undefined".
+      // Exhaustive guard. When RunAccessOperation gains a new variant this
+      // line fails tsgo and forces an explicit decision about which visibility
+      // tier governs the new op.
       const _exhaustive: never = op;
       throw new Error(
         `policyAllows: unhandled RunAccessOperation: ${String(_exhaustive)}`,
       );
     }
   }
-  // ---------------------------------------------------------------------------
-  // Widened visibility branches. Order: workspace bare literal,
-  // then team:<id> prefix, then project:<id> prefix. The existing "admin" /
-  // "owner" / "org" tail stays unchanged below.
-  // ---------------------------------------------------------------------------
+  // Any-match: admit if ANY token in the field admits the actor.
+  return tokens.some((visibility) => matchRunVisibilityToken(visibility, actor));
+}
 
+/**
+ * Per-token run-visibility decision — the single-token predicate the any-match
+ * matcher in {@link policyAllows} folds over each field's token array. Runs
+ * ONLY for non-platform-admin actors (platform_admin is short-circuited in
+ * policyAllows before any token is consulted) and AFTER the kernel `can()`
+ * cross-org guard.
+ *
+ * Tiers (run path). NOTE: `"admin"` here is platform-admin-only — it DIVERGES
+ * from the owner-aware `"admin"` in the extension matcher
+ * (`packages/extensions/src/enforce-extension-access.ts`); each matcher keeps
+ * its own admin semantics.
+ *   workspace    → every same-org member (guard already passed) → allow
+ *   org:<id>     → actor's active org equals <id>
+ *   team:<id>    → actor is a member of <id>
+ *   project:<id> → actor holds a grant on <id>
+ *   admin        → deny (platform_admin already returned true upstream)
+ *   owner        → deny (owner is short-circuited above the policy gate)
+ *   org (legacy) → allow (kernel cross-org guard already applied)
+ */
+function matchRunVisibilityToken(
+  visibility: AgentAuthPolicyVisibility,
+  actor: ActorContext,
+): boolean {
   if (visibility === "workspace") {
-    // "Workspace: All" means EVERY workspace user can use the resource —
-    // not just org_admin/org_owner — matching the UI label
-    // "Whole Workspace / All".
-    // Safe here because policyAllows() runs AFTER enforceRunAccess() +
-    // the kernel can() cross-org guard for non-owners
-    // (src/lib/authz/enforce.ts) — an anonymous/missing actor is already
-    // rejected upstream and a different-org actor is already blocked by
-    // the org guard, so this is "every same-org member of this run's org"
-    // for runs. Manage/grant of workspace visibility stays admin-only
-    // (canGrantWorkspace +
+    // "Workspace: All" means EVERY workspace user can use the resource — not
+    // just org_admin/org_owner — matching the UI label "Whole Workspace / All".
+    // Safe here because policyAllows() runs AFTER enforceRunAccess() + the
+    // kernel can() cross-org guard for non-owners (src/lib/authz/enforce.ts):
+    // an anonymous/missing actor is already rejected upstream and a
+    // different-org actor is already blocked by the org guard. Manage/grant of
+    // workspace visibility stays admin-only (canGrantWorkspace +
     // requireResourceAccess mode:"manage").
     return true;
   }
   if (typeof visibility === "string" && visibility.startsWith("org:")) {
-    const orgId = visibility.slice("org:".length);
-    return Boolean(actor.organizationId === orgId);
+    return actor.organizationId === visibility.slice("org:".length);
   }
   if (typeof visibility === "string" && visibility.startsWith("team:")) {
-    const teamId = visibility.slice("team:".length);
-    return Boolean(actor.teamIds?.includes(teamId));
+    return Boolean(actor.teamIds?.includes(visibility.slice("team:".length)));
   }
   if (typeof visibility === "string" && visibility.startsWith("project:")) {
-    const projectId = visibility.slice("project:".length);
-    return Boolean(actor.projectIds?.includes(projectId));
+    return Boolean(
+      actor.projectIds?.includes(visibility.slice("project:".length)),
+    );
   }
-  // "admin" tier with non-admin actor: deny (admin bypass already returned
-  // above for platform_admin === true).
+  // "admin" tier with a non-admin actor: deny (platform_admin bypass already
+  // returned true in policyAllows).
   if (visibility === "admin") return false;
-  // "owner" tier never allows here — owner is short-circuited above the
-  // policy gate. Any non-owner reaching this code with visibility="owner"
-  // is denied. "org" tier defers to the kernel's already-passed allow
-  // decision (which has applied the cross-org guard).
+  // "owner" tier never allows here — owner is short-circuited above the policy
+  // gate. Any non-owner reaching this code with visibility="owner" is denied.
   if (visibility === "owner") return false;
-  return true; // "org"
+  // "org" (legacy bare token) defers to the kernel's already-passed allow
+  // decision (which has applied the cross-org guard).
+  return true;
 }
 
 /**
@@ -662,6 +813,43 @@ export async function enforceRunAccess(
       statusCode: 403,
       reason: "forbidden",
       message: `Run access denied: token scope insufficient (required ${permission}).`,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Agent-run OBO scope-ceiling — a SECOND hard upper bound, enforced HERE
+  // (alongside the token-scope ceiling above) BEFORE the runBy owner / co-owner
+  // short-circuits AND before the delegated kernel `can()` / platform-admin
+  // path (W2/#1051). Otherwise a run-owner or platform-admin invoker would
+  // nullify the ceiling for every delegated run, letting a narrowly-anchored
+  // agent reach a run outside its scope.
+  //
+  // Fires ONLY for agent-run-OBO delegated actors (`actor.oboCeiling` present;
+  // undefined for every human / session / A2A / machine caller → skip). The
+  // run is bounded by its OWN persisted chain (`run.oboCeiling`), which was
+  // derived at dispatch from the run's LOCKED template anchor + org + project —
+  // NOT from `runBy`, so an agent always reads its own run (its run's anchor ==
+  // the agent's anchor) while a team-anchored agent stays confined to
+  // team-anchored runs. `oboCeilingContains(run.oboCeiling, actor.oboCeiling)`
+  // holds iff every element of the agent's ceiling is contained in the run's
+  // chain (agent ⊆ run) — the containment form of "the run is within the
+  // agent's ceiling".
+  //
+  //   - run.oboCeiling === undefined → a synthetic probe (template-execute /
+  //     connector), NOT a real persisted run — SKIP (the probe gates a
+  //     capability, not access to a run row);
+  //   - run.oboCeiling === null      → a real run with a corrupt stored chain
+  //     — DENY (fail closed);
+  //   - a chain that does not contain the agent's chain → DENY.
+  if (
+    actor.oboCeiling &&
+    run.oboCeiling !== undefined &&
+    !oboCeilingContains(run.oboCeiling, actor.oboCeiling)
+  ) {
+    throw new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message: "Run access denied: outside agent scope ceiling.",
     });
   }
 
@@ -911,8 +1099,41 @@ export async function checkConnectorAccess(
  * caller-supplied tool input. Returns the template on success, or an `{ error }`
  * envelope on denial/miss (the handler forwards either verbatim).
  */
+/**
+ * Facet-based agent-run OBO scope-ceiling test for an agent-template row
+ * (W2/#1051) — shared by `agent_get` (authorizeAgentTemplateRead) and the
+ * `agent_list` per-row filter. Returns `true` when no ceiling applies (a
+ * non-OBO caller: `oboCeiling` undefined). Agent templates carry no project
+ * refinement, so a project-anchored ceiling (a `{project,P}` element under
+ * satisfy-all) always denies — the correct fail-closed confinement. A null
+ * owner anchor normalizes to the organization tier (deny narrower agents).
+ */
+export function agentTemplateWithinOboCeiling(
+  oboCeiling: OboCeilingChain | undefined,
+  template: {
+    orgId?: string | null;
+    ownerLevel?: string | null;
+    ownerId?: string | null;
+  },
+): boolean {
+  if (!oboCeiling) return true;
+  return resourceWithinCeiling(
+    {
+      orgId: template.orgId ?? null,
+      owner: {
+        tier: normalizeOwnerLevel(template.ownerLevel ?? "organization"),
+        id: template.ownerId ?? "",
+      },
+      projectId: null,
+    },
+    oboCeiling,
+  );
+}
+
 export async function authorizeAgentTemplateRead(
-  actor: { userId?: string; actorType?: string; source?: string } | undefined,
+  actor:
+    | { userId?: string; actorType?: string; source?: string; oboCeiling?: OboCeilingChain }
+    | undefined,
   templateId: string,
   organizationId: string | undefined,
   isAdmin: boolean,
@@ -927,6 +1148,32 @@ export async function authorizeAgentTemplateRead(
   const template = await readAgentTemplateById(templateId);
   if (!template) return { error: `Template not found: ${templateId}` };
   if (!isAdmin && (template as { orgId?: string | null }).orgId !== organizationId) {
+    void logAuditEvent({
+      actorPrincipalId: actor?.userId,
+      actorPrincipalType: (actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
+      authSource: (actor?.source as AuditEventInput["authSource"]) ?? "mcp",
+      resourceType: "agent_template",
+      resourceId: templateId,
+      operation: "read",
+      decision: "denied",
+      policyVersion: POLICY_VERSION,
+    });
+    return { error: `Template not found: ${templateId}` };
+  }
+  // Agent-run OBO scope-ceiling (W2/#1051): confine a delegated agent to
+  // agent-template rows within its anchored scope, checked before the row is
+  // returned (and after the org-tenant guard above). Fires only for
+  // agent-run-OBO actors (`actor.oboCeiling` present); a null anchor normalizes
+  // to the organization tier (deny narrower agents, per the derive convention).
+  // Denials are surfaced as the same 404-equivalent "not found" as the
+  // cross-org guard so a confined agent cannot enumerate template ids.
+  if (
+    actor?.oboCeiling &&
+    !agentTemplateWithinOboCeiling(
+      actor.oboCeiling,
+      template as { orgId?: string | null; ownerLevel?: string | null; ownerId?: string | null },
+    )
+  ) {
     void logAuditEvent({
       actorPrincipalId: actor?.userId,
       actorPrincipalType: (actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",

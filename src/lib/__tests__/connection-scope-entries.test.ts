@@ -113,4 +113,49 @@ describe("buildConnectionScopeEntries", () => {
     );
     expect(entries.get(PKG)).toBeUndefined();
   });
+
+  // Multi-scope W2: runDataVisibility is a token array — fan out ONE locus
+  // entry per token.
+  const policyMulti = (tokens: string[]): AgentAuthPolicy =>
+    ({
+      runListVisibility: tokens,
+      runDataVisibility: tokens,
+      runExecuteVisibility: tokens,
+      allowRunSharing: false,
+    }) as unknown as AgentAuthPolicy;
+
+  it("fans out one locus entry per token in a multi-scope grant", () => {
+    const entries = buildConnectionScopeEntries(
+      [row("c11", OTHER)],
+      new Map([["c11", policyMulti(["team:team-9", "project:proj-7"])]]),
+      ACTOR,
+    );
+    expect(entries.get(PKG)).toEqual([
+      { locus: "team", locusId: "team-9" },
+      { locus: "project", locusId: "proj-7" },
+    ]);
+  });
+
+  it("a mix of a broad token and a concrete token emits only the concrete locus", () => {
+    const entries = buildConnectionScopeEntries(
+      [row("c12", OTHER)],
+      new Map([["c12", policyMulti(["workspace", `org:${ORG}`])]]),
+      ACTOR,
+    );
+    // workspace → no entry (default view); org:<id> → one org entry.
+    expect(entries.get(PKG)).toEqual([{ locus: "organization", locusId: ORG }]);
+  });
+
+  it("the actor's own multi-scope connection still contributes a single personal entry plus its shared loci", () => {
+    const entries = buildConnectionScopeEntries(
+      [row("c13", ACTOR)],
+      new Map([["c13", policyMulti(["team:team-9", "project:proj-7"])]]),
+      ACTOR,
+    );
+    expect(entries.get(PKG)).toEqual([
+      { locus: "personal" },
+      { locus: "team", locusId: "team-9" },
+      { locus: "project", locusId: "proj-7" },
+    ]);
+  });
 });

@@ -75,6 +75,14 @@ export interface ApprovalRow {
   /** Single-admin self-approval flag ("your own request"). */
   isOwnRequest?: boolean;
   eligibility?: RowEligibility;
+  /** OPTIONAL PUBLIC optimistic-concurrency token — the source-opaque value a
+   *  decision must echo back (e.g. the agent source's CAS snapshot hash). Unlike
+   *  {@link raw} it is a PUBLIC string a non-owning caller MAY read/serialize:
+   *  `approvals_get` returns it so an MCP client round-trips it into
+   *  `approvals_decide`'s `expectedVersion`, preserving the same "captured at
+   *  view" edit-after-view guard the UI gets by capturing it at render. A source
+   *  needing no concurrency token omits it. */
+  version?: string;
   /** ADAPTER-PRIVATE: only the owning source's rowRenderer may read it; nothing
    *  else may depend on its shape (e.g. the agent source stashes the CAS token). */
   raw?: unknown;
@@ -134,9 +142,25 @@ export type DecideResult =
 export interface ApprovalSource {
   id: string;
   title: string;
-  viewAllHref?: (dir: Direction) => string;
+  /** Optional section-header "View all" link target for a direction. Returns
+   *  `undefined` for a direction that has no drill-down (e.g. a single-direction
+   *  marketplace source in its OFF direction); the section renders no link then. */
+  viewAllHref?: (dir: Direction) => string | undefined;
+  /** OPTIONAL group tag. Sources sharing a group (e.g. the marketplace sources)
+   *  collapse into ONE group-level "not connected" `Empty` + a single sources
+   *  footer, instead of each rendering an independent section. Ungrouped (the v1
+   *  local sources) render standalone as before. */
+  group?: string;
   /** Coarse existence gate — see {@link Availability}. */
   availability(viewer: ApprovalViewer): Availability | Promise<Availability>;
+  /** OPTIONAL per-direction credential gate, distinct from {@link appliesTo}
+   *  (which is about whether the VIEWER can participate). A grouped source whose
+   *  own per-direction credential is absent returns `false` here so the page
+   *  HIDES that section and surfaces a one-line footer hint instead of firing a
+   *  doomed remote call — "misconfiguration is never silently masked". A LOCAL
+   *  read only (env / identity); it must not touch the network. Absent ⇒ the
+   *  section is always considered configured. */
+  sectionConfigured?(viewer: ApprovalViewer, direction: Direction): boolean;
   /** Cheap per-direction section-visibility gate — decided WITHOUT a privileged
    *  fetch so a section the viewer can't participate in is never rendered (e.g.
    *  the agent Inbox is admin-only; the workflow passthrough has no "Your

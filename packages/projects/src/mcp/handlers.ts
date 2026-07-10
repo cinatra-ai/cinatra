@@ -26,6 +26,11 @@ import {
 import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 import type { ProjectGrant, ProjectRole, ProjectAccessSource } from "@/lib/authz/actor-context";
+// Agent-run OBO scope-ceiling enforcement (W2/#1051) for the NON-kernel project
+// ops (they gate via `assertProjectGrantRole` / `assertProjectWritable`, each
+// with its own platform_admin bypass, so the ceiling must be checked BEFORE
+// those helpers) and for the `projects_list` grant-derived row filter.
+import { resourceWithinCeiling } from "@cinatra-ai/mcp-server/obo-ceiling";
 import * as schemas from "./schemas";
 // Write-block enforcement for project binding entry points.
 // Bindings MUST reject when the
@@ -124,9 +129,21 @@ const PROJECT_ROLE_RANK = {
 
 function assertProjectGrantRole(
   actor: PrimitiveActorContext,
-  projectId: string,
+  row: {
+    id: string;
+    ownerLevel: string;
+    ownerId: string;
+    organizationId: string | null;
+  },
   required: "read" | "write" | "admin" | "owner",
 ): void {
+  // Agent-run OBO scope-ceiling — enforced FIRST, BEFORE the `platform_admin`
+  // bypass below (W2/#1051). A delegated agent invoked by a platform-admin
+  // must not escape its anchored scope, so the ceiling runs ahead of the
+  // bypass. Inert for non-OBO callers (`actor.oboCeiling` undefined). Because
+  // every single-project op calls this helper before `assertProjectWritable`
+  // (whose own admin bypass sits behind this one), the ceiling bounds both.
+  assertResourceWithinCeiling(actor, row);
   // platform_admin bypass — same shape as the kernel's
   // `enforce.ts:67` short-circuit. Stamped by upstream code paths that
   // verified the session role at the request boundary.
@@ -138,12 +155,12 @@ function assertProjectGrantRole(
   )
     ? (actor as unknown as { projectGrants: ProjectGrant[] }).projectGrants
     : [];
-  const grant = grants.find((g) => g.projectId === projectId);
+  const grant = grants.find((g) => g.projectId === row.id);
   if (!grant) {
     throw new AuthzError({
       statusCode: 403,
       reason: "forbidden",
-      message: `No project_access for ${projectId}`,
+      message: `No project_access for ${row.id}`,
     });
   }
   if (PROJECT_ROLE_RANK[grant.effectiveRole] < PROJECT_ROLE_RANK[required]) {
@@ -151,6 +168,49 @@ function assertProjectGrantRole(
       statusCode: 403,
       reason: "forbidden",
       message: `Requires ${required}; have ${grant.effectiveRole}`,
+    });
+  }
+}
+
+/**
+ * Agent-run OBO scope-ceiling gate for the NON-kernel project ops (W2/#1051).
+ *
+ * The single-project ops (`projects_archive/unarchive`, `project_access_*`,
+ * `project_agent_template_bindings_*`) authorize via `assertProjectGrantRole`
+ * (and, for binding mutators, `assertProjectWritable`) — each of which has its
+ * OWN `platform_admin` bypass. So a delegated agent invoked by a platform-admin
+ * would sail past the grant gate for ANY project. This helper re-imposes the
+ * agent's anchored-scope ceiling and MUST be called BEFORE those helpers so the
+ * bound holds even for a platform-admin invoker.
+ *
+ * Fires ONLY when the actor carries `oboCeiling` (agent-run-OBO delegations);
+ * every human / session / machine caller has it undefined and is unaffected. A
+ * project is its own project-axis identity, so `projectId` is the row id.
+ */
+function assertResourceWithinCeiling(
+  actor: PrimitiveActorContext,
+  row: {
+    id: string;
+    ownerLevel: string;
+    ownerId: string;
+    organizationId: string | null;
+  },
+): void {
+  const ceiling = actor.oboCeiling;
+  if (!ceiling) return;
+  const within = resourceWithinCeiling(
+    {
+      orgId: row.organizationId,
+      owner: { tier: normalizeOwnerLevel(row.ownerLevel), id: row.ownerId },
+      projectId: row.id,
+    },
+    ceiling,
+  );
+  if (!within) {
+    throw new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message: "Access denied: outside agent scope ceiling.",
     });
   }
 }
@@ -181,6 +241,11 @@ function buildProjectResourceCheck(row: {
     ownerId: row.ownerId,
     visibility: row.visibility === "discoverable" ? "public" : "private",
     coOwnerUserIds,
+    // Project-axis identity for the OBO scope-ceiling gate (W2/#1051): a
+    // project IS its own project axis, so a project-anchored agent (ceiling
+    // carries `{project, P}`) reaches project P through `projects_get` /
+    // `projects_update` and no other project.
+    projectId: row.id,
   };
 }
 
@@ -272,9 +337,28 @@ export function createProjectsPrimitiveHandlers() {
 
       // Apply optional ownerLevel/ownerId predicate filters in JS — these
       // are post-filters on top of the actor's resolved visibility set.
+      const oboCeiling = request.actor.oboCeiling;
       const rows = result.rows
         .filter((r) => !input.ownerLevel || r.owner_level === input.ownerLevel)
-        .filter((r) => !input.ownerId || r.owner_id === input.ownerId);
+        .filter((r) => !input.ownerId || r.owner_id === input.ownerId)
+        // Agent-run OBO scope-ceiling filter (W2/#1051): drop any project row
+        // outside the delegated agent's anchored scope. `actor.projectGrants`
+        // already bounds this list to the INVOKER's authority; the ceiling
+        // additionally confines it to the AGENT's anchor (a project is its own
+        // project-axis identity). Inert for non-OBO callers (oboCeiling
+        // undefined → keep every row).
+        .filter(
+          (r) =>
+            !oboCeiling ||
+            resourceWithinCeiling(
+              {
+                orgId: r.organization_id,
+                owner: { tier: normalizeOwnerLevel(r.owner_level), id: r.owner_id },
+                projectId: r.id,
+              },
+              oboCeiling,
+            ),
+        );
 
       const items = rows.map((r) => {
         const grant = grantById.get(r.id);
@@ -520,7 +604,7 @@ export function createProjectsPrimitiveHandlers() {
       }
 
       // Authz: admin grant or owner.
-      assertProjectGrantRole(request.actor, existing.id, "admin");
+      assertProjectGrantRole(request.actor, existing, "admin");
 
       const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll('"', '""');
       const actorId = userId ?? "system";
@@ -589,7 +673,7 @@ export function createProjectsPrimitiveHandlers() {
         throw new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." });
       }
 
-      assertProjectGrantRole(request.actor, existing.id, "admin");
+      assertProjectGrantRole(request.actor, existing, "admin");
 
       const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll('"', '""');
       const actorId = userId ?? "system";
@@ -656,7 +740,7 @@ export function createProjectsPrimitiveHandlers() {
 
       // Gate on `actor.projectGrants`, NOT the legacy `project.manageMembers`
       // kernel gate, which doesn't enforce ProjectRole semantics.
-      assertProjectGrantRole(request.actor, existing.id, "admin");
+      assertProjectGrantRole(request.actor, existing, "admin");
 
       // Reject attempts to insert the project's own owner as a project_access
       // row. Owner is computed from `projects.owner_level/owner_id`, NEVER
@@ -724,7 +808,7 @@ export function createProjectsPrimitiveHandlers() {
 
       // Gate on `actor.projectGrants` role 'admin'
       // (membership-management surface).
-      assertProjectGrantRole(request.actor, existing.id, "admin");
+      assertProjectGrantRole(request.actor, existing, "admin");
 
       const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll('"', '""');
       await projectsDb.execute(sql`
@@ -746,7 +830,7 @@ export function createProjectsPrimitiveHandlers() {
       }
 
       // Gate on `actor.projectGrants` role 'read'.
-      assertProjectGrantRole(request.actor, existing.id, "read");
+      assertProjectGrantRole(request.actor, existing, "read");
 
       const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll('"', '""');
       const result = await projectsDb.execute<{
@@ -801,7 +885,7 @@ export function createProjectsPrimitiveHandlers() {
       }
 
       // Gate on `actor.projectGrants` role 'read'.
-      assertProjectGrantRole(request.actor, existing.id, "read");
+      assertProjectGrantRole(request.actor, existing, "read");
 
       // Owner short-circuit: owner access is derived, not stored twice.
       if (
@@ -874,7 +958,7 @@ export function createProjectsPrimitiveHandlers() {
 
       // Gate on `actor.projectGrants` role 'write'
       // (tool curation requires write).
-      assertProjectGrantRole(request.actor, existing.id, "write");
+      assertProjectGrantRole(request.actor, existing, "write");
       // Reject writes against an archived project. The role gate above already
       // implies the actor holds the grant; assertProjectWritable adds the
       // archive check
@@ -926,7 +1010,7 @@ export function createProjectsPrimitiveHandlers() {
       }
 
       // Gate on `actor.projectGrants` role 'write'.
-      assertProjectGrantRole(request.actor, existing.id, "write");
+      assertProjectGrantRole(request.actor, existing, "write");
       // Archived projects reject binding mutations. The curation surface is
       // part of the project's first-class data; freezing it on archive is the
       // explicit doctrine.
@@ -993,7 +1077,7 @@ export function createProjectsPrimitiveHandlers() {
       }
 
       // Gate on `actor.projectGrants` role 'write'.
-      assertProjectGrantRole(request.actor, existing.id, "write");
+      assertProjectGrantRole(request.actor, existing, "write");
       // Archived projects reject binding mutations. Removing a binding is a
       // mutation of the curated tool surface; the freeze is symmetric across
       // create/update/delete.
@@ -1026,7 +1110,7 @@ export function createProjectsPrimitiveHandlers() {
       }
 
       // Gate on `actor.projectGrants` role 'read'.
-      assertProjectGrantRole(request.actor, existing.id, "read");
+      assertProjectGrantRole(request.actor, existing, "read");
 
       const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll('"', '""');
       const result = await projectsDb.execute<{

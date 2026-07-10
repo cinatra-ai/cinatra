@@ -117,6 +117,23 @@ const GRID_LAYOUT_BAN = [
   },
 ];
 
+// Canonical toast boundary (cinatra#1108). Every toast must route through the
+// shared wrapper `@cinatra-ai/sdk-ui/toast` (host re-export: `@/lib/cinatra-toast`)
+// so host + extensions share the single host sonner instance and every toast
+// carries the Copy/Close chrome. Direct `sonner` imports are allowed in EXACTLY
+// two sanctioned wrappers, carved out at the end of this config: the sdk-ui
+// toast wrapper (packages/sdk-ui/src/toast.ts) and the host Toaster
+// (src/components/ui/sonner.tsx). Restated into every no-restricted-imports
+// layer below (flat-config options replace, not merge — last match wins), so a
+// stray direct import is caught in whichever zone the file lives.
+const SONNER_BAN = [
+  {
+    regex: "^sonner(/|$)",
+    message:
+      "Route toast through @cinatra-ai/sdk-ui/toast (host: @/lib/cinatra-toast). Direct `sonner` is allowed ONLY in the sdk-ui toast wrapper and the host Toaster (src/components/ui/sonner.tsx).",
+  },
+];
+
 // Raw control JSX is flagged in favor of the shadcn wrappers. ERROR — the
 // tree is now clean of raw restricted elements (the last carve-outs went
 // through the wrappers / the NativeSelect seam), so this is ramped from warn
@@ -541,6 +558,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...RADIX_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
           ],
         },
@@ -564,6 +582,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...RADIX_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
             ...SDK_DASHBOARD_BAN,
           ],
@@ -584,6 +603,7 @@ const eslintConfig = defineConfig([
             ...CLIENT_BAN,
             ...RADIX_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
             ...SDK_DASHBOARD_BAN,
           ],
@@ -606,6 +626,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_NON_CLIENT_BAN,
             ...RADIX_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
           ],
         },
       ],
@@ -626,6 +647,7 @@ const eslintConfig = defineConfig([
             ...MCP_BAN,
             ...DRIZZLE_CUBE_NON_CLIENT_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
           ],
         },
       ],
@@ -647,6 +669,7 @@ const eslintConfig = defineConfig([
             ...CLIENT_BAN,
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
           ],
         },
@@ -671,8 +694,55 @@ const eslintConfig = defineConfig([
             ...CLIENT_BAN,
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
             ...SDK_DASHBOARD_BAN,
+          ],
+        },
+      ],
+    },
+  },
+
+  // ───── Canonical toast wrapper carve-outs (cinatra#1108) ─────
+  // The two sanctioned direct-`sonner` importers. Declared AFTER every
+  // no-restricted-imports layer above so they win for their file (last match
+  // wins), and each RESTATES its zone's full pattern set MINUS SONNER_BAN — it
+  // re-allows `sonner` ONLY, never disables the rule.
+  //
+  // Carve-out A: the sdk-ui toast wrapper lives in the Layer-1 (everywhere)
+  // zone — restate Layer 1's set without SONNER_BAN.
+  {
+    files: ["packages/sdk-ui/src/toast.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...MCP_BAN,
+            ...CLIENT_BAN,
+            ...DRIZZLE_CUBE_BAN,
+            ...RADIX_BAN,
+            ...UI_LIB_BAN,
+            ...GRID_LAYOUT_BAN,
+          ],
+        },
+      ],
+    },
+  },
+  // Carve-out B: the host Toaster lives in the Layer-5 (**/components/ui/**)
+  // zone — restate Layer 5's set (Radix allowed there) without SONNER_BAN.
+  {
+    files: ["src/components/ui/sonner.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...MCP_BAN,
+            ...CLIENT_BAN,
+            ...DRIZZLE_CUBE_BAN,
+            ...UI_LIB_BAN,
+            ...GRID_LAYOUT_BAN,
           ],
         },
       ],
@@ -954,6 +1024,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...RADIX_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
             ...APP_ALIAS_BAN,
           ],
@@ -980,6 +1051,7 @@ const eslintConfig = defineConfig([
             ...CLIENT_BAN,
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
+            ...SONNER_BAN,
             ...GRID_LAYOUT_BAN,
             ...APP_ALIAS_BAN,
           ],

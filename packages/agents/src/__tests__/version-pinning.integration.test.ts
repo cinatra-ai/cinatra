@@ -109,6 +109,7 @@ describe("AgentRunRecord type surface", () => {
       idempotencyKey: null,
       workflowId: null,
       workflowTaskId: null,
+      oboCeiling: null,
     };
     expect(sample.packageVersion).toBeNull();
 

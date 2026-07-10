@@ -45,6 +45,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   isInstallRowAddressableByActor,
+  buildActorScopeForPick,
   type ActorScopeForPick,
 } from "@/lib/extension-install-resolution";
 import {
@@ -156,11 +157,10 @@ const defaultVerifyIntegrity = (
   });
 
 function actorScopeForPick(actor: ActorContext): ActorScopeForPick {
-  return {
-    organizationId: actor.organizationId ?? null,
-    ownerId: actor.principalId ?? null,
-    teamIds: actor.teamIds ?? [],
-  };
+  // Delegates to the shared builder so the admin-standing role fields
+  // (platformRole/orgRole) are threaded — an admin resolves the read-model of a
+  // row they do not personally own.
+  return buildActorScopeForPick(actor);
 }
 
 /**
@@ -175,9 +175,23 @@ function pickAddressableRowForActor(
 ): InstalledExtension | null {
   const addressable = rows.filter((r) => isInstallRowAddressableByActor(r, scope));
   if (addressable.length === 0) return null;
-  const rank = (s: InstalledExtension["status"]): number =>
+  // Cross-org rows (addressable only because a platform_admin sees every org)
+  // rank AFTER the actor's own-org / workspace rows, so an admin's read-model
+  // metadata comes from their active org rather than an arbitrary other org that
+  // merely carries a better lifecycle status. Mirrors pickActiveInstallId's
+  // same-org preference. For a non-admin every addressable row is already
+  // same-org/workspace, so this key is uniform and status still decides.
+  const isCrossOrg = (r: InstalledExtension): boolean =>
+    r.organizationId !== null &&
+    scope.organizationId !== null &&
+    r.organizationId !== scope.organizationId;
+  const statusRank = (s: InstalledExtension["status"]): number =>
     s === "active" ? 0 : s === "locked" ? 1 : 2; // archived last
-  return [...addressable].sort((a, b) => rank(a.status) - rank(b.status))[0];
+  return [...addressable].sort((a, b) => {
+    const orgDelta = Number(isCrossOrg(a)) - Number(isCrossOrg(b));
+    if (orgDelta !== 0) return orgDelta;
+    return statusRank(a.status) - statusRank(b.status);
+  })[0];
 }
 
 /**

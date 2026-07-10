@@ -4,6 +4,7 @@ import type {
   PackageRef,
   Actor,
   ExtensionDiscoveryScope,
+  ActiveExtensionManifest,
 } from "@cinatra-ai/extension-types";
 import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
 import { installSkillPackageFromGitHub } from "./github";
@@ -75,6 +76,41 @@ function skillVisibleToScope(
       // Unknown level -> fail closed.
       return false;
   }
+}
+
+/**
+ * Two-stage facet filter shared by listActive/listArchived: intersect the skill
+ * catalog against the owner-visible lifecycle-live package set (the shared
+ * manifest gate), then apply the per-row skill-visibility predicate.
+ *
+ * ADMIN STANDING (P3): the shared manifest gate (`manifestVisibleToScope`, via
+ * `visibleManifestPackageNames`) now admits a platform_admin to every package
+ * and an org admin to their org's packages, and `skillVisibleToScope`
+ * short-circuits `true` for a platform_admin — so PLATFORM-admin skills-catalog
+ * parity is delivered here. The ORG-admin skills carve-out (surfacing another
+ * user's personal/team/project skill row to an org admin) is DEFERRED: unlike
+ * the connector/artifact facets, whose native catalogs are deployment-shipped
+ * capability descriptors, the skill catalog holds per-owner PRIVATE rows joined
+ * to manifests only by package name, and a skill row carries no owning-org
+ * anchor. Bypassing the per-row owner check for an org admin on a package-name
+ * match would risk a cross-org leak when two orgs author a private skill under a
+ * colliding package name — so it must wait on a per-skill org anchor (tracked
+ * with the write-surface skills carve-out). Until then the per-row predicate
+ * stays authoritative for org admins, matching the P2 "no clean org anchor yet"
+ * decision. No member-facing change.
+ */
+function filterSkillsForScope(
+  skills: SkillManifest[],
+  manifests: ActiveExtensionManifest[],
+  scope: ExtensionDiscoveryScope,
+): SkillManifest[] {
+  const live = visibleManifestPackageNames(manifests, scope);
+  return skills.filter(
+    (skill) =>
+      skill.packageName != null &&
+      live.has(skill.packageName) &&
+      skillVisibleToScope(skill, scope),
+  );
 }
 
 // See ./skill-package-source.ts for the pure-function dispatcher + the
@@ -155,11 +191,8 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
     // because its package name is live somewhere) and under-exposure (private /
     // scoped rows are included when the actor's scope permits).
     async listActive({ scope, manifests }) {
-      const live = visibleManifestPackageNames(manifests, scope);
       const skills = await listInstalledSkills();
-      return skills
-        .filter((s) => s.packageName != null && live.has(s.packageName))
-        .filter((s) => skillVisibleToScope(s, scope));
+      return filterSkillsForScope(skills, manifests, scope);
     },
 
     // Archived twin of listActive (cinatra#948). The catalog RETAINS rows for
@@ -169,11 +202,8 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
     // visibility predicate — an archived scoped skill never leaks outside its
     // owning scope.
     async listArchived({ scope, manifests }) {
-      const archivedVisible = visibleManifestPackageNames(manifests, scope);
       const skills = await listInstalledSkills();
-      return skills
-        .filter((s) => s.packageName != null && archivedVisible.has(s.packageName))
-        .filter((s) => skillVisibleToScope(s, scope));
+      return filterSkillsForScope(skills, manifests, scope);
     },
   };
 }

@@ -221,6 +221,12 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS
   //   delegated_actor_snapshot text;
   delegatedActorSnapshot: text("delegated_actor_snapshot"),
+  // Persisted agent-run OBO scope-ceiling chain (JSON-as-text). Derived at run
+  // creation from the LOCKED template owner anchor + org + project launch, and
+  // re-derived + containment-checked at MCP-token mint. NULL only for a corrupt
+  // anchor (fails closed at mint) or a pre-backfill row. The DDL + backfill are
+  // owned by src/lib/drizzle-store.ts.
+  oboCeiling: text("obo_ceiling"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),

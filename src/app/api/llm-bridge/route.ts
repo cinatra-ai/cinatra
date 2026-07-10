@@ -27,9 +27,19 @@ import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
   readAgentRunByContextId,
   readAgentRunById,
+  readAgentTemplateById,
   OasCinatraLlmSchema,
   type LlmProvider,
 } from "@cinatra-ai/agents";
+import {
+  deriveOboCeilingChain,
+  oboCeilingContains,
+} from "@cinatra-ai/mcp-server/obo-ceiling";
+import { resolveAgentRunCinatraMcpAllowedTools } from "@cinatra-ai/mcp-server/in-admin-cms-tool-policy";
+// #1214 — WHICH agent packages are in-admin CMS content editors is resolved by
+// the host from the generated `relayAgentPackage` bindings (no extension
+// instance named in the mcp-server policy module — core→extension coupling ban).
+import { isInAdminCmsContentEditorPackage } from "@/lib/widget-stream-agents.server";
 // Bridge resolver ports support the WayFlow text-only user envelope.
 // resolveEntryAttachments() in the orchestration layer consumes the
 // ports; without the run.orgId we cannot scope cache/blob reads so
@@ -1009,10 +1019,45 @@ export async function POST(req: Request): Promise<Response> {
                 sourceType: runForPorts.sourceType,
               });
               if (!actor) return null;
+              // Re-derive the OBO scope-ceiling from the run's LOCKED template
+              // anchor + project launch and compare (containment) against the
+              // persisted dispatch ceiling. A corrupt anchor, or a persisted
+              // chain that does NOT contain every re-derived element (or is
+              // missing entirely), FAILS CLOSED — return null so the caller
+              // falls back to the machine token (denied at the boundary). This
+              // is the existing demoted-user fallback and is strictly safer than
+              // minting an un-ceilinged OBO token; never an elevation. On pass,
+              // mint the PERSISTED chain (a superset carrying composed-child
+              // parent elements the mint path cannot re-derive), not the
+              // re-derived subset. Agent-run OBO tokens ONLY.
+              const template = await readAgentTemplateById(runForPorts.templateId);
+              const recomputed = deriveOboCeilingChain({
+                ownerLevel: template?.ownerLevel ?? null,
+                ownerId: template?.ownerId ?? null,
+                orgId: runForPorts.orgId!,
+                projectId: runForPorts.projectId,
+              });
+              if (
+                !recomputed ||
+                !oboCeilingContains(runForPorts.oboCeiling, recomputed)
+              ) {
+                return null;
+              }
+              // #1214 — pin the cinatra self-MCP tool allowlist for in-admin
+              // CMS content-editor agent runs (wordpress-agent / drupal-agent)
+              // to the MCP-backed CMS primitives, so a dispatched content
+              // editor cannot reach the neighbouring WordPress primitives that
+              // remain direct-REST-backed (status/list/delete/media/draft/meta).
+              // Any other agent run resolves to `null` (unrestricted, unchanged).
+              const cinatraMcpAllowedTools =
+                resolveAgentRunCinatraMcpAllowedTools(
+                  isInAdminCmsContentEditorPackage(template?.packageName),
+                );
               return buildLlmMcpServerToolForAgentRun(
                 resolvedRuntime.provider as "openai" | "anthropic",
-                actor,
+                { ...actor, oboCeiling: runForPorts.oboCeiling! },
                 issueAgentRunMcpActorToken,
+                cinatraMcpAllowedTools,
               );
             }
           : undefined;

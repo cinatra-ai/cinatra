@@ -35,6 +35,15 @@ import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import { approveReviewTaskInternal } from "./review-task-actions";
+// cinatra#1061: close the agent-catalog removal-path gate bypass. The gate
+// re-applies the dispatcher's system-extension + dependency-closure refusals
+// before the direct agent_templates delete; the classifier maps the thrown
+// refusal to the returned contract the production UI can render.
+import { assertAgentTemplateRemovable } from "./removal-gate";
+import {
+  classifyRemovalFailure,
+  type RemovalActionResult,
+} from "@cinatra-ai/extensions/removal-failure";
 import {
   createAuditEvent,
   deleteAgentTemplate,
@@ -951,7 +960,7 @@ function makeUninstallRegistryInputSchema() {
 export async function uninstallRegistryPackage(input: {
   packageName: string;
   templateId: string;
-}): Promise<void> {
+}): Promise<RemovalActionResult | void> {
   "use server";
   const parsed = makeUninstallRegistryInputSchema().parse(input);
   const session = await requireAuthSession();
@@ -1052,6 +1061,44 @@ export async function uninstallRegistryPackage(input: {
       reason: "hidden",
       message: "Template not found",
     });
+  }
+
+  // cinatra#1061: close the removal-path gate bypass. This direct
+  // agent_templates delete never went through the extension dispatcher, so it
+  // skipped BOTH the #1036 system-extension protection AND the dependency-closure
+  // gate. Re-apply them here — AFTER authorization (a failed authz check must
+  // keep its hidden-existence 404, so those THROW above), BEFORE the delete.
+  // RETURN the classified refusal instead of throwing: a thrown server-action
+  // error is masked by Next.js in production, so the dependents/system message
+  // would never reach the user (the exact bug #1061 fixes). The raw detail stays
+  // operator-side (logs); a `denied` audit row records the refusal.
+  try {
+    await assertAgentTemplateRemovable(parsed.packageName);
+  } catch (err) {
+    const failure = classifyRemovalFailure(err);
+    console.error(
+      "[registry-uninstall] refused for %s (reason=%s):",
+      parsed.packageName,
+      failure.reason,
+      err instanceof Error ? (err.stack ?? err.message) : String(err),
+    );
+    void logAuditEvent({
+      organizationId: orgId,
+      actorPrincipalId: session.user.id,
+      actorPrincipalType: "human",
+      authSource: "ui",
+      resourceType: "registry_package",
+      resourceId: parsed.packageName,
+      operation: "uninstall",
+      decision: "denied",
+      policyVersion: POLICY_VERSION,
+      metadata: {
+        reason: `removal_gate:${failure.reason}`,
+        templateId: parsed.templateId,
+        templateOrgId: existing.orgId ?? null,
+      },
+    });
+    return failure;
   }
 
   const deleted = await deleteAgentTemplate(parsed.templateId);

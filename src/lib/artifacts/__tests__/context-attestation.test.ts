@@ -5,9 +5,14 @@
 import { describe, it, expect } from "vitest";
 import {
   CONTEXT_ATTESTATION_VERSION,
+  CONTEXT_ATTESTATION_VERSION_V2,
+  CONTEXT_ATTESTATION_SKEW_MS,
+  CONTEXT_ATTESTATION_MAX_FUTURE_MS,
   computeContextAttestation,
+  computeContextAttestationV2,
   parseContextAttestationHeader,
   verifyContextAttestationSignature,
+  verifyContextAttestationSignatureV2,
   resolveContextNodeProvenance,
   evaluateContextAttestation,
 } from "../context-attestation";
@@ -124,18 +129,60 @@ describe("attestation signature", () => {
     ).toBe(false);
   });
 
-  it("parses only well-formed v1:<hex> headers", () => {
+  it("parses well-formed v1 and v2 headers; rejects malformed", () => {
     const sig = computeContextAttestation(KEY, CTX, "n");
-    expect(parseContextAttestationHeader(`v1:${sig}`)).toBe(sig);
-    expect(parseContextAttestationHeader("v2:" + sig)).toBeNull();
+    // v1 → { version, sigHex }
+    expect(parseContextAttestationHeader(`v1:${sig}`)).toEqual({
+      version: "v1",
+      sigHex: sig,
+    });
+    // v2 → { version, sigHex, expiryEpochSeconds }
+    const v2sig = computeContextAttestationV2(KEY, CTX, "n", 1_760_000_300);
+    expect(parseContextAttestationHeader(`v2:1760000300:${v2sig}`)).toEqual({
+      version: "v2",
+      sigHex: v2sig,
+      expiryEpochSeconds: 1_760_000_300,
+    });
+    // malformed / unknown-version → null
+    expect(parseContextAttestationHeader("v2:" + sig)).toBeNull(); // v2 needs an expiry field
+    expect(parseContextAttestationHeader("v2:notanumber:" + sig)).toBeNull();
+    expect(parseContextAttestationHeader("v2:-5:" + sig)).toBeNull();
+    expect(parseContextAttestationHeader("v2:1.5:" + sig)).toBeNull();
+    expect(parseContextAttestationHeader(`v2:1760000300:not-hex!!`)).toBeNull();
+    expect(parseContextAttestationHeader("v3:1760000300:" + sig)).toBeNull();
     expect(parseContextAttestationHeader("v1:not-hex!!")).toBeNull();
     expect(parseContextAttestationHeader("no-colon")).toBeNull();
     expect(parseContextAttestationHeader(":" + sig)).toBeNull();
     expect(parseContextAttestationHeader(null)).toBeNull();
   });
 
-  it("uses the v1 version tag", () => {
+  it("uses the v1 + v2 version tags", () => {
     expect(CONTEXT_ATTESTATION_VERSION).toBe("v1");
+    expect(CONTEXT_ATTESTATION_VERSION_V2).toBe("v2");
+  });
+
+  it("verifies a matching v2 signature (expiry bound into the material)", () => {
+    const exp = 1_760_000_300;
+    const sig = computeContextAttestationV2(KEY, CTX, "ctx-slotA-resolve_context", exp);
+    expect(
+      verifyContextAttestationSignatureV2({
+        key: KEY,
+        contextId: CTX,
+        nodeId: "ctx-slotA-resolve_context",
+        expiryEpochSeconds: exp,
+        providedSignatureHex: sig,
+      }),
+    ).toBe(true);
+    // A DIFFERENT expiry with the same sig fails (expiry is authenticated).
+    expect(
+      verifyContextAttestationSignatureV2({
+        key: KEY,
+        contextId: CTX,
+        nodeId: "ctx-slotA-resolve_context",
+        expiryEpochSeconds: exp + 1,
+        providedSignatureHex: sig,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -419,6 +466,10 @@ describe("cinatra#1151 — real-grammar re-anchor + drifted-build fail-closed bo
 });
 
 describe("evaluateContextAttestation — fail-closed matrix", () => {
+  // The headline matrix exercises the CURRENT protocol (v2, with a valid signed
+  // expiry under a fixed clock). v1 acceptance/rejection has its own suite below.
+  const MATRIX_NOW_MS = 1_760_000_000_000;
+  const MATRIX_EXP_S = MATRIX_NOW_MS / 1000 + 60;
   function goodInput(slot: string, expectedKind: "resolve" | "finalize") {
     const nodeId =
       expectedKind === "resolve"
@@ -428,10 +479,16 @@ describe("evaluateContextAttestation — fail-closed matrix", () => {
       key: KEY,
       contextId: CTX,
       nodeIdHeader: nodeId,
-      attestationHeader: `v1:${computeContextAttestation(KEY, CTX, nodeId)}`,
+      attestationHeader: `v2:${MATRIX_EXP_S}:${computeContextAttestationV2(
+        KEY,
+        CTX,
+        nodeId,
+        MATRIX_EXP_S,
+      )}`,
       runOas: orchestratorOas(),
       slotId: slot,
       expectedKind,
+      nowMs: MATRIX_NOW_MS,
     } as const;
   }
 
@@ -557,5 +614,140 @@ describe("evaluateContextAttestation — fail-closed matrix", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.code).toBe("attestation_kind_mismatch");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1192 — v2 expiry (intra-run replay window) + legacy-v1 transitional acceptance.
+// ---------------------------------------------------------------------------
+describe("#1192 — v2 expiry + legacy v1 acceptance", () => {
+  const NOW_MS = 1_760_000_000_000;
+  const NOW_S = NOW_MS / 1000; // 1_760_000_000
+
+  const NODE = "ctx-slotA-resolve_context";
+  function v2Header(nodeId: string, expiryEpochSeconds: number): string {
+    return `v2:${expiryEpochSeconds}:${computeContextAttestationV2(
+      KEY,
+      CTX,
+      nodeId,
+      expiryEpochSeconds,
+    )}`;
+  }
+  function evalV2(expiryEpochSeconds: number, nowMs = NOW_MS) {
+    return evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: NODE,
+      attestationHeader: v2Header(NODE, expiryEpochSeconds),
+      runOas: orchestratorOas(),
+      slotId: "slotA",
+      expectedKind: "resolve",
+      nowMs,
+    });
+  }
+
+  it("ACCEPTANCE: a fresh v2 attestation passes (and is NOT flagged legacy)", () => {
+    const res = evalV2(NOW_S + 60);
+    expect(res).toEqual({ ok: true, slotId: "slotA", kind: "resolve" });
+    // no legacyV1 marker on a v2 accept
+    if (res.ok) expect(res.legacyV1).toBeUndefined();
+  });
+
+  it("accepts a just-expired v2 within the clock-skew grace", () => {
+    // expired 30s ago, skew is 60s → still accepted
+    expect(CONTEXT_ATTESTATION_SKEW_MS).toBeGreaterThanOrEqual(30_000);
+    const res = evalV2(NOW_S - 30);
+    expect(res.ok).toBe(true);
+  });
+
+  it("ACCEPTANCE: an expired v2 (beyond skew) → attestation_expired", () => {
+    const res = evalV2(NOW_S - 120); // 120s past, beyond the 60s skew
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("attestation_expired");
+  });
+
+  it("rejects an implausibly far-future v2 expiry → attestation_expired", () => {
+    // beyond MAX_FUTURE (600s) → clamped
+    expect(CONTEXT_ATTESTATION_MAX_FUTURE_MS).toBe(600_000);
+    const res = evalV2(NOW_S + 700);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("attestation_expired");
+  });
+
+  it("a TAMPERED v2 expiry (valid sig for a different expiry) → attestation_invalid", () => {
+    const signedExpiry = NOW_S + 60;
+    const good = v2Header(NODE, signedExpiry);
+    // Swap the transmitted expiry but keep the signature — the verifier
+    // recomputes over the NEW expiry and the HMAC no longer matches.
+    const tampered = good.replace(`v2:${signedExpiry}:`, `v2:${signedExpiry + 200}:`);
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: NODE,
+      attestationHeader: tampered,
+      runOas: orchestratorOas(),
+      slotId: "slotA",
+      expectedKind: "resolve",
+      nowMs: NOW_MS,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("attestation_invalid");
+  });
+
+  it("uses the real Date.now() clock when nowMs is omitted", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: NODE,
+      attestationHeader: v2Header(NODE, nowSeconds + 120),
+      runOas: orchestratorOas(),
+      slotId: "slotA",
+      expectedKind: "resolve",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("a legacy v1 attestation is accepted by DEFAULT and flagged legacyV1", () => {
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: NODE,
+      attestationHeader: `v1:${computeContextAttestation(KEY, CTX, NODE)}`,
+      runOas: orchestratorOas(),
+      slotId: "slotA",
+      expectedKind: "resolve",
+    });
+    expect(res).toEqual({ ok: true, slotId: "slotA", kind: "resolve", legacyV1: true });
+  });
+
+  it("a legacy v1 attestation is REJECTED when acceptLegacyV1=false (v2-only enforced)", () => {
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: NODE,
+      attestationHeader: `v1:${computeContextAttestation(KEY, CTX, NODE)}`,
+      runOas: orchestratorOas(),
+      slotId: "slotA",
+      expectedKind: "resolve",
+      acceptLegacyV1: false,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("attestation_legacy_rejected");
+  });
+
+  it("a v2 attestation is accepted even when acceptLegacyV1=false", () => {
+    const res = evaluateContextAttestation({
+      key: KEY,
+      contextId: CTX,
+      nodeIdHeader: NODE,
+      attestationHeader: v2Header(NODE, NOW_S + 60),
+      runOas: orchestratorOas(),
+      slotId: "slotA",
+      expectedKind: "resolve",
+      acceptLegacyV1: false,
+      nowMs: NOW_MS,
+    });
+    expect(res.ok).toBe(true);
   });
 });

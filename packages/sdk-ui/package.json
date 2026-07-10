@@ -9,8 +9,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./marketplace": "./src/marketplace.ts",
+    "./connector-setup-page": "./src/connector-setup-page.tsx",
+    "./connector-setup-columns": "./src/connector-setup-columns.tsx",
+    "./connection-status-badge": "./src/connection-status-badge.tsx",
+    "./connection-status-card": "./src/connection-status-card.tsx",
+    "./connections-list": "./src/connections-list.tsx",
+    "./tabs": "./src/ui/tabs.tsx",
     "./section-header": "./src/section-header.tsx",
     "./nango": "./src/nango.ts",
+    "./toast": "./src/toast.ts",
+    "./search-param-toast": "./src/search-param-toast.tsx",
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/extension-accent": "./src/lib/extension-accent.ts"
   },
@@ -36,5 +44,8 @@
     "react": "^19.2.7",
     "react-dom": "19.2.7",
     "tailwind-merge": "^3.6.0"
+  },
+  "peerDependencies": {
+    "sonner": "^2.0.7"
   }
 }

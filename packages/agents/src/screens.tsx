@@ -29,6 +29,7 @@ import {
   installRegistryPackageAtScope,
 } from "./actions";
 import { RegistryUninstallForm } from "./registry-uninstall-form";
+import { listActiveAgentTemplateDependents } from "./removal-gate";
 import { getAgentPackage } from "@cinatra-ai/registries";
 import type { VerdaccioConfig } from "@cinatra-ai/registries";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
@@ -646,6 +647,12 @@ export async function RegistryEntryDetailSections({
         templateId: installedTemplate.id,
       })
     : null;
+  // cinatra#1061 req 4: the ACTIVE dependents that would block uninstalling this
+  // agent, for the confirm prompt + pre-submit preview. One query on a single-
+  // entry detail view (no N+1); best-effort — the removal gate is authoritative.
+  const uninstallDependents = installedTemplate
+    ? await listActiveAgentTemplateDependents(entry.packageName)
+    : [];
 
   return (
     <>
@@ -754,6 +761,7 @@ export async function RegistryEntryDetailSections({
               <RegistryUninstallForm
                 action={uninstallAction}
                 packageTitle={entry.title}
+                dependents={uninstallDependents}
               />
             ) : null}
           </div>

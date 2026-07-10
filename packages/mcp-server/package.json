@@ -10,7 +10,9 @@
     "./auth-plugins": "./src/auth-plugins.ts",
     "./credentials": "./src/llm-credentials.ts",
     "./delegated-chat-tool-policy": "./src/delegated-chat-tool-policy.ts",
-    "./dev-admin-bypass": "./src/dev-admin-bypass.ts"
+    "./in-admin-cms-tool-policy": "./src/in-admin-cms-tool-policy.ts",
+    "./dev-admin-bypass": "./src/dev-admin-bypass.ts",
+    "./obo-ceiling": "./src/obo-ceiling.ts"
   },
   "scripts": {
     "test": "vitest run"

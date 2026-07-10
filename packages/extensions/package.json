@@ -18,6 +18,7 @@
     "./required-in-prod": "./src/required-in-prod.ts",
     "./static-bundle-anchor": "./src/static-bundle-anchor.ts",
     "./dependency-closure": "./src/dependency-closure.ts",
+    "./removal-failure": "./src/removal-failure.ts",
     "./manifest-dependencies": "./src/manifest-dependencies.ts",
     "./system-extension-inventory": "./src/system-extension-inventory.ts",
     "./dev-version": "./src/dev-version.ts",

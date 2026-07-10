@@ -145,15 +145,20 @@ export async function runAgentRunTriggerReleaseJob(
       );
       return;
     }
-    // Clone: same templateId + inputParams + runBy + orgId.
+    // Clone: same templateId + inputParams + runBy + orgId + projectId.
     // createAgentRunPendingInput mints a new id and returns the row in
     // pending_input status. Propagate orgId so the cloned run preserves tenant
-    // scope.
+    // scope, AND projectId so the run stays project-scoped — the clone otherwise
+    // dropped it, silently widening the run out of its project. Copying projectId
+    // also makes createAgentRunPendingInput re-derive the SAME OBO scope-ceiling
+    // chain as the schedule-defining run (the template owner anchor is locked
+    // after first run), so the cloned run carries the identical ceiling.
     const newRun = await createAgentRunPendingInput({
       templateId: sourceRun.templateId,
       runBy: sourceRun.runBy,
       orgId: sourceRun.orgId,
       inputParams: sourceRun.inputParams ?? {},
+      projectId: sourceRun.projectId,
     });
     // Arm the new run as immediate so the gate opens at run-start.
     // We call createOrUpdateRunTrigger directly here (we are inside the worker

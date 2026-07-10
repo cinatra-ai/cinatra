@@ -757,6 +757,25 @@ export interface MarketplaceExtensionSubmissionListSelfOutput {
   submissions: MarketplaceVendorSubmission[];
 }
 
+/**
+ * OPTIONAL per-row viewer-eligibility metadata a moderation LIST output MAY
+ * carry (#1045). Additive + speculative: the marketplace does not emit these
+ * yet, so every field is optional and every consumer degrades gracefully when
+ * the whole object is absent. When present, the unified approvals inbox renders
+ * disabled/annotated Approve/Reject affordances; action-time enforcement at the
+ * marketplace stays authoritative either way (a stale `can_approve:true` is
+ * still refused at decide time). The client types compile IDENTICALLY with or
+ * without these fields present in a response — no caller may depend on them.
+ */
+export interface MarketplaceRowEligibility {
+  /** Viewer may approve this row. `false` ⇒ render Approve disabled + annotated. */
+  can_approve?: boolean;
+  /** Viewer may reject this row. `false` ⇒ render Reject disabled + annotated. */
+  can_reject?: boolean;
+  /** Human-readable reason the viewer cannot act (e.g. separation-of-duties). */
+  reason?: string;
+}
+
 /** Admin-facing submission row — includes `staging_artifact_path` for review. */
 export interface MarketplaceAdminSubmission extends MarketplaceVendorSubmission {
   vendor_id: number;
@@ -766,6 +785,8 @@ export interface MarketplaceAdminSubmission extends MarketplaceVendorSubmission 
   decided_by_admin_id: number | null;
   description: string | null;
   deps_json: string | null;
+  /** OPTIONAL viewer-eligibility hint — see {@link MarketplaceRowEligibility}. */
+  eligibility?: MarketplaceRowEligibility;
 }
 
 export interface MarketplaceExtensionSubmissionListAdminInput {
@@ -1046,6 +1067,8 @@ export interface MarketplaceVendorApplicationAdminRow {
    * (attempt cap exhausted); null while the row is still recoverable.
    */
   repair_stuck_at: string | null;
+  /** OPTIONAL viewer-eligibility hint — see {@link MarketplaceRowEligibility}. */
+  eligibility?: MarketplaceRowEligibility;
 }
 
 export interface MarketplaceVendorApplicationListAdminOutput {

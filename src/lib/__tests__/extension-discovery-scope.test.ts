@@ -2,14 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/better-auth-db", () => ({ readTeamsForUser: vi.fn() }));
-vi.mock("@/lib/auth-session", () => ({ isPlatformAdmin: vi.fn() }));
+vi.mock("@/lib/auth-session", () => ({
+  isPlatformAdmin: vi.fn(),
+  resolveOrgRoleForSession: vi.fn(),
+}));
 vi.mock("@/lib/authz/build-actor-context", () => ({
   actorFromSession: vi.fn(),
 }));
 
 import { resolveExtensionDiscoveryContext } from "@/lib/extension-discovery-scope";
 import { readTeamsForUser } from "@/lib/better-auth-db";
-import { isPlatformAdmin } from "@/lib/auth-session";
+import { isPlatformAdmin, resolveOrgRoleForSession } from "@/lib/auth-session";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
 
 function session(over: Record<string, unknown> = {}) {
@@ -29,6 +32,8 @@ describe("resolveExtensionDiscoveryContext", () => {
       userId: "u1",
       organizationId: "org-1",
     } as never);
+    // Default: a plain member (no admin standing). Individual tests override.
+    vi.mocked(resolveOrgRoleForSession).mockResolvedValue(undefined);
   });
 
   it("builds the scope from session + vendorScope + team membership", async () => {
@@ -80,5 +85,26 @@ describe("resolveExtensionDiscoveryContext", () => {
       undefined as unknown as string | null,
     );
     expect(scope.vendorScope).toBeNull();
+  });
+
+  it("threads the active-org role so an org_admin carries admin standing", async () => {
+    vi.mocked(readTeamsForUser).mockResolvedValue([] as never);
+    vi.mocked(isPlatformAdmin).mockReturnValue(false);
+    vi.mocked(resolveOrgRoleForSession).mockResolvedValue("org_admin");
+
+    const { scope } = await resolveExtensionDiscoveryContext(session(), null);
+    expect(scope.orgRole).toBe("org_admin");
+    expect(scope.platformRole).toBe("member");
+    expect(resolveOrgRoleForSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits orgRole for a plain member (no admin standing key)", async () => {
+    vi.mocked(readTeamsForUser).mockResolvedValue([] as never);
+    vi.mocked(isPlatformAdmin).mockReturnValue(false);
+    // default mock resolves undefined
+
+    const { scope } = await resolveExtensionDiscoveryContext(session(), null);
+    expect(scope.orgRole).toBeUndefined();
+    expect("orgRole" in scope).toBe(false);
   });
 });

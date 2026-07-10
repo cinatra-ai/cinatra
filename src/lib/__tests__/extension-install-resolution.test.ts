@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   pickActiveInstallId,
+  isInstallRowAddressableByActor,
+  buildActorScopeForPick,
   type ActorScopeForPick,
   type InstallRowForPick,
 } from "@/lib/extension-install-resolution";
@@ -108,5 +110,98 @@ describe("pickActiveInstallId", () => {
 
   it("returns null when no rows exist (caller renders the Install / Activate CTA)", () => {
     expect(pickActiveInstallId([], actor())).toBeNull();
+  });
+});
+
+describe("isInstallRowAddressableByActor — admin standing (P3)", () => {
+  it("a platform_admin addresses any row, including cross-org and non-owned", () => {
+    const pa = actor({ organizationId: ORG, ownerId: USER, platformRole: "platform_admin" });
+    expect(
+      isInstallRowAddressableByActor(
+        row({ organizationId: "org-other", ownerLevel: "user", ownerId: "user-9" }),
+        pa,
+      ),
+    ).toBe(true);
+  });
+
+  it("an org_admin addresses user/team rows of their org they do not own / belong to", () => {
+    const admin = actor({ orgRole: "org_admin", ownerId: USER, teamIds: [] });
+    expect(
+      isInstallRowAddressableByActor(
+        row({ organizationId: ORG, ownerLevel: "user", ownerId: "user-2" }),
+        admin,
+      ),
+    ).toBe(true);
+    expect(
+      isInstallRowAddressableByActor(
+        row({ organizationId: ORG, ownerLevel: "team", ownerId: "team-z" }),
+        admin,
+      ),
+    ).toBe(true);
+  });
+
+  it("an org_admin does NOT address a cross-org row (cross-org safety)", () => {
+    const admin = actor({ orgRole: "org_admin" });
+    expect(
+      isInstallRowAddressableByActor(
+        row({ organizationId: "org-other", ownerLevel: "user", ownerId: "user-2" }),
+        admin,
+      ),
+    ).toBe(false);
+  });
+
+  it("a plain member gains no admin addressability (unchanged)", () => {
+    expect(
+      isInstallRowAddressableByActor(
+        row({ organizationId: ORG, ownerLevel: "user", ownerId: "user-2" }),
+        actor({ orgRole: "member" }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("pickActiveInstallId — same-org determinism for a platform_admin (P3)", () => {
+  it("prefers the actor's active-org row over a cross-org row a platform_admin can also address", () => {
+    const pa = actor({ organizationId: ORG, platformRole: "platform_admin" });
+    const rows = [
+      row({ id: "cross", organizationId: "org-other", ownerLevel: "organization" }),
+      row({ id: "mine", organizationId: ORG, ownerLevel: "organization" }),
+    ];
+    expect(pickActiveInstallId(rows, pa)).toBe("mine");
+  });
+
+  it("still addresses a lone cross-org row for a platform_admin (no same-org candidate)", () => {
+    const pa = actor({ organizationId: ORG, platformRole: "platform_admin" });
+    const rows = [row({ id: "cross-only", organizationId: "org-other", ownerLevel: "organization" })];
+    expect(pickActiveInstallId(rows, pa)).toBe("cross-only");
+  });
+});
+
+describe("buildActorScopeForPick", () => {
+  it("threads the admin-standing role fields from the actor", () => {
+    const scope = buildActorScopeForPick({
+      organizationId: ORG,
+      principalId: USER,
+      teamIds: [TEAM],
+      platformRole: "platform_admin",
+      orgRole: "org_admin",
+    });
+    expect(scope).toEqual({
+      organizationId: ORG,
+      ownerId: USER,
+      teamIds: [TEAM],
+      platformRole: "platform_admin",
+      orgRole: "org_admin",
+    });
+  });
+
+  it("defaults ids to null and leaves roles undefined for a roleless actor", () => {
+    expect(buildActorScopeForPick({})).toEqual({
+      organizationId: null,
+      ownerId: null,
+      teamIds: [],
+      platformRole: undefined,
+      orgRole: undefined,
+    });
   });
 });

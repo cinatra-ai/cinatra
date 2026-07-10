@@ -15,6 +15,7 @@ import {
 import { buildSingleExternalMcpTool } from "@/lib/external-mcp-registry";
 import { buildAllToolboxProviderTools } from "@/lib/llm-toolbox-providers";
 import { getPublicMcpServerUrl, getLlmMcpCredentials, getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
+import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 // Re-export so existing callers don't need to change their imports.
 export { getPublicMcpServerUrl, getLlmMcpCredentials, hasLlmMcpAccess, getLlmMcpAccessStatus } from "@cinatra-ai/mcp-server/credentials";
@@ -49,6 +50,13 @@ export type AgentRunMcpActor = {
   orgId: string;
   runId: string;
   platformRole: "platform_admin" | "member";
+  /**
+   * The agent's anchored scope-ceiling CHAIN (see @cinatra-ai/mcp-server/
+   * obo-ceiling). Derived at dispatch, persisted on the run, re-derived +
+   * containment-checked at mint, then minted into the OBO token. Structurally
+   * mirrors the app-layer `AgentRunMcpActor` (agent-run-mcp-actor-token.ts).
+   */
+  oboCeiling: OboCeilingChain;
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
@@ -58,6 +66,7 @@ export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
 function buildCinatraMcpServerTool(
   serverUrl: string,
   authorizationHeader: string,
+  allowedTools: string[] | null = null,
 ): LlmMcpServerTool {
   return {
     type: "mcp",
@@ -68,7 +77,12 @@ function buildCinatraMcpServerTool(
       "Cinatra enterprise intelligence MCP: read agents, workflows, " +
       "objects/lists/projects, content connectors, cubes, artifact authoring, skills. " +
       "Mutations run via agent dispatch only; no permissions/auth/settings access.",
-    allowedTools: null,
+    // `null` (default) = unrestricted, preserving the chat / machine /
+    // general-agent-run behavior. A non-null allowlist pins the cinatra
+    // self-MCP tool to an explicit tool set (#1214: the in-admin CMS
+    // content-editor agent runs are pinned to the MCP-backed CMS primitives so
+    // they cannot reach the not-yet-rerouted direct-REST CMS primitives).
+    allowedTools,
     requireApproval: "never",
   };
 }
@@ -198,6 +212,12 @@ export async function buildLlmMcpServerToolForAgentRun(
   provider: Extract<LlmProvider, "openai" | "anthropic">,
   actor: AgentRunMcpActor,
   issueActorToken: AgentRunMcpActorTokenIssuer,
+  // #1214: an explicit cinatra self-MCP tool allowlist for this run, or `null`
+  // (default) for unrestricted access (the existing general-agent-run
+  // behavior). The caller (/api/llm-bridge) passes the in-admin CMS allowlist
+  // for content-editor agent runs so they cannot reach the not-yet-rerouted
+  // direct-REST CMS primitives; every other agent run stays unrestricted.
+  allowedTools: string[] | null = null,
 ): Promise<LlmMcpServerTool | null> {
   const serverUrl = getPublicMcpServerUrl();
   if (!serverUrl) return null;
@@ -206,6 +226,7 @@ export async function buildLlmMcpServerToolForAgentRun(
     return buildCinatraMcpServerTool(
       serverUrl,
       `Bearer ${issueActorToken(actor)}`,
+      allowedTools,
     );
   } catch (err) {
     console.warn(

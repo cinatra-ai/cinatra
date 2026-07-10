@@ -189,7 +189,14 @@ async function assertCanonicalArchiveClosure(packageName: string): Promise<void>
     const { listInstalledExtensions } = await import("./canonical-store");
     allRows = await listInstalledExtensions({});
   } catch {
-    return; // manifest unreachable — closure check is opportunistic
+    // cinatra#1061: FAIL-CLOSED. The canonical store is the authoritative
+    // installed-extension status store; if it is unreachable we cannot prove
+    // that no ACTIVE dependent requires this package, so a destructive
+    // archive/uninstall is REFUSED — not silently permitted, as the retired
+    // "closure check is opportunistic" mid-migration allowance did. Aligns with
+    // #1036's fail-closed direction for the system set.
+    const { ClosureCheckUnavailableError } = await import("./dependency-closure");
+    throw new ClosureCheckUnavailableError(packageName);
   }
   const target = allRows.find((r) => r.packageName === packageName);
   if (!target) return;

@@ -49,6 +49,10 @@ const AGENT_RUN_ACTOR: AgentRunMcpActor = {
   orgId: "org-test",
   runId: "run-test-uuid",
   platformRole: "member",
+  oboCeiling: [
+    { tier: "user", id: "u-test" },
+    { tier: "organization", id: "org-test" },
+  ],
 };
 
 const CHAT_ACTOR: ChatMcpActor = {
@@ -306,5 +310,77 @@ describe("agent-run-mcp-actor-token verify", () => {
       expectedIssuer: PUBLIC_AUTH_URL,
     });
     expect(verified).toBeNull();
+  });
+
+  it("rejects a token re-signed without a valid `cl` scope-ceiling claim (fail closed)", () => {
+    // W1 security guard (CLAIM-shape pinning for `cl`): an agent-run OBO token
+    // MUST carry a well-formed scope-ceiling chain. A missing / empty / malformed
+    // `cl` — even under a VALID HMAC — is rejected, so a caller can never
+    // reconstruct an un-ceilinged agent-run OBO actor (it falls back to the
+    // machine token, denied at the boundary). Pins verifyAgentRunMcpActorToken's
+    // `if (!isOboCeilingChain(payload.cl)) return null`.
+    const { createHmac } = require("node:crypto");
+    const secret = process.env.BETTER_AUTH_SECRET;
+    const now = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(
+      JSON.stringify({ alg: "HS256", typ: "JWT" }),
+      "utf8",
+    ).toString("base64url");
+    const baseClaims = {
+      t: "cinatra.agent-run.mcp-obo",
+      sub: "u-test",
+      org: "org-test",
+      run: "run-test",
+      prole: "member",
+      scope: "mcp:connect",
+      aud: PUBLIC_MCP_URL,
+      iss: PUBLIC_AUTH_URL,
+      iat: now,
+      exp: now + 1800,
+    };
+    const signClaims = (claims: Record<string, unknown>): string => {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString(
+        "base64url",
+      );
+      const signingInput = `${header}.${payload}`;
+      const signature = createHmac("sha256", secret!)
+        .update(signingInput)
+        .digest("base64url");
+      return `${signingInput}.${signature}`;
+    };
+    // Every invalid `cl` shape must fail closed: omitted, empty array, unknown
+    // tier, blank id, non-array.
+    const invalidCeilings: Array<Record<string, unknown>> = [
+      { ...baseClaims }, // cl omitted entirely
+      { ...baseClaims, cl: [] },
+      { ...baseClaims, cl: [{ tier: "galaxy", id: "x" }] },
+      { ...baseClaims, cl: [{ tier: "user", id: "" }] },
+      { ...baseClaims, cl: "not-an-array" },
+    ];
+    for (const claims of invalidCeilings) {
+      const verified = verifyAgentRunMcpActorToken({
+        authHeader: `Bearer ${signClaims(claims)}`,
+        request: new Request(PUBLIC_MCP_URL),
+        expectedAudience: PUBLIC_MCP_URL,
+        expectedIssuer: PUBLIC_AUTH_URL,
+      });
+      expect(verified).toBeNull();
+    }
+    // Positive control: the SAME hand-signed path WITH a valid `cl` verifies and
+    // reconstructs the chain — proving the rejections above are due to `cl`
+    // alone, not a signing / harness artifact.
+    const okVerified = verifyAgentRunMcpActorToken({
+      authHeader: `Bearer ${signClaims({
+        ...baseClaims,
+        cl: [{ tier: "organization", id: "org-test" }],
+      })}`,
+      request: new Request(PUBLIC_MCP_URL),
+      expectedAudience: PUBLIC_MCP_URL,
+      expectedIssuer: PUBLIC_AUTH_URL,
+    });
+    expect(okVerified).not.toBeNull();
+    expect(okVerified?.oboCeiling).toEqual([
+      { tier: "organization", id: "org-test" },
+    ]);
   });
 });
