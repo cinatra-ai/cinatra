@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cinatra-ai/agent-ui-protocol": "workspace:*",
     "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",

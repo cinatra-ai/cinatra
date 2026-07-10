@@ -66,6 +66,12 @@ function buildActorFromMcpContext(): Record<string, unknown> {
       // binary shortcuts at :198 / :490-491).
       ...(a2a.projectGrants ? { projectGrants: a2a.projectGrants } : {}),
       ...(platformRole ? { platformRole } : {}),
+      // Forward the agent-run OBO scope-ceiling chain (W1 stamps it onto the
+      // request frame for agent-run-OBO delegations only). `enforceRunAccess`
+      // and `authorizeAgentTemplateRead` consult `actor.oboCeiling` to confine
+      // the delegated run to its anchored scope (W2/#1051). Undefined for
+      // ordinary external-A2A calls — a no-op spread.
+      ...(requestCtx?.oboCeiling ? { oboCeiling: requestCtx.oboCeiling } : {}),
     };
   }
 
@@ -79,6 +85,13 @@ function buildActorFromMcpContext(): Record<string, unknown> {
     // the same transport-written store frame.
     ...(orgRole ? { orgRole } : {}),
     ...(delegatedRestricted ? { delegatedRestricted: true } : {}),
+    // Forward the agent-run OBO scope-ceiling chain from the request frame.
+    // This MODEL branch is the agent-run-OBO carrier path: `enforceRunAccess`
+    // (runs), `enforceResourceAccess` (agent-owned objects/projects the agent
+    // touches) and `authorizeAgentTemplateRead` (agent_get/agent_list) consult
+    // `actor.oboCeiling` to confine the delegated run (W2/#1051). Undefined for
+    // non-OBO model calls — a no-op spread.
+    ...(requestCtx?.oboCeiling ? { oboCeiling: requestCtx.oboCeiling } : {}),
   };
 }
 

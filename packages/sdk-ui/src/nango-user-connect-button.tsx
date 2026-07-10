@@ -27,6 +27,15 @@ type NangoUserConnectButtonProps = {
   reconnectLabel?: string;
   nangoFrontendConfig?: NangoFrontendConfig;
   className?: string;
+  // Optional leading glyph rendered before the label (e.g. the §II indigo-plug
+  // "Connect" mark). Strictly additive and purely presentational: it does NOT
+  // change the connect-session logic, so a connector page can render the design
+  // glyph without duplicating this button's Nango flow (github-connector#43,
+  // item 7). Omit it and the button renders exactly as before. Hidden from
+  // assistive tech (aria-hidden) because the button label already names the
+  // action; the icon is decorative. Suppressed while pending so it does not sit
+  // beside the "Opening..." label.
+  leadingIcon?: ReactNode;
   prerequisiteErrorMessage?: string;
   // Disable the button when a precondition is unmet (e.g. a required OAuth
   // client is not configured yet). Mirrors tailscale-connect-form's
@@ -190,6 +199,7 @@ export function NangoUserConnectButton({
   reconnectLabel = "Reconnect",
   nangoFrontendConfig,
   className,
+  leadingIcon,
   prerequisiteErrorMessage,
   disabled = false,
   onError,
@@ -220,6 +230,11 @@ export function NangoUserConnectButton({
       disabled={pending || disabled}
       className={className}
     >
+      {leadingIcon && !pending ? (
+        <span className="inline-flex shrink-0 items-center" aria-hidden="true">
+          {leadingIcon}
+        </span>
+      ) : null}
       {pending ? "Opening..." : connected ? reconnectLabel : connectLabel}
     </Button>
   );

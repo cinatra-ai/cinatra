@@ -255,6 +255,12 @@ const DENIED_VERB_TOKENS = new Set<string>([
   "upsert",
   "refresh",
   "trigger",
+  // A `*_decide` tool renders a binding approval/rejection at its source (e.g.
+  // `approvals_decide`, `agent_creation_request_decide`). Same rationale as
+  // `stop`/`resume`: a prompt-injected chat must NEVER auto-approve — decisions
+  // stay on the rendered approval surface. Defense-in-depth; these tools are also
+  // deny-by-default (never on the allowlist).
+  "decide",
 ]);
 
 // Family prefixes that must never be reachable from chat regardless of verb.

@@ -156,6 +156,97 @@ export function oboCeilingContains(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Child-run composition (epic W5): a child run dispatched by a parent run is
+// bounded by BOTH its own anchored ceiling AND the parent's chain. The child's
+// effective ceiling chain = child's own anchor ∪ parent's chain (satisfy-all →
+// never wider than the parent). Incomparable axes (e.g. parent team T vs child
+// project P) are carried un-collapsed; a provably-disjoint SAME-axis pair (two
+// distinct ids on one single-valued axis — including an org-floor mismatch) can
+// never be satisfied by any resource, so it PRE-DENIES the dispatch (fail closed
+// with a structured reason; the site creates/enqueues no child run).
+//
+// This is the ONE shared compose-at-dispatch primitive; every dispatch site
+// resolves the parent chain and calls this — never a per-site re-implementation.
+// The child's OWN anchor must be freshly re-derived (`deriveOboCeilingChain`)
+// and NEVER copied from the parent — copying a stale parent/source chain as the
+// child's own anchor is the recurring-trigger clone-copy trap. Composition only
+// ADDS the parent chain on top of the freshly-derived child anchor.
+// ---------------------------------------------------------------------------
+
+/** Reason a composition is provably empty (no resource can satisfy satisfy-all). */
+export type OboCeilingComposeDenial =
+  | { reason: "cross_org"; tier: "organization"; ids: [string, string] }
+  | { reason: "disjoint_axis"; tier: OboCeilingTier; ids: [string, string] };
+
+export type ComposeOboCeilingResult =
+  | { ok: true; chain: OboCeilingChain }
+  | ({ ok: false } & OboCeilingComposeDenial);
+
+/**
+ * Compose a child's own derived ceiling chain with its parent run's chain.
+ *
+ * Rules:
+ *  - Union + dedup on `(tier, id)`; the result is the child's own anchor plus
+ *    every parent ceiling it does not already carry (satisfy-all → the composed
+ *    chain is never wider than the parent, and transitively narrows across
+ *    grandchildren because each level unions its parent's already-composed chain).
+ *  - Every axis is single-valued for a resource (a resource has ONE owner
+ *    tier+id, ONE org, ONE project). So two DISTINCT ids on the SAME tier can
+ *    never both be satisfied → provably disjoint → pre-deny. An org-tier
+ *    conflict is reported as `cross_org`; any other tier as `disjoint_axis`.
+ *  - Incomparable axes (team vs project, user vs team, …) are DIFFERENT tiers →
+ *    both carried, never collapsed, never a pre-deny here (strict satisfy-all at
+ *    enforcement handles them).
+ *
+ * Both inputs must be non-empty, well-formed chains (each already carries its
+ * org floor). Composition is order-insensitive on membership.
+ */
+export function composeOboCeilingChain(
+  parent: OboCeilingChain,
+  child: OboCeilingChain,
+): ComposeOboCeilingResult {
+  // Union + dedup (child first so its freshly-derived anchor leads the chain).
+  const merged: OboCeiling[] = [...child];
+  for (const p of parent) {
+    if (!merged.some((m) => m.tier === p.tier && m.id === p.id)) merged.push(p);
+  }
+
+  // Any single-valued axis carrying two distinct ids is unsatisfiable.
+  const idsByTier = new Map<OboCeilingTier, string>();
+  for (const c of merged) {
+    const seen = idsByTier.get(c.tier);
+    if (seen === undefined) {
+      idsByTier.set(c.tier, c.id);
+    } else if (seen !== c.id) {
+      return c.tier === "organization"
+        ? { ok: false, reason: "cross_org", tier: "organization", ids: [seen, c.id] }
+        : { ok: false, reason: "disjoint_axis", tier: c.tier, ids: [seen, c.id] };
+    }
+  }
+
+  return { ok: true, chain: merged };
+}
+
+/**
+ * Structured error thrown when a child-run dispatch composes a provably-disjoint
+ * ceiling chain (same-axis id conflict or cross-org). Dispatch sites catch this
+ * and surface a structured failure (no child run created/enqueued) — the same
+ * fail-closed pattern as the executor's `AGENT_CROSS_ORG` outcome. `code` is
+ * stable for site-level branching without instanceof coupling across bundles.
+ */
+export class OboCeilingCompositionError extends Error {
+  readonly code = "AGENT_OBO_CEILING_DISJOINT" as const;
+  readonly denial: OboCeilingComposeDenial;
+  constructor(denial: OboCeilingComposeDenial) {
+    super(
+      `child-run OBO ceiling composition is provably disjoint (${denial.reason} on ${denial.tier}: ${denial.ids[0]} vs ${denial.ids[1]})`,
+    );
+    this.name = "OboCeilingCompositionError";
+    this.denial = denial;
+  }
+}
+
 /** A resolved resource's ownership facets, compared against a ceiling chain. */
 export type CeilingResource = {
   orgId?: string | null;
