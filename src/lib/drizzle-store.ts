@@ -9,6 +9,7 @@ import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
 import {
   capabilityOwnershipGrantSchemaQueries,
+  dependencyEdgeSchemaQueries,
   versionIdentitySchemaQueries,
 } from "@/lib/extension-grant-schema";
 import {
@@ -2626,7 +2627,6 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   status text NOT NULL DEFAULT 'active',
   source jsonb NOT NULL,
   required_in_prod boolean NOT NULL DEFAULT false,
-  dependencies jsonb NOT NULL DEFAULT '[]'::jsonb,
   manifest_hash text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -2645,6 +2645,13 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // `versionIdentitySchemaQueries`, spread here AFTER both tables' CREATE
     // statements. The leaf drops the pre-#1040 org-only identity index names.
     ...versionIdentitySchemaQueries(schemaName),
+    // Dependency edges are FIRST-CLASS ROWS since cinatra#1040 S2: the
+    // extension_dependency_edge table + the guarded jsonb->edge-rows migration
+    // mirror (the legacy `dependencies` jsonb column is GONE from the CREATE
+    // above — a fresh DB is born at the post-core__0024 shape; an upgraded DB
+    // converges through the leaf's guarded DO block). Lives in the same
+    // pure-strings leaf module (`dependencyEdgeSchemaQueries`).
+    ...dependencyEdgeSchemaQueries(schemaName),
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_kind_status_idx
   ON "${schemaName.replaceAll('"', '""')}"."installed_extension" (kind, status)` },
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_package_name_idx

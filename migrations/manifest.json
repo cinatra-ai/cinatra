@@ -228,6 +228,16 @@
         "installed_extension",
         "extension_install_ops"
       ]
+    },
+    {
+      "seq": "0024",
+      "file": "core/core__0024_extension-dependency-edge.mjs",
+      "summary": "Dependency edges move off the row jsonb (cinatra-ai/cinatra#1040 S2, edge-storage half). Creates extension_dependency_edge: one row per DECLARED manifest edge of an installed_extension row — declared_package_name / declared_kind / edge_type / requirement / version_constraint (the VersionConstraint union as jsonb, lossless round-trip) / declared_index (manifest array position; UNIQUE per dependent — positional, not a semantic dedupe) — plus the write-time RESOLUTION: resolved_install_id (WHICH installed row satisfied the edge; FK ON DELETE SET NULL) and resolution_reason (free-form provenance). The closure gates (boot/archive/restore/forward) validate resolved edges and fall back to the scoped name-lookup for unresolved ones. PREFLIGHT fails loudly on malformed legacy edges (naming dependent id + declared index) before any destructive work; the backfill resolves per-DECLARING-row scope (own-org live row first, then platform — a platform dependent binds only platform rows; default version preferred, deterministic id tie-break; missing target backfills unresolved) with DETERMINISTIC ids ('iede_' || md5(dependent:index)); then installed_extension.dependencies is DROPPED. The table rides the idempotent bootstrap DDL (dependencyEdgeSchemaQueries spread into buildCreateStoreSchemaQueries, same PR; the bootstrap CREATE of installed_extension no longer declares the jsonb column) so a fresh install is born at the target shape and ledger-fakes this chain; the backfill + column DROP over an already-populated table are the transformational half this module carries on the operator upgrade path. Coordinated NON-rolling deploy boundary (core__0022/core__0005): a pre-0024 process naming the dropped column fails closed (undefined column), never a silent wrong read. Idempotent/lineage-tolerant: CREATE TABLE/indexes IF NOT EXISTS; preflight+backfill+drop live in ONE DO block guarded on the legacy column's existence, so a re-run — or a run after the bootstrap leaf already converged — is a no-op. down() re-adds the jsonb column, re-serializes each dependent's edges in declared order (optional kind key only when present), and drops the table; resolution provenance is lost by design. destructive=true because it backfills from and drops a column on a table that already holds rows on main.",
+      "destructive": true,
+      "tables": [
+        "installed_extension",
+        "extension_dependency_edge"
+      ]
     }
   ]
 }

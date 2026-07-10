@@ -294,6 +294,7 @@ async function assertCanonicalRestoreClosure(packageName: string): Promise<void>
     const result = assertInstallClosure(
       target,
       makeScopedManifestLookup(allRows, target.organizationId),
+      allRows,
     );
     if (result.missingOptional.length > 0) {
       const behavior = optionalMissingBehaviorForKind(target.kind);
