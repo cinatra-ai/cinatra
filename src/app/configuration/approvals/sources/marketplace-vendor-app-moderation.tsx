@@ -10,20 +10,17 @@ import { Badge } from "@/components/ui/badge";
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceVendorApplication } from "../marketplace-decision-helpers";
 import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { marketplaceVendorAppModerationContract } from "./marketplace-vendor-app-moderation.contract";
 import {
   MARKETPLACE_GROUP,
   MARKETPLACE_VENDOR_APPS_ADMIN_HREF,
   MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID,
-  REMOTE_COUNT_CAP,
-  cappedCount,
-  guardedCount,
   guardedFetch,
   hasAdminToken,
-  marketplaceAvailability,
   resolveAdminToken,
   toRowEligibility,
 } from "./marketplace-shared";
-import type { ApprovalAction, ApprovalRow, ApprovalSource, SourceCounts } from "./types";
+import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
 
 // ---------------------------------------------------------------------------
 // Marketplace source #2 — vendor-application MODERATION (Inbox only).
@@ -83,15 +80,13 @@ function toRow(r: MarketplaceVendorApplicationAdminRow): ApprovalRow {
 }
 
 export const marketplaceVendorAppModerationSource: ApprovalSource = {
-  id: SOURCE_ID,
+  // Light nav contract (id / availability / appliesTo / counts) — the SAME
+  // function references the nav registry consumes (registry-parity.test.ts).
+  ...marketplaceVendorAppModerationContract,
   title: "Vendor applications",
   group: MARKETPLACE_GROUP,
 
   viewAllHref: (dir) => (dir === "inbox" ? MARKETPLACE_VENDOR_APPS_ADMIN_HREF : undefined),
-
-  availability: () => marketplaceAvailability(),
-
-  appliesTo: (viewer, direction) => viewer.isAdmin && direction === "inbox",
 
   // Per-direction credential gate — its own `MARKETPLACE_ADMIN_TOKEN`.
   sectionConfigured: () => hasAdminToken(),
@@ -107,18 +102,6 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
   async fetchMine() {
     // Inbox-only source; the instance's own status is the vendor-app-status source.
     return { availability: "ready", rows: [], actions: [] };
-  },
-
-  async counts(viewer): Promise<SourceCounts> {
-    const inbox = await guardedCount(viewer, resolveAdminToken(), `${SOURCE_ID}:inbox`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
-      const out = await client.vendorApplicationListAdmin({
-        status: ["applied"],
-        limit: REMOTE_COUNT_CAP + 1,
-      });
-      return cappedCount(out.rows.length);
-    });
-    return { inbox, mine: 0 };
   },
 
   rowRenderer(row: ApprovalRow) {

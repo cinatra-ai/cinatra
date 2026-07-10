@@ -145,6 +145,7 @@ export function AppShell({
   singleOrg = false,
   hiddenNavTitles,
   pendingApprovalsTotal = 0,
+  approvalsNavVisible = false,
 }: {
   children: React.ReactNode;
   connectionReady: boolean;
@@ -157,11 +158,17 @@ export function AppShell({
   singleOrg?: boolean;
   hiddenNavTitles?: string[];
   /**
-   * Total of pending workflow approvals + admin-only agent creation
-   * requests visible to the actor. 0 when not signed in or when the count
-   * primitive returns 0; the sidebar pill hides at 0.
+   * Sum of the viewer's Inbox-actionable approval counts across the
+   * ApprovalSource registry. 0 when not signed in or when every source
+   * reports 0; the sidebar pill hides at 0.
    */
   pendingApprovalsTotal?: number;
+  /**
+   * Availability-driven visibility of the Admin → Approvals nav item: true
+   * when the viewer has any available source with an actionable Inbox (v1 →
+   * admins). Resolved server-side in layout.tsx from the registry.
+   */
+  approvalsNavVisible?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -475,6 +482,7 @@ export function AppShell({
         hiddenNavTitles={hiddenNavTitles}
         isAdmin={isAdmin}
         pendingApprovalsTotal={pendingApprovalsTotal}
+        approvalsNavVisible={approvalsNavVisible}
       />
       <SidebarInset>
         {/* Spacer: pushes the sticky header (and all page content) into normal flow
@@ -488,13 +496,24 @@ export function AppShell({
             scrollOffset > 10 ? "shadow-sm" : "shadow-none",
           )}
         >
-          {/* Topbar rides the same centred max-w-7xl stage as PageContent/PageHeader
-              (mx-auto max-w-7xl px-5 sm:px-8 lg:px-0) so chrome and full-width
-              content share identical gutters below the cap and equal growing
-              margins above it. The header itself stays full-bleed (border-b spans
-              edge to edge); only this inner control row is capped and centred. */}
-          <div className="mx-auto flex h-full w-full max-w-7xl items-center gap-3 px-5 sm:gap-4 sm:px-8 lg:px-0">
-            <SidebarTrigger variant="outline" className="max-md:scale-125" />
+          {/* cinatra#1284: the top-bar chrome anchors at the true viewport edges,
+              NOT the centred max-w-7xl content stage (reverses #1091 / PR #1153,
+              per owner direction). The control row spans the full available width
+              (the SidebarInset area = viewport minus the persistent sidebar) with
+              only the standard edge gutters (px-5 → sm:px-8): the left element sits
+              flush to the far-left edge + gutter, the right element flush to the
+              far-right edge − gutter, independent of the content cap. The header
+              itself stays full-bleed (border-b spans edge to edge). Content BELOW
+              the bar keeps its capped/centred max-w-7xl stage (unchanged). */}
+          <div
+            data-testid="app-shell-topbar-row"
+            className="flex h-full w-full items-center gap-3 px-5 sm:gap-4 sm:px-8"
+          >
+            <SidebarTrigger
+              data-testid="app-shell-topbar-left"
+              variant="outline"
+              className="max-md:scale-125"
+            />
             <Separator orientation="vertical" className="h-6 shrink-0" />
             <Breadcrumb className="hidden sm:flex">
               <BreadcrumbList>
@@ -520,7 +539,7 @@ export function AppShell({
                 ))}
               </BreadcrumbList>
             </Breadcrumb>
-            <div className="ml-auto flex items-center gap-3">
+            <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3">
             {process.env.NODE_ENV === "development" && <Popover open={devToolsOpen} onOpenChange={(open) => {
               setDevToolsOpen(open);
               if (open) {

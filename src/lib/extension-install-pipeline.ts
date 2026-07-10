@@ -12,9 +12,9 @@ import "server-only";
 // or a DB; `makeDefaultInstallPipelineDeps` wires the real materializer +
 // canonical store + grant store.
 
-import type { HostPortName } from "@cinatra-ai/sdk-extensions";
 import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 
+import { capturePriorOwnershipGrants, makeOwnershipGrantInstallDeps, recordAndAutoApproveOwnershipGrants, unwindOwnershipGrants, type OwnershipGrantInstallHooks } from "@/lib/extension-capability-ownership-grants";
 import { classifyExtensionTrust } from "@/lib/extension-trust";
 import {
   readAccessDeclarationInertly,
@@ -384,7 +384,7 @@ export type InstallPipelineDeps = {
   // The access-declaration vertical slice (cinatra#951) lives in
   // connector-access-config-host.ts: readAccessDeclaration /
   // persistAccessDeclaration / readCurrentAccessDeclaration.
-} & ConnectorAccessDeclarationInstallDeps;
+} & ConnectorAccessDeclarationInstallDeps & OwnershipGrantInstallHooks;
 
 /**
  * Structured operational event for a FAILED durable-restore step (cinatra#158).
@@ -395,7 +395,7 @@ export type InstallDurableRestoreFailureEvent = {
   packageName: string;
   orgId: string | null;
   /** Which durable axis failed to restore. */
-  step: "provenance" | "grant" | "dependencies" | "journal" | "access-declaration";
+  step: "provenance" | "grant" | "ownership-grant" | "dependencies" | "journal" | "access-declaration";
   /** Which unwind path raised it. */
   scope: "pre-finalize" | "post-commit-rollback";
   reason: string;
@@ -541,6 +541,10 @@ export async function installExtensionFromRegistry(
   });
 
   const requestedPorts = await deps.readRequestedPorts(mat.storeDir);
+
+  // Widget-auth token keys this manifest DECLARES (SRI-verified bytes); [] when
+  // unwired/none. (capability-ownership grant S0)
+  const declaredTokenKeys = deps.readWidgetAuthTokenKeys ? await deps.readWidgetAuthTokenKeys(mat.storeDir) : [];
 
   // Read the CURRENT (package, org) journal op EARLY — read-only. Two consumers:
   // (1) the HOST-COMPAT GATE's GC guard just below (a same-version re-install
@@ -783,6 +787,8 @@ export async function installExtensionFromRegistry(
   const isUpdate = priorOp?.phase === "finalized";
   const priorSource = isUpdate ? (await deps.readCurrentSource?.(input.packageName, input.orgId)) ?? null : null;
   const priorGrant = isUpdate ? (await deps.readGrantForScope?.(input.packageName, input.orgId)) ?? null : null;
+  // Prior ownership grants (per declared key) for durable rollback of a failed update.
+  const priorOwnershipGrants = await capturePriorOwnershipGrants(deps, { isUpdate, packageName: input.packageName, orgId: input.orgId, declaredTokenKeys });
   // (d) the prior canonical row's persisted dependency EDGES (#180) — the NEW
   // manifest's edges land at the finalize seam below, so a failed update must
   // restore these on BOTH unwind paths or every closure gate reads the failed
@@ -823,6 +829,9 @@ export async function installExtensionFromRegistry(
       });
       grantStatus = "approved";
     }
+    // Record a PENDING ownership grant per declared token key, auto-approved ONLY
+    // for `trusted-signed` (same split as ports/DDL). (capability-ownership grant S0)
+    await recordAndAutoApproveOwnershipGrants(deps, { declaredTokenKeys, autoGrantPrivileged, packageName: input.packageName, orgId: input.orgId, approvedBy: input.actorUserId ?? "system:auto-trusted-signed" });
     await deps.advanceInstallOpPhase?.({ installOpId, phase: "granted" });
 
     // Apply the extension's declared, host-run node-pg-migrate migrations
@@ -979,6 +988,24 @@ export async function installExtensionFromRegistry(
     // existed) RESTORE the captured OLD provenance/grant/edges. Best-effort +
     // isolated; each FAILED step emits a structured operational event (cinatra#158
     // (d)) AND logs, never masking the original error. A FRESH install captured none.
+    // Undo this attempt's ownership grant writes — OUTSIDE the isUpdate guard: a
+    // fresh install auto-approved grants too and must revoke them, else a failed
+    // install leaves an approved credential-store owner. (capability-ownership grant S0)
+    await unwindOwnershipGrants({
+      deps,
+      packageName: input.packageName,
+      orgId: input.orgId,
+      declaredTokenKeys,
+      priorOwnershipGrants,
+      onFailure: (e) =>
+        emitDurableRestoreFailure(deps, {
+          packageName: input.packageName,
+          orgId: input.orgId,
+          step: "ownership-grant",
+          scope: "pre-finalize",
+          reason: e instanceof Error ? e.message : String(e),
+        }),
+    });
     if (isUpdate) {
       // ALSO restore the OLD host-port grant — `recordRequestedGrant`/`approveGrant`
       // may have reset/re-approved it against the new ports before the throw.
@@ -1182,6 +1209,18 @@ export async function installExtensionFromRegistry(
           recordFailure("grant", e);
         }
       }
+      // (i-c2) unwind the capability-ownership grants: re-pin each captured OLD
+      // row; revoke any NEW key this attempt added — so the re-pinned OLD install
+      // keeps its exact prior ownership and no failed key leaks authority.
+      // (capability-ownership grant S0)
+      await unwindOwnershipGrants({
+        deps,
+        packageName: input.packageName,
+        orgId: input.orgId,
+        declaredTokenKeys,
+        priorOwnershipGrants,
+        onFailure: (e) => recordFailure("ownership-grant", e),
+      });
       // (i-d) restore the OLD dependency EDGES (#180): the finalize seam above
       // persisted the NEW manifest's edges; with the OLD version re-pinned,
       // leaving them would corrupt every closure gate that reads the canonical row.
@@ -1302,7 +1341,7 @@ export async function installExtensionFromRegistry(
 export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineDeps> {
   const { resolveExtensionDistIntegrity } = await import("@cinatra-ai/registries");
   const { materializePackageToStore } = await import("@/lib/extension-package-store");
-  const { recordRequestedGrant, approveGrant, readGrantForScope, restoreGrant, readRequestedHostPortsFromStore } = await import("@/lib/extension-host-port-grants");
+  const { makeHostPortGrantInstallDeps, readRequestedHostPortsFromStore } = await import("@/lib/extension-host-port-grants");
   const { beginInstallOp, advanceInstallOpPhase, finalizeInstallOp, readInstallOp } = await import("@/lib/extension-install-ops");
   const { makeCanonicalRowInstallDeps } = await import("@/lib/extension-install-canonical-row-deps");
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import("@/lib/gatekept-install");
@@ -1450,49 +1489,12 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       });
       return pre !== null;
     },
-    recordRequestedGrant: (g) =>
-      recordRequestedGrant({
-        packageName: g.packageName,
-        orgId: g.orgId,
-        requestedPorts: g.requestedPorts as readonly HostPortName[],
-      }).then(() => undefined),
-    approveGrant: (g) =>
-      approveGrant({
-        packageName: g.packageName,
-        orgId: g.orgId,
-        approvedPorts: g.approvedPorts as readonly HostPortName[],
-        requestedPorts: g.requestedPorts as readonly HostPortName[],
-        approvedBy: g.approvedBy,
-      }).then(() => undefined),
-    // The hot-UPDATE probe's EFFECTIVE-ports basis for a non-auto-grant
-    // (bootstrap/untrusted) install: the EXACT-(package, org)-scoped grant ROW
-    // (status + approvedPorts + requestedPortsHash), with NO global fallback — the
-    // SAME exact-scope resolution `resolveInstallAnchor` uses for its port decision
-    // (it refuses a cross-scope global grant). The pipeline then counts the ports
-    // only when this grant is approved AND its requestedPortsHash still matches the
-    // in-flight request (mirroring `recordRequestedGrant`'s reset-on-change rule).
-    readGrantForScope: async (packageName, orgId) => {
-      const g = await readGrantForScope({ packageName, orgId });
-      return g
-        ? {
-            orgId: g.orgId,
-            status: g.status,
-            approvedPorts: g.approvedPorts,
-            requestedPortsHash: g.requestedPortsHash,
-            approvedBy: g.approvedBy,
-          }
-        : null;
-    },
-    // DURABLE ROLLBACK: re-write the OLD grant row to its captured state.
-    restoreGrant: (i) =>
-      restoreGrant({
-        packageName: i.packageName,
-        orgId: i.orgId,
-        status: i.status,
-        approvedPorts: i.approvedPorts,
-        requestedPortsHash: i.requestedPortsHash,
-        approvedBy: i.approvedBy,
-      }).then(() => undefined),
+    // Host-port grant lifecycle (record/approve/read-scope/restore) — extracted
+    // to `extension-host-port-grants.ts` (pipeline is a file-size bottleneck).
+    ...makeHostPortGrantInstallDeps(),
+    // Capability-ownership grant lifecycle (widget-auth token-key ownership),
+    // mirroring the host-port wiring. (capability-ownership grant S0)
+    ...makeOwnershipGrantInstallDeps(),
     beginInstallOp: (b) => beginInstallOp(b).then(() => undefined),
     advanceInstallOpPhase: (a) => advanceInstallOpPhase(a).then(() => undefined),
     // cinatra#158: the SUPERSESSION seam — atomic demote-OLD + promote-NEW.

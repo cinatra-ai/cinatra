@@ -91,10 +91,14 @@ export default async function RootLayout({
   // instance never wrongly hides sign-up.
   let signUpEnabled = true;
   const hiddenNavTitles: string[] = [];
-  // Aggregate of pending workflow approvals + admin-only agent creation
-  // requests, resolved server-side and consumed by AppSidebar to drive the
-  // Admin → Approvals pill. Defaults to 0 on any resolution error.
+  // Sidebar Approvals nav, resolved server-side from the ApprovalSource
+  // registry (not a hard-wired count): the pill total = sum of every available
+  // source's Inbox-actionable count for the viewer; visibility = the viewer has
+  // any available source with an actionable Inbox (v1 → admins; a future
+  // non-admin-actionable source lights it with no sidebar edit). Both default
+  // to the hidden/empty state on any resolution error.
   let pendingApprovalsTotal = 0;
+  let approvalsNavVisible = false;
   try {
     const [
       setupCompleteResult,
@@ -152,13 +156,25 @@ export default async function RootLayout({
     // The inbound-webhook registry moved under Configuration (cinatra#696) — it
     // no longer has its own sidebar nav title to hide. The page itself
     // (/configuration/webhooks) re-enforces with requireAdminSession().
-    if (session) {
+    const orgId = session?.session?.activeOrganizationId ?? null;
+    if (session && orgId) {
       try {
-        const { pendingApprovalsCount } = await import("@/lib/pending-approvals-count");
-        const counts = await pendingApprovalsCount();
-        pendingApprovalsTotal = counts.total;
+        // IMPORT-LIGHT nav registry ONLY (cinatra#1283) — never the heavy
+        // `sources/registry`, whose decide/render graph (→
+        // `@cinatra-ai/agents/mcp-handlers` + the client decision-action
+        // components) would be compiled into EVERY route via this root layout
+        // and OOM `next build`. The nav registry enumerates the same source
+        // list, so the badge still lights for a new source with no sidebar edit.
+        const [{ availableNavSources }, { summarizeApprovalsNav }] = await Promise.all([
+          import("@/app/configuration/approvals/sources/nav-registry"),
+          import("@/app/configuration/approvals/nav-summary"),
+        ]);
+        const viewer = { userId: session.user.id, orgId, isAdmin };
+        const summary = await summarizeApprovalsNav(await availableNavSources(viewer), viewer);
+        pendingApprovalsTotal = summary.total;
+        approvalsNavVisible = summary.visible;
       } catch {
-        // Soft-fail — the pill just stays hidden.
+        // Soft-fail — the nav item stays hidden and the pill stays empty.
       }
     }
   } catch (err) {
@@ -183,6 +199,7 @@ export default async function RootLayout({
             singleOrg={singleOrg}
             hiddenNavTitles={hiddenNavTitles}
             pendingApprovalsTotal={pendingApprovalsTotal}
+            approvalsNavVisible={approvalsNavVisible}
           >
             {children}
           </AppShell>

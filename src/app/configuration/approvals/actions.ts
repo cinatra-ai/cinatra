@@ -58,6 +58,11 @@ export async function decideApprovalRow(
     return { ok: false, error: result.message };
   }
 
+  // Refresh the page rows/counts AND the sidebar Approvals badge. The badge is
+  // rendered by the ROOT layout, so a page-level revalidate alone would leave a
+  // stale count after this non-redirecting inline decision — revalidate the
+  // root layout segment too so the pill updates without a full reload.
   revalidatePath("/configuration/approvals");
+  revalidatePath("/", "layout");
   return { ok: true };
 }
