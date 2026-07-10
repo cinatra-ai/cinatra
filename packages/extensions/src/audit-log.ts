@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { Actor, PackageRef } from "@cinatra-ai/extension-types";
+import type { ResolvedRowIdentity } from "./lifecycle-target-resolver";
 
 // ---------------------------------------------------------------------------
 // DanglingReferences type
@@ -124,6 +125,11 @@ export async function writeExtensionLifecycleAuditEntry(input: {
   destroyedRowSnapshot: unknown;
   danglingReferences: DanglingReferences;
   reason?: string;
+  // P5 (cinatra#1130): the canonical rows the (platform-admin-only) package-
+  // global destruction affected — recorded so an audit reader can prove which
+  // rows were destroyed. Optional (legacy callers omit it). When exactly one
+  // row is present its org anchors the audit `orgId`.
+  resolvedRows?: ResolvedRowIdentity[];
 }): Promise<void> {
   const { insertExtensionLifecycleAudit } = await import("@/lib/database");
   // Prefer the actor's userId (set by trustworthy callers — UI form actions
@@ -135,16 +141,82 @@ export async function writeExtensionLifecycleAuditEntry(input: {
   const actorIdValue =
     input.actor.userId ??
     `system:${input.actor.source ?? "unknown"}`;
+  const resolvedRows = input.resolvedRows;
   await insertExtensionLifecycleAudit({
     id: crypto.randomUUID(),
     actorId: actorIdValue,
     actorType: input.actor.actorType,
-    orgId: null, // PrimitiveActorContext has no org field; set via caller context if needed
+    // Anchor the audit org to the resolved row when exactly one was targeted;
+    // a package-global platform-admin destruction (>1 row) leaves orgId null and
+    // records every affected row id in the snapshot below.
+    orgId:
+      resolvedRows && resolvedRows.length === 1
+        ? resolvedRows[0].organizationId
+        : null,
     operation: input.operation,
     packageName: input.packageRef.packageName,
     packageVersion: input.packageRef.version ?? null,
-    destroyedRowSnapshot: input.destroyedRowSnapshot,
+    // Preserve the destroyed-row snapshot; additively carry the resolved-row
+    // identities so an audit reader can prove exactly which canonical rows the
+    // op destroyed (escalation-detection signal).
+    destroyedRowSnapshot:
+      resolvedRows && resolvedRows.length > 0
+        ? { snapshot: input.destroyedRowSnapshot, resolvedRows }
+        : input.destroyedRowSnapshot,
     danglingReferences: input.danglingReferences,
     reason: input.reason ?? null,
   });
+}
+
+// ---------------------------------------------------------------------------
+// writeExtensionLifecycleTransitionAudit (P5, cinatra#1130)
+// One durable audit row per ROW-SCOPED lifecycle transition (archive / restore /
+// activate / soft-uninstall) — the org-admin parity ops. The retired
+// package-wide fan-out must never resurrect as N unlabeled transitions, so every
+// resolved-row transition records:
+//   - the standing-VERIFIED actor (userId + actorType; orgId + role in the row);
+//   - the RESOLVED row identity (installed_extension id / organizationId /
+//     ownerLevel / ownerId) — so an org-A admin audit row can be proven to never
+//     carry an org-B or NULL-org row id.
+// The transition itself (`transitionExtensionLifecycle`) flips the canonical
+// status but does NOT persist an audit row; this is that durable trail. Unlike
+// force_delete's audit (written BEFORE destruction, failure aborts), a
+// reversible transition's audit is BEST-EFFORT — a write failure is logged, not
+// thrown, so a restorable archive/restore is never aborted by a transient audit
+// error (the canonical row is authoritative + the op is reversible).
+// ---------------------------------------------------------------------------
+export async function writeExtensionLifecycleTransitionAudit(input: {
+  actor: Actor;
+  operation: "archive" | "restore" | "activate" | "uninstall";
+  packageRef: PackageRef;
+  resolvedRow: ResolvedRowIdentity;
+  /** The standing role that authorized the transition (platform_admin /
+   *  org_owner / org_admin) — recorded in `reason`. */
+  standingReason: string;
+}): Promise<void> {
+  try {
+    const { insertExtensionLifecycleAudit } = await import("@/lib/database");
+    const actorIdValue =
+      input.actor.userId ?? `system:${input.actor.source ?? "unknown"}`;
+    await insertExtensionLifecycleAudit({
+      id: crypto.randomUUID(),
+      actorId: actorIdValue,
+      actorType: input.actor.actorType,
+      orgId: input.resolvedRow.organizationId,
+      operation: input.operation,
+      packageName: input.packageRef.packageName,
+      packageVersion: input.packageRef.version ?? null,
+      // No destroyed row (reversible) — carry the resolved-row identity so the
+      // audit proves which single row transitioned.
+      destroyedRowSnapshot: { resolvedRow: input.resolvedRow },
+      danglingReferences: null,
+      reason: input.standingReason,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[extensions] lifecycle transition audit write failed for ${input.operation} of ${input.packageRef.packageName} (row ${input.resolvedRow.id}) — reversible op left committed:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
