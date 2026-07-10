@@ -5,9 +5,12 @@ set -euo pipefail
 # Builds the docker/wayflow image at CANDIDATE pins (PYTHON_TAG /
 # WAYFLOWCORE_VERSION / PYAGENTSPEC_VERSION build-args; defaults = current pins),
 # mounts the committed no-LLM echo-flow fixture
-# (tests/fixtures/works-after-agent/), boots the runtime, then drives the A2A
-# message/send → completed round-trip (rt/wayflow-a2a-send.mjs) and asserts the
-# task completes with the round-tripped nonce surfaced via the EndNode output.
+# (tests/fixtures/works-after-agent/), boots the runtime, then drives BOTH A2A
+# surfaces against the candidate runtime: the blocking message/send → completed
+# round-trip (rt/wayflow-a2a-send.mjs) AND the streaming message/stream SSE →
+# completed round-trip (rt/wayflow-a2a-stream.mjs, cinatra#1148), each asserting
+# the round-tripped nonce surfaces via the EndNode output (not merely the echoed
+# user input).
 #
 # This proves "wayflow works after a python/wayflowcore-major bump" with a
 # DETERMINISTIC, LLM-FREE agent (path A; design §1.5): the A2A server + task
@@ -117,4 +120,15 @@ WAYFLOW_BASE_URL="$WAYFLOW_URL" WAYFLOW_AGENT_PATH="$AGENT_PATH" WORKS_AFTER_NON
   wa_node "${REPO_ROOT}/scripts/ci/works-after/rt/wayflow-a2a-send.mjs" \
   || fail "wayflow A2A message/send round-trip failed (task did not complete with the nonce)."
 
-echo "${_WA_GREEN}==> works-after wayflow PASSED${_WA_RST} — candidate wayflow ran an agent over A2A (message/send → completed, nonce surfaced)."
+# cinatra#1148: also prove the STREAMING surface against the bumped runtime.
+# message/stream (SSE) is a distinct, load-bearing path (the @a2a-js multi-line-
+# SSE `data:` fix exists because it broke); the host-side packages/a2a SSE tests
+# MOCK the streaming bridge, so only this boots the candidate runtime and drives
+# its native fasta2a SSE stream. A fresh nonce so the stream proof cannot pass on
+# the send arm's echoed input.
+STREAM_NONCE="wa-stream-$(date +%s)-${RANDOM}"
+WAYFLOW_BASE_URL="$WAYFLOW_URL" WAYFLOW_AGENT_PATH="$AGENT_PATH" WORKS_AFTER_NONCE="$STREAM_NONCE" \
+  wa_node "${REPO_ROOT}/scripts/ci/works-after/rt/wayflow-a2a-stream.mjs" \
+  || fail "wayflow A2A message/stream round-trip failed (stream did not complete with the nonce)."
+
+echo "${_WA_GREEN}==> works-after wayflow PASSED${_WA_RST} — candidate wayflow ran an agent over A2A (message/send → completed AND message/stream SSE → completed, nonce surfaced on both)."
