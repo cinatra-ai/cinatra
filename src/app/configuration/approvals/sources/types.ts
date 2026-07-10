@@ -72,8 +72,6 @@ export interface ApprovalRow {
   /** ISO timestamp. */
   createdAt: string;
   href?: string;
-  /** Single-admin self-approval flag ("your own request"). */
-  isOwnRequest?: boolean;
   eligibility?: RowEligibility;
   /** OPTIONAL PUBLIC optimistic-concurrency token — the source-opaque value a
    *  decision must echo back (e.g. the agent source's CAS snapshot hash). Unlike

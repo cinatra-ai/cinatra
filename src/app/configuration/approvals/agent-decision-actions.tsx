@@ -12,13 +12,14 @@ import { decideApprovalRow, type InlineDecideState } from "./actions";
 const INITIAL: InlineDecideState = { ok: false };
 
 /**
- * Inline Approve / Reject affordance for an agent-creation-request Inbox row.
- * Submits through the shared `decideApprovalRow` server action (which dispatches
- * to the source's non-redirecting `decide` helper), carrying the CAS token
+ * Inline Approve / Reject affordance for an agent-creation-request row — used on
+ * an Inbox row (a request someone else must decide) and, for a pending own
+ * request the viewer may clear themselves, on its "Your requests" row. Submits
+ * through the shared `decideApprovalRow` server action (which dispatches to the
+ * source's non-redirecting `decide` helper), carrying the CAS token
  * (`expectedVersion`) captured at render so an edit-after-view is still caught.
- * Reject reveals a required reason. A business refusal is surfaced in place. The
- * single-admin "your own request" flag is rendered by the row itself, so it is
- * not repeated here.
+ * Reject reveals a required reason. A business refusal — including a
+ * separation-of-duties refusal — is surfaced in place.
  */
 export function AgentDecisionActions({
   sourceId,
