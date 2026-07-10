@@ -212,6 +212,12 @@ export function verifyContextAttestationSignatureV2(input: {
 // ---------------------------------------------------------------------------
 
 const CONTEXT_RESOLUTION_PURPOSE_PREFIX = "author-placed-context-resolution-for-";
+// cinatra#1194 — the loader stamps its injected owner FlowNode with this
+// prefix. It never appears in INSTALLED bytes today (injection happens at
+// mount, after install), but any marker family present for a slot makes the
+// legacy structural path authoritative for that slot — mirror of the
+// loader's own skip rule.
+const LOADER_INJECTED_PURPOSE_PREFIX = "loader-injected-context-resolution-for-";
 
 function metadataCinatra(
   node: Record<string, unknown>,
@@ -222,6 +228,221 @@ function metadataCinatra(
   return typeof cin === "object" && cin !== null
     ? (cin as Record<string, unknown>)
     : null;
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#1194 — deterministic injection grammar + contextSlots declaration
+// re-anchor (the loader-owned subflow path).
+//
+// A slim (declaration-only) spec carries NO subflow bytes: the WayFlow
+// loader injects the canonical template at mount time with ids in the FIXED
+// grammar below (docker/wayflow/context_subflow_injection.py — the template
+// and this verifier version together in this repo). The attested nodeId of
+// such a spec therefore cannot be re-anchored to installed STRUCTURE; it is
+// re-anchored to the installed DECLARATION plus the grammar instead, and
+// ONLY on the run-token-authenticated path (the image that injects is the
+// image that attaches the run token; legacy transports keep the marker path).
+// ---------------------------------------------------------------------------
+
+/** The three context ApiNode kinds the loader's template materializes (the
+ *  only node ids the runtime minter can sign). Suffix-matched — no kind is a
+ *  suffix of another, so the parse is unambiguous. */
+const INJECTED_NODE_SUFFIXES: ReadonlyArray<readonly [string, ContextNodeKind]> = [
+  ["-resolve_context", "resolve"],
+  ["-finalize_interactive", "finalize"],
+  ["-finalize_autonomous", "finalize"],
+];
+
+/** Parse a nodeId under the deterministic injection grammar
+ *  `ctx-<slotId>-<kind>`. Returns null for anything else. */
+export function parseInjectedContextNodeId(
+  nodeId: string,
+): { slotId: string; kind: ContextNodeKind } | null {
+  if (!nodeId.startsWith("ctx-")) return null;
+  const rest = nodeId.slice(4);
+  for (const [suffix, kind] of INJECTED_NODE_SUFFIXES) {
+    if (rest.endsWith(suffix)) {
+      const slotId = rest.slice(0, -suffix.length);
+      if (slotId) return { slotId, kind };
+    }
+  }
+  return null;
+}
+
+/** The full id set the loader's injection of `slotId` introduces. Verifier/
+ *  injector COLLISION PARITY: the declaration anchor must refuse exactly
+ *  where the injector would refuse to inject (any of these ids already
+ *  present in the installed bytes). Mirrors _injected_component_ids in
+ *  docker/wayflow/context_subflow_injection.py. */
+function injectedComponentIds(slotId: string): string[] {
+  const kinds = [
+    "start",
+    "resolve_context",
+    "select_mode",
+    "emit_context_payload",
+    "context_select_gate",
+    "finalize_interactive",
+    "finalize_autonomous",
+    "end",
+  ];
+  return [
+    `context-${slotId}-subflow`,
+    `context_${slotId}`,
+    ...kinds.map((k) => `ctx-${slotId}-${k}`),
+  ];
+}
+
+const SELECTION_MODES = new Set(["interactive", "autonomous"]);
+const RESOLUTION_MODES = new Set(["override", "accumulate"]);
+const ALLOWED_SLOT_KEYS = new Set([
+  "slotId",
+  "acceptedArtifactExtensions",
+  "selectionMode",
+  "resolutionMode",
+  "minItems",
+  "maxItems",
+  "readableOnly",
+]);
+
+/** Strict single-entry validation mirroring the canonical zod schema in
+ *  packages/extensions/src/agent-context-slots-reader.ts (kept inline so this
+ *  module stays dependency-light — node:crypto only). */
+function isWellFormedSlotEntry(entry: unknown): entry is Record<string, unknown> {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return false;
+  }
+  const rec = entry as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (!ALLOWED_SLOT_KEYS.has(key)) return false;
+  }
+  if (typeof rec["slotId"] !== "string" || !rec["slotId"]) return false;
+  const exts = rec["acceptedArtifactExtensions"];
+  if (
+    !Array.isArray(exts) ||
+    exts.length === 0 ||
+    !exts.every((e) => typeof e === "string" && e.length > 0)
+  ) {
+    return false;
+  }
+  if (!SELECTION_MODES.has(rec["selectionMode"] as string)) return false;
+  if (!RESOLUTION_MODES.has(rec["resolutionMode"] as string)) return false;
+  const minItems = rec["minItems"];
+  if (
+    minItems !== undefined &&
+    (!Number.isInteger(minItems) || (minItems as number) < 0)
+  ) {
+    return false;
+  }
+  const maxItems = rec["maxItems"];
+  if (
+    maxItems !== undefined &&
+    (!Number.isInteger(maxItems) || (maxItems as number) < 1)
+  ) {
+    return false;
+  }
+  if (
+    typeof minItems === "number" &&
+    typeof maxItems === "number" &&
+    minItems > maxItems
+  ) {
+    return false;
+  }
+  const readableOnly = rec["readableOnly"];
+  if (readableOnly !== undefined && typeof readableOnly !== "boolean") {
+    return false;
+  }
+  return true;
+}
+
+function isPlainObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Loader/verifier CARRIER-PREDICATE PARITY (Codex round-1): a contextSlots
+ *  declaration counts ONLY on a node the loader's `_is_flow_definition`
+ *  recognizes — string id plus a PLAIN-OBJECT $referenced_components, a
+ *  string-or-plain-object start_node, or a nodes array. The legacy
+ *  isFlowDefinition (above) is looser (`typeof === "object"` admits
+ *  null/arrays) and stays untouched for the #825 walk-boundary attribution;
+ *  the DECLARATION scan must mirror the loader exactly so the server can
+ *  never anchor a "carrier" the loader would not inject. */
+function isStrictFlowCarrier(rec: Record<string, unknown>): boolean {
+  return (
+    typeof rec["id"] === "string" &&
+    (isPlainObject(rec["$referenced_components"]) ||
+      typeof rec["start_node"] === "string" ||
+      isPlainObject(rec["start_node"]) ||
+      Array.isArray(rec["nodes"]))
+  );
+}
+
+type DeclarationScan = {
+  /** slotId → number of well-formed declaring occurrences across carriers. */
+  countBySlot: Map<string, number>;
+  /** slotIds that can NEVER anchor via declaration: they appear in a
+   *  malformed carrier (or malformed entry), or twice within one carrier —
+   *  fail-closed taint, per the Codex round-0 convergence. */
+  tainted: Set<string>;
+};
+
+/** Collect contextSlots declarations from every carrier: the root document
+ *  plus any nested Flow definition carrying metadata.cinatra.contextSlots
+ *  DIRECTLY (declaration attribution never crosses into a nested def). */
+function scanContextSlotDeclarations(oas: Record<string, unknown>): DeclarationScan {
+  const countBySlot = new Map<string, number>();
+  const tainted = new Set<string>();
+
+  const consumeCarrier = (raw: unknown): void => {
+    if (raw === null || raw === undefined) return;
+    if (!Array.isArray(raw)) {
+      // Present-but-malformed carrier: nothing trustworthy to extract, and
+      // nothing to taint by name — string slot ids inside a non-array shape
+      // are unreachable anyway. (An attacker cannot use this to UNBLOCK a
+      // slot: absent counts never anchor.)
+      return;
+    }
+    const seenHere = new Set<string>();
+    const wellFormed = raw.every(isWellFormedSlotEntry);
+    for (const entry of raw) {
+      const slotId =
+        typeof entry === "object" && entry !== null
+          ? (entry as Record<string, unknown>)["slotId"]
+          : null;
+      if (typeof slotId !== "string" || !slotId) continue;
+      if (!wellFormed) {
+        tainted.add(slotId);
+        continue;
+      }
+      if (seenHere.has(slotId)) {
+        tainted.add(slotId);
+        continue;
+      }
+      seenHere.add(slotId);
+      countBySlot.set(slotId, (countBySlot.get(slotId) ?? 0) + 1);
+    }
+  };
+
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    const rec = node as Record<string, unknown>;
+    // Only STRICT carriers declare (loader parity). A contextSlots blob on a
+    // node the loader would not recognize is IGNORED, exactly as the loader
+    // ignores it — it can never affect what executes. (A degenerate ROOT
+    // that declares slots fails the loader's mount outright, so ignoring it
+    // here is equally fail-closed: nothing can run to present a token.)
+    if (isStrictFlowCarrier(rec)) {
+      const cin = metadataCinatra(rec);
+      if (cin && "contextSlots" in cin) consumeCarrier(cin["contextSlots"]);
+    }
+    for (const value of Object.values(rec)) walk(value);
+  };
+
+  walk(oas);
+  return { countBySlot, tainted };
 }
 
 /** A Flow definition owns child components — it carries an `id` plus flow
@@ -246,24 +467,42 @@ function contextKindForUrl(url: unknown): ContextNodeKind | null {
 export type ContextNodeProvenance = {
   slotId: string;
   kind: ContextNodeKind;
+  /** How the nodeId was re-anchored: the legacy marked-owner STRUCTURE walk,
+   *  or (cinatra#1194, run-token path only) the deterministic injection
+   *  grammar + the installed contextSlots DECLARATION. */
+  anchor: "marker" | "declaration";
 };
 
 /** Re-anchor an attested context-resolution `nodeId` to the run's compiled OAS.
  *
- *  Returns `{ slotId, kind }` derived from the OAS STRUCTURE (the marked owner
- *  call-site), or null when the node id is:
- *   - absent (no context ApiNode with that id), or
- *   - duplicated across enclosing definitions (id-collision — fail closed), or
- *   - not held by a definition that is the `$component_ref` target of exactly
- *     one `author-placed-context-resolution-for-<slotId>` marker (unowned /
- *     ambiguous — fail closed).
+ *  LEGACY (always available): `{ slotId, kind, anchor: "marker" }` derived
+ *  from the OAS STRUCTURE (the marked owner call-site). Fails closed when
+ *  the node id is duplicated across enclosing definitions (id-collision), or
+ *  not held by a definition that is the `$component_ref` target of exactly
+ *  one context-resolution marker (unowned / ambiguous).
  *
- *  The returned slotId/kind are the STRUCTURAL truth; the caller compares them
- *  against the request body (slotId) and the endpoint it serves (kind). The
- *  owner PACKAGE binding stays with findBoundChildPackageForSlot (unchanged). */
+ *  DECLARATION (cinatra#1194; only with `opts.allowDeclarationAnchor`, which
+ *  the caller sets on the run-token-authenticated path): for a slim spec
+ *  whose installed bytes carry NO subflow, the nodeId is re-anchored to the
+ *  deterministic injection grammar + the installed `contextSlots`
+ *  declaration instead. Fails closed unless ALL hold:
+ *   - the nodeId appears nowhere in the installed bytes,
+ *   - it parses under the grammar `ctx-<slotId>-<kind>`,
+ *   - NONE of the ids the loader's injection of that slot would generate
+ *     exist in the installed bytes (verifier/injector collision parity),
+ *   - the slot is declared EXACTLY once across all carriers, in a
+ *     well-formed declaration (malformed/duplicate carriers taint), and
+ *   - NO marker (author-placed or loader-injected) exists for that slot —
+ *     marker presence keeps the legacy path authoritative, mirroring the
+ *     loader's own injection-skip rule.
+ *
+ *  The returned slotId/kind are the trust-root truth; the caller compares
+ *  them against the request body (slotId) and the endpoint it serves (kind).
+ *  The owner PACKAGE binding stays with findBoundChildPackageForSlot. */
 export function resolveContextNodeProvenance(
   oas: Record<string, unknown>,
   nodeId: string,
+  opts?: { allowDeclarationAnchor?: boolean },
 ): ContextNodeProvenance | null {
   if (!nodeId) return null;
 
@@ -274,6 +513,11 @@ export function resolveContextNodeProvenance(
     string,
     Array<{ defId: string | null; kind: ContextNodeKind }>
   >();
+  // Every slot named by ANY marker family (blocks the declaration anchor).
+  const markerSlots = new Set<string>();
+  // Every id / $referenced_components key in the installed bytes (the
+  // injector's collision surface — see injectedComponentIds).
+  const allIds = new Set<string>();
 
   const walk = (node: unknown, enclosingDefinitionId: string | null): void => {
     if (Array.isArray(node)) {
@@ -286,25 +530,37 @@ export function resolveContextNodeProvenance(
 
     // Owner marker → the context-resolution subflow def it references.
     const purpose = cin?.["purpose"];
-    if (
-      typeof purpose === "string" &&
-      purpose.startsWith(CONTEXT_RESOLUTION_PURPOSE_PREFIX)
-    ) {
-      const slot = purpose.slice(CONTEXT_RESOLUTION_PURPOSE_PREFIX.length);
-      const subflow = rec["subflow"];
-      const ref =
-        typeof subflow === "object" && subflow !== null
-          ? (subflow as Record<string, unknown>)["$component_ref"]
-          : null;
-      if (slot && typeof ref === "string") {
-        const set = slotByContextDef.get(ref) ?? new Set<string>();
-        set.add(slot);
-        slotByContextDef.set(ref, set);
+    if (typeof purpose === "string") {
+      for (const prefix of [
+        CONTEXT_RESOLUTION_PURPOSE_PREFIX,
+        LOADER_INJECTED_PURPOSE_PREFIX,
+      ]) {
+        if (!purpose.startsWith(prefix)) continue;
+        const slot = purpose.slice(prefix.length);
+        if (slot) markerSlots.add(slot);
+        if (prefix !== CONTEXT_RESOLUTION_PURPOSE_PREFIX) continue;
+        const subflow = rec["subflow"];
+        const ref =
+          typeof subflow === "object" && subflow !== null
+            ? (subflow as Record<string, unknown>)["$component_ref"]
+            : null;
+        if (slot && typeof ref === "string") {
+          const set = slotByContextDef.get(ref) ?? new Set<string>();
+          set.add(slot);
+          slotByContextDef.set(ref, set);
+        }
       }
     }
 
     // Context-resolution ApiNode → record its id + enclosing def + kind.
     const id = rec["id"];
+    if (typeof id === "string") allIds.add(id);
+    const refsMap = rec["$referenced_components"];
+    if (typeof refsMap === "object" && refsMap !== null) {
+      for (const key of Object.keys(refsMap as Record<string, unknown>)) {
+        allIds.add(key);
+      }
+    }
     const kind = contextKindForUrl(rec["url"]);
     if (typeof id === "string" && kind) {
       const arr = occurrencesByNodeId.get(id) ?? [];
@@ -321,15 +577,35 @@ export function resolveContextNodeProvenance(
   walk(oas, null);
 
   const occ = occurrencesByNodeId.get(nodeId);
-  // Absent, or duplicated across definitions (id-collision) → fail closed.
-  if (!occ || occ.length !== 1) return null;
-  const { defId, kind } = occ[0];
-  if (!defId) return null;
-  const slots = slotByContextDef.get(defId);
-  // The enclosing def is not a single-slot marked context owner → fail closed.
-  if (!slots || slots.size !== 1) return null;
-  const slotId = [...slots][0];
-  return { slotId, kind };
+  if (occ && occ.length === 1) {
+    // Legacy structural anchor: the node id exists in the installed bytes.
+    const { defId, kind } = occ[0];
+    if (!defId) return null;
+    const slots = slotByContextDef.get(defId);
+    // The enclosing def is not a single-slot marked context owner → fail closed.
+    if (!slots || slots.size !== 1) return null;
+    const slotId = [...slots][0];
+    return { slotId, kind, anchor: "marker" };
+  }
+  if (occ && occ.length !== 1) return null; // duplicated in bytes → fail closed
+
+  // cinatra#1194 — declaration anchor (run-token path only). The node id is
+  // NOT in the installed bytes: for a slim spec that is exactly right (the
+  // loader injected it at mount).
+  if (!opts?.allowDeclarationAnchor) return null;
+  const parsed = parseInjectedContextNodeId(nodeId);
+  if (!parsed) return null;
+  // Verifier/injector collision parity: the loader refuses to inject a slot
+  // whose generated ids collide with existing ids; anchoring must refuse in
+  // exactly the same situations.
+  for (const generatedId of injectedComponentIds(parsed.slotId)) {
+    if (allIds.has(generatedId)) return null;
+  }
+  if (markerSlots.has(parsed.slotId)) return null; // legacy authoritative
+  const { countBySlot, tainted } = scanContextSlotDeclarations(oas);
+  if (tainted.has(parsed.slotId)) return null;
+  if (countBySlot.get(parsed.slotId) !== 1) return null;
+  return { slotId: parsed.slotId, kind: parsed.kind, anchor: "declaration" };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +616,15 @@ export function resolveContextNodeProvenance(
 // ---------------------------------------------------------------------------
 
 export type ContextAttestationResult =
-  | { ok: true; slotId: string; kind: ContextNodeKind; legacyV1?: boolean }
+  | {
+      ok: true;
+      slotId: string;
+      kind: ContextNodeKind;
+      /** cinatra#1194 — which re-anchor served this node (observability for
+       *  the slim-format rollout; ids only, logged by the IO caller). */
+      anchor: "marker" | "declaration";
+      legacyV1?: boolean;
+    }
   | { ok: false; code: string; message: string };
 
 /** Evaluate the #907/#1192 attestation for a composed-child context call. Every
@@ -366,6 +650,12 @@ export function evaluateContextAttestation(input: {
    *  transitional). Set false (CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0) to enforce
    *  v2-only after the wayflow minter image has rolled. */
   acceptLegacyV1?: boolean;
+  /** cinatra#1194 — allow the declaration re-anchor for slim (declaration-
+   *  only) specs. Default false; the IO caller enables it ONLY when the run
+   *  was resolved via the run token (the acceptance boundary: the injecting
+   *  image is the token-attaching image). The legacy marker anchor is always
+   *  available regardless. */
+  allowDeclarationAnchor?: boolean;
   /** Injectable clock (ms) for the v2 expiry check. Default Date.now(). */
   nowMs?: number;
 }): ContextAttestationResult {
@@ -462,12 +752,16 @@ export function evaluateContextAttestation(input: {
     }
   }
 
-  const prov = runOas ? resolveContextNodeProvenance(runOas, nodeId) : null;
+  const prov = runOas
+    ? resolveContextNodeProvenance(runOas, nodeId, {
+        allowDeclarationAnchor: input.allowDeclarationAnchor === true,
+      })
+    : null;
   if (!prov) {
     return {
       ok: false,
       code: "attestation_node_unrecognized",
-      message: `attested node '${nodeId}' is not a unique, marked context-resolution node in the run OAS`,
+      message: `attested node '${nodeId}' is not a unique, marked or declared context-resolution node in the run OAS`,
     };
   }
   if (prov.slotId !== input.slotId) {
@@ -485,6 +779,12 @@ export function evaluateContextAttestation(input: {
     };
   }
   return legacyV1
-    ? { ok: true, slotId: prov.slotId, kind: prov.kind, legacyV1: true }
-    : { ok: true, slotId: prov.slotId, kind: prov.kind };
+    ? {
+        ok: true,
+        slotId: prov.slotId,
+        kind: prov.kind,
+        anchor: prov.anchor,
+        legacyV1: true,
+      }
+    : { ok: true, slotId: prov.slotId, kind: prov.kind, anchor: prov.anchor };
 }
