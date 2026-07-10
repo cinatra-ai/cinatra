@@ -328,3 +328,58 @@ describe("InstalledExtensionCard — §III spec-line update states", () => {
     expect(html).not.toContain("opacity-55");
   });
 });
+
+// ---------------------------------------------------------------------------
+// §III description-survives-every-update-state (owner review 2026-07-10,
+// PR #1310: "Description text missing — as per spec, max 2 lines").
+//
+// The owner's screenshots came from an ad-hoc gallery seed whose synthetic
+// connector rows carried a NULL native description (installed-rows hydrates the
+// description from per-kind native descriptors, not the DB seed), so the card's
+// `{description && …}` guard correctly rendered nothing. The card + screen code
+// was already correct. These invariants pin that contract so the update-chip
+// wiring can never DISPLACE or DROP the description element in any chip state:
+// the two-line-clamped description paragraph must render alongside the chip,
+// the greyed incompatible line, the non-comparable note, AND the empty state.
+// ---------------------------------------------------------------------------
+describe("InstalledExtensionCard — §III description survives every update-chip state", () => {
+  const DESCRIPTION = "Stateless schema-driven web research enricher.";
+
+  // The description <p> is the ONLY paragraph carrying the description copy —
+  // extract it specifically (the banner's italic NAME has its own title clamp).
+  function descriptionParagraph(html: string): string | undefined {
+    return html.match(/<p class="[^"]*">[^<]*<\/p>/)?.[0];
+  }
+
+  const STATES: Array<[string, Record<string, unknown>]> = [
+    ["update-available (blue chip)", { updateChip: <UpdateAvailableChip /> }],
+    [
+      "incompatible (greyed spec line + note)",
+      {
+        specLineMuted: true,
+        updateNote: <InstalledUpdateNote>Newer version needs a newer Cinatra</InstalledUpdateNote>,
+      },
+    ],
+    [
+      "non-comparable (note, no chip)",
+      { updateNote: <InstalledUpdateNote>No registry version to compare</InstalledUpdateNote> },
+    ],
+    ["up-to-date / fail-quiet (no chip)", {}],
+  ];
+
+  for (const [label, over] of STATES) {
+    it(`renders the 2-line-clamped description in the ${label} state`, () => {
+      const html = renderWithUpdate(over);
+      const paragraph = descriptionParagraph(html);
+      // Presence: the description text is actually in the DOM (not dropped by
+      // the chip wiring) …
+      expect(paragraph).toBeDefined();
+      expect(html).toContain(DESCRIPTION);
+      // … as the muted description paragraph, clamped to exactly 2 lines (§III).
+      expect(paragraph).toContain(DESCRIPTION);
+      expect(paragraph).toContain("text-muted-foreground");
+      expect(paragraph).toContain("line-clamp-2");
+      expect(paragraph).not.toContain("line-clamp-3");
+    });
+  }
+});
