@@ -179,7 +179,7 @@ if grep -q '^CINATRA_INSTALL_PROFILE=' .env.local; then
     sed -i "s|^CINATRA_INSTALL_PROFILE=.*|CINATRA_INSTALL_PROFILE=$INSTALL_PROFILE|" .env.local
   fi
 else
-  printf '\n# Install profile (cinatra#1238): dev | demo. `demo` = dev + bundled apps + seed.\nCINATRA_INSTALL_PROFILE=%s\n' "$INSTALL_PROFILE" >> .env.local
+  printf '\n# Install profile (cinatra#1238): dev | demo. demo = dev + bundled apps + seed.\nCINATRA_INSTALL_PROFILE=%s\n' "$INSTALL_PROFILE" >> .env.local
 fi
 info "Install profile: $INSTALL_PROFILE (CINATRA_INSTALL_PROFILE=$INSTALL_PROFILE)."
 
