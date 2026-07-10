@@ -20,6 +20,7 @@
     "./dependency-closure": "./src/dependency-closure.ts",
     "./removal-failure": "./src/removal-failure.ts",
     "./manifest-dependencies": "./src/manifest-dependencies.ts",
+    "./cross-kind-dep-graph": "./src/cross-kind-dep-graph.ts",
     "./system-extension-inventory": "./src/system-extension-inventory.ts",
     "./dev-version": "./src/dev-version.ts",
     "./publish-authority": "./src/publish-authority.ts",

@@ -37,6 +37,7 @@
       "@cinatra-ai/extensions/dependency-closure": ["./packages/extensions/src/dependency-closure.ts"],
       "@cinatra-ai/extensions/removal-failure": ["./packages/extensions/src/removal-failure.ts"],
       "@cinatra-ai/extensions/manifest-dependencies": ["./packages/extensions/src/manifest-dependencies.ts"],
+      "@cinatra-ai/extensions/cross-kind-dep-graph": ["./packages/extensions/src/cross-kind-dep-graph.ts"],
       "@cinatra-ai/extensions/system-extension-inventory": ["./packages/extensions/src/system-extension-inventory.ts"],
       "@cinatra-ai/extensions/dev-version": ["./packages/extensions/src/dev-version.ts"],
       "@cinatra-ai/extensions/publish-authority": ["./packages/extensions/src/publish-authority.ts"],
