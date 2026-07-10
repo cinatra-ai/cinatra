@@ -64,7 +64,10 @@ export type LocalAgentTemplateSeed = {
    * back-compat with the ZIP-import / registry-install seed shape. (Removal
    * tracked as a follow-up milestone.)
    */
-  agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; undefined when manifest had no value
+  // cinatra#1058: widened to the requirement-carrying union — an OPTIONAL
+  // projected agent edge is `{ range, requirement: "optional" }`; REQUIRED /
+  // legacy entries stay bare range strings.
+  agentDependencies?: Record<string, string | { range: string; requirement: "required" | "optional" }>; // @cinatra/* dep ranges (+requirement)
   /**
    * Connector-dependency map projected from the canonical `cinatra.dependencies`
    * `kind: "connector"` edges (cinatra#1056). Each value carries the edge's

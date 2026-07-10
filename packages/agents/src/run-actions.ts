@@ -1,5 +1,6 @@
 "use server";
 import { requireAuthSession } from "@/lib/auth-session";
+import { resolveTemplateVisibilityActor } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
@@ -154,10 +155,12 @@ export async function createPendingRunForZeroInputTemplate(
   const orgId = session?.session?.activeOrganizationId ?? null;
   if (!orgId) return { ok: false, error: "no active organization" };
 
-  const template = await readAgentTemplateBySlug(args.templateSlug, {
-    actorUserId: userId,
-    includeNonPublished: true,
-  });
+  // admin-parity P4 (cinatra#1129): a platform_admin / owning-org admin can run
+  // a non-published template, not just its creator.
+  const template = await readAgentTemplateBySlug(
+    args.templateSlug,
+    await resolveTemplateVisibilityActor(session),
+  );
   if (!template) return { ok: false, error: "template not found" };
 
   // Create an empty pending_input run owned by the actor. The setup loop in
@@ -248,10 +251,12 @@ export async function createAndTriggerRun(
   const orgId = session?.session?.activeOrganizationId ?? null;
   if (!orgId) return { ok: false, error: "no active organization" };
 
-  const template = await readAgentTemplateBySlug(args.templateSlug, {
-    actorUserId: userId,
-    includeNonPublished: true,
-  });
+  // admin-parity P4 (cinatra#1129): a platform_admin / owning-org admin can run
+  // a non-published template, not just its creator.
+  const template = await readAgentTemplateBySlug(
+    args.templateSlug,
+    await resolveTemplateVisibilityActor(session),
+  );
   if (!template) return { ok: false, error: "template not found" };
 
   return createAndTriggerRunCore(userId, orgId, template);
@@ -473,15 +478,12 @@ export async function startDevChildPreviewRun(
   const lookupSlug = pkgMatch ? `${pkgMatch[1]}/${pkgMatch[2]}` : packageName;
   const fallbackSlug = pkgMatch ? pkgMatch[2] : packageName;
 
-  let template = await readAgentTemplateBySlug(lookupSlug, {
-    actorUserId: userId,
-    includeNonPublished: true,
-  });
+  // admin-parity P4 (cinatra#1129): a platform_admin / owning-org admin can run
+  // a non-published template, not just its creator.
+  const templateVisibilityActor = await resolveTemplateVisibilityActor(session);
+  let template = await readAgentTemplateBySlug(lookupSlug, templateVisibilityActor);
   if (!template && fallbackSlug !== lookupSlug) {
-    template = await readAgentTemplateBySlug(fallbackSlug, {
-      actorUserId: userId,
-      includeNonPublished: true,
-    });
+    template = await readAgentTemplateBySlug(fallbackSlug, templateVisibilityActor);
   }
   if (!template) return { ok: false, error: "template not found" };
 
