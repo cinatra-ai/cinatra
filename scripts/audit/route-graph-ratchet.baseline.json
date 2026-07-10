@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 134,
-    "/api/mcp": 1389,
-    "/chat": 1427,
-    "/api/a2a": 1394,
-    "/api/llm-bridge": 1400
+    "/sign-in": 135,
+    "/api/mcp": 1390,
+    "/chat": 1428,
+    "/api/a2a": 1395,
+    "/api/llm-bridge": 1401
   },
   "absorbs": {
     "/sign-in": {
-      "from": 133,
-      "to": 134,
-      "reason": "cinatra#534 (PR #1289): the capability-ownership grant primitive (S0) extracted the two grant tables' bootstrap DDL into a pure-strings leaf src/lib/extension-grant-schema.ts imported by drizzle-store.ts. /sign-in reaches drizzle-store (auth -> DB) but NOT the install pipeline, so it gains exactly this one leaf (the ownership-grant primitive stays off /sign-in's graph). Delta measured B-A on the identical rebased tree. Absorbed raise 133->134.",
-      "pr": 1289
+      "from": 134,
+      "to": 135,
+      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 134->135.",
+      "pr": 1317
     },
     "/api/mcp": {
-      "from": 1386,
-      "to": 1389,
-      "reason": "cinatra#1193 (PR #1232): the run-token spine (W1) adds THREE net-new reachable first-party modules on every route that reaches the agent-execution graph \u2014 src/lib/agent-run-token.ts (the dispatch-minted per-run credential: mint + sha256 hash + the single fail-closed verifier), packages/agents/src/wayflow-dispatch-payload.ts (the spread-then-overwrite WayFlow initial-message builder that carries the token), and packages/agents/src/run-token-store.ts (the two agent_runs token-hash accessors setAgentRunTokenHash + readAgentRunByTokenHash, extracted VERBATIM from packages/agents/src/store.ts to hold store.ts under the file-size ratchet ceiling \u2014 byte-equivalent, re-exported from store.ts so callers are unchanged). All three are reachable via packages/agents/src/execution.ts + store.ts, which every locked agent-execution route reaches. Re-stacked on CURRENT main after #1257 (agent_kind) took core__0019 \u2014 this migration is core__0020. Measured on the merged tree vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). The +3 delta is DISJOINT from PR #1289's capability-ownership grant primitive (+2, already baked into the base ceiling this record raises FROM). Absorbed raise 1386->1389.",
-      "pr": 1232
+      "from": 1389,
+      "to": 1390,
+      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1389->1390.",
+      "pr": 1317
     },
     "/chat": {
-      "from": 1424,
-      "to": 1427,
-      "reason": "cinatra#1193 (PR #1232): the run-token spine (W1) adds THREE net-new reachable first-party modules on every route that reaches the agent-execution graph \u2014 src/lib/agent-run-token.ts (the dispatch-minted per-run credential: mint + sha256 hash + the single fail-closed verifier), packages/agents/src/wayflow-dispatch-payload.ts (the spread-then-overwrite WayFlow initial-message builder that carries the token), and packages/agents/src/run-token-store.ts (the two agent_runs token-hash accessors setAgentRunTokenHash + readAgentRunByTokenHash, extracted VERBATIM from packages/agents/src/store.ts to hold store.ts under the file-size ratchet ceiling \u2014 byte-equivalent, re-exported from store.ts so callers are unchanged). All three are reachable via packages/agents/src/execution.ts + store.ts, which every locked agent-execution route reaches. Re-stacked on CURRENT main after #1257 (agent_kind) took core__0019 \u2014 this migration is core__0020. Measured on the merged tree vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). The +3 delta is DISJOINT from PR #1289's capability-ownership grant primitive (+2, already baked into the base ceiling this record raises FROM). Absorbed raise 1424->1427.",
-      "pr": 1232
+      "from": 1427,
+      "to": 1428,
+      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1427->1428.",
+      "pr": 1317
     },
     "/api/a2a": {
-      "from": 1391,
-      "to": 1394,
-      "reason": "cinatra#1193 (PR #1232): the run-token spine (W1) adds THREE net-new reachable first-party modules on every route that reaches the agent-execution graph \u2014 src/lib/agent-run-token.ts (the dispatch-minted per-run credential: mint + sha256 hash + the single fail-closed verifier), packages/agents/src/wayflow-dispatch-payload.ts (the spread-then-overwrite WayFlow initial-message builder that carries the token), and packages/agents/src/run-token-store.ts (the two agent_runs token-hash accessors setAgentRunTokenHash + readAgentRunByTokenHash, extracted VERBATIM from packages/agents/src/store.ts to hold store.ts under the file-size ratchet ceiling \u2014 byte-equivalent, re-exported from store.ts so callers are unchanged). All three are reachable via packages/agents/src/execution.ts + store.ts, which every locked agent-execution route reaches. Re-stacked on CURRENT main after #1257 (agent_kind) took core__0019 \u2014 this migration is core__0020. Measured on the merged tree vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). The +3 delta is DISJOINT from PR #1289's capability-ownership grant primitive (+2, already baked into the base ceiling this record raises FROM). Absorbed raise 1391->1394.",
-      "pr": 1232
+      "from": 1394,
+      "to": 1395,
+      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1394->1395.",
+      "pr": 1317
     },
     "/api/llm-bridge": {
-      "from": 1397,
-      "to": 1400,
-      "reason": "cinatra#1193 (PR #1232): the run-token spine (W1) adds THREE net-new reachable first-party modules on every route that reaches the agent-execution graph \u2014 src/lib/agent-run-token.ts (the dispatch-minted per-run credential: mint + sha256 hash + the single fail-closed verifier), packages/agents/src/wayflow-dispatch-payload.ts (the spread-then-overwrite WayFlow initial-message builder that carries the token), and packages/agents/src/run-token-store.ts (the two agent_runs token-hash accessors setAgentRunTokenHash + readAgentRunByTokenHash, extracted VERBATIM from packages/agents/src/store.ts to hold store.ts under the file-size ratchet ceiling \u2014 byte-equivalent, re-exported from store.ts so callers are unchanged). All three are reachable via packages/agents/src/execution.ts + store.ts, which every locked agent-execution route reaches. Re-stacked on CURRENT main after #1257 (agent_kind) took core__0019 \u2014 this migration is core__0020. Measured on the merged tree vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). The +3 delta is DISJOINT from PR #1289's capability-ownership grant primitive (+2, already baked into the base ceiling this record raises FROM). Absorbed raise 1397->1400.",
-      "pr": 1232
+      "from": 1400,
+      "to": 1401,
+      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1400->1401.",
+      "pr": 1317
     }
   }
 }
