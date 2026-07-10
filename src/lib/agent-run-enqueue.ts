@@ -113,41 +113,112 @@ export class ConnectorNotConfiguredError extends Error {
   }
 }
 
+/** One connector dependency the run-start preflight declined to gate on. The
+ * dependent step is SKIPPED (skip-step-audit) rather than the run failing —
+ * the per-kind optional-missing behavior for connectors (cinatra#1058). */
+export type SkippedOptionalConnector = { packageId: string; reason: string };
+
+export type ConnectorPreflightResult = {
+  /** Optional connector deps whose run-start authority was DENIED. Their
+   * dependent step is skipped-and-audited; the run still proceeds. */
+  skippedOptional: SkippedOptionalConnector[];
+};
+
 export async function runConnectorPreflight(
   connectorDependencies: ConnectorDependencyMap | undefined,
   actor: ActorContext | undefined,
   mode: ConnectorPolicyMode,
-): Promise<void> {
-  if (!connectorDependencies) return;
+): Promise<ConnectorPreflightResult> {
+  const skippedOptional: SkippedOptionalConnector[] = [];
+  if (!connectorDependencies) return { skippedOptional };
   for (const [packageId, rawValue] of Object.entries(connectorDependencies)) {
-    // cinatra#1056: carry the projected edge's requirement through instead of
-    // hardcoding "required". A bare-string (legacy) value normalizes to
-    // "required". W1 still fail-closes on any deny for BOTH requirements — the
-    // optional-dependency SKIP behavior (skip-step-audit) is a later wave; this
-    // change only threads the requirement so that wave has it (and so the audit
-    // event records the real requirement).
+    // cinatra#1056 threaded the projected edge's requirement through instead of
+    // hardcoding "required"; a bare-string (legacy) value normalizes to
+    // "required". cinatra#1058 wires the per-kind optional behavior on top:
+    //   - REQUIRED dep denied  → fail closed at enqueue (ConnectorNotConfiguredError).
+    //   - OPTIONAL dep denied  → skip-step-audit: do NOT throw; collect the dep so
+    //     the caller records an audited, run-visible "skipped step" annotation and
+    //     the run proceeds without that connector's dependent step.
     const requirement: "required" | "optional" =
       typeof rawValue === "string" ? "required" : rawValue.requirement;
     if (actor) {
       // Run-start connector authority. Route through the canonical helper so
       // every connector decision emits a structured audit event carrying the
-      // real requirement.
+      // real requirement; the helper marks an optional deny `skipped: true`.
       const { requireConnectorAuthority } = await import("@/lib/connector-authority");
       const decision = await requireConnectorAuthority(packageId, actor, { mode, requirement });
       if (!decision.allowed) {
-        throw new ConnectorNotConfiguredError(packageId, decision.reason);
+        if (decision.skipped) {
+          skippedOptional.push({ packageId, reason: decision.reason });
+        } else {
+          throw new ConnectorNotConfiguredError(packageId, decision.reason);
+        }
       }
     } else {
       // No actor to attribute — un-audited synchronous gate. With a non-empty
       // map this branch fail-closes on `no_actor` for every dep, so
       // `enqueueAgentRun` derives a run actor BEFORE calling us whenever a map is
       // present (see the self-heal in enqueueAgentRun); this branch remains only
-      // as a last-resort guard for a direct caller.
+      // as a last-resort guard for a direct caller. The optional-skip routing
+      // mirrors the audited branch so a direct actor-less caller degrades the
+      // same way (optional → skip, required → fail closed).
       const decision = enforceConnectorPolicy(packageId, actor, mode);
       if (!decision.allowed) {
-        throw new ConnectorNotConfiguredError(packageId, decision.reason);
+        if (requirement === "optional") {
+          skippedOptional.push({ packageId, reason: decision.reason ?? "no_actor" });
+        } else {
+          throw new ConnectorNotConfiguredError(packageId, decision.reason);
+        }
       }
     }
+  }
+  return { skippedOptional };
+}
+
+/**
+ * Record the run-visible, audited "skipped step" annotation for each optional
+ * connector dep the run-start preflight declined (cinatra#1058 skip-step-audit).
+ * Emits one `audit_events` row per skipped dep, tagged with the runId and
+ * `behavior: "skip-step-audit"`, so the skip surfaces on the run's audit trail
+ * as an intentional optional-dependency decision. Best-effort: a write failure
+ * is logged and swallowed — it must never fail an otherwise-enqueuable run.
+ */
+export async function recordOptionalConnectorSkips(
+  runId: string,
+  actor: ActorContext,
+  skipped: readonly SkippedOptionalConnector[],
+): Promise<void> {
+  try {
+    const { logAuditEvent } = await import("@/lib/authz/audit");
+    for (const { packageId, reason } of skipped) {
+      await logAuditEvent({
+        organizationId: actor.organizationId,
+        actorPrincipalId: actor.principalId,
+        actorPrincipalType: "system",
+        authSource: "worker",
+        resourceType: "connector_instance",
+        resourceId: packageId,
+        operation: "use",
+        // `allowed`: the RUN is allowed to proceed; the connector's dependent
+        // step is what gets skipped. The `skipped`/`behavior` metadata is the
+        // discriminant, not the decision.
+        decision: "allowed",
+        policyVersion: "connector-scope-use-policy",
+        runId,
+        metadata: {
+          packageId,
+          requirement: "optional",
+          skipped: true,
+          behavior: "skip-step-audit",
+          reason,
+        },
+      });
+    }
+  } catch (err) {
+    console.warn(
+      `[agent-run-enqueue] failed to record optional-connector skip annotation for run ${runId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -209,7 +280,21 @@ export async function enqueueAgentRun(
 
   if (hasConnectorDeps && preflightActor) {
     try {
-      await runConnectorPreflight(connectorDependencies, preflightActor, "use");
+      const { skippedOptional } = await runConnectorPreflight(
+        connectorDependencies,
+        preflightActor,
+        "use",
+      );
+      // cinatra#1058 skip-step-audit: an optional connector dep denied at
+      // run-start does NOT fail the run — its dependent step is skipped. Record
+      // one audited, run-visible annotation per skipped dep (audit_events row
+      // carrying this runId + behavior:skip-step-audit) so the skip is an
+      // intentional, attributable decision rather than a silent mid-run
+      // degrade. Best-effort: an audit-write hiccup must never fail an
+      // otherwise-enqueuable run.
+      if (skippedOptional.length > 0) {
+        await recordOptionalConnectorSkips(record.runId, preflightActor, skippedOptional);
+      }
     } catch (err) {
       if (softPreflight && err instanceof ConnectorNotConfiguredError) {
         console.warn(

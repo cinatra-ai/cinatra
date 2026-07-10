@@ -249,7 +249,9 @@ async function agentRunHooks(): Promise<ExtensionKindHooks> {
 }
 
 async function agentTemplateHooks(): Promise<ExtensionKindHooks> {
-  const { readAgentTemplateById } = await import("@cinatra-ai/agents/store");
+  const { readAgentTemplateById, updateAgentTemplateAuthPolicy } = await import(
+    "@cinatra-ai/agents/store"
+  );
   return {
     resourceExists: async (id) => {
       const template = await readAgentTemplateById(id);
@@ -261,6 +263,17 @@ async function agentTemplateHooks(): Promise<ExtensionKindHooks> {
       // first granting themselves a co-owner row.
       const template = await readAgentTemplateById(id);
       return template?.creatorId ? [template.creatorId] : [];
+    },
+    // Dual-write so the run enforcement path sees a generic-surface policy edit
+    // (admin-parity P4, cinatra#1129). The polymorphic write lands the canonical
+    // policy in extension_access_policy, but enforceRunAccess resolves a run's
+    // effective policy from run.authPolicy ?? agent_templates.agent_auth_policy
+    // ?? DEFAULT — the legacy template column. Without this mirror an
+    // agent_template access-policy edit made through the generic Permissions
+    // surface never reached enforceRunAccess. Must not throw (best-effort
+    // mirror; the polymorphic write is canonical).
+    afterPolicyWrite: async (id, policy) => {
+      await updateAgentTemplateAuthPolicy(id, policy);
     },
     selfRemoveRedirect: "/configuration/extensions",
   };

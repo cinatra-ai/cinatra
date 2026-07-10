@@ -48,6 +48,7 @@ import {
   readRunCoOwners,
 } from "./store";
 import type { AgentTemplateRecord } from "./store";
+import { resolveTemplateVisibilityActor } from "./auth-policy";
 import { OrchestratorLedgerSchema } from "./orchestrator-execution";
 import { buildSubAgentNodes } from "./orchestrator-readiness";
 import type { SubAgentNodeData } from "./orchestrator-readiness";
@@ -155,10 +156,12 @@ async function loadOrchestratorScreenData(agentId: string, instanceId: string) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
 
-  const template = await readAgentTemplateBySlug(agentId, {
-    actorUserId,
-    includeNonPublished: true,
-  });
+  // admin-parity P4 (cinatra#1129): a platform_admin / owning-org admin can open
+  // a non-published orchestrator template, not just its creator.
+  const template = await readAgentTemplateBySlug(
+    agentId,
+    await resolveTemplateVisibilityActor(session),
+  );
   if (!template || template.type !== "orchestrator") notFound();
 
   const run = await readAgentRunById(instanceId);
