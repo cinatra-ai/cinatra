@@ -36,6 +36,7 @@ import {
 
 import { requireAdminSession } from "@/lib/auth-session";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
+import { resolveMarketplaceAdminToken } from "@/lib/marketplace-credentials";
 import type {
   MarketplaceAdminSubmission,
   MarketplaceExtensionSubmissionListAdminInput,
@@ -57,8 +58,19 @@ const STATUS_VALUES: StatusFilterValue[] = [
   "superseded",
 ];
 
-function resolveMarketplaceToken(): string | undefined {
-  return process.env.MARKETPLACE_INSTANCE_TOKEN;
+/**
+ * Admin/moderation bearer (#1224). The admin queue calls the `PRINCIPAL_ADMIN`-
+ * bound `extension_submission_list_admin`, so it resolves `MARKETPLACE_ADMIN_TOKEN`
+ * — never the consumer/instance token. Returns `undefined` (fail-closed inline
+ * banner) rather than throwing when the admin token is unset. No fallback to the
+ * instance token.
+ */
+function resolveAdminToken(): string | undefined {
+  try {
+    return resolveMarketplaceAdminToken();
+  } catch {
+    return undefined;
+  }
 }
 
 function parseStatusFilter(raw: string | undefined): StatusFilterValue {
@@ -72,9 +84,15 @@ async function loadSubmissions(filter: StatusFilterValue): Promise<{
   rows: MarketplaceAdminSubmission[];
   fetchError: string | null;
 }> {
-  const token = resolveMarketplaceToken();
+  const token = resolveAdminToken();
   if (!token) {
-    return { rows: [], fetchError: "Marketplace instance token is not configured." };
+    return {
+      rows: [],
+      fetchError:
+        "MARKETPLACE_ADMIN_TOKEN is not configured. Extension-submission moderation " +
+        "requires the admin marketplace credential — set MARKETPLACE_ADMIN_TOKEN to " +
+        "moderate submissions.",
+    };
   }
   try {
     const client = createHttpMarketplaceMcpClient({ token });

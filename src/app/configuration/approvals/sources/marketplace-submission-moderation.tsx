@@ -14,8 +14,8 @@ import {
   MARKETPLACE_SUBMISSION_MODERATION_SOURCE_ID,
   MARKETPLACE_SUBMISSIONS_ADMIN_HREF,
   guardedFetch,
-  hasInstanceToken,
-  resolveInstanceToken,
+  hasAdminToken,
+  resolveAdminToken,
   toRowEligibility,
 } from "./marketplace-shared";
 import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
@@ -24,7 +24,10 @@ import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
 // Marketplace source #1 — extension-submission MODERATION (Inbox only).
 //
 // The moderator queue of all vendors' pending extension submissions. Credential:
-// `MARKETPLACE_INSTANCE_TOKEN` (mirrors the drill-down admin queue page exactly).
+// `MARKETPLACE_ADMIN_TOKEN` via `resolveMarketplaceAdminToken()` (#1224 — the
+// list-admin/approve/reject abilities are `PRINCIPAL_ADMIN`-bound, so they use
+// the ADMIN credential, exactly like vendor-application moderation; the section
+// is `not_configured` (hidden + footer hint) when the admin token is absent).
 // Approve / Reject decide at the marketplace through the non-redirecting helper;
 // the marketplace's WP cap + separation-of-duties are the authoritative gate and
 // surface as readable #1046 text at action time.
@@ -81,11 +84,11 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
 
   viewAllHref: (dir) => (dir === "inbox" ? MARKETPLACE_SUBMISSIONS_ADMIN_HREF : undefined),
 
-  // Per-direction credential gate — its own `MARKETPLACE_INSTANCE_TOKEN`.
-  sectionConfigured: () => hasInstanceToken(),
+  // Per-direction credential gate — its own `MARKETPLACE_ADMIN_TOKEN` (#1224).
+  sectionConfigured: () => hasAdminToken(),
 
   async fetchInbox(viewer) {
-    return guardedFetch(viewer, resolveInstanceToken(), MODERATE_ACTIONS, async (token) => {
+    return guardedFetch(viewer, resolveAdminToken(), MODERATE_ACTIONS, async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const out = await client.extensionSubmissionListAdmin({ status: "pending", limit: LIST_LIMIT });
       return out.submissions.map(toRow);

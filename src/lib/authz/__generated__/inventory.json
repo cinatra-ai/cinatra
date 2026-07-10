@@ -240,17 +240,17 @@
     {
       "primitiveName": "approvals_decide",
       "file": "src/app/configuration/approvals/approvals-mcp.ts",
-      "line": 329
+      "line": 328
     },
     {
       "primitiveName": "approvals_get",
       "file": "src/app/configuration/approvals/approvals-mcp.ts",
-      "line": 324
+      "line": 323
     },
     {
       "primitiveName": "approvals_list",
       "file": "src/app/configuration/approvals/approvals-mcp.ts",
-      "line": 319
+      "line": 318
     },
     {
       "primitiveName": "artifact_assertion_get",
