@@ -169,7 +169,7 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () 
     }
   });
 
-  it("agent_kind is NOT NULL text defaulting to 'task'; assistant_config is nullable text", async () => {
+  it("agent_kind is NOT NULL text defaulting to 'executor'; assistant_config is nullable text", async () => {
     const { rows } = await kindPool.query(
       `SELECT column_name, data_type, is_nullable, column_default
          FROM information_schema.columns
@@ -179,7 +179,7 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () 
     const byName = Object.fromEntries(rows.map((r) => [r.column_name, r]));
     expect(byName.agent_kind.data_type).toBe("text");
     expect(byName.agent_kind.is_nullable).toBe("NO");
-    expect(byName.agent_kind.column_default).toContain("'task'");
+    expect(byName.agent_kind.column_default).toContain("'executor'");
     expect(byName.assistant_config.data_type).toBe("text");
     expect(byName.assistant_config.is_nullable).toBe("YES");
   });
@@ -206,22 +206,22 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () 
     "(id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, agent_kind, assistant_config)";
   const baseVals = "'', '[]', '{}', '{\"steps\":[]}'";
 
-  it("a task row with NO assistant_config is accepted (the default shape)", async () => {
+  it("an executor row with NO assistant_config is accepted (the default shape)", async () => {
     await expect(
       kindPool.query(
         `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
-         VALUES ($1, 'task-ok', ${baseVals}, '@t/task-ok', 'task', NULL)`,
-        ["k-task-ok"],
+         VALUES ($1, 'executor-ok', ${baseVals}, '@t/executor-ok', 'executor', NULL)`,
+        ["k-executor-ok"],
       ),
     ).resolves.toBeDefined();
   });
 
-  it("a task row WITH an assistant_config is REJECTED by the pairing CHECK", async () => {
+  it("an executor row WITH an assistant_config is REJECTED by the pairing CHECK", async () => {
     await expect(
       kindPool.query(
         `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
-         VALUES ($1, 'task-bad', ${baseVals}, '@t/task-bad', 'task', '{"persona":"x","skillBundle":[]}')`,
-        ["k-task-bad"],
+         VALUES ($1, 'executor-bad', ${baseVals}, '@t/executor-bad', 'executor', '{"persona":"x","skillBundle":[]}')`,
+        ["k-executor-bad"],
       ),
     ).rejects.toThrow(/agent_kind_config_check/);
   });
@@ -256,7 +256,7 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () 
     ).rejects.toThrow(/agent_kind_check/);
   });
 
-  it("an unspecified agent_kind defaults to 'task'", async () => {
+  it("an unspecified agent_kind defaults to 'executor'", async () => {
     await kindPool.query(
       `INSERT INTO "${KIND_SCHEMA}".agent_templates
          (id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name)
@@ -267,6 +267,6 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () 
       `SELECT agent_kind, assistant_config FROM "${KIND_SCHEMA}".agent_templates WHERE id = $1`,
       ["k-default"],
     );
-    expect(rows[0]).toEqual({ agent_kind: "task", assistant_config: null });
+    expect(rows[0]).toEqual({ agent_kind: "executor", assistant_config: null });
   });
 });

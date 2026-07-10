@@ -1,11 +1,11 @@
 // core__0019 — the interaction axis on agent_templates (cinatra-ai/cinatra#1037
-// P1, the schema half). Adds `agent_kind` (`assistant|task`, default `task`)
+// P1, the schema half). Adds `agent_kind` (`assistant|executor`, default `executor`)
 // and the typed `assistant_config` sidecar (JSON-as-text), plus the two
 // authoritative write-time invariants:
 //
-//   • agent_templates_agent_kind_check         — agent_kind IN ('assistant','task')
+//   • agent_templates_agent_kind_check         — agent_kind IN ('assistant','executor')
 //   • agent_templates_agent_kind_config_check  — an `assistant` row MUST carry a
-//                                                 config; a `task` row MUST NOT.
+//                                                 config; an `executor` row MUST NOT.
 //
 // `agent_kind` is ORTHOGONAL to `type` (leaf|proxy|orchestrator, the
 // execution-topology axis) — this migration deliberately does NOT overload
@@ -18,7 +18,7 @@
 // already holds rows in a DEPLOYED database is a transformational change the
 // bootstrap `CREATE TABLE IF NOT EXISTS` cannot express — it needs this module
 // on the operator upgrade path. Every existing row defaults to
-// `agent_kind='task'` with `assistant_config=NULL`, which satisfies the
+// `agent_kind='executor'` with `assistant_config=NULL`, which satisfies the
 // pairing CHECK, so the constraint validates cleanly with no backfill (there
 // are no pre-existing `assistant` rows — the column is brand new).
 //
@@ -66,20 +66,20 @@ export function up(pgm) {
   // 1. Columns (additive; guarded so the operator path is safe even if the
   //    candidate bootstrap DDL has not run first).
   pgm.sql(
-    `ALTER TABLE agent_templates ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'task';`,
+    `ALTER TABLE agent_templates ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'executor';`,
   );
   pgm.sql(
     `ALTER TABLE agent_templates ADD COLUMN IF NOT EXISTS assistant_config text;`,
   );
 
   // 2. Invariants (the transformational half — a CHECK over already-populated
-  //    rows). All existing rows are task/NULL and pass cleanly.
-  pgm.sql(addCheckIfAbsentSql(KIND_CHECK, `agent_kind IN ('assistant', 'task')`));
+  //    rows). All existing rows are executor/NULL and pass cleanly.
+  pgm.sql(addCheckIfAbsentSql(KIND_CHECK, `agent_kind IN ('assistant', 'executor')`));
   pgm.sql(
     addCheckIfAbsentSql(
       CONFIG_CHECK,
       `(agent_kind = 'assistant' AND assistant_config IS NOT NULL)
-       OR (agent_kind = 'task' AND assistant_config IS NULL)`,
+       OR (agent_kind = 'executor' AND assistant_config IS NULL)`,
     ),
   );
 

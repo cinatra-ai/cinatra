@@ -23,21 +23,21 @@ describe("core__0019 up()", () => {
   const stmts = collectSql(up as (b: { sql: (s: string) => void }) => void);
   const joined = stmts.join("\n").toLowerCase();
 
-  it("adds agent_kind (NOT NULL DEFAULT 'task') and assistant_config columns, idempotently", () => {
-    expect(joined).toContain("add column if not exists agent_kind text not null default 'task'");
+  it("adds agent_kind (NOT NULL DEFAULT 'executor') and assistant_config columns, idempotently", () => {
+    expect(joined).toContain("add column if not exists agent_kind text not null default 'executor'");
     expect(joined).toContain("add column if not exists assistant_config text");
   });
 
   it("adds the kind-enum CHECK constraint", () => {
     expect(joined).toContain("agent_templates_agent_kind_check");
-    expect(joined).toContain("agent_kind in ('assistant', 'task')");
+    expect(joined).toContain("agent_kind in ('assistant', 'executor')");
   });
 
-  it("adds the pairing invariant CHECK — assistant requires a config, task carries none", () => {
+  it("adds the pairing invariant CHECK — assistant requires a config, executor carries none", () => {
     expect(joined).toContain("agent_templates_agent_kind_config_check");
     const normalized = joined.replace(/\s+/g, " ");
     expect(normalized).toContain(
-      "(agent_kind = 'assistant' and assistant_config is not null) or (agent_kind = 'task' and assistant_config is null)",
+      "(agent_kind = 'assistant' and assistant_config is not null) or (agent_kind = 'executor' and assistant_config is null)",
     );
   });
 

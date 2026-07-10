@@ -1,12 +1,12 @@
 // The interaction axis (cinatra-ai/cinatra#1037 P1, the "packaging" half).
 //
 // `agent_templates.agent_kind` types a template as a conversational `assistant`
-// or a bounded `task`. This axis is ORTHOGONAL to `type`
+// or a bounded `executor`. This axis is ORTHOGONAL to `type`
 // (leaf|proxy|orchestrator, the execution-topology axis) — it is never
 // overloaded onto `type`, and there is deliberately NO "project" kind.
 //
 // An `assistant` row carries a typed `assistant_config` SIDECAR (persona, skill
-// bundle, allowed tools/agents, model prefs); a `task` row carries NONE. The
+// bundle, allowed tools/agents, model prefs); an `executor` row carries NONE. The
 // authoritative write-time invariant lives in the database as the
 // `agent_templates_agent_kind_config_check` CHECK constraint, so EVERY writer
 // (importAgentTemplate, ensureAgentPackage, the marketplace install saga) is
@@ -24,12 +24,12 @@ import { z } from "zod";
 // agent_kind
 // ---------------------------------------------------------------------------
 
-export const AGENT_KINDS = ["assistant", "task"] as const;
+export const AGENT_KINDS = ["assistant", "executor"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
 /** The default kind for every template that does not declare one — matches the
- *  `DEFAULT 'task'` on the column, so an un-typed legacy row is a task agent. */
-export const DEFAULT_AGENT_KIND: AgentKind = "task";
+ *  `DEFAULT 'executor'` on the column, so an un-typed legacy row is an executor agent. */
+export const DEFAULT_AGENT_KIND: AgentKind = "executor";
 
 export function isAgentKind(value: unknown): value is AgentKind {
   return typeof value === "string" && (AGENT_KINDS as readonly string[]).includes(value);
@@ -126,7 +126,7 @@ export type AgentKindConfigInput = {
 export type NormalizedAgentKindConfig = {
   agentKind: AgentKind;
   /** The serialized `assistant_config` column value: a JSON string for an
-   *  assistant, `null` for a task. */
+   *  assistant, `null` for an executor. */
   assistantConfigColumn: string | null;
 };
 
@@ -136,7 +136,7 @@ export type NormalizedAgentKindConfig = {
  * check (which the DB CHECK cannot do) and a typed error:
  *
  *   • an `assistant` row MUST carry a valid `assistant_config`;
- *   • a `task` row MUST NOT carry one.
+ *   • an `executor` row MUST NOT carry one.
  *
  * Returns the normalized column value (serialized config, or `null`) ready to
  * bind into the INSERT/UPDATE. Throws on any violation so a bad write fails at
@@ -148,11 +148,11 @@ export function normalizeAgentKindConfig(input: AgentKindConfigInput): Normalize
   }
   const hasConfig = input.assistantConfig !== null && input.assistantConfig !== undefined;
 
-  if (input.agentKind === "task") {
+  if (input.agentKind === "executor") {
     if (hasConfig) {
-      throw new Error("agent_kind='task' must not carry an assistant_config");
+      throw new Error("agent_kind='executor' must not carry an assistant_config");
     }
-    return { agentKind: "task", assistantConfigColumn: null };
+    return { agentKind: "executor", assistantConfigColumn: null };
   }
 
   // agent_kind === "assistant"

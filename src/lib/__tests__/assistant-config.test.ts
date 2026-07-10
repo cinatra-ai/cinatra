@@ -27,17 +27,17 @@ const validConfig: AssistantConfig = {
 };
 
 describe("agent_kind", () => {
-  it("enumerates exactly assistant + task", () => {
-    expect([...AGENT_KINDS]).toEqual(["assistant", "task"]);
+  it("enumerates exactly assistant + executor", () => {
+    expect([...AGENT_KINDS]).toEqual(["assistant", "executor"]);
   });
 
-  it("defaults to task (matches the column DEFAULT)", () => {
-    expect(DEFAULT_AGENT_KIND).toBe("task");
+  it("defaults to executor (matches the column DEFAULT)", () => {
+    expect(DEFAULT_AGENT_KIND).toBe("executor");
   });
 
   it("isAgentKind accepts only the two kinds", () => {
     expect(isAgentKind("assistant")).toBe(true);
-    expect(isAgentKind("task")).toBe(true);
+    expect(isAgentKind("executor")).toBe(true);
     expect(isAgentKind("project")).toBe(false);
     expect(isAgentKind("leaf")).toBe(false);
     expect(isAgentKind(undefined)).toBe(false);
@@ -133,20 +133,20 @@ describe("normalizeAgentKindConfig — the write-time invariant", () => {
     ).toThrow(/Invalid assistant_config/);
   });
 
-  it("task WITHOUT a config → null column", () => {
-    const out = normalizeAgentKindConfig({ agentKind: "task" });
-    expect(out).toEqual({ agentKind: "task", assistantConfigColumn: null });
+  it("executor WITHOUT a config → null column", () => {
+    const out = normalizeAgentKindConfig({ agentKind: "executor" });
+    expect(out).toEqual({ agentKind: "executor", assistantConfigColumn: null });
   });
 
-  it("task WITH a config → throws (I: task rows carry none)", () => {
+  it("executor WITH a config → throws (I: executor rows carry none)", () => {
     expect(() =>
-      normalizeAgentKindConfig({ agentKind: "task", assistantConfig: validConfig }),
+      normalizeAgentKindConfig({ agentKind: "executor", assistantConfig: validConfig }),
     ).toThrow(/must not carry an assistant_config/);
   });
 
   it("an unknown kind → throws", () => {
     expect(() =>
-      normalizeAgentKindConfig({ agentKind: "project" as unknown as "task" }),
+      normalizeAgentKindConfig({ agentKind: "project" as unknown as "executor" }),
     ).toThrow(/Invalid agent_kind/);
   });
 });
