@@ -475,8 +475,9 @@ function ModalHero({
   const { bg } = ACCENT_PALETTE[accent];
 
   return (
-    // §V hero row: 18px gap, top-aligned, straight on the dialog paper.
-    <div data-slot="marketplace-modal-hero" className="flex items-start gap-4.5">
+    // 0.5.0 §II hero row: 18px gap, the name + byline block CENTRED vertically
+    // against the square logo; the price stays pinned to the top (self-start).
+    <div data-slot="marketplace-modal-hero" className="flex items-center gap-4.5">
       {/* §V logo tile: 64×64, radius 15, white surface, hairline + soft
           shadow, the 34px kind emblem in the extension's stable accent. */}
       <div
@@ -541,9 +542,12 @@ function ModalHero({
           </span>
         </p>
       </div>
-      {/* §V price: right-aligned in the header, sans 700 15px ink. */}
+      {/* 0.5.0 §II price: pinned to the TOP of the centred header (self-start +
+          4px top pad) even though the name/byline block centres against the logo. */}
       {detail.cost && (
-        <div className="shrink-0 pt-1 text-sm font-bold text-foreground">{detail.cost}</div>
+        <div className="shrink-0 self-start pt-1 text-sm font-bold text-foreground">
+          {detail.cost}
+        </div>
       )}
     </div>
   );

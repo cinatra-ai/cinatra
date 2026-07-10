@@ -64,6 +64,14 @@ export const semanticArtifactManifestSchema: z.ZodType<SemanticArtifactManifest>
       })
       .strict()
       .optional(),
+    // Reverse cross-kind advisory edge: agent package names this artifact's
+    // authoring/validator/enricher skills may invoke. KEPT per cinatra#1059
+    // (dormant — zero live declarations today) as the counterpart to the
+    // agent→artifact `cinatra.produces` edge; both feed the pure cross-kind
+    // graph (`@cinatra-ai/extensions/cross-kind-dep-graph`) consumed by
+    // `decideUninstall` (uninstall safety) and `checkAuthoringRecursionBudget`.
+    // NOTE: this is the SEMANTIC-MANIFEST `agentDependencies`, distinct from
+    // the deprecated legacy agent-package `cinatra.agentDependencies` map.
     agentDependencies: z.array(z.string().min(1)).optional(),
     // Per-extension matcher confidence floor.
     // The matcher runtime asserts the type only when the classifier's

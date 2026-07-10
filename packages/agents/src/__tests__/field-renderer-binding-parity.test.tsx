@@ -43,10 +43,7 @@ import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaFieldRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
-import {
-  TriggerConfigureFormRenderer,
-  TriggerConfirmSummaryRenderer,
-} from "../trigger-agent-renderers";
+import { TriggerConfigureFormRenderer } from "../trigger-agent-renderers";
 import { SkillRecommenderRenderer } from "../skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "../email-test-delivery-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
@@ -116,7 +113,14 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/agent-builder:grouped-setup-form", GroupedSetupFormRenderer as never, 50],
   ["@cinatra-ai/auditor-agent:review", AuditorReviewRenderer as never, 80],
   ["@cinatra-ai/trigger-agent:configure", TriggerConfigureFormRenderer as never, 60],
-  ["@cinatra-ai/trigger-agent:confirm", TriggerConfirmSummaryRenderer as never, 60],
+  // NOTE: @cinatra-ai/trigger-agent:confirm was intentionally RETIRED, not
+  // regressed. The trigger-agent ships a deterministic single-gate OAS
+  // (configure only); the "confirm" fieldRenderer was a dead binding with no
+  // matching gate — its manifest declaration and generated binding were dropped
+  // upstream, so the id now resolves to null (the trigger-agent is itself slated
+  // for retirement as scheduling becomes platform-default). Only :configure
+  // remains in the parity table. The TriggerConfirmSummaryRenderer component is
+  // still registered host-side, so removing the dead binding is non-breaking.
 ];
 
 describe("resolution parity with the retired hand map", () => {

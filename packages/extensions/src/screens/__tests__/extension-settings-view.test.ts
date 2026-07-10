@@ -36,6 +36,13 @@ describe("§V — narrow column + §II detail header (nothing top-right)", () =>
     expect(VIEW).toContain("KIND_LABEL[kind]");
     expect(VIEW).toContain(" by ");
   });
+  it("centres the name + byline vertically against the logo (0.5.0 §V/§II)", () => {
+    // The header row (the flex carrying the size-16 tile) must vertically centre
+    // its name/byline column against the logo — items-center, not the former
+    // items-start.
+    expect(VIEW).toContain('<div className="flex items-center gap-4.5">');
+    expect(VIEW).not.toContain('flex items-start gap-4.5');
+  });
   it("separates the header with the double-etched rule", () => {
     expect(VIEW).toContain("border-y border-line-strong");
   });

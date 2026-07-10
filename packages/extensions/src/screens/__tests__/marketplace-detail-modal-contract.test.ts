@@ -46,4 +46,17 @@ describe("marketplace-detail-modal source contract (cinatra#948)", () => {
     expect(SOURCE).toMatch(/\{trigger \?\? \(/);
     expect(SOURCE).toMatch(/More details/);
   });
+
+  it("centres the hero name + byline against the logo, price pinned top (0.5.0 §II)", () => {
+    // The hero row centres its name/byline block vertically against the square
+    // logo (items-center, not the former items-start)…
+    const hero = SOURCE.match(
+      /data-slot="marketplace-modal-hero" className="flex items-\w+ gap-4\.5"/,
+    )?.[0];
+    expect(hero).toContain("items-center");
+    expect(SOURCE).not.toMatch(/marketplace-modal-hero" className="flex items-start/);
+    // …while the price stays pinned to the TOP of the centred header (self-start).
+    const price = SOURCE.match(/\{detail\.cost && \([\s\S]{0,200}?\)\}/)?.[0];
+    expect(price).toContain("self-start");
+  });
 });

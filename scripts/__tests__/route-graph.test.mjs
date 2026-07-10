@@ -144,3 +144,39 @@ describe("route-graph.mjs — tryFile() containment guard", () => {
     }
   });
 });
+
+describe("route-graph.mjs — package.json subpath-exports resolution", () => {
+  // A workspace package's `exports` map points a subpath at an ARBITRARY src
+  // location, not necessarily src/<sub>. @cinatra-ai/sdk-ui maps
+  // "./tabs" -> "./src/ui/tabs.tsx". A consumer (e.g. the gmail-connector
+  // setup page) imports `@cinatra-ai/sdk-ui/tabs`; the naive src/<sub> guess
+  // (src/tabs) does NOT exist, so before exports-map resolution the analyzer
+  // reported the edge as MISSING and the ratchet failed closed. This asserts
+  // the analyzer now resolves the subpath through the exports map against the
+  // REAL sdk-ui package in this repo (missingCount 0, sdk-ui counted).
+  it("resolves an @cinatra-ai/* subpath whose exports target is not src/<sub>", () => {
+    const tmp = mkdtempSync(path.join(REPO_ROOT, "rg-subpath-fixture-"));
+    try {
+      const entryAbs = path.join(tmp, "entry.ts");
+      // value binding (not `import type`) so the edge is a real graph edge.
+      writeFileSync(entryAbs, 'import { Tabs } from "@cinatra-ai/sdk-ui/tabs";\nexport const use = Tabs;\n');
+      const entryRel = path.relative(REPO_ROOT, entryAbs).split(path.sep).join("/");
+      const outJson = path.join(tmp, "result.json");
+      const res = spawnSync("node", [SCRIPT, "--routes", entryRel, "--json", outJson], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        timeout: 120_000,
+      });
+      expect(res.status, `stderr: ${res.stderr}`).toBe(0);
+      const result = JSON.parse(readFileSync(outJson, "utf8"));
+      const route = result.routes.find((r) => r.route === entryRel);
+      expect(route).toBeDefined();
+      expect(route.ok).toBe(true);
+      // The subpath resolved: no unresolved edges, and sdk-ui is in the graph.
+      expect(route.missingCount).toBe(0);
+      expect(route.byOwner["@cinatra-ai/sdk-ui"]).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

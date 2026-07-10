@@ -33,8 +33,35 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 // ---------------------------------------------------------------------------
 
 export const CONTEXT_ATTESTATION_VERSION = "v1";
+export const CONTEXT_ATTESTATION_VERSION_V2 = "v2";
 export const CONTEXT_NODE_HEADER = "x-cinatra-context-node";
 export const CONTEXT_ATTESTATION_HEADER = "x-cinatra-context-attestation";
+
+// #1192 (replay-window hardening) — v2 binds a signed EXPIRY into the material so
+// a captured (node, attestation) pair is no longer replayable for the whole run.
+// v1 signed only `v1\n<contextId>\n<nodeId>` (no expiry) → a captured pair replayed
+// for the run lifetime (up to 24h). The runtime minter (docker/wayflow/
+// agent_loader.py) now sets `expiry = now + a short TTL` and emits
+// `v2:<expiryEpochSeconds>:<hex>` over `v2\n<contextId>\n<nodeId>\n<expiryEpochSeconds>`.
+// A tampered expiry changes the material → the signature fails; a stale expiry is
+// caught by the fail-closed window check below.
+//
+// MERGE-SAFE rollout: the verifier accepts BOTH v1 (legacy, sig-only) and v2, so a
+// freshly-deployed verifier still authenticates an as-yet-unrolled minter across
+// the non-atomic two-image (Next app vs wayflow container) deploy. v1 acceptance
+// is TRANSITIONAL — set CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0 to enforce v2-only once
+// the wayflow image has rolled (see evaluateContextAttestation `acceptLegacyV1`).
+// v1 stays unforgeable (key-signed); post-rollout the minter emits only v2, so no
+// v1 pair exists to capture. Removing v1 acceptance folds into the run-token spine
+// that supersedes this whole path.
+
+/** Grace applied to a v2 expiry for verifier/minter clock skew — a token that
+ *  expired within this window is still accepted. */
+export const CONTEXT_ATTESTATION_SKEW_MS = 60_000;
+/** Reject a v2 expiry further in the future than this (defense-in-depth: even a
+ *  key-holding minter cannot mint a long-lived token). Comfortably exceeds the
+ *  minter TTL (_CONTEXT_ATTESTATION_TTL_SECONDS in agent_loader.py) + skew. */
+export const CONTEXT_ATTESTATION_MAX_FUTURE_MS = 600_000;
 
 /** The two endpoint "kinds" a context-resolution ApiNode targets. `resolve` →
  *  /api/context-resolve; `finalize` → /api/context-finalize (interactive or
@@ -42,9 +69,9 @@ export const CONTEXT_ATTESTATION_HEADER = "x-cinatra-context-attestation";
  *  cannot be replayed on finalize (and vice-versa). */
 export type ContextNodeKind = "resolve" | "finalize";
 
-/** Canonical, injective signing material. Newline-delimited so no field can
- *  bleed into another (contextId/nodeId are opaque ids without newlines). The
- *  version prefix lets the contract rev without silent cross-version replay. */
+/** Canonical v1 signing material (legacy — no expiry). Newline-delimited so no
+ *  field can bleed into another (contextId/nodeId are opaque ids without
+ *  newlines). The version prefix prevents silent cross-version replay. */
 export function contextAttestationMaterial(
   contextId: string,
   nodeId: string,
@@ -52,8 +79,17 @@ export function contextAttestationMaterial(
   return `${CONTEXT_ATTESTATION_VERSION}\n${contextId}\n${nodeId}`;
 }
 
-/** HMAC-SHA256(key, material) hex. Used by the server to recompute; the runtime
- *  computes the same value with the same key (see agent_loader.py). */
+/** Canonical v2 signing material — appends the expiry so it is authenticated (a
+ *  tampered expiry changes the material and fails the signature). */
+export function contextAttestationMaterialV2(
+  contextId: string,
+  nodeId: string,
+  expiryEpochSeconds: number,
+): string {
+  return `${CONTEXT_ATTESTATION_VERSION_V2}\n${contextId}\n${nodeId}\n${expiryEpochSeconds}`;
+}
+
+/** HMAC-SHA256(key, v1 material) hex. */
 export function computeContextAttestation(
   key: string,
   contextId: string,
@@ -64,40 +100,98 @@ export function computeContextAttestation(
     .digest("hex");
 }
 
-/** Parse the `X-Cinatra-Context-Attestation` header value. Format:
- *  `v1:<hex>`. Returns the hex signature for the supported version, or null
- *  on any malformed / unknown-version input (caller fails closed). */
-export function parseContextAttestationHeader(raw: string | null): string | null {
-  if (typeof raw !== "string") return null;
-  const idx = raw.indexOf(":");
-  if (idx <= 0) return null;
-  const version = raw.slice(0, idx);
-  const sig = raw.slice(idx + 1);
-  if (version !== CONTEXT_ATTESTATION_VERSION) return null;
-  // hex, non-empty, even length (sha256 → 64 hex chars, but keep the check
-  // shape-only; the constant-time compare is the real gate).
-  if (!/^[0-9a-f]+$/i.test(sig)) return null;
-  return sig.toLowerCase();
+/** HMAC-SHA256(key, v2 material) hex. Mirrors the runtime minter in
+ *  agent_loader.py (same key, same material). */
+export function computeContextAttestationV2(
+  key: string,
+  contextId: string,
+  nodeId: string,
+  expiryEpochSeconds: number,
+): string {
+  return createHmac("sha256", key)
+    .update(contextAttestationMaterialV2(contextId, nodeId, expiryEpochSeconds))
+    .digest("hex");
 }
 
-/** Constant-time compare of a provided hex signature against the expected one.
- *  Length-mismatch short-circuits false (timingSafeEqual requires equal-length
- *  buffers). */
+/** Parsed `X-Cinatra-Context-Attestation` header — a discriminated union over
+ *  the protocol version. v1: `v1:<hex>`; v2: `v2:<expiryEpochSeconds>:<hex>`. */
+export type ParsedContextAttestation =
+  | { version: "v1"; sigHex: string }
+  | { version: "v2"; sigHex: string; expiryEpochSeconds: number };
+
+function isHexSignature(s: string): boolean {
+  return s.length > 0 && /^[0-9a-f]+$/i.test(s);
+}
+
+/** Parse the `X-Cinatra-Context-Attestation` header value. Returns the parsed
+ *  shape for a supported version, or null on any malformed / unknown-version
+ *  input (caller fails closed). A v2 expiry must be a non-negative safe integer
+ *  (digits only — no sign, dot, NaN, or overflow). */
+export function parseContextAttestationHeader(
+  raw: string | null,
+): ParsedContextAttestation | null {
+  if (typeof raw !== "string") return null;
+  const firstColon = raw.indexOf(":");
+  if (firstColon <= 0) return null;
+  const version = raw.slice(0, firstColon);
+  const rest = raw.slice(firstColon + 1);
+  if (version === CONTEXT_ATTESTATION_VERSION) {
+    if (!isHexSignature(rest)) return null;
+    return { version: "v1", sigHex: rest.toLowerCase() };
+  }
+  if (version === CONTEXT_ATTESTATION_VERSION_V2) {
+    const secondColon = rest.indexOf(":");
+    if (secondColon <= 0) return null;
+    const expStr = rest.slice(0, secondColon);
+    const sig = rest.slice(secondColon + 1);
+    if (!/^[0-9]+$/.test(expStr)) return null;
+    const expiryEpochSeconds = Number(expStr);
+    if (!Number.isSafeInteger(expiryEpochSeconds)) return null;
+    if (!isHexSignature(sig)) return null;
+    return { version: "v2", sigHex: sig.toLowerCase(), expiryEpochSeconds };
+  }
+  return null;
+}
+
+/** Constant-time compare of two hex signatures. Length-mismatch short-circuits
+ *  false (timingSafeEqual requires equal-length buffers). */
+function constantTimeHexEqual(providedHex: string, expectedHex: string): boolean {
+  const providedBuf = Buffer.from(providedHex, "utf8");
+  const expectedBuf = Buffer.from(expectedHex, "utf8");
+  if (providedBuf.length !== expectedBuf.length) return false;
+  return timingSafeEqual(providedBuf, expectedBuf);
+}
+
+/** Constant-time verify of a v1 signature. */
 export function verifyContextAttestationSignature(input: {
   key: string;
   contextId: string;
   nodeId: string;
   providedSignatureHex: string;
 }): boolean {
-  const expected = computeContextAttestation(
-    input.key,
-    input.contextId,
-    input.nodeId,
+  return constantTimeHexEqual(
+    input.providedSignatureHex,
+    computeContextAttestation(input.key, input.contextId, input.nodeId),
   );
-  const providedBuf = Buffer.from(input.providedSignatureHex, "utf8");
-  const expectedBuf = Buffer.from(expected, "utf8");
-  if (providedBuf.length !== expectedBuf.length) return false;
-  return timingSafeEqual(providedBuf, expectedBuf);
+}
+
+/** Constant-time verify of a v2 signature (expiry is part of the material). */
+export function verifyContextAttestationSignatureV2(input: {
+  key: string;
+  contextId: string;
+  nodeId: string;
+  expiryEpochSeconds: number;
+  providedSignatureHex: string;
+}): boolean {
+  return constantTimeHexEqual(
+    input.providedSignatureHex,
+    computeContextAttestationV2(
+      input.key,
+      input.contextId,
+      input.nodeId,
+      input.expiryEpochSeconds,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -246,14 +340,20 @@ export function resolveContextNodeProvenance(
 // ---------------------------------------------------------------------------
 
 export type ContextAttestationResult =
-  | { ok: true; slotId: string; kind: ContextNodeKind }
+  | { ok: true; slotId: string; kind: ContextNodeKind; legacyV1?: boolean }
   | { ok: false; code: string; message: string };
 
-/** Evaluate the #907 attestation for a composed-child context call. Every
+/** Evaluate the #907/#1192 attestation for a composed-child context call. Every
  *  failure is a 403-worthy fail-closed reason (the caller maps `code`/`message`
  *  to ContextRouteError). `contextId` MUST be the trusted x-cinatra-a2a-context-id
  *  binding (never a body value); `nodeIdHeader`/`attestationHeader` are the raw
- *  request header values; `runOas` is the run package's installed OAS. */
+ *  request header values; `runOas` is the run package's installed OAS.
+ *
+ *  A v2 attestation additionally carries a signed expiry: it is rejected once
+ *  expired (past `expiry + skew`) or if its expiry is implausibly far in the
+ *  future — closing the intra-run replay window. A v1 attestation has no expiry
+ *  and is accepted only transitionally (`acceptLegacyV1`, default true) for the
+ *  non-atomic two-image rollout. */
 export function evaluateContextAttestation(input: {
   key: string | undefined | null;
   contextId: string | null;
@@ -262,6 +362,12 @@ export function evaluateContextAttestation(input: {
   runOas: Record<string, unknown> | null;
   slotId: string;
   expectedKind: ContextNodeKind;
+  /** Accept a legacy v1 (no-expiry) attestation. Default true (MERGE-SAFE
+   *  transitional). Set false (CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0) to enforce
+   *  v2-only after the wayflow minter image has rolled. */
+  acceptLegacyV1?: boolean;
+  /** Injectable clock (ms) for the v2 expiry check. Default Date.now(). */
+  nowMs?: number;
 }): ContextAttestationResult {
   const { key, contextId, nodeIdHeader, attestationHeader, runOas } = input;
 
@@ -282,8 +388,8 @@ export function evaluateContextAttestation(input: {
     };
   }
   const nodeId = nodeIdHeader;
-  const sigHex = parseContextAttestationHeader(attestationHeader);
-  if (!nodeId || !sigHex) {
+  const parsed = parseContextAttestationHeader(attestationHeader);
+  if (!nodeId || !parsed) {
     return {
       ok: false,
       code: "attestation_missing",
@@ -291,20 +397,71 @@ export function evaluateContextAttestation(input: {
         "composed-child context resolution requires a valid per-node attestation",
     };
   }
-  if (
-    !verifyContextAttestationSignature({
-      key,
-      contextId,
-      nodeId,
-      providedSignatureHex: sigHex,
-    })
-  ) {
-    return {
-      ok: false,
-      code: "attestation_invalid",
-      message: "context attestation signature did not verify",
-    };
+
+  const acceptLegacyV1 = input.acceptLegacyV1 ?? true;
+  const nowMs = input.nowMs ?? Date.now();
+  let legacyV1 = false;
+
+  if (parsed.version === "v1") {
+    if (!acceptLegacyV1) {
+      return {
+        ok: false,
+        code: "attestation_legacy_rejected",
+        message:
+          "legacy v1 context attestation rejected — v2 (expiring) attestation required",
+      };
+    }
+    if (
+      !verifyContextAttestationSignature({
+        key,
+        contextId,
+        nodeId,
+        providedSignatureHex: parsed.sigHex,
+      })
+    ) {
+      return {
+        ok: false,
+        code: "attestation_invalid",
+        message: "context attestation signature did not verify",
+      };
+    }
+    legacyV1 = true;
+  } else {
+    // v2 — verify the signature (which binds the expiry) BEFORE trusting the
+    // expiry value, then enforce the fail-closed validity window.
+    if (
+      !verifyContextAttestationSignatureV2({
+        key,
+        contextId,
+        nodeId,
+        expiryEpochSeconds: parsed.expiryEpochSeconds,
+        providedSignatureHex: parsed.sigHex,
+      })
+    ) {
+      return {
+        ok: false,
+        code: "attestation_invalid",
+        message: "context attestation signature did not verify",
+      };
+    }
+    const expiryMs = parsed.expiryEpochSeconds * 1000;
+    if (nowMs > expiryMs + CONTEXT_ATTESTATION_SKEW_MS) {
+      return {
+        ok: false,
+        code: "attestation_expired",
+        message: "context attestation has expired",
+      };
+    }
+    if (expiryMs > nowMs + CONTEXT_ATTESTATION_MAX_FUTURE_MS) {
+      return {
+        ok: false,
+        code: "attestation_expired",
+        message:
+          "context attestation expiry is implausibly far in the future",
+      };
+    }
   }
+
   const prov = runOas ? resolveContextNodeProvenance(runOas, nodeId) : null;
   if (!prov) {
     return {
@@ -327,5 +484,7 @@ export function evaluateContextAttestation(input: {
       message: `attested node is a '${prov.kind}' node, not '${input.expectedKind}'`,
     };
   }
-  return { ok: true, slotId: prov.slotId, kind: prov.kind };
+  return legacyV1
+    ? { ok: true, slotId: prov.slotId, kind: prov.kind, legacyV1: true }
+    : { ok: true, slotId: prov.slotId, kind: prov.kind };
 }

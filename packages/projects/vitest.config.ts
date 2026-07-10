@@ -41,6 +41,14 @@ export default defineConfig({
       // tests don't exercise the archive gate's I/O; they assert the SQL
       // emission shape.
       "@/lib/project-writable": path.join(__dirname, "src/__tests__/__stubs__/project-writable.ts"),
+      // PURE OBO scope-ceiling subpath (W2/#1051) — resolve to the REAL source
+      // (no server-only / no heavy deps) so the ceiling logic is exercised, not
+      // stubbed. MUST precede the general `@cinatra-ai/mcp-server` stub alias
+      // below: Vite matches aliases in order and the stub is a single file, so
+      // a subpath falling through to it resolves to an invalid `mcp-server.ts/
+      // obo-ceiling` path. Reached transitively via the aliased
+      // `@/lib/authz/enforce-resource-access` and directly by handlers.ts.
+      "@cinatra-ai/mcp-server/obo-ceiling": path.join(root, "packages/mcp-server/src/obo-ceiling.ts"),
       // mcp-server stub — only need `mcpRequestContextStorage`, mirror
       // objects/__stubs__/mcp-server.ts.
       "@cinatra-ai/mcp-server": path.join(__dirname, "src/__tests__/__stubs__/mcp-server.ts"),

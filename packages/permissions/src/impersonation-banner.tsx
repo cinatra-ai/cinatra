@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useTransition } from "react";
 import Link from "next/link";
 import { UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/cinatra-toast";
 import { authClient } from "@/lib/auth-client";
 
 // Height of the banner in pixels — must match the rendered height so the
@@ -13,7 +14,6 @@ const BANNER_HEIGHT = 24;
 export function ImpersonationBanner() {
   const { data, isPending } = authClient.useSession();
   const [isStopping, startTransition] = useTransition();
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const isActive = !isPending && !!data?.session?.impersonatedBy;
 
@@ -36,19 +36,17 @@ export function ImpersonationBanner() {
 
   function stopImpersonating() {
     startTransition(async () => {
-      setErrorMessage(null);
-
       try {
         const result = await authClient.admin.stopImpersonating();
         if (result.error) {
-          setErrorMessage(result.error.message || "Unable to stop impersonation.");
+          toast.error(result.error.message || "Unable to stop impersonation.");
           return;
         }
 
         // Full navigation so the session is re-initialised immediately.
         window.location.reload();
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to stop impersonation.");
+        toast.error(error instanceof Error ? error.message : "Unable to stop impersonation.");
       }
     });
   }
@@ -66,7 +64,6 @@ export function ImpersonationBanner() {
         <span>
           <Link href="/accounts" className="font-semibold underline-offset-2 hover:underline">{displayName}</Link>
         </span>
-        {errorMessage ? <span className="ml-1 text-destructive">{errorMessage}</span> : null}
       </div>
       <Button
         type="button"

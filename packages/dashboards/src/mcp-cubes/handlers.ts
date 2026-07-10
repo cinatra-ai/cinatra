@@ -211,10 +211,18 @@ export function createDashboardCubeMcpHandlers() {
       // Shared resolver: widens accessibleOrgIds AND decorates
       // isPlatformAdmin (DB role lookup) for the llm_usage cube gate.
       // registry.ts uses the SAME helper so the two MCP sites never drift.
+      //
+      // Agent-run OBO (epic #1049 / W4 #1053): `oboCeiling` is present on the
+      // frame iff the caller is an agent-run OBO delegation. The shared MCP
+      // boundary already DENIES a non-org ceiling here; this pins the surviving
+      // org-only-ceiling case so a delegated run's cube read can never widen
+      // the security context beyond the run's own org.
+      const agentRunObo = !!mcpRequestContextStorage.getStore()?.oboCeiling;
       const sc = await buildDashboardCubeMcpSecurityContext(
         identity,
         listAccessibleOrgIdsForUser,
         readUserIsPlatformAdmin,
+        { agentRunObo },
       );
       if (!sc) {
         throw new Error(

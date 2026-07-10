@@ -238,6 +238,21 @@
       "line": 18
     },
     {
+      "primitiveName": "approvals_decide",
+      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "line": 329
+    },
+    {
+      "primitiveName": "approvals_get",
+      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "line": 324
+    },
+    {
+      "primitiveName": "approvals_list",
+      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "line": 319
+    },
+    {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
       "line": 304
@@ -1165,7 +1180,7 @@
     {
       "primitiveName": "wordpress_content_editor_run",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 63
+      "line": 70
     },
     {
       "primitiveName": "wordpress_instances_list",
@@ -1175,7 +1190,12 @@
     {
       "primitiveName": "wordpress_media_upload",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 35
+      "line": 37
+    },
+    {
+      "primitiveName": "wordpress_pages_list",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 46
     },
     {
       "primitiveName": "wordpress_post_create_draft",
@@ -1185,17 +1205,17 @@
     {
       "primitiveName": "wordpress_post_delete",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 31
+      "line": 32
     },
     {
       "primitiveName": "wordpress_post_get",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 49
+      "line": 56
     },
     {
       "primitiveName": "wordpress_post_get_latest",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 44
+      "line": 51
     },
     {
       "primitiveName": "wordpress_post_status",
@@ -1205,17 +1225,17 @@
     {
       "primitiveName": "wordpress_post_update",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 58
+      "line": 65
     },
     {
       "primitiveName": "wordpress_post_update_meta",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 53
+      "line": 60
     },
     {
       "primitiveName": "wordpress_posts_list",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
-      "line": 39
+      "line": 41
     },
     {
       "primitiveName": "wordpress_status",
