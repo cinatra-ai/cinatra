@@ -68,6 +68,12 @@ export type ExtensionCardProps = {
   footer?: React.ReactNode;
   /** Replaces the indicator in the chip top-right (e.g. kind + visibility badges). */
   badges?: React.ReactNode;
+  /**
+   * `"listing"`-variant byline slot (design spec 0.5.0 §I): the `{Kind} by
+   * {Vendor}` line rendered beneath the name inside the coloured banner. Ignored
+   * by the `"chip"` variant. See `ExtensionCardListingBanner`'s `byline`.
+   */
+  byline?: React.ReactNode;
   /** Force render mode. Defaults to true (button) unless body slots are present. */
   interactive?: boolean;
   /**
@@ -101,6 +107,7 @@ export function ExtensionCard({
   meta,
   footer,
   badges,
+  byline,
   interactive,
   variant = "chip",
   iconUrl,
@@ -164,6 +171,7 @@ export function ExtensionCard({
           accentColor={accentColor}
           emblem={emblem}
           iconUrl={iconUrl}
+          byline={byline}
           badges={badges}
         />
       ) : (
@@ -235,11 +243,13 @@ function ExtensionCardChip({
 }
 
 /**
- * Marketplace listing-card banner (design spec §IV). The coloured banner area
- * (category colour, min-h 96px) lays the 46×46 SQUARE icon tile and the
- * human-readable name out side by side — the name lives INSIDE the banner
- * (Archivo italic-800, 18px, line-clamp 3), not beneath the emblem (that is the
- * §V running-agent chip). The icon tile resolves a fallback chain: a hosted
+ * Marketplace listing-card banner (design spec 0.5.0 §I). The coloured banner
+ * area (category colour, min-h 88px) lays the 46×46 SQUARE icon tile beside a
+ * name + byline column — the human-readable name (Archivo italic-800, 18px,
+ * line-clamp 2) with the `{Kind} by {Vendor}` `byline` slot directly beneath it
+ * (0.5.0 moved the byline off the body/middle panel into this coloured ground,
+ * recoloured to match the name). Both live INSIDE the banner, not beneath the
+ * emblem (that is the running-agent chip). The icon tile resolves a fallback chain: a hosted
  * square icon URL → else the kind/vendor `emblem` (the caller resolves
  * icon → vendor-logo → kind-emblem before passing `iconUrl`/`emblem`). The
  * tile never goes blank even when the resolved URL is present but the image
@@ -264,6 +274,7 @@ export function ExtensionCardListingBanner({
   accentColor,
   emblem,
   iconUrl,
+  byline,
   badges,
   className,
   muted = false,
@@ -276,6 +287,16 @@ export function ExtensionCardListingBanner({
   accentColor: ExtensionAccent;
   emblem: React.ReactNode;
   iconUrl?: string | null;
+  /**
+   * The `{Kind} by {Vendor}` byline (design spec 0.5.0 §I/§III/§IV): renders
+   * directly BENEATH the name, inside the coloured banner. The caller supplies
+   * the slot content already shaped for its surface (§I carries the vendor link
+   * + verified check; §III/§IV a plain vendor span). Text colour INHERITS the
+   * banner ground — `currentColor` (white `fg`) on an active card, muted-grey on
+   * the `muted` (archived) variant — so the byline recolours to match the name
+   * automatically; callers must not hard-code a text colour on the slot.
+   */
+  byline?: React.ReactNode;
   badges?: React.ReactNode;
   className?: string;
   /**
@@ -309,7 +330,8 @@ export function ExtensionCardListingBanner({
   const { bg, fg } = ACCENT_PALETTE[accentColor];
   const interactive = detailHref != null;
   const commonClassName = cn(
-    "relative flex min-h-[96px] items-center gap-3 p-[14px]",
+    // min-h 88px (design spec 0.5.0 §I: 96→88 now the byline shares the banner).
+    "relative flex min-h-[88px] items-center gap-3 p-[14px]",
     muted && "bg-muted text-muted-foreground",
     // Interactive accent (cinatra#1121): pointer cursor, a focus-visible ring
     // painted INSIDE the panel (the card clips overflow, so an outset ring would
@@ -361,19 +383,30 @@ export function ExtensionCardListingBanner({
           emblem
         )}
       </span>
+      {/* Name + byline column (design spec 0.5.0 §I): 5px apart, both inside the
+          coloured banner. `relative` (interactive case) lifts the whole column
+          above the hover wash. The byline slot inherits the banner ground colour
+          (white / muted) so it recolours to match the name. */}
       <div
-        data-slot="extension-card-name"
         className={cn(
-          "line-clamp-3 min-w-0 font-display text-listing-title font-extrabold italic",
-          // `relative` only in the interactive case (so the name paints above the
-          // hover wash); non-interactive callers stay byte-identical.
+          "flex min-w-0 flex-col gap-[5px]",
           interactive && "relative",
-          // Reserve room for the top-right badge overlay so a long, line-clamped
-          // name never runs underneath the badges.
-          badges && "pr-20",
         )}
       >
-        {name}
+        <div
+          data-slot="extension-card-name"
+          className={cn(
+            // Name clamps at 2 lines (0.5.0 §I: was 3) — the byline now takes
+            // the third line's room beneath it.
+            "line-clamp-2 min-w-0 font-display text-listing-title font-extrabold italic",
+            // Reserve room for the top-right badge overlay so a long, line-clamped
+            // name never runs underneath the badges.
+            badges && "pr-20",
+          )}
+        >
+          {name}
+        </div>
+        {byline}
       </div>
       {badges && (
         <div className="absolute right-[14px] top-[14px] flex flex-wrap items-center justify-end gap-1.5">

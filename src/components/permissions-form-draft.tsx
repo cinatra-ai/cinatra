@@ -109,10 +109,11 @@ export function PermissionsFormDraft({
   // Access change → locksteps the three visibility fields. Mirrors the bound
   // PermissionsForm's onSubmit projection so the draft + bound paths agree on
   // shape; downstream compatibility projection depends on this.
-  const setAccess = (next: string) => {
-    // Multi-scope W1: normalize the (currently single-token) selection to its
-    // canonical array form. Mirrors the bound PermissionsForm's projection.
-    const selection = normalizeVisibilitySelection([next as AgentAuthPolicyVisibility]);
+  const setAccess = (next: string[]) => {
+    // Multi-scope W3: the checkbox multi-select picker yields the full token
+    // array; normalize it to its canonical form. Mirrors the bound
+    // PermissionsForm's projection.
+    const selection = normalizeVisibilitySelection(next as AgentAuthPolicyVisibility[]);
     onChange({
       ...value,
       policy: {
@@ -222,7 +223,8 @@ export function PermissionsFormDraft({
         <h2 className="text-base font-semibold text-foreground">Access</h2>
         <div className="flex flex-col gap-1.5">
           <AccessComboboxHierarchical
-            value={policy.runListVisibility[0]}
+            multiple
+            value={policy.runListVisibility}
             onChange={setAccess}
             scopes={availableScopes}
             disabled={disabled}

@@ -6,17 +6,16 @@ import Link from "next/link";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 
 import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { marketplaceVendorAppStatusContract } from "./marketplace-vendor-app-status.contract";
 import {
   MARKETPLACE_GROUP,
   MARKETPLACE_VENDOR_APP_STATUS_HREF,
   MARKETPLACE_VENDOR_APP_STATUS_SOURCE_ID,
-  guardedCount,
   guardedFetch,
   hasVendorToken,
-  marketplaceAvailability,
   resolveVendorToken,
 } from "./marketplace-shared";
-import type { ApprovalRow, ApprovalSource, SourceCounts } from "./types";
+import type { ApprovalRow, ApprovalSource } from "./types";
 
 // ---------------------------------------------------------------------------
 // Marketplace source #4 — this instance's vendor-application STATUS ("Your
@@ -54,15 +53,13 @@ function statusVariant(state: string): MarketplaceBadgeVariant {
 }
 
 export const marketplaceVendorAppStatusSource: ApprovalSource = {
-  id: SOURCE_ID,
+  // Light nav contract (id / availability / appliesTo / counts) — the SAME
+  // function references the nav registry consumes (registry-parity.test.ts).
+  ...marketplaceVendorAppStatusContract,
   title: "This instance's vendor application",
   group: MARKETPLACE_GROUP,
 
   viewAllHref: (dir) => (dir === "mine" ? MARKETPLACE_VENDOR_APP_STATUS_HREF : undefined),
-
-  availability: () => marketplaceAvailability(),
-
-  appliesTo: (viewer, direction) => viewer.isAdmin && direction === "mine",
 
   sectionConfigured: () => hasVendorToken(),
 
@@ -92,16 +89,6 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
       };
       return [row];
     });
-  },
-
-  async counts(viewer): Promise<SourceCounts> {
-    // The instance's application is "in flight" only while `applied`.
-    const mine = await guardedCount(viewer, resolveVendorToken(), `${SOURCE_ID}:mine`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
-      const status = await client.vendorApplicationStatus();
-      return status.state === "applied" ? 1 : 0;
-    });
-    return { inbox: 0, mine };
   },
 
   rowRenderer(row: ApprovalRow) {

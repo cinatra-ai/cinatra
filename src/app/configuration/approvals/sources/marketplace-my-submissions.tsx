@@ -9,18 +9,16 @@ import type { MarketplaceVendorSubmission } from "@cinatra-ai/marketplace-mcp-cl
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { withdrawMarketplaceSubmission } from "../marketplace-decision-helpers";
 import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { marketplaceMySubmissionsContract } from "./marketplace-my-submissions.contract";
 import {
   MARKETPLACE_GROUP,
   MARKETPLACE_MY_SUBMISSIONS_SOURCE_ID,
   MARKETPLACE_SUBMISSIONS_SELF_HREF,
-  cappedCount,
-  guardedCount,
   guardedFetch,
   hasInstanceToken,
-  marketplaceAvailability,
   resolveInstanceToken,
 } from "./marketplace-shared";
-import type { ApprovalAction, ApprovalRow, ApprovalSource, SourceCounts } from "./types";
+import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
 
 // ---------------------------------------------------------------------------
 // Marketplace source #3 — MY extension submissions ("Your requests" only).
@@ -74,15 +72,13 @@ function toRow(s: MarketplaceVendorSubmission): ApprovalRow {
 }
 
 export const marketplaceMySubmissionsSource: ApprovalSource = {
-  id: SOURCE_ID,
+  // Light nav contract (id / availability / appliesTo / counts) — the SAME
+  // function references the nav registry consumes (registry-parity.test.ts).
+  ...marketplaceMySubmissionsContract,
   title: "This instance's extension submissions",
   group: MARKETPLACE_GROUP,
 
   viewAllHref: (dir) => (dir === "mine" ? MARKETPLACE_SUBMISSIONS_SELF_HREF : undefined),
-
-  availability: () => marketplaceAvailability(),
-
-  appliesTo: (viewer, direction) => viewer.isAdmin && direction === "mine",
 
   sectionConfigured: () => hasInstanceToken(),
 
@@ -97,16 +93,6 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
       const out = await client.extensionSubmissionListSelf();
       return out.submissions.map(toRow);
     });
-  },
-
-  async counts(viewer): Promise<SourceCounts> {
-    // "mine" counts the in-flight (still-pending, withdrawable) submissions.
-    const mine = await guardedCount(viewer, resolveInstanceToken(), `${SOURCE_ID}:mine`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
-      const out = await client.extensionSubmissionListSelf();
-      return cappedCount(out.submissions.filter((s) => s.status === "pending").length);
-    });
-    return { inbox: 0, mine };
   },
 
   rowRenderer(row: ApprovalRow) {

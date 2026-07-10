@@ -6,12 +6,44 @@ import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
+import { buildConfigurationNeedsNotificationInput } from "@/lib/agent-configuration-needs-notifications";
 
 import { ConformanceCardFixtures } from "./card-fixtures";
+import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
 } from "./fixture-data";
+
+// Bell flyout needs-configuration row (cinatra#1057 ruling (c)). Built here from
+// the REAL server-side builder so the entry copy — `Set up connections for
+// "<agent>":` — is verifiable byte-for-byte on the production-equivalent boot.
+// Mounted in THIS already-allowlisted conformance harness (off the pixel-diffed
+// /design-fixtures index, coverage assertion-based) rather than a NEW standalone
+// public route, so no src/lib/auth-route-guard.ts allowlist edit is needed and
+// the change stays off the gate-suite high-risk auth paths.
+const BELL_CONFIG_NEEDS_FIXTURE = buildConfigurationNeedsNotificationInput({
+  agentPackageName: "@cinatra-ai/social-outreach-agent",
+  agentDisplayName: "Social Outreach Agent",
+  connectors: [
+    {
+      displayName: "LinkedIn",
+      packageName: "@cinatra-ai/linkedin-connector",
+      settingsHref: "/connectors/cinatra-ai/linkedin/setup",
+    },
+  ],
+});
+const BELL_CONFIG_NEEDS_CONNECTORS = (
+  BELL_CONFIG_NEEDS_FIXTURE.metadata as {
+    configurationNeeds: {
+      connectors: {
+        displayName: string;
+        packageName: string;
+        settingsHref: string | null;
+      }[];
+    };
+  }
+).configurationNeeds.connectors;
 
 export const metadata: Metadata = {
   title: "Design Fixtures — Conformance harness — Cinatra",
@@ -81,6 +113,19 @@ export default function ConformanceHarnessPage() {
           </CardHeader>
           <CardContent>
             <ConformanceCardFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Bell flyout — needs-configuration row (surface: bell-config-needs-row)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <NotificationConfigNeedsFixture
+              title={BELL_CONFIG_NEEDS_FIXTURE.title}
+              createdAt={new Date("2026-07-10T09:00:00.000Z").toISOString()}
+              connectors={BELL_CONFIG_NEEDS_CONNECTORS}
+            />
           </CardContent>
         </Card>
       </PageContent>

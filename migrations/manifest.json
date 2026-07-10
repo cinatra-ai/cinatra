@@ -200,6 +200,15 @@
       "tables": [
         "agent_runs"
       ]
+    },
+    {
+      "seq": "0019",
+      "file": "core/core__0019_agent-kind-assistant-config.mjs",
+      "summary": "The interaction axis on agent_templates (cinatra-ai/cinatra#1037 P1, schema half). Adds agent_kind ('assistant'|'executor', default 'executor') and the typed assistant_config sidecar (JSON-as-text), plus two authoritative write-time invariants — agent_templates_agent_kind_check (agent_kind IN ('assistant','executor')) and agent_templates_agent_kind_config_check (an 'assistant' row MUST carry a config; an 'executor' row MUST NOT). agent_kind is ORTHOGONAL to type (leaf|proxy|orchestrator) — not overloaded, no 'project' kind. The two columns are additive (bootstrap DDL adds them via ADD COLUMN IF NOT EXISTS; a fresh install is born at the target shape and ledger-fakes this chain); the CHECK constraints over an already-populated table are the transformational half this module carries on the operator upgrade path. Every existing row defaults to executor/NULL and satisfies the pairing CHECK, so the constraint validates with no backfill (no pre-existing assistant rows — the column is brand new). Idempotent/lineage-tolerant: columns IF NOT EXISTS, constraints added only when absent (pg_constraint lookup against current_schema()), index IF NOT EXISTS. down() drops the constraints, the kind index, then the columns (structural addition, not a rename). destructive=true because it adds CHECK constraints over a table that already holds rows on main.",
+      "destructive": true,
+      "tables": [
+        "agent_templates"
+      ]
     }
   ]
 }

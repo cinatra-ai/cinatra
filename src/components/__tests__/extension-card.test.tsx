@@ -22,21 +22,40 @@ describe("ExtensionCard listing banner (§IV, shell mode, variant=listing)", () 
     description: "Gathers sources and cites answers.",
   };
 
-  it("renders the §IV banner: 96px coloured banner, 46×46 square icon tile, name in the banner", () => {
+  it("renders the 0.5.0 §I banner: 88px coloured banner, 46×46 square icon tile, name in the banner", () => {
     const html = renderToStaticMarkup(<ExtensionCard {...shellProps} />);
-    // Banner area present with the listing-card slot + min-height.
+    // Banner area present with the listing-card slot + min-height (0.5.0: 88px,
+    // reduced from 96 now the byline shares the banner).
     expect(html).toContain('data-slot="extension-card-banner"');
-    expect(html).toContain("min-h-[96px]");
-    // Square icon tile (46×46, 11px radius), NOT the round 42px §V emblem pill.
+    expect(html).toContain("min-h-[88px]");
+    expect(html).not.toContain("min-h-[96px]");
+    // Square icon tile (46×46, 11px radius), NOT the round 42px running-agent pill.
     expect(html).toContain('data-slot="extension-card-icon"');
     expect(html).toContain("h-[46px]");
     expect(html).toContain("w-[46px]");
     expect(html).toContain("rounded-[11px]");
-    // Name lives inside the banner (Archivo italic-800, listing-title token = 18px, line-clamp-3).
+    // Name lives inside the banner (Archivo italic-800, listing-title token =
+    // 18px), clamped at 2 lines (0.5.0: was 3; the byline takes the 3rd line).
     expect(html).toContain('data-slot="extension-card-name"');
     expect(html).toContain("Research Assistant");
-    expect(html).toContain("line-clamp-3");
+    expect(html).toContain("line-clamp-2");
+    expect(html).not.toContain("line-clamp-3");
     expect(html).toContain("text-listing-title");
+  });
+
+  it("renders the byline slot beneath the name inside the banner (0.5.0 §I)", () => {
+    const html = renderToStaticMarkup(
+      <ExtensionCard {...shellProps} byline={<span data-testid="byline-slot">Agent by Cinatra</span>} />,
+    );
+    // The byline slot is a banner descendant, placed after the name…
+    const bannerAt = html.indexOf('data-slot="extension-card-banner"');
+    const nameAt = html.indexOf('data-slot="extension-card-name"');
+    const bylineAt = html.indexOf('data-testid="byline-slot"');
+    const bodyAt = html.indexOf("bg-surface p-4");
+    expect(bylineAt).toBeGreaterThan(nameAt);
+    expect(bylineAt).toBeGreaterThan(bannerAt);
+    // …not in the body block below the banner.
+    expect(bylineAt).toBeLessThan(bodyAt);
   });
 
   it("uses the kind emblem when no icon URL is supplied (fallback chain tail)", () => {

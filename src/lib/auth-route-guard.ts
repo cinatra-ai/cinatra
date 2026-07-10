@@ -115,12 +115,6 @@ const PUBLIC_EXACT_PATHS = [
 // production-standalone design-visual-verify harness. Without this exemption
 // guardAppRoute 307s the unauthenticated harness to /sign-in before the fixture
 // renders, so the gate's own specs time out locating the fixture testids.
-// "/design-fixtures/notification-config-needs" (cinatra#1057): the bell flyout
-// needs-configuration row — same static, dataless render contract as its
-// siblings (the real ConfigurationNeedsRow mounted with an in-memory
-// notification whose title is produced by the real server-side builder; no DB,
-// no session, no user data). Kept OFF the pixel-diffed /design-fixtures index
-// so the committed baselines there stay untouched.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -129,7 +123,6 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/conformance/seed",
   "/design-fixtures/agents-card",
   "/design-fixtures/header-rule",
-  "/design-fixtures/notification-config-needs",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

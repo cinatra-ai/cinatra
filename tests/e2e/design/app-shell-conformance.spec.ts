@@ -19,6 +19,17 @@
  *      so the sheet header clears the bar. A regression to `top-0` would hide
  *      the drawer title behind the app bar again (the original defect).
  *
+ *   3. Top-bar edge anchoring (from cinatra#1284, reverses #1091 / PR #1153).
+ *      The top-bar control row spans the full available width (the SidebarInset
+ *      area = viewport minus the persistent sidebar) with only the standard edge
+ *      gutters (px-5 → sm:px-8): the LEFT element anchors flush to the far-left
+ *      available edge + gutter and the RIGHT element flush to the far-right edge
+ *      − gutter, independent of the `max-w-7xl` content cap. A regression back to
+ *      the centred `mx-auto max-w-7xl` stage (the #1091 behaviour) pulls both
+ *      elements IN toward the content column on any viewport wider than the cap —
+ *      this guard asserts, at a wide 1920px viewport, that they sit at the edge
+ *      gutters and NOT at the content-cap edges, so that regression fails red.
+ *
  * Assertion-based (no pixel baselines) — pixel-diff + axe stay owned by
  * design-fixtures.spec.ts. Runs in the `design-fixtures-chromium` project of
  * tests/e2e/config/design.config.ts, which boots the app with
@@ -241,5 +252,75 @@ test.describe("side-sheet top offset under the fixed app bar (cinatra#833)", () 
     // #833 defect hid it behind the bar) — and has real height on screen.
     expect(titleBox.top).toBeGreaterThanOrEqual(bar.bottom - 1);
     expect(titleBox.bottom).toBeGreaterThan(titleBox.top);
+  });
+});
+
+test.describe("top-bar edge anchoring (cinatra#1284, reverses #1091)", () => {
+  // A viewport wide enough that the AVAILABLE area (viewport minus the ~256px
+  // persistent sidebar) meaningfully exceeds the max-w-7xl cap (80rem = 1280px),
+  // so the centred-stage regression is observable. At 1600px the available area
+  // (~1344px) is only ~64px over the cap, so the edge-anchored and content-cap
+  // positions nearly coincide; 1920px leaves ~1664px available (~384px over the
+  // cap) so the two layouts are unambiguously distinguishable.
+  const WIDE_WIDTH = 1920;
+  // sm:px-8 = 2rem = 32px at this width (>= the sm breakpoint of 640px).
+  const GUTTER = 32;
+  const CONTENT_CAP = 1280; // max-w-7xl
+
+  test("left/right elements anchor at the available-area edges, not the content cap", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: WIDE_WIDTH, height: 900 });
+    await gotoShell(page);
+
+    const row = page.getByTestId("app-shell-topbar-row");
+    const left = page.getByTestId("app-shell-topbar-left");
+    const right = page.getByTestId("app-shell-topbar-right");
+    await expect(row).toBeVisible();
+    await expect(left).toBeVisible();
+    await expect(right).toBeVisible();
+
+    const rect = (l: Locator) =>
+      l.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, width: r.width };
+      });
+
+    const rowBox = await rect(row);
+    const leftBox = await rect(left);
+    const rightBox = await rect(right);
+
+    // The row is the available area: it starts at the SidebarInset's left edge
+    // (the persistent sidebar's inner edge when shown; otherwise viewport x=0)
+    // and must be WIDER than the content cap at this viewport — proving we are
+    // testing above the cap where the regression is visible.
+    expect(rowBox.width).toBeGreaterThan(CONTENT_CAP);
+
+    // Where the OLD centred `mx-auto max-w-7xl` stage would have placed each
+    // element: the cap is centred in the available row, so its inner edges pull
+    // IN by (rowWidth − cap) / 2 on each side.
+    const capInset = (rowBox.width - CONTENT_CAP) / 2;
+    const contentCapLeft = rowBox.left + capInset;
+    const contentCapRight = rowBox.right - capInset;
+
+    // THE fix: the left element sits at the available-area left edge + gutter,
+    // NOT at the centred content-cap left edge.
+    expect(leftBox.left).toBeCloseTo(rowBox.left + GUTTER, 0);
+    // …and demonstrably to the LEFT of where the content-cap stage would place
+    // it (a regression to #1091 makes leftBox.left ≈ contentCapLeft and fails).
+    expect(leftBox.left).toBeLessThan(contentCapLeft - GUTTER);
+
+    // THE fix: the right element sits at the available-area right edge − gutter,
+    // NOT at the centred content-cap right edge.
+    expect(rightBox.right).toBeCloseTo(rowBox.right - GUTTER, 0);
+    // …and demonstrably to the RIGHT of the content-cap stage's right edge.
+    expect(rightBox.right).toBeGreaterThan(contentCapRight + GUTTER);
+
+    // The header itself stays full-bleed (border edge to edge): the header spans
+    // the whole available area, matching the row — only the inner anchoring
+    // changed, per AC #2.
+    const header = await rect(page.getByTestId("app-shell-topbar"));
+    expect(header.left).toBeCloseTo(rowBox.left, 0);
+    expect(header.right).toBeCloseTo(rowBox.right, 0);
   });
 });

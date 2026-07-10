@@ -100,8 +100,15 @@ export default async function AdministrationApprovalsPage({
   const sources = await availableSources(viewer);
 
   // Actionable counts across available sources (soft-fail per source). Feeds the
-  // smart default direction and the direction-tab pills. (The sidebar badge
-  // stays on pendingApprovalsCount() until it moves to the registry.)
+  // smart default direction and the direction-tab pills. The sidebar badge sums
+  // the SAME per-source Inbox count FUNCTIONS (each heavy source spreads its
+  // `*.contract.ts` — registry-parity.test.ts pins the shared references), but
+  // it is computed in an INDEPENDENT root-layout pass off `nav-registry`, so the
+  // two totals are not guaranteed byte-equal at runtime: a per-source soft-fail
+  // (a transient remote error) can zero a count in one pass but not the other,
+  // and the ~60s marketplace count cache can serve a different snapshot. They
+  // agree in the steady state (same sources, same count fns); they are not
+  // "equal by construction" instant-to-instant.
   const countsList = await Promise.all(
     sources.map((s) => s.counts(viewer).catch(() => ({ inbox: 0, mine: 0 }) as SourceCounts)),
   );

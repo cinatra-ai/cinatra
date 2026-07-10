@@ -9,7 +9,10 @@ import {
   ExtensionCardListingBanner,
   type ExtensionAccent,
 } from "@/components/extension-card";
-import { ACCENT_PALETTE } from "@/lib/extension-accent";
+// 0.5.0 §III moved the "{Kind} by {Vendor}" byline into the coloured banner
+// panel (recoloured by the banner's own text-current), so this card no longer
+// derives an accent bg for a middle-panel byline — the direct ACCENT_PALETTE
+// import is dropped (the banner still applies it internally).
 import type { ConfigurationNeed } from "@/lib/extension-dependency-ux";
 
 /**
@@ -18,10 +21,11 @@ import type { ConfigurationNeed } from "@/lib/extension-dependency-ux";
  * card per installed extension, split three ways.
  *
  *   1. LEFT — the ListingCard mark (46px icon tile + italic display name on
- *      the extension's accent ground), reused verbatim from
+ *      the extension's accent ground) with the "{Kind} by {Vendor}" byline
+ *      beneath the name (design spec 0.5.0 §III moved the byline into this
+ *      coloured panel, recoloured white/grey to match the name), reused from
  *      `ExtensionCardListingBanner` at listing-card width (340px).
- *   2. MIDDLE — the "{Kind} by {Vendor}" byline (small kind glyph tinted with
- *      the accent), the description, then the mono version with the lifecycle
+ *   2. MIDDLE — the description, then the mono version with the lifecycle
  *      status indicator beside it.
  *   3. RIGHT — a hairline-divided actions panel carrying EXACTLY the §VI
  *      drawing's two actions — Settings (primary, only where a configuration
@@ -43,7 +47,7 @@ export type InstalledExtensionCardProps = {
   /** Kind (or vendor-brand) emblem for the icon tile; `iconUrl` wins when set. */
   emblem: ReactNode;
   iconUrl?: string | null;
-  /** Small kind glyph for the byline (tinted with the accent color). */
+  /** Small kind glyph for the byline (white on the coloured banner ground). */
   kindIcon?: ReactNode;
   kindLabel: string;
   vendor?: string | null;
@@ -217,7 +221,6 @@ export function InstalledExtensionCard({
   accentLabel,
   accentInert = false,
 }: InstalledExtensionCardProps) {
-  const { bg } = ACCENT_PALETTE[accentColor];
   // An affected agent (unconfigured required connectors) cannot run yet, so it
   // wears the SAME greyed treatment as an archived card — desaturated ground,
   // muted emblem, muted text/actions — plus the needs-review strip below. The
@@ -236,15 +239,44 @@ export function InstalledExtensionCard({
         className,
       )}
     >
+      {/* The three §VI panels sit in a row; the outer card is a COLUMN so the
+          post-install needs-review strip (cinatra#1057) can span the full card
+          width beneath them. */}
       <div className="flex flex-col md:flex-row md:items-stretch">
-        {/* LEFT — the ListingCard mark at listing-card width; a greyed card
-            (archived or needs-review) renders the muted (light-grey) mark. */}
+        {/* LEFT — the ListingCard mark at listing-card width, carrying the
+            "{Kind} by {Vendor}" byline beneath the name (design spec 0.5.0 §III:
+            byline moved into the coloured panel). The byline inherits the banner
+            ground colour via `text-current` — white on an active card, grey on
+            the muted variant — so it recolours to match the name. A greyed card
+            (archived OR needs-review, cinatra#1057) renders the muted mark, which
+            also greys the byline for free. */}
         <ExtensionCardListingBanner
           name={name}
           accentColor={accentColor}
           emblem={emblem}
           iconUrl={iconUrl}
           muted={greyed}
+          byline={
+            <div
+              data-slot="installed-extension-byline"
+              className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
+            >
+              {kindIcon && (
+                <span aria-hidden className="inline-flex shrink-0 text-current">
+                  {kindIcon}
+                </span>
+              )}
+              <span className="overflow-hidden text-ellipsis">
+                <span className="font-medium">{kindLabel}</span>
+                {vendor && (
+                  <>
+                    {" by "}
+                    <span className="font-medium">{vendor}</span>
+                  </>
+                )}
+              </span>
+            </div>
+          }
           className="p-4 md:w-[340px] md:shrink-0"
           detailHref={accentDetailHref}
           onActivate={onAccentActivate}
@@ -252,42 +284,9 @@ export function InstalledExtensionCard({
           inert={accentInert}
         />
 
-        {/* MIDDLE — byline, description, version + status. */}
+        {/* MIDDLE — description, version + status (the byline moved into the
+            coloured panel above in 0.5.0 §III). */}
         <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
-          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            {kindIcon && (
-              <span
-                aria-hidden
-                className={cn("inline-flex shrink-0", greyed && "text-muted-foreground")}
-                style={greyed ? undefined : { color: bg }}
-              >
-                {kindIcon}
-              </span>
-            )}
-            <span className="truncate">
-              <span
-                className={cn(
-                  "font-medium",
-                  greyed ? "text-muted-foreground" : "text-foreground",
-                )}
-              >
-                {kindLabel}
-              </span>
-              {vendor && (
-                <>
-                  {" by "}
-                  <span
-                    className={cn(
-                      "font-medium",
-                      greyed ? "text-muted-foreground" : "text-foreground",
-                    )}
-                  >
-                    {vendor}
-                  </span>
-                </>
-              )}
-            </span>
-          </div>
           {description && (
             <p
               className={cn(
