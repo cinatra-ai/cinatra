@@ -35,12 +35,15 @@ export interface ApprovalsNavSummary {
    */
   total: number;
   /**
-   * Availability-driven nav visibility: the viewer has at least one available
-   * source whose Inbox is ACTIONABLE for them. The workflow legacy passthrough
-   * is a read-only mirror (`inboxActionable: false`) so — although it applies
-   * to every org member's Inbox — it does not, on its own, light the nav; v1
-   * stays admin-only (unchanged). A future source that grants a non-admin an
-   * actionable Inbox flips this with no sidebar rework.
+   * Nav visibility. TWO ways in (owner review #1302 ask 5, option-b):
+   *   • the viewer has an available source whose Inbox is ACTIONABLE for them
+   *     (admins — count-independent, so the item shows at zero pending, exactly
+   *     as before; the read-only workflow passthrough (`inboxActionable:false`)
+   *     does NOT count); OR
+   *   • the viewer has at least one OWN request in flight (`mine > 0`). This is
+   *     the non-admin path: a member who proposed an agent via `/chat` gets the
+   *     Approvals surface to find and track their own request, even though no
+   *     Inbox source is actionable for them. Admin behavior is unchanged.
    */
   visible: boolean;
 }
@@ -52,10 +55,12 @@ const EMPTY: ApprovalsNavSummary = { total: 0, visible: false };
  * NOT the raw registry — a `not_configured` source must not affect the nav)
  * into the sidebar summary.
  *
- * - `visible` — a pure, fetch-free predicate: any source that both applies to
- *   the viewer's Inbox and is actionable (`inboxActionable !== false`). No
- *   count is consulted, so an admin still sees the nav at zero pending, exactly
- *   as today.
+ * - `visible` — lit when EITHER the viewer has an actionable Inbox source
+ *   (`appliesTo(inbox) && inboxActionable !== false` — admins, count-independent,
+ *   so the nav shows at zero pending exactly as before) OR the viewer has any
+ *   own request in flight (`mine > 0` summed across sources — the non-admin
+ *   option-b path, owner review #1302 ask 5). The `mine` counts are already
+ *   fetched for `total`, so this adds no work.
  * - `total`   — the summed Inbox counts, soft-failing PER SOURCE so one slow /
  *   failing (e.g. remote) source can never blank the pill or zero the others.
  */
@@ -65,7 +70,7 @@ export async function summarizeApprovalsNav(
 ): Promise<ApprovalsNavSummary> {
   if (sources.length === 0) return EMPTY;
 
-  const visible = sources.some(
+  const inboxActionableForViewer = sources.some(
     (s) => s.appliesTo(viewer, "inbox") && s.inboxActionable !== false,
   );
 
@@ -77,6 +82,11 @@ export async function summarizeApprovalsNav(
     ),
   );
   const total = counts.reduce((sum, c) => sum + c.inbox, 0);
+  const mineTotal = counts.reduce((sum, c) => sum + c.mine, 0);
+
+  // Non-admins reach the surface through their OWN in-flight requests (option-b);
+  // admins keep the count-independent actionable-Inbox path.
+  const visible = inboxActionableForViewer || mineTotal > 0;
 
   return { total, visible };
 }

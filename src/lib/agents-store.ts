@@ -24,6 +24,7 @@ type AssignedSkillsActorContext = {
 };
 import {
   readSkillsCatalog,
+  resolveEffectiveSkillAccessPolicy,
   skillMatchesStore,
   filterMatchRowsByVisibility,
   MANUAL_VERSION,
@@ -1016,7 +1017,19 @@ export async function getAssignedSkillIdsForAgent(
   // level=agent self-match and level=system global injection are direct catalog
   // passes (no DB read).
   let catalog: {
-    skills: Array<{ id: string; level?: string; agentId?: string; scope?: string }>;
+    skills: Array<{
+      id: string;
+      level?: string;
+      agentId?: string;
+      scope?: string;
+      packageId?: string;
+      accessPolicy?: import("@cinatra-ai/agents/auth-policy").AgentAuthPolicy | null;
+    }>;
+    skillPackages?: Array<{
+      id?: string;
+      packageId?: string;
+      accessPolicy?: import("@cinatra-ai/agents/auth-policy").AgentAuthPolicy | null;
+    }>;
   };
   let agents: PersistedAgent[];
   let matchRows: SkillMatchRow[];
@@ -1072,6 +1085,9 @@ export async function getAssignedSkillIdsForAgent(
       level: skill.level ?? "system",
       scope: skill.scope,
       agentId: skill.agentId,
+      // Canonical effective policy (W4): skill override else parent package's.
+      // When present the visibility filter enforces its union any-match.
+      accessPolicy: resolveEffectiveSkillAccessPolicy(skill, catalog.skillPackages ?? []),
     });
   }
 

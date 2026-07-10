@@ -71,11 +71,17 @@ export async function createSkillFromTemplateAction(formData: FormData) {
     if (!source) {
       redirect(`/skills?error=source-skill-not-found`);
     }
+    const { readSkillsCatalog, resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
     try {
       requireResourceAccess(actor, buildSkillResourceRef({
         id: source.id,
         level: source.level,
         scope: source.scope ?? null,
+        // Canonical effective policy (W4): skill override else parent package's.
+        accessPolicy: resolveEffectiveSkillAccessPolicy(
+          source,
+          (await readSkillsCatalog()).skillPackages ?? [],
+        ),
       }));
     } catch {
       // Collapse forbidden + missing so existence is not disclosed.

@@ -147,6 +147,23 @@ export type SkillResourceRef = {
   organizationId?: string;
   ownerId?: string;
   /**
+   * CANONICAL enforcement source (multi-scope access W4, #1073). The effective
+   * access-policy visibility union for this skill — the skill's own
+   * `accessPolicy.runListVisibility` when set, else the parent package's
+   * (resolved by the caller). When present and non-empty, `requireResourceAccess`
+   * evaluates it ANY-MATCH: an actor matching ANY token is admitted. This is
+   * what lets an OR-policy like `[team:t1, project:p2]` admit members of EITHER
+   * scope — a projection the single `(level, scope)` tuple cannot represent.
+   *
+   * When OMITTED the legacy `(level, scope)` branches run instead — the
+   * transitional bridge for registry refs and skill rows not yet carrying a
+   * canonical policy. `level` is retained for the structural system-hidden gate,
+   * the OBO ceiling facet mapping, and the workspace carve-outs (all evaluated
+   * around, not replaced by, the policy union) as a label/index hint only —
+   * never as the membership decision when `policy` is present.
+   */
+  policy?: readonly AgentAuthPolicyVisibility[];
+  /**
    * AUTHORITATIVE flag: this skill is the `widget-chat.*`-capability skill of
    * an active extension, i.e. the SYSTEM PROMPT served to an UNAUTHENTICATED
    * in-CMS widget chat. Set ONLY by the skills layer from the extension
@@ -193,6 +210,15 @@ export function buildSkillResourceRef(
      * never on the skill id's shape. Omitted ⇒ `false`.
      */
     isWidgetChatSkill?: boolean;
+    /**
+     * EFFECTIVE access policy for this skill — the skill's own `accessPolicy`
+     * when set, else the parent package's (the caller resolves the inheritance;
+     * see `resolveEffectiveSkillAccessPolicy` in @cinatra-ai/skills). When
+     * present its `runListVisibility` union becomes the CANONICAL enforcement
+     * source (any-match) and the legacy `(level, scope)` membership branches are
+     * bypassed. Omitted / null ⇒ the transitional `(level, scope)` fallback.
+     */
+    accessPolicy?: AgentAuthPolicy | null;
   },
 ): SkillResourceRef {
   return {
@@ -205,6 +231,11 @@ export function buildSkillResourceRef(
     // policy branch ignores this field — undefined makes that explicit.
     organizationId: skill.level === "organization" ? (skill.scope ?? undefined) : undefined,
     isWidgetChatSkill: skill.isWidgetChatSkill ?? false,
+    // Canonical multi-scope union (W4). `runListVisibility` is the field the
+    // catalog projects to `(level, scope)` (see writeSkillAccessPolicy), so it
+    // is the authoritative "who may see/use this skill" dimension. Undefined
+    // when the skill carries no effective policy → the tuple fallback runs.
+    policy: skill.accessPolicy?.runListVisibility,
   };
 }
 
@@ -250,6 +281,21 @@ export function requireResourceAccess(
   if (resource.level === "system") {
     throw new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." });
   }
+  // Canonical multi-scope enforcement (W4, #1073). When the ref carries an
+  // effective access policy, the visibility union is the SOLE membership
+  // decision: admit on ANY matching token (OR-visibility), else deny. This
+  // supersedes the `(level, scope)` branches below, which the tuple can no
+  // longer faithfully represent for an OR-policy like `[team:t1, project:p2]`.
+  // A single-token policy reproduces the exact pre-array decision, so migrated
+  // callers are behaviour-preserving. `level`/`ownerId`/`organizationId` remain
+  // available above (system-hidden, OBO facets) and inside the workspace/owner
+  // token predicates as structural hints — never as the union decision here.
+  if (resource.policy && resource.policy.length > 0) {
+    for (const token of resource.policy) {
+      if (matchSkillAccessToken(token, actor, resource, mode)) return;
+    }
+    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
+  }
   if (resource.level === "organization") {
     if (!resource.organizationId || actor.organizationId !== resource.organizationId) {
       throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
@@ -265,63 +311,129 @@ export function requireResourceAccess(
     throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
   }
   if (resource.level === "workspace") {
-    // "Workspace: All" = every workspace user.
-    // Workspace read requires either an
-    // authenticated workspace principal (real userId + orgId — restored
-    // via the OBO bridge's transport-stamped actor.orgId in skills
-    // handlers' resolveOrgIdFromSession(actor)), OR the internal
-    // roleless buildSkillTools model actor reading the chat's OWN system
-    // skill (narrowly scoped to that exact skill id + MCP service-account
-    // shape). Manage stays admin.
-    const hasWorkspacePrincipal =
-      Boolean(actor.organizationId) &&
-      Boolean(actor.principalId) &&
-      actor.principalId !== "system";
-    // The chat skill package is split into focused sub-skills
-    // (chat-assistant-core plus concern skills). The internal model actor
-    // must be able to read any of the chat
-    // package's OWN infrastructure prompts (the `@cinatra-ai/chat:chat-`
-    // prefix), still narrowly scoped to the exact MCP service-account
-    // shape. Manage stays admin.
-    const isInternalModelChatSkillRead =
-      mode === "read" &&
-      actor.principalType === "ServiceAccount" &&
-      actor.authSource === "mcp" &&
-      actor.principalId === "system" &&
-      resource.resourceType === "skill" &&
-      typeof resource.resourceId === "string" &&
-      resource.resourceId.startsWith("@cinatra-ai/chat:chat-");
-    // The unauthenticated in-CMS widget chat (WordPress/Drupal content-editor
-    // SSE stream) has NO human session — `buildSkillTools` resolves its
-    // widget-chat SKILL.md through the SAME roleless internal-model
-    // service-account actor. Allow that exact shape to read a widget-chat
-    // skill, gated on the AUTHORITATIVE `isWidgetChatSkill` flag stamped by the
-    // skills layer from the extension manifest's `widget-chat.*` capability
-    // (NOT the id's shape) — so an arbitrary workspace skill whose id merely
-    // resembles a widget skill is NOT exposed and the cross-org workspace-read
-    // enumeration guard holds. Manage stays admin.
-    const isInternalModelWidgetChatSkillRead =
-      mode === "read" &&
-      actor.principalType === "ServiceAccount" &&
-      actor.authSource === "mcp" &&
-      actor.principalId === "system" &&
-      resource.resourceType === "skill" &&
-      resource.isWidgetChatSkill === true;
-    if (
-      mode === "read" &&
-      (hasWorkspacePrincipal ||
-        isInternalModelChatSkillRead ||
-        isInternalModelWidgetChatSkillRead)
-    )
-      return;
-    if (mode === "manage") {
-      if (actor.orgRole === "org_admin" || actor.orgRole === "org_owner") return;
-    }
+    if (decideWorkspaceAccess(actor, resource, mode)) return;
     throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
   }
   // Owner short-circuit: personal/agent/third-party/undefined levels fall here.
   if (resource.ownerId && actor.principalId === resource.ownerId) return;
   throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
+}
+
+/**
+ * Workspace-tier read/manage decision — the SINGLE source of truth for
+ * "Workspace: All" access, shared by the legacy `level === "workspace"` branch
+ * and the canonical policy branch's `workspace` token predicate so the two can
+ * never drift.
+ *
+ * Read is granted to either an authenticated workspace principal (real userId +
+ * orgId — restored via the OBO bridge's transport-stamped actor.orgId in skills
+ * handlers' resolveOrgIdFromSession(actor)), OR the internal roleless
+ * buildSkillTools model actor reading the chat package's OWN infrastructure
+ * prompts (`@cinatra-ai/chat:chat-` prefix, narrowly scoped to the MCP
+ * service-account shape), OR that same roleless actor reading an
+ * AUTHORITATIVELY-flagged widget-chat skill (`isWidgetChatSkill`, stamped by the
+ * skills layer from the extension manifest's `widget-chat.*` capability — never
+ * the id's shape, so an arbitrary look-alike skill is not exposed and the
+ * cross-org workspace-read enumeration guard holds). Manage stays admin.
+ */
+function decideWorkspaceAccess(
+  actor: ActorContext,
+  resource: SkillResourceRef,
+  mode: "read" | "manage",
+): boolean {
+  const hasWorkspacePrincipal =
+    Boolean(actor.organizationId) &&
+    Boolean(actor.principalId) &&
+    actor.principalId !== "system";
+  const isInternalModelChatSkillRead =
+    mode === "read" &&
+    actor.principalType === "ServiceAccount" &&
+    actor.authSource === "mcp" &&
+    actor.principalId === "system" &&
+    resource.resourceType === "skill" &&
+    typeof resource.resourceId === "string" &&
+    resource.resourceId.startsWith("@cinatra-ai/chat:chat-");
+  const isInternalModelWidgetChatSkillRead =
+    mode === "read" &&
+    actor.principalType === "ServiceAccount" &&
+    actor.authSource === "mcp" &&
+    actor.principalId === "system" &&
+    resource.resourceType === "skill" &&
+    resource.isWidgetChatSkill === true;
+  if (
+    mode === "read" &&
+    (hasWorkspacePrincipal ||
+      isInternalModelChatSkillRead ||
+      isInternalModelWidgetChatSkillRead)
+  )
+    return true;
+  if (mode === "manage") {
+    return actor.orgRole === "org_admin" || actor.orgRole === "org_owner";
+  }
+  return false;
+}
+
+/**
+ * Per-token decision for the canonical skill access-policy union (W4, #1073).
+ * Folded any-match by `requireResourceAccess`: the actor is admitted iff ANY
+ * token in the effective `runListVisibility` union admits them. Each token
+ * reproduces the EXACT membership semantics of the legacy `(level, scope)`
+ * branch it replaces, so a single-token policy is behaviour-identical to the
+ * pre-array gate and a multi-token policy is their union (OR-visibility).
+ *
+ * Runs AFTER the platform_admin bypass, the system-hidden gate, and the OBO
+ * ceiling containment check in `requireResourceAccess` — none of which this
+ * predicate re-evaluates.
+ *
+ *   workspace    → shared decideWorkspaceAccess (principal / internal-model
+ *                  carve-outs for read; org_admin/org_owner for manage)
+ *   org:<id>     → actor's active org equals <id>
+ *   org (legacy) → actor's active org equals the ref's owning org (fail closed
+ *                  when the owning org is unknown — a bare `org` token carries
+ *                  no id of its own)
+ *   team:<id>    → actor is a member of team <id>
+ *   project:<id> → actor holds a grant on project <id>
+ *   owner        → actor is the resource owner (mirrors the owner short-circuit)
+ *   admin        → deny. For SKILLS `admin` means "platform admins only" (the
+ *                  picker's "Workspace: Admins only"; legacy projection was
+ *                  `level:"system"`, hidden from non-platform admins). The
+ *                  platform_admin bypass already returned upstream, so any
+ *                  non-platform actor reaching this token is denied in BOTH
+ *                  read and manage — matching the legacy system-hidden gate and
+ *                  the run matcher. (NOT org_admin: that would OVER-GRANT manage
+ *                  vs the tuple — a distinct token from `workspace`, whose
+ *                  manage IS org_admin via decideWorkspaceAccess.)
+ */
+function matchSkillAccessToken(
+  token: AgentAuthPolicyVisibility,
+  actor: ActorContext,
+  resource: SkillResourceRef,
+  mode: "read" | "manage",
+): boolean {
+  if (token === "workspace") return decideWorkspaceAccess(actor, resource, mode);
+  if (token.startsWith("org:")) {
+    return actor.organizationId === token.slice("org:".length);
+  }
+  if (token === "org") {
+    // Bare legacy `org` carries no id — bind to the ref's owning org and fail
+    // closed when unknown, so it never widens to "any org member".
+    return Boolean(resource.organizationId) && actor.organizationId === resource.organizationId;
+  }
+  if (token.startsWith("team:")) {
+    return Boolean(actor.teamIds?.includes(token.slice("team:".length)));
+  }
+  if (token.startsWith("project:")) {
+    return Boolean(actor.projectIds?.includes(token.slice("project:".length)));
+  }
+  if (token === "owner") {
+    return Boolean(resource.ownerId) && actor.principalId === resource.ownerId;
+  }
+  // `admin` = platform-admin-only for skills (legacy `level:"system"` gate).
+  // platform_admin already returned upstream, so deny here in read AND manage —
+  // granting org_admin would OVER-GRANT manage vs the tuple (`workspace` is the
+  // distinct token whose manage IS org_admin, via decideWorkspaceAccess above).
+  // `admin` and any unrecognized token: deny.
+  return false;
 }
 
 /**

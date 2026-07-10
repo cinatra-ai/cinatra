@@ -11,6 +11,7 @@ import {
   findSavedConnectionForAgentUrl,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
+  setAgentRunTokenHash,
 } from "./store";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
@@ -100,6 +101,8 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask } from "@cina
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
 import { issueAgentRunBinding } from "@/lib/agent-run-binding";
+import { mintRunToken } from "@/lib/agent-run-token";
+import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
 function enrichmentContextFor(userId: string | null) {
@@ -1571,11 +1574,24 @@ async function runAgentBuilderExecutionJobInner(
               runBy: run.runBy,
             })
           : undefined;
-      const initialMessagePayload: Record<string, unknown> = {
-        ...(run.inputParams ?? {}),
-        cinatra_run_id: run.id,
-        ...(runBinding ? { cinatra_run_binding: runBinding } : {}),
-      };
+      // #1193 run-token spine: mint a random per-run credential and persist
+      // ONLY its hash BEFORE the blocking sendTask (the same race-free ordering
+      // the context-id pre-bind below uses), then carry the RAW token in the
+      // initial message under a reserved key. A later wave teaches the loader to
+      // pop the key before schema-filtering and attach the token to first-party
+      // callbacks (host-anchored to CINATRA_BASE_URL); until then the
+      // container's _filter_inputs_to_flow_schema drops the undeclared key, so
+      // it never reaches WayFlow. The builder spreads author inputs FIRST, then
+      // overwrites the dispatch-owned identity keys, so inputs can neither
+      // smuggle nor override them.
+      const runToken = mintRunToken();
+      await setAgentRunTokenHash(runId, runToken.tokenHash);
+      const initialMessagePayload = buildWayflowInitialMessagePayload({
+        inputParams: run.inputParams,
+        runId: run.id,
+        runBinding,
+        runToken: runToken.token,
+      });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must

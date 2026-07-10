@@ -153,6 +153,14 @@ describe("canonical lifecycle status reachability guard", () => {
         "packages/extensions/src/system-extension-inventory.ts",
         "packages/extensions/src/required-in-prod.ts",
         "src/lib/drizzle-store.ts",
+        // Extracted bootstrap-DDL string leaves for drizzle-store.ts
+        // (capabilityOwnershipGrantSchemaQueries + versionIdentitySchemaQueries,
+        // cinatra#1040 S1). Pure DDL {text}[] builders spread into
+        // buildCreateStoreSchemaQueries — the same sanctioned schema-evolution
+        // path as drizzle-store.ts above, extracted only to keep that file under
+        // its size ratchet. The version-identity backfill UPDATE against
+        // installed_extension lives here (DDL, not a lifecycle write).
+        "src/lib/extension-grant-schema.ts",
         // Seed script — idempotent seed-marker wipe + re-insert (dev seeding).
         "scripts/seed.mjs",
         "packages/extensions/src/__tests__/drift-canonical-gate-reach.test.ts",

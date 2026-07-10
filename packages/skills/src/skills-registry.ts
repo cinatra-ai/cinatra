@@ -8,7 +8,8 @@ import {
   readAgentSkillMatches,
   readAgentsForSkillMatching,
 } from "@/lib/agents-store";
-import { createSkillFromTemplate, readSkillsCatalog, type SkillLevel } from "./skills-store";
+import { createSkillFromTemplate, readSkillsCatalog, resolveEffectiveSkillAccessPolicy, type SkillLevel } from "./skills-store";
+import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
 export type SkillManifest = {
   id: string;
@@ -36,6 +37,13 @@ export type SkillManifest = {
    * dropdown — agent-linked skills are not assignable to OTHER agents.
    */
   agentId?: string;
+  /**
+   * Canonical per-skill access-policy override (multi-scope access W4, #1073),
+   * carried through from the persisted catalog row. The enforcement source when
+   * set; `requireResourceAccess` reads it via `buildSkillResourceRef`. Absent ⇒
+   * inherit the package policy (see `resolveEffectiveSkillAccessPolicy`).
+   */
+  accessPolicy?: AgentAuthPolicy | null;
 };
 
 export type SkillPackageManifest = {
@@ -57,6 +65,13 @@ export type SkillPackageManifest = {
    * the `level === "third-party"` predicate.
    */
   isCustom?: boolean;
+  /**
+   * Canonical package-level access policy (W4, #1073) — the inheritance default
+   * for embedded skills that carry no own override. Threaded so
+   * `resolveEffectiveSkillAccessPolicy(skill, [pkg])` resolves inheritance
+   * without a second catalog read.
+   */
+  accessPolicy?: AgentAuthPolicy | null;
   skills: SkillManifest[];
 };
 
@@ -159,6 +174,7 @@ export async function listInstalledSkillPackages(): Promise<SkillPackageManifest
     // Surface isCustom so callers can distinguish operator-installed packages
     // without keying on the "third-party" SkillLevel value.
     isCustom: skillPackage.isCustom,
+    accessPolicy: skillPackage.accessPolicy,
     skillCount: catalog.skills.filter((skill) => skill.packageId === skillPackage.packageId).length,
     skills: catalog.skills.filter((skill) => skill.packageId === skillPackage.packageId),
   }));
@@ -199,6 +215,9 @@ export async function listVisibleInstalledSkillPackages(
             id: s.id,
             level: s.level,
             scope: s.scope ?? null,
+            // Canonical effective policy (W4): skill override else this
+            // package's policy. Enforcement reads the union any-match.
+            accessPolicy: resolveEffectiveSkillAccessPolicy(s, [pkg]),
           }));
           return true;
         } catch {

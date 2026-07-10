@@ -342,6 +342,112 @@ describe("installExtensionWithDependencies — #1039 Option B committed dedupe-u
   });
 });
 
+// #1039 Option B — UPDATE-TIME slice: updateExtensionPackage / extensions_update
+// route the ROOT through the durable UPDATE pipeline as a COMMITTED member while
+// the new version's newly required deps auto-install FRESH dependencies-first.
+describe("installExtensionWithDependencies — #1039 Option B update-time (rootAction:'update')", () => {
+  it("root-only fast path: a committed root update routes through the UPDATE pipeline and surfaces in result.updated", async () => {
+    const h = makeHarness({
+      preInstalled: [ROOT], // the root is already installed (an in-place update)
+      plan: [member(ROOT, { action: "update" })],
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+      h.deps,
+    );
+    // No ledger row (depless), dispatched via the update pipeline, not install.
+    expect(res.batchId).toBeNull();
+    expect(h.events).toContain(`update:${ROOT}`);
+    expect(h.events).not.toContain(`install:${ROOT}`);
+    // Surfaced under `updated`, never `installed`.
+    expect(res.updated).toEqual([{ packageName: ROOT, version: "1.0.0" }]);
+    expect(res.installed).toEqual([]);
+  });
+
+  it("batched: the new version's new dep installs FRESH, the root updates in place; result partitions install vs update", async () => {
+    const h = makeHarness({
+      // The root is already installed; the new required dep is fresh.
+      preInstalled: [ROOT],
+      plan: [member("@cinatra-ai/new-dep"), member(ROOT, { action: "update" })],
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+      h.deps,
+    );
+    expect(h.events).toContain("install:@cinatra-ai/new-dep");
+    expect(h.events).toContain(`update:${ROOT}`);
+    expect(h.events).not.toContain(`install:${ROOT}`);
+    // Dependencies-first: the fresh dep installs BEFORE the root update.
+    expect(h.events.indexOf("install:@cinatra-ai/new-dep")).toBeLessThan(
+      h.events.indexOf(`update:${ROOT}`),
+    );
+    expect(res.installed.map((m) => m.packageName)).toEqual(["@cinatra-ai/new-dep"]);
+    expect(res.updated.map((m) => m.packageName)).toEqual([ROOT]);
+  });
+
+  it("a fresh new-dep failure aborts BEFORE the root update — the root is never touched", async () => {
+    const h = makeHarness({
+      preInstalled: [ROOT],
+      plan: [member("@cinatra-ai/new-dep"), member(ROOT, { action: "update" })],
+      installFail: "@cinatra-ai/new-dep",
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+        h.deps,
+      ),
+    ).rejects.toThrow();
+    expect(h.events).toContain("install-FAIL:@cinatra-ai/new-dep");
+    // The root update is LAST — a pre-root member failure means it never ran.
+    expect(h.events).not.toContain(`update:${ROOT}`);
+  });
+
+  it("boot sweeper leaves a committed ROOT update member untouched (preState.present); only fresh deps roll back", async () => {
+    const swept: string[] = [];
+    const stale: InstallBatch = {
+      batchId: "b-stale-update",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "installing",
+      members: [
+        {
+          packageName: "@cinatra-ai/new-dep",
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install",
+          preState: { present: false },
+        },
+        {
+          packageName: ROOT,
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "update",
+          preState: { present: true, version: "0.9.0" },
+        },
+      ],
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    const { swept: n } = await sweepStaleInstallBatches(
+      { olderThanMs: 0 },
+      {
+        listStale: async () => [stale],
+        setPhase: async (_id, _p) => stale,
+        updateMember: async (_id, _pkg, _patch) => stale,
+        uninstallMember: async (m) => {
+          swept.push(m.packageName);
+        },
+      },
+    );
+    expect(n).toBe(1);
+    // The committed root update stays; only the fresh dep is compensated.
+    expect(swept).toEqual(["@cinatra-ai/new-dep"]);
+    expect(swept).not.toContain(ROOT);
+  });
+});
+
 describe("installExtensionWithDependencies — #157 saga owns fan-out + single agent reload", () => {
   it("every member install runs INSIDE the saga-owned-fan-out context (agent handler installs root-only)", async () => {
     const h = makeHarness({

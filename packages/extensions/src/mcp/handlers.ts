@@ -266,15 +266,36 @@ export function createExtensionsPrimitiveHandlers() {
       // Dispatch + record the EXACT resolved version (see extensions_install).
       const dispatchVersion = resolution.resolvedVersion ?? input.packageVersion;
       try {
-        await extensionRegistry.update(
-          typeId,
-          {
-            registryUrl: "",
+        // #1039 Option B (update-time slice): on the dev/non-gatekept path route
+        // the update THROUGH the planner/batch (rootAction:'update') — mirroring
+        // extensions_install — so the new version's newly required dependencies
+        // auto-install DEPENDENCIES-FIRST, dependent-break checking is plan-aware,
+        // and a clean shared-dependency dedupe-upward executes as a committed
+        // update; the root is a COMMITTED in-place update member. The GATEKEPT
+        // path keeps the direct in-place update (its host-computed-set dedupe +
+        // durable-restore is the deferred Option A slice, #1296).
+        const { isGatekeptInstallEnabled } = await import("@/lib/gatekept-install");
+        if (isGatekeptInstallEnabled()) {
+          await extensionRegistry.update(
+            typeId,
+            {
+              registryUrl: "",
+              packageName: input.packageName,
+              version: dispatchVersion,
+            },
+            actor,
+          );
+        } else {
+          const { installExtensionWithDependencies } = await import(
+            "@/lib/extension-install-batch"
+          );
+          await installExtensionWithDependencies({
             packageName: input.packageName,
             version: dispatchVersion,
-          },
-          actor,
-        );
+            actor,
+            rootAction: "update",
+          });
+        }
       } catch (err) {
         // Connector model-B / hot-update: surface a `requires-rebuild`
         // outcome instead of throwing (see extensions_install).
