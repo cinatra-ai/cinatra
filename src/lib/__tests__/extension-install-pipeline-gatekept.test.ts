@@ -54,14 +54,15 @@ vi.mock("@/lib/extension-package-store", () => ({
   materializePackageToStore: h.materializePackageToStore,
 }));
 vi.mock("@/lib/extension-host-port-grants", () => ({
-  recordRequestedGrant: vi.fn(async () => {}),
-  approveGrant: vi.fn(async () => {}),
-  // The hot-UPDATE probe's exact-scope grant reader (makeDefaultInstallPipelineDeps
-  // wires it). A fresh gatekept install has no prior grant → null.
-  readGrantForScope: vi.fn(async () => null),
-  // Design B durable-rollback grant restorer (wired by makeDefaultInstallPipelineDeps);
-  // never invoked on a fresh gatekept install (no superseding update).
-  restoreGrant: vi.fn(async () => {}),
+  // The host-port grant lifecycle deps factory the pipeline wires (record/approve/
+  // read-scope/restore). No-op stubs: a fresh gatekept install requests no ports
+  // and has no prior grant → readGrantForScope null, the rest never observed here.
+  makeHostPortGrantInstallDeps: () => ({
+    recordRequestedGrant: vi.fn(async () => {}),
+    approveGrant: vi.fn(async () => {}),
+    readGrantForScope: vi.fn(async () => null),
+    restoreGrant: vi.fn(async () => {}),
+  }),
   // The manifest requestedHostPorts reader (the pipeline's readRequestedPorts
   // default) — no ports requested in these fixtures.
   readRequestedHostPortsFromStore: vi.fn(async () => []),
