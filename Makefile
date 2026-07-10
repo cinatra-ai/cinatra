@@ -1,8 +1,16 @@
-.PHONY: setup refresh dev down reset reset-full logs clean check
+.PHONY: setup setup-demo refresh dev down reset reset-full logs clean check
 
 # First-time setup: install deps, start infra, configure app.
 setup:
 	bash scripts/setup.sh
+
+# Demo install (cinatra#1238): a strict SUPERSET of `make setup` — development
+# runtime + the demo install profile. Brings up the four bundled app profiles
+# (wordpress, drupal, twenty, plane), forces the sample seed, and activates the
+# demo dev-fixtures + the lazy monolithic ACME seed (fires at boot once the
+# first human admin registers). Equivalent to `MODE=demo bash scripts/setup.sh`.
+setup-demo:
+	MODE=demo bash scripts/setup.sh
 
 # Update an existing checkout: after `git pull`, reconcile dependencies and the
 # dev database schema to the code on disk. Dev-only; never touches git.

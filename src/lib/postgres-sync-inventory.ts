@@ -124,6 +124,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Reads the single `instance_identity` metadata row (instance namespace + encrypted Verdaccio credentials). Boot/provisioning state, not a per-request hot path.",
   },
+  "src/lib/demo-seed-runner.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Demo-mode one-shot seed gate (#1238): reads admin-existence + claims the monolithic demo seed via an ON-CONFLICT metadata write (the exactly-once guarantee is the ON-CONFLICT SQL, not sync execution). Runs only on the boot phase in the demo install profile (isDemoProfile), never on a per-request path; kept on the sync bridge because it executes in the synchronous boot phase.",
+  },
   "src/lib/dev-auto-setup.ts": {
     class: "migratable-background-setup",
     justification:

@@ -339,6 +339,23 @@ export type PlanDependencyInstallInput = {
   orgId: string | null;
   /** The marketplace authorize closure (gatekept) — null on the dev path. */
   closure: DependencyClosurePin[] | null;
+  /**
+   * How the saga realizes the ROOT member (#1039 Option B, update-time slice).
+   *  - `"install"` (default): a FRESH root install — the root is exempt from
+   *    the installed-version conflict check (installing over an existing root is
+   *    the caller's chosen update flow) and installs LAST as a fresh member.
+   *  - `"update"`: the caller (`updateExtensionPackage` / `extensions_update` on
+   *    the dev/non-gatekept path) is UPDATING an already-installed root in place.
+   *    The root member is emitted as a COMMITTED `action:"update"` (routed
+   *    through the durable update pipeline), while the NEW version's newly
+   *    required dependencies auto-install as fresh members FIRST (dependencies-
+   *    first) and a clean shared-dependency dedupe-upward executes as its own
+   *    committed update. Honored ONLY on the non-gatekept path (`closure ===
+   *    null`); the gatekept update path is the deferred durable-restore slice
+   *    (#1296) and keeps the direct in-place update, so the root stays
+   *    `action:"install"` there and is never routed through this planner.
+   */
+  rootAction?: "install" | "update";
 };
 
 /**
@@ -349,7 +366,7 @@ export async function planDependencyInstall(
   input: PlanDependencyInstallInput,
   deps: DependencyPlanDeps,
 ): Promise<DependencyInstallPlan> {
-  const { root, orgId, closure } = input;
+  const { root, orgId, closure, rootAction = "install" } = input;
   const source = closure ? ("marketplace-closure" as const) : ("manifest-walk" as const);
   const closureByName = new Map((closure ?? []).map((c) => [c.name, c]));
   const installedRows = await deps.readInstalledRows();
@@ -467,11 +484,23 @@ export async function planDependencyInstall(
     requestedBy: { from: string; edge: ExtensionDependency } | null,
   ): PlannedMember {
     // 2. Installed check (item 7): same version → skip member; different →
-    //    conflict CLASSIFICATION. The ROOT is exempt (installing over an
-    //    existing root is the update flow the caller chose).
+    //    conflict CLASSIFICATION. The ROOT is exempt from the conflict check
+    //    (installing/updating over an existing root is the flow the caller
+    //    chose) — but on an UPDATE it is realized as a COMMITTED in-place
+    //    update member (#1039 Option B update-time slice), routed through the
+    //    durable update pipeline instead of a fresh install.
     let alreadyInstalled = false;
     let action: PlannedMember["action"] = "install";
-    if (packageName !== root.packageName) {
+    if (packageName === root.packageName) {
+      // #1039 Option B (update-time): the ROOT of an UPDATE is a committed
+      // `action:"update"` member on the non-gatekept path. A fresh install
+      // keeps `action:"install"`; the gatekept update path is the deferred
+      // durable-restore slice (#1296) and never reaches this planner, so the
+      // root there would (defensively) stay a fresh install.
+      if (rootAction === "update" && closure === null) {
+        action = "update";
+      }
+    } else {
       const row = findLiveRow(installedRows, packageName, orgId);
       const installedVersion =
         row?.source && (row.source as { version?: string }).version

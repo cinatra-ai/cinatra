@@ -53,7 +53,7 @@ export function isEnvFlagEnabled(value: string | undefined): boolean {
  * `isStrictDevelopmentRuntime`): development mode AND not a production Node env.
  * Fixtures never seed outside this — prod never gets demo/dev fixtures.
  */
-function isStrictDevelopmentRuntime(env: Record<string, string | undefined> = process.env): boolean {
+export function isStrictDevelopmentRuntime(env: Record<string, string | undefined> = process.env): boolean {
   return env.CINATRA_RUNTIME_MODE === "development" && env.NODE_ENV !== "production";
 }
 
@@ -69,4 +69,34 @@ function isStrictDevelopmentRuntime(env: Record<string, string | undefined> = pr
 export function shouldSeedDevFixtures(env: Record<string, string | undefined> = process.env): boolean {
   if (!isStrictDevelopmentRuntime(env)) return false;
   return isDemoProfile(env) || isEnvFlagEnabled(env.CINATRA_DEV_FIXTURES);
+}
+
+/**
+ * The pending-demo-seed decision (`cinatra install demo`, cinatra#1238 item 3).
+ *
+ * The monolithic `scripts/seed.mjs` demo dataset (ACME Group) INTENTIONALLY
+ * no-ops until a HUMAN platform admin exists — it must never fabricate/promote
+ * a machine admin, because the one-shot first-human admin slot belongs to the
+ * first real registrant (cinatra#1135). So a demo install cannot seed the
+ * monolithic dataset synchronously at setup time on a fresh DB (no admin yet).
+ *
+ * Instead the demo overlay seeds it LAZILY: on each strict-dev demo boot, once a
+ * human admin has registered AND the one-shot has not already run, the seed
+ * fires exactly once and a durable sentinel is recorded so it never re-runs.
+ * This function is that pure gate (no IO) — the boot runner supplies the two
+ * runtime facts (`humanAdminExists`, `alreadySeeded`) it reads from the DB.
+ *
+ * ALL of:
+ *   - install profile is `demo` (`CINATRA_INSTALL_PROFILE=demo`),
+ *   - strict development runtime (never prod, never a plain dev instance),
+ *   - a human platform admin now exists (the seed's own precondition), and
+ *   - the one-shot demo seed has not already completed.
+ */
+export function shouldRunDemoSeed(
+  facts: { humanAdminExists: boolean; alreadySeeded: boolean },
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (!isStrictDevelopmentRuntime(env)) return false;
+  if (!isDemoProfile(env)) return false;
+  return facts.humanAdminExists && !facts.alreadySeeded;
 }
