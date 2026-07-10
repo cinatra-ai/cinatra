@@ -2305,25 +2305,11 @@ export async function updateAgentRunAuthPolicy(
     .where(eq(agentRuns.id, id));
 }
 
-/**
- * `afterPolicyWrite` dual-write (admin-parity P4, cinatra#1129) mirroring a
- * generic-surface agent_template policy edit into the legacy
- * `agent_templates.agent_auth_policy` column that
- * `enforceRunAccess` → `resolveEffectivePolicy` reads (the generic Permissions
- * layer only writes the polymorphic table). Metadata-only — skips the lock.
- */
-export async function updateAgentTemplateAuthPolicy(
-  id: string,
-  policy: AgentAuthPolicy | null,
-): Promise<void> {
-  await db
-    .update(agentTemplates)
-    .set({
-      agentAuthPolicy: policy ? JSON.stringify(policy) : null,
-      updatedAt: new Date(),
-    })
-    .where(eq(agentTemplates.id, id));
-}
+// `updateAgentTemplateAuthPolicy` (admin-parity P4 dual-write, cinatra#1129) is
+// a vertical-slice extraction into ./store-agent-template-policy to keep this
+// hub under the file-size ratchet ceiling; re-exported here so
+// `@cinatra-ai/agents/store` consumers are unchanged.
+export { updateAgentTemplateAuthPolicy } from "./store-agent-template-policy";
 
 // ---------------------------------------------------------------------------
 // run_co_owners DAO. addRunCoOwner uses ON CONFLICT DO NOTHING
