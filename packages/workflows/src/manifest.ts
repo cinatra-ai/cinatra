@@ -84,7 +84,12 @@ export function validateWorkflowExtensionPackage(pkg: {
   // validated fail-closed by the agent-bindings generator
   // (mergeRoleDeclarations in scripts/extensions/agent-binding-kinds.mjs), so
   // this validator only needs to permit the key.
-  const allowed = new Set(["kind", "apiVersion", "workflowVersion", "dependencies", "roles"]);
+  // `displayName` is the platform-standard human-name key used across ALL kinds:
+  // the extension-manifest generator resolves `cinatra.displayName` (resolveDisplayName
+  // in scripts/extensions/generate-extension-manifest.mjs) into the card identity, and
+  // the SDK manifest types it (`displayName?: string`). A workflow package may declare
+  // it like any other kind — permit it, not unexpected drift.
+  const allowed = new Set(["kind", "apiVersion", "workflowVersion", "dependencies", "roles", "displayName"]);
   for (const k of Object.keys(cinatra)) {
     if (!allowed.has(k)) errors.push(`unexpected cinatra key "${k}"`);
   }

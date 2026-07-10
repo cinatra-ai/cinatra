@@ -70,6 +70,14 @@ export default defineConfig({
       // vitest. The stub provides the same public surface for type-level
       // imports; behaviour tests should vi.mock locally.
       "@/lib/object-history": path.join(__dirname, "src/__tests__/__stubs__/object-history.ts"),
+      // PURE OBO scope-ceiling subpath (W2/#1051) — resolve to the REAL source
+      // (no server-only / no heavy deps) so the ceiling logic is exercised, not
+      // stubbed. MUST precede the general `@cinatra-ai/mcp-server` stub alias
+      // below (Vite matches in order; the stub is a single file, so a subpath
+      // falling through resolves to an invalid `mcp-server.ts/obo-ceiling`
+      // path). Reached transitively via the aliased
+      // `@/lib/authz/enforce-resource-access` the objects handlers import.
+      "@cinatra-ai/mcp-server/obo-ceiling": path.join(root, "packages/mcp-server/src/obo-ceiling.ts"),
       // Alias @cinatra-ai/mcp-server to a tiny stub so registry-orgid.test.ts
       // can import `mcpRequestContextStorage` without pulling in the real
       // next/navigation + better-auth entry point.
