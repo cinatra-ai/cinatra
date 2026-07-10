@@ -1,14 +1,13 @@
 import { eq, notInArray } from "drizzle-orm";
-// SQL-TEXT-ONLY driver (cinatra#104): the pg-proxy driver builds queries
-// without importing `pg`. Turbopack externalizes `pg` via dynamic `import()`
-// (esm_import), which would make this module — and every static importer up
-// to database.ts — an ASYNC module, breaking the codebase's synchronous
-// `require()` composition (see src/lib/postgres-config.ts). Code that needs
-// a REAL pg connection lives in src/lib/extension-destinations-store.ts.
-// Enforced by src/lib/__tests__/postgres-sync-leaf-imports.test.ts.
+// SQL-TEXT-ONLY driver (cinatra#104): pg-proxy builds queries WITHOUT importing
+// `pg`, so this module + every static importer up to database.ts stays SYNC (a `pg`
+// import goes async via Turbopack's dynamic import() and breaks the sync `require()`
+// composition — see postgres-config.ts; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
+
+import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
 
 type QueryInput = {
   text: string;
@@ -579,6 +578,7 @@ END $$` },
             CHECK (status IN ('pending', 'approved', 'revoked'));
         END IF;
       END $$;` },
+    ...capabilityOwnershipGrantSchemaQueries(schemaName), // capability-ownership grant (S0), additive
 
     // Runtime installer — snapshot leases. An in-flight run that imports
     // a digest-pinned package dir holds a lease so the GC reaper never deletes
@@ -1534,7 +1534,7 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS workflow_task_id text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_idempotency_key_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (idempotency_key) WHERE idempotency_key IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_workflow_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (workflow_id) WHERE workflow_id IS NOT NULL` },
-    // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0019.
+    // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
     // Delegated execution-actor snapshot.
@@ -2228,10 +2228,12 @@ $body$` },
     // authPolicy on agent_runs: per-run override (JSON-as-text; nullable = use template's agentAuthPolicy or DEFAULT_AGENT_AUTH_POLICY).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_auth_policy text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS auth_policy text` },
-    // agent_runs.org_id: org-scoping for run lists.
-    // Nullable; existing rows remain NULL (visible only to platform-admin
-    // cross-org reads via skipOrgFilter). No automatic backfill — document
-    // as admin task.
+    // Interaction axis (#1037 P1): agent_kind ('assistant'|'executor', default 'executor', ORTHOGONAL to `type`) + typed assistant_config sidecar; invariant CHECKs (assistant⇒config, executor⇒none). Shape + write-time twin in src/lib/assistant-config.ts; transformational half in migration core__0019.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'executor', ADD COLUMN IF NOT EXISTS assistant_config text` },
+    { text: `DO $$ BEGIN ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_check", `CHECK (agent_kind IN ('assistant', 'executor'))`)} ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_config_check", `CHECK ((agent_kind = 'assistant' AND assistant_config IS NOT NULL) OR (agent_kind = 'executor' AND assistant_config IS NULL))`)} END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_templates_agent_kind_idx ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (agent_kind)` },
+    // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
+    // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` },
     // agent_runs.project_id inheritance
@@ -2241,12 +2243,9 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS project_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (project_id, created_at DESC) WHERE project_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_project_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (project_id, status, created_at DESC) WHERE project_id IS NOT NULL` },
-    // agent_runs.org_id NOT NULL. Drops legacy NULL rows; no backfill.
-    // PoC mode (no production data preservation). Idempotent: DELETE matches zero
-    // rows on subsequent boots once the column is NOT NULL, and ALTER on an
-    // already-NOT-NULL column is a no-op in Postgres.
-    // Order matters: DELETE must precede ALTER — PG rejects SET NOT NULL on a
-    // column with NULL rows.
+    // agent_runs.org_id NOT NULL. Drops legacy NULL rows (PoC mode, no prod data
+    // preservation) then SET NOT NULL. Order matters (DELETE before ALTER — PG
+    // rejects SET NOT NULL with NULL rows) and both are idempotent no-ops after.
     { text: `DELETE FROM "${schemaName.replaceAll('"', '""')}"."agent_runs" WHERE org_id IS NULL` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ALTER COLUMN org_id SET NOT NULL` },
     // Backfill NULL package_name rows with deterministically-unique

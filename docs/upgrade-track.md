@@ -31,7 +31,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | Service / artifact | File | Current pin | Upstream major target | Notes |
 |---|---|---|---|---|
 | postgres (platform) | docker-compose.yml | `postgres:17-alpine` | postgres 18-alpine | platform DB; consolidation + defer per §3 |
-| nango-db | docker-compose.yml | `postgres:15-alpine` | postgres 18-alpine | Nango's own DB; the 17/15 spread to reconcile (§3) |
+| nango-db | docker-compose.yml | `postgres:17-alpine@sha256:979c…59ca` (was `15-alpine`; **consolidated + digest-pinned** — §3 rationale, applied §8) | postgres 18-alpine | now on the platform Postgres major; the 17/15 spread reconciled |
 | twenty-db | docker-compose.yml | `postgres:16` | follows Twenty upstream | profile `twenty`; upstream-dictated major, not ours |
 | plane-db | docker-compose.yml | `postgres:15.7-alpine` | follows Plane upstream | profile `plane`; upstream-dictated, track don't lead |
 | redis (platform) | docker-compose.yml | `redis:7-alpine` | redis 8-alpine | major deferred to its own lane |
@@ -39,7 +39,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | plane-redis | docker-compose.yml | `valkey/valkey:7.2.11-alpine` | valkey 8 | profile `plane`; Plane-dictated |
 | neo4j | docker-compose.yml | `neo4j:2026.05-community@sha256:b91a…9604` (was `5.26-community`, **major applied** — §7) | at target (CalVer latest) | graphiti-coupled; CalVer line is the 5.x semver successor |
 | graphiti | docker-compose.yml | `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0…c4d6` (digest-pinned this pass — §7) | **no next major published** (repo tops out at this tag) | neo4j-coupled; held at current release (only change is the immutable pin) |
-| verdaccio | docker-compose.yml | `verdaccio/verdaccio:6` | verdaccio 6.x (no major offered) | dev registry; ephemeral storage |
+| verdaccio | docker-compose.yml | `verdaccio/verdaccio:6@sha256:e3ac…3575` (was floating `:6`, **pinned this pass** — §8) | verdaccio 6.7.4 (latest stable; no newer major offered) | dev registry; ephemeral storage |
 | nango-server | docker-compose.yml | digest-pinned `nangohq/nango-server:hosted@sha256:…` (was floating, pinned this pass — §2) | Renovate-tracked | the headline drift this pass closes |
 | wordpress-db (mariadb) | docker-compose.yml | `mariadb:11.4` | mariadb 11.8 then mariadb 12.3 | profile `wordpress` |
 | drupal-db (mariadb) | docker-compose.yml | `mariadb:11.4` | mariadb 11.8 then mariadb 12.3 | profile `drupal` |
@@ -221,7 +221,10 @@ Image / runtime majors offered: postgres 18, redis 8, valkey 8, mariadb 12,
 wordpress 7 (plus 6.9), php 8.5, python 3.14, tailscale 1.98 (held — see §1),
 rabbitmq 4. npm / toolchain majors offered: ESLint 10, Next 16.x (the
 `eslint-config-next` + `next` pair), the React monorepo, `@opentelemetry/*` 2
-(deferred per the overrides note), `cron-parser` 5, `pdfjs-dist` 6,
+(deferred per the overrides note), **`typescript` 7 (the native/Go compiler GA'd
+2026-07-09 as `typescript@7`; see §8 — the `@typescript/native-preview` package
+that previewed it stays a dev/nightly channel, excluded from the bar, and is
+obsoleted by adopting the stable GA)**, `cron-parser` 5, `pdfjs-dist` 6,
 `react-day-picker` 10, `github/codeql-action` 4, pnpm 11.6.
 
 This pass only **inventories** these; each is taken on in its own staged
@@ -424,3 +427,98 @@ Graphiti is **derived state** (rebuildable): it owns no durable store of its own
 is no graphiti backup/RPO concern; a graphiti rollback is just reverting the
 digest pin. When a knowledge-graph-mcp major **is** published, it re-enters this
 lane (re-pair with the Neo4j pin, re-run the works-after round-trip).
+
+---
+
+## 8. Refresh 2026-07-10 — TypeScript 7 GA + verdaccio pin + nango-db consolidation
+
+A re-grounding of §1/§5 against the live `main` compose and the npm registry.
+Two things moved since the ground date (§2 nango-db bump had also landed since
+first pass); this section is the delta, the earlier sections stay as the
+first-pass record.
+
+### 8.1 TypeScript 7 went GA (the second true in-scope stack major)
+
+**TypeScript 7.0 — the native (Go/"tsgo") compiler rewrite — reached GA
+(announced 2026-07-08/09), shipping as the mainstream `typescript` package.**
+Grounded on the npm registry observed 2026-07-10: the `latest` dist-tag is now
+`typescript@7.0.2` (with `beta = 6.0.0-beta`, `rc = 7.0.1-rc`, `next = 7.1.x-dev`
+— i.e. `7.0.2` is the stable line, not a prerelease). The
+repo pins `typescript: "^6.0.3"`, which resolves to the top of the `6.x` line
+(`6.0.3`), so **`typescript` is now one stable major behind (6 → 7.0.2)** — a
+real, offered stack major where it previously was not (the first-pass inventory
+correctly excluded it because no stable 7.x existed yet; the native compiler was
+still preview-only).
+
+- **Bar** (latest stable): `typescript@7.0.2` — latest stable major AND latest
+  in-major patch.
+- **This is the second true in-scope stack major**, alongside `@opentelemetry/*`
+  `1.x → 2.x` (cinatra#673). Every other coupled stack group remains at its
+  latest stable major (in-range minor/patch currency only).
+- **Coupled group + upstream gate.** The stack-major lane couples `typescript`
+  with `@typescript-eslint` and the `eslint-config-next` / `next` toolchain that
+  type-checks against it. **This lane is currently upstream-blocked: no
+  `@typescript-eslint` release supports TS 7 yet.** The latest
+  `@typescript-eslint/parser` (`8.63.0`, also the version locked here) peers
+  `typescript: ">=4.8.4 <6.1.0"` — it caps at TS 6.0 and refuses TS 7. So TS 7
+  is recorded as an **offered-but-gated** major (same shape as the ESLint-10
+  gate in §4.5): the lane records the target and waits for a TS-7-aware
+  typescript-eslint line, then runs the hop with its coupled group at each
+  member's latest stable through the works-after / named-SHA CI gate. (TS 7 also
+  drops the in-process compiler API surface, so any tooling that imports
+  `typescript` programmatically is re-checked in the lane.)
+- **`@typescript/native-preview` was the PRE-GA preview of this same native
+  compiler — not a separate product.** Now that the native compiler has GA'd as
+  `typescript@7`, that preview package continues only as a **dev/nightly
+  channel** (npm `latest` `7.0.0-dev.20260707.2`, `beta 7.0.0-dev.20260421.2` —
+  no stable dist-tag). Under the latest-stable bar the currency target is
+  therefore **stable `typescript@7.0.2`**, and the `-dev` native-preview channel
+  stays **excluded as a prerelease** (you track the GA'd stable line, not the
+  nightly). **Obsolete-on-upgrade:** adopting stable `typescript@7` makes the
+  separate `@typescript/native-preview` devDependency redundant (the GA
+  supersedes the preview of the same compiler), so the TS 7 lane should DROP it
+  — a workaround retired by this major, tracked here per the cross-cutting
+  obsolete-on-upgrade check.
+
+Obsolete-on-upgrade note for the TS 7 lane: also re-check the ESLint-10
+react-version workaround in `eslint.config.mjs` (§4.5) — the `eslint-plugin-react`
+/ `@typescript-eslint` versions the TS 7 bump drags may change whether that
+hard-set `settings.react.version` string is still required.
+
+### 8.2 verdaccio `:6` — floating tag pinned to a digest (applied this refresh)
+
+The first pass recorded verdaccio as the one remaining safe-to-pin-in-place
+float (dev registry, ephemeral storage) but left the target recorded. This
+refresh **applies the pin**: `verdaccio/verdaccio:6` was a floating major tag
+that moved on every pull; it is now pinned to the confirmed multi-arch
+(amd64/arm64) OCI **index** digest in `docker-compose.yml`:
+
+```
+image: verdaccio/verdaccio:6@sha256:e3ac7e335e69504cd0b09616aa52066399868282313c34762d2a77b8169a3575
+```
+
+Resolved empirically (`docker buildx imagetools inspect verdaccio/verdaccio:6`,
+2026-07-10): an `application/vnd.oci.image.index.v1+json` index carrying
+`linux/amd64` + `linux/arm64` manifests, so the digest pin carries **no**
+cross-architecture portability cost (same reasoning as the Nango §2 and Neo4j
+§7.1 rows). `:6` is kept for human readability; the `@sha256` is the binding
+pin. `verdaccio 6.7.4` is the latest stable line and no newer major is offered,
+so this is a currency-complete pin, not a held target. Re-resolve the digest at
+bump time with the `imagetools inspect` command above.
+
+The broader compose still carries floats in the **bundled demo apps** — the
+Plane profile's `minio:…latest` and `makeplane/plane-*:${PLANE_TAG:-stable}`,
+and the Twenty tag via `${TWENTY_TAG}`. Those are upstream-dictated,
+profile-gated demo images (§1) and are out of the platform env-app pin-drift
+scope; they are flagged here (and in §1) for a demo-app pin pass, not pinned as
+part of the platform inventory.
+
+### 8.3 nango-db consolidation reflected in §1
+
+The first-pass §1/§3 recorded `nango-db` at `postgres:15-alpine` with the 17/15
+spread to reconcile. That reconciliation has since landed: live `main` pins
+`nango-db` at `postgres:17-alpine@sha256:979c…59ca` (consolidated onto the
+platform Postgres major AND digest-pinned to a confirmed multi-arch manifest).
+The §1 row is updated to match; §3's rationale stays as the first-pass record.
+The platform Postgres **18** major itself remains deferred to its own staged
+upgrade lane (data-migration-bearing; `pg_upgrade`/dump-restore), unchanged.

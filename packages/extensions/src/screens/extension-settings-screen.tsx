@@ -166,12 +166,12 @@ export async function ExtensionSettingsScreen({
     );
     const effective = stored ?? DEFAULT_EXTENSION_ACCESS_POLICY;
     const allowRunSharing = effective.allowRunSharing;
-    async function saveAccess(next: string): Promise<{ ok: boolean; error?: string }> {
+    async function saveAccess(next: string[]): Promise<{ ok: boolean; error?: string }> {
       "use server";
-      // Multi-scope W1 (#1069): each run-access field holds a NON-EMPTY array of
-      // visibility tokens. The single-select install-scope picker yields one
-      // token; normalize it to the canonical array form before the write.
-      const selection = normalizeVisibilitySelection([next as AgentAuthPolicyVisibility]);
+      // Multi-scope W3 (#1069/#1072): each run-access field holds a NON-EMPTY
+      // array of visibility tokens. The checkbox multi-select picker yields the
+      // full token array; normalize it to the canonical form before the write.
+      const selection = normalizeVisibilitySelection(next as AgentAuthPolicyVisibility[]);
       const result = await saveExtensionAccessPolicy(extKind, resourceId, {
         runListVisibility: selection,
         runDataVisibility: selection,
@@ -182,7 +182,7 @@ export async function ExtensionSettingsScreen({
     }
     permissions = (
       <ExtensionAccessControl
-        initialValue={effective.runListVisibility[0]}
+        initialValue={effective.runListVisibility}
         scopes={scopes}
         save={saveAccess}
       />

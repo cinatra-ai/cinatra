@@ -34,7 +34,7 @@ const q = (s: string) => s.replaceAll('"', '""');
 beforeAll(async () => {
   if (!hasDb) return;
   // Defensive: ensure the run-token column + partial unique index exist
-  // (mirrors src/lib/drizzle-store.ts + core__0019; idempotent).
+  // (mirrors src/lib/drizzle-store.ts + core__0020; idempotent).
   const c = new Client({ connectionString: dbUrl });
   await c.connect();
   await c.query(`ALTER TABLE "${q(SCHEMA)}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text`);

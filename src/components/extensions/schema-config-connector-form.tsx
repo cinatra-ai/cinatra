@@ -15,8 +15,20 @@
 // are filtered against the HOST-evaluated `isAdmin` prop (the host re-rejects an
 // admin-only value at the write handler — defense in depth).
 
-import { useCallback, useEffect, useState } from "react";
-import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckIcon, CopyIcon, PlugZap, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import { toast } from "@/lib/cinatra-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Field,
   FieldContent,
@@ -47,6 +59,7 @@ import { Switch } from "@/components/ui/switch";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
+  NamedActionField,
   SchemaConfigField,
   SchemaConfigSurface,
   TextField,
@@ -54,7 +67,6 @@ import type {
   SelectField,
   RecordListField,
   RecordListBadgeVariant,
-  BannerField,
   BannerTone,
   AdvisoryField,
   DynamicSelectOptionsField,
@@ -77,6 +89,25 @@ export type SchemaConfigConnectorFormProps = {
   initialValues?: Record<string, string>;
   /** Optional override for the Nango connect handler (default: host nango flow). */
   onConnect?: (providerConfigKey: string) => void;
+  /**
+   * Field kinds the host renders ELSEWHERE and therefore wants suppressed from
+   * the form column. The Model-A setup page (design/specs/app-connectors.html
+   * §II) lifts the connector's `status-probe` into the right-column
+   * `ConnectionStatusCard`, so it passes `omitFieldKinds={["status-probe"]}` to
+   * stop the same probe rendering twice. Filtering is generic and applies to
+   * both the flat fields and every tab panel; a suppressed kind carries no form
+   * input, so `collectFormInputs()` submission is unaffected.
+   */
+  omitFieldKinds?: SchemaConfigField["kind"][];
+  /**
+   * The connector's initial connected state (host readiness — the resolved
+   * status-probe signal, the SAME `resolveConnectorBadgeState` seed the
+   * right-column status card reads). Seeds the canonical Connect / Disconnect
+   * pair: Disconnect is disabled until connected (design §II item 8). A
+   * successful `role:"connect"` action flips it true; `role:"disconnect"` flips
+   * it false. Absent → treated as not connected.
+   */
+  initialConnected?: boolean;
 };
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
@@ -104,6 +135,37 @@ function bannerNameFromResult(result: unknown): string | null {
   return null;
 }
 
+// A schema-declared banner tone → the cinatraToast variant it toasts as. The
+// schema-declared banner variants are the STATIC toast messages an action result
+// surfaces (cinatra#1109): a `{ banner: "<name>" }` result toasts that variant's
+// message instead of rendering an in-form Alert.
+const TONE_TO_TOAST: Record<BannerTone, "success" | "error" | "warning" | "info" | "message"> = {
+  default: "message",
+  destructive: "error",
+  warning: "warning",
+  success: "success",
+  info: "info",
+};
+
+type BannerVariantEntry = { tone: BannerTone; message: string };
+
+/** Flatten every schema-declared banner field's variants (base fields + tabs)
+ *  into a name → {tone,message} lookup, so an action result's `{banner}` name
+ *  resolves to the STATIC message to toast. */
+function collectBannerVariants(surface: SchemaConfigSurface): Record<string, BannerVariantEntry> {
+  const out: Record<string, BannerVariantEntry> = {};
+  const scan = (fields: SchemaConfigField[]) => {
+    for (const field of fields) {
+      if (field.kind === "banner") {
+        for (const v of field.variants) out[v.name] = { tone: v.tone, message: v.message };
+      }
+    }
+  };
+  scan(surface.fields);
+  for (const tab of surface.tabs ?? []) scan(tab.fields);
+  return out;
+}
+
 // The reserved value of the base "Setup" tab. A leading underscore can never be
 // a connector tab id (the schema-config KEY_RE requires a leading letter), so
 // this never collides with a declared tab.
@@ -116,45 +178,94 @@ export function SchemaConfigConnectorForm({
   isAdmin = false,
   initialValues = {},
   onConnect,
+  omitFieldKinds,
+  initialConnected = false,
 }: SchemaConfigConnectorFormProps) {
+  // Kinds the host suppresses from the form column (Model-A lifts `status-probe`
+  // into the right-column status card). A Set for O(1) membership; empty/absent
+  // omits nothing.
+  const omit = omitFieldKinds && omitFieldKinds.length > 0 ? new Set(omitFieldKinds) : null;
   // Shared form-level state driven by action RESULTS:
-  //  - `bannerName`: the active banner variant name (a create/delete result sets it).
   //  - `listEpoch`: bumped to force every record-list to re-fetch after a write.
-  const [bannerName, setBannerName] = useState<string | null>(null);
+  // Action OUTCOMES (the form-level banner variant + per-row Done/error) now
+  // TOAST (cinatra#1109) instead of rendering an in-form Alert. Content-LOAD
+  // failures (record-list / dynamic-select fetches) stay inline — they are a
+  // persistent "couldn't load" state, not a one-shot action result.
   const [listEpoch, setListEpoch] = useState(0);
+  // Live connected state driving the canonical Connect / Disconnect pair.
+  // Seeded from the host readiness signal; a successful role action mutates it.
+  const [connected, setConnected] = useState<boolean>(initialConnected);
+  const bannerVariants = useMemo(() => collectBannerVariants(surface), [surface]);
 
-  const onActionResult = useCallback((result: ActionResult) => {
-    if (!result.ok) {
-      // An error result still surfaces a banner when an "error" variant exists.
-      setBannerName("error");
+  const onActionResult = useCallback(
+    (result: ActionResult) => {
+      if (!result.ok) {
+        // Prefer the schema-declared "error" banner variant's static message;
+        // otherwise toast the action's own error text.
+        const v = bannerVariants["error"];
+        if (v) toast[TONE_TO_TOAST[v.tone]](v.message);
+        else toast.error(result.error ?? "Action failed.");
+        setListEpoch((e) => e + 1);
+        return;
+      }
+      // A `{ banner: "<name>" }` result toasts that variant's static message;
+      // otherwise a generic success confirmation.
+      const name = bannerNameFromResult(result.result);
+      const v = name ? bannerVariants[name] : undefined;
+      if (v) toast[TONE_TO_TOAST[v.tone]](v.message);
+      else toast.success("Done.");
+      // Any successful write may have changed the underlying rows — refresh lists.
       setListEpoch((e) => e + 1);
-      return;
-    }
-    const name = bannerNameFromResult(result.result);
-    if (name) setBannerName(name);
-    // Any successful write may have changed the underlying rows — refresh lists.
-    setListEpoch((e) => e + 1);
-  }, []);
+    },
+    [bannerVariants],
+  );
 
   // One field group — shared by the flat form and by each tab panel. Field
   // `key`s are globally unique (parser invariant), so row keys never collide.
-  const renderGroup = (fields: SchemaConfigField[]) => (
-    <FieldGroup>
-      {fields.map((field, i) => (
-        <SchemaConfigFieldRow
-          key={fieldKey(field, i)}
-          field={field}
-          installId={installId}
-          isAdmin={isAdmin}
-          initialValues={initialValues}
-          onConnect={onConnect}
-          bannerName={bannerName}
-          listEpoch={listEpoch}
-          onActionResult={onActionResult}
-        />
-      ))}
-    </FieldGroup>
-  );
+  //
+  // Canonical connection actions (design §II items 7/8/15/16): any `named-action`
+  // carrying a `role` ("connect"/"disconnect") is LIFTED out of the normal
+  // one-row-per-field flow and rendered together as ONE side-by-side
+  // `ConnectionActionsRow`, at the slot of the FIRST role action. Role-less named
+  // actions (e.g. the openai "Save skills administration") render unchanged.
+  const renderGroup = (fields: SchemaConfigField[]) => {
+    const shown = omit ? fields.filter((f) => !omit.has(f.kind)) : fields;
+    const roleActions = shown.filter(
+      (f): f is NamedActionField => f.kind === "named-action" && !!f.role,
+    );
+    const firstRoleIdx = shown.findIndex((f) => f.kind === "named-action" && !!f.role);
+    return (
+      <FieldGroup>
+        {shown.map((field, i) => {
+          if (field.kind === "named-action" && field.role) {
+            // Render the whole connection-actions row ONCE, at the first role slot.
+            return i === firstRoleIdx ? (
+              <ConnectionActionsRow
+                key="__connection-actions"
+                actions={roleActions}
+                installId={installId}
+                connected={connected}
+                setConnected={setConnected}
+                onActionResult={onActionResult}
+              />
+            ) : null;
+          }
+          return (
+            <SchemaConfigFieldRow
+              key={fieldKey(field, i)}
+              field={field}
+              installId={installId}
+              isAdmin={isAdmin}
+              initialValues={initialValues}
+              onConnect={onConnect}
+              listEpoch={listEpoch}
+              onActionResult={onActionResult}
+            />
+          );
+        })}
+      </FieldGroup>
+    );
+  };
 
   const hasTabs = !!surface.tabs && surface.tabs.length > 0;
 
@@ -212,7 +323,6 @@ function SchemaConfigFieldRow({
   isAdmin,
   initialValues,
   onConnect,
-  bannerName,
   listEpoch,
   onActionResult,
 }: {
@@ -221,7 +331,6 @@ function SchemaConfigFieldRow({
   isAdmin: boolean;
   initialValues: Record<string, string>;
   onConnect?: (providerConfigKey: string) => void;
-  bannerName: string | null;
   listEpoch: number;
   onActionResult: (result: ActionResult) => void;
 }) {
@@ -267,7 +376,9 @@ function SchemaConfigFieldRow({
     case "record-list":
       return <RecordListRow field={field} installId={installId} listEpoch={listEpoch} onActionResult={onActionResult} />;
     case "banner":
-      return <BannerRow field={field} activeName={bannerName} />;
+      // Schema-declared banner variants are surfaced as TOASTs when an action
+      // result selects one (see onActionResult), not as an in-form Alert.
+      return null;
     case "advisory":
       return <AdvisoryRow field={field} installId={installId} />;
     case "dynamic-select-options":
@@ -352,14 +463,13 @@ function NamedActionRow({
   onActionResult: (result: ActionResult) => void;
 }) {
   const [pending, setPending] = useState(false);
-  const [detail, setDetail] = useState<string | null>(null);
   const run = useCallback(async () => {
     if (field.confirm && !window.confirm(field.confirm)) return;
     setPending(true);
-    setDetail(null);
     const r = await invokeAction(installId, field.actionId, collectFormInputs());
     setPending(false);
-    setDetail(r.ok ? "Done." : r.error ?? "Action failed.");
+    // The outcome (Done. / error / schema-declared banner variant) TOASTs via
+    // onActionResult — no in-form "Done."/error text.
     onActionResult(r);
   }, [field.confirm, field.actionId, installId, onActionResult]);
   return (
@@ -369,9 +479,160 @@ function NamedActionRow({
         <Button type="button" onClick={run} disabled={pending}>
           {field.label}
         </Button>
-        {detail ? <FieldDescription>{detail}</FieldDescription> : field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+        {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       </FieldContent>
     </Field>
+  );
+}
+
+/**
+ * The canonical connection-actions row (design/specs/app-connectors.html §II,
+ * "One connection" — items 7/8/15/16). Renders the `role`-bearing named actions
+ * SIDE BY SIDE, never stacked: Connect (indigo primary, plug leadingIcon) on the
+ * left, Disconnect (destructive red, unplug leadingIcon) on the right. Disconnect
+ * is disabled until the connector is connected, and its confirmation is a neutral
+ * AlertDialog (never a bare prompt). The icons are the SAME PlugZap / Unplug the
+ * status badge + §I card grid use, so the whole surface speaks one status
+ * language (item 33).
+ */
+function ConnectionActionsRow({
+  actions,
+  installId,
+  connected,
+  setConnected,
+  onActionResult,
+}: {
+  actions: NamedActionField[];
+  installId: string;
+  connected: boolean;
+  setConnected: (v: boolean) => void;
+  onActionResult: (result: ActionResult) => void;
+}) {
+  // Canonical order is Connect then Disconnect regardless of declared order.
+  const connect = actions.find((a) => a.role === "connect");
+  const disconnect = actions.find((a) => a.role === "disconnect");
+  return (
+    <div data-testid="connection-actions" className="flex flex-wrap gap-2.5 pt-2">
+      {connect ? (
+        <ConnectButton
+          field={connect}
+          installId={installId}
+          onConnected={() => setConnected(true)}
+          onActionResult={onActionResult}
+        />
+      ) : null}
+      {disconnect ? (
+        <DisconnectButton
+          field={disconnect}
+          installId={installId}
+          connected={connected}
+          onDisconnected={() => setConnected(false)}
+          onActionResult={onActionResult}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Connect (role:"connect") — indigo primary + plug. Saves the form inputs. */
+function ConnectButton({
+  field,
+  installId,
+  onConnected,
+  onActionResult,
+}: {
+  field: NamedActionField;
+  installId: string;
+  onConnected: () => void;
+  onActionResult: (result: ActionResult) => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const run = useCallback(async () => {
+    setPending(true);
+    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    setPending(false);
+    if (r.ok) onConnected();
+    onActionResult(r);
+  }, [installId, field.actionId, onConnected, onActionResult]);
+  return (
+    <Button type="button" data-testid="connector-connect" onClick={run} disabled={pending}>
+      <PlugZap />
+      {field.label}
+    </Button>
+  );
+}
+
+/**
+ * Disconnect (role:"disconnect") — destructive red + unplug, disabled until
+ * connected. Its confirmation is a neutral AlertDialog (title "Disconnect
+ * connector?", connector-neutral body); `field.confirm` is intentionally NOT
+ * used (the dialog is the sole confirmation path, per the vocabulary precedence).
+ */
+function DisconnectButton({
+  field,
+  installId,
+  connected,
+  onDisconnected,
+  onActionResult,
+}: {
+  field: NamedActionField;
+  installId: string;
+  connected: boolean;
+  onDisconnected: () => void;
+  onActionResult: (result: ActionResult) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const confirm = useCallback(async () => {
+    setPending(true);
+    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    setPending(false);
+    setOpen(false);
+    if (r.ok) onDisconnected();
+    onActionResult(r);
+  }, [installId, field.actionId, onDisconnected, onActionResult]);
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      {/* asChild trigger (not a bare Button) so Radix owns the trigger ref and
+          restores focus to it on Cancel/close — a plain controlled Button leaves
+          focus on <body>. `disabled` gates opening until connected. */}
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="destructive"
+          data-testid="connector-disconnect"
+          disabled={!connected}
+        >
+          <Unplug />
+          {field.label}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Disconnect connector?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Disconnect this connector and remove its saved configuration? It will stop working
+            until you connect it again.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            data-testid="connector-disconnect-confirm"
+            disabled={pending}
+            onClick={(e) => {
+              // Keep the dialog mounted through the async action; we close it
+              // ourselves in `confirm` once the request resolves.
+              e.preventDefault();
+              void confirm();
+            }}
+          >
+            <Unplug />
+            {field.label}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -647,17 +908,6 @@ const BANNER_TONE_TO_VARIANT: Record<BannerTone, React.ComponentProps<typeof Ale
   success: "success",
   info: "info",
 };
-
-function BannerRow({ field, activeName }: { field: BannerField; activeName: string | null }) {
-  const variant = activeName ? field.variants.find((v) => v.name === activeName) : undefined;
-  if (!variant) return null;
-  return (
-    <Alert data-testid="schema-config-banner" variant={BANNER_TONE_TO_VARIANT[variant.tone]}>
-      <AlertTitle>{field.label}</AlertTitle>
-      <AlertDescription>{variant.message}</AlertDescription>
-    </Alert>
-  );
-}
 
 function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: string }) {
   const [ready, setReady] = useState<boolean | null>(null);

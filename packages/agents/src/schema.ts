@@ -273,7 +273,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // explicit column whitelist, so a resumed/cloned/child run never inherits a
   // parent's hash. Set only by the dispatcher (setAgentRunTokenHash) before the
   // blocking sendTask. Unique per run via the partial index below.
-  // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0019
+  // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0020
   //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
   runTokenHash: text("run_token_hash"),
 }, (t) => ({

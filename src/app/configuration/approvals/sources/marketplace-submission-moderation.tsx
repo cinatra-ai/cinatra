@@ -8,20 +8,17 @@ import type { MarketplaceAdminSubmission } from "@cinatra-ai/marketplace-mcp-cli
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { decideMarketplaceSubmission } from "../marketplace-decision-helpers";
 import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { marketplaceSubmissionModerationContract } from "./marketplace-submission-moderation.contract";
 import {
   MARKETPLACE_GROUP,
   MARKETPLACE_SUBMISSION_MODERATION_SOURCE_ID,
   MARKETPLACE_SUBMISSIONS_ADMIN_HREF,
-  REMOTE_COUNT_CAP,
-  cappedCount,
-  guardedCount,
   guardedFetch,
   hasInstanceToken,
-  marketplaceAvailability,
   resolveInstanceToken,
   toRowEligibility,
 } from "./marketplace-shared";
-import type { ApprovalAction, ApprovalRow, ApprovalSource, SourceCounts } from "./types";
+import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
 
 // ---------------------------------------------------------------------------
 // Marketplace source #1 — extension-submission MODERATION (Inbox only).
@@ -75,15 +72,14 @@ function toRow(s: MarketplaceAdminSubmission): ApprovalRow {
 }
 
 export const marketplaceSubmissionModerationSource: ApprovalSource = {
-  id: SOURCE_ID,
+  // Light nav contract (id / availability / appliesTo / counts) — the SAME
+  // function references the nav registry consumes, so the sidebar badge and this
+  // page can never disagree (registry-parity.test.ts).
+  ...marketplaceSubmissionModerationContract,
   title: "Extension submissions",
   group: MARKETPLACE_GROUP,
 
   viewAllHref: (dir) => (dir === "inbox" ? MARKETPLACE_SUBMISSIONS_ADMIN_HREF : undefined),
-
-  availability: () => marketplaceAvailability(),
-
-  appliesTo: (viewer, direction) => viewer.isAdmin && direction === "inbox",
 
   // Per-direction credential gate — its own `MARKETPLACE_INSTANCE_TOKEN`.
   sectionConfigured: () => hasInstanceToken(),
@@ -99,18 +95,6 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
   async fetchMine() {
     // Inbox-only source; "Your requests" is served by the my-submissions source.
     return { availability: "ready", rows: [], actions: [] };
-  },
-
-  async counts(viewer): Promise<SourceCounts> {
-    const inbox = await guardedCount(viewer, resolveInstanceToken(), `${SOURCE_ID}:inbox`, async (token) => {
-      const client = createHttpMarketplaceMcpClient({ token });
-      const out = await client.extensionSubmissionListAdmin({
-        status: "pending",
-        limit: REMOTE_COUNT_CAP + 1,
-      });
-      return cappedCount(out.submissions.length);
-    });
-    return { inbox, mine: 0 };
   },
 
   rowRenderer(row: ApprovalRow) {

@@ -44,6 +44,71 @@ describe("parseSchemaConfig (the schema-config vocabulary)", () => {
     expect(parseSchemaConfig({ fields: [{ kind: "named-action", label: "A", actionId: "bad id!" }] }).ok).toBe(false);
   });
 
+  it("accepts an optional connection-action role on a named-action", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        { kind: "named-action", label: "Connect", actionId: "saveConnection", role: "connect" },
+        { kind: "named-action", label: "Disconnect", actionId: "clearConnection", role: "disconnect" },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const [c, d] = r.surface.fields;
+      expect(c.kind === "named-action" && c.role).toBe("connect");
+      expect(d.kind === "named-action" && d.role).toBe("disconnect");
+    }
+  });
+
+  it("a role-less named-action stays role-undefined (back-compat)", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "named-action", label: "Save", actionId: "saveSkillsSettings" }],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.surface.fields[0] as { role?: string }).role).toBeUndefined();
+  });
+
+  it("rejects a duplicate connection role across the surface (fail-closed)", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        { kind: "named-action", label: "Connect", actionId: "saveA", role: "connect" },
+        { kind: "named-action", label: "Connect again", actionId: "saveB", role: "connect" },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/role "connect" is declared 2 times/);
+  });
+
+  it("rejects connection roles split across a base field and a tab (must share one group)", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "named-action", label: "Connect", actionId: "saveConn", role: "connect" }],
+      tabs: [
+        {
+          id: "extra",
+          label: "Extra",
+          fields: [{ kind: "named-action", label: "Disconnect", actionId: "clearConn", role: "disconnect" }],
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/split across multiple tabs\/groups/);
+  });
+
+  it("rejects an out-of-allowlist named-action role (fail-closed)", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "named-action", label: "X", actionId: "doThing", role: "delete" }],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/"role" must be one of/);
+  });
+
+  it("still rejects an unknown key on a named-action (role does not widen the allowlist)", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "named-action", label: "X", actionId: "doThing", onClick: "evil()" }],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/unexpected key/);
+  });
+
   it("validates repeatable-list item fields (flat text/secret only)", () => {
     const nested = parseSchemaConfig({
       fields: [{ kind: "repeatable-list", key: "l", label: "L", itemFields: [{ kind: "repeatable-list", key: "n", label: "N", itemFields: [] }] }],

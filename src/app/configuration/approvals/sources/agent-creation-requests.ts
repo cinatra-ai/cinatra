@@ -5,8 +5,6 @@ import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
-import { readConnectorConfigFromDatabase } from "@/lib/database";
-import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
 import {
   listAgentCreationRequests,
   type AgentCreationRequestRow,
@@ -16,14 +14,16 @@ import {
 import { decideAgentCreationRequest } from "../decision-helpers";
 import { AGENT_SOURCE_ID } from "../resolve-active-view";
 import { AgentDecisionActions } from "../agent-decision-actions";
+import {
+  agentCreationRequestsContract,
+  viewerMayApproveOwn,
+} from "./agent-creation-requests.contract";
 import type {
   ApprovalEnvelope,
   ApprovalRow,
   ApprovalSource,
-  ApprovalViewer,
   Direction,
   FetchOpts,
-  SourceCounts,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -50,26 +50,6 @@ interface AgentRowRaw {
   /** CAS token captured at render — fed back on an inline decision. */
   snapshotHash: string;
   rejectionReason: string | null;
-}
-
-/** Mirror of the decide primitive's `connector_config.agent_creation.allowSelfApproval`
- *  read (canonical owner: the agent-creation-request MCP handler) so the Inbox
- *  self-inclusion matches when a self-approval would actually be permitted. */
-function isSelfApprovalAllowed(): boolean {
-  try {
-    const cfg = readConnectorConfigFromDatabase<{ allowSelfApproval?: boolean }>("agent_creation", {});
-    return cfg.allowSelfApproval === true;
-  } catch {
-    return false;
-  }
-}
-
-/** Whether `viewer` may clear their OWN proposal (single-admin exception, or the
- *  connector_config override). Matches the decide primitive's SoD guard. */
-async function viewerMayApproveOwn(viewer: ApprovalViewer): Promise<boolean> {
-  if (isSelfApprovalAllowed()) return true;
-  const otherAdmins = await countOtherPlatformAdmins(viewer.userId);
-  return otherAdmins === 0;
 }
 
 function toRow(r: AgentCreationRequestRow, isOwnRequest: boolean): ApprovalRow {
@@ -143,20 +123,11 @@ function readyEnvelope(rows: ApprovalRow[]): ApprovalEnvelope {
 }
 
 export const agentCreationRequestsSource: ApprovalSource = {
-  id: AGENT_SOURCE_ID,
+  // Light nav contract (id / availability / appliesTo / counts) — the SAME
+  // function references the nav registry consumes, so the sidebar badge and this
+  // page can never disagree (registry-parity.test.ts).
+  ...agentCreationRequestsContract,
   title: "Agent creation requests",
-
-  availability() {
-    // Local source — always exists for an org'd viewer (admins see Inbox+Mine,
-    // any author sees Mine). Per-direction visibility is handled by appliesTo.
-    return "ready";
-  },
-
-  appliesTo(viewer, direction) {
-    // Mine is available to any author; Inbox is admin-only (no admin fetch, no
-    // leak, for a non-admin) — decided WITHOUT a privileged fetch.
-    return direction === "mine" ? true : viewer.isAdmin;
-  },
 
   async fetchInbox(viewer): Promise<ApprovalEnvelope> {
     if (!viewer.isAdmin) return readyEnvelope([]);
@@ -178,23 +149,6 @@ export const agentCreationRequestsSource: ApprovalSource = {
     const all = listAgentCreationRequests({ orgId: viewer.orgId, authorId: viewer.userId, status: "all" });
     const selected = selectMineRows(all, opts?.status);
     return readyEnvelope(selected.map((r) => toRow(r, false)));
-  },
-
-  async counts(viewer): Promise<SourceCounts> {
-    // Ignores any history filter — always the actionable/in-flight count.
-    let inbox = 0;
-    if (viewer.isAdmin) {
-      const proposed = listAgentCreationRequests({ orgId: viewer.orgId, status: "proposed" });
-      const includeOwn =
-        proposed.some((r) => r.authorId === viewer.userId) && (await viewerMayApproveOwn(viewer));
-      inbox = proposed.filter((r) => r.authorId !== viewer.userId || includeOwn).length;
-    }
-    const mine = listAgentCreationRequests({
-      orgId: viewer.orgId,
-      authorId: viewer.userId,
-      status: "proposed",
-    }).length;
-    return { inbox, mine };
   },
 
   rowRenderer(row: ApprovalRow, ctx: { direction: Direction }) {

@@ -163,9 +163,10 @@ describe("resetRemoteRegistryAction — terminal states (denied/expired/error �
         status: "not_connected",
       });
 
-      // Redirect ends with &ok=requested-reset.
+      // Redirect ends with &net_ok=requested-reset (codes-only flash params are
+      // namespaced net_* so they never collide with the instance tab's ok/error).
       expect(url).not.toBeNull();
-      expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+      expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
     });
   }
 });
@@ -187,7 +188,7 @@ describe("resetRemoteRegistryAction — non-terminal states are no-ops", () => {
     expect(vi.mocked(deleteRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(url).not.toBeNull();
-    expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+    expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
   });
 
   it("no-ops when status is pending (operator must use cancel)", async () => {
@@ -203,7 +204,7 @@ describe("resetRemoteRegistryAction — non-terminal states are no-ops", () => {
     expect(vi.mocked(deleteRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(url).not.toBeNull();
-    expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+    expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
   });
 
   it("no-ops idempotently when status is not_connected", async () => {
@@ -218,7 +219,7 @@ describe("resetRemoteRegistryAction — non-terminal states are no-ops", () => {
     expect(vi.mocked(deleteRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(url).not.toBeNull();
-    expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+    expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
   });
 
   it("no-ops idempotently when remote slot is absent", async () => {
@@ -229,7 +230,7 @@ describe("resetRemoteRegistryAction — non-terminal states are no-ops", () => {
     expect(vi.mocked(deleteRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(url).not.toBeNull();
-    expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+    expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
   });
 });
 
@@ -303,7 +304,7 @@ describe("resetRemoteRegistryAction — Nango cleanup is idempotent", () => {
     });
 
     expect(url).not.toBeNull();
-    expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+    expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
 
     consoleWarnSpy.mockRestore();
   });
@@ -332,7 +333,7 @@ describe("resetRemoteRegistryAction — Nango cleanup is idempotent", () => {
     });
 
     expect(url).not.toBeNull();
-    expect(url!.endsWith("&ok=requested-reset")).toBe(true);
+    expect(url!.endsWith("&net_ok=requested-reset")).toBe(true);
 
     consoleWarnSpy.mockRestore();
   });

@@ -1,0 +1,111 @@
+name: toast-banner-gate (reusable)
+
+# cinatra#1213 (S13 / toast-notifications epic) AC3 — a reusable `workflow_call`
+# an INDIVIDUAL connector repo's own CI adopts to run the SAME toast-banner
+# conformance heuristic that core CI runs (the vitest guard
+# src/lib/__tests__/toast-banner-guard.test.ts), with NO per-repo copy of the
+# rule. Both the core guard and the standalone scanner this workflow invokes
+# import the single detector module scripts/audit/lib/toast-banner-detect.mjs,
+# so a connector's gate can never drift from core's.
+#
+# WHAT IT ENFORCES: fails the connector build when a searchParams-driven
+# conditional transient banner — a success/destructive <Alert> or a
+# flash-palette colored <div> gated on a transient-outcome query param — is
+# (re)introduced in the connector's source, instead of the canonical toast
+# layer (cinatraToast / useNotify / the <SearchParamToast> island in
+# @cinatra-ai/sdk-ui). An import ban cannot catch a JSX banner; this closes that
+# vector for the connector repos the epic migrated (S3–S12).
+#
+# Usage from a connector repo's own workflow:
+#
+#   jobs:
+#     toast-banner-gate:
+#       uses: cinatra-ai/cinatra/.github/workflows/toast-banner-gate-reusable.yml@<pinned-sha>
+#       with:
+#         ref: <same-pinned-sha>
+#
+# DOUBLE-PIN, per the workflow-pinning convention used elsewhere in this repo
+# (extension-ioc-gate.yml, extension-conformance-gate-reusable.yml): the
+# `uses:` ref and the `ref` input below MUST be the SAME cinatra commit, so the
+# scanner + its detector module are never pulled from mutable main.
+#
+# ORG-RULESET NOTE (not done here): making this a REQUIRED check in each
+# connector repo follows that repo's own branch protection (the
+# `github-org-rulesets-on-team` mechanism) — AC3 ships the reusable workflow and
+# the per-repo callers; the required-flip is owner-reviewed policy.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: >-
+          Pinned cinatra-ai/cinatra commit SHA to check out the scanner + its
+          detector module from. MUST match the `uses:` pin on the caller's
+          `uses: cinatra-ai/cinatra/.github/workflows/
+          toast-banner-gate-reusable.yml@<sha>` line.
+        required: true
+        type: string
+      scan_root:
+        description: 'Comma-separated source roots to scan under the calling repo (default "src").'
+        required: false
+        type: string
+        default: src
+      baseline:
+        description: >-
+          Path (relative to the calling repo root) of the shrink-only baseline
+          JSON. Default toast-banner-guard.baseline.json; a missing file is
+          treated as an empty (zero-tolerance) baseline.
+        required: false
+        type: string
+        default: toast-banner-guard.baseline.json
+      enforce:
+        description: 'Fail the job on a non-baselined finding (default true).'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  toast-banner-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the calling repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: package-under-test
+          persist-credentials: false
+
+      - name: Checkout the cinatra toast-banner scanner (pinned)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: cinatra-ai/cinatra
+          ref: ${{ inputs.ref }}
+          path: cinatra-toast-banner-gate
+          sparse-checkout: |
+            scripts/audit/toast-banner-scan.mjs
+            scripts/audit/lib/toast-banner-detect.mjs
+            scripts/audit/lib/strip-comments.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Run the toast-banner conformance gate
+        run: |
+          set -u
+          SCAN=cinatra-toast-banner-gate/scripts/audit/toast-banner-scan.mjs
+          if [ ! -f "$SCAN" ]; then
+            echo "::error::toast-banner-gate: pinned scanner not found at $SCAN (bad ref, or the sparse-checkout paths above drifted from cinatra's layout)."
+            exit 1
+          fi
+          node "$SCAN" \
+            --package package-under-test \
+            --baseline "package-under-test/${{ inputs.baseline }}" \
+            --scan-root "${{ inputs.scan_root }}" \
+            --enforce "${{ inputs.enforce }}"

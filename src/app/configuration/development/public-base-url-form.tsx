@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { LinkIcon } from "lucide-react";
 import { TailscaleLogo } from "@/components/tailscale-logo";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/cinatra-toast";
 import { CardContent, CardFooter } from "@/components/ui/card";
 import { Field, FieldDescription } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -26,7 +26,6 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
   const [url, setUrl] = useState(initialUrl);
   const [savedUrl, setSavedUrl] = useState(initialUrl);
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -50,14 +49,14 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
   }, [flyoutOpen]);
 
   function handleSave() {
-    setError(null);
     startTransition(async () => {
       const result = await setMcpPublicBaseUrlAction({ url: trimmed.length > 0 ? trimmed : null });
       if (!result.ok) {
-        setError(result.error);
+        toast.error(result.error);
         return;
       }
       setSavedUrl(trimmed);
+      toast.success("Public base URL saved.");
     });
   }
 
@@ -147,12 +146,6 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
             URL must be origin-only — protocol + host (no path, query, or fragment).
             Example: <code>https://my-tunnel.example.ts.net</code>.
           </span>
-        )}
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
         )}
       </CardContent>
 

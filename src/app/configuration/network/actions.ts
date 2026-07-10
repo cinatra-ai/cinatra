@@ -26,8 +26,14 @@ import { runRegistryPollJob } from "@/lib/registry-poll-job";
 const SETTINGS_PATH = "/configuration/environment?tab=registries";
 const SETTINGS_REVALIDATE_PATH = "/configuration/environment";
 
-function settingsRedirectUrl(param: "ok" | "error", value: string): string {
-  return `${SETTINGS_PATH}&${param}=${encodeURIComponent(value)}`;
+// Codes-only flash protocol: outcomes redirect to the registries tab carrying a
+// stable CODE on `net_ok` / `net_error` (mapped to a static toast by the
+// registries-tab <SearchParamToast> island via ./registries-flash). The params
+// are NAMESPACED (net_*) so they never collide with the instance tab's
+// error/saved params. Never reflect URL-derived text into the toast.
+function settingsRedirectUrl(param: "ok" | "error", code: string): string {
+  const netParam = param === "ok" ? "net_ok" : "net_error";
+  return `${SETTINGS_PATH}&${netParam}=${code}`;
 }
 
 const REMOTE_REGISTRY_URL = "https://registry.cinatra.ai";
@@ -35,8 +41,8 @@ const REMOTE_REGISTRY_URL = "https://registry.cinatra.ai";
 const DEFAULT_LOCAL_REGISTRY_URL = "http://127.0.0.1:4873";
 void DEFAULT_LOCAL_REGISTRY_URL;
 
-function redirectWithError(message: string): never {
-  redirect(settingsRedirectUrl("error", message));
+function redirectWithError(code: string): never {
+  redirect(settingsRedirectUrl("error", code));
 }
 
 function getInstanceUrl(): string {
@@ -51,7 +57,7 @@ function getInstanceUrl(): string {
 function ensureIdentityWithNamespace(): InstanceIdentity {
   const current = readInstanceIdentity();
   if (!current || !current.instanceNamespace) {
-    redirectWithError("Complete instance setup before configuring registries.");
+    redirectWithError("setup-required");
   }
   return current;
 }
@@ -133,20 +139,20 @@ export async function setLocalRegistryAction(formData: FormData): Promise<void> 
   const url = typeof rawUrl === "string" ? rawUrl.trim() : "";
   const token = typeof rawToken === "string" ? rawToken.trim() : "";
 
-  if (!url) redirectWithError("Registry URL is required.");
+  if (!url) redirectWithError("url-required");
   try {
     new URL(url);
   } catch {
-    redirectWithError("Registry URL is not a valid URL.");
+    redirectWithError("url-invalid");
   }
   const identity = ensureIdentityWithNamespace();
   const existingLocal = identity.registries?.local ?? null;
 
   if (!existingLocal && token.length < 16) {
-    redirectWithError("Token must be at least 16 characters.");
+    redirectWithError("token-too-short");
   }
   if (token && token.length < 16) {
-    redirectWithError("Token must be at least 16 characters.");
+    redirectWithError("token-too-short");
   }
 
   const enc = token ? encryptSecret(token, "vendor.token") : null;
@@ -192,7 +198,7 @@ export async function requestRemoteAccessAction(formData: FormData): Promise<voi
   const rawEmail = formData.get("contactEmail");
   const contactEmail = typeof rawEmail === "string" ? rawEmail.trim() : "";
   if (!contactEmail || !/.+@.+\..+/.test(contactEmail)) {
-    redirectWithError("Enter a valid contact email.");
+    redirectWithError("email-invalid");
   }
 
   const identity = ensureIdentityWithNamespace();
@@ -200,7 +206,7 @@ export async function requestRemoteAccessAction(formData: FormData): Promise<voi
   if (!namespace) {
     // ensureIdentityWithNamespace guarantees this, but TS can't narrow it
     // through the helper boundary.
-    redirectWithError("Complete instance setup before configuring registries.");
+    redirectWithError("setup-required");
   }
   const instanceUrl = getInstanceUrl();
   const idempotencyKey = buildIdempotencyKey({ namespace, instanceUrl, contactEmail });
@@ -396,7 +402,7 @@ export async function cancelRemoteRequestAction(): Promise<void> {
   const identity = ensureIdentityWithNamespace();
   const namespace = identity.instanceNamespace;
   if (!namespace) {
-    redirectWithError("Complete instance setup before configuring registries.");
+    redirectWithError("setup-required");
   }
   const remote = identity.registries?.remote;
 
@@ -563,7 +569,7 @@ export async function resetRemoteRegistryAction(): Promise<void> {
   const identity = ensureIdentityWithNamespace();
   const namespace = identity.instanceNamespace;
   if (!namespace) {
-    redirectWithError("Complete instance setup before configuring registries.");
+    redirectWithError("setup-required");
   }
   const remote = identity.registries?.remote;
 

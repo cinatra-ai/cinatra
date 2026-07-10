@@ -638,8 +638,11 @@ void ensureNangoIntegration;
 // ---------------------------------------------------------------------------
 
 function twentyConnectorSetupHref(): string {
+  // getConnectorSetupHref expects a BARE descriptor slug (e.g. "twenty-connector"),
+  // not a vendor-prefixed one — a vendor-prefixed slug never resolves, so the
+  // lookup silently fell through to the hardcoded fallback on every call.
   return (
-    getConnectorSetupHref("cinatra-ai/twenty-connector") ??
+    getConnectorSetupHref("twenty-connector") ??
     "/connectors/cinatra-ai/twenty-connector/setup"
   );
 }
@@ -662,25 +665,26 @@ export async function saveTwentyConnectionAction(formData: FormData): Promise<vo
   const base = twentyConnectorSetupHref();
   const owner = await requireTwentyConnectManager();
   if (!owner) {
-    redirect(`${base}?error=${encodeURIComponent("Only an administrator can connect Twenty.")}`);
+    // Codes-only flash: the connector dispatch route's schema-config island maps
+    // the code to a static toast (never toasts URL-derived text).
+    redirect(`${base}?error=admin-only`);
   }
   const instanceUrl = String(formData.get("instanceUrl") ?? "");
   const apiKey = String(formData.get("apiKey") ?? "");
-  let errorMessage: string | null = null;
+  let failed = false;
   try {
     await saveTwentyConnection({ instanceUrl, apiKey, owner });
   } catch (err) {
-    // Only surface our OWN vetted messages (TwentyConnectionError, which never
-    // carries the key or a readback value). Any other error may embed the
-    // request payload / key — never place it in the redirect URL (it would land
-    // in browser + server access logs); use a generic message instead.
-    errorMessage =
-      err instanceof TwentyConnectionError
-        ? err.message
-        : "Unable to connect Twenty. Please try again.";
+    // Log the vetted message server-side; emit a stable code (never place the
+    // message — which could embed request payload — into the redirect URL).
+    console.error(
+      "[twenty] connect failed:",
+      err instanceof TwentyConnectionError ? err.message : err,
+    );
+    failed = true;
   }
-  if (errorMessage) {
-    redirect(`${base}?error=${encodeURIComponent(errorMessage)}`);
+  if (failed) {
+    redirect(`${base}?error=connect-failed`);
   }
   redirect(`${base}?saved=1`);
 }
@@ -689,9 +693,7 @@ export async function disconnectTwentyConnectionAction(formData: FormData): Prom
   void formData; // the disconnect form carries no fields; the param satisfies `<form action>`
   const base = twentyConnectorSetupHref();
   if (!(await requireTwentyConnectManager())) {
-    redirect(
-      `${base}?error=${encodeURIComponent("Only an administrator can disconnect Twenty.")}`,
-    );
+    redirect(`${base}?error=admin-only`);
   }
   await disconnectTwentyConnection();
   redirect(`${base}?deleted=1`);

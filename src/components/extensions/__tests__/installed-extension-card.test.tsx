@@ -1,18 +1,24 @@
 /**
- * InstalledExtensionCard — archived §VI treatment (cinatra#957) + the
- * §VII "Agent card (All Agents)" derivation (cinatra#1007 / design#25).
+ * InstalledExtensionCard — archived §III treatment (cinatra#957) + the
+ * §IV "Agent card (All Agents)" derivation (cinatra#1007 / design#25) + the
+ * design spec 0.5.0 byline relocation (cinatra#1246).
  *
  * Invariants pinned here:
  *   - An ACTIVE card keeps its category colour: the banner carries the accent
  *     inline background and the icon tile inks the accent.
+ *   - 0.5.0 §III: the "{Kind} by {Vendor}" byline lives INSIDE the coloured
+ *     banner (beneath the name), NOT in the white middle panel. It reads via
+ *     `text-current` so it recolours to match the name — white on an active
+ *     card, grey on the archived (muted) banner — and NEVER turns white on an
+ *     archived card.
  *   - An ARCHIVED card renders fully greyed: no accent inline background on
  *     the banner (light-grey `muted` token ground instead), muted logo tile,
- *     muted byline text, and muted status/actions zones — while the actions
- *     stay rendered (Restore/Reinstall must remain operable).
- *   - Omitting `version`/`status` (the §VII Agent-card derivation) drops the
+ *     muted byline text (grey preserved), and muted status/actions zones —
+ *     while the actions stay rendered (Restore/Reinstall must remain operable).
+ *   - Omitting `version`/`status` (the §IV Agent-card derivation) drops the
  *     whole version/status row from the DOM rather than rendering it empty.
- *   - The description clamps to 2 lines by default (§VI, cinatra#1005) and
- *     under an explicit `descriptionLineClamp={2}` (§VII).
+ *   - The description clamps to 2 lines by default (§III, cinatra#1005) and
+ *     under an explicit `descriptionLineClamp={2}` (§IV).
  */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -56,10 +62,8 @@ describe("InstalledExtensionCard — §VI archived treatment", () => {
     expect(html).toContain("bg-muted");
   });
 
-  it("archived card mutes byline text and status/actions zones", () => {
+  it("archived card mutes the status/actions zones", () => {
     const html = render(true);
-    // kind label + vendor render muted, never foreground-strong.
-    expect(html).not.toContain("text-foreground");
     expect(html).toContain("opacity-70");
   });
 
@@ -68,14 +72,53 @@ describe("InstalledExtensionCard — §VI archived treatment", () => {
     expect(html).toContain(">Restore<");
   });
 
-  it("active card renders byline in foreground and unmuted zones", () => {
+  // ── 0.5.0 §III byline relocation (cinatra#1246) ──────────────────────────
+
+  it("renders the byline INSIDE the coloured banner, not the white middle panel", () => {
     const html = render(false);
-    expect(html).toContain("text-foreground");
-    expect(html).not.toContain("opacity-70");
+    const bylineAt = html.indexOf('data-slot="installed-extension-byline"');
+    const bannerAt = html.indexOf('data-slot="extension-card-banner"');
+    // The middle panel is the justify-center white column that follows the banner.
+    const middlePanelAt = html.indexOf("flex min-w-0 flex-1 flex-col justify-center");
+    expect(bylineAt).toBeGreaterThan(-1);
+    // byline sits between the banner opening and the middle panel → it's a
+    // banner descendant, not a middle-panel child.
+    expect(bylineAt).toBeGreaterThan(bannerAt);
+    expect(bylineAt).toBeLessThan(middlePanelAt);
+  });
+
+  it("active byline reads white via text-current on the accent ground (never a hard-coded colour)", () => {
+    const html = render(false);
+    // The active banner container paints the white foreground inline…
+    expect(html).toContain(`color:${ACCENT_PALETTE.green.fg}`);
+    // …and the byline inherits it (text-current), so it recolours to match the
+    // name rather than pinning its own token.
+    const byline = html.match(
+      /<div data-slot="installed-extension-byline"[^>]*>/,
+    )?.[0];
+    expect(byline).toContain("text-current");
+    expect(byline).not.toContain("text-foreground");
+    expect(byline).not.toContain("text-surface-strong");
+  });
+
+  it("archived byline stays GREY (no white-on-archived): text-current inherits the muted ground", () => {
+    const html = render(true);
+    // The archived banner drops the accent for the muted token ground…
+    expect(html).toContain("bg-muted");
+    expect(html).toContain("text-muted-foreground");
+    // …and the byline uses text-current (inherits the muted grey), never the
+    // active card's white foreground hex — the known "white byline on the
+    // archived card" failure class.
+    const byline = html.match(
+      /<div data-slot="installed-extension-byline"[^>]*>/,
+    )?.[0];
+    expect(byline).toContain("text-current");
+    expect(byline).not.toContain(ACCENT_PALETTE.green.fg);
+    expect(byline).not.toContain("text-surface-strong");
   });
 });
 
-describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", () => {
+describe("InstalledExtensionCard — §IV Agent card (All Agents) derivation", () => {
   function renderAgentCard(): string {
     return renderToStaticMarkup(
       <InstalledExtensionCard
@@ -101,7 +144,7 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
   it("clamps the description to 2 lines under the explicit §VII prop", () => {
     const html = renderAgentCard();
     // The description <p> carries line-clamp-2. The banner's ITALIC NAME
-    // (e.g. "Research Assistant") always renders line-clamp-3 regardless of
+    // (e.g. "Research Assistant") always renders line-clamp-2 regardless of
     // descriptionLineClamp — that's ExtensionCardListingBanner's own
     // (unrelated) title clamp, so assert on the description paragraph
     // specifically rather than the whole card's markup.
@@ -121,7 +164,7 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
       />,
     );
     // Assert on the description <p> specifically — the banner's italic NAME
-    // always renders its own (unrelated) line-clamp-3 title clamp.
+    // always renders its own (unrelated) title clamp.
     const descriptionParagraph = html.match(/<p class="[^"]*">[^<]*<\/p>/)?.[0];
     expect(descriptionParagraph).toContain("line-clamp-2");
     expect(descriptionParagraph).not.toContain("line-clamp-3");

@@ -47,20 +47,19 @@ function resolveMarketplaceToken(): string | undefined {
   return process.env.MARKETPLACE_INSTANCE_TOKEN;
 }
 
-/** Encode an MCP error message for inclusion in a redirect query string. */
-function encodeError(message: string): string {
-  return encodeURIComponent(message.slice(0, 300));
-}
-
 /**
  * Build the admin-list redirect URL preserving the caller's status filter.
  * The forms post a `return_status` hidden input (the filter the admin was
  * viewing) so a retry from `?status=approved` doesn't drop the user back to
  * the default `pending` page after the action returns.
+ *
+ * Codes-only flash protocol: `ok`/`error` carry a STABLE code (mapped to a
+ * static toast at the mount site); the raw MCP error is logged server-side,
+ * never reflected into the redirect URL.
  */
 function adminRedirect(
   formData: FormData,
-  query: { ok?: string; id?: string; error?: string },
+  query: { ok?: string; error?: string },
 ): string {
   const params = new URLSearchParams();
   const returnStatus = String(formData.get("return_status") ?? "").trim();
@@ -68,7 +67,6 @@ function adminRedirect(
     params.set("status", returnStatus);
   }
   if (query.ok)    params.set("ok",    query.ok);
-  if (query.id)    params.set("id",    query.id);
   if (query.error) params.set("error", query.error);
   const qs = params.toString();
   return qs === "" ? ADMIN_LIST_PATH : `${ADMIN_LIST_PATH}?${qs}`;
@@ -79,21 +77,21 @@ export async function withdrawSubmissionAction(formData: FormData): Promise<void
   await requireAdminSession();
   const submissionId = String(formData.get("submission_id") ?? "").trim();
   if (submissionId === "") {
-    redirect(`${VENDOR_LIST_PATH}?error=${encodeError("Missing submission_id.")}`);
+    redirect(`${VENDOR_LIST_PATH}?error=missing-id`);
   }
   const token = resolveMarketplaceToken();
   if (!token) {
-    redirect(`${VENDOR_LIST_PATH}?error=${encodeError("Marketplace token not configured.")}`);
+    redirect(`${VENDOR_LIST_PATH}?error=token-missing`);
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {
     await client.extensionSubmissionWithdraw({ submission_id: submissionId });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Withdraw failed.";
-    redirect(`${VENDOR_LIST_PATH}?error=${encodeError(msg)}`);
+    console.error("[withdrawSubmissionAction] withdraw failed:", err);
+    redirect(`${VENDOR_LIST_PATH}?error=withdraw-failed`);
   }
   revalidatePath(VENDOR_LIST_PATH);
-  redirect(`${VENDOR_LIST_PATH}?ok=withdraw&id=${encodeURIComponent(submissionId)}`);
+  redirect(`${VENDOR_LIST_PATH}?ok=withdraw`);
 }
 
 /** Admin approves a pending submission. Starts the promotion saga. */
@@ -101,19 +99,19 @@ export async function approveSubmissionAction(formData: FormData): Promise<void>
   await requireAdminSession();
   const submissionId = String(formData.get("submission_id") ?? "").trim();
   if (submissionId === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Missing submission_id.") }));
+    redirect(adminRedirect(formData, { error: "missing-id" }));
   }
   const token = resolveMarketplaceToken();
   if (!token) {
-    redirect(adminRedirect(formData, { error: encodeError("Marketplace token not configured.") }));
+    redirect(adminRedirect(formData, { error: "token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   let approveResult: Awaited<ReturnType<typeof client.extensionSubmissionApprove>>;
   try {
     approveResult = await client.extensionSubmissionApprove({ submission_id: submissionId });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Approve failed.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[approveSubmissionAction] approve failed:", err);
+    redirect(adminRedirect(formData, { error: "approve-failed" }));
   }
 
   // Fast-freshness catalog reconcile: enqueue a single-package
@@ -124,7 +122,7 @@ export async function approveSubmissionAction(formData: FormData): Promise<void>
   await enqueueCatalogSyncForApprovedSubmission(approveResult);
 
   revalidatePath(ADMIN_LIST_PATH);
-  redirect(adminRedirect(formData, { ok: "approve", id: encodeURIComponent(submissionId) }));
+  redirect(adminRedirect(formData, { ok: "approve" }));
 }
 
 /** Admin rejects a pending submission with a non-empty reason. */
@@ -133,29 +131,27 @@ export async function rejectSubmissionAction(formData: FormData): Promise<void> 
   const submissionId = String(formData.get("submission_id") ?? "").trim();
   const reason       = String(formData.get("reason") ?? "").trim();
   if (submissionId === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Missing submission_id.") }));
+    redirect(adminRedirect(formData, { error: "missing-id" }));
   }
   if (reason === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Reject reason is required.") }));
+    redirect(adminRedirect(formData, { error: "reason-required" }));
   }
   if (reason.length > REJECT_REASON_MAX) {
-    redirect(adminRedirect(formData, {
-      error: encodeError(`Reject reason exceeds ${REJECT_REASON_MAX}-char cap.`),
-    }));
+    redirect(adminRedirect(formData, { error: "reason-too-long" }));
   }
   const token = resolveMarketplaceToken();
   if (!token) {
-    redirect(adminRedirect(formData, { error: encodeError("Marketplace token not configured.") }));
+    redirect(adminRedirect(formData, { error: "token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {
     await client.extensionSubmissionReject({ submission_id: submissionId, reason });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Reject failed.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[rejectSubmissionAction] reject failed:", err);
+    redirect(adminRedirect(formData, { error: "reject-failed" }));
   }
   revalidatePath(ADMIN_LIST_PATH);
-  redirect(adminRedirect(formData, { ok: "reject", id: encodeURIComponent(submissionId) }));
+  redirect(adminRedirect(formData, { ok: "reject" }));
 }
 
 /** Admin retries the promotion saga on a row stuck at approved+failed. */
@@ -163,21 +159,21 @@ export async function retryPromotionAction(formData: FormData): Promise<void> {
   await requireAdminSession();
   const submissionId = String(formData.get("submission_id") ?? "").trim();
   if (submissionId === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Missing submission_id.") }));
+    redirect(adminRedirect(formData, { error: "missing-id" }));
   }
   const token = resolveMarketplaceToken();
   if (!token) {
-    redirect(adminRedirect(formData, { error: encodeError("Marketplace token not configured.") }));
+    redirect(adminRedirect(formData, { error: "token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {
     await client.extensionSubmissionPromotionRetry({ submission_id: submissionId });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Retry failed.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[retryPromotionAction] retry failed:", err);
+    redirect(adminRedirect(formData, { error: "retry-failed" }));
   }
   revalidatePath(ADMIN_LIST_PATH);
-  redirect(adminRedirect(formData, { ok: "retry", id: encodeURIComponent(submissionId) }));
+  redirect(adminRedirect(formData, { ok: "retry" }));
 }
 
 // NOTE: the REJECT_REASON_MAX value above is mirrored in the textarea's

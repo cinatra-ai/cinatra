@@ -1,4 +1,4 @@
-// core__0019 — run-token spine: dispatch-minted per-run credential hash
+// core__0020 — run-token spine: dispatch-minted per-run credential hash
 // (cinatra-ai/cinatra#1193, W1 of the run-identity-spine epic #1192).
 //
 // WHY. Run identity reaches the app through several parallel, re-derived
@@ -50,7 +50,7 @@ export function up(pgm) {
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
   // Reversible: drop the index then the additive column (restores the
-  // pre-0019 shape on any lineage). The column is a fresh #1193 addition, so
+  // pre-0020 shape on any lineage). The column is a fresh #1193 addition, so
   // no legitimate data is lost — the raw token was never stored, and a dropped
   // hash simply reverts run selection to the legacy channels.
   pgm.sql(`DROP INDEX IF EXISTS agent_runs_run_token_hash_uniq;`);

@@ -128,3 +128,145 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates ownership schema", () => {
     expect(rows[0]).toEqual({ owner_level: "organization", owner_id: "org-existing-ownership" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Interaction axis (cinatra-ai/cinatra#1037 P1) — agent_kind + assistant_config
+// + the two invariant CHECK constraints, proven live against Postgres.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () => {
+  const KIND_SCHEMA = "cinatra_test_agent_kind_schema";
+  let kindPool: Pool;
+
+  beforeAll(async () => {
+    if (!HAS_REAL_DB) return;
+    kindPool = new Pool({ connectionString: DB_URL });
+    await kindPool.query(`DROP SCHEMA IF EXISTS "${KIND_SCHEMA}" CASCADE`);
+    await kindPool.query(`CREATE SCHEMA "${KIND_SCHEMA}"`);
+    const queries = buildCreateStoreSchemaQueries(KIND_SCHEMA);
+    for (const q of queries) {
+      const trimmed = q.text.trim().toUpperCase();
+      const head = trimmed.slice(0, 6);
+      // Include DO blocks (via startsWith) — the interaction-axis invariant
+      // CHECKs are added through the bootstrap's guarded DO block, so a
+      // head-only slice ("DO $$\n") would wrongly skip them.
+      const isDoBlock = trimmed.startsWith("DO $$");
+      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S" && !isDoBlock) {
+        continue;
+      }
+      try {
+        await kindPool.query(q.text);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("does not exist")) throw err;
+      }
+    }
+  }, 60_000);
+
+  afterAll(async () => {
+    if (kindPool) {
+      await kindPool.query(`DROP SCHEMA IF EXISTS "${KIND_SCHEMA}" CASCADE`);
+      await kindPool.end();
+    }
+  });
+
+  it("agent_kind is NOT NULL text defaulting to 'executor'; assistant_config is nullable text", async () => {
+    const { rows } = await kindPool.query(
+      `SELECT column_name, data_type, is_nullable, column_default
+         FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'agent_templates' AND column_name = ANY($2)`,
+      [KIND_SCHEMA, ["agent_kind", "assistant_config"]],
+    );
+    const byName = Object.fromEntries(rows.map((r) => [r.column_name, r]));
+    expect(byName.agent_kind.data_type).toBe("text");
+    expect(byName.agent_kind.is_nullable).toBe("NO");
+    expect(byName.agent_kind.column_default).toContain("'executor'");
+    expect(byName.assistant_config.data_type).toBe("text");
+    expect(byName.assistant_config.is_nullable).toBe("YES");
+  });
+
+  it("both invariant CHECK constraints + the kind index exist", async () => {
+    const { rows: cons } = await kindPool.query(
+      `SELECT c.conname FROM pg_constraint c
+         JOIN pg_class t ON t.oid = c.conrelid
+         JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = $1 AND t.relname = 'agent_templates' AND c.contype = 'c'`,
+      [KIND_SCHEMA],
+    );
+    const names = cons.map((r) => r.conname);
+    expect(names).toContain("agent_templates_agent_kind_check");
+    expect(names).toContain("agent_templates_agent_kind_config_check");
+    const { rows: idx } = await kindPool.query(
+      `SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'agent_templates' AND indexname = 'agent_templates_agent_kind_idx'`,
+      [KIND_SCHEMA],
+    );
+    expect(idx.length).toBe(1);
+  });
+
+  const baseCols =
+    "(id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, agent_kind, assistant_config)";
+  const baseVals = "'', '[]', '{}', '{\"steps\":[]}'";
+
+  it("an executor row with NO assistant_config is accepted (the default shape)", async () => {
+    await expect(
+      kindPool.query(
+        `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
+         VALUES ($1, 'executor-ok', ${baseVals}, '@t/executor-ok', 'executor', NULL)`,
+        ["k-executor-ok"],
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("an executor row WITH an assistant_config is REJECTED by the pairing CHECK", async () => {
+    await expect(
+      kindPool.query(
+        `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
+         VALUES ($1, 'executor-bad', ${baseVals}, '@t/executor-bad', 'executor', '{"persona":"x","skillBundle":[]}')`,
+        ["k-executor-bad"],
+      ),
+    ).rejects.toThrow(/agent_kind_config_check/);
+  });
+
+  it("an assistant row WITH an assistant_config is accepted", async () => {
+    await expect(
+      kindPool.query(
+        `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
+         VALUES ($1, 'asst-ok', ${baseVals}, '@t/asst-ok', 'assistant', '{"persona":"Cinatra","skillBundle":["chat-assistant-core"]}')`,
+        ["k-asst-ok"],
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("an assistant row WITHOUT an assistant_config is REJECTED by the pairing CHECK", async () => {
+    await expect(
+      kindPool.query(
+        `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
+         VALUES ($1, 'asst-bad', ${baseVals}, '@t/asst-bad', 'assistant', NULL)`,
+        ["k-asst-bad"],
+      ),
+    ).rejects.toThrow(/agent_kind_config_check/);
+  });
+
+  it("an unknown agent_kind is REJECTED by the kind CHECK", async () => {
+    await expect(
+      kindPool.query(
+        `INSERT INTO "${KIND_SCHEMA}".agent_templates ${baseCols}
+         VALUES ($1, 'kind-bad', ${baseVals}, '@t/kind-bad', 'project', NULL)`,
+        ["k-kind-bad"],
+      ),
+    ).rejects.toThrow(/agent_kind_check/);
+  });
+
+  it("an unspecified agent_kind defaults to 'executor'", async () => {
+    await kindPool.query(
+      `INSERT INTO "${KIND_SCHEMA}".agent_templates
+         (id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name)
+       VALUES ($1, 'default-kind', '', '[]', '{}', '{"steps":[]}', '@t/default-kind')`,
+      ["k-default"],
+    );
+    const { rows } = await kindPool.query(
+      `SELECT agent_kind, assistant_config FROM "${KIND_SCHEMA}".agent_templates WHERE id = $1`,
+      ["k-default"],
+    );
+    expect(rows[0]).toEqual({ agent_kind: "executor", assistant_config: null });
+  });
+});

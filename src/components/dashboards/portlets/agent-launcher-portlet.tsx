@@ -8,6 +8,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/cinatra-toast";
 import { launchAgentAction } from "@/lib/dashboards/portlet-actions";
 import type { PortletComponentProps } from "./types";
 
@@ -21,7 +22,6 @@ export function AgentLauncherPortlet({ config, inputs, onOutput }: PortletCompon
     );
     return Object.keys(seed).length > 0 ? JSON.stringify(seed, null, 2) : "{}";
   });
-  const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
@@ -30,21 +30,20 @@ export function AgentLauncherPortlet({ config, inputs, onOutput }: PortletCompon
   }
 
   function handleLaunch() {
-    setError(null);
     setRunId(null);
     // Validate JSON client-side for a friendly error; the server re-validates.
     if (params.trim()) {
       try {
         JSON.parse(params);
       } catch {
-        setError("Inputs must be valid JSON.");
+        toast.error("Inputs must be valid JSON.");
         return;
       }
     }
     start(async () => {
       const res = await launchAgentAction({ agentRef, agentPackage, inputParams: params });
       if (!res.ok) {
-        setError(res.message);
+        toast.error(res.message);
         return;
       }
       setRunId(res.runId);
@@ -71,7 +70,6 @@ export function AgentLauncherPortlet({ config, inputs, onOutput }: PortletCompon
           </Link>
         ) : null}
       </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
 }

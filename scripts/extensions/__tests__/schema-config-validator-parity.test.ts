@@ -5,8 +5,8 @@ import { describe, it, expect } from "vitest";
 // representative corpus (valid + each invalid family) so the generation-time
 // gate can never silently diverge from the authoritative runtime parser the
 // dispatch route renders from.
-import { validateConfigSchema } from "../generate-extension-manifest.mjs";
-import { parseSchemaConfig } from "@/lib/extension-schema-config";
+import { validateConfigSchema, SCHEMA_CONFIG_FIELD_KEYS } from "../generate-extension-manifest.mjs";
+import { parseSchemaConfig, FIELD_KEY_ALLOWLIST } from "@/lib/extension-schema-config";
 
 // Each case: the raw configSchema + a human label. The two validators must AGREE
 // on the ok/not-ok verdict for every one.
@@ -226,6 +226,33 @@ const CORPUS: Array<{ label: string; raw: unknown }> = [
     },
   },
 ];
+
+// Direct structural lockstep on the per-kind key allowlists themselves. The
+// behavioral corpus above only catches a drift a case happens to exercise; this
+// asserts the generator's SCHEMA_CONFIG_FIELD_KEYS map is byte-for-byte the same
+// vocabulary as the runtime parser's FIELD_KEY_ALLOWLIST for EVERY kind and EVERY
+// key — so the NEXT optional key added to one side (as `role` was for named-action)
+// cannot silently be omitted from the other and hard-fail a post-release manifest
+// regeneration.
+describe("SCHEMA_CONFIG_FIELD_KEYS (generator) ⇄ FIELD_KEY_ALLOWLIST (parser) lockstep", () => {
+  const sortSet = (s: ReadonlySet<string>): string[] => [...s].sort();
+
+  it("covers exactly the same set of field kinds", () => {
+    expect(Object.keys(SCHEMA_CONFIG_FIELD_KEYS).sort()).toEqual(
+      Object.keys(FIELD_KEY_ALLOWLIST).sort(),
+    );
+  });
+
+  for (const kind of Object.keys(FIELD_KEY_ALLOWLIST)) {
+    it(`allows exactly the same keys for kind: ${kind}`, () => {
+      const genKeys = (SCHEMA_CONFIG_FIELD_KEYS as Record<string, ReadonlySet<string>>)[kind];
+      expect(genKeys, `generator has no allowlist for kind ${kind}`).toBeInstanceOf(Set);
+      expect(sortSet(genKeys)).toEqual(
+        sortSet((FIELD_KEY_ALLOWLIST as Record<string, ReadonlySet<string>>)[kind]),
+      );
+    });
+  }
+});
 
 describe("generator validateConfigSchema ⇄ parseSchemaConfig parity", () => {
   for (const { label, raw } of CORPUS) {

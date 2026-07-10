@@ -13,6 +13,25 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
+import { toast } from "@/lib/cinatra-toast";
+
+// Action outcomes (the form-level banner variant + per-row Done/error) toast
+// via the canonical wrapper (cinatra#1109) rather than rendering an in-form
+// Alert; mock it so the tests can assert the toasted static message.
+vi.mock("@/lib/cinatra-toast", () => {
+  const base = vi.fn();
+  const t = Object.assign(base, {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+    promise: vi.fn(),
+    loading: vi.fn(),
+    dismiss: vi.fn(),
+  });
+  return { toast: t, cinatraToast: t };
+});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -140,7 +159,8 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/listServers"))).toBe(true);
   });
 
-  it("banner: stays hidden until an action result names a variant", async () => {
+  it("banner: an action result's variant TOASTs its static message (no in-form banner)", async () => {
+    vi.mocked(toast.success).mockClear();
     const surface = surfaceOf({
       fields: [
         {
@@ -155,10 +175,11 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     await renderForm({ installId: "i1", packageName: "@x/y", surface });
-    // No banner before any action.
+    // The banner field renders NOTHING inline — the outcome is a toast.
     expect(container.querySelector('[data-testid="schema-config-banner"]')).toBeNull();
 
-    // Click the named action → result `{ banner: "saved" }` → banner appears.
+    // Click the named action → result `{ banner: "saved" }` → the variant's
+    // STATIC message toasts (success tone), and no inline banner ever appears.
     const btn = [...container.querySelectorAll("button")].find((b) => b.textContent === "Save");
     expect(btn).toBeTruthy();
     await act(async () => {
@@ -166,8 +187,8 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    const banner = container.querySelector('[data-testid="schema-config-banner"]');
-    expect(banner?.textContent).toContain("Saved!");
+    expect(toast.success).toHaveBeenCalledWith("Saved!");
+    expect(container.querySelector('[data-testid="schema-config-banner"]')).toBeNull();
   });
 
   it("advisory: renders whenReady / whenNotReady from the probe verdict", async () => {
@@ -339,5 +360,133 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     });
     const hidden = container.querySelector<HTMLInputElement>('input[name="hosts"]');
     expect(JSON.parse(hidden!.value)).toEqual(["example.com"]);
+  });
+
+  it("omitFieldKinds: a suppressed kind (Model-A status-probe → status card) is not rendered, others stay", async () => {
+    const surface = surfaceOf({
+      fields: [
+        { kind: "status-probe", label: "Connection", actionId: "connectionStatus" },
+        { kind: "secret", key: "apiKey", label: "API key" },
+      ],
+    });
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      omitFieldKinds: ["status-probe"],
+    });
+    // The status-probe row (its only affordance is a "Check" button) is gone…
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.some((b) => b.textContent?.trim() === "Check")).toBe(false);
+    // …but the rest of the form still renders.
+    expect(container.querySelector('input[name="apiKey"]')).toBeTruthy();
+  });
+
+  it("without omitFieldKinds the status-probe still renders inline (back-compat)", async () => {
+    const surface = surfaceOf({
+      fields: [{ kind: "status-probe", label: "Connection", actionId: "connectionStatus" }],
+    });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.some((b) => b.textContent?.trim() === "Check")).toBe(true);
+  });
+});
+
+// Owner ruling (epic #1101, 2026-07-10): key-based schema-config connectors get
+// the canonical indigo-plug Connect / red-unplug Disconnect pair (design §II
+// items 7/8/15/16), driven by the connector's own `role`-tagged named actions.
+describe("SchemaConfigConnectorForm — canonical Connect/Disconnect pair (#1101)", () => {
+  const CONN_SURFACE = {
+    fields: [
+      { kind: "secret", key: "apiKey", label: "API key" },
+      { kind: "named-action", label: "Connect", actionId: "saveConnection", role: "connect" },
+      { kind: "named-action", label: "Disconnect", actionId: "clearConnection", role: "disconnect" },
+    ],
+  } as const;
+
+  it("renders the connect/disconnect roles as ONE side-by-side actions row", async () => {
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i1", packageName: "@x/y", surface, initialConnected: true });
+    // Exactly one connection-actions row, holding both buttons side by side.
+    const rows = container.querySelectorAll('[data-testid="connection-actions"]');
+    expect(rows.length).toBe(1);
+    expect(container.querySelector('[data-testid="connector-connect"]')?.textContent).toContain("Connect");
+    expect(container.querySelector('[data-testid="connector-disconnect"]')?.textContent).toContain("Disconnect");
+    // The role actions are NOT ALSO rendered as their own labelled field rows.
+    const connectButtons = [...container.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Connect");
+    expect(connectButtons.length).toBe(1);
+  });
+
+  it("Disconnect is disabled until connected; Connect is always available", async () => {
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i1", packageName: "@x/y", surface, initialConnected: false });
+    const connect = container.querySelector<HTMLButtonElement>('[data-testid="connector-connect"]');
+    const disconnect = container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]');
+    expect(connect?.disabled).toBe(false);
+    expect(disconnect?.disabled).toBe(true);
+  });
+
+  it("a successful Connect flips the state so Disconnect becomes enabled", async () => {
+    const seenUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      seenUrls.push(String(url));
+      return new Response(JSON.stringify({ result: { banner: "saved" } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i9", packageName: "@x/y", surface, initialConnected: false });
+    const connect = container.querySelector<HTMLButtonElement>('[data-testid="connector-connect"]');
+    await act(async () => {
+      connect!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // saveConnection was POSTed to the host action endpoint…
+    expect(seenUrls.some((u) => u.includes("/api/extensions/i9/actions/saveConnection"))).toBe(true);
+    // …and Disconnect is now enabled.
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]')?.disabled).toBe(false);
+  });
+
+  it("Disconnect opens the neutral AlertDialog; confirming POSTs clearConnection + flips state", async () => {
+    const seenUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      seenUrls.push(String(url));
+      return new Response(JSON.stringify({ result: { banner: "cleared" } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i9", packageName: "@x/y", surface, initialConnected: true });
+    const disconnect = container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]');
+    await act(async () => {
+      disconnect!.click();
+      await Promise.resolve();
+    });
+    // The dialog (portaled to body) shows the connector-NEUTRAL title.
+    expect(document.body.textContent).toContain("Disconnect connector?");
+    const confirmBtn = document.body.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect-confirm"]');
+    expect(confirmBtn).toBeTruthy();
+    await act(async () => {
+      confirmBtn!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(seenUrls.some((u) => u.includes("/api/extensions/i9/actions/clearConnection"))).toBe(true);
+    // State flipped back → Disconnect disabled again.
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]')?.disabled).toBe(true);
+  });
+
+  it("a role-less named-action still renders as its own plain button (back-compat)", async () => {
+    const surface = surfaceOf({
+      fields: [
+        { kind: "named-action", label: "Connect", actionId: "saveConnection", role: "connect" },
+        { kind: "named-action", label: "Save skills administration", actionId: "saveSkillsSettings" },
+      ],
+    });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface, initialConnected: false });
+    // The role-less action is NOT inside the connection-actions row.
+    const row = container.querySelector('[data-testid="connection-actions"]');
+    expect(row?.textContent).not.toContain("Save skills administration");
+    const plain = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save skills administration");
+    expect(plain).toBeTruthy();
   });
 });
