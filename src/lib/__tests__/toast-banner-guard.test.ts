@@ -71,12 +71,32 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Shared lexical comment stripper used by the audit gates — removes comments
-// while preserving string/JSX/template contents verbatim (so real
-// `variant="destructive"` JSX survives, but a banner mentioned in a doc-comment
-// does not trip the guard). Same import shape the sibling src/lib e2e tests use
-// for a scripts/*.mjs helper.
-import { stripComments } from "../../../scripts/audit/lib/strip-comments.mjs";
+// The pure detectors (the searchParams-flash-driven banner heuristic) live in a
+// shared module so the standalone connector scanner (scripts/audit/
+// toast-banner-scan.mjs, run by the reusable toast-banner-gate workflow the
+// S3–S12 connectors adopt) enforces the EXACT SAME rule as this core guard, with
+// no per-repo copy — the single-source-of-truth shape the extension conformance
+// gate uses. The unit fixtures below remain the RED/GREEN behaviour proof.
+import {
+  FLASH_OUTCOME_READ,
+  ALERT_STATUS_BANNER,
+  FLASH_COLORED_DIV,
+  rendersTransientBanner,
+  readsFlashOutcomeParam,
+  isBannerFile,
+  isExcludedFromScan,
+} from "../../../scripts/audit/lib/toast-banner-detect.mjs";
+
+// Re-exported for callers that want the raw detectors (kept from when they were
+// defined inline here); the vitest fixtures exercise `isBannerFile` end-to-end.
+export {
+  FLASH_OUTCOME_READ,
+  ALERT_STATUS_BANNER,
+  FLASH_COLORED_DIV,
+  rendersTransientBanner,
+  readsFlashOutcomeParam,
+  isBannerFile,
+};
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const BASELINE_PATH = path.join(REPO_ROOT, "src/lib/toast-banner-guard.baseline.json");
@@ -86,83 +106,11 @@ const BASELINE_PATH = path.join(REPO_ROOT, "src/lib/toast-banner-guard.baseline.
 const SCAN_ROOTS = ["src", "packages"] as const;
 
 // ---------------------------------------------------------------------------
-// Pure detectors (unit-tested below against inline fixtures — this is the
-// permanent RED-behaviour proof; no real offender file is needed to prove the
-// guard bites).
-// ---------------------------------------------------------------------------
-
-/**
- * Transient-OUTCOME query-param codes. Deliberately specific (a post-action
- * redirect flash), NOT generic tokens like `status`/`page` that route/pagination
- * code reads — this is what keeps the heuristic off persistent surfaces.
- */
-const OUTCOME =
-  "(?:saved|ok|error|errors|deleted|added|removed|invalid|invalidUrl|logsCleared|reconnected|disconnected)";
-
-/**
- * A read of a transient-outcome value FROM searchParams. Covers (incl. optional
- * chaining `?.`):
- *   - `searchParams.get("saved")` / `searchParams?.get("saved")`
- *   - `resolvedSearchParams.ok` / `searchParams.error` / `params.error` /
- *     `sp.deleted` (the resolved-searchParams object is conventionally named
- *     one of these; the OUTCOME token set makes a route-`params` collision
- *     effectively impossible — route params are path segments, never `ok`/`error`)
- *   - `pick(sp.error)` / `pickSearchParam(resolvedSearchParams.ok)`
- */
-export const FLASH_OUTCOME_READ = new RegExp(
-  "(?:" +
-    `searchParams\\??\\.get\\(\\s*["']${OUTCOME}["']` +
-    "|" +
-    `(?:resolvedSearchParams|searchParams|params|sp)\\??\\.${OUTCOME}\\b` +
-    "|" +
-    `pick\\w*\\(\\s*\\w+\\??\\.${OUTCOME}\\b` +
-    ")",
-  "i",
-);
-
-/**
- * A status-carrying `<Alert>` — the transient-banner variants. Matches both a
- * string-literal variant (`variant="destructive"`) and an inline-expression
- * variant that names the code (`variant={x ? "destructive" : "default"}`). A
- * plain `<Alert>` / `variant="default"` (persistent/informational) does NOT
- * match. A variant supplied through an opaque variable is a known residual (see
- * the header's accepted-limits note).
- */
-export const ALERT_STATUS_BANNER =
-  /<Alert\b[^>]*\bvariant\s*=\s*(?:["'](?:success|destructive)["']|\{[^}>]*\b(?:success|destructive)\b)/;
-
-/** A raw colored-`<div>` banner in the flash palette (bg-/border- status
- * colors). `text-`-only destructive copy (in-dialog inline errors) does NOT
- * match — only a filled/bordered banner surface. `className={cn("bg-…")}` and
- * template-literal class strings are caught; a class built from a variable is
- * a known residual. */
-export const FLASH_COLORED_DIV =
-  /<div\b[^>]*className=[^>]*(?:bg-destructive|bg-red-|bg-amber-|bg-yellow-|bg-emerald-|bg-green-|border-destructive)\b/;
-
-/** True when the file renders a transient banner primitive. */
-export function rendersTransientBanner(strippedText: string): boolean {
-  return ALERT_STATUS_BANNER.test(strippedText) || FLASH_COLORED_DIV.test(strippedText);
-}
-
-/** True when the file reads a transient-outcome searchParam. */
-export function readsFlashOutcomeParam(strippedText: string): boolean {
-  return FLASH_OUTCOME_READ.test(strippedText);
-}
-
-/**
- * The guard's file-level match: a searchParams-flash-driven transient banner.
- * Comments are stripped first so a doc-comment mention neither trips nor masks
- * the guard. A file both reads a transient-outcome param AND renders a status
- * banner.
- */
-export function isBannerFile(text: string): boolean {
-  const stripped = stripComments(text);
-  return readsFlashOutcomeParam(stripped) && rendersTransientBanner(stripped);
-}
-
-// ---------------------------------------------------------------------------
 // Filesystem scan (deterministic; git-index-driven so gitignored node_modules
-// trees are excluded by construction).
+// trees are excluded by construction). The banner heuristic itself is imported
+// from scripts/audit/lib/toast-banner-detect.mjs above (shared with the
+// connector scanner); the unit fixtures at the bottom of this file remain the
+// permanent RED/GREEN proof.
 // ---------------------------------------------------------------------------
 
 /** This guard file, repo-relative — always excluded (it holds the fixtures). */
@@ -178,10 +126,9 @@ function listSourceFiles(): string[] {
   return out
     .split("\0")
     .filter((p) => p.length > 0)
-    // Never scan tests (fixtures), or the canonical island itself.
-    .filter((p) => !/(^|\/)__tests__\//.test(p))
-    .filter((p) => !/\.test\.tsx?$/.test(p))
-    .filter((p) => !/(^|\/)search-param-toast\.tsx$/.test(p))
+    // Never scan tests (fixtures) or the canonical island itself (shared
+    // exclusion predicate, so core and the connector scanner never drift).
+    .filter((p) => !isExcludedFromScan(p))
     .filter((p) => p !== GUARD_REL);
 }
 
