@@ -197,6 +197,68 @@ async function syncCanonicalRowTransition(
   });
 }
 
+// ---------------------------------------------------------------------------
+// SOFT-PATH capability-teardown gate (cinatra#1277 — the F9 refinement P5
+// consciously deferred).
+//
+// `fireExtensionCapabilityTeardown(packageName)` deregisters a package's
+// IN-PROCESS capability registrations — MCP tools, capability providers,
+// `ctx.ui` surfaces/actions, object types, dashboard cubes + portlet kinds —
+// PACKAGE-GLOBALLY: every one of those in-memory registries is keyed by package
+// NAME ONLY (no org dimension), and registration is register-once-at-boot,
+// driven by the StaticBundleLoader activating the package whenever ANY canonical
+// row is live (active/locked). Per-org AVAILABILITY is enforced at the
+// resolve/authz layer by each org's row status — NOT in these registries.
+//
+// P5 (cinatra#1130) routes org-admin archive / soft-uninstall through the SOFT
+// (archive) paths, which transition ONLY the actor-org's row. Firing the
+// package-global teardown there would drop the package's in-process
+// registrations for EVERY co-tenant org in the worker until the next boot /
+// activate — a bounded cross-org runtime-availability bleed. So on the soft
+// paths fire the teardown ONLY when the just-committed transition left NO
+// surviving live row for the package (it is now fully retired instance-wide);
+// while a co-tenant org's row is still active/locked, SKIP it — that org keeps
+// its registrations, and the archived actor-org is already denied at the
+// resolve/authz layer by its own now-archived row.
+//
+// This is org-AGNOSTIC (via the effective-status aggregate), so it is also
+// correct when a platform admin archives ONE org's row while another org is
+// live — a standing-based gate would wrongly fire and drop the sibling.
+//
+// FAIL-SAFE / BEST-EFFORT (codex convergence): the effective-status probe runs
+// AFTER the row transition already committed, so a probe failure must NOT abort
+// the committed soft archive — it is logged and the teardown is SKIPPED. Skip is
+// the safe direction: never drop a co-tenant org's tools; a stale in-memory
+// registration on a since-retired package is harmless (the archived rows deny it
+// at resolve/authz) and self-heals on the next boot.
+//
+// The HARD paths (platform-admin hard-delete uninstall / force_delete) still
+// fire the teardown UNCONDITIONALLY: they destroy the package's rows + durable
+// data package-globally, so the process-global in-memory teardown is correct.
+async function fireCapabilityTeardownIfPackageFullyRetired(packageName: string): Promise<void> {
+  try {
+    const { readEffectiveStatusByPackageNames } = await import("./canonical-store");
+    const effective = await readEffectiveStatusByPackageNames([packageName]);
+    // "active" ⇒ some canonical row is still live (a co-tenant org) ⇒ the package
+    // stays registered in-process for that org; skip the process-global teardown.
+    if (effective.get(packageName) === "active") return;
+  } catch (err) {
+    console.warn(
+      '[cinatra:extensions] surviving-live-row probe failed for "%s" after a soft ' +
+        "lifecycle transition — SKIPPING the process-global capability teardown " +
+        "(in-memory only; the durable transition already committed):",
+      packageName,
+      err instanceof Error ? err.message : err,
+    );
+    return;
+  }
+  // Fully retired instance-wide (no row active/locked) ⇒ tear the package's
+  // in-process registrations down, exactly as the pre-#1277 unconditional fire
+  // did for the last-live-row case.
+  const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
+  await fireExtensionCapabilityTeardown(packageName);
+}
+
 // PLATFORM-ADMIN-ONLY explicit per-row canonical cleanup for a package-GLOBAL
 // destruction. Reached ONLY behind an `isPlatformAdminActor` gate (org admins
 // are routed to the soft/archive path / refused before this). Transitions EVERY
@@ -1195,7 +1257,6 @@ class ExtensionRegistryImpl {
     // only ever reach their own org's row (the primary bound; the standing check
     // is the safety net under it).
     const row = await resolveLifecycleTargetRow(ref.packageName, actor);
-    const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
 
     // ORG-ADMIN parity: uninstall routes to the SOFT (archive) path only. The
     // hard-delete branch's handler.uninstall (deletes the agent template / skill
@@ -1204,8 +1265,11 @@ class ExtensionRegistryImpl {
     if (!isPlatformAdminActor(actor)) {
       await handler.archive(ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
-      // Process-local deregistration (in-memory only; DB rows preserved).
-      fireExtensionCapabilityTeardown(ref.packageName);
+      // Process-local deregistration (in-memory only; DB rows preserved) — but
+      // ONLY when this soft transition retired the package's LAST live row
+      // (cinatra#1277): while a co-tenant org's row is still live the package
+      // stays registered in-process for that org.
+      await fireCapabilityTeardownIfPackageFullyRetired(ref.packageName);
       return;
     }
 
@@ -1215,9 +1279,11 @@ class ExtensionRegistryImpl {
     if (used || cascade.archivedDependentExists) {
       await handler.archive(ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
-      // Process-local deregistration (in-memory only; DB rows preserved,
-      // archive is restorable). Best-effort + host-injected (no-op in workers).
-      fireExtensionCapabilityTeardown(ref.packageName);
+      // Process-local deregistration (in-memory only; DB rows preserved, archive
+      // is restorable) — gated on the package being fully retired instance-wide
+      // (cinatra#1277: a platform admin may archive one org's row while another
+      // org's row is still live). Best-effort + host-injected (no-op in workers).
+      await fireCapabilityTeardownIfPackageFullyRetired(ref.packageName);
       return;
     }
     // HARD-DELETE (platform-admin-only): handler.uninstall + data-teardown are
@@ -1225,8 +1291,10 @@ class ExtensionRegistryImpl {
     // only per-row bulk (not the retired fan-out).
     await handler.uninstall(ref, actor);
     await syncCanonicalPackageGlobalTransition(ref.packageName, "uninstall", actor);
-    // Process-local deregistration — fires for the HARD-DELETE branch too (then
-    // the durable teardown below removes DB rows).
+    // Process-local deregistration — fires UNCONDITIONALLY for the HARD-DELETE
+    // branch (the package is destroyed package-globally; then the durable
+    // teardown below removes DB rows).
+    const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
     fireExtensionCapabilityTeardown(ref.packageName);
     // Durable teardown of this package's org-scoped settings/secrets rows. Fires
     // ONLY in this HARD-DELETE branch — NOT the archive branch above, which
@@ -1251,10 +1319,12 @@ class ExtensionRegistryImpl {
     await syncCanonicalRowTransition(row, "archive", actor);
     // Process-local deregistration of the package's in-memory register(ctx)
     // registrations so an explicitly-archived extension stops being
-    // listable/invocable/resolvable in the running process without a restart.
-    // DB rows are PRESERVED (archive is restorable). Best-effort + host-injected.
-    const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
-    fireExtensionCapabilityTeardown(ref.packageName);
+    // listable/invocable/resolvable in the running process without a restart —
+    // but ONLY once this soft transition retired the package's LAST live row
+    // (cinatra#1277); while a co-tenant org's row is still live the package stays
+    // registered in-process for that org. DB rows are PRESERVED (archive is
+    // restorable). Best-effort + host-injected.
+    await fireCapabilityTeardownIfPackageFullyRetired(ref.packageName);
   }
 
   // Explicit restore. Re-activates the archived canonical row AND — for a hot-
