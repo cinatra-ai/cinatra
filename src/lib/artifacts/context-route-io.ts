@@ -142,6 +142,10 @@ function enforceContextAttestation(input: {
   runOas: Record<string, unknown> | null;
   slotId: string;
   expectedKind: ContextNodeKind;
+  /** cinatra#1194 — true only when the run was resolved via the run token
+   *  (servedBy === "run_token"). Gates the declaration re-anchor for slim
+   *  (declaration-only) specs; the legacy marker anchor is unaffected. */
+  runTokenServed: boolean;
 }): void {
   const { req, a2aContextId, runOas, slotId, expectedKind } = input;
   // The full fail-closed decision (context-id binding required, dedicated key
@@ -162,10 +166,18 @@ function enforceContextAttestation(input: {
     // Set CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0 to enforce v2-only once the wayflow
     // image has rolled.
     acceptLegacyV1: process.env.CINATRA_CONTEXT_ATTEST_ACCEPT_V1 !== "0",
+    // cinatra#1194 — the declaration re-anchor (injection grammar + installed
+    // contextSlots declaration) is admitted ONLY on the run-token path.
+    allowDeclarationAnchor: input.runTokenServed,
   });
   if (!result.ok) {
     throw new ContextRouteError(403, result.code, result.message);
   }
+  // cinatra#1194 — which-anchor metric for the slim-format rollout (ids only).
+  console.info(
+    `[context-attestation] node anchored via=${result.anchor} ` +
+      `slot=${result.slotId} kind=${result.kind}`,
+  );
   if (result.legacyV1) {
     // Transitional visibility: a legacy v1 (no-expiry) attestation was accepted.
     // Post-rollout this should stop appearing; then enforce v2-only via
@@ -370,9 +382,14 @@ export async function deriveContextRouteContext(
       runOas,
       slotId: body.slotId,
       expectedKind,
+      // cinatra#1194 — the declaration re-anchor for slim specs is admitted
+      // only when the run token selected the run (strongest binding).
+      runTokenServed: servedBy === "run_token",
     });
     const boundChildPackage = runOas
-      ? findBoundChildPackageForSlot(runOas, body.slotId)
+      ? findBoundChildPackageForSlot(runOas, body.slotId, {
+          allowDeclarationBinding: servedBy === "run_token",
+        })
       : null;
     if (!boundChildPackage || boundChildPackage !== body.parentPackageName) {
       throw new ContextRouteError(
