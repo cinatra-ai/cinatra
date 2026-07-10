@@ -113,6 +113,11 @@ export async function writeExtensionLifecycleAuditEntry(input: {
   actor: Actor;
   operation:
     | "force_delete"
+    // Platform-admin hard-delete uninstall branch: same pre-destruction
+    // provenance record as force_delete (destroyed-row snapshot + dangling
+    // references + resolved-row identities) for the other package-global
+    // hard-delete path that fires durable teardown (cinatra#1276).
+    | "uninstall"
     | "purge"
     | "registry_unpublish"
     | "registry_delete"
