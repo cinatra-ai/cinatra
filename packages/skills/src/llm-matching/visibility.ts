@@ -21,6 +21,10 @@
  */
 
 import type { SkillMatchRow } from "./types";
+import type {
+  AgentAuthPolicy,
+  AgentAuthPolicyVisibility,
+} from "@cinatra-ai/agents/auth-policy";
 
 export type VisibilityActor = {
   userId?: string;
@@ -41,9 +45,53 @@ export type VisibilitySkillMeta = {
   scope?: string;
   /** Set for `level: "agent"` skills - the canonical packageId of the owning agent. */
   agentId?: string;
+  /**
+   * Canonical EFFECTIVE access policy (multi-scope access W4, #1073) — the
+   * skill's own `accessPolicy` else the parent package's, resolved by the feeder
+   * (`resolveEffectiveSkillAccessPolicy` in @cinatra-ai/skills). When present its
+   * `runListVisibility` union is the SOLE membership decision (any-match), so an
+   * OR-policy like `[team:t1, project:p2]` admits members of EITHER scope — a
+   * projection the single `(level, scope)` tuple below cannot represent. Absent
+   * ⇒ the transitional `(level, scope)` fallback runs.
+   */
+  accessPolicy?: AgentAuthPolicy | null;
 };
 
 const SCOPED_LEVELS = new Set(["personal", "team", "organization", "workspace", "project"]);
+
+/**
+ * Any-match decision for the canonical access-policy union in the LLM-matching
+ * read filter (W4). Mirrors the per-token semantics of `requireResourceAccess`
+ * / `matchSkillAccessToken`, adapted to the roleless read-time `VisibilityActor`
+ * (no org-role / manage tier — list filtering is read-only). A single-token
+ * policy reproduces the exact legacy per-level decision; multi-token is their OR.
+ *
+ *   workspace    → authenticated workspace user (userId + orgId)
+ *   org:<id>     → actor's active org equals <id>
+ *   team:<id>    → actor is a member of team <id>
+ *   project:<id> → actor holds a grant on project <id>
+ *   owner        → actor is the skill owner (`skill.scope` is the owner id)
+ *   org (legacy) → bind to the skill's owning org (`skill.scope`), fail closed
+ *   admin        → deny (platform_admin is short-circuited by the caller)
+ */
+function actorMatchesSkillPolicy(
+  tokens: readonly AgentAuthPolicyVisibility[],
+  actor: VisibilityActor,
+  skill: VisibilitySkillMeta,
+): boolean {
+  const owner = skill.scope ?? "";
+  return tokens.some((token) => {
+    if (token === "workspace") return Boolean(actor.orgId && actor.userId);
+    if (token.startsWith("org:")) return actor.orgId === token.slice("org:".length);
+    if (token === "org") return owner !== "" && actor.orgId === owner;
+    if (token.startsWith("team:")) return actor.teamIds.includes(token.slice("team:".length));
+    if (token.startsWith("project:")) return actor.projectIds.includes(token.slice("project:".length));
+    if (token === "owner") return owner !== "" && actor.userId === owner;
+    // "admin" and anything unrecognized: deny (platform_admin already returned
+    // above in the caller's short-circuit).
+    return false;
+  });
+}
 
 /**
  * Visibility filter applied at READ time.
@@ -82,6 +130,15 @@ export function filterMatchRowsByVisibility(
     const skill = skillsById.get(row.skillId);
     if (!skill) return false; // defensive: skill no longer installed
     const level = skill.level;
+    // Canonical multi-scope enforcement (W4, #1073). When the effective policy
+    // is present it is the SOLE membership decision (any-match) — the tuple
+    // below can't represent an OR-policy. Applies at every level EXCEPT the
+    // structural pass-throughs (agent/system/third-party) whose visibility is
+    // decided by their bundling, not a per-actor scope union.
+    const tokens = skill.accessPolicy?.runListVisibility;
+    if (SCOPED_LEVELS.has(level) && tokens && tokens.length > 0) {
+      return actorMatchesSkillPolicy(tokens, actor, skill);
+    }
     if (!SCOPED_LEVELS.has(level)) return true; // agent / system / third-party pass through
 
     // "Workspace: All" means every workspace user, but the actor must be

@@ -92,6 +92,12 @@ vi.mock("../skills-registry", () => registryMock);
 
 const storeMock = vi.hoisted(() => ({
   updateSkillVisibility: vi.fn(),
+  // W4 (#1073): saveSkillVisibility now resolves the skill's effective access
+  // policy to thread onto the manage gate. Stub the catalog read + resolver so
+  // the gate uses the (level, scope) fallback (null effective policy) — the
+  // decision under test (system-skill hidden / personal owner) is unchanged.
+  readSkillsCatalog: vi.fn(async () => ({ skills: [], skillPackages: [] })),
+  resolveEffectiveSkillAccessPolicy: vi.fn(() => null),
 }));
 vi.mock("../skills-store", () => storeMock);
 
