@@ -54,7 +54,7 @@ const SEED_SCOPES = {
 
 function EditablePermissions() {
   return (
-    <ExtensionAccessControl initialValue="workspace" scopes={SEED_SCOPES} save={noopSave} />
+    <ExtensionAccessControl initialValue={["workspace"]} scopes={SEED_SCOPES} save={noopSave} />
   );
 }
 
