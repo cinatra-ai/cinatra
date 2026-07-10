@@ -63,3 +63,35 @@ describe("scheduling/trigger FIRE path routes through the config-needs run gate"
     expect(job).toMatch(/firing anyway \(fail-open\)/);
   });
 });
+
+describe("immediate-trigger surface routes through the config-needs run gate", () => {
+  const svc = read("trigger-service.ts");
+
+  it("gates the IMMEDIATE trigger through assertAgentRunReadyByPackage", () => {
+    // The immediate trigger transitions the run straight to `queued`, bypassing
+    // the fire-time gate — it must have its OWN readiness check.
+    expect(svc).toMatch(/immediateTriggerConfigBlock/);
+    expect(svc).toMatch(/assertAgentRunReadyByPackage/);
+    expect(svc).toMatch(/agent-run-readiness/);
+  });
+
+  it("refuses BEFORE any trigger row or schedule is created (fail-closed)", () => {
+    const gateIdx = svc.indexOf(
+      'const notReady = await immediateTriggerConfigBlock(run.templateId, actor.userId)',
+    );
+    const upsertIdx = svc.indexOf("await createOrUpdateRunTrigger(");
+    const scheduleIdx = svc.indexOf("scheduleResult = await scheduleTrigger(");
+    const queuedIdx = svc.indexOf('transitionRunStatus(args.runId, "pending_input", "queued")');
+    expect(gateIdx).toBeGreaterThan(-1);
+    // the gate runs before the first mutation, the scheduling call, and the
+    // immediate→queued transition
+    expect(gateIdx).toBeLessThan(upsertIdx);
+    expect(gateIdx).toBeLessThan(scheduleIdx);
+    expect(gateIdx).toBeLessThan(queuedIdx);
+    expect(svc).toMatch(/if \(notReady\) return \{ ok: false, error: notReady \}/);
+  });
+
+  it("gates ONLY the immediate type — scheduled/recurring arm without an arm-time config gate", () => {
+    expect(svc).toMatch(/if \(args\.triggerType === "immediate"\) \{\s*\n\s*const notReady = await immediateTriggerConfigBlock/);
+  });
+});

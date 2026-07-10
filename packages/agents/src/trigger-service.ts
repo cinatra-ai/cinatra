@@ -27,6 +27,7 @@ import {
   transitionRunStatus,
   RunTransitionError,
   readAgentRunById,
+  readAgentTemplateById,
 } from "./store";
 // Schedule↔PM-task sync (cinatra#317). packages/agents calls OUT to the
 // host-owned PM provider bridge via the Next.js "@/lib/*" alias (Option 2 / the
@@ -151,6 +152,48 @@ function isOwnerOrAdmin(
   return runOwnerId === actor.userId;
 }
 
+/**
+ * Fail-closed configuration-needs check for the IMMEDIATE trigger surface
+ * (cinatra #1057 ruling (b)). An immediate trigger transitions the run straight
+ * to `queued` for the dispatcher, bypassing the fire-time gate that
+ * trigger-release-job applies to scheduled/recurring fires — so the immediate
+ * surface needs its OWN check. Resolves the run's agent package from its
+ * template and asks the shared run-readiness predicate whether every REQUIRED
+ * connector is configured for this user; returns a human error naming each
+ * still-unconfigured connector (by displayName) when the dispatch must be
+ * refused, or `null` when the agent may run (out of scope / untracked / fully
+ * configured).
+ *
+ * Posture mirrors trigger-release-job's fire gate: a DETERMINATE unconfigured
+ * result blocks (the readiness derivation is itself fail-soft→blocking at the
+ * probe boundary), while a thrown INFRA error is non-determinate and left to the
+ * downstream backstops rather than stranding the trigger call (fail-open).
+ */
+async function immediateTriggerConfigBlock(
+  templateId: string,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const template = await readAgentTemplateById(templateId);
+    if (!template?.packageName) return null;
+    const { assertAgentRunReadyByPackage } = await import(
+      "@/lib/agent-run-readiness"
+    );
+    const block = await assertAgentRunReadyByPackage(
+      template.packageName,
+      template.packageName,
+      { userId: userId ?? null },
+    );
+    return block ? block.error : null;
+  } catch (err) {
+    console.warn(
+      "[setRunTriggerForActor] immediate config-needs gate errored — allowing (fail-open):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // setRunTriggerForActor — configure a trigger for `runId` on behalf of `actor`.
 // ---------------------------------------------------------------------------
@@ -175,6 +218,18 @@ export async function setRunTriggerForActor(
   if (!run) return { ok: false, error: "run not found" };
   if (!isOwnerOrAdmin(actor, run.runBy ?? null)) {
     return { ok: false, error: "forbidden" };
+  }
+
+  // CONFIGURATION-NEEDS RUN GATE — IMMEDIATE trigger surface (cinatra #1057
+  // ruling (b)): an immediate trigger dispatches NOW (transitions the run to
+  // `queued` below), so refuse it fail-closed BEFORE any trigger row or schedule
+  // is created when the agent's REQUIRED connectors are not yet configured for
+  // this user, naming each unconfigured connector. Scheduled/recurring are NOT
+  // gated at arm time — a connection may be configured before the future fire,
+  // which the fire path (trigger-release-job) re-checks.
+  if (args.triggerType === "immediate") {
+    const notReady = await immediateTriggerConfigBlock(run.templateId, actor.userId);
+    if (notReady) return { ok: false, error: notReady };
   }
 
   // Server-side validation — defence in depth + consistency between
