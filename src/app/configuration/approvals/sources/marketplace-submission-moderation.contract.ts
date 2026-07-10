@@ -7,7 +7,7 @@ import {
   cappedCount,
   guardedCount,
   marketplaceAvailability,
-  resolveInstanceToken,
+  resolveAdminToken,
 } from "./marketplace-shared";
 import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./types";
 
@@ -32,7 +32,7 @@ export const marketplaceSubmissionModerationContract = {
   appliesTo: (viewer: ApprovalViewer, direction) => viewer.isAdmin && direction === "inbox",
 
   async counts(viewer: ApprovalViewer): Promise<SourceCounts> {
-    const inbox = await guardedCount(viewer, resolveInstanceToken(), `${SOURCE_ID}:inbox`, async (token) => {
+    const inbox = await guardedCount(viewer, resolveAdminToken(), `${SOURCE_ID}:inbox`, async (token) => {
       const client = createMarketplaceClient(token);
       const out = await client.extensionSubmissionListAdmin({
         status: "pending",

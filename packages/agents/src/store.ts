@@ -2270,6 +2270,14 @@ export async function readAgentRunByContextId(
   return row ? deserializeRun(row) : null;
 }
 
+// #1193 run-token spine store seam. Extracted verbatim to ./run-token-store to
+// keep this hub under the file-size ratchet ceiling; re-exported here so callers
+// importing from ./store are unchanged (pure mechanical extraction).
+export {
+  setAgentRunTokenHash,
+  readAgentRunByTokenHash,
+} from "./run-token-store";
+
 /**
  * Update the user-given title for an agent run.
  * Used by run-name-actions.ts and by legacy-agent adapters .

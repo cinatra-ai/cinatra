@@ -1533,10 +1533,7 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_a2a_task_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (a2a_task_id) WHERE a2a_task_id IS NOT NULL` },
     // agent_dependencies: JSON-stringified Record<string,string> of @cinatra/* dep ranges
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_dependencies text` },
-    // connector_dependencies: JSON-stringified
-    // Record<string,string> of @cinatra-ai/<x>-connector workspace dep ranges.
-    // One-shot ADD COLUMN IF NOT EXISTS — nullable, no backfill (no legacy
-    // values to migrate; agents publish with the field present).
+    // connector_dependencies: JSON-stringified Record<string,string> of @cinatra-ai/<x>-connector dep ranges (nullable, additive, no backfill).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS connector_dependencies text` },
     // type: leaf | proxy | orchestrator (default 'leaf')
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS type text NOT NULL DEFAULT 'leaf'` },
@@ -1551,6 +1548,9 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS workflow_task_id text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_idempotency_key_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (idempotency_key) WHERE idempotency_key IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_workflow_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (workflow_id) WHERE workflow_id IS NOT NULL` },
+    // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON

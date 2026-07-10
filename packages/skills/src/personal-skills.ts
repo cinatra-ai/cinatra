@@ -280,6 +280,9 @@ export async function createOrUpdateCustomSkillForAgent(input: {
   // `requireResourceAccess`.
   if (input.actor) {
     const actor = input.actor;
+    // Resolve package inheritance once for the leak-guard filter (W4).
+    const { readSkillsCatalog, resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
+    const matchedSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
     matchedSkills = matchedSkills.filter((skill) => {
       try {
         // See auth-policy.ts buildSkillResourceRef.
@@ -287,6 +290,8 @@ export async function createOrUpdateCustomSkillForAgent(input: {
           id: skill.id,
           level: skill.level,
           scope: skill.scope ?? null,
+          // Canonical effective policy (W4): skill override else package's.
+          accessPolicy: resolveEffectiveSkillAccessPolicy(skill, matchedSkillPackages),
         }));
         return true;
       } catch {

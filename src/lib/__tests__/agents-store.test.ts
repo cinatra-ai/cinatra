@@ -88,6 +88,20 @@ vi.mock("@cinatra-ai/skills", async () => {
   return {
     filterMatchRowsByVisibility: visibility.filterMatchRowsByVisibility,
     MANUAL_VERSION: "manual",
+    // W4 (#1073): getAssignedSkillIdsForAgent resolves each skill's effective
+    // access policy (own override else parent package's) to feed the visibility
+    // filter. Mirror the real resolver inline (avoids importActual of the
+    // server-only-guarded skill-packages module); with no accessPolicy set the
+    // filter falls back to the (level, scope) tuple these tests already assert.
+    resolveEffectiveSkillAccessPolicy: (
+      skill: { packageId?: string; accessPolicy?: unknown } | undefined,
+      skillPackages: Array<{ id?: string; packageId?: string; accessPolicy?: unknown }> = [],
+    ) =>
+      skill?.accessPolicy ??
+      skillPackages.find(
+        (p) => p.packageId === skill?.packageId || p.id === skill?.packageId,
+      )?.accessPolicy ??
+      null,
     readSkillsCatalog: vi.fn(async () => skillsCatalogState),
     skillMatchesStore: {
       readAllMatched: vi.fn(async () => persistedMatchRows),

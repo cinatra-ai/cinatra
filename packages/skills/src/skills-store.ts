@@ -5,7 +5,16 @@ import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
-import { installedSkillPackages } from "./skill-packages";
+// installedSkillPackages + the canonical access-policy helpers (W4, #1073) live
+// in ./skill-packages (an already-graph-reachable node) — co-located there to
+// avoid adding a new module to the locked route bundles (route-graph ratchet)
+// while keeping this file under its size ceiling (file-size ratchet).
+import {
+  installedSkillPackages,
+  normalizeStoredAccessPolicy,
+  visibilityToLevelScope,
+} from "./skill-packages";
+export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
 import { assertSafePathSegment } from "@cinatra-ai/registries";
@@ -780,7 +789,11 @@ function scanInstalledPackageCatalog() {
   return { skillPackages, skills };
 }
 
-function normalizeStoredSkillPackage(record: Record<string, unknown>): PersistedSkillPackage | null {
+// Exported for the W4 normalization round-trip test. The DB sync
+// (`syncInstalledSkillsToDatabase`) maps every stored row through these exact
+// functions before writing back, so proving they preserve `accessPolicy` proves
+// the sync round-trips it (the DROP here was the #1073 bug).
+export function normalizeStoredSkillPackage(record: Record<string, unknown>): PersistedSkillPackage | null {
   if (
     typeof record.id !== "string" ||
     typeof record.packageId !== "string" ||
@@ -807,6 +820,11 @@ function normalizeStoredSkillPackage(record: Record<string, unknown>): Persisted
     isCustom: record.isCustom === true,
     level: isSkillLevel(record.level) ? record.level : undefined,
     originRepoUrl: typeof record.originRepoUrl === "string" ? record.originRepoUrl : undefined,
+    // Preserve the canonical access policy (W4) — the enforcement source. Also
+    // carry installedByUserId through, the package's primary-owner anchor.
+    accessPolicy: normalizeStoredAccessPolicy(record.accessPolicy),
+    installedByUserId:
+      typeof record.installedByUserId === "string" ? record.installedByUserId : undefined,
   };
 }
 
@@ -814,7 +832,7 @@ function isPersistedSkillPackage(value: PersistedSkillPackage | null): value is 
   return value !== null;
 }
 
-function normalizeStoredSkill(record: Record<string, unknown>): PersistedSkill | null {
+export function normalizeStoredSkill(record: Record<string, unknown>): PersistedSkill | null {
   if (
     typeof record.id !== "string" ||
     typeof record.slug !== "string" ||
@@ -860,6 +878,10 @@ function normalizeStoredSkill(record: Record<string, unknown>): PersistedSkill |
     // (excluded). The whitelist would silently drop this field otherwise.
     allowAnthropicUpload:
       record.allowAnthropicUpload === true ? true : undefined,
+    // Preserve the per-skill access-policy override (W4) — the canonical
+    // enforcement source that takes precedence over the parent package's policy.
+    // Was dropped here, forcing every policy reader onto the lossy tuple.
+    accessPolicy: normalizeStoredAccessPolicy(record.accessPolicy),
   };
 
   // Derive level and scope if not explicitly stored
@@ -2291,33 +2313,11 @@ export async function uninstallSkillPackage(packageId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// updateSkillVisibility — write AgentAuthPolicyVisibility back to (level, scope)
+// updateSkillVisibility — write AgentAuthPolicyVisibility back to (level, scope).
+// The (level, scope) projection helper `visibilityToLevelScope` lives in the
+// sibling ./skill-packages module (imported above) to keep this file under the
+// size ratchet.
 // ---------------------------------------------------------------------------
-
-/**
- * Maps an AgentAuthPolicyVisibility token to the (level, scope) columns used
- * by the persisted skill catalog. Lossless round-trip for the supported
- * variant set.
- */
-function visibilityToLevelScope(
-  visibility: string,
-  ownerUserId: string | undefined,
-): { level: SkillLevel; scope: string | undefined } {
-  if (visibility === "owner") return { level: "personal", scope: ownerUserId };
-  if (visibility === "org" || visibility.startsWith("org:")) {
-    return { level: "organization", scope: "org" };
-  }
-  if (visibility.startsWith("team:")) {
-    return { level: "team", scope: visibility.slice("team:".length) };
-  }
-  if (visibility.startsWith("project:")) {
-    return { level: "project", scope: visibility.slice("project:".length) };
-  }
-  if (visibility === "workspace") return { level: "workspace", scope: undefined };
-  if (visibility === "admin") return { level: "system", scope: undefined };
-  // Fallback — keep personal
-  return { level: "personal", scope: ownerUserId };
-}
 
 /**
  * Persist an access-policy change for an installed skill.
