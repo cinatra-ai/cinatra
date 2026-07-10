@@ -79,6 +79,14 @@ vi.mock("@/lib/extension-install-batch", () => ({
     (installBatchMock as (...x: unknown[]) => unknown)(...a),
 }));
 
+// #1039 Option B (update-time): extensions_update routes through the batch on
+// the dev/non-gatekept path (rootAction:'update'). The real @/lib/gatekept-
+// install returns isGatekeptInstallEnabled()===false in this test environment
+// (the extensions_install wrapper relies on the same), so no mock is needed —
+// the update lands on the batch entry exactly like install. The gatekept
+// direct-update branch (deferred durable-restore, #1296) is exercised by the
+// gatekept lifecycle-resolution suites, not re-mocked here.
+
 vi.mock("@/lib/verdaccio-config", () => ({
   loadVerdaccioConfigForServer: vi.fn(async () => ({
     registryUrl: "http://localhost:4873",
@@ -260,13 +268,13 @@ describe("extensions MCP tool handlers", () => {
     expect(result.packageVersion).toBe("2.0.0");
   });
 
-  it("extensions_update calls extensionRegistry.update with correct typeId", async () => {
-    // deriveTypeId throws on unsupported kinds instead of silently rerouting
-    // to "agent", which would produce cryptic Zod errors deep in the agent
-    // install path. Use kind:"agent"
-    // here for the happy path and assert the throw separately below.
+  it("extensions_update routes through the dependency-batch entry (rootAction:'update') on the dev path (#1039)", async () => {
+    // #1039 Option B (update-time slice): on the dev/non-gatekept path the
+    // update no longer calls extensionRegistry.update directly — it routes
+    // through the planner/batch as a committed in-place root update so the new
+    // version's newly required deps auto-install and dependent-break checking
+    // becomes plan-aware. The batch re-derives the member typeId itself.
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: "3.1.0", manifest: { cinatra: { kind: "agent" } } });
-    extensionRegistry.update.mockResolvedValueOnce(undefined);
 
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
@@ -275,11 +283,14 @@ describe("extensions MCP tool handlers", () => {
       actor,
     );
 
-    expect(extensionRegistry.update).toHaveBeenCalledWith(
-      "agent",
-      { registryUrl: "", packageName: "@cinatra/my-agent-2", version: "3.1.0" },
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: "@cinatra/my-agent-2",
+      version: "3.1.0",
       actor,
-    );
+      rootAction: "update",
+    });
+    // The bare dispatcher update is NOT called directly on the dev path.
+    expect(extensionRegistry.update).not.toHaveBeenCalled();
     expect(result).toEqual({
       success: true,
       packageName: "@cinatra/my-agent-2",
@@ -289,9 +300,9 @@ describe("extensions MCP tool handlers", () => {
 
   it("extensions_update dispatches + records the RESOLVED exact version, not the raw 'latest' input", async () => {
     // Same exact-version-threading invariant as extensions_install: a "latest"
-    // update authorizes a concrete version and must dispatch/record THAT.
+    // update authorizes a concrete version and must dispatch/record THAT
+    // (now via the batch entry on the dev path).
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: "4.2.0", manifest: { cinatra: { kind: "agent" } } });
-    extensionRegistry.update.mockResolvedValueOnce(undefined);
 
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
@@ -300,11 +311,12 @@ describe("extensions MCP tool handlers", () => {
       actor,
     );
 
-    expect(extensionRegistry.update).toHaveBeenCalledWith(
-      "agent",
-      { registryUrl: "", packageName: "@cinatra/my-agent-2", version: "4.2.0" },
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: "@cinatra/my-agent-2",
+      version: "4.2.0",
       actor,
-    );
+      rootAction: "update",
+    });
     expect(result).toEqual({
       success: true,
       packageName: "@cinatra/my-agent-2",
@@ -312,35 +324,25 @@ describe("extensions MCP tool handlers", () => {
     });
   });
 
-  it("extensions_update dispatches connector kind to the connector handler", async () => {
-    // Connector is a registered extension kind: deriveTypeId no longer
-    // throws for "connector" (handler-bootstrap registers
-    // createConnectorExtensionHandler). The runtime guard moved DOWN to the
-    // connector handler; at the dispatch level extensions_update now resolves
-    // the "connector" typeId and calls extensionRegistry.update accordingly,
-    // instead of pre-failing at deriveTypeId. This unlocks
-    // extensions_force_delete / extensions_purge reaching the connector
-    // handler for DB + audit + Verdaccio cleanup.
-    //
-    // The connector handler is also MODEL-B-AWARE — a schema-config
-    // connector is runtime-installable; a bundled-react one raises the typed
-    // ConnectorRequiresRebuildError, which the MCP handler surfaces as a
-    // { requiresRebuild:true } result (covered in connector-handler-model-b.test.ts).
-    // This dispatch test only exercises the happy connector-typeId path, so it
-    // mocks the RESOLVED exact version the assertion below pins (3.1.0).
+  it("extensions_update is kind-agnostic on the dev path — a connector update also routes through the batch (#1039)", async () => {
+    // The dispatch-level typeId resolution (deriveTypeId) is now the batch
+    // planner's job; the update entry hands the batch the package + version +
+    // rootAction:'update' and the planner re-derives the member kind. This
+    // proves a connector update takes the same plan-aware path as an agent one.
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "connector", resolvedVersion: "3.1.0", manifest: { cinatra: { kind: "connector" } } });
-    extensionRegistry.update.mockResolvedValueOnce(undefined);
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
     await handlers.extensions_update(
       { packageName: "@cinatra/my-connector", packageVersion: "3.1.0" },
       actor,
     );
-    expect(extensionRegistry.update).toHaveBeenCalledWith(
-      "connector",
-      { registryUrl: "", packageName: "@cinatra/my-connector", version: "3.1.0" },
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: "@cinatra/my-connector",
+      version: "3.1.0",
       actor,
-    );
+      rootAction: "update",
+    });
+    expect(extensionRegistry.update).not.toHaveBeenCalled();
   });
 
   it("extensions_install surfaces a REQUIRES_REBUILD throw as a { requiresRebuild:true } result (not a 500)", async () => {

@@ -128,6 +128,9 @@ export type InstallBatchSagaDeps = {
     root: { packageName: string; version: string };
     orgId: string | null;
     closure: GatekeptInstallResolution["authorize"]["closure"] | null;
+    /** #1039 Option B (update-time): the root is a committed in-place update
+     *  (dev/non-gatekept path) rather than a fresh install. */
+    rootAction?: "install" | "update";
   }) => Promise<DependencyInstallPlan>;
   /**
    * Run `fn` with the SAGA-OWNED-FAN-OUT context active (#157). The agent
@@ -338,7 +341,21 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
  * The dependency-batch install entry. See the module doc for the saga shape.
  */
 export async function installExtensionWithDependencies(
-  input: { packageName: string; version?: string; actor: Actor },
+  input: {
+    packageName: string;
+    version?: string;
+    actor: Actor;
+    /**
+     * #1039 Option B (update-time slice): `"update"` routes the ROOT through
+     * the durable UPDATE pipeline as a COMMITTED in-place member (its new
+     * required deps auto-install as fresh members first; a clean shared-dep
+     * dedupe-upward executes as its own committed update). Set by
+     * `updateExtensionPackage` / `extensions_update` on the dev/non-gatekept
+     * path only. Absent/`"install"` (default) = the unchanged fresh-install
+     * flow. The gatekept update path is deferred (#1296) and never sets this.
+     */
+    rootAction?: "install" | "update";
+  },
   depsOverride?: InstallBatchSagaDeps,
 ): Promise<BatchInstallResult> {
   // Tests inject COMPLETE deps; production callers take the default factory
@@ -417,6 +434,11 @@ export async function installExtensionWithDependencies(
         root: { packageName: input.packageName, version: rootVersion },
         orgId,
         closure: resolution ? resolution.authorize.closure : null,
+        // #1039 Option B (update-time): route the root through the durable
+        // update pipeline as a committed member. `resolution == null` on the
+        // dev/non-gatekept path (the only path an update is routed here); on the
+        // gatekept path the planner defensively ignores this (closure != null).
+        rootAction: input.rootAction ?? "install",
       });
 
       const toInstall = plan.ordered.filter((m) => !m.alreadyInstalled);
@@ -491,18 +513,27 @@ export async function installExtensionWithDependencies(
     // an agent (installAgentFromPackage does not reload on its own).
     if (batch === null) {
       const root = toInstall[0]!;
+      // #1039 Option B (update-time): a lone root can itself be a committed
+      // in-place UPDATE (`updateExtensionPackage`/`extensions_update` on the
+      // dev/non-gatekept path with no NEW deps to add) — route it through the
+      // durable update pipeline, not a fresh install. A fresh depless install
+      // stays exactly as before (installMember).
+      const rootIsUpdate = root.action === "update";
       await deps.withSagaOwnedFanout(input.packageName, () =>
-        deps.installMember(root, input.actor),
+        rootIsUpdate
+          ? deps.updateMemberPackage(root, input.actor)
+          : deps.installMember(root, input.actor),
       );
       await maybeReloadAgentRuntime([root]);
+      const rootEntry = { packageName: root.packageName, version: root.version };
       return {
         rootPackage: input.packageName,
         // The PLANNED root version (dev "latest" already resolved concrete).
         rootVersion: root.version,
-        installed: [{ packageName: root.packageName, version: root.version }],
-        // The root-only fast path never carries a dedupe-upward update member
-        // (a lone root is always a fresh install of the root itself).
-        updated: [],
+        installed: rootIsUpdate ? [] : [rootEntry],
+        // An in-place root update is surfaced under `updated`, mirroring the
+        // committed dedupe-upward result partition on the batched path.
+        updated: rootIsUpdate ? [rootEntry] : [],
         alreadyInstalled,
         batchId: null,
       };
