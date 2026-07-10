@@ -228,6 +228,30 @@ export type InstalledExtension = {
   kind: ExtensionKind;
   status: ExtensionLifecycleStatus;
   source: ExtensionSource;
+  /**
+   * The installed package VERSION — part of the storage identity (cinatra#1040
+   * S1: multiple versions of one package can be installed side by side, each its
+   * own canonical row). Derived from the source's own version for verdaccio /
+   * bundled sources; github / local sources carry no version, so the store and
+   * the core__0022 backfill floor them to `0.0.0`. ALWAYS present on a row read
+   * from the DB (the column is NOT NULL) — `rowToCanonical` always sets it;
+   * OPTIONAL on the type only as an additive-compat measure (the same shape as
+   * `accessDeclaration` below) so existing install-row fixtures/writers need not
+   * thread it, and the store re-derives it at insert.
+   */
+  version?: string;
+  /**
+   * Whether THIS version is the DEFAULT that owns the package's unversioned
+   * global name (cinatra#1040 S1). Exactly one default per (org, owner, package)
+   * — DB-enforced by a partial-unique index. ALWAYS present on a DB read (the
+   * column is NOT NULL DEFAULT true); OPTIONAL on the type only for additive
+   * compat (as above). The two DB-query projection seams (connectors-registry,
+   * agent-mount-projection) read only the default row for a global name — they
+   * drop a row ONLY when it is EXPLICITLY non-default (`isDefault === false`), so
+   * a legacy/single-version row (true, or an unset fixture) is always kept.
+   * Selection of a non-default version is a later slice.
+   */
+  isDefault?: boolean;
   requiredInProd: boolean;
   dependencies: ExtensionDependency[];
   manifestHash: string | null;

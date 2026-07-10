@@ -178,9 +178,14 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
     // preservation proof): provenance source, dependency edges, manifest
     // hash, owner/org scoping — the pre-upgrade prod reality of the
     // 33-package interim set.
+    // version is NOT NULL since cinatra#1040 S1 (version identity). These
+    // legacy local/bundled anchor sources carry no source.version, so they
+    // floor to '0.0.0' — the same backfill floor versionIdentitySchemaQueries
+    // applies to version-less sources. is_default defaults true (sole row per
+    // identity), so it needs no explicit value here.
     const insert = `INSERT INTO "${schema}".installed_extension
-      (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11)`;
+      (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash, version)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,'0.0.0')`;
     // demoted, prod-locked platform anchor with rich metadata
     await client.query(insert, [
       "iext_demoted_twenty",
@@ -333,9 +338,11 @@ describe.skipIf(!hasDb)("fresh prod DB — seeding creates ONLY the shrunk requi
     // image): the records-driven seeder must never consult, touch, or
     // resurrect it.
     await client.query(
+      // version NOT NULL since cinatra#1040 S1; version-less local source
+      // floors to '0.0.0' (see the upgraded-DB fixture note above).
       `INSERT INTO "${schema}".installed_extension
-       (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11)`,
+       (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash, version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,'0.0.0')`,
       [
         "iext_optional_blog",
         "@cinatra-ai/blog-connector",

@@ -64,9 +64,9 @@ type SidebarOpts = {
 // gate INDEPENDENTLY so a new approval source can light Approvals without
 // touching the sidebar:
 //   • Approvals — availability-driven (approvalsNavVisible, resolved server-side
-//     from the ApprovalSource registry). In v1 that means admins, preserving
-//     today's behavior; a future non-admin-actionable source flips it on with
-//     no edit here. Carries the pending-count pill.
+//     from the ApprovalSource registry): admins (an actionable Inbox source) OR
+//     any viewer with an own request in flight (the option-b non-admin path,
+//     cinatra#1302). Carries the pending-count pill.
 //   • Configuration — the cog → /configuration entry, admin-only.
 // The group renders when EITHER item is present, and is null when neither is.
 // Exported for unit tests (the availability-driven Approvals split is the

@@ -6,8 +6,16 @@ import { eq, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
-import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
+
+import {
+  capabilityOwnershipGrantSchemaQueries,
+  versionIdentitySchemaQueries,
+} from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
+import {
+  skillPackageCoOwnerConstraintQueries,
+  skillCoOwnerConstraintQueries,
+} from "@/lib/co-owner-constraint-schema";
 
 type QueryInput = {
   text: string;
@@ -251,60 +259,7 @@ END $$` },
       granted_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (package_id, user_id)
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS skill_package_co_owners_user_id_idx ON "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners" (user_id)` },
-    { text: `DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_package_co_owners'
-            AND constraint_name = 'skill_package_co_owners_user_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_user_id_fkey
-            FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_package_co_owners'
-            AND constraint_name = 'skill_package_co_owners_granted_by_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_granted_by_fkey
-            FOREIGN KEY (granted_by) REFERENCES public."user"(id);
-        END IF;
-        -- Replace CASCADE with RESTRICT on the
-        -- package_id FK if a pre-existing schema was bootstrapped while the
-        -- CASCADE was still in CREATE TABLE. Idempotent: only fires when the
-        -- current constraint delete_rule is still CASCADE.
-        IF EXISTS (
-          SELECT 1 FROM information_schema.referential_constraints rc
-          WHERE rc.constraint_schema = '${schemaName.replaceAll("'", "''")}'
-            AND rc.constraint_name = 'skill_package_co_owners_package_id_fkey'
-            AND rc.delete_rule = 'CASCADE'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            DROP CONSTRAINT skill_package_co_owners_package_id_fkey;
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_package_id_fkey
-            FOREIGN KEY (package_id) REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_packages"(id) ON DELETE RESTRICT;
-        END IF;
-        -- Heal a schema where the package_id FK is
-        -- missing entirely after table
-        -- creation, or any state where the constraint got dropped manually).
-        -- CREATE TABLE IF NOT EXISTS won't re-add the FK, so we add it here.
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_package_co_owners'
-            AND constraint_name = 'skill_package_co_owners_package_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_package_id_fkey
-            FOREIGN KEY (package_id) REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_packages"(id) ON DELETE RESTRICT;
-        END IF;
-      END $$;` },
+    ...skillPackageCoOwnerConstraintQueries(schemaName),
     // skill_co_owners: per-skill (not per-package)
     // sharing join. Lets operators override the parent package's access
     // policy on individual skills. Mirrors skill_package_co_owners
@@ -327,52 +282,7 @@ END $$` },
       granted_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (skill_id, user_id)
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS skill_co_owners_user_id_idx ON "${schemaName.replaceAll('"', '""')}"."skill_co_owners" (user_id)` },
-    { text: `DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_co_owners'
-            AND constraint_name = 'skill_co_owners_user_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-            ADD CONSTRAINT skill_co_owners_user_id_fkey
-            FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_co_owners'
-            AND constraint_name = 'skill_co_owners_granted_by_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-            ADD CONSTRAINT skill_co_owners_granted_by_fkey
-            FOREIGN KEY (granted_by) REFERENCES public."user"(id);
-        END IF;
-        -- Heal a schema where skill_id FK was
-        -- never added (table was originally created without it).
-        --
-        -- review follow-up: BEFORE adding the FK, clean up any orphan
-        -- skill_co_owners rows whose skill_id no longer points at a real
-        -- skill row. The legacy no-FK design allowed package-uninstall
-        -- paths to drop skill rows while leaving co-owner grants in place;
-        -- those orphans would block ALTER TABLE ADD CONSTRAINT now.
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_co_owners'
-            AND constraint_name = 'skill_co_owners_skill_id_fkey'
-        ) THEN
-          DELETE FROM "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-          WHERE skill_id NOT IN (
-            SELECT id FROM "${schemaName.replaceAll('"', '""')}"."skills"
-          );
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-            ADD CONSTRAINT skill_co_owners_skill_id_fkey
-            FOREIGN KEY (skill_id) REFERENCES "${schemaName.replaceAll('"', '""')}"."skills"(id) ON DELETE RESTRICT;
-        END IF;
-      END $$;` },
+    ...skillCoOwnerConstraintQueries(schemaName),
 
     // -----------------------------------------------------------------------
     // Generic extension permissions consolidation.
@@ -619,13 +529,11 @@ END $$` },
     { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_org_uniq` },
     { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_global_uniq` },
     // The TRUST INVARIANT moves to the DB: AT MOST ONE `finalized` op per
-    // (package, org) — that single finalized op IS the install anchor. The
-    // partial unique index makes it provable + serializes concurrent finalizes
-    // (finalizeInstallOp's supersession demotes the prior finalized op first). A
-    // GLOBAL (org_id IS NULL) twin is needed because Postgres treats NULLs as
-    // distinct under a plain unique.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id) WHERE phase = 'finalized'` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_global ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE phase = 'finalized' AND org_id IS NULL` },
+    // (package, org) — that single finalized op IS the install anchor. cinatra#1040
+    // S1 re-keys that uniqueness to include version (one anchor per package/org/
+    // version): the version-keyed partial-unique indexes (+ their GLOBAL org-NULL
+    // twins) are created by `versionIdentitySchemaQueries` (spread below), which
+    // also drops the pre-#1040 org-only names on an upgraded DB.
     // Anchor / non-finalized-window / sweeper reads scan by (package, org, phase).
     { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_scope_phase_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id, phase)` },
     { text: `DO $$
@@ -2728,18 +2636,17 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // The RESOLVED connector access declaration cache (cinatra#951); NULL for
     // non-connector kinds / pre-reader rows. Additive → bootstrap ADD COLUMN.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS access_declaration jsonb` },
-    // Identity is (organization_id, owner_level, owner_id, package_name).
+    // Identity is (organization_id, owner_level, owner_id, package_name, VERSION).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'
     // in owner_id). Postgres treats NULLs as distinct in unique constraints by
-    // default — partial indexes handle both cases.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_org_idx
-  ON "${schemaName.replaceAll('"', '""')}"."installed_extension"
-    (organization_id, owner_level, owner_id, package_name)
-  WHERE organization_id IS NOT NULL` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_platform_idx
-  ON "${schemaName.replaceAll('"', '""')}"."installed_extension"
-    (owner_level, owner_id, package_name)
-  WHERE organization_id IS NULL` },
+    // default — partial indexes handle both cases. cinatra#1040 S1 adds version to
+    // the identity (multiple versions installable side by side) plus is_default +
+    // a one-default-per-identity index: the version column, backfill, the
+    // version-keyed identity indexes and the one-default indexes (and the
+    // extension_install_ops re-key above) all live in the pure-strings leaf
+    // `versionIdentitySchemaQueries`, spread here AFTER both tables' CREATE
+    // statements. The leaf drops the pre-#1040 org-only identity index names.
+    ...versionIdentitySchemaQueries(schemaName),
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_kind_status_idx
   ON "${schemaName.replaceAll('"', '""')}"."installed_extension" (kind, status)` },
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_package_name_idx
