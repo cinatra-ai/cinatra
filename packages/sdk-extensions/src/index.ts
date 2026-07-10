@@ -208,49 +208,6 @@ export {
   _resetPmWorkStoreRegistry,
 } from "./pm-work-store-registry-contract";
 
-// PROJECT-TEMPLATE contract (EPIC #1030, cinatra#1032): the typed
-// `cinatra/project-template.json` task graph + PURE deterministic derivations —
-// schema validation, the worker-ref "one truth source" rule (exact-match to the
-// manifest `cinatra.dependencies` edges), the worker allowlist, deterministic
-// date materialization into `PmWorkStore` drafts, and the deterministic
-// ready-item PICK validator (the shared outside-the-LLM "ready" predicate). Types
-// + pure functions only. The RUNTIME consumers (the dynamic dispatch primitive +
-// dispatch-attempt ledger + project lease, the install/kind-gate enforcement
-// wiring, and the plane-project-manager-agent extension) are separate follow-on
-// slices — this module holds no dispatch/OBO-ceiling runtime state.
-export type {
-  WorkerAgentRef,
-  ApprovalGate,
-  AcceptanceCheck,
-  TaskSchedule,
-  ProjectTemplateTask,
-  ProjectTemplateAnchor,
-  ProjectTemplate,
-  ProjectTemplateViolation,
-  ProjectTemplateValidation,
-  MaterializedWorkItem,
-  MaterializeOptions,
-  ReadyItemView,
-  NotReadyReason,
-  ReadyContext,
-} from "./project-template-contract";
-export {
-  PROJECT_TEMPLATE_FORMAT_VERSION,
-  PROJECT_TEMPLATE_NATURAL_KEY_SEPARATOR,
-  PROJECT_TEMPLATE_ID_PATTERN,
-  validateProjectTemplate,
-  versionConstraintsEqual,
-  checkTemplateWorkerRefsAgainstDependencies,
-  templateWorkerAllowlist,
-  composeWorkItemNaturalKey,
-  computeAbsoluteDate,
-  materializeProjectTemplate,
-  itemNotReadyReason,
-  isItemReady,
-  indexItemStatusByKey,
-  readyItems,
-} from "./project-template-contract";
-
 export {
   setExtensionConnectorConfigStore,
   getExtensionConnectorConfig,
