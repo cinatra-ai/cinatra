@@ -225,11 +225,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       // header actions. The declared status-probe is lifted into that card (its
       // Check runs the connector's own `connectionStatus` action), and the form
       // column suppresses the inline probe row so the same probe never renders
-      // twice. No plug/unplug Connect/Disconnect pair is built here — for a
-      // key-based connector the real actions are the schema's own Save/Clear named
-      // actions in the fields column, and whether such connectors also get the
-      // canonical plug/unplug pair is a spec-interpretation question still pending
-      // the owner (epic #1101).
+      // twice. Per the owner's ruling (epic #1101, 2026-07-10) the key-based
+      // connectors ALSO get the canonical indigo-plug Connect / red-unplug
+      // Disconnect pair: the form renders it from the connector's own
+      // `role`-tagged named actions (saveConnection→connect, clearConnection→
+      // disconnect), seeded with the connector's connected state so Disconnect is
+      // disabled until connected (design §II items 7/8/15/16). `initialConnected`
+      // is the SAME `resolveConnectorBadgeState` seed the status card reads.
       return (
         <ConnectorSetupPage
           title={displayName}
@@ -246,6 +248,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
                   surface={render.surface}
                   isAdmin={isAdmin}
                   omitFieldKinds={["status-probe"]}
+                  initialConnected={badgeState.connected}
                 />
               }
               aside={

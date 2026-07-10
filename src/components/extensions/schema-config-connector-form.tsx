@@ -16,7 +16,17 @@
 // admin-only value at the write handler — defense in depth).
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { CheckIcon, CopyIcon, PlugZap, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Field,
   FieldContent,
@@ -47,6 +57,7 @@ import { Switch } from "@/components/ui/switch";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
+  NamedActionField,
   SchemaConfigField,
   SchemaConfigSurface,
   TextField,
@@ -87,6 +98,15 @@ export type SchemaConfigConnectorFormProps = {
    * input, so `collectFormInputs()` submission is unaffected.
    */
   omitFieldKinds?: SchemaConfigField["kind"][];
+  /**
+   * The connector's initial connected state (host readiness — the resolved
+   * status-probe signal, the SAME `resolveConnectorBadgeState` seed the
+   * right-column status card reads). Seeds the canonical Connect / Disconnect
+   * pair: Disconnect is disabled until connected (design §II item 8). A
+   * successful `role:"connect"` action flips it true; `role:"disconnect"` flips
+   * it false. Absent → treated as not connected.
+   */
+  initialConnected?: boolean;
 };
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
@@ -127,6 +147,7 @@ export function SchemaConfigConnectorForm({
   initialValues = {},
   onConnect,
   omitFieldKinds,
+  initialConnected = false,
 }: SchemaConfigConnectorFormProps) {
   // Kinds the host suppresses from the form column (Model-A lifts `status-probe`
   // into the right-column status card). A Set for O(1) membership; empty/absent
@@ -137,6 +158,9 @@ export function SchemaConfigConnectorForm({
   //  - `listEpoch`: bumped to force every record-list to re-fetch after a write.
   const [bannerName, setBannerName] = useState<string | null>(null);
   const [listEpoch, setListEpoch] = useState(0);
+  // Live connected state driving the canonical Connect / Disconnect pair.
+  // Seeded from the host readiness signal; a successful role action mutates it.
+  const [connected, setConnected] = useState<boolean>(initialConnected);
 
   const onActionResult = useCallback((result: ActionResult) => {
     if (!result.ok) {
@@ -153,23 +177,51 @@ export function SchemaConfigConnectorForm({
 
   // One field group — shared by the flat form and by each tab panel. Field
   // `key`s are globally unique (parser invariant), so row keys never collide.
-  const renderGroup = (fields: SchemaConfigField[]) => (
-    <FieldGroup>
-      {(omit ? fields.filter((f) => !omit.has(f.kind)) : fields).map((field, i) => (
-        <SchemaConfigFieldRow
-          key={fieldKey(field, i)}
-          field={field}
-          installId={installId}
-          isAdmin={isAdmin}
-          initialValues={initialValues}
-          onConnect={onConnect}
-          bannerName={bannerName}
-          listEpoch={listEpoch}
-          onActionResult={onActionResult}
-        />
-      ))}
-    </FieldGroup>
-  );
+  //
+  // Canonical connection actions (design §II items 7/8/15/16): any `named-action`
+  // carrying a `role` ("connect"/"disconnect") is LIFTED out of the normal
+  // one-row-per-field flow and rendered together as ONE side-by-side
+  // `ConnectionActionsRow`, at the slot of the FIRST role action. Role-less named
+  // actions (e.g. the openai "Save skills administration") render unchanged.
+  const renderGroup = (fields: SchemaConfigField[]) => {
+    const shown = omit ? fields.filter((f) => !omit.has(f.kind)) : fields;
+    const roleActions = shown.filter(
+      (f): f is NamedActionField => f.kind === "named-action" && !!f.role,
+    );
+    const firstRoleIdx = shown.findIndex((f) => f.kind === "named-action" && !!f.role);
+    return (
+      <FieldGroup>
+        {shown.map((field, i) => {
+          if (field.kind === "named-action" && field.role) {
+            // Render the whole connection-actions row ONCE, at the first role slot.
+            return i === firstRoleIdx ? (
+              <ConnectionActionsRow
+                key="__connection-actions"
+                actions={roleActions}
+                installId={installId}
+                connected={connected}
+                setConnected={setConnected}
+                onActionResult={onActionResult}
+              />
+            ) : null;
+          }
+          return (
+            <SchemaConfigFieldRow
+              key={fieldKey(field, i)}
+              field={field}
+              installId={installId}
+              isAdmin={isAdmin}
+              initialValues={initialValues}
+              onConnect={onConnect}
+              bannerName={bannerName}
+              listEpoch={listEpoch}
+              onActionResult={onActionResult}
+            />
+          );
+        })}
+      </FieldGroup>
+    );
+  };
 
   const hasTabs = !!surface.tabs && surface.tabs.length > 0;
 
@@ -387,6 +439,153 @@ function NamedActionRow({
         {detail ? <FieldDescription>{detail}</FieldDescription> : field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       </FieldContent>
     </Field>
+  );
+}
+
+/**
+ * The canonical connection-actions row (design/specs/app-connectors.html §II,
+ * "One connection" — items 7/8/15/16). Renders the `role`-bearing named actions
+ * SIDE BY SIDE, never stacked: Connect (indigo primary, plug leadingIcon) on the
+ * left, Disconnect (destructive red, unplug leadingIcon) on the right. Disconnect
+ * is disabled until the connector is connected, and its confirmation is a neutral
+ * AlertDialog (never a bare prompt). The icons are the SAME PlugZap / Unplug the
+ * status badge + §I card grid use, so the whole surface speaks one status
+ * language (item 33).
+ */
+function ConnectionActionsRow({
+  actions,
+  installId,
+  connected,
+  setConnected,
+  onActionResult,
+}: {
+  actions: NamedActionField[];
+  installId: string;
+  connected: boolean;
+  setConnected: (v: boolean) => void;
+  onActionResult: (result: ActionResult) => void;
+}) {
+  // Canonical order is Connect then Disconnect regardless of declared order.
+  const connect = actions.find((a) => a.role === "connect");
+  const disconnect = actions.find((a) => a.role === "disconnect");
+  return (
+    <div data-testid="connection-actions" className="flex flex-wrap gap-2.5 pt-2">
+      {connect ? (
+        <ConnectButton
+          field={connect}
+          installId={installId}
+          onConnected={() => setConnected(true)}
+          onActionResult={onActionResult}
+        />
+      ) : null}
+      {disconnect ? (
+        <DisconnectButton
+          field={disconnect}
+          installId={installId}
+          connected={connected}
+          onDisconnected={() => setConnected(false)}
+          onActionResult={onActionResult}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Connect (role:"connect") — indigo primary + plug. Saves the form inputs. */
+function ConnectButton({
+  field,
+  installId,
+  onConnected,
+  onActionResult,
+}: {
+  field: NamedActionField;
+  installId: string;
+  onConnected: () => void;
+  onActionResult: (result: ActionResult) => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const run = useCallback(async () => {
+    setPending(true);
+    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    setPending(false);
+    if (r.ok) onConnected();
+    onActionResult(r);
+  }, [installId, field.actionId, onConnected, onActionResult]);
+  return (
+    <Button type="button" data-testid="connector-connect" onClick={run} disabled={pending}>
+      <PlugZap />
+      {field.label}
+    </Button>
+  );
+}
+
+/**
+ * Disconnect (role:"disconnect") — destructive red + unplug, disabled until
+ * connected. Its confirmation is a neutral AlertDialog (title "Disconnect
+ * connector?", connector-neutral body); `field.confirm` is intentionally NOT
+ * used (the dialog is the sole confirmation path, per the vocabulary precedence).
+ */
+function DisconnectButton({
+  field,
+  installId,
+  connected,
+  onDisconnected,
+  onActionResult,
+}: {
+  field: NamedActionField;
+  installId: string;
+  connected: boolean;
+  onDisconnected: () => void;
+  onActionResult: (result: ActionResult) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const confirm = useCallback(async () => {
+    setPending(true);
+    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    setPending(false);
+    setOpen(false);
+    if (r.ok) onDisconnected();
+    onActionResult(r);
+  }, [installId, field.actionId, onDisconnected, onActionResult]);
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <Button
+        type="button"
+        variant="destructive"
+        data-testid="connector-disconnect"
+        disabled={!connected}
+        onClick={() => setOpen(true)}
+      >
+        <Unplug />
+        {field.label}
+      </Button>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Disconnect connector?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Disconnect this connector and remove its saved configuration? It will stop working
+            until you connect it again.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            data-testid="connector-disconnect-confirm"
+            disabled={pending}
+            onClick={(e) => {
+              // Keep the dialog mounted through the async action; we close it
+              // ourselves in `confirm` once the request resolves.
+              e.preventDefault();
+              void confirm();
+            }}
+          >
+            <Unplug />
+            {field.label}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

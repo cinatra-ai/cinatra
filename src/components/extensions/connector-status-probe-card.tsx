@@ -20,12 +20,11 @@
 // probe id is the connector's OWN declared `status-probe.actionId`
 // ("connectionStatus" for the key-based connectors) — the host never invents it.
 //
-// This wrapper deliberately builds NO Connect/Disconnect plug/unplug pair: for a
-// key-based connector the real actions are the schema's Save/Clear named actions
-// in the fields column, and whether such connectors also get the canonical
-// plug/unplug pair is a spec-interpretation question still pending the owner
-// (epic #1101). Only the status card + Check — which unambiguously apply — are
-// built here.
+// This wrapper builds only the status card + Check. The canonical indigo-plug
+// Connect / red-unplug Disconnect pair (design §II items 7/8/15/16, owner-ruled
+// on for key-based connectors — epic #1101, 2026-07-10) lives in the LEFT-column
+// form, rendered from the connector's own `role`-tagged named actions; this
+// right-column card owns the connected/disconnected badge + Check only.
 
 import { useCallback, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";

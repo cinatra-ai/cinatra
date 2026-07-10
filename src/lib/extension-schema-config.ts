@@ -84,12 +84,37 @@ export type CopyableCredentialField = {
   description?: string;
 };
 
-/** A named action button (dispatched via the host action endpoint). */
+/**
+ * The canonical connection-action role a `named-action` may carry (design spec:
+ * app-connectors §II, "One connection" — the plug/unplug Connect / Disconnect
+ * pair). A CLOSED allowlist: an EXPLICIT contract, not an inference from the
+ * label (label-inference was found not merge-safe). When a named action declares
+ * `role`, the host renders it as the canonical affordance instead of a generic
+ * labelled button:
+ *   - `connect`    → the indigo-primary Connect button (plug leadingIcon).
+ *   - `disconnect` → the destructive red Disconnect button (unplug leadingIcon),
+ *     disabled until the connector is connected, whose confirmation is the
+ *     renderer-owned neutral AlertDialog (NOT a bare prompt).
+ * The two render SIDE BY SIDE as one connection-actions row. `role` is pure UI
+ * metadata: it never grants authority — the host action endpoint owns
+ * authorization exactly as for a role-less named action.
+ */
+export type ConnectorActionRole = "connect" | "disconnect";
+
+/**
+ * A named action button (dispatched via the host action endpoint). An optional
+ * `role` promotes it to a canonical connection affordance (see
+ * `ConnectorActionRole`). PRECEDENCE: for `role:"disconnect"` the renderer's
+ * neutral AlertDialog is the sole confirmation path, so a `confirm` string is
+ * IGNORED (the two must never stack a prompt on a dialog); a role-less named
+ * action keeps its `confirm` window-prompt behavior unchanged.
+ */
 export type NamedActionField = {
   kind: "named-action";
   label: string;
   actionId: string;
   confirm?: string;
+  role?: ConnectorActionRole;
   description?: string;
 };
 
@@ -343,7 +368,7 @@ const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<string>> = 
   "repeatable-list": new Set(["kind", "key", "label", "itemLabel", "itemFields", "description"]),
   "status-probe": new Set(["kind", "label", "actionId", "description"]),
   "copyable-credential": new Set(["kind", "key", "label", "description"]),
-  "named-action": new Set(["kind", "label", "actionId", "confirm", "description"]),
+  "named-action": new Set(["kind", "label", "actionId", "confirm", "role", "description"]),
   select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
   "record-list": new Set([
     "kind",
@@ -409,6 +434,11 @@ const BADGE_VARIANTS: ReadonlySet<string> = new Set([
   "info",
   "ghost",
   "muted",
+]);
+/** The closed set of connection-action roles a `named-action` may declare. */
+export const CONNECTOR_ACTION_ROLES: ReadonlySet<ConnectorActionRole> = new Set<ConnectorActionRole>([
+  "connect",
+  "disconnect",
 ]);
 const BANNER_TONES: ReadonlySet<string> = new Set([
   "default",
@@ -624,9 +654,27 @@ function validateField(
         errors.push(`${at}: ${kind} requires a valid "actionId"`);
         return null;
       }
-      return kind === "status-probe"
-        ? { kind, label, actionId: raw.actionId, description }
-        : { kind, label, actionId: raw.actionId, confirm: str(raw.confirm) ? raw.confirm : undefined, description };
+      if (kind === "status-probe") {
+        return { kind, label, actionId: raw.actionId, description };
+      }
+      // Optional connection-action role — a CLOSED allowlist (fail-closed on any
+      // other value). Absent → a plain named action (back-compat).
+      let role: ConnectorActionRole | undefined;
+      if (raw.role !== undefined) {
+        if (typeof raw.role !== "string" || !CONNECTOR_ACTION_ROLES.has(raw.role as ConnectorActionRole)) {
+          errors.push(`${at}: named-action "role" must be one of ${[...CONNECTOR_ACTION_ROLES].map((r) => JSON.stringify(r)).join(", ")}`);
+          return null;
+        }
+        role = raw.role as ConnectorActionRole;
+      }
+      return {
+        kind,
+        label,
+        actionId: raw.actionId,
+        confirm: str(raw.confirm) ? raw.confirm : undefined,
+        ...(role ? { role } : {}),
+        description,
+      };
     }
     case "repeatable-list": {
       const key = requireKey(raw, at, errors, seenKeys);

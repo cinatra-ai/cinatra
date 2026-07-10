@@ -370,3 +370,94 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     expect(buttons.some((b) => b.textContent?.trim() === "Check")).toBe(true);
   });
 });
+
+// Owner ruling (epic #1101, 2026-07-10): key-based schema-config connectors get
+// the canonical indigo-plug Connect / red-unplug Disconnect pair (design §II
+// items 7/8/15/16), driven by the connector's own `role`-tagged named actions.
+describe("SchemaConfigConnectorForm — canonical Connect/Disconnect pair (#1101)", () => {
+  const CONN_SURFACE = {
+    fields: [
+      { kind: "secret", key: "apiKey", label: "API key" },
+      { kind: "named-action", label: "Connect", actionId: "saveConnection", role: "connect" },
+      { kind: "named-action", label: "Disconnect", actionId: "clearConnection", role: "disconnect" },
+    ],
+  } as const;
+
+  it("renders the connect/disconnect roles as ONE side-by-side actions row", async () => {
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i1", packageName: "@x/y", surface, initialConnected: true });
+    // Exactly one connection-actions row, holding both buttons side by side.
+    const rows = container.querySelectorAll('[data-testid="connection-actions"]');
+    expect(rows.length).toBe(1);
+    expect(container.querySelector('[data-testid="connector-connect"]')?.textContent).toContain("Connect");
+    expect(container.querySelector('[data-testid="connector-disconnect"]')?.textContent).toContain("Disconnect");
+    // The role actions are NOT ALSO rendered as their own labelled field rows.
+    const connectButtons = [...container.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Connect");
+    expect(connectButtons.length).toBe(1);
+  });
+
+  it("Disconnect is disabled until connected; Connect is always available", async () => {
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i1", packageName: "@x/y", surface, initialConnected: false });
+    const connect = container.querySelector<HTMLButtonElement>('[data-testid="connector-connect"]');
+    const disconnect = container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]');
+    expect(connect?.disabled).toBe(false);
+    expect(disconnect?.disabled).toBe(true);
+  });
+
+  it("a successful Connect flips the state so Disconnect becomes enabled", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ result: { banner: "saved" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i9", packageName: "@x/y", surface, initialConnected: false });
+    const connect = container.querySelector<HTMLButtonElement>('[data-testid="connector-connect"]');
+    await act(async () => {
+      connect!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // saveConnection was POSTed to the host action endpoint…
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/saveConnection"))).toBe(true);
+    // …and Disconnect is now enabled.
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]')?.disabled).toBe(false);
+  });
+
+  it("Disconnect opens the neutral AlertDialog; confirming POSTs clearConnection + flips state", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ result: { banner: "cleared" } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf(CONN_SURFACE);
+    await renderForm({ installId: "i9", packageName: "@x/y", surface, initialConnected: true });
+    const disconnect = container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]');
+    await act(async () => {
+      disconnect!.click();
+      await Promise.resolve();
+    });
+    // The dialog (portaled to body) shows the connector-NEUTRAL title.
+    expect(document.body.textContent).toContain("Disconnect connector?");
+    const confirmBtn = document.body.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect-confirm"]');
+    expect(confirmBtn).toBeTruthy();
+    await act(async () => {
+      confirmBtn!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/clearConnection"))).toBe(true);
+    // State flipped back → Disconnect disabled again.
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]')?.disabled).toBe(true);
+  });
+
+  it("a role-less named-action still renders as its own plain button (back-compat)", async () => {
+    const surface = surfaceOf({
+      fields: [
+        { kind: "named-action", label: "Connect", actionId: "saveConnection", role: "connect" },
+        { kind: "named-action", label: "Save skills administration", actionId: "saveSkillsSettings" },
+      ],
+    });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface, initialConnected: false });
+    // The role-less action is NOT inside the connection-actions row.
+    const row = container.querySelector('[data-testid="connection-actions"]');
+    expect(row?.textContent).not.toContain("Save skills administration");
+    const plain = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save skills administration");
+    expect(plain).toBeTruthy();
+  });
+});
