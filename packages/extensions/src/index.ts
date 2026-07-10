@@ -1204,8 +1204,21 @@ class ExtensionRegistryImpl {
     if (!isPlatformAdminActor(actor)) {
       await handler.archive(ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
-      // Process-local deregistration (in-memory only; DB rows preserved).
-      fireExtensionCapabilityTeardown(ref.packageName);
+      // F9 (cinatra#1277): NO package-global capability teardown on the
+      // org-admin SOFT path. `fireExtensionCapabilityTeardown` deregisters the
+      // package's in-memory register(ctx) registrations PACKAGE-GLOBALLY (the
+      // registries are keyed by package name with no org dimension — per-org
+      // in-process registration is not modelled), so firing it here would drop
+      // the package's MCP tools / capability providers / ctx.ui / object-types /
+      // cubes/portlets for EVERY org in the running worker on an org-X admin's
+      // ordinary soft action — a cross-org runtime-availability bleed. The
+      // durable row transition above is correctly org-X-scoped; the surviving
+      // orgs' rows keep the package live in-process, and org-X's archived row
+      // gates its own availability at the serve/resolve boundary + re-establishes
+      // from surviving rows on the next boot/activate. The package-global
+      // teardown stays reserved for platform-admin standing (the platform-admin
+      // archive / hard-delete branches below) and the genuine full-removal paths
+      // (forceDelete / purge).
       return;
     }
 
@@ -1274,7 +1287,9 @@ class ExtensionRegistryImpl {
     await assertNoLockedCanonicalRow(ref.packageName, "archive");
     // Closure: refuse archive if an active dependent requires this package.
     await assertCanonicalArchiveClosure(ref.packageName);
-    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
+    const { resolveLifecycleTargetRow, isPlatformAdminActor } = await import(
+      "./lifecycle-target-resolver"
+    );
     const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).archive(ref, actor);
     await syncCanonicalRowTransition(row, "archive", actor);
@@ -1282,8 +1297,21 @@ class ExtensionRegistryImpl {
     // registrations so an explicitly-archived extension stops being
     // listable/invocable/resolvable in the running process without a restart.
     // DB rows are PRESERVED (archive is restorable). Best-effort + host-injected.
-    const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
-    fireExtensionCapabilityTeardown(ref.packageName);
+    //
+    // F9 (cinatra#1277): GATED on platform-admin standing. The teardown is
+    // package-global (the in-memory registries are keyed by package name with no
+    // org dimension — per-org in-process registration is not modelled), so an
+    // org-admin's row-scoped archive of THEIR org's row must NOT fire it, or it
+    // would drop the package's capability surfaces for every OTHER org in the
+    // running worker (cross-org runtime-availability bleed). The org-X row
+    // transition above is correctly scoped; surviving orgs keep the package live
+    // in-process and org-X re-establishes from surviving rows on boot/activate.
+    // A platform admin retains instance-wide reach, so their archive still fires
+    // the package-global teardown.
+    if (isPlatformAdminActor(actor)) {
+      const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
+      fireExtensionCapabilityTeardown(ref.packageName);
+    }
   }
 
   // Explicit restore. Re-activates the archived canonical row AND — for a hot-

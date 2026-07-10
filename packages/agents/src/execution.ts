@@ -853,7 +853,31 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
  *
  * This check is state-dependent and runs on every execution start — not at
  * install time — so upgrade/reinstall flows remain unblocked (Pitfall 6).
+ *
+ * cinatra#1058 — per-kind optional behavior. Each agent_dependencies entry now
+ * carries a `requirement` (bare-string value ⇒ "required"; the legacy shape).
+ *   - A missing REQUIRED sub-agent hard-fails the run (unchanged actionable copy).
+ *   - A missing OPTIONAL sub-agent routes to STOP-RUN-HITL: the readiness gate
+ *     throws {@link OrchestratorOptionalDepsUnavailableError}, which the worker
+ *     catch converts to a `pending_input` pause (surfaced to a human) rather
+ *     than a `failed` run. Required always wins when both are missing.
  */
+export class OrchestratorOptionalDepsUnavailableError extends Error {
+  override readonly name = "OrchestratorOptionalDepsUnavailableError";
+  readonly code = "ORCHESTRATOR_OPTIONAL_DEPS_UNAVAILABLE" as const;
+  readonly missingOptional: string[];
+
+  constructor(missingOptional: string[]) {
+    super(
+      `Run paused for input — optional sub-agent(s) not installed: ${missingOptional.join(", ")}. ` +
+        `Install ${missingOptional[0]}` +
+        (missingOptional.length > 1 ? " (and others)" : "") +
+        ` and resume the run to include their step(s).`,
+    );
+    this.missingOptional = missingOptional;
+  }
+}
+
 export async function assertOrchestratorReady(
   template: AgentTemplateRecord,
 ): Promise<void> {
@@ -863,20 +887,26 @@ export async function assertOrchestratorReady(
   const depNames = Object.keys(deps);
   if (depNames.length === 0) return;
 
-  const missing: string[] = [];
+  const missingRequired: string[] = [];
+  const missingOptional: string[] = [];
   for (const pkgName of depNames) {
+    // Normalize the union value: a bare string is a legacy/required range; an
+    // object carries the projected edge's requirement (cinatra#1058).
+    const raw = deps[pkgName];
+    const requirement: "required" | "optional" =
+      typeof raw === "string" ? "required" : raw.requirement;
+    const requiredRange = typeof raw === "string" ? raw : raw.range;
     const found = await readAgentTemplates({
       packageName: pkgName,
       status: "published",
       limit: 1,
     });
     if (found.items.length === 0) {
-      missing.push(pkgName);
+      (requirement === "optional" ? missingOptional : missingRequired).push(pkgName);
     } else {
       // Warn when the installed version doesn't satisfy the declared semver range.
       // Not a hard block — preserves existing flows; a future phase can promote this.
       const installedVersion = found.items[0]?.packageVersion;
-      const requiredRange = deps[pkgName];
       if (installedVersion && requiredRange && !semver.satisfies(installedVersion, requiredRange)) {
         console.warn(
           `[agent-builder] Orchestrator sub-agent ${pkgName}@${installedVersion} does not satisfy required range ${requiredRange}`,
@@ -885,13 +915,18 @@ export async function assertOrchestratorReady(
     }
   }
 
-  if (missing.length > 0) {
+  // Required missing ⇒ hard fail (wins over any optional-missing). Unchanged copy.
+  if (missingRequired.length > 0) {
     throw new Error(
-      `Orchestrator cannot run — missing installed sub-agents: ${missing.join(", ")}. ` +
-        `Run \`cinatra agents install ${missing[0]}\`` +
-        (missing.length > 1 ? " (and others)" : "") +
+      `Orchestrator cannot run — missing installed sub-agents: ${missingRequired.join(", ")}. ` +
+        `Run \`cinatra agents install ${missingRequired[0]}\`` +
+        (missingRequired.length > 1 ? " (and others)" : "") +
         " first.",
     );
+  }
+  // Only optional deps missing ⇒ stop-run-hitl (pause, don't fail).
+  if (missingOptional.length > 0) {
+    throw new OrchestratorOptionalDepsUnavailableError(missingOptional);
   }
 }
 
@@ -1071,6 +1106,16 @@ async function runAgentBuilderExecutionJobInner(
   try {
     await assertOrchestratorReady(template);
   } catch (err) {
+    if (err instanceof OrchestratorOptionalDepsUnavailableError) {
+      // stop-run-hitl (cinatra#1058): only OPTIONAL sub-agents are missing — pause
+      // the run for human input instead of failing it. The message surfaces which
+      // optional sub-agents are missing; a human installs them and resumes via the
+      // existing pending_input → queued path (which re-runs this gate, now green).
+      await transitionRunStatus(runId, "queued", "pending_input", {
+        error: err.message,
+      });
+      return;
+    }
     await transitionRunStatus(runId, "queued", "failed", {
       error: err instanceof Error ? err.message : String(err),
     });

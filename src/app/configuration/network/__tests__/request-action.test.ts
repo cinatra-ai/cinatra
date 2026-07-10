@@ -223,9 +223,9 @@ describe("requestRemoteAccessAction — 201 happy path", () => {
     expect(String(args[2]?.jobId)).toBe("registry-poll:req-1");
   });
 
-  it("redirects to /configuration/environment?tab=registries&ok=requested", async () => {
+  it("redirects to /configuration/environment?tab=registries&net_ok=requested", async () => {
     const url = await captureRedirect(() => requestRemoteAccessAction(buildValidFormData()));
-    expect(url).toBe("/configuration/environment?tab=registries&ok=requested");
+    expect(url).toBe("/configuration/environment?tab=registries&net_ok=requested");
   });
 });
 
@@ -243,7 +243,7 @@ describe("requestRemoteAccessAction — 409 paths", () => {
     const url = await captureRedirect(() =>
       requestRemoteAccessAction(buildValidFormData()),
     );
-    expect(url).toBe(`/configuration/environment?tab=registries&error=${code}`);
+    expect(url).toBe(`/configuration/environment?tab=registries&net_error=${code}`);
     expect(vi.mocked(writeRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueBackgroundJob)).not.toHaveBeenCalled();
@@ -262,7 +262,7 @@ describe("requestRemoteAccessAction — error paths", () => {
     const url = await captureRedirect(() =>
       requestRemoteAccessAction(buildValidFormData()),
     );
-    expect(url).toBe("/configuration/environment?tab=registries&error=registry_unreachable");
+    expect(url).toBe("/configuration/environment?tab=registries&net_error=registry_unreachable");
     expect(vi.mocked(writeRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueBackgroundJob)).not.toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe("requestRemoteAccessAction — error paths", () => {
     const url = await captureRedirect(() =>
       requestRemoteAccessAction(buildValidFormData()),
     );
-    expect(url).toBe("/configuration/environment?tab=registries&error=registry_unreachable");
+    expect(url).toBe("/configuration/environment?tab=registries&net_error=registry_unreachable");
     expect(vi.mocked(writeRegistryCredential)).not.toHaveBeenCalled();
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueBackgroundJob)).not.toHaveBeenCalled();
@@ -284,7 +284,7 @@ describe("requestRemoteAccessAction — error paths", () => {
     const url = await captureRedirect(() =>
       requestRemoteAccessAction(buildValidFormData()),
     );
-    expect(url).toBe("/configuration/environment?tab=registries&error=nango_unavailable");
+    expect(url).toBe("/configuration/environment?tab=registries&net_error=nango_unavailable");
     // No local row persisted — the registry has the request and replays
     // its 201 within 24h via Idempotency-Key cache once Nango is fixed.
     expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();

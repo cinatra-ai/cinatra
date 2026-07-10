@@ -2,41 +2,6 @@
   "note": "Toast-banner conformance ratchet baseline (no-new-rot). Each entry is a file that CURRENTLY renders a searchParams-flash-driven transient banner — a success/destructive <Alert> or a flash-palette colored-<div> gated on a transient-outcome query param (saved/ok/error/deleted/…). The canonical transient-notification layer is the toast island: route flash outcomes through the codes-only <SearchParamToast> island (packages/sdk-ui/src/search-param-toast.tsx) and imperative notifications through cinatraToast / useNotify. This guard (src/lib/__tests__/toast-banner-guard.test.ts) FAILS when a file NOT in this baseline starts matching (a new/reintroduced banner) and when a baseline entry no longer matches (it must be REMOVED — the ratchet only shrinks). class=pending-migration entries are the transient banners the toast epic migrates to the island (they must ratchet to zero); class=adjudicated-inline entries are epic-sanctioned inline surfaces the file-level heuristic also flags (persistent state / already-canonical) — permanent, each with a reason. Regenerate the current match set with `node scripts/../` — see the guard test's SCAN section. Do NOT add a pending-migration entry to make a new banner pass; convert it to a toast instead.",
   "entries": [
     {
-      "file": "packages/skills/src/plugin-pages.tsx",
-      "class": "pending-migration",
-      "reason": "Skills plugin page surfaces a ?error flash via an inline Alert; the toast epic (S2) routes it through the <SearchParamToast> island (its saved/deleted siblings already toast)."
-    },
-    {
-      "file": "src/app/configuration/environment/page.tsx",
-      "class": "pending-migration",
-      "reason": "Instance-identity save success/error surfaced via inline Alerts gated on ?ok/?error flash params; the toast epic (S2) migrates the save-outcome feedback to the toast island (the persistent runtime-mode Alert stays inline)."
-    },
-    {
-      "file": "src/app/configuration/llm/apis-page.tsx",
-      "class": "pending-migration",
-      "reason": "LLM APIs page renders a success Alert gated on the ?saved flash param; the toast epic (S2) migrates it to the toast island."
-    },
-    {
-      "file": "src/app/configuration/marketplace/vendor-applications/page.tsx",
-      "class": "pending-migration",
-      "reason": "Vendor-applications page mounts an inline ResultBanner (<Alert>) gated on ?ok/?error flash params; the toast epic (S2) migrates the action-result feedback to the toast island (the persistent list-load failure stays inline)."
-    },
-    {
-      "file": "src/app/connectors/email/page.tsx",
-      "class": "pending-migration",
-      "reason": "Email routing page renders success/destructive Alerts gated on ?saved/?error flash params; the toast epic (S2) migrates them to the toast island."
-    },
-    {
-      "file": "src/app/setup/ai/page.tsx",
-      "class": "pending-migration",
-      "reason": "Setup AI-key step renders a flash Alert that duplicates the wizard toast; the toast epic (S2) drops the inline alert in favour of the codes-only island."
-    },
-    {
-      "file": "src/app/setup/connections/page.tsx",
-      "class": "pending-migration",
-      "reason": "Setup connections step renders a flash Alert that duplicates the wizard toast; the toast epic (S2) drops the inline alert in favour of the codes-only island."
-    },
-    {
       "file": "src/app/setup/name/page.tsx",
       "class": "adjudicated-inline",
       "reason": "Already canonical: the ?error flash is surfaced by the codes-only <SearchParamToast> island in the setup layout (see the in-file comment); the destructive Alert here is PERSISTENT namespace-immutability guidance and the success Alert is gated on the DB-persisted identity state, not on a flash code. The file reads ?error only to suppress the auto-advance redirect. Permanent inline surface per the epic adjudication (persistent state stays inline)."

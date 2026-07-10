@@ -50,10 +50,6 @@ const customSkillSchema = z.object({
   content: z.string().min(10, "Skill content is required."),
 });
 
-function encodeMessage(value: string) {
-  return encodeURIComponent(value);
-}
-
 export async function createSkillFromTemplateAction(formData: FormData) {
   // Require an actor and, when basedOnSkillId is set, load the source skill
   // and gate it via requireResourceAccess in read mode. AuthzError redirects
@@ -73,7 +69,7 @@ export async function createSkillFromTemplateAction(formData: FormData) {
   if (parsed.basedOnSkillId) {
     const source = await getInstalledSkillById(parsed.basedOnSkillId);
     if (!source) {
-      redirect(`/skills?error=${encodeMessage("Source skill not found.")}`);
+      redirect(`/skills?error=source-skill-not-found`);
     }
     try {
       requireResourceAccess(actor, buildSkillResourceRef({
@@ -83,7 +79,7 @@ export async function createSkillFromTemplateAction(formData: FormData) {
       }));
     } catch {
       // Collapse forbidden + missing so existence is not disclosed.
-      redirect(`/skills?error=${encodeMessage("Source skill not found.")}`);
+      redirect(`/skills?error=source-skill-not-found`);
     }
   }
 
@@ -115,14 +111,17 @@ export async function savePersonalSkillAction(formData: FormData) {
     : "/skills/new";
 
   if (!parsed.success) {
-    const message = parsed.error.issues[0]?.message ?? "Unable to save the custom skill.";
-    redirect(`${editorPath}?error=${encodeMessage(message)}`);
+    console.error(
+      "[skills] save validation failed:",
+      parsed.error.issues[0]?.message ?? "unknown",
+    );
+    redirect(`${editorPath}?error=save-invalid`);
   }
 
   const agents = selectAttachableAgents(await readAgentsForSkillMatching());
   const agent = agents.find((entry) => entry.id === parsed.data.agentId);
   if (!agent) {
-    redirect(`${editorPath}?error=${encodeMessage("The selected agent is no longer available.")}`);
+    redirect(`${editorPath}?error=agent-unavailable`);
   }
 
   const frontmatter = parseSkillFrontmatter(parsed.data.content);
@@ -147,7 +146,7 @@ export async function savePersonalSkillAction(formData: FormData) {
     const { getInstalledSkillById } = await import("./skills-registry");
     const existing = await getInstalledSkillById(parsed.data.skillId);
     if (!existing || existing.level !== "personal") {
-      redirect(`${editorPath}?error=${encodeMessage("Skill not found.")}`);
+      redirect(`${editorPath}?error=skill-not-found`);
     }
     const { requireResourceAccess, buildSkillResourceRef } = await import("@cinatra-ai/agents/auth-policy");
     try {
@@ -162,7 +161,7 @@ export async function savePersonalSkillAction(formData: FormData) {
       );
     } catch {
       // Don't leak existence: same redirect target as the not-found branch.
-      redirect(`${editorPath}?error=${encodeMessage("Skill not found.")}`);
+      redirect(`${editorPath}?error=skill-not-found`);
     }
   }
 

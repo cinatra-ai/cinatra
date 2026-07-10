@@ -51,6 +51,13 @@ type ForceDeleteAudit = { operation: string; resolvedRows: unknown };
 const forceDeleteAudits: ForceDeleteAudit[] = [];
 const preCleanedTemplateIds: string[] = [];
 let dataTeardownFired: string[] = [];
+// F9 (cinatra#1277): the package-global in-memory capability teardown. It is the
+// ONLY channel that drops a package's register(ctx) registrations (MCP tools /
+// capability providers / ctx.ui / object types / cubes / portlets) in the running
+// worker. Because those registries are keyed by package name with no org
+// dimension, firing it on an org-admin SOFT action would remove the package for
+// EVERY org — so an org-admin soft path must NOT fire it.
+let capabilityTeardownFired: string[] = [];
 
 // --- mocks -----------------------------------------------------------------
 vi.mock("../canonical-store", () => ({
@@ -129,6 +136,7 @@ import {
   PlatformAdminRequiredError,
 } from "../lifecycle-target-resolver";
 import { setExtensionDataTeardownHook } from "../data-teardown-hook";
+import { setExtensionCapabilityTeardownHook } from "../capability-teardown-hook";
 import { readAgentTemplateByPackageName } from "@cinatra-ai/agents";
 
 // --- actors ----------------------------------------------------------------
@@ -183,11 +191,18 @@ beforeEach(() => {
   setExtensionDataTeardownHook((pkg) => {
     dataTeardownFired.push(pkg);
   });
+  capabilityTeardownFired = [];
+  setExtensionCapabilityTeardownHook((pkg) => {
+    capabilityTeardownFired.push(pkg);
+  });
   handler = makeHandler();
   extensionRegistry.register(handler);
   SEEDED = [row("iext-p", null), row("iext-x", "org-x"), row("iext-y", "org-y")];
 });
-afterEach(() => setExtensionDataTeardownHook(null));
+afterEach(() => {
+  setExtensionDataTeardownHook(null);
+  setExtensionCapabilityTeardownHook(null);
+});
 
 // ---------------------------------------------------------------------------
 // 6.1 Cross-org escalation regression (the keystone-gap guard)
@@ -203,6 +218,10 @@ describe("cross-org escalation regression", () => {
     // one audit row, carrying the org-X resolved-row identity
     expect(transitionAudits).toHaveLength(1);
     expect(transitionAudits[0]).toMatchObject({ resolvedRowId: "iext-x", orgId: "org-x" });
+    // F9 (cinatra#1277): the package-global capability teardown does NOT fire on
+    // the org-admin soft path, so org-Y's + the platform row's in-process
+    // registrations stay live in the running worker.
+    expect(capabilityTeardownFired).toEqual([]);
   });
 
   it("org-X admin soft-uninstall touches ONLY the org-X row and fires NO package-global hooks", async () => {
@@ -217,6 +236,8 @@ describe("cross-org escalation regression", () => {
     // package-global destructive hooks did NOT fire
     expect(preCleanedTemplateIds).toEqual([]);
     expect(dataTeardownFired).toEqual([]);
+    // F9 (cinatra#1277): nor the package-global in-memory capability teardown.
+    expect(capabilityTeardownFired).toEqual([]);
   });
 
   it("org admin force_delete is REFUSED with ZERO row changes", async () => {
@@ -395,5 +416,57 @@ describe("audit provenance", () => {
     const ids = transitionAudits.map((a) => a.resolvedRowId);
     expect(ids).not.toContain("iext-b");
     expect(ids).not.toContain("iext-p");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F9 (cinatra#1277) — per-org capability-teardown granularity.
+//
+// The in-memory capability registries are keyed by PACKAGE NAME with no org
+// dimension (per-org in-process registration is not modelled), so the
+// package-global `fireExtensionCapabilityTeardown` cannot drop only one org's
+// registrations. Option B: gate that teardown behind PLATFORM-ADMIN standing on
+// the org-admin-reachable SOFT paths (archive / soft-uninstall) so an org-X
+// admin's ordinary soft action leaves every OTHER org's in-process MCP tools /
+// providers / ctx.ui / object-types / cubes/portlets resolvable and invocable.
+// Durable per-org DB rows stay correctly row-scoped (asserted above); a platform
+// admin and the genuine full-removal paths (hard-delete / forceDelete) retain the
+// package-global teardown.
+// ---------------------------------------------------------------------------
+describe("F9 capability-teardown granularity (#1277)", () => {
+  it("cross-org availability: org-X admin archive fires NO package-global capability teardown (org-Y + platform stay live)", async () => {
+    // Two orgs (org-x, org-y) + the platform row share ONE installed package —
+    // its register(ctx) capabilities are a SINGLE process-global registration.
+    await extensionRegistry.archive("agent", ref(), orgAdmin("org-x"));
+    // The soft path did NOT fire the package-global teardown, so the shared
+    // in-process registration survives for org-Y (and the platform row).
+    expect(capabilityTeardownFired).toEqual([]);
+    // And the durable transition stayed scoped to org-X's row.
+    expect(transitions).toEqual([expect.objectContaining({ id: "iext-x", op: "archive" })]);
+  });
+
+  it("org-X admin soft-uninstall fires NO package-global capability teardown", async () => {
+    await extensionRegistry.uninstall("agent", ref(), orgAdmin("org-x"));
+    expect(handler.archive).toHaveBeenCalledTimes(1);
+    expect(handler.uninstall).not.toHaveBeenCalled();
+    expect(capabilityTeardownFired).toEqual([]);
+  });
+
+  it("platform-admin archive RETAINS instance-wide reach — fires the package-global capability teardown", async () => {
+    // A platform admin resolves the NULL-org platform row; instance-wide reach is
+    // by design, so the package-global teardown still fires.
+    await extensionRegistry.archive("agent", ref(), platformAdmin());
+    expect(transitions).toEqual([expect.objectContaining({ id: "iext-p", op: "archive" })]);
+    expect(capabilityTeardownFired).toEqual([PKG]);
+  });
+
+  it("platform-admin hard-delete uninstall fires the package-global capability teardown (genuine full removal)", async () => {
+    // Unused + no dependents + platform admin -> the hard-delete branch, which
+    // genuinely removes the package process-wide.
+    SEEDED = [row("iext-p", null)];
+    await extensionRegistry.uninstall("agent", ref(), platformAdmin());
+    expect(handler.uninstall).toHaveBeenCalledTimes(1);
+    expect(capabilityTeardownFired).toEqual([PKG]);
+    expect(dataTeardownFired).toEqual([PKG]);
   });
 });

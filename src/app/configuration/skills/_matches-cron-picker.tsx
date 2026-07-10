@@ -18,6 +18,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { toast } from "@/lib/cinatra-toast";
 import { setScheduleAction } from "./actions";
 
 // === DUPLICATED FROM packages/agents/src/trigger-screen-client.tsx ============
@@ -258,13 +259,10 @@ export function MatchesCronPicker({ initial }: { initial: ScheduleSnapshot }) {
   const [recurring, setRecurring] = useState<RecurringConfig>(() => fromSnapshot(initial));
   const [timezone, setTimezone] = useState(initial.timezone || "UTC");
   const [pending, startTransition] = useTransition();
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const summary = enabled ? `Schedule (${describeCron(recurring)} ${timezone})` : "Schedule (off)";
 
   function handleSave() {
-    setError(null);
     const cronExpression = enabled ? buildCron(recurring) : null;
     const fd = new FormData();
     if (enabled) fd.set("enabled", "on");
@@ -273,9 +271,9 @@ export function MatchesCronPicker({ initial }: { initial: ScheduleSnapshot }) {
     startTransition(async () => {
       try {
         await setScheduleAction(fd);
-        setSavedAt(new Date().toLocaleTimeString());
+        toast.success("Schedule saved.");
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to save schedule.");
+        toast.error(err instanceof Error ? err.message : "Unable to save schedule.");
       }
     });
   }
@@ -436,8 +434,6 @@ export function MatchesCronPicker({ initial }: { initial: ScheduleSnapshot }) {
           <Button onClick={handleSave} disabled={pending}>
             {pending ? "Saving…" : "Save schedule"}
           </Button>
-          {savedAt ? <span className="text-xs text-muted-foreground">Saved at {savedAt}</span> : null}
-          {error ? <span className="text-xs text-destructive">{error}</span> : null}
         </div>
       </div>
     </details>

@@ -59,29 +59,30 @@ import { attemptPersistFirstRollback } from "./vendor-application-rollback";
 
 const REGISTRIES_BASE = "/configuration/environment?tab=registries";
 
-function redirectWithVendorError(message: string): never {
-  redirect(`${REGISTRIES_BASE}&vendor_application_error=${encodeURIComponent(message.slice(0, 300))}`);
+// Codes-only flash protocol: emit a STABLE code (mapped to a static message by
+// the registries-tab <SearchParamToast> island via ./registries-flash). The
+// specific server/marketplace error is logged server-side, never reflected into
+// the redirect URL.
+function redirectWithVendorError(code: string): never {
+  redirect(`${REGISTRIES_BASE}&vendor_application_error=${code}`);
   throw new Error("unreachable");
 }
 
 function redirectWithVendorOk(okCode: string): never {
-  redirect(`${REGISTRIES_BASE}&vendor_application_ok=${encodeURIComponent(okCode)}`);
+  redirect(`${REGISTRIES_BASE}&vendor_application_ok=${okCode}`);
   throw new Error("unreachable");
 }
 
 function resolveTokenOrFail(): string {
   const identity = readInstanceIdentity();
   if (!identity) {
-    redirectWithVendorError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithVendorError("identity-not-configured");
   }
   try {
     return resolveConsumerOrVendorMarketplaceToken(identity);
   } catch (err) {
     if (err instanceof VendorCredentialsMissingError) {
-      redirectWithVendorError(
-        "Marketplace consumer attachment is missing. Wait for the boot-time attach hook " +
-          "or restart the app to mint a marketplace bearer.",
-      );
+      redirectWithVendorError("attachment-missing");
     }
     throw err;
   }
@@ -112,21 +113,21 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
 
   const tierRaw = String(formData.get("tier") ?? "").trim();
   if (tierRaw !== "free" && tierRaw !== "commercial") {
-    redirectWithVendorError("Tier must be 'free' or 'commercial'.");
+    redirectWithVendorError("invalid-tier");
   }
   const tier = tierRaw as "free" | "commercial";
 
   const termsAccepted = formData.get("termsAccepted");
   if (termsAccepted !== "on" && termsAccepted !== "true") {
-    redirectWithVendorError("You must accept the marketplace terms to apply as a vendor.");
+    redirectWithVendorError("terms-required");
   }
 
   const displayName = String(formData.get("display_name") ?? "").trim();
   if (!displayName) {
-    redirectWithVendorError("Vendor display name is required.");
+    redirectWithVendorError("display-name-required");
   }
   if (displayName.length > 190) {
-    redirectWithVendorError("Vendor display name must be 190 characters or fewer.");
+    redirectWithVendorError("display-name-too-long");
   }
 
   // terms_version + terms_digest are derived from the marketplace-terms helper
@@ -140,7 +141,7 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
 
   const identity = readInstanceIdentity();
   if (!identity) {
-    redirectWithVendorError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithVendorError("identity-not-configured");
   }
   const proposedScope = `@${identity.instanceNamespace}`;
 
@@ -271,7 +272,8 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
     if (isTerminalAuthFailure(err)) {
       rollbackPersistFirstMarker();
     }
-    redirectWithVendorError(`Vendor application failed: ${message}`);
+    console.error("[vendor-application] apply failed:", message);
+    redirectWithVendorError("apply-failed");
   }
 
   // Structured terms errors: cm signals stale terms / digest mismatch via the
@@ -282,15 +284,9 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
   if ("error_code" in response) {
     rollbackPersistFirstMarker();
     if (response.error_code === "TERMS_VERSION_STALE") {
-      redirectWithVendorError(
-        `Marketplace terms have been updated (current version: ${response.current_version}). ` +
-          `Re-accept the latest terms at ${response.terms_url} and resubmit.`,
-      );
+      redirectWithVendorError("terms-stale");
     }
-    redirectWithVendorError(
-      `Marketplace terms digest does not match the canonical server-side digest. ` +
-        `Re-fetch the latest terms body at ${response.terms_url} and resubmit.`,
-    );
+    redirectWithVendorError("terms-digest-mismatch");
   }
 
   // Map cm's `state` to the local `VendorState` union. cm only returns
@@ -363,13 +359,13 @@ export async function cancelVendorApplicationAction(formData: FormData): Promise
 
   const identity = readInstanceIdentity();
   if (!identity) {
-    redirectWithVendorError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithVendorError("identity-not-configured");
   }
 
   const applicationIdRaw = String(formData.get("application_id") ?? "").trim();
   const applicationId = applicationIdRaw || identity.vendorApplicationId || "";
   if (!applicationId) {
-    redirectWithVendorError("No open vendor application to cancel.");
+    redirectWithVendorError("no-open-application");
   }
 
   // Cancel must ALWAYS clear the local marker — even when cm is unreachable or
@@ -449,7 +445,7 @@ export async function refreshVendorApplicationStatusAction(): Promise<void> {
 
   const identity = readInstanceIdentity();
   if (!identity) {
-    redirectWithVendorError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithVendorError("identity-not-configured");
   }
 
   const token = resolveTokenOrFail();
@@ -459,9 +455,8 @@ export async function refreshVendorApplicationStatusAction(): Promise<void> {
   try {
     status = await client.vendorApplicationStatus();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
     console.error("[vendor-application] status refresh failed:", err);
-    redirectWithVendorError(`Refresh vendor-application status failed: ${message}`);
+    redirectWithVendorError("refresh-failed");
   }
 
   const nextVendorState = (() => {
@@ -520,12 +515,10 @@ export async function refreshConsumerAttachmentAction(): Promise<void> {
 
   const identity = readInstanceIdentity();
   if (!identity) {
-    redirectWithVendorError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithVendorError("identity-not-configured");
   }
   if (!identity.consumerAttachment) {
-    redirectWithVendorError(
-      "No consumer attachment to refresh. Wait for the boot-time attach hook or restart.",
-    );
+    redirectWithVendorError("no-consumer-attachment");
   }
 
   const fresh = readInstanceIdentity() ?? identity;
@@ -558,7 +551,7 @@ export async function rotateConsumerTokenAction(): Promise<void> {
 
   const identity = readInstanceIdentity();
   if (!identity) {
-    redirectWithVendorError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithVendorError("identity-not-configured");
   }
   if (
     !identity.instanceId ||
@@ -566,9 +559,7 @@ export async function rotateConsumerTokenAction(): Promise<void> {
     !identity.instanceAttachSecretIv ||
     identity.instanceAttachSecretAlgo !== "aes-256-gcm"
   ) {
-    redirectWithVendorError(
-      "Instance attach secret is not provisioned. Cannot rotate consumer token.",
-    );
+    redirectWithVendorError("attach-secret-missing");
   }
 
   let plaintextSecret: string;
@@ -576,7 +567,7 @@ export async function rotateConsumerTokenAction(): Promise<void> {
     plaintextSecret = decryptInstanceAttachSecret(identity);
   } catch (err) {
     console.error("[vendor-application] decrypt instanceAttachSecret failed:", err);
-    redirectWithVendorError("Could not decrypt the instance attach secret to rotate the token.");
+    redirectWithVendorError("decrypt-failed");
   }
 
   try {
@@ -636,9 +627,8 @@ export async function rotateConsumerTokenAction(): Promise<void> {
     }
     writeInstanceIdentity({ ...fresh, consumerAttachment: nextAttachment });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
     console.error("[vendor-application] rotateConsumerToken failed:", err);
-    redirectWithVendorError(`Rotate consumer token failed: ${message}`);
+    redirectWithVendorError("rotate-failed");
   }
 
   invalidateInstanceIdentityCache();

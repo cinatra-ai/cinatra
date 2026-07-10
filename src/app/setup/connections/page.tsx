@@ -6,22 +6,16 @@ import { saveNangoConnectionAction } from "@/app/campaigns/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
 
 export const metadata: Metadata = { title: "Setup: Connections" };
 import { getNangoSettings, getNangoSettingsEnvManaged, getNangoStatus } from "@/lib/nango-system";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 
-type SetupNangoPageProps = {
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
-};
-
-function pickSearchParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-export default async function SetupNangoPage({ searchParams }: SetupNangoPageProps) {
+// Flash outcomes surface via the shell-bypass setup layout's <SearchParamToast>
+// (codes-only). The former inline ?error/?saved <Alert>s duplicated that wizard
+// toast and are retired here.
+export default async function SetupNangoPage() {
   const nangoStatus = getNangoStatus();
 
   if (nangoStatus.status === "connected") {
@@ -30,14 +24,11 @@ export default async function SetupNangoPage({ searchParams }: SetupNangoPagePro
     redirect(next?.href ?? "/");
   }
 
-  const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
   const settings = getNangoSettings();
   // Which fields are supplied by an operator env override (host-resolved from
   // the connector's manifest, cinatra-ai/cinatra#982) — replaces the direct
   // `process.env.NANGO_*` reads so core hardcodes no connector env-var names.
   const envManaged = getNangoSettingsEnvManaged();
-  const errorMessage = pickSearchParam(resolvedSearchParams.error);
-  const saved = pickSearchParam(resolvedSearchParams.saved) === "1";
 
   return (
     <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
@@ -47,18 +38,6 @@ export default async function SetupNangoPage({ searchParams }: SetupNangoPagePro
           Cinatra uses Nango to store and manage external API credentials and OAuth connections. Configure the connection to your Nango instance.
         </p>
       </div>
-
-      {errorMessage ? (
-        <Alert variant="destructive" className="mt-5 rounded-control">
-          <AlertDescription>{errorMessage}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      {saved ? (
-        <Alert variant="success" className="mt-5 rounded-control">
-          <AlertDescription>Nango administration were saved.</AlertDescription>
-        </Alert>
-      ) : null}
 
       <form action={saveNangoConnectionAction} className="mt-6 grid gap-4">
         <Input type="hidden" name="redirectTo" value="/setup" />

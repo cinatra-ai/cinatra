@@ -21,6 +21,7 @@ import { format } from "date-fns";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "@/lib/cinatra-toast";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -116,7 +117,6 @@ export type TriggerTabClientProps = {
 export function TriggerTabClient(props: TriggerTabClientProps) {
   const router = useRouter();
   const [isCancelling, startCancelTransition] = useTransition();
-  const [actionError, setActionError] = useState<string | null>(null);
 
   const isReleased = !!props.trigger.releasedAt;
 
@@ -192,11 +192,10 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
   }, [props.templateId, props.trigger, conversation]);
 
   const onCancel = () => {
-    setActionError(null);
     startCancelTransition(async () => {
       const result = await deleteRunTrigger({ runId: props.runId });
       if (!result.ok) {
-        setActionError(result.error);
+        toast.error(result.error);
         return;
       }
       router.refresh();
@@ -273,10 +272,6 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
         ) : null}
       </div>
 
-      {actionError ? (
-        <p className="text-sm text-destructive">{actionError}</p>
-      ) : null}
-
       {/* Always-visible bottom overlay — no toggle.
           resetSignal omitted — no renderer transitions on the trigger tab. */}
       <HitlConversationPanel
@@ -298,14 +293,12 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
 function ReleaseNowButton({ runId }: { runId: string }) {
   const router = useRouter();
   const [isReleasing, startReleaseTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
 
   const onRelease = () => {
-    setError(null);
     startReleaseTransition(async () => {
       const result = await releaseTriggerNow({ runId });
       if (!result.ok) {
-        setError(result.error);
+        toast.error(result.error);
         return;
       }
       router.refresh();
@@ -313,8 +306,7 @@ function ReleaseNowButton({ runId }: { runId: string }) {
   };
 
   return (
-    <>
-      <AlertDialog>
+    <AlertDialog>
         <AlertDialogTrigger asChild>
           <Button variant="secondary" disabled={isReleasing}>
             {isReleasing ? "Releasing…" : "Release now"}
@@ -336,10 +328,6 @@ function ReleaseNowButton({ runId }: { runId: string }) {
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
-      </AlertDialog>
-      {error ? (
-        <p className="text-sm text-destructive mt-1">{error}</p>
-      ) : null}
-    </>
+    </AlertDialog>
   );
 }
