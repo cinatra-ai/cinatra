@@ -136,5 +136,34 @@
         "type": "table"
       }
     ]
+  },
+  "plane": {
+    "$comment": "Generic work items seeded INTO the local dev Plane instance so the Plane connector's PM-sync has real content to operate on. IMPORTANT — Plane differs from Twenty: it has NO headless API-key mint and NO create_project MCP tool (only list_projects / list_work_items / create_work_item / update_work_item). So the seeder does NOT create the project; it RESOLVES the EXISTING project below by `identifier` (then `name`) from list_projects and seeds work items into it. If the project is absent (fresh Plane needs a one-time interactive sign-up + PAT mint + project create), the seeder fails CLOSED and logs a hint — it never guesses a project. Seeded via scripts/fixtures/seed-plane-content.mjs on the connector-provided Plane MCP client. Idempotency: a gitignored provenance sidecar (data/plane/dev-content-provenance.local.json) maps fixtureId -> {id,rev,checksum}; work items are matched by that stored id (rename-safe) then by name; user deletes/edits are respected (never recreated/clobbered); a `version` bump replaces fixture-owned rows. All content is FICTIONAL and generic.",
+    "project": {
+      "fixtureId": "plane-project-demo",
+      "identifier": "DEMO",
+      "name": "Demo Delivery",
+      "description": "A generic demo project so your local Plane is never empty. Everything here is fictional and safe to edit or delete."
+    },
+    "workItems": [
+      {
+        "fixtureId": "plane-item-onboard",
+        "name": "Set up the demo workspace",
+        "description": "A generic demo task seeded automatically into your local development Plane so the connector has real content to operate on. Ask the Cinatra assistant to summarise or re-prioritise it.",
+        "priority": "high"
+      },
+      {
+        "fixtureId": "plane-item-content-review",
+        "name": "Review the Brightwater Logistics content plan",
+        "description": "Brightwater Logistics (a fictional demo company) needs its Q3 content plan reviewed. This placeholder work item exists only in your local dev environment.",
+        "priority": "medium"
+      },
+      {
+        "fixtureId": "plane-item-publish-followup",
+        "name": "Publish the product-update announcement",
+        "description": "Follow-up task demonstrating the Plane content workflow. Fictional and safe to edit or delete.",
+        "priority": "low"
+      }
+    ]
   }
 }

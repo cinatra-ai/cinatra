@@ -28,10 +28,13 @@ import type {
 // remote marketplace calls when nothing is connected — every remote entry point
 // (counts(), fetch*) gates on these predicates first.
 //
-// Per-adapter credential gates mirror the existing drill-down pages EXACTLY (no
-// credential migration in this slice):
-//   • submission moderation + my submissions → `MARKETPLACE_INSTANCE_TOKEN`
-//     (the pages' local `resolveMarketplaceToken()`).
+// Per-adapter credential gates (the extension-submission moderation queue was
+// converged onto the ADMIN token in #1224 — the `PRINCIPAL_ADMIN`-bound
+// list-admin/approve/reject must not read the consumer/instance token):
+//   • extension-submission MODERATION         → `resolveMarketplaceAdminToken()`
+//     (`MARKETPLACE_ADMIN_TOKEN`) — #1224, same credential as vendor-app moderation.
+//   • my submissions (self)                    → `MARKETPLACE_INSTANCE_TOKEN`
+//     (the self drill-down page's local instance-token read).
 //   • vendor-application moderation           → `resolveMarketplaceAdminToken()`
 //     (`MARKETPLACE_ADMIN_TOKEN`).
 //   • my vendor-application status            → `resolveConsumerOrVendorMarketplaceToken`
@@ -66,9 +69,10 @@ export const REMOTE_COUNT_CAP = 9;
 
 // --- Credential presence (no network) --------------------------------------
 
-/** Instance token — the bearer the extension-submission surfaces use. Mirrors
- *  the current pages' local `resolveMarketplaceToken()` EXACTLY (a direct
- *  `MARKETPLACE_INSTANCE_TOKEN` env read; no credential migration in this slice). */
+/** Instance token — the consumer/self bearer used by the my-submissions (self)
+ *  surface and withdraw (a direct `MARKETPLACE_INSTANCE_TOKEN` env read). The
+ *  extension-submission MODERATION queue moved to the ADMIN token in #1224, so
+ *  this is no longer the moderation credential. */
 export function resolveInstanceToken(): string | undefined {
   const t = process.env.MARKETPLACE_INSTANCE_TOKEN;
   return t && t.length > 0 ? t : undefined;

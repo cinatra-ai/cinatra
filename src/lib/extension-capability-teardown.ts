@@ -18,6 +18,7 @@ import { removeExtensionMcpToolsForPackage } from "@/lib/extension-mcp-registry"
 import {
   invalidateProvidersForPackage,
   hasCapabilityProvidersForPackage,
+  clearPackageSignedActivated,
 } from "@/lib/extension-capabilities-registry";
 import { invalidateExtensionUiForPackage, hasExtensionUiForPackage } from "@/lib/extension-ui-registry";
 import { invalidateObjectTypesForPackage } from "@/lib/extension-object-types-teardown";
@@ -61,6 +62,14 @@ export function teardownExtensionCapabilities(packageName: string): {
   const hadProviders = hasCapabilityProvidersForPackage(packageName);
   const removedTools = removeExtensionMcpToolsForPackage(packageName);
   invalidateProvidersForPackage(packageName);
+  // engineering#534 S1 — a package that loses its capability providers also loses
+  // any credential-store ownership standing, so clear its signed-activated marker
+  // in lockstep (fail-closed: an unmarked package is not trusted-signed). Pure
+  // in-memory Set delete; safe on the defensive pre-reactivate teardown too (a
+  // no-op when unset). Not counted toward the guarded generation bump below — the
+  // marker is a trust-tracking side-signal, not one of the four operator
+  // control-plane register-channel kinds.
+  clearPackageSignedActivated(packageName);
   invalidateExtensionUiForPackage(packageName);
   // Deregister the package's object types so an archived/uninstalled extension's
   // types stop resolving/listing in the running process without a restart.

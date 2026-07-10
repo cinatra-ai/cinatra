@@ -56,7 +56,11 @@ function unknownAction(action: string): Extract<DecideResult, { ok: false }> {
 
 /**
  * Decide (approve / reject) an extension-submission moderation row.
- * Credential: `MARKETPLACE_INSTANCE_TOKEN` (mirrors the admin queue page).
+ * Credential: `MARKETPLACE_ADMIN_TOKEN` via `resolveMarketplaceAdminToken()`
+ * (#1224 — the admin/moderation abilities are `PRINCIPAL_ADMIN`-bound, so they
+ * resolve the ADMIN credential, NOT the consumer/instance token; an absent
+ * admin token FAILS CLOSED as a clean refusal). Mirrors the admin queue page
+ * and `decideMarketplaceVendorApplication`.
  * On approve, enqueues the SAME single-package catalog reconcile the drill-down
  * approve action does (shared helper) so the two approve paths never diverge.
  */
@@ -73,8 +77,12 @@ export async function decideMarketplaceSubmission(
     return { ok: false, kind: "refused", code: "reason_required", message: "A rejection reason is required." };
   }
 
-  const token = resolveInstanceToken();
-  if (!token) return notConfigured("The marketplace instance token");
+  let token: string;
+  try {
+    token = resolveMarketplaceAdminToken();
+  } catch {
+    return notConfigured("The marketplace admin token");
+  }
 
   const client = createHttpMarketplaceMcpClient({ token });
   try {

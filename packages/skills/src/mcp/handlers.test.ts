@@ -20,7 +20,14 @@ vi.mock("server-only", () => ({}));
 // the @/lib/* modules so handlers.ts can be imported without pulling in
 // any DB/network/server-only modules. Only `libraryListSchema` is exercised.
 vi.mock("../skills-store", () => ({
-  readSkillsCatalog: vi.fn(),
+  // Default-resolve to a shape with skillPackages so the W4 (#1073) effective-
+  // policy resolution (`(await readSkillsCatalog()).skillPackages`) added to the
+  // installed_list / installed_get / resolve_for_agent / upsert handlers doesn't
+  // throw. The access DECISION is unaffected — requireResourceAccess is mocked.
+  readSkillsCatalog: vi.fn(async () => ({ skills: [], skillPackages: [] })),
+  // Effective-policy resolver: fall back to the (level, scope) branch (null)
+  // so the mocked requireResourceAccess keeps inspecting resource.level/scope.
+  resolveEffectiveSkillAccessPolicy: vi.fn(() => null),
   uninstallSkillPackage: vi.fn(),
   listCustomSkills: vi.fn(),
   getCustomSkillById: vi.fn(),

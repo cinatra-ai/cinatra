@@ -13,6 +13,7 @@ import {
   upsertSkill,
   deleteCustomSkill,
   listCustomSkillsForAgent,
+  resolveEffectiveSkillAccessPolicy,
 } from "../skills-store";
 // LOCAL_USER_ID stays out of production paths; dev-bypass fallback resolves
 // dynamically inside guarded blocks below.
@@ -278,6 +279,9 @@ export function createSkillsPrimitiveHandlers() {
               id: skill.id ?? skill.name,
               level: skill.level,
               scope: (skill as { scope?: string | null }).scope ?? null,
+              // Canonical effective policy (W4): the skill's own accessPolicy
+              // else the parent package's. Enforcement reads its union any-match.
+              accessPolicy: resolveEffectiveSkillAccessPolicy(skill, catalog.skillPackages ?? []),
             }));
             return true;
           } catch {
@@ -375,6 +379,8 @@ export function createSkillsPrimitiveHandlers() {
                 id: s.id,
                 level: s.level,
                 scope: s.scope ?? null,
+                // Effective policy (W4): skill override else this package's.
+                accessPolicy: resolveEffectiveSkillAccessPolicy(s, [pkg]),
               }));
               return true;
             } catch {
@@ -486,6 +492,8 @@ export function createSkillsPrimitiveHandlers() {
             id: s.id,
             level: s.level,
             scope: s.scope ?? null,
+            // Effective policy (W4): skill override else parent package's.
+            accessPolicy: resolveEffectiveSkillAccessPolicy(s, catalog.skillPackages ?? []),
           }));
           return true;
         } catch {
@@ -523,12 +531,18 @@ export function createSkillsPrimitiveHandlers() {
         // roleless-internal-model carve-out for the unauthenticated widget SSE
         // stream. Any other workspace skill stays org-gated.
         const isWidgetChatSkill = await isWidgetChatSkillId(skill.id);
+        // Effective policy (W4): skill override else parent package's.
+        const effectivePolicy = resolveEffectiveSkillAccessPolicy(
+          skill,
+          (await readSkillsCatalog()).skillPackages ?? [],
+        );
         // Use the auth-policy resource-ref builder for consistent scope.
         requireResourceAccess(actorCtx, buildSkillResourceRef({
           id: skill.id,
           level: skill.level,
           scope: skill.scope ?? null,
           isWidgetChatSkill,
+          accessPolicy: effectivePolicy,
         }));
       } catch (err) {
         if (err instanceof AuthzError) return null; // 404 semantics — same wire shape as not-found
@@ -591,6 +605,8 @@ export function createSkillsPrimitiveHandlers() {
       const actorCtx = await actorContextFromMcpRequest(request.actor as PrimitiveActorContext, orgId);
 
       const allSkills = await listInstalledSkills();
+      // Resolve package inheritance once for the whole page (W4).
+      const installedSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
 
       // Post-fetch row filter: requireResourceAccess throws on deny; catch silently to exclude.
       const visibleSkills = allSkills.filter((skill) => {
@@ -600,6 +616,7 @@ export function createSkillsPrimitiveHandlers() {
             id: skill.id,
             level: skill.level,
             scope: skill.scope ?? null,
+            accessPolicy: resolveEffectiveSkillAccessPolicy(skill, installedSkillPackages),
           }));
           return true;
         } catch {
@@ -661,6 +678,8 @@ export function createSkillsPrimitiveHandlers() {
       const skillById = new Map(
         (await listInstalledSkills()).map((entry) => [entry.id, entry] as const),
       );
+      // Resolve package inheritance once for the id-surface filter (W4).
+      const resolveSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
       const skillIds = rawSkillIds.filter((id) => {
         const entry = skillById.get(id);
         // Ids that point to skills no longer in the catalog are dropped
@@ -672,6 +691,7 @@ export function createSkillsPrimitiveHandlers() {
             id: entry.id,
             level: entry.level,
             scope: entry.scope ?? null,
+            accessPolicy: resolveEffectiveSkillAccessPolicy(entry, resolveSkillPackages),
           }));
           return true;
         } catch {
@@ -692,6 +712,7 @@ export function createSkillsPrimitiveHandlers() {
               id: skill.id,
               level: skill.level,
               scope: skill.scope ?? null,
+              accessPolicy: resolveEffectiveSkillAccessPolicy(skill, resolveSkillPackages),
             }));
             customSkillContent = skill.content;
           } catch {
@@ -764,6 +785,11 @@ export function createSkillsPrimitiveHandlers() {
             id: existing.id,
             level: existing.level,
             scope: existing.scope ?? null,
+            // Effective policy (W4): skill override else parent package's.
+            accessPolicy: resolveEffectiveSkillAccessPolicy(
+              existing,
+              (await readSkillsCatalog()).skillPackages ?? [],
+            ),
           }),
           "manage",
         );

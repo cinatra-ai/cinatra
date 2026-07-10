@@ -54,7 +54,7 @@ import { getInstalledSkillById, listInstalledSkills } from "./skills-registry";
 // Both skill_package and skill mount the generic ExtensionPermissionsClient.
 // Per-kind action wiring lives in @cinatra-ai/extensions.
 import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
-import { getCustomSkillById, type SkillLevel } from "./skills-store";
+import { getCustomSkillById, readSkillsCatalog, resolveEffectiveSkillAccessPolicy, type SkillLevel } from "./skills-store";
 // SkillAccessClient is not mounted on the skill detail page; the generic
 // ExtensionPermissionsClient owns the UI.
 // The afterPolicyWrite hook keeps the (level, scope) tuple projection in sync
@@ -120,6 +120,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
   // `skills_installed_list` returns to MCP callers. platform_admin
   // is short-circuited inside `requireResourceAccess` and continues to
   // see everything.
+  const listSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
   const skills = allSkills.filter((s) => {
     try {
       // Keep the UI authorization shape aligned with auth-policy.ts.
@@ -127,6 +128,8 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
         id: s.id,
         level: s.level,
         scope: s.scope ?? null,
+        // Canonical effective policy (W4): skill override else parent package's.
+        accessPolicy: resolveEffectiveSkillAccessPolicy(s, listSkillPackages),
       }));
       return true;
     } catch {
@@ -368,6 +371,10 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
       id: skill.id,
       level: skill.level,
       scope: skill.scope ?? null,
+      accessPolicy: resolveEffectiveSkillAccessPolicy(
+        skill,
+        (await readSkillsCatalog()).skillPackages ?? [],
+      ),
     }));
   } catch {
     notFound();
@@ -496,6 +503,10 @@ export async function CreateFromSkillPage({ params }: CreateFromSkillPageProps) 
       id: skill.id,
       level: skill.level,
       scope: skill.scope ?? null,
+      accessPolicy: resolveEffectiveSkillAccessPolicy(
+        skill,
+        (await readSkillsCatalog()).skillPackages ?? [],
+      ),
     }));
   } catch {
     notFound();
