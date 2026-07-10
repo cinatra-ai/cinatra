@@ -45,6 +45,13 @@ export interface RawPackageJson {
   /** Cinatra-namespaced manifest extension. */
   cinatra?: {
     kind?: ExtensionKind;
+    /**
+     * SDK ABI range this version was built against (`cinatra.sdkAbiRange`).
+     * Not used by the metadata mapper; carried here so the sync worker can
+     * populate the update read model's `latestSdkAbiRange` from the same
+     * manifest it already fetched.
+     */
+    sdkAbiRange?: string;
     marketplace?: {
       longDescription?: string;
       assets?: Array<{ path: string; role: "hero" | "screenshot" | "icon" }>;

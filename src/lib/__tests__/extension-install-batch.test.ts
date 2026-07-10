@@ -37,6 +37,7 @@ function member(packageName: string, over: Partial<PlannedMember> = {}): Planned
     typeId: "connector",
     edges: [],
     alreadyInstalled: false,
+    action: "install",
     ...over,
   };
 }
@@ -145,6 +146,17 @@ function makeHarness(opts: {
       }
       events.push(`install:${m.packageName}`);
     }),
+    updateMemberPackage: vi.fn(async (m) => {
+      const fail =
+        typeof opts.installFail === "function"
+          ? opts.installFail(m.packageName)
+          : opts.installFail === m.packageName;
+      if (fail) {
+        events.push(`update-FAIL:${m.packageName}`);
+        throw new Error(`update pipeline refused ${m.packageName}`);
+      }
+      events.push(`update:${m.packageName}`);
+    }),
     uninstallMember: vi.fn(async (m) => {
       events.push(`uninstall:${m.packageName}`);
     }),
@@ -236,6 +248,203 @@ describe("installExtensionWithDependencies — happy path", () => {
     );
     expect(h.events).not.toContain("install:@cinatra-ai/dep-a");
     expect(res.alreadyInstalled).toEqual(["@cinatra-ai/dep-a"]);
+  });
+});
+
+// #1039 Option B — leave-at-NEW committed dedupe-upward on the dev/non-gatekept path.
+describe("installExtensionWithDependencies — #1039 Option B committed dedupe-upward", () => {
+  it("an action:'update' member is routed through the UPDATE pipeline (not install) and surfaced in result.updated", async () => {
+    const h = makeHarness({
+      // The shared dep is pre-installed at 0.9.0 and planned as a committed upgrade.
+      preInstalled: ["@cinatra-ai/shared"],
+      plan: [
+        member("@cinatra-ai/shared", { action: "update", version: "1.0.0" }),
+        member(ROOT),
+      ],
+    });
+    const res = await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    // Dispatched via the update pipeline, never the install one.
+    expect(h.events).toContain("update:@cinatra-ai/shared");
+    expect(h.events).not.toContain("install:@cinatra-ai/shared");
+    expect(h.events).toContain(`install:${ROOT}`);
+    // Partitioned in the result.
+    expect(res.updated).toEqual([{ packageName: "@cinatra-ai/shared", version: "1.0.0" }]);
+    expect(res.installed.map((m) => m.packageName)).toEqual([ROOT]);
+  });
+
+  it("COMMITTED: a later member's failure rolls back fresh members but LEAVES the upgraded shared dep (never uninstalled)", async () => {
+    const h = makeHarness({
+      preInstalled: ["@cinatra-ai/shared"],
+      // dep-a is a fresh install; shared is a committed update; the ROOT fails.
+      plan: [
+        member("@cinatra-ai/shared", { action: "update", version: "1.0.0" }),
+        member("@cinatra-ai/dep-a"),
+        member(ROOT),
+      ],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow();
+    // The committed upgrade ran and was NEVER compensated (pre-existing member).
+    expect(h.events).toContain("update:@cinatra-ai/shared");
+    expect(h.events).not.toContain("uninstall:@cinatra-ai/shared");
+    // The fresh member IS rolled back.
+    expect(h.events).toContain("uninstall:@cinatra-ai/dep-a");
+  });
+
+  it("the boot sweeper leaves a committed update member untouched (preState.present)", async () => {
+    // A stale batch whose shared-dep update reached 'installed' must NOT be
+    // uninstalled by the sweeper — it is a pre-existing (preState.present)
+    // member, so it is committed exactly like the mid-batch compensation path.
+    const swept: string[] = [];
+    const stale: InstallBatch = {
+      batchId: "b-stale",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "installing",
+      members: [
+        {
+          packageName: "@cinatra-ai/shared",
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "update",
+          preState: { present: true, version: "0.9.0" },
+        },
+        {
+          packageName: "@cinatra-ai/dep-a",
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install",
+          preState: { present: false },
+        },
+      ],
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    const { swept: n } = await sweepStaleInstallBatches(
+      { olderThanMs: 0 },
+      {
+        listStale: async () => [stale],
+        setPhase: async (_id, _p) => stale,
+        updateMember: async (_id, _pkg, _patch) => stale,
+        uninstallMember: async (m) => {
+          swept.push(m.packageName);
+        },
+      },
+    );
+    expect(n).toBe(1);
+    // Only the fresh member is compensated; the committed update stays.
+    expect(swept).toEqual(["@cinatra-ai/dep-a"]);
+    expect(swept).not.toContain("@cinatra-ai/shared");
+  });
+});
+
+// #1039 Option B — UPDATE-TIME slice: updateExtensionPackage / extensions_update
+// route the ROOT through the durable UPDATE pipeline as a COMMITTED member while
+// the new version's newly required deps auto-install FRESH dependencies-first.
+describe("installExtensionWithDependencies — #1039 Option B update-time (rootAction:'update')", () => {
+  it("root-only fast path: a committed root update routes through the UPDATE pipeline and surfaces in result.updated", async () => {
+    const h = makeHarness({
+      preInstalled: [ROOT], // the root is already installed (an in-place update)
+      plan: [member(ROOT, { action: "update" })],
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+      h.deps,
+    );
+    // No ledger row (depless), dispatched via the update pipeline, not install.
+    expect(res.batchId).toBeNull();
+    expect(h.events).toContain(`update:${ROOT}`);
+    expect(h.events).not.toContain(`install:${ROOT}`);
+    // Surfaced under `updated`, never `installed`.
+    expect(res.updated).toEqual([{ packageName: ROOT, version: "1.0.0" }]);
+    expect(res.installed).toEqual([]);
+  });
+
+  it("batched: the new version's new dep installs FRESH, the root updates in place; result partitions install vs update", async () => {
+    const h = makeHarness({
+      // The root is already installed; the new required dep is fresh.
+      preInstalled: [ROOT],
+      plan: [member("@cinatra-ai/new-dep"), member(ROOT, { action: "update" })],
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+      h.deps,
+    );
+    expect(h.events).toContain("install:@cinatra-ai/new-dep");
+    expect(h.events).toContain(`update:${ROOT}`);
+    expect(h.events).not.toContain(`install:${ROOT}`);
+    // Dependencies-first: the fresh dep installs BEFORE the root update.
+    expect(h.events.indexOf("install:@cinatra-ai/new-dep")).toBeLessThan(
+      h.events.indexOf(`update:${ROOT}`),
+    );
+    expect(res.installed.map((m) => m.packageName)).toEqual(["@cinatra-ai/new-dep"]);
+    expect(res.updated.map((m) => m.packageName)).toEqual([ROOT]);
+  });
+
+  it("a fresh new-dep failure aborts BEFORE the root update — the root is never touched", async () => {
+    const h = makeHarness({
+      preInstalled: [ROOT],
+      plan: [member("@cinatra-ai/new-dep"), member(ROOT, { action: "update" })],
+      installFail: "@cinatra-ai/new-dep",
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+        h.deps,
+      ),
+    ).rejects.toThrow();
+    expect(h.events).toContain("install-FAIL:@cinatra-ai/new-dep");
+    // The root update is LAST — a pre-root member failure means it never ran.
+    expect(h.events).not.toContain(`update:${ROOT}`);
+  });
+
+  it("boot sweeper leaves a committed ROOT update member untouched (preState.present); only fresh deps roll back", async () => {
+    const swept: string[] = [];
+    const stale: InstallBatch = {
+      batchId: "b-stale-update",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "installing",
+      members: [
+        {
+          packageName: "@cinatra-ai/new-dep",
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install",
+          preState: { present: false },
+        },
+        {
+          packageName: ROOT,
+          version: "1.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "update",
+          preState: { present: true, version: "0.9.0" },
+        },
+      ],
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    const { swept: n } = await sweepStaleInstallBatches(
+      { olderThanMs: 0 },
+      {
+        listStale: async () => [stale],
+        setPhase: async (_id, _p) => stale,
+        updateMember: async (_id, _pkg, _patch) => stale,
+        uninstallMember: async (m) => {
+          swept.push(m.packageName);
+        },
+      },
+    );
+    expect(n).toBe(1);
+    // The committed root update stays; only the fresh dep is compensated.
+    expect(swept).toEqual(["@cinatra-ai/new-dep"]);
+    expect(swept).not.toContain(ROOT);
   });
 });
 

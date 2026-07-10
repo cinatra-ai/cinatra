@@ -25,6 +25,8 @@ const OP_LABELS: Record<string, string> = {
 const ERROR_MESSAGES: Record<string, string> = {
   "missing-id":     "Missing submission id.",
   "token-missing":  "Marketplace token is not configured.",
+  "admin-token-missing":
+    "MARKETPLACE_ADMIN_TOKEN is not configured — extension-submission moderation requires the admin marketplace credential.",
   "reason-required": "A reject reason is required.",
   "reason-too-long": "The reject reason is too long.",
   "withdraw-failed": "Could not withdraw the submission. See server logs for details.",

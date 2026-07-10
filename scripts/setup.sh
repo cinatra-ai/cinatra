@@ -6,6 +6,8 @@ set -euo pipefail
 #
 # Non-interactive overrides (useful for CI / scripted installs):
 #   MODE=dev|prod   bash scripts/setup.sh   # skip the dev/prod prompt
+#   MODE=demo       bash scripts/setup.sh   # demo overlay: dev + the four app
+#                                           #   profiles + demo profile + seed
 #   SEED=1|0        bash scripts/setup.sh   # skip the sample-data prompt
 #   YES=1           bash scripts/setup.sh   # accept all defaults (MODE=dev, SEED=0)
 
@@ -54,6 +56,31 @@ normalize_mode() {
     *) echo "" ;;
   esac
 }
+
+# ── Demo overlay (cinatra#1238) ──────────────────────────────────────────────
+# `MODE=demo` is a strict SUPERSET of a dev install: the DEVELOPMENT runtime
+# (`CINATRA_RUNTIME_MODE=development`) PLUS the orthogonal demo install profile
+# (`CINATRA_INSTALL_PROFILE=demo`) — which brings up the four bundled app
+# profiles (wordpress, drupal, twenty, plane), forces the sample-data seed, and
+# activates the demo dev-fixtures + the lazy monolithic ACME seed at app boot.
+# It is DELIBERATELY not a third runtime mode (that would flip the dozens of
+# `RUNTIME_MODE === "development"` checks); the profile is an independent axis.
+#
+# Detected here, BEFORE mode normalization (which would reject "demo"): a demo
+# request is rewritten to a dev-mode install carrying the demo profile. A re-run
+# also stays demo when the existing .env.local already pins it.
+DEMO=0
+INSTALL_PROFILE="dev"
+if [ "$(printf '%s' "${MODE:-}" | tr '[:upper:]' '[:lower:]')" = "demo" ]; then
+  DEMO=1
+  INSTALL_PROFILE="demo"
+  MODE="dev"   # downstream mode resolution treats demo as a development install
+  info "Demo overlay requested (MODE=demo): development runtime + demo profile + the four bundled app profiles + forced sample seed."
+elif [ -z "${MODE:-}" ] && [ -f .env.local ] && grep -q '^CINATRA_INSTALL_PROFILE=demo$' .env.local; then
+  DEMO=1
+  INSTALL_PROFILE="demo"
+  info "Existing .env.local pins CINATRA_INSTALL_PROFILE=demo — keeping the demo overlay on this run."
+fi
 
 RESOLVED_MODE=""
 
@@ -139,6 +166,23 @@ else
   info ".env.local already exists ($RESOLVED_MODE), skipping."
 fi
 
+# ── Install profile (cinatra#1238) ───────────────────────────────────────────
+# Upsert CINATRA_INSTALL_PROFILE to match this run (demo or dev). ALWAYS written
+# — a plain dev/prod re-run NORMALIZES the profile back to `dev` so a prior
+# `MODE=demo` .env.local never leaks a demo overlay (extra app profiles, forced
+# seed, the lazy ACME seed) into a subsequent plain reconcile. Idempotent:
+# rewrite-if-present, append-if-absent (.env.example may not ship the key).
+if grep -q '^CINATRA_INSTALL_PROFILE=' .env.local; then
+  if [ "$(uname)" = "Darwin" ]; then
+    sed -i '' "s|^CINATRA_INSTALL_PROFILE=.*|CINATRA_INSTALL_PROFILE=$INSTALL_PROFILE|" .env.local
+  else
+    sed -i "s|^CINATRA_INSTALL_PROFILE=.*|CINATRA_INSTALL_PROFILE=$INSTALL_PROFILE|" .env.local
+  fi
+else
+  printf '\n# Install profile (cinatra#1238): dev | demo. demo = dev + bundled apps + seed.\nCINATRA_INSTALL_PROFILE=%s\n' "$INSTALL_PROFILE" >> .env.local
+fi
+info "Install profile: $INSTALL_PROFILE (CINATRA_INSTALL_PROFILE=$INSTALL_PROFILE)."
+
 # ── Docker infrastructure ─────────────────────────────────────────────────────
 
 info "Starting infrastructure (Postgres + Redis)..."
@@ -161,6 +205,40 @@ until curl -sf http://127.0.0.1:3003/health >/dev/null 2>&1; do
   sleep 2
 done
 info "Nango is ready."
+
+# ── Demo app profiles (cinatra#1238) ─────────────────────────────────────────
+# On a demo install, bring up the four bundled app profiles and wait for each to
+# answer. Their connectors' dev-auto-setup hooks converge a live connection to
+# each at app boot (dev-auto-setup.ts), so the apps must be reachable BEFORE the
+# first `pnpm dev`. Health-wait is BOUNDED and NON-FATAL: a slow/failed app
+# warns but never aborts setup — the boot-time hooks are idempotent and re-wire
+# on the next boot once the container is healthy. WordPress + Drupal seed their
+# own demo content from their entrypoints; Twenty + Plane content is seeded from
+# the app-side demo path once their connections converge.
+if [ "$DEMO" = "1" ]; then
+  info "Bringing up the four demo app profiles (wordpress, drupal, twenty, plane)..."
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+    --profile wordpress --profile drupal --profile twenty --profile plane up -d
+
+  # Bounded HTTP health-wait. $1=label $2=url $3=timeout-seconds.
+  wait_for_app() {
+    _label="$1"; _url="$2"; _deadline=$(( $(date +%s) + ${3:-300} ))
+    info "Waiting for $_label ($_url)..."
+    until curl -sf -o /dev/null --max-time 5 "$_url"; do
+      if [ "$(date +%s)" -ge "$_deadline" ]; then
+        warn "$_label did not answer within ${3:-300}s — continuing. Its connection re-wires on the next \`pnpm dev\` boot once it is healthy."
+        return 0
+      fi
+      sleep 3
+    done
+    info "$_label is ready."
+  }
+  wait_for_app "WordPress" "http://localhost:8080/wp-json/" 300
+  wait_for_app "Drupal"    "http://localhost:8082/"         300
+  wait_for_app "Twenty"    "http://localhost:3300/healthz"  300
+  wait_for_app "Plane"     "http://localhost:3400/api/instances/" 420
+  info "Demo app profiles up. Connections converge at the first \`pnpm dev\` boot."
+fi
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -280,7 +358,13 @@ fi
 
 LOAD_SEED=0
 
-if [ -n "${SEED:-}" ]; then
+if [ "$DEMO" = "1" ]; then
+  # Demo forces the sample seed (cinatra#1238). It no-ops here until a human
+  # admin exists (the seed's own precondition), then fires lazily at app boot
+  # via the demo-seed boot runner — so opting in here is safe and idempotent.
+  LOAD_SEED=1
+  info "Demo overlay: sample fixture data (ACME Group) is forced on (CINATRA_INSTALL_PROFILE=demo)."
+elif [ -n "${SEED:-}" ]; then
   case "$(printf '%s' "$SEED" | tr '[:upper:]' '[:lower:]')" in
     1|y|yes|true) LOAD_SEED=1 ;;
     0|n|no|false) LOAD_SEED=0 ;;

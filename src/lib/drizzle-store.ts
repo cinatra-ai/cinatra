@@ -8,6 +8,10 @@ import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
 import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
+import {
+  skillPackageCoOwnerConstraintQueries,
+  skillCoOwnerConstraintQueries,
+} from "@/lib/co-owner-constraint-schema";
 
 type QueryInput = {
   text: string;
@@ -251,60 +255,7 @@ END $$` },
       granted_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (package_id, user_id)
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS skill_package_co_owners_user_id_idx ON "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners" (user_id)` },
-    { text: `DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_package_co_owners'
-            AND constraint_name = 'skill_package_co_owners_user_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_user_id_fkey
-            FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_package_co_owners'
-            AND constraint_name = 'skill_package_co_owners_granted_by_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_granted_by_fkey
-            FOREIGN KEY (granted_by) REFERENCES public."user"(id);
-        END IF;
-        -- Replace CASCADE with RESTRICT on the
-        -- package_id FK if a pre-existing schema was bootstrapped while the
-        -- CASCADE was still in CREATE TABLE. Idempotent: only fires when the
-        -- current constraint delete_rule is still CASCADE.
-        IF EXISTS (
-          SELECT 1 FROM information_schema.referential_constraints rc
-          WHERE rc.constraint_schema = '${schemaName.replaceAll("'", "''")}'
-            AND rc.constraint_name = 'skill_package_co_owners_package_id_fkey'
-            AND rc.delete_rule = 'CASCADE'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            DROP CONSTRAINT skill_package_co_owners_package_id_fkey;
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_package_id_fkey
-            FOREIGN KEY (package_id) REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_packages"(id) ON DELETE RESTRICT;
-        END IF;
-        -- Heal a schema where the package_id FK is
-        -- missing entirely after table
-        -- creation, or any state where the constraint got dropped manually).
-        -- CREATE TABLE IF NOT EXISTS won't re-add the FK, so we add it here.
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_package_co_owners'
-            AND constraint_name = 'skill_package_co_owners_package_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_package_co_owners"
-            ADD CONSTRAINT skill_package_co_owners_package_id_fkey
-            FOREIGN KEY (package_id) REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_packages"(id) ON DELETE RESTRICT;
-        END IF;
-      END $$;` },
+    ...skillPackageCoOwnerConstraintQueries(schemaName),
     // skill_co_owners: per-skill (not per-package)
     // sharing join. Lets operators override the parent package's access
     // policy on individual skills. Mirrors skill_package_co_owners
@@ -327,52 +278,7 @@ END $$` },
       granted_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (skill_id, user_id)
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS skill_co_owners_user_id_idx ON "${schemaName.replaceAll('"', '""')}"."skill_co_owners" (user_id)` },
-    { text: `DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_co_owners'
-            AND constraint_name = 'skill_co_owners_user_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-            ADD CONSTRAINT skill_co_owners_user_id_fkey
-            FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_co_owners'
-            AND constraint_name = 'skill_co_owners_granted_by_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-            ADD CONSTRAINT skill_co_owners_granted_by_fkey
-            FOREIGN KEY (granted_by) REFERENCES public."user"(id);
-        END IF;
-        -- Heal a schema where skill_id FK was
-        -- never added (table was originally created without it).
-        --
-        -- review follow-up: BEFORE adding the FK, clean up any orphan
-        -- skill_co_owners rows whose skill_id no longer points at a real
-        -- skill row. The legacy no-FK design allowed package-uninstall
-        -- paths to drop skill rows while leaving co-owner grants in place;
-        -- those orphans would block ALTER TABLE ADD CONSTRAINT now.
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'skill_co_owners'
-            AND constraint_name = 'skill_co_owners_skill_id_fkey'
-        ) THEN
-          DELETE FROM "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-          WHERE skill_id NOT IN (
-            SELECT id FROM "${schemaName.replaceAll('"', '""')}"."skills"
-          );
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skill_co_owners"
-            ADD CONSTRAINT skill_co_owners_skill_id_fkey
-            FOREIGN KEY (skill_id) REFERENCES "${schemaName.replaceAll('"', '""')}"."skills"(id) ON DELETE RESTRICT;
-        END IF;
-      END $$;` },
+    ...skillCoOwnerConstraintQueries(schemaName),
 
     // -----------------------------------------------------------------------
     // Generic extension permissions consolidation.
@@ -1519,10 +1425,7 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_a2a_task_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (a2a_task_id) WHERE a2a_task_id IS NOT NULL` },
     // agent_dependencies: JSON-stringified Record<string,string> of @cinatra/* dep ranges
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_dependencies text` },
-    // connector_dependencies: JSON-stringified
-    // Record<string,string> of @cinatra-ai/<x>-connector workspace dep ranges.
-    // One-shot ADD COLUMN IF NOT EXISTS — nullable, no backfill (no legacy
-    // values to migrate; agents publish with the field present).
+    // connector_dependencies: JSON-stringified Record<string,string> of @cinatra-ai/<x>-connector dep ranges (nullable, additive, no backfill).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS connector_dependencies text` },
     // type: leaf | proxy | orchestrator (default 'leaf')
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS type text NOT NULL DEFAULT 'leaf'` },
@@ -1537,6 +1440,9 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS workflow_task_id text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_idempotency_key_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (idempotency_key) WHERE idempotency_key IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_workflow_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (workflow_id) WHERE workflow_id IS NOT NULL` },
+    // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
@@ -2228,10 +2134,12 @@ $body$` },
     // authPolicy on agent_runs: per-run override (JSON-as-text; nullable = use template's agentAuthPolicy or DEFAULT_AGENT_AUTH_POLICY).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_auth_policy text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS auth_policy text` },
-    // agent_runs.org_id: org-scoping for run lists.
-    // Nullable; existing rows remain NULL (visible only to platform-admin
-    // cross-org reads via skipOrgFilter). No automatic backfill — document
-    // as admin task.
+    // Interaction axis (#1037 P1): agent_kind ('assistant'|'executor', default 'executor', ORTHOGONAL to `type`) + typed assistant_config sidecar; invariant CHECKs (assistant⇒config, executor⇒none). Shape + write-time twin in src/lib/assistant-config.ts; transformational half in migration core__0019.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'executor', ADD COLUMN IF NOT EXISTS assistant_config text` },
+    { text: `DO $$ BEGIN ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_check", `CHECK (agent_kind IN ('assistant', 'executor'))`)} ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_config_check", `CHECK ((agent_kind = 'assistant' AND assistant_config IS NOT NULL) OR (agent_kind = 'executor' AND assistant_config IS NULL))`)} END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_templates_agent_kind_idx ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (agent_kind)` },
+    // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
+    // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` },
     // agent_runs.project_id inheritance
@@ -2241,12 +2149,9 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS project_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (project_id, created_at DESC) WHERE project_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_project_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (project_id, status, created_at DESC) WHERE project_id IS NOT NULL` },
-    // agent_runs.org_id NOT NULL. Drops legacy NULL rows; no backfill.
-    // PoC mode (no production data preservation). Idempotent: DELETE matches zero
-    // rows on subsequent boots once the column is NOT NULL, and ALTER on an
-    // already-NOT-NULL column is a no-op in Postgres.
-    // Order matters: DELETE must precede ALTER — PG rejects SET NOT NULL on a
-    // column with NULL rows.
+    // agent_runs.org_id NOT NULL. Drops legacy NULL rows (PoC mode, no prod data
+    // preservation) then SET NOT NULL. Order matters (DELETE before ALTER — PG
+    // rejects SET NOT NULL with NULL rows) and both are idempotent no-ops after.
     { text: `DELETE FROM "${schemaName.replaceAll('"', '""')}"."agent_runs" WHERE org_id IS NULL` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ALTER COLUMN org_id SET NOT NULL` },
     // Backfill NULL package_name rows with deterministically-unique

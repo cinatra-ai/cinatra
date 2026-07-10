@@ -72,6 +72,21 @@ export type PlannedMember = {
   edges: ExtensionDependency[];
   /** Already installed at exactly the pinned version — the saga skips it. */
   alreadyInstalled: boolean;
+  /**
+   * How the saga realizes this member (#1039 Option B, dev/non-gatekept path):
+   *  - `"install"`: a member NOT present pre-batch — installed fresh; rolled
+   *    back (compensated) if a later member fails.
+   *  - `"update"`: a shared dependency already installed at an OLDER version
+   *    that is a CLEAN dedupe-upward (`upgradable-clean`) — upgraded in place to
+   *    the new pin via the durable update pipeline. It is a COMMITTED upgrade:
+   *    the compatibility proof (every live dependent admits the pin + the new
+   *    version is self-satisfiable in place) makes leaving it at the new version
+   *    provably non-breaking, so a later member's failure does NOT roll it back
+   *    (only fresh `install` members roll back). Emitted ONLY on the
+   *    non-gatekept path; the gatekept path keeps the hard refusal (its
+   *    host-computed-set dedupe rides the deferred durable-restore subsystem).
+   */
+  action: "install" | "update";
 };
 
 export type DependencyInstallPlan = {
@@ -324,6 +339,23 @@ export type PlanDependencyInstallInput = {
   orgId: string | null;
   /** The marketplace authorize closure (gatekept) — null on the dev path. */
   closure: DependencyClosurePin[] | null;
+  /**
+   * How the saga realizes the ROOT member (#1039 Option B, update-time slice).
+   *  - `"install"` (default): a FRESH root install — the root is exempt from
+   *    the installed-version conflict check (installing over an existing root is
+   *    the caller's chosen update flow) and installs LAST as a fresh member.
+   *  - `"update"`: the caller (`updateExtensionPackage` / `extensions_update` on
+   *    the dev/non-gatekept path) is UPDATING an already-installed root in place.
+   *    The root member is emitted as a COMMITTED `action:"update"` (routed
+   *    through the durable update pipeline), while the NEW version's newly
+   *    required dependencies auto-install as fresh members FIRST (dependencies-
+   *    first) and a clean shared-dependency dedupe-upward executes as its own
+   *    committed update. Honored ONLY on the non-gatekept path (`closure ===
+   *    null`); the gatekept update path is the deferred durable-restore slice
+   *    (#1296) and keeps the direct in-place update, so the root stays
+   *    `action:"install"` there and is never routed through this planner.
+   */
+  rootAction?: "install" | "update";
 };
 
 /**
@@ -334,7 +366,7 @@ export async function planDependencyInstall(
   input: PlanDependencyInstallInput,
   deps: DependencyPlanDeps,
 ): Promise<DependencyInstallPlan> {
-  const { root, orgId, closure } = input;
+  const { root, orgId, closure, rootAction = "install" } = input;
   const source = closure ? ("marketplace-closure" as const) : ("manifest-walk" as const);
   const closureByName = new Map((closure ?? []).map((c) => [c.name, c]));
   const installedRows = await deps.readInstalledRows();
@@ -452,23 +484,40 @@ export async function planDependencyInstall(
     requestedBy: { from: string; edge: ExtensionDependency } | null,
   ): PlannedMember {
     // 2. Installed check (item 7): same version → skip member; different →
-    //    precise conflict refusal. The ROOT is exempt (installing over an
-    //    existing root is the update flow the caller chose).
+    //    conflict CLASSIFICATION. The ROOT is exempt from the conflict check
+    //    (installing/updating over an existing root is the flow the caller
+    //    chose) — but on an UPDATE it is realized as a COMMITTED in-place
+    //    update member (#1039 Option B update-time slice), routed through the
+    //    durable update pipeline instead of a fresh install.
     let alreadyInstalled = false;
-    if (packageName !== root.packageName) {
+    let action: PlannedMember["action"] = "install";
+    if (packageName === root.packageName) {
+      // #1039 Option B (update-time): the ROOT of an UPDATE is a committed
+      // `action:"update"` member on the non-gatekept path. A fresh install
+      // keeps `action:"install"`; the gatekept update path is the deferred
+      // durable-restore slice (#1296) and never reaches this planner, so the
+      // root there would (defensively) stay a fresh install.
+      if (rootAction === "update" && closure === null) {
+        action = "update";
+      }
+    } else {
       const row = findLiveRow(installedRows, packageName, orgId);
       const installedVersion =
         row?.source && (row.source as { version?: string }).version
           ? (row.source as { version: string }).version
           : null;
       if (row && installedVersion && installedVersion !== pin) {
-        // DEDUPE-UPWARD analysis (#1039): classify the conflict and CARRY the
-        // computed evidence into the refusal. Auto-EXECUTING the upgrade (an
-        // `action:"update"` batch member) is deferred pending the durable
-        // prior-state compensation contract; the refusal here is unchanged in
-        // behavior (INSTALLED_VERSION_CONFLICT on every path) but now names the
-        // conflicting or admitting dependents so the operator knows WHY and
-        // whether an explicit update resolves it.
+        // DEDUPE-UPWARD (#1039, Option B): classify the conflict and CARRY the
+        // computed evidence. On the non-gatekept path a CLEAN upward-dedupe
+        // (`upgradable-clean` — every live dependent admits the pin AND the new
+        // version is self-satisfiable in place) is EXECUTED as an in-place
+        // `action:"update"` member instead of refusing: a provably non-breaking,
+        // COMMITTED upgrade (the saga leaves it at the new version even if a
+        // later member fails). Every other class — and EVERY class on the
+        // gatekept path (`closure != null`, whose host-computed-set dedupe rides
+        // the deferred durable-restore subsystem) — keeps the evidence-carrying
+        // hard refusal (INSTALLED_VERSION_CONFLICT). The refusal now names the
+        // conflicting or admitting dependents so the operator knows WHY.
         const conflict = classifyInstalledVersionConflict({
           packageName,
           installedVersion,
@@ -485,6 +534,14 @@ export async function planDependencyInstall(
           orgId: row.organizationId ?? null,
           isAutoInstallableEdge: deps.isAutoInstallableEdge,
         });
+        // Option B execution: a CLEAN dedupe-upward on the non-gatekept path is
+        // realized as a committed in-place update, NOT a refusal. `closure` is
+        // non-null only on the gatekept path — there the compatibility proof is
+        // still a hard REFUSE-UP-FRONT gate (durable-restore is deferred), so the
+        // switch below runs for every class as before.
+        if (conflict.kind === "upgradable-clean" && closure === null) {
+          action = "update";
+        } else {
         const requestedFrom = requestedBy?.from ?? root.packageName;
         const base =
           `${packageName} is already installed at ${installedVersion}, but ` +
@@ -506,6 +563,10 @@ export async function planDependencyInstall(
               `${packageName} to ${pin} (extensions_update ${packageName}@${pin}) and retry.`;
             break;
           case "upgradable-clean":
+            // Reached ONLY on the gatekept path (the non-gatekept path took the
+            // execute-as-update branch above): a clean dedupe-upward the
+            // gatekept host-computed-set dedupe (deferred) would resolve, but
+            // which is refused here for now.
             detail =
               ` The installed version is OLDER, every installed dependent admits ${pin}, and ` +
               `${packageName}@${pin} needs no new dependencies — update ${packageName} to ${pin} ` +
@@ -519,6 +580,7 @@ export async function planDependencyInstall(
             break;
         }
         throw new DependencyPlanError("INSTALLED_VERSION_CONFLICT", base + detail);
+        }
       }
       if (row && (installedVersion === null || installedVersion === pin)) {
         // A live row with no verdaccio version (dev/local source) counts as
@@ -535,6 +597,7 @@ export async function planDependencyInstall(
       typeId: kindToTypeId(summary.kind, packageName, !alreadyInstalled),
       edges,
       alreadyInstalled,
+      action,
     };
     if (summary.kind) memberKinds.set(packageName, summary.kind);
     resolved.set(packageName, member);

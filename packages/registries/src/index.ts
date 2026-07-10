@@ -48,6 +48,14 @@ export {
 export { comparePluginVersions, satisfiesVersionRange, isExactVersion, isValidVersionRange } from "./version-compare";
 export type { VersionComparisonResult } from "./version-compare";
 
+// NOTE: the cached "update read model" (#1041) is DELIBERATELY NOT re-exported
+// from this top-level barrel. Adding it here pulls its module into the graph of
+// every route that reaches the registries barrel (/api/a2a, /api/mcp,
+// /api/llm-bridge, /chat), tripping the route-graph ratchet (a locked route's
+// first-party module ceiling may only ever shrink). Consumers import it via the
+// deep path `@cinatra-ai/registries/src/update-read-model` — the same
+// barrel-avoidance pattern the marketplace card model uses for version-compare.
+
 export {
   listAgentPackages,
   getAgentPackage,

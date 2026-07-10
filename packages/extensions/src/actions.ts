@@ -144,12 +144,35 @@ export async function updateExtensionPackage(
   "use server";
   await requireAdminSession();
   try {
-    const typeId = await resolveExtensionTypeId(packageName, packageVersion);
-    await extensionRegistry.update(
-      typeId,
-      { registryUrl: "", packageName, version: packageVersion },
-      actor,
-    );
+    // #1039 Option B (update-time slice): on the dev/non-gatekept path route the
+    // update THROUGH the dependency planner/batch (rootAction:'update') instead
+    // of the bare `extensionRegistry.update` — so the new version's newly
+    // required dependencies auto-install DEPENDENCIES-FIRST, dependent-break
+    // checking becomes plan-aware, and a clean shared-dependency dedupe-upward
+    // executes as a committed update. The root is realized as a COMMITTED
+    // in-place update member (leave-at-NEW). The GATEKEPT path keeps the direct
+    // in-place update: its host-computed-set dedupe + durable-restore is the
+    // deferred slice (Option A, #1296), so update-through-batch there stays
+    // fenced. Dynamic import: @/lib is the host (mirrors installExtensionPackage).
+    const { isGatekeptInstallEnabled } = await import("@/lib/gatekept-install");
+    if (isGatekeptInstallEnabled()) {
+      const typeId = await resolveExtensionTypeId(packageName, packageVersion);
+      await extensionRegistry.update(
+        typeId,
+        { registryUrl: "", packageName, version: packageVersion },
+        actor,
+      );
+    } else {
+      const { installExtensionWithDependencies } = await import(
+        "@/lib/extension-install-batch"
+      );
+      await installExtensionWithDependencies({
+        packageName,
+        version: packageVersion,
+        actor,
+        rootAction: "update",
+      });
+    }
     return { success: true };
   } catch (err) {
     // Classify from the real error before stringification (cinatra#685).

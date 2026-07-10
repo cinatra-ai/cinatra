@@ -17,6 +17,8 @@ import {
   createOrUpdateCustomSkillForAgent,
   buildDefaultPersonalSkillName,
   listCustomSkillsForCurrentUserAndAgent,
+  readSkillsCatalog,
+  resolveEffectiveSkillAccessPolicy,
 } from "@cinatra-ai/skills";
 import {
   readHitlPromptsForRun,
@@ -166,9 +168,10 @@ export async function getSkillsForAgentAction(
     // The trade-off: when assignedIds is empty we still pay for the catalog
     // fetch (instead of short-circuiting), but the empty case is rare for
     // agents that wire a recommend gate.
-    const [assignedIds, catalog] = await Promise.all([
+    const [assignedIds, catalog, skillPackages] = await Promise.all([
       getAssignedSkillIdsForAgent(agentPackageName, actor),
       listInstalledSkills(),
+      readSkillsCatalog().then((c) => c.skillPackages ?? []),
     ]);
     if (!assignedIds || assignedIds.length === 0) return [];
 
@@ -182,6 +185,8 @@ export async function getSkillsForAgentAction(
             id: skill.id,
             level: skill.level,
             scope: skill.scope ?? null,
+            // Canonical effective policy (W4): skill override else package's.
+            accessPolicy: resolveEffectiveSkillAccessPolicy(skill, skillPackages),
           }));
           return true;
         } catch {

@@ -9,6 +9,7 @@ import {
   getInstallProfile,
   isDemoProfile,
   isEnvFlagEnabled,
+  shouldRunDemoSeed,
   shouldSeedDevFixtures,
 } from "@/lib/install-profile";
 
@@ -83,5 +84,46 @@ describe("shouldSeedDevFixtures — the relocation matrix", () => {
 
   it("demo profile OUTSIDE strict development runtime ⇒ never seeds", () => {
     expect(shouldSeedDevFixtures({ CINATRA_INSTALL_PROFILE: "demo" })).toBe(false);
+  });
+});
+
+describe("shouldRunDemoSeed — the pending monolithic-seed one-shot", () => {
+  const demoDev = (extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv =>
+    ({ CINATRA_RUNTIME_MODE: "development", NODE_ENV: "test", CINATRA_INSTALL_PROFILE: "demo", ...extra });
+
+  it("fires ONLY once a human admin exists and it has not already run", () => {
+    expect(shouldRunDemoSeed({ humanAdminExists: true, alreadySeeded: false }, demoDev())).toBe(true);
+  });
+
+  it("waits while no human admin exists (fresh demo DB, nobody registered yet)", () => {
+    expect(shouldRunDemoSeed({ humanAdminExists: false, alreadySeeded: false }, demoDev())).toBe(false);
+  });
+
+  it("never re-runs once the one-shot completed", () => {
+    expect(shouldRunDemoSeed({ humanAdminExists: true, alreadySeeded: true }, demoDev())).toBe(false);
+  });
+
+  it("never runs on a plain dev instance (no demo profile), even with an admin", () => {
+    expect(
+      shouldRunDemoSeed({ humanAdminExists: true, alreadySeeded: false }, {
+        CINATRA_RUNTIME_MODE: "development",
+        NODE_ENV: "test",
+      }),
+    ).toBe(false);
+  });
+
+  it("never runs outside strict development runtime", () => {
+    expect(
+      shouldRunDemoSeed({ humanAdminExists: true, alreadySeeded: false }, {
+        CINATRA_INSTALL_PROFILE: "demo",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunDemoSeed({ humanAdminExists: true, alreadySeeded: false }, {
+        CINATRA_RUNTIME_MODE: "development",
+        NODE_ENV: "production",
+        CINATRA_INSTALL_PROFILE: "demo",
+      }),
+    ).toBe(false);
   });
 });
