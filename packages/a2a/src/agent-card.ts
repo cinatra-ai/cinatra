@@ -178,8 +178,18 @@ export function buildAgentCard(input: BuildAgentCardInput): AgentCard {
       schema: {},
     }));
     // Surface the orchestrator dependency manifest. Empty `{}` when the source
-    // manifest declared none, so consumers always see a stable shape.
-    const agentDependencies = template.agentDependencies ?? {};
+    // manifest declared none, so consumers always see a stable shape. The A2A
+    // card carries the plain package→range map; an OPTIONAL edge's requirement
+    // is a run-time-gate concern (canonical `cinatra.dependencies`), so flatten
+    // the requirement-carrying union to bare ranges here (cinatra#1058). Inlined
+    // (not the shared @cinatra-ai/agents helper) so the flatten survives a2a's
+    // whole-module mock of that package.
+    const agentDependencies: Record<string, string> = Object.fromEntries(
+      Object.entries(template.agentDependencies ?? {}).map(([k, v]) => [
+        k,
+        typeof v === "string" ? v : v.range,
+      ]),
+    );
     // Surface agent type to A2A consumers. Defaults to "leaf" for legacy/test
     // fixtures that predate the field.
     const type = template.type ?? "leaf";

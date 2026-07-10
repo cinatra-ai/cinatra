@@ -508,7 +508,8 @@ export {
   readAgentTemplateOrigin,
   updateAgentTemplateOrigin,
 } from "./store";
-export type { ExtensionOrigin } from "./schema";
+export type { ExtensionOrigin, AgentDependencyMap, AgentDepValue } from "./schema";
+export { flattenAgentDependencyRanges } from "./schema";
 
 // ---------------------------------------------------------------------------
 // LLM provider/model/capability policy. Re-exported so downstream consumers can
