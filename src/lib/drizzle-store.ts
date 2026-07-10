@@ -1,14 +1,13 @@
 import { eq, notInArray } from "drizzle-orm";
-// SQL-TEXT-ONLY driver (cinatra#104): the pg-proxy driver builds queries
-// without importing `pg`. Turbopack externalizes `pg` via dynamic `import()`
-// (esm_import), which would make this module — and every static importer up
-// to database.ts — an ASYNC module, breaking the codebase's synchronous
-// `require()` composition (see src/lib/postgres-config.ts). Code that needs
-// a REAL pg connection lives in src/lib/extension-destinations-store.ts.
-// Enforced by src/lib/__tests__/postgres-sync-leaf-imports.test.ts.
+// SQL-TEXT-ONLY driver (cinatra#104): pg-proxy builds queries WITHOUT importing
+// `pg`, so this module + every static importer up to database.ts stays SYNC (a `pg`
+// import goes async via Turbopack's dynamic import() and breaks the sync `require()`
+// composition — see postgres-config.ts; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
+
+import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
 
 type QueryInput = {
   text: string;
@@ -579,6 +578,7 @@ END $$` },
             CHECK (status IN ('pending', 'approved', 'revoked'));
         END IF;
       END $$;` },
+    ...capabilityOwnershipGrantSchemaQueries(schemaName), // capability-ownership grant (S0), additive
 
     // Runtime installer — snapshot leases. An in-flight run that imports
     // a digest-pinned package dir holds a lease so the GC reaper never deletes

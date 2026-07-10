@@ -106,6 +106,15 @@ const PUBLIC_EXACT_PATHS = [
 // contract as its siblings (the real AgentAllCard mounted with an injected
 // detail loader; no DB, no user data). Its Playwright guard runs in the same
 // production-standalone design-visual-verify harness.
+// "/design-fixtures/header-rule" (cinatra#1101): the page-header SECTION-RULE
+// conformance harness — the REAL shared chrome (PageHeader divider + TabsListRow,
+// both → <Separator major> → .divider-etched) mounted beside the app.html
+// reference rule so the header-rule gate can pixel-classify the etched
+// paired-line divider. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no user data); its Playwright suite runs in the same
+// production-standalone design-visual-verify harness. Without this exemption
+// guardAppRoute 307s the unauthenticated harness to /sign-in before the fixture
+// renders, so the gate's own specs time out locating the fixture testids.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -113,6 +122,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/conformance/seeded",
   "/design-fixtures/conformance/seed",
   "/design-fixtures/agents-card",
+  "/design-fixtures/header-rule",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

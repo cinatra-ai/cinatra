@@ -46,10 +46,8 @@ import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
 
 import { requireAdminSession } from "@/lib/auth-session";
-import {
-  composeNamespaceErrorMessage,
-  validateInstanceNamespace,
-} from "@/lib/instance-namespace";
+import type { InstanceErrorCode } from "./instance-flash";
+import { validateInstanceNamespace } from "@/lib/instance-namespace";
 import {
   readInstanceIdentity,
   writeInstanceIdentity,
@@ -94,8 +92,11 @@ import {
 const REGISTRY_URL =
   process.env.CINATRA_AGENT_REGISTRY_URL?.trim() || "https://registry.cinatra.ai";
 
-function redirectWithError(message: string): never {
-  redirect("/configuration/environment?tab=instance&error=" + encodeURIComponent(message));
+// Codes-only flash protocol: redirect to the instance tab carrying a stable
+// CODE (mapped to a static message by the <SearchParamToast> island via
+// ./instance-flash). Never reflect URL-derived text into the toast.
+function redirectWithError(code: InstanceErrorCode): never {
+  redirect("/configuration/environment?tab=instance&error=" + code);
   throw new Error("unreachable");
 }
 
@@ -312,12 +313,7 @@ async function assertNamespaceRenameAllowed(
         "[provisionAndPersist] rename blocked — vendor credentials present but unusable",
         { code: err.code },
       );
-      redirectWithError(
-        "Could not verify vendor-application status (consumer attachment is " +
-          "present but malformed). Repair the marketplace attachment from " +
-          "Configuration → Environment → Registries before renaming the " +
-          "instance namespace.",
-      );
+      redirectWithError("attachment-malformed");
     }
     throw err;
   }
@@ -340,18 +336,11 @@ async function assertNamespaceRenameAllowed(
     if (canFailOpenOnUnreachableMarketplace(identity, err)) {
       return;
     }
-    redirectWithError(
-      "Could not reach the Cinatra Marketplace to verify vendor-application status. " +
-        "Please retry in a moment; if the marketplace is down, rename is paused.",
-    );
+    redirectWithError("marketplace-unreachable-rename");
   }
 
   if (status && (status.state === "applied" || status.state === "approved")) {
-    redirectWithError(
-      `Namespace is reserved as your vendor scope (status: ${status.state}). ` +
-        "Cancel your vendor application from Configuration → Environment → Registries " +
-        "before renaming the instance namespace.",
-    );
+    redirectWithError("namespace-reserved");
   }
 }
 
@@ -375,9 +364,7 @@ async function provisionAndPersist(
   // direct Verdaccio provisioning under modes (a)/(b), which would split
   // ownership of the namespace.
   if (process.env.MARKETPLACE_INSTANCE_TOKEN?.trim()) {
-    redirectWithError(
-      "Renaming the instance namespace on a marketplace-backed instance is not yet supported. Contact Cinatra Marketplace support to coordinate the change.",
-    );
+    redirectWithError("marketplace-rename-unsupported");
   }
 
   // Rename gate: when a vendor application is opened (or approved), the
@@ -416,20 +403,14 @@ async function provisionAndPersist(
   if (envToken) {
     // Mode (a) — pre-provisioned token.
     if (!isPlausibleRegistryToken(envToken)) {
-      redirectWithError(
-        "Pre-provisioned registry token (CINATRA_AGENT_REGISTRY_TOKEN) looks malformed. Operator: check the instance environment for stray whitespace.",
-      );
+      redirectWithError("registry-token-malformed");
     }
     if (!process.env.CINATRA_AGENT_REGISTRY_URL?.trim()) {
-      redirectWithError(
-        "Pre-provisioned registry token is set but CINATRA_AGENT_REGISTRY_URL is missing. Operator: set the registry URL in the instance environment.",
-      );
+      redirectWithError("registry-url-missing");
     }
     const expectedScope = `@${newName}`;
     if (process.env.CINATRA_AGENT_REGISTRY_SCOPE?.trim() !== expectedScope) {
-      redirectWithError(
-        `Pre-provisioned registry scope must match the new namespace. Operator: mint a new token for "${newName}" via the registry-token provisioning flow and set CINATRA_AGENT_REGISTRY_SCOPE=${expectedScope} + the new TOKEN in the instance environment BEFORE renaming.`,
-      );
+      redirectWithError("registry-scope-mismatch");
     }
     token = envToken;
     // No in-app password in the pre-provisioned flow — the operator holds the
@@ -454,26 +435,20 @@ async function provisionAndPersist(
       token = result.token;
     } catch (e) {
       if (e instanceof VerdaccioUserAlreadyRegisteredError) {
-        redirectWithError("That vendor name is already taken.");
+        redirectWithError("namespace-taken");
       }
       if (e instanceof VerdaccioRegistrationDisabledError) {
-        redirectWithError(
-          "Registry self-registration is disabled. Operator: pre-provision the new namespace with the registry-token provisioning flow and set CINATRA_AGENT_REGISTRY_TOKEN/URL/SCOPE in the instance environment.",
-        );
+        redirectWithError("registry-registration-disabled");
       }
       if (e instanceof VerdaccioUnexpectedResponseError) {
-        redirectWithError(
-        "Registry returned an unexpected response. Operator: see server logs.",
-      );
+        redirectWithError("registry-unexpected-response");
       }
       // Emit a generic redirect message and log the full error server-side.
       // Reflecting the inner Error.message into ?error= leaks network
       // diagnostics (DNS errors with the configured registry host,
       // EHOSTUNREACH targets, etc.) into URL query params.
       console.error("[provisionAndPersist] unexpected registry error:", e);
-      redirectWithError(
-        "Could not provision registry user. Operator: see server logs.",
-      );
+      redirectWithError("registry-provision-failed");
       throw e; // unreachable; satisfies TS narrowing
     }
   }
@@ -531,20 +506,20 @@ export async function editVendorAction(formData: FormData): Promise<void> {
   const session = await requireAdminSession();
   const operatorEmail = session.user.email ?? "";
   if (!operatorEmail) {
-    redirectWithError("Could not determine operator email. Please sign in again.");
+    redirectWithError("operator-email-missing");
   }
 
   const instanceDisplayName = String(formData.get("instanceDisplayName") ?? "").trim();
   if (!instanceDisplayName) {
-    redirectWithError("Instance display name is required.");
+    redirectWithError("invalid-display-name");
   }
   if (instanceDisplayName.length > 120) {
-    redirectWithError("Instance display name must be 120 characters or fewer.");
+    redirectWithError("display-name-too-long");
   }
 
   const current = readInstanceIdentity();
   if (!current) {
-    redirectWithError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithError("identity-not-configured");
   }
 
   // Namespace validation routes through the shared validator. The canonical
@@ -553,7 +528,7 @@ export async function editVendorAction(formData: FormData): Promise<void> {
     String(formData.get("instanceNamespace") ?? current.instanceNamespace),
   );
   if (!namespaceResult.ok) {
-    redirectWithError(composeNamespaceErrorMessage(namespaceResult.error));
+    redirectWithError("invalid-namespace");
   }
   const newName = namespaceResult.canonical;
 
@@ -602,7 +577,7 @@ export async function renameInstanceNamespaceAction(formData: FormData): Promise
   const session = await requireAdminSession();
   const operatorEmail = session.user.email ?? "";
   if (!operatorEmail) {
-    redirectWithError("Could not determine operator email. Please sign in again.");
+    redirectWithError("operator-email-missing");
   }
 
   // Namespace validation routes through the shared validator. The canonical
@@ -611,25 +586,23 @@ export async function renameInstanceNamespaceAction(formData: FormData): Promise
     String(formData.get("instanceNamespace") ?? ""),
   );
   if (!namespaceResult.ok) {
-    redirectWithError(composeNamespaceErrorMessage(namespaceResult.error));
+    redirectWithError("invalid-namespace");
   }
   const newName = namespaceResult.canonical;
 
   const current = readInstanceIdentity();
   if (!current) {
-    redirectWithError("Instance identity is not configured. Run /setup/name first.");
+    redirectWithError("identity-not-configured");
   }
   if (current.firstPublishedAt === null) {
-    redirectWithError(
-      "Use Edit instead of Rename for unpublished identities.",
-    );
+    redirectWithError("use-edit-not-rename");
   }
   // Short-circuit no-op renames. Without this guard, the registry sees a
   // duplicate adduser call and either (a) emits 409 misinterpreted as "name
   // taken by someone else" or (b) silently rotates credentials while appending
   // a semantic-duplicate entry to oldInstanceNamespaces[].
   if (newName === current.instanceNamespace) {
-    redirectWithError("New vendor name must differ from the current one.");
+    redirectWithError("namespace-unchanged");
   }
 
   await provisionAndPersist(current, newName, operatorEmail, { append: true });

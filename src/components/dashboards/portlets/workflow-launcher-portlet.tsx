@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { toast } from "@/lib/cinatra-toast";
 import {
   loadWorkflowLauncherTemplate,
   launchWorkflowAction,
@@ -95,7 +96,6 @@ export function WorkflowLauncherPortlet({ config, inputs, rowContext, onOutput }
   const [tmpl, setTmpl] = useState<WorkflowLauncherTemplate | null>(null);
   const [overlay, setOverlay] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set<string>());
-  const [error, setError] = useState<string | null>(null);
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [loading, startLoad] = useTransition();
   const [launching, startLaunch] = useTransition();
@@ -129,7 +129,6 @@ export function WorkflowLauncherPortlet({ config, inputs, rowContext, onOutput }
   }
 
   function handleLaunch() {
-    setError(null);
     setWorkflowId(null);
     startLaunch(async () => {
       const res = await launchWorkflowAction({
@@ -139,7 +138,7 @@ export function WorkflowLauncherPortlet({ config, inputs, rowContext, onOutput }
         name: tmpl!.name,
       });
       if (!res.ok) {
-        setError(res.message);
+        toast.error(res.message);
         return;
       }
       setWorkflowId(res.workflowId);
@@ -173,7 +172,6 @@ export function WorkflowLauncherPortlet({ config, inputs, rowContext, onOutput }
           </Link>
         ) : null}
       </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
 }

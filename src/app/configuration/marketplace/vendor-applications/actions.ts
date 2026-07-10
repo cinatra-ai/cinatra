@@ -37,18 +37,18 @@ const ADMIN_FILTER_STATUSES = new Set([
   "reset",
 ]);
 
-function encodeError(message: string): string {
-  return encodeURIComponent(message.slice(0, 300));
-}
-
 /**
  * Build the admin-list redirect URL preserving the caller's status filter.
  * Forms post a `return_status` hidden input so a retry from `?status=approved`
  * doesn't drop the user back to the default `applied` page after the action.
+ *
+ * Codes-only flash protocol: `ok`/`error` carry a STABLE code (mapped to a
+ * static toast at the mount site); the raw MCP error is logged server-side,
+ * never reflected into the redirect URL.
  */
 function adminRedirect(
   formData: FormData,
-  query: { ok?: string; id?: string; error?: string },
+  query: { ok?: string; error?: string },
 ): string {
   const params = new URLSearchParams();
   const returnStatus = String(formData.get("return_status") ?? "").trim();
@@ -56,7 +56,6 @@ function adminRedirect(
     params.set("status", returnStatus);
   }
   if (query.ok) params.set("ok", query.ok);
-  if (query.id) params.set("id", query.id);
   if (query.error) params.set("error", query.error);
   const qs = params.toString();
   return qs === "" ? ADMIN_LIST_PATH : `${ADMIN_LIST_PATH}?${qs}`;
@@ -67,29 +66,24 @@ export async function approveVendorApplicationAction(formData: FormData): Promis
   await requireAdminSession();
   const applicationId = String(formData.get("application_id") ?? "").trim();
   if (applicationId === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Missing application_id.") }));
+    redirect(adminRedirect(formData, { error: "missing-id" }));
   }
   let token: string;
   try {
     token = resolveMarketplaceAdminToken();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Marketplace admin token not configured.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[approveVendorApplicationAction] admin token unavailable:", err);
+    redirect(adminRedirect(formData, { error: "token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {
     await client.vendorApplicationApprove({ application_id: applicationId });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Approve failed.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[approveVendorApplicationAction] approve failed:", err);
+    redirect(adminRedirect(formData, { error: "approve-failed" }));
   }
   revalidatePath(ADMIN_LIST_PATH);
-  redirect(
-    adminRedirect(formData, {
-      ok: "approve",
-      id: encodeURIComponent(applicationId),
-    }),
-  );
+  redirect(adminRedirect(formData, { ok: "approve" }));
 }
 
 /** Admin rejects a vendor application with a REQUIRED non-empty reason. */
@@ -98,24 +92,20 @@ export async function rejectVendorApplicationAction(formData: FormData): Promise
   const applicationId = String(formData.get("application_id") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
   if (applicationId === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Missing application_id.") }));
+    redirect(adminRedirect(formData, { error: "missing-id" }));
   }
   if (reason === "") {
-    redirect(adminRedirect(formData, { error: encodeError("Reject reason is required.") }));
+    redirect(adminRedirect(formData, { error: "reason-required" }));
   }
   if (reason.length > REJECT_REASON_MAX) {
-    redirect(
-      adminRedirect(formData, {
-        error: encodeError(`Reject reason exceeds ${REJECT_REASON_MAX}-char cap.`),
-      }),
-    );
+    redirect(adminRedirect(formData, { error: "reason-too-long" }));
   }
   let token: string;
   try {
     token = resolveMarketplaceAdminToken();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Marketplace admin token not configured.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[rejectVendorApplicationAction] admin token unavailable:", err);
+    redirect(adminRedirect(formData, { error: "token-missing" }));
   }
   const client = createHttpMarketplaceMcpClient({ token });
   try {
@@ -124,14 +114,9 @@ export async function rejectVendorApplicationAction(formData: FormData): Promise
       decision_reason: reason,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Reject failed.";
-    redirect(adminRedirect(formData, { error: encodeError(msg) }));
+    console.error("[rejectVendorApplicationAction] reject failed:", err);
+    redirect(adminRedirect(formData, { error: "reject-failed" }));
   }
   revalidatePath(ADMIN_LIST_PATH);
-  redirect(
-    adminRedirect(formData, {
-      ok: "reject",
-      id: encodeURIComponent(applicationId),
-    }),
-  );
+  redirect(adminRedirect(formData, { ok: "reject" }));
 }

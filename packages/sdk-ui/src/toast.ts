@@ -101,6 +101,11 @@ export const cinatraToast = Object.assign(
 
 // Re-export the canonical `toast` symbol so a single import is the
 // migration path: `import { toast } from "@cinatra-ai/sdk-ui/toast";`
-// (host: `import { toast } from "@/lib/cinatra-toast";`).
+// (the cinatra-app host additionally re-exports this same symbol from its
+// app-local lib path so in-app call sites keep one stable import). The path is
+// intentionally NOT written here as a quoted `from` example: this module is
+// reachable from the consumer-portable `./marketplace` entry, and the pack-smoke
+// gate's import scanner would read an app-local `@/…` string in a comment as a
+// real non-portable import.
 export const toast = cinatraToast;
 export type { CinatraToastOptions };

@@ -57,28 +57,38 @@ function SidebarPill({ count }: { count: number }) {
 type SidebarOpts = {
   isAdmin: boolean;
   pendingApprovalsTotal: number;
+  approvalsNavVisible: boolean;
 };
 
-// The admin-only Admin group. Rendered ABOVE Intelligence (top of the rail)
-// for platform admins. Approvals carries the pending-count pill; Configuration
-// is the cog → /configuration entry.
-function buildAdminGroup(opts: SidebarOpts): { title: string; items: NavItem[] } | null {
-  if (!opts.isAdmin) return null;
-  return {
-    title: "Admin",
-    items: [
-      {
-        title: "Approvals",
-        url: "/configuration/approvals",
-        icon: domainIcons.approvals,
-        extra:
-          opts.pendingApprovalsTotal > 0 ? (
-            <SidebarPill count={opts.pendingApprovalsTotal} />
-          ) : undefined,
-      },
-      { title: "Configuration", url: "/configuration", icon: Settings },
-    ] as NavItem[],
-  };
+// The Admin group, rendered ABOVE Intelligence (top of the rail). Its two items
+// gate INDEPENDENTLY so a new approval source can light Approvals without
+// touching the sidebar:
+//   • Approvals — availability-driven (approvalsNavVisible, resolved server-side
+//     from the ApprovalSource registry). In v1 that means admins, preserving
+//     today's behavior; a future non-admin-actionable source flips it on with
+//     no edit here. Carries the pending-count pill.
+//   • Configuration — the cog → /configuration entry, admin-only.
+// The group renders when EITHER item is present, and is null when neither is.
+// Exported for unit tests (the availability-driven Approvals split is the
+// load-bearing behavior of cinatra#1047).
+export function buildAdminGroup(opts: SidebarOpts): { title: string; items: NavItem[] } | null {
+  const items: NavItem[] = [];
+  if (opts.approvalsNavVisible) {
+    items.push({
+      title: "Approvals",
+      url: "/configuration/approvals",
+      icon: domainIcons.approvals,
+      extra:
+        opts.pendingApprovalsTotal > 0 ? (
+          <SidebarPill count={opts.pendingApprovalsTotal} />
+        ) : undefined,
+    });
+  }
+  if (opts.isAdmin) {
+    items.push({ title: "Configuration", url: "/configuration", icon: Settings });
+  }
+  if (items.length === 0) return null;
+  return { title: "Admin", items };
 }
 
 function buildSidebarData(_opts: SidebarOpts) {
@@ -284,6 +294,7 @@ export function AppSidebar({
   hiddenNavTitles,
   isAdmin = false,
   pendingApprovalsTotal = 0,
+  approvalsNavVisible = false,
 }: {
   connectionReady: boolean;
   userAccentColor?: import("@/lib/extension-accent").ExtensionAccent | null;
@@ -295,29 +306,37 @@ export function AppSidebar({
   // rather than relying on "click → 403".
   hiddenNavTitles?: string[];
   /**
-   * Gates the Admin group (Approvals + Configuration). Plumbed from
-   * layout.tsx via isPlatformAdmin(session).
+   * Gates the Admin → Configuration entry (and, today, most admin surfaces).
+   * Plumbed from layout.tsx via isPlatformAdmin(session). Approvals no longer
+   * rides this flag — it is availability-driven via approvalsNavVisible.
    */
   isAdmin?: boolean;
   /**
-   * Total count for the Admin → Approvals pill. Resolved server-side from
-   * pendingApprovalsCount() in layout.tsx (which gates `agentRequests`
-   * behind isAdmin in the count itself).
+   * Total count for the Admin → Approvals pill. Resolved server-side in
+   * layout.tsx by summing the ApprovalSource registry's per-source
+   * Inbox-actionable counts for the viewer.
    */
   pendingApprovalsTotal?: number;
+  /**
+   * Availability-driven visibility of the Admin → Approvals item: the viewer
+   * has any available source with an actionable Inbox (v1 → admins, unchanged;
+   * a future non-admin-actionable source lights it with no edit here).
+   * Resolved server-side in layout.tsx from the registry.
+   */
+  approvalsNavVisible?: boolean;
 }) {
   const hidden = new Set([
     ...(hiddenNavTitles ?? []),
     ...(singleOrg ? ["Organizations"] : []),
   ]);
-  const adminGroupRaw = buildAdminGroup({ isAdmin, pendingApprovalsTotal });
+  const adminGroupRaw = buildAdminGroup({ isAdmin, pendingApprovalsTotal, approvalsNavVisible });
   const adminGroup = adminGroupRaw
     ? {
         ...adminGroupRaw,
         items: (adminGroupRaw.items as NavItem[]).filter((item) => !hidden.has(item.title)),
       }
     : null;
-  const navGroups = buildSidebarData({ isAdmin, pendingApprovalsTotal })
+  const navGroups = buildSidebarData({ isAdmin, pendingApprovalsTotal, approvalsNavVisible })
     .map((group) => ({
       ...group,
       items: (group.items as NavItem[]).filter((item) => !hidden.has(item.title)),

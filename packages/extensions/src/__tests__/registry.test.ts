@@ -23,6 +23,9 @@ vi.mock("@cinatra-ai/agents", () => ({
 vi.mock("../audit-log", () => ({
   computeDanglingReferences: vi.fn(async () => ({})),
   writeExtensionLifecycleAuditEntry: vi.fn(async () => {}),
+  // P5 (cinatra#1130): the durable per-transition audit written by the
+  // row-scoped archive/restore/soft-uninstall path.
+  writeExtensionLifecycleTransitionAudit: vi.fn(async () => {}),
 }));
 
 // The dispatcher reads/writes the canonical manifest
@@ -31,8 +34,29 @@ vi.mock("../audit-log", () => ({
 // Mock the canonical store so these tests isolate the DISPATCH contract without
 // a live DB. Defaults: no installed rows (no lock, no closure block), empty
 // effective-status map (dependents default to "active" = fail-safe block).
+// P5 (cinatra#1130): the destructive dispatcher now RESOLVES a single canonical
+// row (org-equality) + gates standing before transitioning. Seed ONE platform
+// NULL-org row per package so the default platform-admin contract actor
+// resolves a target and the pre-existing branch/predicate assertions still run
+// (a NULL-org row is addressable only by a platform admin — makeActor is one).
 vi.mock("../canonical-store", () => ({
-  readInstalledExtensionsByPackageName: vi.fn(async () => []),
+  readInstalledExtensionsByPackageName: vi.fn(async (pkg: string) => [
+    {
+      id: "iext_seed",
+      packageName: pkg,
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      kind: "agent",
+      status: "active",
+      source: { type: "verdaccio", version: "1.0.0" },
+      requiredInProd: false,
+      dependencies: [],
+      manifestHash: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  ]),
   readInstalledExtensionById: vi.fn(async () => null),
   listInstalledExtensions: vi.fn(async () => []),
   readEffectiveStatusByPackageNames: vi.fn(async () => new Map<string, "active" | "archived">()),
@@ -59,6 +83,12 @@ vi.mock("../activate-hook", () => ({
 import {
   readEffectiveStatusByPackageNames,
 } from "../canonical-store";
+// Mocked audit helpers (see vi.mock("../audit-log") above) — imported so the
+// provenance-parity tests can assert the dispatcher's calls into them.
+import {
+  writeExtensionLifecycleAuditEntry,
+  computeDanglingReferences,
+} from "../audit-log";
 
 // ---------------------------------------------------------------------------
 // Helper to set up the predicate mocks for a given scenario
@@ -87,6 +117,15 @@ function mockActiveDependentScenario(depName = "dep-agent") {
   (readAgentTemplatesDependingOn as ReturnType<typeof vi.fn>).mockResolvedValue([
     { extensionLifecycleStatus: "active", name: depName, packageName: depName },
   ]);
+}
+
+// Never used (0 runs) but a template row EXISTS → platform-admin hard-delete
+// branch with a non-null destroyed-row snapshot to prove the provenance entry
+// carries it.
+function mockNeverUsedWithTemplateScenario() {
+  (readAgentTemplateByPackageName as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "tpl-x" });
+  (countRunsForTemplate as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+  (readAgentTemplatesDependingOn as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 }
 
 function mockArchivedDependentOnlyScenario() {
@@ -286,6 +325,109 @@ describe("ExtensionRegistry", () => {
       await extensionRegistry.forceDelete("agent", ref, makeActor());
       expect(handler.uninstall).toHaveBeenCalled();
       expect(fired).toEqual([ref.packageName]);
+    });
+  });
+
+  // cinatra#1276 — audit-entry parity for the platform-admin hard-delete
+  // uninstall branch. That path tears down the handler backing AND fires durable
+  // org-scoped data teardown, so it must write the same richer pre-destruction
+  // provenance entry forceDelete writes (destroyed-row snapshot + dangling
+  // references + resolved-row identities) BEFORE the destructive calls — a
+  // provenance-write failure aborts the destroy. The archive (soft) branch
+  // writes NO such entry, and forceDelete's force_delete provenance is unchanged.
+  describe("hard-delete uninstall provenance parity (#1276)", () => {
+    let fired: string[];
+    beforeEach(() => {
+      fired = [];
+      setExtensionDataTeardownHook((pkg) => {
+        fired.push(pkg);
+      });
+    });
+    afterEach(() => setExtensionDataTeardownHook(null));
+
+    it("writes the uninstall provenance entry (snapshot + dangling refs) BEFORE handler.uninstall and data-teardown", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      const ref = makeRef();
+      const actor = makeActor();
+      mockNeverUsedWithTemplateScenario();
+      const dangling = {
+        agent_runs_count: 0,
+        agent_runs_count_capped: false,
+        dependent_extensions: [],
+        dependent_extensions_capped: false,
+      };
+      (computeDanglingReferences as ReturnType<typeof vi.fn>).mockResolvedValueOnce(dangling);
+
+      await extensionRegistry.uninstall("agent", ref, actor);
+
+      // Persisted with operation "uninstall", the destroyed-row snapshot, the
+      // computed dangling references, the resolvable actor (identity carrier),
+      // and the resolved-row identities of every canonical row removed.
+      expect(writeExtensionLifecycleAuditEntry).toHaveBeenCalledTimes(1);
+      expect(writeExtensionLifecycleAuditEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor,
+          operation: "uninstall",
+          packageRef: ref,
+          destroyedRowSnapshot: { id: "tpl-x" },
+          danglingReferences: dangling,
+          resolvedRows: expect.any(Array),
+        }),
+      );
+      // Provenance is written BEFORE the destructive calls (so a write failure
+      // aborts the destroy).
+      const writeOrder = (writeExtensionLifecycleAuditEntry as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0];
+      const uninstallOrder = (handler.uninstall as ReturnType<typeof vi.fn>).mock
+        .invocationCallOrder[0];
+      expect(writeOrder).toBeLessThan(uninstallOrder);
+      expect(fired).toEqual([ref.packageName]);
+    });
+
+    it("aborts the destroy when the provenance write fails (handler.uninstall + data-teardown never run)", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      const ref = makeRef();
+      mockNeverUsedWithTemplateScenario();
+      (writeExtensionLifecycleAuditEntry as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error("audit insert failed"),
+      );
+
+      await expect(
+        extensionRegistry.uninstall("agent", ref, makeActor()),
+      ).rejects.toThrow("audit insert failed");
+
+      expect(handler.uninstall).not.toHaveBeenCalled();
+      expect(fired).toEqual([]);
+    });
+
+    it("does NOT write an uninstall provenance entry on the archive (soft) branch", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      const ref = makeRef();
+      mockUsedScenario(); // used → archive, not hard-delete
+
+      await extensionRegistry.uninstall("agent", ref, makeActor());
+
+      expect(handler.archive).toHaveBeenCalled();
+      expect(handler.uninstall).not.toHaveBeenCalled();
+      expect(writeExtensionLifecycleAuditEntry).not.toHaveBeenCalled();
+      expect(fired).toEqual([]);
+    });
+
+    it("forceDelete still writes its force_delete provenance entry (unchanged)", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      const ref = makeRef();
+      mockNeverUsedNoDepScenario();
+
+      await extensionRegistry.forceDelete("agent", ref, makeActor());
+
+      expect(writeExtensionLifecycleAuditEntry).toHaveBeenCalledTimes(1);
+      expect(writeExtensionLifecycleAuditEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ operation: "force_delete", packageRef: ref }),
+      );
     });
   });
 
