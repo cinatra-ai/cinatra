@@ -7,8 +7,11 @@
  *  - admin badge = the sum of every source's Inbox count; visibility on when an
  *    actionable Inbox applies (even at zero pending — count-independent);
  *  - a READ-ONLY source (inboxActionable:false, e.g. the workflow passthrough)
- *    that applies to a non-admin's Inbox and even has a POSITIVE count does NOT
- *    light the nav — preserving v1's admin-only nav;
+ *    that applies to a non-admin's Inbox and even has a POSITIVE Inbox count does
+ *    NOT, on its own, light the nav;
+ *  - a NON-ADMIN with an own request in flight (`mine > 0`) IS visible via the
+ *    option-b mine path (owner review #1302 ask 5); a member with nothing of
+ *    their own stays hidden;
  *  - adding a mock source changes BOTH the badge total and the visibility with
  *    no sidebar edit — including a future source that grants a NON-ADMIN an
  *    actionable Inbox, which lights the nav;
@@ -67,14 +70,29 @@ describe("summarizeApprovalsNav", () => {
     expect(s.total).toBe(5); // 3 agent + 2 workflow
   });
 
-  it("non-admin with only the read-only passthrough: NOT visible, even though its count is positive", async () => {
+  it("non-admin WITH an own request in flight: visible via the option-b mine path (owner #1302 ask 5)", async () => {
+    // agentSource has no actionable Inbox for a member, and the passthrough is a
+    // read-only mirror — so pre-#1302 the member saw nothing. Now a member with
+    // an own request (agentSource `mine: 1`) reaches the Approvals surface to
+    // track it, even though no Inbox source is actionable for them.
     const s = await summarizeApprovalsNav([agentSource, workflowPassthrough], MEMBER);
-    // Passthrough applies to the member's inbox but is inboxActionable:false;
-    // the agent inbox does not apply to a non-admin → no actionable source.
-    expect(s.visible).toBe(false);
-    // The badge would still be non-zero (workflow org-wide count) — moot while
-    // the nav is hidden, and it matches today's pendingApprovalsCount semantics.
+    expect(s.visible).toBe(true);
+    // The Inbox pill total is the member's actionable Inbox count only (0 agent +
+    // 2 org-wide passthrough) — unchanged; visibility now rides `mine`, not it.
     expect(s.total).toBe(2);
+  });
+
+  it("non-admin with NO own request and only the read-only passthrough: NOT visible", async () => {
+    // No actionable Inbox source AND mine === 0 across sources → still hidden, so
+    // the option-b path does not light the nav for a member with nothing of theirs.
+    const memberNoOwn = makeSource({
+      id: "agent-creation-requests",
+      appliesInbox: (v) => v.isAdmin,
+      counts: () => ({ inbox: 0, mine: 0 }),
+    });
+    const s = await summarizeApprovalsNav([memberNoOwn, workflowPassthrough], MEMBER);
+    expect(s.visible).toBe(false);
+    expect(s.total).toBe(2); // org-wide passthrough count, moot while hidden
   });
 
   it("admin sees the nav even at ZERO pending (visibility is count-independent)", async () => {
@@ -89,14 +107,22 @@ describe("summarizeApprovalsNav", () => {
   });
 
   it("a future source that grants a NON-ADMIN an actionable Inbox lights the nav (no sidebar edit)", async () => {
+    // Base: a member with NO own requests (agent `mine: 0`) + the read-only
+    // passthrough → hidden. Adding an actionable-Inbox source flips visibility
+    // via the Inbox path independently of the option-b `mine` path.
+    const agentNoOwn = makeSource({
+      id: "agent-creation-requests",
+      appliesInbox: (v) => v.isAdmin,
+      counts: () => ({ inbox: 0, mine: 0 }),
+    });
     const projectAgentGate = makeSource({
       id: "project-agent-gate",
       appliesInbox: () => true, // applies to members
       counts: () => ({ inbox: 4, mine: 0 }), // actionable (inboxActionable defaults on)
     });
-    const before = await summarizeApprovalsNav([agentSource, workflowPassthrough], MEMBER);
+    const before = await summarizeApprovalsNav([agentNoOwn, workflowPassthrough], MEMBER);
     const after = await summarizeApprovalsNav(
-      [agentSource, workflowPassthrough, projectAgentGate],
+      [agentNoOwn, workflowPassthrough, projectAgentGate],
       MEMBER,
     );
     // Adding a source flips visibility AND changes the total — both derived from

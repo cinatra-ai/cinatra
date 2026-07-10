@@ -170,6 +170,63 @@ describe("agentCreationRequestsSource.fetchInbox — own is Your-requests-only",
   });
 });
 
+describe("agentCreationRequestsSource — human-readable row title (owner #1302 ask 1)", () => {
+  it("uses the OAS display name (`oas.name`), NEVER the @scope/package identifier", async () => {
+    h.store.rows = [
+      mkRow({
+        id: "d1",
+        authorId: "u-other",
+        status: "proposed",
+        packageName: "@acme/meeting-summarizer-agent",
+        packageVersion: "0.1.0",
+        packageSlug: "meeting-summarizer-agent",
+        proposalSnapshot: {
+          oas: { name: "Meeting Summarizer" },
+          packageJson: { name: "@acme/meeting-summarizer-agent" },
+        },
+      }),
+    ];
+    const env = await agentCreationRequestsSource.fetchInbox(admin);
+    expect(env.rows[0].title).toBe("Meeting Summarizer");
+    expect(env.rows[0].title).not.toContain("@acme");
+    expect(env.rows[0].title).not.toContain("0.1.0");
+  });
+
+  it("falls back to the packageJson manifest displayName when the OAS has no name", async () => {
+    h.store.rows = [
+      mkRow({
+        id: "d2",
+        authorId: "u-other",
+        status: "proposed",
+        packageName: "@acme/lead-enrichment-agent",
+        proposalSnapshot: {
+          oas: {},
+          packageJson: { name: "@acme/lead-enrichment-agent", cinatra: { displayName: "Lead Enrichment" } },
+        },
+      }),
+    ];
+    const env = await agentCreationRequestsSource.fetchInbox(admin);
+    expect(env.rows[0].title).toBe("Lead Enrichment");
+  });
+
+  it("last-resort fallback humanizes the slug (never the raw packageName)", async () => {
+    h.store.rows = [
+      mkRow({
+        id: "d3",
+        authorId: "u-other",
+        status: "proposed",
+        packageName: "@acme/chat-support-triage-agent",
+        packageSlug: "chat-support-triage-agent",
+        // no snapshot metadata at all
+        proposalSnapshot: undefined,
+      }),
+    ];
+    const env = await agentCreationRequestsSource.fetchInbox(admin);
+    expect(env.rows[0].title).toBe("Chat Support Triage Agent");
+    expect(env.rows[0].title).not.toContain("@acme");
+  });
+});
+
 describe('agentCreationRequestsSource.fetchMine ("Your requests" window)', () => {
   beforeEach(() => {
     vi.mocked(countOtherPlatformAdmins).mockResolvedValue(1); // window tests: not decidable

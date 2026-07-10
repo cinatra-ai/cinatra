@@ -67,6 +67,48 @@ interface AgentRowRaw {
   decidableOwn?: boolean;
 }
 
+/** Turn a package slug / scoped name into a human label as a LAST-RESORT
+ *  fallback — strip a leading `@scope/`, split hyphen/underscore separators, and
+ *  Title Case. Never returns the raw scoped package identifier (owner review
+ *  #1302 ask 1: the row title is a human name, never the packageName). */
+function humanizeAgentSlug(raw: string): string {
+  const bare = raw
+    .replace(/^@[^/]+\//, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+  if (!bare) return raw;
+  return bare.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Human-readable agent name for the row title — the manifest / OAS display
+ *  name the author gave the agent in `/chat`, NEVER the `@scope/package`
+ *  identifier (owner review #1302 ask 1). A proposal snapshot carries the
+ *  agentspec OAS, whose top-level `name` (e.g. "Web Research Agent") is the
+ *  human name — distinct from `metadata.cinatra.packageName` (the package id
+ *  stored on `r.packageName`). Falls back through the OAS `info.title`, then the
+ *  packageJson manifest `displayName`, then a humanized slug — but never the raw
+ *  package name. */
+function agentDisplayName(r: AgentCreationRequestRow): string {
+  const oas = r.proposalSnapshot?.oas as
+    | { name?: unknown; info?: { title?: unknown } }
+    | undefined;
+  const oasName = typeof oas?.name === "string" ? oas.name.trim() : "";
+  if (oasName) return oasName;
+  const infoTitle = typeof oas?.info?.title === "string" ? oas.info.title.trim() : "";
+  if (infoTitle) return infoTitle;
+
+  const pj = r.proposalSnapshot?.packageJson as
+    | { displayName?: unknown; cinatra?: { displayName?: unknown } | null }
+    | undefined;
+  const cinatraDisplay =
+    typeof pj?.cinatra?.displayName === "string" ? pj.cinatra.displayName.trim() : "";
+  if (cinatraDisplay) return cinatraDisplay;
+  const pjDisplay = typeof pj?.displayName === "string" ? pj.displayName.trim() : "";
+  if (pjDisplay) return pjDisplay;
+
+  return humanizeAgentSlug(r.packageSlug || r.packageName);
+}
+
 function toRow(r: AgentCreationRequestRow, opts?: { decidableOwn?: boolean }): ApprovalRow {
   const raw: AgentRowRaw = {
     snapshotHash: r.snapshotHash,
@@ -76,7 +118,8 @@ function toRow(r: AgentCreationRequestRow, opts?: { decidableOwn?: boolean }): A
   return {
     id: r.id,
     sourceId: AGENT_SOURCE_ID,
-    title: `${r.packageName}@${r.packageVersion}`,
+    // Human-readable name (manifest/OAS displayName), never the packageName.
+    title: agentDisplayName(r),
     subtitle: r.packageSlug,
     status: r.status,
     createdAt: r.createdAt,
