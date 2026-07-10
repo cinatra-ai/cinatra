@@ -5,9 +5,11 @@
 // not-self-satisfiable case, or an out-of-scope newer/downgrade — and prove the
 // planner's INSTALLED_VERSION_CONFLICT refusal now CARRIES that evidence.
 //
-// Auto-EXECUTING the upgrade (an `action:"update"` batch member) is a separate,
-// spec-deviation-gated step (durable prior-state compensation); this file
-// covers the non-deviating analysis + enriched refusal only.
+// Option B execution (owner-decided 2026-07-10): on the DEV/non-gatekept path a
+// clean dedupe-upward now EMITS an `action:"update"` member (committed in-place
+// upgrade), while the GATEKEPT path keeps the evidence-carrying hard refusal
+// (its host-computed-set dedupe rides the deferred durable-restore subsystem).
+// Both the classification and the planner-emission are covered below.
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -257,7 +259,36 @@ describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe ev
     }
   });
 
-  it("clean dedupe-upward candidate refusal states it is resolvable by an explicit update", async () => {
+  it("Option B (dev path): a clean dedupe-upward EMITS an action:'update' member instead of refusing", async () => {
+    const deps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.2.3" } })] },
+        [D]: { version: "0.2.3" },
+      },
+      [
+        row(D, "0.2.1"),
+        row("@cinatra-ai/consumer", "1.0.0", [
+          edge(D, { versionConstraint: { kind: "semver-range", range: "^0.2.0" } }),
+        ]),
+      ],
+    );
+    const plan = await planDependencyInstall(
+      { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+      deps,
+    );
+    const dMember = plan.ordered.find((m) => m.packageName === D)!;
+    // The shared dep is an in-place committed upgrade to the new pin...
+    expect(dMember.action).toBe("update");
+    expect(dMember.version).toBe("0.2.3");
+    expect(dMember.alreadyInstalled).toBe(false);
+    // ...ordered BEFORE the root (dependencies-first), and the root is a fresh install.
+    const rootMember = plan.ordered.find((m) => m.packageName === ROOT)!;
+    expect(rootMember.action).toBe("install");
+    expect(plan.ordered.indexOf(dMember)).toBeLessThan(plan.ordered.indexOf(rootMember));
+    expect(plan.ordered[plan.ordered.length - 1]!.packageName).toBe(ROOT);
+  });
+
+  it("Option B: the GATEKEPT path (closure provided) still REFUSES a clean dedupe-upward (keeps the hard refusal)", async () => {
     const deps = makeDeps(
       {
         [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.2.3" } })] },
@@ -271,14 +302,44 @@ describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe ev
       ],
     );
     try {
-      await planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, deps);
-      expect.unreachable("should refuse in the analysis-only foundation");
+      await planDependencyInstall(
+        {
+          root: { packageName: ROOT, version: "1.0.0" },
+          orgId: null,
+          // Gatekept: the authorize closure pins the same versions.
+          closure: [
+            { name: ROOT, version: "1.0.0" },
+            { name: D, version: "0.2.3" },
+          ],
+        },
+        deps,
+      );
+      expect.unreachable("the gatekept path must keep the hard refusal (durable-restore deferred)");
     } catch (e) {
       expect(e).toBeInstanceOf(DependencyPlanError);
+      expect((e as DependencyPlanError).code).toBe("INSTALLED_VERSION_CONFLICT");
       const msg = (e as Error).message;
       expect(msg).toContain("every installed dependent admits 0.2.3");
       expect(msg).toContain(`extensions_update ${D}@0.2.3`);
     }
+  });
+
+  it("Option B (dev path): a DISJOINT conflict still refuses even though clean ones now execute", async () => {
+    const deps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.3.0" } })] },
+        [D]: { version: "0.3.0" },
+      },
+      [
+        row(D, "0.2.1"),
+        row("@cinatra-ai/pinned-consumer", "1.0.0", [
+          edge(D, { versionConstraint: { kind: "semver-range", range: "~0.2.0" } }),
+        ]),
+      ],
+    );
+    await expect(
+      planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, deps),
+    ).rejects.toMatchObject({ code: "INSTALLED_VERSION_CONFLICT" });
   });
 
   it("org-scoped install conflicting with a PLATFORM row evaluates dependents at the PLATFORM scope (scope-fallback regression)", async () => {
