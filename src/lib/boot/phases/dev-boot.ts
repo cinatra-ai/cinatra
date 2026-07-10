@@ -210,4 +210,22 @@ async function runDevAutoSetupAndFixtures(): Promise<void> {
   } catch (err) {
     console.warn("[dev-fixture-seeder] boot hook failed:", err);
   }
+  // Demo overlay (cinatra#1238 item 3): on a strict-dev `CINATRA_INSTALL_PROFILE=demo`
+  // instance, once a HUMAN admin has registered, lazily fire the monolithic ACME
+  // demo dataset exactly once. Runs LAST — after connections have converged
+  // (dev-auto-setup above) and the extension fixtures are applied — and self-gates
+  // to a no-op on a plain dev/prod instance or before the first human admin exists.
+  // Soft-fail + idempotent (the seed's own sentinel org gates re-runs); never
+  // blocks boot. Reached only when shouldSeedDevFixtures() is true, which demo
+  // always satisfies (the early return above only fires on a non-demo instance,
+  // where the demo seed would skip regardless).
+  try {
+    const { runPendingDemoSeedFromBoot } = await import("@/lib/demo-seed-runner");
+    const outcome = await runPendingDemoSeedFromBoot();
+    if (outcome.status === "error") {
+      console.warn("[demo-seed] boot runner error:", outcome.reason);
+    }
+  } catch (err) {
+    console.warn("[demo-seed] boot hook failed:", err);
+  }
 }
