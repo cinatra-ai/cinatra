@@ -43,6 +43,16 @@ import { createHash, randomBytes } from "node:crypto";
  */
 export const CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__";
 
+/**
+ * The HTTP header under which the WayFlow container loader attaches the RAW
+ * per-run token on host-anchored first-party callbacks (#1193 W2). Lower-case
+ * because `Request.headers.get` is case-insensitive and the loader emits
+ * `X-Cinatra-Run-Token`; any TS consumer reads it via this constant. Kept
+ * DISTINCT from the shared bridge token and the A2A context-id header so the
+ * one credential carries run identity end-to-end.
+ */
+export const RUN_TOKEN_HEADER = "x-cinatra-run-token";
+
 /** Random credential size — 256 bits of entropy. */
 export const RUN_TOKEN_BYTES = 32;
 
