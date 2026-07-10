@@ -292,11 +292,17 @@ function newEdgeId(): string {
 /**
  * REPLACE a dependent's persisted edges (delete + insert, declared order),
  * re-resolving each declared edge at write time. Runs INSIDE the caller's
- * transaction with the dependent row locked (`FOR UPDATE`) so concurrent
- * replaces for the same row serialize instead of interleaving — and so the
- * row write + edge replacement + hydrated return are ONE atomic unit (a
- * failed edge write can never leave a committed row without its declared
- * edges).
+ * transaction; the CALLER must already hold the dependent's ROW LOCK (both
+ * callers do: the insert path created the row in this transaction, the
+ * metadata path UPDATEd it first), which serializes concurrent replaces for
+ * one row and makes row write + edge replacement + hydrated return ONE atomic
+ * unit (a failed edge write can never leave a committed row without its
+ * declared edges). Deliberately NO extra `FOR UPDATE` here: upgrading the
+ * caller's ordinary (non-key) UPDATE lock to the strongest row lock would
+ * CONFLICT with the FK `KEY SHARE` locks concurrent edge inserts take on
+ * their resolution targets — two mutually-dependent replaces could deadlock
+ * (codex round-2). The non-key lock the callers already hold is compatible
+ * with `KEY SHARE`.
  */
 async function replaceDependencyEdgesInTx(
   tx: CanonicalDbLike,
@@ -304,11 +310,6 @@ async function replaceDependencyEdgesInTx(
   dependencies: readonly ExtensionDependency[],
   organizationId: string | null,
 ): Promise<void> {
-  await tx
-    .select({ id: installedExtensionTable.id })
-    .from(installedExtensionTable)
-    .where(eq(installedExtensionTable.id, dependentId))
-    .for("update");
   const resolved = await resolveDeclaredEdges(tx, dependencies, organizationId);
   await tx
     .delete(extensionDependencyEdgeTable)
