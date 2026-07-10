@@ -64,6 +64,19 @@ export function flattenAgentDependencyRanges(
   );
 }
 
+/**
+ * Build the published packument's legacy `agentDependencies` field from a
+ * template record's stored deps — the null-tolerant flatten used at the
+ * registry-publish boundary. An OPTIONAL edge's requirement rides canonical
+ * `cinatra.dependencies`, not this legacy range map. Returns undefined when the
+ * record has no deps. (cinatra#1058)
+ */
+export function buildPublishAgentDependencies(
+  map: AgentDependencyMap | null | undefined,
+): Record<string, string> | undefined {
+  return map ? flattenAgentDependencyRanges(map) : undefined;
+}
+
 const cinatraSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 
 // ---------------------------------------------------------------------------

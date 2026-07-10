@@ -146,7 +146,7 @@ import {
 // resolvePublishDestination must be called before publishAgentPackageFromGitDir.
 import { resolvePublishDestination, PublishDestinationNotConfiguredError } from "@cinatra-ai/extensions/destination-resolver";
 import { updateAgentTemplateOrigin } from "../store";
-import { flattenAgentDependencyRanges } from "../schema";
+import { buildPublishAgentDependencies } from "../schema";
 import { deleteAgentTemplateGuarded } from "../removal-gate";
 import {
   readInstanceIdentity,
@@ -6081,14 +6081,8 @@ async function handleAgentBuilderRegistryPublish(
       riskLevel: publishMetadata.riskLevel,
       toolAccess: publishMetadata.toolAccess,
       hasApprovalGates: publishMetadata.hasApprovalGates,
-      // Pass agentDependencies from the template record so the published
-      // packument includes cinatra.agentDependencies for the resolver. Flatten
-      // the requirement-carrying union to bare ranges — the packument's legacy
-      // field is a plain package→range map; an OPTIONAL edge's requirement rides
-      // canonical `cinatra.dependencies`, not here (cinatra#1058).
-      agentDependencies: template.agentDependencies
-        ? flattenAgentDependencyRanges(template.agentDependencies)
-        : undefined,
+      // Legacy packument agentDependencies — flattened bare ranges (cinatra#1058).
+      agentDependencies: buildPublishAgentDependencies(template.agentDependencies),
     },
     registryPublishConfig,
 );
