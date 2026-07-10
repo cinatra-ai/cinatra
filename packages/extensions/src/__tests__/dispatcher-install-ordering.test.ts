@@ -115,7 +115,11 @@ import { extensionRegistry } from "../index";
 import { makeHandler, makeRef } from "./__mocks__/extension-handler";
 import type { Actor } from "../index";
 
-const orgActor: Actor = { actorType: "system", userId: "u1", source: "worker", orgId: "org-1" };
+// P5 (cinatra#1130): destructive lifecycle ops (restore) now resolve the actor's
+// single org row + gate destructive-write standing over it. This fixture acts on
+// org-1's own rows, so it carries org_admin standing (inert for the install/
+// update path, which scopes purely on orgId).
+const orgActor: Actor = { actorType: "system", userId: "u1", source: "worker", orgId: "org-1", orgRole: "org_admin" };
 
 beforeEach(() => {
   extensionRegistry._resetForTesting();

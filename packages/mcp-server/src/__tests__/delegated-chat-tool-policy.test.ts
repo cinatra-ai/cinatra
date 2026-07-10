@@ -217,4 +217,20 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
     }
   });
+
+  it("denies the unified approvals_* tools — a decision stays on the rendered approval surface, never a chat auto-approve (#1048)", () => {
+    // `approvals_decide` is denied by the `decide` verb TOKEN (same rationale as
+    // stop/resume: a prompt-injected chat must never render a binding approval);
+    // `approvals_list` / `approvals_get` are denied by deny-by-default (not on the
+    // strict allowlist). The pre-existing `agent_creation_request_decide` is now
+    // ALSO covered by the `decide` token (previously off-chat only by omission).
+    for (const name of [
+      "approvals_decide",
+      "approvals_list",
+      "approvals_get",
+      "agent_creation_request_decide",
+    ]) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+    }
+  });
 });

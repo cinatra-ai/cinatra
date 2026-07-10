@@ -93,6 +93,20 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   apollo_status:                 { resourceType: "connector_instance", action: "read",    status: "enforced" },
   apollo_validate:               { resourceType: "connector_instance", action: "read",    status: "enforced" },
 
+  // ───── approvals (unified approvals_* over the ApprovalSource registry) ─────
+  // COARSE Posture-B boundary class only — real per-source authorization lives in
+  // each ApprovalSource's fetch*/actions.decide (the SAME helpers the UI uses).
+  // Reuse the agent list/read/share entries (no new registry/drift): the agent
+  // creation-request family is the dominant decidable source and its coarse gate
+  // is exactly right. list/read are member-passable (member holds
+  // agent.read/agent.list) so a non-admin ELIGIBLE viewer clears the boundary and
+  // the per-source `appliesTo`/eligibility filters the content; `share`
+  // (admin-effect) makes the boundary membership-gate + DEFER decide's real
+  // admin/SoD check to the handler.
+  approvals_list:   { resourceType: "agent", action: "list",  status: "enforced" },
+  approvals_get:    { resourceType: "agent", action: "read",  status: "enforced" },
+  approvals_decide: { resourceType: "agent", action: "share", status: "enforced" },
+
   // ───── artifact ─────
   artifact_assertion_get:           { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_assertion_list:          { resourceType: "artifact", action: "list",   status: "enforced" },
@@ -405,6 +419,7 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   wordpress_content_editor_run:    { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_instances_list:        { resourceType: "connector_instance", action: "list",    status: "enforced" },
   wordpress_media_upload:          { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  wordpress_pages_list:            { resourceType: "connector_instance", action: "list",    status: "enforced" },
   wordpress_post_create_draft:     { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_post_delete:           { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_post_get:              { resourceType: "connector_instance", action: "execute", status: "enforced" },

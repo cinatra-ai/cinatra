@@ -41,7 +41,7 @@ import type { ExtensionOrigin, ConnectorDependencyMap, AgentDependencyMap } from
 // agent_templates.agent_auth_policy and (per-run override) agent_runs.auth_policy.
 // enforceRunAccess is the policy enforcer; PrimitiveActorContext is the actor
 // envelope every MCP / route call site already constructs.
-import type { AgentAuthPolicy, ActorRoleHints } from "./auth-policy";
+import type { AgentAuthPolicy, ActorRoleHints, AgentTemplateVisibilityOptions } from "./auth-policy";
 import {
   enforceRunAccess,
   DEFAULT_AGENT_AUTH_POLICY,
@@ -272,6 +272,14 @@ export type CreateAgentRunInput = {
   a2aTaskId?: string;    // A2A task id (when run created via A2A path)
   parentRunId?: string | null; // orchestrator parent run id; only accepted at create time.
                                // updateAgentRun* helpers refuse to mutate it.
+  // Child-run OBO ceiling composition (epic W5). When a dispatch site creates a
+  // CHILD run under an active agent run it passes the PARENT run's persisted
+  // ceiling chain (read from the dispatching run's actor frame). The store folds
+  // it into the freshly-derived child anchor via the shared compose primitive
+  // (satisfy-all). Omitted by top-level and recurring-clone paths → the child
+  // anchor is derived un-composed (copy-trap-safe). A provably-disjoint
+  // composition throws OboCeilingCompositionError → the dispatch fails closed.
+  parentOboCeiling?: OboCeilingChain | null;
   timeoutSeconds?: number | null; // server-side timeout (seconds); null = no timeout
   // org id resolved by every entry point before insert.
   // Required at the store layer; runtime PG NOT NULL enforces.
@@ -632,7 +640,7 @@ export function slugifyAgentTemplateName(value: string): string {
 
 export async function readAgentTemplateBySlug(
   slug: string,
-  options?: { actorUserId?: string | null; includeNonPublished?: boolean },
+  options?: AgentTemplateVisibilityOptions,
 ): Promise<AgentTemplateRecord | null> {
   const normalized = slug.trim().toLowerCase();
   if (!normalized) return null;
@@ -689,12 +697,23 @@ export async function readAgentTemplateBySlug(
 
 function applyAgentTemplateVisibility(
   record: AgentTemplateRecord,
-  options?: { actorUserId?: string | null; includeNonPublished?: boolean },
+  options?: AgentTemplateVisibilityOptions,
 ): AgentTemplateRecord | null {
   // Published templates are visible to everyone.
   if (record.status === "published") return record;
   // Non-published (draft/archived) require an explicit opt-in.
   if (!options?.includeNonPublished) return null;
+  // Admin standing over the template's org (admin-parity P4, cinatra#1129):
+  // platform_admin sees every non-published template; an org admin/owner of the
+  // OWNING org sees its org's (org-id MATCH keeps a different-org admin out).
+  if (options?.actorPlatformRole === "platform_admin") return record;
+  if (
+    record.orgId &&
+    options?.actorOrganizationId === record.orgId &&
+    (options?.actorOrgRole === "org_admin" || options?.actorOrgRole === "org_owner")
+  ) {
+    return record;
+  }
   // Creator-owned: only visible to the creator.
   if (record.creatorId) {
     return options?.actorUserId && record.creatorId === options.actorUserId ? record : null;
@@ -1309,6 +1328,10 @@ export async function createAgentRun(
     templateId: input.templateId,
     orgId: input.orgId,
     projectId: input.projectId,
+    // Child-run composition (W5): folds the parent run's chain onto the freshly
+    // derived child anchor. Throws OboCeilingCompositionError on a provably-
+    // disjoint chain BEFORE any insert → the dispatch creates no child run.
+    parentOboCeiling: input.parentOboCeiling ?? null,
   });
   const values = {
     id: input.id,
@@ -1921,6 +1944,11 @@ export async function readAgentRunsByTemplate(
             orgId: run.orgId,
             effectivePolicy,
             coOwnerUserIds,
+            // Carry the run's persisted OBO ceiling so this per-row list filter
+            // confines an agent-run-OBO actor to runs within its scope
+            // (W2/#1051). A partial literal that dropped it would skip the
+            // ceiling on this list path.
+            oboCeiling: run.oboCeiling,
           },
           opts.actor,
           "list",
@@ -2276,6 +2304,12 @@ export async function updateAgentRunAuthPolicy(
     .set({ authPolicy: policy ? JSON.stringify(policy) : null })
     .where(eq(agentRuns.id, id));
 }
+
+// `updateAgentTemplateAuthPolicy` (admin-parity P4 dual-write, cinatra#1129) is
+// a vertical-slice extraction into ./store-agent-template-policy to keep this
+// hub under the file-size ratchet ceiling; re-exported here so
+// `@cinatra-ai/agents/store` consumers are unchanged.
+export { updateAgentTemplateAuthPolicy } from "./store-agent-template-policy";
 
 // ---------------------------------------------------------------------------
 // run_co_owners DAO. addRunCoOwner uses ON CONFLICT DO NOTHING

@@ -204,7 +204,11 @@ export async function POST(req: Request): Promise<Response> {
             // any failure falls through to the plain A2A stream (the catch
             // below), so the A2A contract is never broken by AG-UI authz.
             await enforceRunAccess(
-              { id: run.id, runBy: run.runBy, orgId: run.orgId },
+              // Carry the run's persisted OBO ceiling (W2/#1051) for uniformity
+              // — the verified-A2A actor here carries no `oboCeiling`, so the
+              // ceiling gate is inert on this path, but every real-run access
+              // site forwards it so the invariant holds.
+              { id: run.id, runBy: run.runBy, orgId: run.orgId, oboCeiling: run.oboCeiling },
               primitiveActorFromVerifiedA2A(resolvedActorContext),
               "read",
               resolvedActorContext.organizationId !== undefined

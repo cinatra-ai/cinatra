@@ -42,6 +42,30 @@ export type PrimitiveActorContext = {
   // server-only code may stamp this — no path lets a downstream MCP client
   // forge it.
   orgRole?: "org_owner" | "org_admin" | "member";
+  // Agent-run OBO scope-ceiling CHAIN — the agent's anchored-scope upper bound
+  // (`invoker authority ∩ agent anchor`). Present ONLY for agent-run-OBO
+  // delegated actors (stamped by the MCP registries from
+  // `McpRequestContext.oboCeiling`, which the transport forwards from the signed
+  // token claim); undefined for every human / session / machine caller. The
+  // kernels (`enforceResourceAccess`, `enforceRunAccess`) and the projects/agents
+  // gates consult it to confine the delegated run — see W2 (#1051). Trust
+  // boundary: only upstream server-only code stamps it; a downstream MCP client
+  // cannot forge it. A valid agent-run token ALWAYS carries a non-empty chain
+  // (the verifier fails closed on a missing chain — W1/#1050), so a present
+  // value is authoritative and an undefined value legitimately means "not an
+  // agent-run-OBO actor, do not enforce".
+  //
+  // Typed INLINE (not imported from `@cinatra-ai/mcp-server/obo-ceiling`) to
+  // keep this leaf package zero-dependency — the same convention every other
+  // trusted field here follows (`platformRole`, `orgRole`, …). The shape is
+  // structurally identical to the pure `OboCeilingChain` carrier type, so it is
+  // assignment-compatible in both directions with the enforcement helpers
+  // (`resourceWithinCeiling` / `oboCeilingContains`) and the registries that
+  // stamp the real chain onto this envelope.
+  oboCeiling?: Array<{
+    tier: "user" | "team" | "organization" | "workspace" | "project";
+    id: string;
+  }>;
 };
 
 export type PrimitiveErrorShape = {

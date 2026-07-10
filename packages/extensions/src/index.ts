@@ -21,6 +21,7 @@ import type {
 // ---------------------------------------------------------------------------
 export type { DanglingReferences } from "./audit-log";
 import type { DanglingReferences } from "./audit-log";
+import type { InstalledExtension } from "./canonical-types";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 
 // ---------------------------------------------------------------------------
@@ -142,40 +143,88 @@ export async function assertNoLockedCanonicalRow(
 }
 
 // ---------------------------------------------------------------------------
-// Canonical manifest is wired into the real lifecycle flows. After a
-// dispatcher op succeeds, the manifest is synced so
-// `installed_extension` stays authoritative (not just seeded by the one-shot
-// migration). Identity-agnostic: operates on every row matching the package
-// name, since the kind-agnostic dispatcher does not carry org/owner identity
-// (that lives at the install-action scope-picker layer).
+// Canonical manifest transition (P5, cinatra#1130) — ROW-SCOPED.
+//
+// The old identity-agnostic `syncCanonicalManifestTransition(packageName, ...)`
+// looped EVERY canonical row for the package (all orgs + the platform NULL-org
+// row). That was the keystone cross-org destructive-auth hole once standing
+// widened past platform-admin: one org admin's call fanned out over every org's
+// row. The fan-out is RETIRED. Two replacements:
+//   - `syncCanonicalRowTransition` transitions EXACTLY the resolved row (the
+//     org-admin parity ops: archive / restore-as-activate / soft-uninstall, and
+//     a platform admin's row-scoped archive/restore);
+//   - `syncCanonicalPackageGlobalTransition` is the EXPLICIT, platform-admin-
+//     ONLY, per-row-audited canonical cleanup for a package-GLOBAL destruction
+//     (hard-delete uninstall / force_delete), whose handler + data-teardown
+//     delete by package name across orgs — so no sibling org row is left active
+//     pointing at a now-deleted package backing. It is NOT the retired fan-out:
+//     it is only ever reached AFTER an `isPlatformAdminActor` gate.
 // ---------------------------------------------------------------------------
-// NON-best-effort. The canonical manifest is the only status store, so a
-// failed canonical write must surface (no swallow). The per-kind handler's
-// status write is removed — this dispatcher sync IS the lifecycle write.
-// (assertNoLockedCanonicalRow already ran upstream for destructive ops, so a
-// LOCKED_REJECTS_OP here would be a genuine invariant violation worth raising.)
-async function syncCanonicalManifestTransition(
+// NON-best-effort transition. The canonical manifest is the only status store,
+// so a failed canonical write must surface (no swallow). The durable per-
+// transition audit is best-effort (a reversible op is never aborted by a
+// transient audit-write error). assertNoLockedCanonicalRow already ran upstream
+// for destructive ops, so a LOCKED_REJECTS_OP here would be a genuine invariant
+// violation worth raising.
+async function syncCanonicalRowTransition(
+  row: InstalledExtension,
+  op: "archive" | "activate" | "uninstall",
+  actor: Actor,
+): Promise<void> {
+  const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
+  const { lifecycleTransitionLabel, resolvedRowIdentity } = await import(
+    "./lifecycle-target-resolver"
+  );
+  const label = lifecycleTransitionLabel(actor, op, row);
+  await transitionExtensionLifecycle(row.id, op, {
+    actor: { source: actor.source ?? "dispatcher", userId: actor.userId },
+    reason: label,
+  });
+  // One durable audit row per resolved-row transition: standing-verified actor
+  // + resolved-row identity (so an org-A admin audit row can be proven to never
+  // carry an org-B / NULL-org row id).
+  const { writeExtensionLifecycleTransitionAudit } = await import("./audit-log");
+  await writeExtensionLifecycleTransitionAudit({
+    actor,
+    operation: op,
+    packageRef: {
+      registryUrl: "",
+      packageName: row.packageName,
+      version: (row.source as { version?: string } | null)?.version ?? undefined,
+    },
+    resolvedRow: resolvedRowIdentity(row),
+    standingReason: label,
+  });
+}
+
+// PLATFORM-ADMIN-ONLY explicit per-row canonical cleanup for a package-GLOBAL
+// destruction. Reached ONLY behind an `isPlatformAdminActor` gate (org admins
+// are routed to the soft/archive path / refused before this). Transitions EVERY
+// canonical row for the package so nothing is left dangling once the package
+// backing (agent template / skill package / data rows) is globally deleted.
+async function syncCanonicalPackageGlobalTransition(
   packageName: string,
-  op: "archive" | "activate" | "uninstall" | "force_delete",
+  op: "uninstall" | "force_delete",
   actor: Actor,
 ): Promise<void> {
   const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
   const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
   const rows = await readInstalledExtensionsByPackageName(packageName);
   if (rows.length === 0) {
-    // Data-quality signal: every installed package should have a canonical
-    // row. Warn rather than throw so a legacy template without a
-    // backfilled row does not hard-fail an archive/uninstall (grandfather).
+    // Data-quality signal: a legacy template without a backfilled row does not
+    // hard-fail the (already committed) package-global destruction.
     // eslint-disable-next-line no-console
     console.warn(
-      `[extensions] syncCanonicalManifestTransition('${packageName}', '${op}') — no canonical installed_extension row to ${op}.`,
+      `[extensions] syncCanonicalPackageGlobalTransition('${packageName}', '${op}') — no canonical installed_extension row to ${op}.`,
     );
     return;
   }
   for (const row of rows) {
+    const scope =
+      row.organizationId == null ? "platform (NULL-org)" : `org ${row.organizationId}`;
     await transitionExtensionLifecycle(row.id, op, {
       actor: { source: actor.source ?? "dispatcher", userId: actor.userId },
-      reason: `dispatcher ${op}`,
+      reason: `platform_admin ${op} (package-global) of ${scope} row ${row.id}`,
     });
   }
 }
@@ -1122,60 +1171,113 @@ class ExtensionRegistryImpl {
     }
   }
 
-  // Uninstall branches on predicate + cascade:
-  //   1. checkDependents may throw ActiveDependentError (active dep blocks)
-  //   2. If archived dep exists → force archive (closure preservation)
-  //   3. If extensionHasBeenUsed → archive (preserves run history)
-  //   4. Otherwise → hard-delete via handler.uninstall
+  // Uninstall (P5, cinatra#1130 — ROW-SCOPED + standing-gated):
+  //   0. resolve the SINGLE actor-org row + gate destructive-write standing
+  //      over it (fail-closed; NoAddressableRowError never falls through).
+  //   1. ORG-ADMIN parity → the SOFT (archive) path ONLY: canonical-row-scoped,
+  //      preserves the row, fires NONE of the package-global destructive hooks
+  //      (handler.uninstall / removeReferencingRunRows / fireExtensionDataTeardown).
+  //   2. PLATFORM ADMIN → today's predicate-driven behavior:
+  //      a. checkDependents may throw ActiveDependentError (active dep blocks)
+  //      b. archived dep exists / extensionHasBeenUsed → archive (row-scoped)
+  //      c. otherwise → package-global hard-delete (platform-admin-only).
   async uninstall(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
     // Locked-row protection is enforced at the dispatcher layer.
     await assertNoLockedCanonicalRow(ref.packageName, "uninstall");
-    // Closure: refuse uninstall if an active dependent requires this package.
+    // Closure: refuse uninstall if an active dependent requires this package
+    // (package-wide over-block — the safe direction across every scope).
     await assertCanonicalArchiveClosure(ref.packageName);
     const handler = this.resolve(typeId);
+    const { resolveLifecycleTargetRow, isPlatformAdminActor } = await import(
+      "./lifecycle-target-resolver"
+    );
+    // Resolve to the actor's single row + gate standing FIRST — an org admin can
+    // only ever reach their own org's row (the primary bound; the standing check
+    // is the safety net under it).
+    const row = await resolveLifecycleTargetRow(ref.packageName, actor);
+    const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
+
+    // ORG-ADMIN parity: uninstall routes to the SOFT (archive) path only. The
+    // hard-delete branch's handler.uninstall (deletes the agent template / skill
+    // package by NAME) + fireExtensionDataTeardown are package-global, so an org
+    // admin never reaches them — their uninstall archives their org's row.
+    if (!isPlatformAdminActor(actor)) {
+      await handler.archive(ref, actor);
+      await syncCanonicalRowTransition(row, "archive", actor);
+      // Process-local deregistration (in-memory only; DB rows preserved).
+      fireExtensionCapabilityTeardown(ref.packageName);
+      return;
+    }
+
+    // PLATFORM ADMIN — predicate-driven (retains today's reach).
     const cascade = await checkDependents(ref); // throws ActiveDependentError if active dep
     const used = await extensionHasBeenUsed(ref);
     if (used || cascade.archivedDependentExists) {
       await handler.archive(ref, actor);
-      await syncCanonicalManifestTransition(ref.packageName, "archive", actor);
-      // Process-local deregistration: drop the package's in-memory register(ctx)
-      // registrations (MCP tools / capability providers / ctx.ui surfaces /
-      // object types) so an archived extension stops being
-      // listable/invocable/resolvable in the running process without a restart.
-      // DB rows are PRESERVED (archive is restorable) — only in-memory state is
-      // cleared. Best-effort + host-injected (no-op in workers).
-      const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
+      await syncCanonicalRowTransition(row, "archive", actor);
+      // Process-local deregistration (in-memory only; DB rows preserved,
+      // archive is restorable). Best-effort + host-injected (no-op in workers).
       fireExtensionCapabilityTeardown(ref.packageName);
       return;
     }
+    // HARD-DELETE (platform-admin-only): handler.uninstall + data-teardown are
+    // package-global, so the canonical cleanup is the EXPLICIT platform-admin-
+    // only per-row bulk (not the retired fan-out).
+    //
+    // Pre-destruction provenance parity with forceDelete (cinatra#1276): this
+    // package-global hard-delete tears down the handler backing AND fires
+    // durable teardown of org-scoped rows below, so it records the SAME richer
+    // provenance entry forceDelete writes — destroyed-row snapshot + computed
+    // dangling references + the resolved-row identities of every canonical row
+    // removed — written BEFORE the destructive calls so a provenance-write
+    // failure aborts the destroy (no silent deletion without a provenance
+    // trail). Unlike forceDelete, this branch is reached only when the extension
+    // was never used (no run history), so there are no RESTRICT-FK source rows
+    // to pre-clean here.
+    const { readAgentTemplateByPackageName } = await import("@cinatra-ai/agents");
+    const snapshot = await readAgentTemplateByPackageName(ref.packageName);
+    const { computeDanglingReferences, writeExtensionLifecycleAuditEntry } =
+      await import("./audit-log");
+    const danglingReferences = await computeDanglingReferences(ref);
+    const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+    const { resolvedRowIdentity } = await import("./lifecycle-target-resolver");
+    const affectedRows = (
+      await readInstalledExtensionsByPackageName(ref.packageName)
+    ).map(resolvedRowIdentity);
+    await writeExtensionLifecycleAuditEntry({
+      actor,
+      operation: "uninstall",
+      packageRef: ref,
+      destroyedRowSnapshot: snapshot ?? null,
+      danglingReferences,
+      resolvedRows: affectedRows,
+    });
     await handler.uninstall(ref, actor);
-    await syncCanonicalManifestTransition(ref.packageName, "uninstall", actor);
-    // Process-local deregistration of the package's in-memory register(ctx)
-    // registrations — same as the archive branch above. Fires for the
-    // HARD-DELETE branch too (then the durable teardown below removes DB rows).
-    const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
+    await syncCanonicalPackageGlobalTransition(ref.packageName, "uninstall", actor);
+    // Process-local deregistration — fires for the HARD-DELETE branch too (then
+    // the durable teardown below removes DB rows).
     fireExtensionCapabilityTeardown(ref.packageName);
-    // Durable teardown of this package's org-scoped settings/secrets rows
-    // (a forthcoming dev-fixtures contract extends it to fixture rows). Fires
+    // Durable teardown of this package's org-scoped settings/secrets rows. Fires
     // ONLY in this HARD-DELETE branch — NOT the archive branch above, which
-    // preserves run history and is restorable, so its org-scoped config must
-    // survive. Awaited + idempotent + best-effort.
+    // preserves run history and is restorable. Awaited + idempotent + best-effort.
     const { fireExtensionDataTeardown } = await import("./data-teardown-hook");
     await fireExtensionDataTeardown(ref.packageName);
   }
 
-  // Explicit archive (no predicate/cascade — user-initiated)
+  // Explicit archive (no predicate/cascade — user-initiated). ROW-SCOPED +
+  // standing-gated (P5): resolve the single actor-org row, gate write standing
+  // over it, then transition exactly that row (never the package-wide fan-out).
   async archive(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
     // Locked-row protection is enforced at the dispatcher layer:
-    // reject archive if ANY canonical row for this package is locked.
-    // This is a coarse gate at the kind-agnostic boundary; per-org callers
-    // that have an identity should call enforceCanonicalManifest directly
-    // for the structured-error path.
+    // reject archive if ANY canonical row for this package is locked
+    // (package-wide over-block — standing-agnostic, the safe direction).
     await assertNoLockedCanonicalRow(ref.packageName, "archive");
     // Closure: refuse archive if an active dependent requires this package.
     await assertCanonicalArchiveClosure(ref.packageName);
+    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
+    const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).archive(ref, actor);
-    await syncCanonicalManifestTransition(ref.packageName, "archive", actor);
+    await syncCanonicalRowTransition(row, "archive", actor);
     // Process-local deregistration of the package's in-memory register(ctx)
     // registrations so an explicitly-archived extension stops being
     // listable/invocable/resolvable in the running process without a restart.
@@ -1198,8 +1300,12 @@ class ExtensionRegistryImpl {
     // archived/missing (a restore operates on a row whose .dependencies are
     // already materialized, so a forward closure check is meaningful).
     await assertCanonicalRestoreClosure(ref.packageName);
+    // ROW-SCOPED + standing-gated (P5): resolve the single actor-org row + gate
+    // write standing before re-activating exactly that row.
+    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
+    const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).restore(ref, actor);
-    await syncCanonicalManifestTransition(ref.packageName, "activate", actor);
+    await syncCanonicalRowTransition(row, "activate", actor);
 
     // Only a hot-loadable-module kind re-registers in-process; other kinds ship no
     // runtime module (their handler.restore already re-surfaced them).
@@ -1246,6 +1352,19 @@ class ExtensionRegistryImpl {
   ): Promise<{ danglingReferences: DanglingReferences }> {
     // Locked-row protection is enforced at the dispatcher layer.
     await assertNoLockedCanonicalRow(ref.packageName, "force_delete");
+    // PLATFORM-ADMIN-ONLY (P5, F8): removeReferencingRunRows, handler.uninstall
+    // (deletes the agent template / skill package by NAME), and
+    // fireExtensionDataTeardown are ALL package-global. An org admin is refused
+    // with ZERO row changes — BEFORE the audit write / FK pre-clean / any
+    // mutation. (System-extension protection above already ran.)
+    const {
+      isPlatformAdminActor,
+      PlatformAdminRequiredError,
+      resolvedRowIdentity,
+    } = await import("./lifecycle-target-resolver");
+    if (!isPlatformAdminActor(actor)) {
+      throw new PlatformAdminRequiredError("force_delete");
+    }
     const handler = this.resolve(typeId);
     const { readAgentTemplateByPackageName, removeReferencingRunRows, withInstallLock } =
       await import("@cinatra-ai/agents");
@@ -1260,6 +1379,12 @@ class ExtensionRegistryImpl {
       const { computeDanglingReferences, writeExtensionLifecycleAuditEntry } =
         await import("./audit-log");
       const danglingReferences = await computeDanglingReferences(ref);
+      // Capture the resolved-row identities (every canonical row this package-
+      // global destruction removes) for audit provenance.
+      const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+      const affectedRows = (
+        await readInstalledExtensionsByPackageName(ref.packageName)
+      ).map(resolvedRowIdentity);
       // Audit BEFORE destruction — a write failure aborts the op (no silent destruction).
       await writeExtensionLifecycleAuditEntry({
         actor,
@@ -1267,6 +1392,7 @@ class ExtensionRegistryImpl {
         packageRef: ref,
         destroyedRowSnapshot: snapshot ?? null,
         danglingReferences,
+        resolvedRows: affectedRows,
         ...(reason !== undefined ? { reason } : {}),
       });
       // Pre-clean the FK source rows so the RESTRICT FKs do not block
@@ -1276,8 +1402,10 @@ class ExtensionRegistryImpl {
         await removeReferencingRunRows(snapshot.id);
       }
       await handler.uninstall(ref, actor); // hard-delete; cascade bypassed by design
-      // Drop the canonical manifest row(s) for this package.
-      await syncCanonicalManifestTransition(ref.packageName, "force_delete", actor);
+      // Drop the canonical manifest row(s) — EXPLICIT platform-admin-only per-row
+      // cleanup (this method is platform-admin-gated above), so no sibling org
+      // row is left active pointing at the now-deleted package backing.
+      await syncCanonicalPackageGlobalTransition(ref.packageName, "force_delete", actor);
       // Process-local deregistration of the package's in-memory register(ctx)
       // registrations so a force-deleted extension stops being
       // listable/invocable/resolvable without a restart. Best-effort + host-injected.
