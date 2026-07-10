@@ -27,9 +27,13 @@ const BELL_CONFIG_NEEDS_FIXTURE = buildConfigurationNeedsNotificationInput({
   agentDisplayName: "Social Outreach Agent",
   connectors: [
     {
+      // FICTIONAL connector package (like the fictional agent above): the
+      // core-extension-instance-coupling-ban forbids a core file naming a real
+      // extension instance, and the fixture only needs a plausible shape —
+      // packageName is used as a React key, never rendered.
       displayName: "LinkedIn",
-      packageName: "@cinatra-ai/linkedin-connector",
-      settingsHref: "/connectors/cinatra-ai/linkedin/setup",
+      packageName: "@cinatra-ai/pro-network-connector",
+      settingsHref: "/connectors/cinatra-ai/pro-network/setup",
     },
   ],
 });
