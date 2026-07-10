@@ -59,9 +59,16 @@ import type {
 export type BatchInstallResult = {
   rootPackage: string;
   rootVersion: string;
-  /** Members THIS call installed (dependencies first; the root is last). */
+  /** Members THIS call installed FRESH (dependencies first; the root is last). */
   installed: { packageName: string; version: string }[];
-  /** Closure members that were already present and were skipped. */
+  /**
+   * Shared dependencies THIS call UPGRADED in place (#1039 Option B dedupe-
+   * upward `action:"update"` members) — a committed, provably-non-breaking
+   * upgrade that stays even if a later member fails. Empty on the gatekept path
+   * (which keeps the hard refusal).
+   */
+  updated: { packageName: string; version: string }[];
+  /** Closure members that were already present at the pin and were skipped. */
   alreadyInstalled: string[];
   batchId: string | null; // null = root-only fast path (no ledger row)
 };
@@ -132,6 +139,18 @@ export type InstallBatchSagaDeps = {
   withSagaOwnedFanout: <T>(rootPackageName: string, fn: () => Promise<T>) => Promise<T>;
   /** Install ONE package through the real dispatcher. */
   installMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  /**
+   * Upgrade ONE already-installed shared dependency in place through the real
+   * dispatcher's durable UPDATE pipeline (#1039 Option B `action:"update"`
+   * member). Distinct from `installMember` because the member is already
+   * present at an OLDER version — the update pipeline atomically re-materializes
+   * it at the new pin (its own durable rollback covers the single update). This
+   * is a COMMITTED upgrade: the compensation inverse never touches it (it is a
+   * pre-existing member — `preState.present` — so the newly-installed-only
+   * compensation loop and the boot sweeper both skip it), so no cross-batch
+   * durable-restore is required (that is the deferred Option A subsystem).
+   */
+  updateMemberPackage: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
   /** Uninstall ONE package through the real dispatcher (compensation inverse). */
   uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
   /**
@@ -269,6 +288,14 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
     installMember: async (member, actor) => {
       const { extensionRegistry } = await import("@cinatra-ai/extensions");
       await extensionRegistry.install(
+        member.typeId,
+        { registryUrl: "", packageName: member.packageName, version: member.version },
+        actor,
+      );
+    },
+    updateMemberPackage: async (member, actor) => {
+      const { extensionRegistry } = await import("@cinatra-ai/extensions");
+      await extensionRegistry.update(
         member.typeId,
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
@@ -436,6 +463,7 @@ export async function installExtensionWithDependencies(
           version: m.version,
           typeId: m.typeId,
           status: m.alreadyInstalled ? "already-installed" : "planned",
+          action: m.action,
           preState: {
             present: row.present,
             ...(row.version ? { version: row.version } : {}),
@@ -472,6 +500,9 @@ export async function installExtensionWithDependencies(
         // The PLANNED root version (dev "latest" already resolved concrete).
         rootVersion: root.version,
         installed: [{ packageName: root.packageName, version: root.version }],
+        // The root-only fast path never carries a dedupe-upward update member
+        // (a lone root is always a fresh install of the root itself).
+        updated: [],
         alreadyInstalled,
         batchId: null,
       };
@@ -490,7 +521,12 @@ export async function installExtensionWithDependencies(
     //    installed), so it aborts + compensates like any failure; the RAW
     //    error is rethrown (not wrapped) so the MCP surface keeps returning
     //    its structured { requiresRebuild: true } outcome.
-    const installedThisBatch: { packageName: string; version: string; typeId: string }[] = [];
+    const installedThisBatch: {
+      packageName: string;
+      version: string;
+      typeId: string;
+      action: "install" | "update";
+    }[] = [];
     for (const member of toInstall) {
       try {
         // P2-5 GRANT TTL: refresh near expiry; refusal/unavailability aborts.
@@ -541,12 +577,23 @@ export async function installExtensionWithDependencies(
         // #157: the agent handler dispatched here installs ROOT-ONLY under the
         // saga-owned-fan-out context — the saga (this loop) owns the dependency
         // fan-out, so no second registries dep-resolver runs per member.
+        //
+        // #1039 Option B: an `action:"update"` member is a CLEAN dedupe-upward of
+        // an already-installed shared dependency — routed through the durable
+        // UPDATE pipeline (in-place re-materialize at the new pin), not a fresh
+        // install. It is a COMMITTED upgrade: because it is a pre-existing member
+        // (`preState.present`), the newly-installed-only compensation loop below
+        // and the boot sweeper both skip it, so a later member's failure leaves
+        // it at the new (provably non-breaking) version.
         await deps.withSagaOwnedFanout(input.packageName, () =>
-          deps.installMember(member, input.actor),
+          member.action === "update"
+            ? deps.updateMemberPackage(member, input.actor)
+            : deps.installMember(member, input.actor),
         );
-        // Track the durable install IMMEDIATELY — before the ledger write —
-        // so a ledger failure right after a successful member install still
-        // compensates that member (it IS installed, whatever the ledger says).
+        // Track the durable install/update IMMEDIATELY — before the ledger write —
+        // so a ledger failure right after a successful member op still routes it
+        // correctly (an install compensates; a committed update is skipped by the
+        // pre-existing-member guard in compensation).
         installedThisBatch.push(member);
         const op = await deps.readInstallOp(member.packageName, orgId).catch(() => null);
         await deps.ledger.updateMember(batch.batchId, member.packageName, {
@@ -582,7 +629,12 @@ export async function installExtensionWithDependencies(
       rootVersion:
         planned.plan.ordered.find((m) => m.packageName === input.packageName)?.version ??
         rootVersion,
-      installed: installedThisBatch.map(({ packageName, version }) => ({ packageName, version })),
+      installed: installedThisBatch
+        .filter((m) => m.action === "install")
+        .map(({ packageName, version }) => ({ packageName, version })),
+      updated: installedThisBatch
+        .filter((m) => m.action === "update")
+        .map(({ packageName, version }) => ({ packageName, version })),
       alreadyInstalled,
       batchId: batch.batchId,
     };

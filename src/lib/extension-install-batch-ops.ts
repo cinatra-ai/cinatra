@@ -73,6 +73,15 @@ export type InstallBatchMember = {
   /** Registry dispatch typeId the planner resolved for this member. */
   typeId: string;
   status: BatchMemberStatus;
+  /**
+   * How the saga realizes this member (#1039 Option B). Absent on legacy rows
+   * (pre-#1039) ⇒ treated as `"install"`. An `"update"` member is a committed
+   * dedupe-upward of a pre-existing shared dependency: it is ALWAYS a
+   * `preState.present` member, so the newly-installed-only compensation loop
+   * and the boot sweeper both skip it (never rolled back) — no per-field durable
+   * restore is captured for it (that is the deferred Option A subsystem).
+   */
+  action?: "install" | "update";
   preState: BatchMemberPreState;
   /** The member's install-op id once its install began (journal linkage). */
   installOpId?: string;
