@@ -77,7 +77,7 @@ describe("immediate-trigger surface routes through the config-needs run gate", (
 
   it("refuses BEFORE any trigger row or schedule is created (fail-closed)", () => {
     const gateIdx = svc.indexOf(
-      'const notReady = await immediateTriggerConfigBlock(run.templateId, actor.userId)',
+      "const notReady = await immediateTriggerConfigBlock(run.templateId, run.runBy ?? null)",
     );
     const upsertIdx = svc.indexOf("await createOrUpdateRunTrigger(");
     const scheduleIdx = svc.indexOf("scheduleResult = await scheduleTrigger(");
@@ -93,5 +93,13 @@ describe("immediate-trigger surface routes through the config-needs run gate", (
 
   it("gates ONLY the immediate type — scheduled/recurring arm without an arm-time config gate", () => {
     expect(svc).toMatch(/if \(args\.triggerType === "immediate"\) \{\s*\n\s*const notReady = await immediateTriggerConfigBlock/);
+  });
+
+  it("keys readiness on the RUN OWNER (run.runBy), not the acting principal", () => {
+    // An admin may trigger another user's run (isOwnerOrAdmin) — readiness must
+    // reflect the OWNER's connector state, exactly as the fire gate does
+    // (userId: run.runBy), never the admin's (actor.userId).
+    expect(svc).toMatch(/immediateTriggerConfigBlock\(run\.templateId, run\.runBy/);
+    expect(svc).not.toMatch(/immediateTriggerConfigBlock\(run\.templateId, actor\.userId/);
   });
 });

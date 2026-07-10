@@ -159,10 +159,15 @@ function isOwnerOrAdmin(
  * trigger-release-job applies to scheduled/recurring fires — so the immediate
  * surface needs its OWN check. Resolves the run's agent package from its
  * template and asks the shared run-readiness predicate whether every REQUIRED
- * connector is configured for this user; returns a human error naming each
- * still-unconfigured connector (by displayName) when the dispatch must be
- * refused, or `null` when the agent may run (out of scope / untracked / fully
- * configured).
+ * connector is configured **for the RUN OWNER** (`run.runBy`), returning a human
+ * error naming each still-unconfigured connector (by displayName) when the
+ * dispatch must be refused, or `null` when the agent may run (out of scope /
+ * untracked / fully configured).
+ *
+ * Keys on `run.runBy`, NOT the acting principal — an admin may trigger another
+ * user's run (`isOwnerOrAdmin`), and readiness must reflect the OWNER's
+ * connector state (exactly as trigger-release-job's fire gate does), never the
+ * admin's. For the ordinary owner-triggers-own-run path the two coincide.
  *
  * Posture mirrors trigger-release-job's fire gate: a DETERMINATE unconfigured
  * result blocks (the readiness derivation is itself fail-soft→blocking at the
@@ -171,7 +176,7 @@ function isOwnerOrAdmin(
  */
 async function immediateTriggerConfigBlock(
   templateId: string,
-  userId: string,
+  runOwnerUserId: string | null,
 ): Promise<string | null> {
   try {
     const template = await readAgentTemplateById(templateId);
@@ -182,7 +187,7 @@ async function immediateTriggerConfigBlock(
     const block = await assertAgentRunReadyByPackage(
       template.packageName,
       template.packageName,
-      { userId: userId ?? null },
+      { userId: runOwnerUserId ?? null },
     );
     return block ? block.error : null;
   } catch (err) {
@@ -228,7 +233,7 @@ export async function setRunTriggerForActor(
   // gated at arm time — a connection may be configured before the future fire,
   // which the fire path (trigger-release-job) re-checks.
   if (args.triggerType === "immediate") {
-    const notReady = await immediateTriggerConfigBlock(run.templateId, actor.userId);
+    const notReady = await immediateTriggerConfigBlock(run.templateId, run.runBy ?? null);
     if (notReady) return { ok: false, error: notReady };
   }
 
