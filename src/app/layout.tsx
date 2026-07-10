@@ -159,12 +159,18 @@ export default async function RootLayout({
     const orgId = session?.session?.activeOrganizationId ?? null;
     if (session && orgId) {
       try {
-        const [{ availableSources }, { summarizeApprovalsNav }] = await Promise.all([
-          import("@/app/configuration/approvals/sources/registry"),
+        // IMPORT-LIGHT nav registry ONLY (cinatra#1283) — never the heavy
+        // `sources/registry`, whose decide/render graph (→
+        // `@cinatra-ai/agents/mcp-handlers` + the client decision-action
+        // components) would be compiled into EVERY route via this root layout
+        // and OOM `next build`. The nav registry enumerates the same source
+        // list, so the badge still lights for a new source with no sidebar edit.
+        const [{ availableNavSources }, { summarizeApprovalsNav }] = await Promise.all([
+          import("@/app/configuration/approvals/sources/nav-registry"),
           import("@/app/configuration/approvals/nav-summary"),
         ]);
         const viewer = { userId: session.user.id, orgId, isAdmin };
-        const summary = await summarizeApprovalsNav(await availableSources(viewer), viewer);
+        const summary = await summarizeApprovalsNav(await availableNavSources(viewer), viewer);
         pendingApprovalsTotal = summary.total;
         approvalsNavVisible = summary.visible;
       } catch {

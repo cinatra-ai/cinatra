@@ -139,18 +139,26 @@ export type DecideResult =
       kind: DecideKind;
     };
 
-export interface ApprovalSource {
+/**
+ * The IMPORT-LIGHT half of {@link ApprovalSource} — everything the sidebar
+ * Approvals nav badge needs and NOTHING that pulls a heavy runtime.
+ *
+ * The root layout (on every route's build graph) resolves the badge
+ * `{ total, visible }` from this contract via `nav-registry.ts` +
+ * `summarizeApprovalsNav`, so it must be derivable WITHOUT importing the
+ * source's `rowRenderer` / decide `actions` — those drag `decision-helpers`
+ * (→ `@cinatra-ai/agents/mcp-handlers`, the agents runtime) and the React
+ * client decision-action components into the layout graph, OOMing `next build`
+ * (cinatra#1283). Each source therefore exposes a `*.contract.ts` module
+ * implementing THIS interface (`satisfies ApprovalNavSource`), consumed by the
+ * light nav registry; the heavy `*.ts` source SPREADS its contract so the
+ * count/visibility functions are the SAME references (no drift) while the
+ * render/decide surface stays wired only to the `/configuration/approvals`
+ * page. `ApprovalSource extends ApprovalNavSource`, so a full source is always
+ * a valid nav source.
+ */
+export interface ApprovalNavSource {
   id: string;
-  title: string;
-  /** Optional section-header "View all" link target for a direction. Returns
-   *  `undefined` for a direction that has no drill-down (e.g. a single-direction
-   *  marketplace source in its OFF direction); the section renders no link then. */
-  viewAllHref?: (dir: Direction) => string | undefined;
-  /** OPTIONAL group tag. Sources sharing a group (e.g. the marketplace sources)
-   *  collapse into ONE group-level "not connected" `Empty` + a single sources
-   *  footer, instead of each rendering an independent section. Ungrouped (the v1
-   *  local sources) render standalone as before. */
-  group?: string;
   /**
    * Whether this source's Inbox is ACTIONABLE (a viewer it applies to can
    * decide a row) versus a read-only mirror whose rows are decided elsewhere.
@@ -165,6 +173,30 @@ export interface ApprovalSource {
   inboxActionable?: boolean;
   /** Coarse existence gate — see {@link Availability}. */
   availability(viewer: ApprovalViewer): Availability | Promise<Availability>;
+  /** Cheap per-direction section-visibility gate — decided WITHOUT a privileged
+   *  fetch so a section the viewer can't participate in is never rendered (e.g.
+   *  the agent Inbox is admin-only; the workflow passthrough has no "Your
+   *  requests" view in v1). Distinct from "applicable but empty" (renders the
+   *  `Empty` family). */
+  appliesTo(viewer: ApprovalViewer, direction: Direction): boolean;
+  /** Per-direction actionable counts feeding the sidebar badge and the
+   *  direction-tab pills. Viewer-self-gating: reports 0 for a direction the
+   *  viewer cannot act on / a section that is not configured, so the light nav
+   *  reducer never leaks a count the page would not show. */
+  counts(viewer: ApprovalViewer): Promise<SourceCounts>;
+}
+
+export interface ApprovalSource extends ApprovalNavSource {
+  title: string;
+  /** Optional section-header "View all" link target for a direction. Returns
+   *  `undefined` for a direction that has no drill-down (e.g. a single-direction
+   *  marketplace source in its OFF direction); the section renders no link then. */
+  viewAllHref?: (dir: Direction) => string | undefined;
+  /** OPTIONAL group tag. Sources sharing a group (e.g. the marketplace sources)
+   *  collapse into ONE group-level "not connected" `Empty` + a single sources
+   *  footer, instead of each rendering an independent section. Ungrouped (the v1
+   *  local sources) render standalone as before. */
+  group?: string;
   /** OPTIONAL per-direction credential gate, distinct from {@link appliesTo}
    *  (which is about whether the VIEWER can participate). A grouped source whose
    *  own per-direction credential is absent returns `false` here so the page
@@ -173,15 +205,8 @@ export interface ApprovalSource {
    *  read only (env / identity); it must not touch the network. Absent ⇒ the
    *  section is always considered configured. */
   sectionConfigured?(viewer: ApprovalViewer, direction: Direction): boolean;
-  /** Cheap per-direction section-visibility gate — decided WITHOUT a privileged
-   *  fetch so a section the viewer can't participate in is never rendered (e.g.
-   *  the agent Inbox is admin-only; the workflow passthrough has no "Your
-   *  requests" view in v1). Distinct from "applicable but empty" (renders the
-   *  `Empty` family). */
-  appliesTo(viewer: ApprovalViewer, direction: Direction): boolean;
   fetchInbox(viewer: ApprovalViewer, opts?: FetchOpts): Promise<ApprovalEnvelope>;
   fetchMine(viewer: ApprovalViewer, opts?: FetchOpts): Promise<ApprovalEnvelope>;
-  counts(viewer: ApprovalViewer): Promise<SourceCounts>;
   rowRenderer(row: ApprovalRow, ctx: { direction: Direction }): ReactNode;
   actions: {
     decide(input: DecideInput, viewer: ApprovalViewer): Promise<DecideResult>;

@@ -10,17 +10,28 @@
  * Import-light + framework-free (types only) so it is unit-testable in
  * isolation with mock sources — the page's / registry's full server module
  * graph is never pulled in here (mirrors `resolve-active-view.ts`). The
- * session→viewer→`availableSources()` resolution stays in the server layout
+ * session→viewer→`availableNavSources()` resolution stays in the server layout
  * that owns the session; this module only reduces a source LIST + viewer.
+ *
+ * Takes the LIGHT {@link ApprovalNavSource} (id / inboxActionable / appliesTo /
+ * counts) — never the heavy full `ApprovalSource` — so the root layout that
+ * calls it can resolve the badge off `nav-registry` without dragging the
+ * decide/render graph into every route's build (cinatra#1283). A full source is
+ * a valid nav source (`ApprovalSource extends ApprovalNavSource`), so the page
+ * may reuse this reducer too.
  */
-import type { ApprovalSource, ApprovalViewer, SourceCounts } from "./sources/types";
+import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./sources/types";
 
 export interface ApprovalsNavSummary {
   /**
    * Sum of every source's Inbox-actionable count for the viewer (each
    * `counts()` is viewer-self-gating and reports its default actionable
-   * window). Equals the unified page's Inbox-tab total by construction. The
-   * pill caps the DISPLAY at "99+"; remote sources cap their own count.
+   * window). Uses the SAME per-source count functions as the unified page's
+   * Inbox tab (registry parity), so it agrees with that total in the steady
+   * state — but it is an INDEPENDENT pass, so a per-source soft-fail or a stale
+   * ~60s marketplace count-cache snapshot can make them differ instant-to-
+   * instant (not equal by construction). The pill caps the DISPLAY at "99+";
+   * remote sources cap their own count.
    */
   total: number;
   /**
@@ -49,7 +60,7 @@ const EMPTY: ApprovalsNavSummary = { total: 0, visible: false };
  *   failing (e.g. remote) source can never blank the pill or zero the others.
  */
 export async function summarizeApprovalsNav(
-  sources: ApprovalSource[],
+  sources: ApprovalNavSource[],
   viewer: ApprovalViewer,
 ): Promise<ApprovalsNavSummary> {
   if (sources.length === 0) return EMPTY;
