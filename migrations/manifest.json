@@ -218,6 +218,16 @@
       "tables": [
         "agent_runs"
       ]
+    },
+    {
+      "seq": "0021",
+      "file": "core/core__0021_assistant-threads-turns.mjs",
+      "summary": "Structured assistant threads + assistant_turns (cinatra-ai/cinatra#1037 P2a, the assistant-runtime persistence half). SEQ COORDINATION: seq 0020 is claimed by a concurrent sibling slice, so this P2a table pair intentionally takes 0021 (append-only ledger; never renumber). Adds two typed tables: assistant_threads (the structured thread — owner_user_id, org_id, the bound assistant PRINCIPAL assistant_user_id, the A2A context_id continuity handle, title, ordering timestamps) and assistant_turns (one AG-UI RUN in a thread — thread_id FK, run_id keying the durable Redis-Streams AG-UI event log cinatra:a2a:events:{run_id}, assistant_user_id principal attribution, role, status). These own the #1037-P2 side of the assistant-stream boundary named in @cinatra-ai/agent-ui-protocol CONTRACT.md section 1 (thread model, message persistence, attribution, turn<->run linkage); the stream contract owns the durable event log itself, so assistant_turns stores metadata + the run pointer and NOT the events (no double persistence model). The legacy chat_threads JSON-payload table STAYS in place — the /chat persistence subroutes + chat_thread_send are rewired/deleted in P2b/P3 — so this migration is purely additive and introduces no double-write. Additive: bootstrap DDL (buildCreateStoreSchemaQueries, same PR) creates both via CREATE TABLE IF NOT EXISTS so a fresh install is born at target and ledger-fakes this chain; this module carries the same creates onto the operator upgrade path. Idempotent/lineage-tolerant: tables + indexes IF NOT EXISTS; the FK (assistant_turns.thread_id -> assistant_threads.id ON DELETE CASCADE) and the status/role CHECKs added only when absent (pg_constraint lookup against current_schema()); unqualified names resolve to the runner's search_path schema. down() drops the child assistant_turns then the parent assistant_threads (true reverse; loses structured thread/turn data by design — structural addition, not a rename). destructive=false (additive new tables holding no pre-existing data).",
+      "destructive": false,
+      "tables": [
+        "assistant_threads",
+        "assistant_turns"
+      ]
     }
   ]
 }

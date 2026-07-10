@@ -6,8 +6,8 @@ import { eq, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
-
 import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
+import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 
 type QueryInput = {
   text: string;
@@ -835,6 +835,7 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS chat_threads_project_created_idx ON "${schemaName.replaceAll('"', '""')}"."chat_threads" (project_id, created_at DESC, id) WHERE project_id IS NOT NULL` },
+    ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
     // usage_events table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."usage_events" (
       id text PRIMARY KEY,
