@@ -65,6 +65,7 @@ import inspect
 import json
 import os
 import re
+import time
 import urllib.parse as _urlparse
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
@@ -111,6 +112,14 @@ _DEFAULT_HTTPX_TIMEOUT_SECONDS: float = 86_400.0
 #: blocking agent steps that wait on a batch LLM finish naturally rather than
 #: emitting a -32603 "Time out error".
 _DEFAULT_BLOCKING_TIMEOUT_SECONDS: int = 86_400
+
+#: #1192 — TTL (seconds) for the v2 per-node context-callback attestation. The
+#: attestation is minted FRESH on each context-resolve/finalize ApiNode call and
+#: verified server-side within one HTTP round-trip, so a short lifetime is ample
+#: and closes the intra-run replay window (v1 had none → a captured pair replayed
+#: for the run lifetime, up to 24h). The server clamps far-future expiries and
+#: allows a small clock-skew grace (see src/lib/artifacts/context-attestation.ts).
+_CONTEXT_ATTESTATION_TTL_SECONDS: int = 300
 
 # ---------------------------------------------------------------------------
 # Extract A2A user-message JSON inputs for start_conversation.
@@ -357,6 +366,38 @@ def _substitute_placeholders(content: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Host-anchor helper (#1192). Parse a URL string to its (lowercased host,
+# effective port), applying the scheme default port (http→80, https→443) when
+# no explicit port is present. Used to gate credential/attestation injection to
+# the configured CINATRA_BASE_URL host:port ONLY (never an OAS/LLM-steered host).
+# ---------------------------------------------------------------------------
+
+
+def _effective_host_port(url: str) -> Tuple[Optional[str], Optional[int]]:
+    """Return (lowercased host, effective port) for `url`, or (None, None) on any
+    parse failure (malformed URL, bad port) so callers fail CLOSED — an
+    unparseable URL is treated as NOT the internal host and receives no secret.
+
+    The scheme default port is applied when the URL carries none, so
+    ``http://host/x`` (port 80) does NOT match a ``:3000`` base URL — closing the
+    same-host/other-port sub-leak. Host/port are taken from urllib parser fields
+    (``.hostname`` is already lowercased and strips userinfo + IPv6 brackets),
+    never raw string matching.
+    """
+    try:
+        parsed = _urlparse.urlparse(url)
+        host = parsed.hostname
+        if not host:
+            return (None, None)
+        port = parsed.port  # raises ValueError on a malformed port
+    except (ValueError, TypeError):
+        return (None, None)
+    if port is None:
+        port = 443 if (parsed.scheme or "").lower() == "https" else 80
+    return (host.lower(), port)
+
+
+# ---------------------------------------------------------------------------
 # Bridge-token patches and supporting compatibility patches. All use the
 # `__cinatra_patched__` idempotent sentinel.
 #
@@ -400,6 +441,22 @@ def _patch_api_call_step_bridge_token() -> None:
             "by the server until this key is set here AND on the app."
         )
 
+    # #1192: host-anchor target. The bridge token, context id, and per-node
+    # attestation attach ONLY to calls whose host:port equals CINATRA_BASE_URL
+    # (matching the sibling _patch_a2a_agent_bridge_token). Parsed once at patch
+    # time (env is stable at runtime). An unparseable base URL yields a None host
+    # that matches nothing, so injection fails CLOSED (loud warning below).
+    base_url = os.environ.get(
+        "CINATRA_BASE_URL", "http://host.docker.internal:3000"
+    )
+    proxy_host, proxy_port = _effective_host_port(base_url)
+    if proxy_host is None:
+        print(
+            f"[agent_loader] WARNING: CINATRA_BASE_URL is unparseable ({base_url!r}) "
+            "— host-anchored ApiNode credential/attestation injection will match NO "
+            "host; internal callbacks will 403. Fix CINATRA_BASE_URL."
+        )
+
     try:
         from wayflowcore.steps import ApiCallStep  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover
@@ -413,56 +470,82 @@ def _patch_api_call_step_bridge_token() -> None:
 
     async def _patched(self: Any, request: Dict[str, Any]) -> Any:
         # request["headers"] may be absent when the ApiNode declares no
-        # headers. setdefault preserves any OAS-declared headers and
-        # adds ours.
+        # headers. setdefault preserves any OAS-declared headers.
         request.setdefault("headers", {})
-        request["headers"]["X-Cinatra-Bridge-Token"] = token
-        # Inject X-Cinatra-A2A-Context-Id for the internal bridge/context
-        # ApiNode calls so the run context can be resolved + bound server-side.
-        # The context routes (context-resolve/context-finalize) fail closed when
-        # the header is present-but-unresolvable, so injecting it for every
-        # in-conversation call keeps them context-bound (not body-trusting).
-        _ctx_id = _WAYFLOW_CONTEXT_ID.get()
         _ctx_url = str(request.get("url", ""))
-        if _ctx_id and (
-            "llm-bridge" in _ctx_url
-            or "context-resolve" in _ctx_url
-            or "context-finalize" in _ctx_url
-            # The bridge callbacks below derive actor authority
-            # from a body-selected agent_run_id. Inject the auth-path context id
-            # so the server can bind that id to the run actually executing this
-            # callback (it fails closed when the header is absent). The header is
-            # set from a per-task ContextVar and is NOT writable by the OAS
-            # author, so it is a trustworthy "which run is running" statement.
-            or "/agents/passthrough" in _ctx_url
-            or "/auditor/run-skills" in _ctx_url
-            or "/auditor/apply" in _ctx_url
-        ):
-            request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
-        # #907: mint the per-node context-callback attestation for the internal
-        # context-resolution ApiNodes. `self` IS the executing compiled step;
-        # `self.id` is the inlined context node's id (`ctx-<slotId>-<kind>`,
-        # e.g. `ctx-ideaContext-resolve_context`) — the AUTHORITATIVE
-        # execution-position identity the OAS author cannot substitute at
-        # callback time. Sign `(contextId, nodeId)` with the dedicated key so
-        # the server can prove WHICH child is calling (a composed child cannot
-        # obtain an attestation for a sibling's node without executing it). The
-        # server re-anchors nodeId against the run OAS structure, so the id
-        # SHAPE is not trusted — only a genuine, uniquely-marked context node
-        # for the claimed slot passes.
-        if (
-            attest_key
-            and _ctx_id
-            and ("context-resolve" in _ctx_url or "context-finalize" in _ctx_url)
-        ):
-            _node_id = getattr(self, "id", "") or ""
-            if _node_id:
-                _material = f"v1\n{_ctx_id}\n{_node_id}".encode("utf-8")
-                _sig = hmac.new(
-                    attest_key.encode("utf-8"), _material, hashlib.sha256
-                ).hexdigest()
-                request["headers"]["X-Cinatra-Context-Node"] = _node_id
-                request["headers"]["X-Cinatra-Context-Attestation"] = f"v1:{_sig}"
+        # #1192 HOST-ANCHOR: attach the bridge token, context id, and per-node
+        # attestation ONLY when this ApiNode call targets the configured
+        # CINATRA_BASE_URL host:port. An OAS-declared or LLM-steered URL to any
+        # OTHER host — even one whose PATH contains a context substring —
+        # receives no secret. An unparseable URL yields (None, None) → not
+        # internal → nothing injected (fail closed). Mirrors the sibling
+        # httpx.AsyncClient.send patch's host gate.
+        _req_host, _req_port = _effective_host_port(_ctx_url)
+        _is_internal = (
+            proxy_host is not None
+            and _req_host is not None
+            and _req_host == proxy_host
+            and _req_port == proxy_port
+        )
+        if _is_internal:
+            request["headers"]["X-Cinatra-Bridge-Token"] = token
+            # Inject X-Cinatra-A2A-Context-Id for the internal bridge/context
+            # ApiNode calls so the run context can be resolved + bound server-
+            # side. The context routes (context-resolve/context-finalize) fail
+            # closed when the header is present-but-unresolvable, so injecting it
+            # for every in-conversation internal call keeps them context-bound
+            # (not body-trusting).
+            _ctx_id = _WAYFLOW_CONTEXT_ID.get()
+            if _ctx_id and (
+                "llm-bridge" in _ctx_url
+                or "context-resolve" in _ctx_url
+                or "context-finalize" in _ctx_url
+                # The bridge callbacks below derive actor authority from a
+                # body-selected agent_run_id. Inject the auth-path context id so
+                # the server can bind that id to the run actually executing this
+                # callback (it fails closed when the header is absent). The
+                # header is set from a per-task ContextVar and is NOT writable by
+                # the OAS author, so it is a trustworthy "which run is running"
+                # statement.
+                or "/agents/passthrough" in _ctx_url
+                or "/auditor/run-skills" in _ctx_url
+                or "/auditor/apply" in _ctx_url
+            ):
+                request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
+            # #907/#1192: mint the per-node context-callback attestation for the
+            # internal context-resolution ApiNodes. `self` IS the executing
+            # compiled step; `self.id` is the inlined context node's id
+            # (`ctx-<slotId>-<kind>`, e.g. `ctx-ideaContext-resolve_context`) —
+            # the AUTHORITATIVE execution-position identity the OAS author cannot
+            # substitute at callback time. Sign `(contextId, nodeId, expiry)`
+            # with the dedicated key so the server can prove WHICH child is
+            # calling (a composed child cannot obtain an attestation for a
+            # sibling's node without executing it) AND bind the claim to a short
+            # lifetime (#1192 replay-window fix — v2 material adds the expiry). The
+            # server re-anchors nodeId against the run OAS structure, so the id
+            # SHAPE is not trusted — only a genuine, uniquely-marked context node
+            # for the claimed slot passes.
+            if (
+                attest_key
+                and _ctx_id
+                and (
+                    "context-resolve" in _ctx_url
+                    or "context-finalize" in _ctx_url
+                )
+            ):
+                _node_id = getattr(self, "id", "") or ""
+                if _node_id:
+                    _expiry = int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
+                    _material = (
+                        f"v2\n{_ctx_id}\n{_node_id}\n{_expiry}".encode("utf-8")
+                    )
+                    _sig = hmac.new(
+                        attest_key.encode("utf-8"), _material, hashlib.sha256
+                    ).hexdigest()
+                    request["headers"]["X-Cinatra-Context-Node"] = _node_id
+                    request["headers"]["X-Cinatra-Context-Attestation"] = (
+                        f"v2:{_expiry}:{_sig}"
+                    )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
         # Default httpx timeout is 5 s. Real-world ApiNode calls span:
@@ -3193,8 +3276,60 @@ def _preflight_bridge_token() -> None:
     sys.exit(1)
 
 
+def _preflight_context_attest_key() -> None:
+    """Fail LOUD at boot when CINATRA_CONTEXT_ATTEST_KEY is missing/whitespace-only.
+
+    #1192: symmetric with `_preflight_bridge_token`. The per-node context-callback
+    attestation (see `_patch_api_call_step_bridge_token`) is signed with this
+    dedicated key; the app fail-CLOSES at 403 on any composed-child context
+    resolution when it is absent. Historically the loader only WARNED and kept
+    serving, so a missing key was invisible until a COMPOSED-CHILD run hit it
+    mid-flight — leaf agents worked, composed children 403'd (the silent
+    partial-outage provisioning trap that bit #1151 Layer 2).
+
+    Exiting non-zero here turns that silent, downstream 403 into an immediate,
+    actionable boot failure. The key is provisioned fleet-wide by scripts/setup.sh
+    and propagated to the container env by scripts/gen-wayflow-env.mjs, so a hard
+    boot failure is safe.
+
+    Opt out with CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1 for the rare harness that
+    runs the loader without composed-child context resolution (e.g. an isolated
+    mount/health test). The opt-out is LOUD (it prints that attestation is
+    disabled) so the degraded posture is never silent.
+    """
+    if os.environ.get("CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY") == "1":
+        print(
+            "[agent_loader] CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1 — booting WITHOUT "
+            "a context attestation key. Composed-child context resolution "
+            "(/api/context-resolve, /api/context-finalize) will be REJECTED (403). "
+            "Intended for isolated harnesses only.",
+            flush=True,
+        )
+        return
+    key = (os.environ.get("CINATRA_CONTEXT_ATTEST_KEY") or "").strip()
+    if key:
+        return
+    import sys
+
+    print(
+        "[agent_loader] FATAL: CINATRA_CONTEXT_ATTEST_KEY is unset or empty. The "
+        "runtime signs the per-node context-callback attestation with this "
+        "dedicated key; without it every composed-child context resolution "
+        "(/api/context-resolve, /api/context-finalize) is REJECTED (403) — leaf "
+        "agents work but composed children fail mid-run. Refusing to start. Set "
+        "CINATRA_CONTEXT_ATTEST_KEY (the dev setup mints one in .env.local; "
+        "`npm run services` propagates it via docker/wayflow/.wayflow.env) — it "
+        "MUST match the value on the app. To bypass for an isolated test harness "
+        "with no composed children, set CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1.",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.exit(1)
+
+
 def main() -> None:
     _preflight_bridge_token()
+    _preflight_context_attest_key()
     agents_dir = Path(os.environ.get("CINATRA_AGENTS_DIR", "/agents"))
     parent_app = build_parent_app(agents_dir)
     host = os.environ.get("HOST", "0.0.0.0")

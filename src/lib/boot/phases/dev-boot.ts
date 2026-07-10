@@ -186,9 +186,23 @@ async function runDevAutoSetupAndFixtures(): Promise<void> {
   } catch (err) {
     console.warn("[dev-auto-setup] boot hook failed:", err);
   }
-  // After dev-auto-setup has ensured the dev org + connector wiring exists, apply
-  // each extension's declared cinatra.devFixtures into its own org-scoped surfaces
-  // so a freshly-installed extension is visible on this dev boot. Soft-fail +
+  // Extension dev-fixtures RELOCATION (`cinatra install demo`; cinatra-cli#122):
+  // the dev-fixtures dataset is now demo-MANDATORY / dev-OPT-IN — it is no longer
+  // seeded on every dev boot. Gate the seeder CALL here (the primary gate); the
+  // seeder ALSO self-guards on the same decision (defense in depth) so no future
+  // caller can leak fixtures into a plain dev boot. dev-auto-setup above is
+  // DELIBERATELY unaffected: connector wiring / auto-connect still runs on every
+  // dev boot so a demo's bundled apps connect once their containers are up.
+  const { shouldSeedDevFixtures } = await import("@/lib/install-profile");
+  if (!shouldSeedDevFixtures()) {
+    console.info(
+      "[dev-fixture-seeder] skipped — extension dev-fixtures seed only in demo " +
+        "(CINATRA_INSTALL_PROFILE=demo) or when opted in for dev (CINATRA_DEV_FIXTURES=1).",
+    );
+    return;
+  }
+  // Apply each extension's declared cinatra.devFixtures into its own org-scoped
+  // surfaces so a freshly-installed extension is visible on this boot. Soft-fail +
   // idempotent; never blocks boot.
   try {
     const { runDevFixtureSeeder } = await import("@/lib/dev-fixture-seeder");

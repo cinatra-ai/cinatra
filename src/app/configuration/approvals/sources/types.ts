@@ -75,6 +75,14 @@ export interface ApprovalRow {
   /** Single-admin self-approval flag ("your own request"). */
   isOwnRequest?: boolean;
   eligibility?: RowEligibility;
+  /** OPTIONAL PUBLIC optimistic-concurrency token — the source-opaque value a
+   *  decision must echo back (e.g. the agent source's CAS snapshot hash). Unlike
+   *  {@link raw} it is a PUBLIC string a non-owning caller MAY read/serialize:
+   *  `approvals_get` returns it so an MCP client round-trips it into
+   *  `approvals_decide`'s `expectedVersion`, preserving the same "captured at
+   *  view" edit-after-view guard the UI gets by capturing it at render. A source
+   *  needing no concurrency token omits it. */
+  version?: string;
   /** ADAPTER-PRIVATE: only the owning source's rowRenderer may read it; nothing
    *  else may depend on its shape (e.g. the agent source stashes the CAS token). */
   raw?: unknown;

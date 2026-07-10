@@ -412,6 +412,26 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
         const mcpToolsetEntries = mcpServerTools.map((t) => ({
           type: "mcp_toolset" as const,
           mcp_server_name: t.serverLabel,
+          // #1214 — honor the client-side `allowedTools` hint on the Anthropic
+          // NATIVE MCP path. Under the connector's active beta
+          // (`mcp-client-2025-11-20`) tool allowlisting lives on the
+          // `mcp_toolset` entry via `default_config` + per-tool `configs`
+          // (keyed by tool name), NOT on the server definition (that
+          // `tool_configuration.allowed_tools` shape is the deprecated
+          // `mcp-client-2025-04-04` form). Without this the native serializer
+          // silently exposes the FULL server surface — the gap that would let
+          // an in-admin CMS content-editor run reach the not-yet-rerouted
+          // direct-REST CMS primitives on the Anthropic path. `null`/`undefined`
+          // = unrestricted (omit; unchanged); an array pins the exact tool set
+          // (deny-by-default + explicit per-tool enable).
+          ...(t.allowedTools
+            ? {
+                default_config: { enabled: false },
+                configs: Object.fromEntries(
+                  t.allowedTools.map((name) => [name, { enabled: true }]),
+                ),
+              }
+            : {}),
         }));
         const nativeTools = nativeToolDefs && nativeToolDefs.length > 0
           ? [...nativeToolDefs, ...mcpToolsetEntries]
@@ -832,6 +852,18 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
       const streamMcpToolsetEntries = streamMcpServerTools.map((t) => ({
         type: "mcp_toolset" as const,
         mcp_server_name: t.serverLabel,
+        // #1214 — mirror the generate-path fix on the stream path: pin the
+        // allowlist on the `mcp_toolset` entry (active `mcp-client-2025-11-20`
+        // shape) so the native stream serializer does not silently drop the
+        // client-side `allowedTools` hint.
+        ...(t.allowedTools
+          ? {
+              default_config: { enabled: false },
+              configs: Object.fromEntries(
+                t.allowedTools.map((name) => [name, { enabled: true }]),
+              ),
+            }
+          : {}),
       }));
       const streamMcpServersArray = streamMcpServerTools.map((t) => ({
         name: t.serverLabel,

@@ -19,10 +19,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 import { requireAdminSession } from "@/lib/auth-session";
-import {
-  composeNamespaceErrorMessage,
-  validateInstanceNamespace,
-} from "@/lib/instance-namespace";
+import { validateInstanceNamespace } from "@/lib/instance-namespace";
 import { getApprovedInstanceNamespaces } from "@/lib/instance-namespace/approved-list";
 import {
   buildFreshInstanceIdentityDurableFields,
@@ -47,6 +44,7 @@ import { withInstanceIdentityWriteLock } from "@/lib/instance-identity-write-loc
 import type { RemoteRegistryConnection } from "@/lib/instance-identity-store";
 import { redactSensitive } from "@/lib/redact-sensitive";
 import { resolveRegistryUrl, shouldSelfRegisterRegistryUser } from "./registry-url";
+import type { SetupErrorCode } from "../setup-flash";
 
 // -----------------------------------------------------------------------------
 // Validation — npm scope rules for namespace + display name.
@@ -64,8 +62,17 @@ const instanceDisplayNameSchema = z.object({
     .max(120, "Instance display name must be 120 characters or fewer."),
 });
 
-function redirectWithError(message: string): never {
-  redirect("/setup/name?error=" + encodeURIComponent(message));
+// Codes-only flash protocol: build a `/setup/name?error=<code>` target. The
+// <SearchParamToast> island in the setup layout maps the code to a STATIC
+// message (src/app/setup/setup-flash.ts) — nothing URL-derived is toasted, so a
+// crafted `?error=<spoofed link>` cannot inject toast text. Typing the arg as
+// SetupErrorCode keeps every emitter in lockstep with the mount-site map.
+function setupErrorHref(code: SetupErrorCode): string {
+  return "/setup/name?error=" + code;
+}
+
+function redirectWithErrorCode(code: SetupErrorCode): never {
+  redirect(setupErrorHref(code));
   // redirect throws; satisfies `never` return.
   throw new Error("unreachable");
 }
@@ -121,12 +128,13 @@ async function persistDeferredInstanceIdentity(input: {
   await attachMarketplaceConsumerBestEffort();
 }
 
-// composeNamespaceErrorMessage lives in the shared @/lib/instance-namespace
-// barrel (compose-error-message.ts). The link in the contact channel is NOT
-// hyperlinked here (server-redirect copy is plain text consumed by an Alert);
-// the clickable variant lives in the wizard client island
-// (src/app/setup/name/instance-namespace-input.tsx) and the administration
-// rename modal (src/app/configuration/instance/rename-confirmation.tsx).
+// Namespace-validation specifics are surfaced at the field by the wizard client
+// island (src/app/setup/name/instance-namespace-input.tsx, which uses the shared
+// composeNamespaceErrorMessage from @/lib/instance-namespace) and the
+// administration rename modal (src/app/configuration/instance/rename-confirmation.tsx).
+// This server action is the codes-only backstop: a namespace failure emits the
+// `invalid-namespace` code, not the composed message (nothing URL-derived is
+// toasted).
 
 // -----------------------------------------------------------------------------
 // Action
@@ -147,7 +155,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
   const session = await requireAdminSession();
   const operatorEmail = session.user.email ?? "";
   if (!operatorEmail) {
-    redirectWithError("Could not determine operator email. Please sign in again.");
+    redirectWithErrorCode("operator-email-missing");
   }
 
   // Step 2 — Block re-provisioning when an identity row already exists. After
@@ -156,9 +164,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
   // freeze invariant.
   const existingIdentity = readInstanceIdentity();
   if (existingIdentity) {
-    redirectWithError(
-      "Instance namespace is already configured. Use Administration → Instance to edit or rename.",
-    );
+    redirectWithErrorCode("identity-exists");
   }
 
   // Step 3 — CINATRA_ENCRYPTION_KEY pre-check. The /setup/key page is wizard
@@ -166,9 +172,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
   // the action layer because env vars can change between page render and submit
   // (process restart, operator pulled the var, etc.).
   if (!process.env.CINATRA_ENCRYPTION_KEY?.trim()) {
-    redirectWithError(
-      "CINATRA_ENCRYPTION_KEY is not set. Configure it via /setup/key first.",
-    );
+    redirectWithErrorCode("encryption-key-missing");
   }
 
   // Step 4 — Validate both fields.
@@ -179,7 +183,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
     instanceDisplayName: String(formData.get("instanceDisplayName") ?? ""),
   });
   if (!displayNameParsed.success) {
-    redirectWithError(displayNameParsed.error.issues[0]?.message ?? "Invalid input.");
+    redirectWithErrorCode("invalid-display-name");
   }
   const { instanceDisplayName } = displayNameParsed.data;
 
@@ -188,7 +192,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
     { approvedExactNames: getApprovedInstanceNamespaces() },
   );
   if (!namespaceResult.ok) {
-    redirectWithError(composeNamespaceErrorMessage(namespaceResult.error));
+    redirectWithErrorCode("invalid-namespace");
   }
   // Always persist the canonical form.
   const instanceNamespace = namespaceResult.canonical;
@@ -217,7 +221,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
   const envToken = process.env.CINATRA_AGENT_REGISTRY_TOKEN?.trim();
   const conflict = detectMarketplaceEnvConflict();
   if (conflict) {
-    redirectWithError(conflict.reason);
+    redirectWithErrorCode("marketplace-env-conflict");
   }
 
   let token: string;
@@ -244,11 +248,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
         // concurrent setup submit that already wrote.
         const existingNow = readInstanceIdentity();
         if (existingNow) {
-          redirectTarget =
-            "/setup/name?error=" +
-            encodeURIComponent(
-              "Instance namespace is already configured. Use Administration → Instance to edit or rename.",
-            );
+          redirectTarget = setupErrorHref("identity-exists");
           return;
         }
 
@@ -308,9 +308,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
       });
     } catch (e) {
       console.error("[saveInstanceIdentityAction] marketplace bootstrap failed:", e);
-      redirectWithError(
-        "Could not reserve the namespace on the Cinatra Marketplace. Operator: check MARKETPLACE_INSTANCE_TOKEN and the marketplace endpoint, then see server logs.",
-      );
+      redirectWithErrorCode("marketplace-register-failed");
     }
     if (redirectTarget) {
       redirect(redirectTarget);
@@ -322,20 +320,14 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
   } else if (envToken) {
     // Mode (a) — pre-provisioned token.
     if (!isPlausibleRegistryToken(envToken)) {
-      redirectWithError(
-        "Pre-provisioned registry token (CINATRA_AGENT_REGISTRY_TOKEN) looks malformed. Operator: check the instance environment for stray whitespace.",
-      );
+      redirectWithErrorCode("registry-token-malformed");
     }
     if (!process.env.CINATRA_AGENT_REGISTRY_URL?.trim()) {
-      redirectWithError(
-        "Pre-provisioned registry token is set but CINATRA_AGENT_REGISTRY_URL is missing. Operator: set the registry URL in the instance environment.",
-      );
+      redirectWithErrorCode("registry-url-missing");
     }
     const expectedScope = `@${instanceNamespace}`;
     if (process.env.CINATRA_AGENT_REGISTRY_SCOPE?.trim() !== expectedScope) {
-      redirectWithError(
-        `Pre-provisioned registry scope must match the namespace. Operator: set CINATRA_AGENT_REGISTRY_SCOPE=${expectedScope} in the instance environment.`,
-      );
+      redirectWithErrorCode("registry-scope-mismatch");
     }
     token = envToken;
     // The pre-provisioned flow has no in-app password — the operator holds the
@@ -375,7 +367,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
       token = result.token;
     } catch (e) {
       if (e instanceof VerdaccioUserAlreadyRegisteredError) {
-        redirectWithError("That namespace is already taken.");
+        redirectWithErrorCode("namespace-taken");
       }
       if (e instanceof VerdaccioRegistrationDisabledError) {
         await persistDeferredInstanceIdentity({
@@ -390,17 +382,13 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
       }
       if (e instanceof VerdaccioUnexpectedResponseError) {
         // Operator preflight handover.
-        redirectWithError(
-          "Registry returned an unexpected response. Operator: see the Verdaccio preflight notes.",
-        );
+        redirectWithErrorCode("registry-unexpected-response");
       }
       // Emit a generic redirect message and log the full error server-side.
       // Reflecting the inner Error.message into the ?error= query param leaked
       // network diagnostics.
       console.error("[saveInstanceIdentityAction] unexpected registry error:", e);
-      redirectWithError(
-        "Could not provision registry user. Operator: see server logs.",
-      );
+      redirectWithErrorCode("registry-provision-failed");
       throw e; // unreachable; satisfies TS narrowing
     }
   }

@@ -256,6 +256,10 @@ function buildObjectResourceCheck(row: ObjectRecord): ResourceForAccessCheck {
     ownerLevel: normalizeOwnerLevel(row.ownerLevel),
     ownerId: row.ownerId,
     visibility: normalizeObjectVisibility(row.visibility),
+    // Project-axis identity for the OBO scope-ceiling gate (W2/#1051): an
+    // object's `project_id` refinement (null for org-substrate objects). A
+    // project-anchored agent is confined to objects tagged for its project.
+    projectId: row.projectId,
   };
 }
 

@@ -14,8 +14,9 @@ set -euo pipefail
 # broker/worker + ASGI app + message protocol — exactly what a bump of the
 # wayflow python stack can break — without any LLM key or private extension.
 #
-# The runtime fails LOUD at boot without CINATRA_BRIDGE_TOKEN; the arm mints a
-# throwaway one. The loader ONLY mounts an agent dir that carries a valid
+# The runtime fails LOUD at boot without CINATRA_BRIDGE_TOKEN or
+# CINATRA_CONTEXT_ATTEST_KEY; the arm mints throwaway values for both. The loader
+# ONLY mounts an agent dir that carries a valid
 # .cinatra-published.json marker whose oasSha256 matches cinatra/oas.json, so the
 # fixture ships that committed marker (kept in sync by works-after:test).
 #
@@ -72,11 +73,17 @@ docker build \
 docker network create "$NET" >/dev/null
 
 BRIDGE_TOKEN="works-after-$(wa_throwaway_hexkey 16)"
+# #1192: the boot preflight also requires the per-node context-attestation key
+# (symmetric with the bridge token). This deterministic arm runs NO composed
+# children, but the runtime refuses to boot without it — mint a throwaway so the
+# real preflight-pass boot path is exercised (rather than the opt-out bypass).
+ATTEST_KEY="works-after-$(wa_throwaway_hexkey 16)"
 # Loopback-only ephemeral host port; mount the fixture tree read-only at /agents.
 docker run -d --name "$APP" --network "$NET" -p 127.0.0.1::3010 \
   -e PORT=3010 \
   -e CINATRA_AGENTS_DIR=/agents \
   -e CINATRA_BRIDGE_TOKEN="$BRIDGE_TOKEN" \
+  -e CINATRA_CONTEXT_ATTEST_KEY="$ATTEST_KEY" \
   -e CINATRA_BASE_URL="http://host.docker.internal:3000" \
   -v "${FIXTURE_ROOT}:/agents:ro" \
   "$IMG" >/dev/null
