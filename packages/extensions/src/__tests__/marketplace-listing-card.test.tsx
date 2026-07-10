@@ -14,6 +14,7 @@
  * so static-markup assertions are used throughout, matching the sibling
  * `src/components/__tests__/extension-card.test.tsx` pattern.
  */
+import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -141,6 +142,85 @@ describe("MarketplaceListingCard — 0.5.0 §I byline in the banner (cinatra#124
     // A derived package-scope namespace (no vendor block) is NOT verified.
     const noVendor = renderCard({ vendor: null });
     expect(noVendor).not.toContain('data-slot="extension-card-verified"');
+  });
+});
+
+describe("MarketplaceListingCard — the cost text renders in EVERY install-state variant (cinatra#1273)", () => {
+  // Owner CHANGES_REQUESTED on #1273 (2026-07-10): the "Update now" and
+  // "Installing…" card variants dropped the cost text. The design spec 0.5.0
+  // §I draws the price row on ALL six state cards — "Update · newer in catalog"
+  // reads "$9/mo" (app-extensions.html L373) and "Installing · submit pending"
+  // reads "$12" (L437) — never blank. The price row is a function of the
+  // card's commerce badge ONLY; it must not be coupled to, or suppressed by,
+  // the six-state CTA slot the caller passes. These guards render the card in
+  // the exact update + installing (pending) shapes and lock that the priced
+  // cost row is still present, so a future refactor can never silently drop it
+  // for those two states again.
+  function renderWithCta(
+    badge: MarketplaceCardData["badge"],
+    ctaControl: ReactNode,
+    ctaState: string,
+  ): string {
+    return renderToStaticMarkup(
+      <MarketplaceListingCard
+        card={cardData({ badge })}
+        accentColor="olive"
+        ctaControl={ctaControl}
+        ctaState={ctaState}
+        detailsControl={<Button variant="link">More details</Button>}
+      />,
+    );
+  }
+
+  it('renders the "$9/mo" cost row on the Update-now card variant (spec §I L373)', () => {
+    const html = renderWithCta(
+      { text: "$9/mo", variant: "price" },
+      <Button size="sm">Update now</Button>,
+      "update",
+    );
+    // The priced cost row is present…
+    expect(html).toContain('data-slot="extension-card-price"');
+    expect(html).toContain(">$9/mo<");
+    // …alongside the Update-now CTA (proving the two coexist, not either/or).
+    expect(html).toContain('data-cta-state="update"');
+    expect(html).toContain(">Update now<");
+  });
+
+  it('renders the "$12" cost row on the Installing… (pending) card variant (spec §I L437)', () => {
+    // The Installing… visual is the pending label of the install submit; the
+    // card is otherwise the install/update card, so the priced cost row must
+    // still render above the busy button.
+    const installingCta = (
+      <Button size="sm" disabled data-pending="">
+        Installing…
+      </Button>
+    );
+    const html = renderWithCta({ text: "$12", variant: "price" }, installingCta, "install");
+    expect(html).toContain('data-slot="extension-card-price"');
+    expect(html).toContain(">$12<");
+    expect(html).toContain(">Installing…<");
+  });
+
+  it("renders the priced cost row for ALL SIX install-state CTAs (the price row is CTA-state-independent)", () => {
+    // Literal all-six-state guard: the price row is a pure function of the
+    // commerce badge, so it must survive every resolved CTA identity the live
+    // screen can pass (install · installed · update · restore · installing ·
+    // incompatible). Cross every state with each commerce variant so neither
+    // the state NOR the badge kind can ever gate the cost row off again.
+    const ctaStates = ["install", "installed", "update", "restore", "installing", "incompatible"];
+    const badges: MarketplaceCardData["badge"][] = [
+      { text: "Free", variant: "free" },
+      { text: "Free, Open Source", variant: "oss" },
+      { text: "$9/mo", variant: "price" },
+    ];
+    for (const ctaState of ctaStates) {
+      for (const badge of badges) {
+        const html = renderWithCta(badge, <Button size="sm">CTA</Button>, ctaState);
+        expect(html).toContain('data-slot="extension-card-price"');
+        expect(html).toContain(`>${badge!.text}<`);
+        expect(html).toContain(`data-cta-state="${ctaState}"`);
+      }
+    }
   });
 });
 
