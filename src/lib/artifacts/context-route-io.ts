@@ -40,6 +40,10 @@ import {
   evaluateContextAttestation,
   type ContextNodeKind,
 } from "./context-attestation";
+import {
+  recordContextRouteResolutionPath,
+  type ContextRouteServedBy,
+} from "./context-route-observability";
 
 // ---------------------------------------------------------------------------
 // Heavy IO for the context routes: auth + run + actor derivation (reuses the
@@ -107,6 +111,9 @@ export type DerivedContext = {
   actor: ActorContext;
   run: AgentRunRecord;
   projectId: string | undefined;
+  /** Which binding resolved the run (#1193 W2 token-first vs legacy split) —
+   *  carried so the route-level success trace (#1197) can name the path. */
+  servedBy: ContextRouteServedBy;
   /** The run's TEMPLATE package (server-derived, NOT the body). The trust root
    *  for actor + audit-store scoping. */
   trustedPackageName: string;
@@ -213,7 +220,7 @@ export async function deriveContextRouteContext(
   const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
   const runTokenHeader = req.headers.get(RUN_TOKEN_HEADER);
   let run: AgentRunRecord | null = null;
-  let servedBy: "run_token" | "context_id" | "body";
+  let servedBy: ContextRouteServedBy;
   if (runTokenHeader !== null) {
     // (a) Token present ⇒ it is the trust root. verifyRunToken hashes it and
     // resolves the run by the unique index. Absent/empty or unresolvable both
@@ -299,11 +306,14 @@ export async function deriveContextRouteContext(
     );
   }
   // #1193 run-token spine (W2): which-path-served metric for the W3 legacy-
-  // removal gate. Ids only — the raw token and its hash are NEVER logged.
-  console.info(
-    `[context-route] run resolved kind=${expectedKind} via=${servedBy} ` +
-      `run=${run.id} ctx=${a2aContextId ?? "-"}`,
-  );
+  // removal gate — per-(kind, via) counter + info line (#1197). Ids only — the
+  // raw token and its hash are NEVER logged.
+  recordContextRouteResolutionPath({
+    kind: expectedKind,
+    via: servedBy,
+    runId: run.id,
+    contextId: a2aContextId,
+  });
   if (!run.orgId || !run.runBy) {
     throw new ContextRouteError(
       403,
@@ -436,7 +446,7 @@ export async function deriveContextRouteContext(
   const projectId =
     normalizeProjectId(run.projectId) ?? normalizeProjectId(body.projectId);
 
-  return { actor, run, projectId, trustedPackageName, trustedSlotPackageName };
+  return { actor, run, projectId, servedBy, trustedPackageName, trustedSlotPackageName };
 }
 
 /** Resolve candidates for a slot via the existing resolver + server-side
