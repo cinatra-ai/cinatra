@@ -951,14 +951,14 @@ const SCHEMA_CONFIG_FIELD_KINDS = new Set([
 // Exact per-kind key allowlists — mirror src/lib/extension-schema-config.ts so a
 // smuggled executable/HTML carrier key is REJECTED at generation too (fail-closed
 // pure-data invariant). Keep these in lockstep with the TS parser.
-const SCHEMA_CONFIG_FIELD_KEYS = {
+export const SCHEMA_CONFIG_FIELD_KEYS = {
   text: new Set(["kind", "key", "label", "placeholder", "required", "description"]),
   secret: new Set(["kind", "key", "label", "required", "description"]),
   "nango-connect": new Set(["kind", "label", "providerConfigKey", "description"]),
   "repeatable-list": new Set(["kind", "key", "label", "itemLabel", "itemFields", "description"]),
   "status-probe": new Set(["kind", "label", "actionId", "description"]),
   "copyable-credential": new Set(["kind", "key", "label", "description"]),
-  "named-action": new Set(["kind", "label", "actionId", "confirm", "description"]),
+  "named-action": new Set(["kind", "label", "actionId", "confirm", "role", "description"]),
   select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
   "record-list": new Set([
     "kind", "label", "listActionId", "deleteActionId", "emptyState",

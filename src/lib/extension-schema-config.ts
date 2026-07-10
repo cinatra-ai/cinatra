@@ -361,7 +361,7 @@ const FIELD_KINDS = new Set<SchemaConfigFieldKind>([
 // smuggling an executable/HTML carrier key (`onClick`, `html`, `dangerouslySet…`,
 // `script`, …) into a field the renderer might otherwise spread. Pure-data
 // invariant (security invariant 1): no field kind may carry executable code.
-const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<string>> = {
+export const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<string>> = {
   text: new Set(["kind", "key", "label", "placeholder", "required", "description"]),
   secret: new Set(["kind", "key", "label", "required", "description"]),
   "nango-connect": new Set(["kind", "label", "providerConfigKey", "description"]),
