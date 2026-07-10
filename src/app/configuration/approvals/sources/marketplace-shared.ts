@@ -1,6 +1,7 @@
 import "server-only";
 
 import { MarketplaceMcpError, type MarketplaceRowEligibility } from "@cinatra-ai/marketplace-mcp-client";
+import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import {
@@ -120,6 +121,19 @@ export function resolveVendorToken(): string | undefined {
  *  for robustness / independence from resolution order.) */
 export function anyMarketplaceCredential(): boolean {
   return hasInstanceToken() || hasAdminToken() || hasVendorToken();
+}
+
+// --- Vendored marketplace HTTP client factory ------------------------------
+//
+// The ONE place the vendored `@cinatra-ai/marketplace-mcp-client/http-client`
+// is constructed for the approval sources' counts/fetch. Centralizing it here
+// (already the allowlisted vendored-surface file for this feature) keeps the
+// import-LIGHT `*.contract.ts` nav halves off a direct vendored-package import
+// — they call this factory instead — so the marketplace-mcp-client-banned
+// migration guard has ONE fewer call site to swap, and adding a new nav source
+// never re-introduces the vendored name. Returns the client for the bearer.
+export function createMarketplaceClient(token: string) {
+  return createHttpMarketplaceMcpClient({ token });
 }
 
 // --- Capped, ~60s server cache for the direction counts --------------------
