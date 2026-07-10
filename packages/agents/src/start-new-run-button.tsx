@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/cinatra-toast";
 import { createAndTriggerRun } from "./run-actions";
 
 export type StartNewRunButtonProps = {
@@ -12,16 +13,14 @@ export type StartNewRunButtonProps = {
 export function StartNewRunButton({ agentId }: StartNewRunButtonProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
 
   const handleClick = () => {
-    setError(null);
     startTransition(async () => {
       const result = await createAndTriggerRun({ templateSlug: agentId });
       if (result.ok) {
         router.push(`/agents/${agentId}/${encodeURIComponent(result.runId)}`);
       } else {
-        setError(result.error ?? "Could not create a new run.");
+        toast.error(result.error ?? "Could not create a new run.");
       }
     });
   };
@@ -31,7 +30,6 @@ export function StartNewRunButton({ agentId }: StartNewRunButtonProps) {
       <Button onClick={handleClick} disabled={isPending}>
         {isPending ? "Starting…" : "Start new run"}
       </Button>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
 }

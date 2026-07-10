@@ -32,6 +32,7 @@ import {
   type BreadcrumbCrumb,
 } from "@/lib/breadcrumb-trail";
 import { Building2, FolderKanban, MessageSquare, Play, Plus, Settings, TriangleAlert, UsersRound, Wrench } from "lucide-react";
+import { toast } from "@/lib/cinatra-toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -202,7 +203,6 @@ export function AppShell({
   const [createOrganizationOpen, setCreateOrganizationOpen] = useState(false);
   const [defaultLlmProvider, setDefaultLlmProvider] = useState<string | null>(null);
   const [llmProviderPending, setLlmProviderPending] = useState(false);
-  const [llmProviderSaved, setLlmProviderSaved] = useState(false);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [chatThreadTitle, setChatThreadTitle] = useState<string | null>(null);
   const [agentInstanceName, setAgentInstanceName] = useState<string | null>(null);
@@ -448,7 +448,6 @@ export function AppShell({
 
   async function handleSwitchProvider(provider: "openai" | "anthropic") {
     setLlmProviderPending(true);
-    setLlmProviderSaved(false);
     try {
       const res = await fetch("/api/admin/default-llm-provider", {
         method: "PUT",
@@ -457,11 +456,12 @@ export function AppShell({
       });
       if (res.ok) {
         setDefaultLlmProvider(provider);
-        setLlmProviderSaved(true);
-        setTimeout(() => setLlmProviderSaved(false), 2000);
+        toast.success("Default LLM provider saved.");
+      } else {
+        toast.error("Could not save the default LLM provider.");
       }
     } catch {
-      // Ignore failures silently.
+      toast.error("Could not save the default LLM provider.");
     } finally {
       setLlmProviderPending(false);
     }
@@ -576,9 +576,6 @@ export function AppShell({
                       </Button>
                     ))}
                   </div>
-                  {llmProviderSaved ? (
-                    <p className="mt-2 px-2 text-xs text-success">Saved</p>
-                  ) : null}
                 </div>
                 <Separator className="mx-1 my-1 border-warning/20" />
                 <div className="px-1 py-2">

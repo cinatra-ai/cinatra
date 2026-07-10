@@ -123,11 +123,10 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
         </Alert>
       ) : null}
 
-      {errorMessage ? (
-        <Alert variant="destructive">
-          <AlertDescription>{errorMessage}</AlertDescription>
-        </Alert>
-      ) : null}
+      {/* A failed save surfaces via the shell-bypass setup layout's
+          <SearchParamToast> (codes-only wizard toast). `errorMessage` is still
+          read above to suppress the auto-forward; its inline <Alert> that
+          duplicated the wizard toast is retired. */}
 
       {/* Card 1: API key + project + organization */}
       <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
