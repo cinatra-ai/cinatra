@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { getActorContext } from "@/lib/auth-session";
@@ -44,6 +45,7 @@ import { requiresRebuildState } from "@/lib/extension-schema-config";
 import type { SchemaConfigSurface } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
 import { ConnectorStatusProbeCard } from "@/components/extensions/connector-status-probe-card";
+import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { InstallActivateCta } from "@/components/extensions/install-activate-cta";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -71,6 +73,20 @@ function findStatusProbeActionId(surface: SchemaConfigSurface): string | undefin
 }
 
 export const dynamic = "force-dynamic";
+
+// Host-owned codes-only flash island for the schema-config setup surface. Host
+// actions that redirect back to a connector's setup page carry a stable code —
+// e.g. the external-MCP management actions (campaigns/actions.ts) redirect to
+// the MCP-servers connector page with ?saved=1 / ?deleted=1, and the Twenty
+// connect/disconnect actions with ?error=<code>. The schema-config surface reads
+// no searchParams itself, so nothing rendered these outcomes before; this island
+// maps each code to a STATIC message and toasts it.
+const CONNECTOR_SETUP_FLASH_TOASTS: SearchParamToastConfig[] = [
+  { param: "saved", value: "1", message: "Saved.", variant: "success" },
+  { param: "deleted", value: "1", message: "Removed.", variant: "success" },
+  { param: "error", value: "admin-only", message: "Only an administrator can change this connection.", variant: "error" },
+  { param: "error", value: "connect-failed", message: "Could not connect. Check the details and try again.", variant: "error" },
+];
 
 type RouteParams = {
   vendor: string;
@@ -278,6 +294,9 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           actions={statusBadge}
         />
         <PageContent className="flex flex-col gap-6 pb-8">
+          <Suspense fallback={null}>
+            <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
+          </Suspense>
           {installId ? (
             <SchemaConfigConnectorForm
               installId={installId}

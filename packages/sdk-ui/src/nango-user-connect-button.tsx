@@ -7,6 +7,7 @@ import NangoFrontend from "@nangohq/frontend";
 import type { ConnectUI } from "@nangohq/frontend";
 import { StatusPill } from "./status-pill";
 import { Button } from "./ui/button";
+import { toast } from "./toast";
 
 // Host-pure Nango connect UI primitives — connectors depend only on the SDK. All host
 // data arrives via props; `connectorKey` is `string` (the SDK does not import the
@@ -26,6 +27,15 @@ type NangoUserConnectButtonProps = {
   reconnectLabel?: string;
   nangoFrontendConfig?: NangoFrontendConfig;
   className?: string;
+  // Optional leading glyph rendered before the label (e.g. the §II indigo-plug
+  // "Connect" mark). Strictly additive and purely presentational: it does NOT
+  // change the connect-session logic, so a connector page can render the design
+  // glyph without duplicating this button's Nango flow (github-connector#43,
+  // item 7). Omit it and the button renders exactly as before. Hidden from
+  // assistive tech (aria-hidden) because the button label already names the
+  // action; the icon is decorative. Suppressed while pending so it does not sit
+  // beside the "Opening..." label.
+  leadingIcon?: ReactNode;
   prerequisiteErrorMessage?: string;
   // Disable the button when a precondition is unmet (e.g. a required OAuth
   // client is not configured yet). Mirrors tailscale-connect-form's
@@ -128,6 +138,7 @@ function useNangoUserConnect({
 
               connect?.close();
               setPending(false);
+              toast.success("Connected.");
               router.refresh();
             } catch (error) {
               connect?.close();
@@ -188,6 +199,7 @@ export function NangoUserConnectButton({
   reconnectLabel = "Reconnect",
   nangoFrontendConfig,
   className,
+  leadingIcon,
   prerequisiteErrorMessage,
   disabled = false,
   onError,
@@ -195,17 +207,17 @@ export function NangoUserConnectButton({
 }: NangoUserConnectButtonProps) {
   // Fallback error surface: no call site is required to pass `onError`, and a
   // connect-session failure must still be visible once the orphaned Connect UI
-  // is closed (#48). Used only when the caller does not supply `onError`.
-  const [fallbackError, setFallbackError] = useState<string | null>(null);
+  // is closed (#48). When the caller supplies `onError` it owns the surface (no
+  // toast — avoids double-surfacing); otherwise the failure sinks to a toast.
   const { pending, openConnection } = useNangoUserConnect({
     connectorKey,
     reconnectConnectionId,
     nangoFrontendConfig,
     prerequisiteErrorMessage,
-    onError: onError ?? ((message) => setFallbackError(message || null)),
+    onError: onError ?? ((message) => { if (message) toast.error(message); }),
   });
 
-  const button = (
+  return (
     <Button
       type="button"
       onClick={() => {
@@ -218,19 +230,13 @@ export function NangoUserConnectButton({
       disabled={pending || disabled}
       className={className}
     >
+      {leadingIcon && !pending ? (
+        <span className="inline-flex shrink-0 items-center" aria-hidden="true">
+          {leadingIcon}
+        </span>
+      ) : null}
       {pending ? "Opening..." : connected ? reconnectLabel : connectLabel}
     </Button>
-  );
-
-  if (onError) {
-    return button;
-  }
-
-  return (
-    <div className="inline-flex flex-col items-start gap-2">
-      {button}
-      {fallbackError ? <p className="text-sm text-destructive">{fallbackError}</p> : null}
-    </div>
   );
 }
 
@@ -258,13 +264,12 @@ export function NangoUserConnectCard({
   className,
   onClickOverride,
 }: NangoUserConnectCardProps) {
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { pending, openConnection } = useNangoUserConnect({
     connectorKey,
     reconnectConnectionId,
     nangoFrontendConfig,
     prerequisiteErrorMessage,
-    onError: (message) => setErrorMessage(message || null),
+    onError: (message) => { if (message) toast.error(message); },
   });
 
   return (
@@ -295,7 +300,6 @@ export function NangoUserConnectCard({
       <div className="mt-6">
         <h2 className="text-xl font-semibold tracking-tight text-foreground">{title}</h2>
         {subtitle ? <p className="mt-2 text-sm leading-6 text-muted-foreground">{subtitle}</p> : null}
-        {errorMessage ? <p className="mt-3 text-sm text-destructive">{errorMessage}</p> : null}
       </div>
     </Button>
   );

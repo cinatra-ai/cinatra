@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 133,
-    "/api/mcp": 1354,
-    "/chat": 1392,
-    "/api/a2a": 1359,
-    "/api/llm-bridge": 1363
+    "/api/mcp": 1378,
+    "/chat": 1416,
+    "/api/a2a": 1383,
+    "/api/llm-bridge": 1389
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1358,
-      "to": 1359,
-      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1358->1359.",
-      "pr": 1186
+      "from": 1382,
+      "to": 1383,
+      "reason": "cinatra#1129 (PR #1264): the admin-parity P4 file-size-ratchet fix extracts the updateAgentTemplateAuthPolicy DAO out of packages/agents/src/store.ts into a new first-party module packages/agents/src/store-agent-template-policy.ts, re-exported from ./store so @cinatra-ai/agents/store consumers are unchanged. store.ts is reachable from this locked agent route, so the split adds exactly one new reachable first-party module. This supersedes the prior record; the base branch already baked in that raise. Measured vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). Absorbed raise 1382->1383.",
+      "pr": 1264
     },
     "/api/llm-bridge": {
-      "from": 1362,
-      "to": 1363,
-      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1362->1363.",
-      "pr": 1186
+      "from": 1388,
+      "to": 1389,
+      "reason": "cinatra#1129 (PR #1264): the admin-parity P4 file-size-ratchet fix extracts the updateAgentTemplateAuthPolicy DAO out of packages/agents/src/store.ts into a new first-party module packages/agents/src/store-agent-template-policy.ts, re-exported from ./store so @cinatra-ai/agents/store consumers are unchanged. store.ts is reachable from this locked agent route, so the split adds exactly one new reachable first-party module. This supersedes the prior record; the base branch already baked in that raise. Measured vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). Absorbed raise 1388->1389.",
+      "pr": 1264
     },
     "/api/mcp": {
-      "from": 1353,
-      "to": 1354,
-      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1353->1354.",
-      "pr": 1186
+      "from": 1377,
+      "to": 1378,
+      "reason": "cinatra#1129 (PR #1264): the admin-parity P4 file-size-ratchet fix extracts the updateAgentTemplateAuthPolicy DAO out of packages/agents/src/store.ts into a new first-party module packages/agents/src/store-agent-template-policy.ts, re-exported from ./store so @cinatra-ai/agents/store consumers are unchanged. store.ts is reachable from this locked agent route, so the split adds exactly one new reachable first-party module. This supersedes the prior record; the base branch already baked in that raise. Measured vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). Absorbed raise 1377->1378.",
+      "pr": 1264
     },
     "/chat": {
-      "from": 1391,
-      "to": 1392,
-      "reason": "PR #1186 (cinatra#1108): the canonical cinatraToast wrapper moved into @cinatra-ai/sdk-ui (packages/sdk-ui/src/toast.ts) so host and extensions share the host's single sonner instance; the host @/lib/cinatra-toast and @/components/search-param-toast become re-exports and packages/skills plugin-pages imports the sdk-ui island directly. The sdk-ui toast wrapper is one net-new reachable first-party leaf on every locked route that reaches the shared toast/skills graph, so each such route grows by exactly one first-party module. flashHref stays OFF the @cinatra-ai/sdk-extensions index barrel (exposed via a ./flash-href subpath) so it adds no second edge. Reconciled onto main's CURRENT post-#1062 ceiling after rebase: measured on the rebased tree with the companion extension repos cloned pinned (missingCount 0), so the +1 is exact against the new base. Absorbed raise 1391->1392.",
-      "pr": 1186
+      "from": 1415,
+      "to": 1416,
+      "reason": "cinatra#1129 (PR #1264): the admin-parity P4 file-size-ratchet fix extracts the updateAgentTemplateAuthPolicy DAO out of packages/agents/src/store.ts into a new first-party module packages/agents/src/store-agent-template-policy.ts, re-exported from ./store so @cinatra-ai/agents/store consumers are unchanged. store.ts is reachable from this locked agent route, so the split adds exactly one new reachable first-party module. This supersedes the prior record; the base branch already baked in that raise. Measured vs origin/main with the companion extension repos cloned pinned (missingCount 0, delta exact). Absorbed raise 1415->1416.",
+      "pr": 1264
     },
     "/sign-in": {
       "from": 132,

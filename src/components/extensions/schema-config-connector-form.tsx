@@ -15,8 +15,9 @@
 // are filtered against the HOST-evaluated `isAdmin` prop (the host re-rejects an
 // admin-only value at the write handler — defense in depth).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckIcon, CopyIcon, PlugZap, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import { toast } from "@/lib/cinatra-toast";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -66,7 +67,6 @@ import type {
   SelectField,
   RecordListField,
   RecordListBadgeVariant,
-  BannerField,
   BannerTone,
   AdvisoryField,
   DynamicSelectOptionsField,
@@ -135,6 +135,37 @@ function bannerNameFromResult(result: unknown): string | null {
   return null;
 }
 
+// A schema-declared banner tone → the cinatraToast variant it toasts as. The
+// schema-declared banner variants are the STATIC toast messages an action result
+// surfaces (cinatra#1109): a `{ banner: "<name>" }` result toasts that variant's
+// message instead of rendering an in-form Alert.
+const TONE_TO_TOAST: Record<BannerTone, "success" | "error" | "warning" | "info" | "message"> = {
+  default: "message",
+  destructive: "error",
+  warning: "warning",
+  success: "success",
+  info: "info",
+};
+
+type BannerVariantEntry = { tone: BannerTone; message: string };
+
+/** Flatten every schema-declared banner field's variants (base fields + tabs)
+ *  into a name → {tone,message} lookup, so an action result's `{banner}` name
+ *  resolves to the STATIC message to toast. */
+function collectBannerVariants(surface: SchemaConfigSurface): Record<string, BannerVariantEntry> {
+  const out: Record<string, BannerVariantEntry> = {};
+  const scan = (fields: SchemaConfigField[]) => {
+    for (const field of fields) {
+      if (field.kind === "banner") {
+        for (const v of field.variants) out[v.name] = { tone: v.tone, message: v.message };
+      }
+    }
+  };
+  scan(surface.fields);
+  for (const tab of surface.tabs ?? []) scan(tab.fields);
+  return out;
+}
+
 // The reserved value of the base "Setup" tab. A leading underscore can never be
 // a connector tab id (the schema-config KEY_RE requires a leading letter), so
 // this never collides with a declared tab.
@@ -155,26 +186,39 @@ export function SchemaConfigConnectorForm({
   // omits nothing.
   const omit = omitFieldKinds && omitFieldKinds.length > 0 ? new Set(omitFieldKinds) : null;
   // Shared form-level state driven by action RESULTS:
-  //  - `bannerName`: the active banner variant name (a create/delete result sets it).
   //  - `listEpoch`: bumped to force every record-list to re-fetch after a write.
-  const [bannerName, setBannerName] = useState<string | null>(null);
+  // Action OUTCOMES (the form-level banner variant + per-row Done/error) now
+  // TOAST (cinatra#1109) instead of rendering an in-form Alert. Content-LOAD
+  // failures (record-list / dynamic-select fetches) stay inline — they are a
+  // persistent "couldn't load" state, not a one-shot action result.
   const [listEpoch, setListEpoch] = useState(0);
   // Live connected state driving the canonical Connect / Disconnect pair.
   // Seeded from the host readiness signal; a successful role action mutates it.
   const [connected, setConnected] = useState<boolean>(initialConnected);
+  const bannerVariants = useMemo(() => collectBannerVariants(surface), [surface]);
 
-  const onActionResult = useCallback((result: ActionResult) => {
-    if (!result.ok) {
-      // An error result still surfaces a banner when an "error" variant exists.
-      setBannerName("error");
+  const onActionResult = useCallback(
+    (result: ActionResult) => {
+      if (!result.ok) {
+        // Prefer the schema-declared "error" banner variant's static message;
+        // otherwise toast the action's own error text.
+        const v = bannerVariants["error"];
+        if (v) toast[TONE_TO_TOAST[v.tone]](v.message);
+        else toast.error(result.error ?? "Action failed.");
+        setListEpoch((e) => e + 1);
+        return;
+      }
+      // A `{ banner: "<name>" }` result toasts that variant's static message;
+      // otherwise a generic success confirmation.
+      const name = bannerNameFromResult(result.result);
+      const v = name ? bannerVariants[name] : undefined;
+      if (v) toast[TONE_TO_TOAST[v.tone]](v.message);
+      else toast.success("Done.");
+      // Any successful write may have changed the underlying rows — refresh lists.
       setListEpoch((e) => e + 1);
-      return;
-    }
-    const name = bannerNameFromResult(result.result);
-    if (name) setBannerName(name);
-    // Any successful write may have changed the underlying rows — refresh lists.
-    setListEpoch((e) => e + 1);
-  }, []);
+    },
+    [bannerVariants],
+  );
 
   // One field group — shared by the flat form and by each tab panel. Field
   // `key`s are globally unique (parser invariant), so row keys never collide.
@@ -214,7 +258,6 @@ export function SchemaConfigConnectorForm({
               isAdmin={isAdmin}
               initialValues={initialValues}
               onConnect={onConnect}
-              bannerName={bannerName}
               listEpoch={listEpoch}
               onActionResult={onActionResult}
             />
@@ -280,7 +323,6 @@ function SchemaConfigFieldRow({
   isAdmin,
   initialValues,
   onConnect,
-  bannerName,
   listEpoch,
   onActionResult,
 }: {
@@ -289,7 +331,6 @@ function SchemaConfigFieldRow({
   isAdmin: boolean;
   initialValues: Record<string, string>;
   onConnect?: (providerConfigKey: string) => void;
-  bannerName: string | null;
   listEpoch: number;
   onActionResult: (result: ActionResult) => void;
 }) {
@@ -335,7 +376,9 @@ function SchemaConfigFieldRow({
     case "record-list":
       return <RecordListRow field={field} installId={installId} listEpoch={listEpoch} onActionResult={onActionResult} />;
     case "banner":
-      return <BannerRow field={field} activeName={bannerName} />;
+      // Schema-declared banner variants are surfaced as TOASTs when an action
+      // result selects one (see onActionResult), not as an in-form Alert.
+      return null;
     case "advisory":
       return <AdvisoryRow field={field} installId={installId} />;
     case "dynamic-select-options":
@@ -420,14 +463,13 @@ function NamedActionRow({
   onActionResult: (result: ActionResult) => void;
 }) {
   const [pending, setPending] = useState(false);
-  const [detail, setDetail] = useState<string | null>(null);
   const run = useCallback(async () => {
     if (field.confirm && !window.confirm(field.confirm)) return;
     setPending(true);
-    setDetail(null);
     const r = await invokeAction(installId, field.actionId, collectFormInputs());
     setPending(false);
-    setDetail(r.ok ? "Done." : r.error ?? "Action failed.");
+    // The outcome (Done. / error / schema-declared banner variant) TOASTs via
+    // onActionResult — no in-form "Done."/error text.
     onActionResult(r);
   }, [field.confirm, field.actionId, installId, onActionResult]);
   return (
@@ -437,7 +479,7 @@ function NamedActionRow({
         <Button type="button" onClick={run} disabled={pending}>
           {field.label}
         </Button>
-        {detail ? <FieldDescription>{detail}</FieldDescription> : field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+        {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       </FieldContent>
     </Field>
   );
@@ -866,17 +908,6 @@ const BANNER_TONE_TO_VARIANT: Record<BannerTone, React.ComponentProps<typeof Ale
   success: "success",
   info: "info",
 };
-
-function BannerRow({ field, activeName }: { field: BannerField; activeName: string | null }) {
-  const variant = activeName ? field.variants.find((v) => v.name === activeName) : undefined;
-  if (!variant) return null;
-  return (
-    <Alert data-testid="schema-config-banner" variant={BANNER_TONE_TO_VARIANT[variant.tone]}>
-      <AlertTitle>{field.label}</AlertTitle>
-      <AlertDescription>{variant.message}</AlertDescription>
-    </Alert>
-  );
-}
 
 function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: string }) {
   const [ready, setReady] = useState<boolean | null>(null);

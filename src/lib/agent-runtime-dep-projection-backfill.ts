@@ -20,11 +20,12 @@ import "server-only";
 //
 // Inert + safe: kill-switchable (`CINATRA_AGENT_RUNTIME_DEP_BACKFILL=off`),
 // idempotent (writes only when the merged projection differs), soft-failing
-// per-template (never aborts boot). ONLY REQUIRED `kind:"agent"` edges are
-// projected into `agent_dependencies` (the readiness gate hard-fails every entry
-// and is requirement-less; optional-agent behavior is a later wave); ALL
-// `kind:"connector"` edges are projected into `connector_dependencies` carrying
-// their requirement.
+// per-template (never aborts boot). `kind:"agent"` edges project into
+// `agent_dependencies` carrying their requirement (REQUIRED as a bare range —
+// the legacy shape; OPTIONAL as `{ range, requirement: "optional" }` so the
+// readiness gate routes it to stop-run-hitl — cinatra#1058, reversing #1056's
+// deferral). ALL `kind:"connector"` edges project into `connector_dependencies`
+// carrying their requirement.
 // ---------------------------------------------------------------------------
 
 import type { ExtensionDependency, VersionConstraint } from "@cinatra-ai/extensions/canonical-types";
@@ -38,20 +39,23 @@ const LIVE_STATUSES = new Set(["active", "locked"]);
 
 export type ConnectorDepValue = { range: string; requirement: "required" | "optional" };
 export type ConnectorDependencyMap = Record<string, string | ConnectorDepValue>;
+export type AgentDepValue = { range: string; requirement: "required" | "optional" };
+export type AgentDependencyMap = Record<string, string | AgentDepValue>;
 
 export type RuntimeDepMaps = {
-  agentDependencies?: Record<string, string>;
+  agentDependencies?: AgentDependencyMap;
   connectorDependencies?: ConnectorDependencyMap;
 };
 
 /**
  * PURE projection. MERGE the canonical edges onto the existing runtime-dep maps
- * — required `kind:"agent"` edges into `agentDependencies` (as a bare range),
- * every `kind:"connector"` edge into `connectorDependencies` (as
- * `{ range, requirement }`). NEVER removes an existing entry, so a template's
- * install-seeded legacy `agentDependencies` survive untouched when the canonical
- * row carries no kinded agent edge. `changed` is true only when the merged
- * result differs from what the template already holds (idempotence).
+ * — `kind:"agent"` edges into `agentDependencies` (REQUIRED as a bare range,
+ * OPTIONAL as `{ range, requirement: "optional" }`), every `kind:"connector"`
+ * edge into `connectorDependencies` (as `{ range, requirement }`). NEVER removes
+ * an existing entry, so a template's install-seeded legacy `agentDependencies`
+ * survive untouched when the canonical row carries no kinded agent edge.
+ * `changed` is true only when the merged result differs from what the template
+ * already holds (idempotence).
  */
 export function projectCanonicalEdgesOntoRuntimeDeps(
   edges: readonly ExtensionDependency[],
@@ -61,11 +65,14 @@ export function projectCanonicalEdgesOntoRuntimeDeps(
   const existingAgent = existing.agentDependencies ?? {};
   const existingConnector = existing.connectorDependencies ?? {};
 
-  const nextAgent: Record<string, string> = { ...existingAgent };
+  const nextAgent: AgentDependencyMap = { ...existingAgent };
   const nextConnector: ConnectorDependencyMap = { ...existingConnector };
   for (const e of edges) {
-    if (e.kind === "agent" && e.requirement === "required") {
-      nextAgent[e.packageName] = toRange(e.versionConstraint);
+    if (e.kind === "agent") {
+      nextAgent[e.packageName] =
+        e.requirement === "optional"
+          ? { range: toRange(e.versionConstraint), requirement: "optional" }
+          : toRange(e.versionConstraint);
     } else if (e.kind === "connector") {
       nextConnector[e.packageName] = {
         range: toRange(e.versionConstraint),

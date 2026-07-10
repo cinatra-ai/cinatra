@@ -13,9 +13,11 @@ import {
   resolveWordPressInstanceAdmin,
 } from "@/lib/connector-client-providers";
 import { getMcpLoggingSettings } from "@/lib/mcp-logging";
+import { Suspense } from "react";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
+import { SearchParamToast } from "@/components/search-param-toast";
 import { SettingsTabNav } from "@/components/settings-tab-nav";
 import { DevelopmentLoggingForm } from "@/app/configuration/development/development-logging-form";
 
@@ -29,14 +31,9 @@ type Props = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-function pickSearchParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 export default async function SettingsTelemetryPage({ searchParams }: Props) {
   const resolved = (await (searchParams ?? Promise.resolve({}))) as Record<string, string | string[] | undefined>;
   const tab = (Array.isArray(resolved.tab) ? resolved.tab[0] : resolved.tab) ?? "logs";
-  const logsCleared = pickSearchParam(resolved.logsCleared) === "1";
 
   const anthropic = getAnthropicLoggingSettings();
   const apollo = getLlmProviderSurface("apollo")?.getLoggingSettings?.() ?? null;
@@ -54,6 +51,11 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        <Suspense fallback={null}>
+          <SearchParamToast
+            toasts={[{ param: "logsCleared", value: "1", message: "All provider log entries were deleted." }]}
+          />
+        </Suspense>
         <SettingsTabNav tabs={TABS} activeTab={tab} />
 
         {tab === "logs" && (
@@ -128,11 +130,6 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
                   : []),
               ]}
             />
-            {logsCleared && (
-              <div className="soft-panel rounded-card px-6 py-4 text-sm text-success">
-                All provider log entries were deleted.
-              </div>
-            )}
           </>
         )}
       </PageContent>
