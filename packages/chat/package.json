@@ -8,6 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./renderer": "./src/renderer/index.ts",
+    "./renderer/ag-ui-reducer": "./src/renderer/ag-ui-reducer.ts",
+    "./renderer/ag-ui-interactive": "./src/renderer/ag-ui-interactive.tsx",
     "./chat-page": "./src/chat-page.tsx",
     "./actions": "./src/actions.ts",
     "./module": "./src/integration/module.ts",
