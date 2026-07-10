@@ -147,7 +147,106 @@ export function snapshotCapabilityProviders(): { capability: string; packageName
   return out;
 }
 
-/** Test/teardown helper — clears all providers. */
+/** Test/teardown helper — clears all providers AND the co-located
+ * signed-activated markers below, so a "reset this registry module" in a test
+ * leaves NO residual state (a stale signed marker outliving a provider reset
+ * could otherwise bleed the fail-closed trust signal across tests). Use
+ * `__resetSignedTrustedRegistry()` for a targeted signed-only reset. */
 export function __resetCapabilityRegistry(): void {
   registry.clear();
+  signedTrustedRegistry.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Signed-activated package registry (engineering#534 S1)
+// ---------------------------------------------------------------------------
+//
+// Per-process record of the runtime-installed packages that reached
+// `trusted-signed` AND SUCCESSFULLY ACTIVATED (registered/bootstrapped) in this
+// process. Co-located HERE — rather than in a standalone module — because its
+// lifecycle is lockstep-coupled to the capability providers above (it is cleared
+// in the SAME `teardownExtensionCapabilities` chokepoint that invalidates a
+// package's providers) and because a standalone module would add a net-new
+// route-reachable first-party module to the baselined dev-perf route-graph
+// (this registry is already in every relevant graph). Its own namespaced
+// `Symbol.for(...)` singleton keeps it independent of the provider Map.
+//
+// WHY IT EXISTS. The widget-auth owner resolver (`widget-auth-provider.ts`)
+// must, for a MARKETPLACE-installed connector, confirm the runtime owner
+// currently classifies `trusted-signed` before it may own a credential store —
+// a `trusted-bootstrap`/`untrusted` package can never own one (the same bar the
+// install pipeline enforces for the auto-approve of a capability-ownership
+// grant). The two consuming surfaces (`/api/connect/token`,
+// `/api/webhooks/wordpress`) are UNAUTHENTICATED, server-to-server, and carry NO
+// actor/org context, so the actor-scoped runtime trust gate cannot serve them.
+// The only authoritative `trusted-signed` verdict for a runtime-installed
+// package is produced by the `runtime-package-loader` at activation; this
+// registry PUBLISHES that verdict for actor-free request-time lookup.
+//
+// TRUST CONTRACT (codex-converged, engineering#534 S1):
+//   - A package is marked ONLY after the loader SUCCESSFULLY activated it
+//     (registered/bootstrapped, no failed result) with a `trusted-signed`
+//     verdict. The loader's pre-activation `signedTrustedNames` alone is NOT
+//     sufficient: a package can classify signed then FAIL at bootstrap, so
+//     publishing before final activation success would let a partially-failed
+//     provider satisfy this credential-store trust boundary.
+//   - The marker is CLEARED in the SAME teardown chokepoint that removes a
+//     package's capability providers, so an archived/uninstalled/re-activated
+//     package's stale signed marker never outlives its live providers.
+//   - Reads FAIL CLOSED: an unmarked package is NOT trusted-signed (false), so a
+//     missing/lost marker denies ownership rather than granting it.
+//
+// IDENTITY BASIS. mark / clear / isPackageSignedActivated key on the raw
+// `packageName` string — the SAME host-injected canonical package name the
+// provider Map above is keyed by (the loader's activation-result packageName, the
+// teardown chokepoint's packageName, and the grant row's package_name all derive
+// from that one materialized-manifest identity). Consistency across the three
+// call-sites is what makes the fail-closed check exact; a divergent normalization
+// at any site would fail closed on read or leave a stale marker on clear.
+
+const SIGNED_TRUSTED_REGISTRY_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-signed-trusted-registry/v1",
+);
+type SignedTrustedRegistryHolder = {
+  [SIGNED_TRUSTED_REGISTRY_KEY]?: Set<string>;
+};
+const _signedHolder = globalThis as unknown as SignedTrustedRegistryHolder;
+const signedTrustedRegistry: Set<string> =
+  _signedHolder[SIGNED_TRUSTED_REGISTRY_KEY] ??
+  (_signedHolder[SIGNED_TRUSTED_REGISTRY_KEY] = new Set<string>());
+
+/**
+ * Mark a package as having SUCCESSFULLY activated at the `trusted-signed` tier.
+ * Called by the runtime-package-loader ONLY for a package whose activation
+ * succeeded (registered/bootstrapped, no failure) and whose trust verdict was
+ * `trusted-signed` — never from the pre-activation classification alone.
+ */
+export function markPackageSignedActivated(packageName: string): void {
+  if (packageName) signedTrustedRegistry.add(packageName);
+}
+
+/**
+ * Clear a package's signed-activated marker. Wired into the capability-teardown
+ * chokepoint (`teardownExtensionCapabilities`), so it fires on every retire path
+ * (archive / uninstall / force-delete / purge) and the defensive pre-reactivate
+ * teardown — keeping the marker's lifecycle identical to the capability
+ * providers it guards.
+ */
+export function clearPackageSignedActivated(packageName: string): void {
+  signedTrustedRegistry.delete(packageName);
+}
+
+/**
+ * Whether a package is CURRENTLY a successfully-activated `trusted-signed`
+ * runtime package. Fail-closed: an unmarked package returns false. The widget-
+ * auth owner resolver's runtime arm requires this before a marketplace-installed
+ * connector may own the credential store.
+ */
+export function isPackageSignedActivated(packageName: string): boolean {
+  return signedTrustedRegistry.has(packageName);
+}
+
+/** Test/teardown helper — clears every signed-activated marker. */
+export function __resetSignedTrustedRegistry(): void {
+  signedTrustedRegistry.clear();
 }

@@ -60,8 +60,8 @@ function clientIp(request: Request): string {
 // `@cinatra-ai/host:wordpress-widget-auth` capability, resolved lazily. A
 // missing connector THROWS here (surfaced as a generic invalid_grant by the
 // handler's existing try/catch — never a silently-minted or empty secret).
-function resolveWebhookSecret(): string {
-  const store = requireWordPressWidgetAuth();
+async function resolveWebhookSecret(): Promise<string> {
+  const store = await requireWordPressWidgetAuth();
   const existing = store.read();
   if (existing?.webhookSecret) return existing.webhookSecret;
   return store.generate().webhookSecret;
@@ -115,7 +115,7 @@ export async function POST(request: Request): Promise<Response> {
         client,
         redirectUri,
         codeVerifier,
-        webhookSecret: resolveWebhookSecret(),
+        webhookSecret: await resolveWebhookSecret(),
         tokenBrokerAvailable: tokenBrokerAvailable(),
         webhookContract,
       });
@@ -161,7 +161,7 @@ export async function POST(request: Request): Promise<Response> {
       result = await exchangeInstallCode({
         installCode,
         client,
-        webhookSecret: resolveWebhookSecret(),
+        webhookSecret: await resolveWebhookSecret(),
         tokenBrokerAvailable: tokenBrokerAvailable(),
         webhookContract,
       });

@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   // missing connector THROWS (a logged 500) rather than silently accepting an
   // unverifiable webhook. A resolved-but-unconfigured store (no creds minted)
   // keeps its historical 400 "not configured" behavior.
-  const config = requireWordPressWidgetAuth().read();
+  const config = (await requireWordPressWidgetAuth()).read();
   if (!config) {
     return Response.json(
       { error: "WordPress widget integration not configured. Generate credentials at /connectors/cinatra-ai/wordpress-assistant-connector/setup first." },
