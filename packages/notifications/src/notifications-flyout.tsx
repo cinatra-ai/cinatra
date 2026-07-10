@@ -755,7 +755,7 @@ function NotificationRow({
 // Agent post-install "needs configuration" row (cinatra #1057 ruling (c)).
 //
 // One entry per affected agent. The title is the ruling copy
-// "Set up connections for agent <displayName>"; the body is the list of each
+// `Set up connections for "<displayName>":`; the body is the list of each
 // required connector's human-readable displayName linking to that connector's
 // setup page (never the bare package id). Rendered in the design system's
 // Needs-review status colours — the mustard tint (`bg-warning/10`) over the
@@ -766,7 +766,7 @@ function NotificationRow({
 // interaction — it clears only when the agent becomes runnable, at which point
 // the server reconciler deletes it.
 // ---------------------------------------------------------------------------
-function ConfigurationNeedsRow({
+export function ConfigurationNeedsRow({
   notification,
   connectors,
   onCloseFlyout,

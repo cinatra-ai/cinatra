@@ -106,6 +106,12 @@ const PUBLIC_EXACT_PATHS = [
 // contract as its siblings (the real AgentAllCard mounted with an injected
 // detail loader; no DB, no user data). Its Playwright guard runs in the same
 // production-standalone design-visual-verify harness.
+// "/design-fixtures/notification-config-needs" (cinatra#1057): the bell flyout
+// needs-configuration row — same static, dataless render contract as its
+// siblings (the real ConfigurationNeedsRow mounted with an in-memory
+// notification whose title is produced by the real server-side builder; no DB,
+// no session, no user data). Kept OFF the pixel-diffed /design-fixtures index
+// so the committed baselines there stay untouched.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -113,6 +119,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/conformance/seeded",
   "/design-fixtures/conformance/seed",
   "/design-fixtures/agents-card",
+  "/design-fixtures/notification-config-needs",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

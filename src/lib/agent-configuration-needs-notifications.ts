@@ -7,7 +7,7 @@ import "server-only";
 // behaviour. The Extensions-page card renders the greyed archived treatment +
 // the needs-review strip (the on-page half); the run gate blocks execution (the
 // enforcement half); this module keeps the BELL flyout in sync with the SAME
-// derivation so the operator sees "Set up connections for agent <name>" the
+// derivation so the operator sees `Set up connections for "<name>":` the
 // moment an installed agent is gated on an unconfigured required connector, and
 // the entry DISAPPEARS the moment the agent becomes runnable.
 //
@@ -82,7 +82,8 @@ function configurationNeedsBody(agent: GatedAgent): string {
 
 /**
  * PURE: build the notification input for one gated agent. Title is the ruling
- * (c) copy `Set up connections for agent <displayName>`; the connector links
+ * (c) copy `Set up connections for "<displayName>":` (the human-readable agent
+ * name in quotation marks, followed by a colon); the connector links
  * ride in `metadata.configurationNeeds` (rendered by the flyout row); `warning`
  * kind puts it in the Unread tab + bell badge as an actionable reminder.
  */
@@ -90,7 +91,7 @@ export function buildConfigurationNeedsNotificationInput(
   agent: GatedAgent,
 ): NotificationInput {
   return {
-    title: `Set up connections for agent ${agent.agentDisplayName}`,
+    title: `Set up connections for "${agent.agentDisplayName}":`,
     body: configurationNeedsBody(agent),
     kind: "warning",
     dedupeKey: configurationNeedsDedupeKey(agent.agentPackageName),

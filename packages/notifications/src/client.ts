@@ -26,4 +26,7 @@ export type {
 export {
   NotificationsProvider,
   NotificationsBellTrigger,
+  // Exported for the design-fixtures render surface (the bell config-needs row
+  // in isolation); the app itself renders it via the flyout tree.
+  ConfigurationNeedsRow,
 } from "./notifications-flyout";

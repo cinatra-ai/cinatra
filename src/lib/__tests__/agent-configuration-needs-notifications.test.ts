@@ -54,11 +54,11 @@ function existingEntry(agent: GatedAgent, id = agent.agentPackageName): AppNotif
 }
 
 describe("buildConfigurationNeedsNotificationInput — ruling (c) copy + links", () => {
-  it("titles the entry 'Set up connections for agent <displayName>'", () => {
+  it('titles the entry `Set up connections for "<displayName>":`', () => {
     const input = buildConfigurationNeedsNotificationInput(
       gated("@cinatra-ai/sales-agent", "Sales Agent", ["@cinatra-ai/apollo-connector"]),
     );
-    expect(input.title).toBe("Set up connections for agent Sales Agent");
+    expect(input.title).toBe('Set up connections for "Sales Agent":');
     expect(input.kind).toBe("warning");
   });
 
@@ -116,7 +116,7 @@ describe("reconcileConfigurationNeedsNotifications — entry lifecycle", () => {
       });
     expect(toClearDedupeKeys).toEqual([]);
     expect(toCreateInputs).toHaveLength(1);
-    expect(toCreateInputs[0]!.title).toBe("Set up connections for agent Sales Agent");
+    expect(toCreateInputs[0]!.title).toBe('Set up connections for "Sales Agent":');
   });
 
   it("STAYS: a gated agent that already has a matching entry → no-op", () => {

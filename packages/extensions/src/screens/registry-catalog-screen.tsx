@@ -137,7 +137,7 @@ export async function RegistryCatalogScreen({
     return {} as Record<string, never>;
   });
 
-  // Reconcile the bell flyout's "Set up connections for agent <name>" entries
+  // Reconcile the bell flyout's `Set up connections for "<name>":` entries
   // (cinatra #1057 ruling (c)) from the SAME per-connector derivation that
   // drives the card strip above, so the bell and the card can never disagree:
   // one entry per gated agent, created on install-completion / when an agent

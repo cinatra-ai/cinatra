@@ -474,7 +474,7 @@ describe("configuration-needs entry — metadata predicate + extractor", () => {
   ): AppNotification {
     return notification("cn-1", {
       kind: "warning",
-      title: "Set up connections for agent Sales Agent",
+      title: 'Set up connections for "Sales Agent":',
       metadata: {
         category: AGENT_CONFIGURATION_NEEDS_CATEGORY,
         configurationNeeds: {
