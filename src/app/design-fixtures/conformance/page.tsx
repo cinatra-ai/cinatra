@@ -10,6 +10,7 @@ import { buildConfigurationNeedsNotificationInput } from "@/lib/agent-configurat
 
 import { ConformanceCardFixtures } from "./card-fixtures";
 import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixture";
+import { ConnectorSetupConformanceFixture } from "./connector-setup-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -130,6 +131,17 @@ export default function ConformanceHarnessPage() {
               createdAt={new Date("2026-07-10T09:00:00.000Z").toISOString()}
               connectors={BELL_CONFIG_NEEDS_CONNECTORS}
             />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Connector setup — tabbed schema-config (surface: connector-setup-tabbed)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ConnectorSetupConformanceFixture />
           </CardContent>
         </Card>
       </PageContent>
