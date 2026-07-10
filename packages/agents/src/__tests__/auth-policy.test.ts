@@ -11,6 +11,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as authz from "@/lib/authz";
 import type { Permission } from "@/lib/authz";
 
+// enforceRunAccess derives the actor's role in the run's org via
+// resolveOrgRoleForUser (admin-parity P4, cinatra#1129) before the kernel probe.
+// Mock @/lib/auth-session so the derivation returns a controllable value
+// (default undefined = no org role) instead of hitting the DB. getAuthSession /
+// isPlatformAdmin are only used by actorContextFromMcpRequest (not exercised here).
+const authSessionMock = vi.hoisted(() => ({
+  getAuthSession: vi.fn(async (): Promise<unknown> => null),
+  isPlatformAdmin: vi.fn(() => false),
+  resolveOrgRoleForUser: vi.fn(
+    async (): Promise<"org_owner" | "org_admin" | "member" | undefined> => undefined,
+  ),
+}));
+vi.mock("@/lib/auth-session", () => authSessionMock);
+
 import {
   DEFAULT_AGENT_AUTH_POLICY,
   AgentAuthPolicySchema,
@@ -563,6 +577,61 @@ describe("enforceRunAccess (admin override, no can() mock)", () => {
       ),
     ).rejects.toThrow();
   });
+
+  it("H7: org admin of the run's org READS an admin-tier run via derived orgRole (admin-parity P4)", async () => {
+    // The caller declares the actor's active org (actorOrganizationId === run
+    // org), so enforceRunAccess derives the actor's role in the run's org
+    // (resolveOrgRoleForUser → org_admin); the kernel grants run.read (org role,
+    // same org) and the owner-aware "admin" visibility tier admits the org
+    // admin. Proves the derivation + owner-aware tier end-to-end.
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValueOnce("org_admin");
+    await expect(
+      enforceRunAccess(
+        {
+          id: "r1",
+          runBy: "u1",
+          orgId: "o1",
+          effectivePolicy: {
+            runListVisibility: ["admin"],
+            runDataVisibility: ["admin"],
+            runExecuteVisibility: ["admin"],
+            allowRunSharing: false,
+          },
+        },
+        { actorType: "human", userId: "u2", source: "ui" },
+        "read",
+        { platformRole: "member", actorOrganizationId: "o1" },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("H8: derivation does NOT fire cross-active-org — a run in a different org than the actor's active org stays denied (admin-parity P4 safety guard)", async () => {
+    // actorOrganizationId ('oB') !== run.orgId ('o1'): even though the user is an
+    // org_admin of o1, the derivation is skipped (they are acting in oB), so the
+    // kernel cross-org guard denies. Guards against the multi-org over-grant.
+    // Clear the call history from prior H-tests so the not-called assertion
+    // reflects THIS call only (the describe has no beforeEach mock reset).
+    authSessionMock.resolveOrgRoleForUser.mockClear();
+    await expect(
+      enforceRunAccess(
+        {
+          id: "r1",
+          runBy: "u1",
+          orgId: "o1",
+          effectivePolicy: {
+            runListVisibility: ["admin"],
+            runDataVisibility: ["admin"],
+            runExecuteVisibility: ["admin"],
+            allowRunSharing: false,
+          },
+        },
+        { actorType: "human", userId: "u2", source: "ui" },
+        "read",
+        { platformRole: "member", actorOrganizationId: "oB" },
+      ),
+    ).rejects.toThrow();
+    expect(authSessionMock.resolveOrgRoleForUser).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -714,7 +783,7 @@ describe("policyAllows — widened actor-scope branches", () => {
       expect(allowed).toBe(true);
     });
 
-    it("\"admin\" denies non-admin (only platformRole platform_admin bypasses)", () => {
+    it("\"admin\" denies a plain member (platform_admin / org admin required)", () => {
       const allowed = policyAllows(
         policyOf("admin"),
         "read",
@@ -723,14 +792,91 @@ describe("policyAllows — widened actor-scope branches", () => {
       expect(allowed).toBe(false);
     });
   });
+
+  // admin-parity P4 (cinatra#1129): the run-path "admin" tier is now
+  // OWNER-AWARE — it converges with the extension evaluator's owner-aware
+  // "admin" tier (hasAdminStandingOverExtension). policyAllows runs AFTER the
+  // kernel can() cross-org guard, so an org_admin/org_owner reaching the token
+  // is an admin of the run's org.
+  describe("admin tier — owner-aware (admin-parity P4)", () => {
+    it("admits an org_admin (was platform-admin-only before P4 — the pin flips)", () => {
+      expect(
+        policyAllows(policyOf("admin"), "read", buildActor({ orgRole: "org_admin" })),
+      ).toBe(true);
+    });
+
+    it("admits an org_owner", () => {
+      expect(
+        policyAllows(policyOf("admin"), "read", buildActor({ orgRole: "org_owner" })),
+      ).toBe(true);
+    });
+
+    it("admits an org_admin for list + editOutput + share (non-execute tiers)", () => {
+      const p = policyOf("admin");
+      const admin = () => buildActor({ orgRole: "org_admin" });
+      expect(policyAllows({ ...p, allowRunSharing: true }, "list", admin())).toBe(true);
+      expect(policyAllows(p, "editOutput", admin())).toBe(true);
+      expect(policyAllows({ ...p, allowRunSharing: true }, "share", admin())).toBe(true);
+    });
+
+    it("still denies a plain org member", () => {
+      expect(
+        policyAllows(policyOf("admin"), "read", buildActor({ orgRole: "member" })),
+      ).toBe(false);
+    });
+
+    it("H4: does NOT widen execute-tier ops to an org admin (execute stays out of policyAllows)", () => {
+      // member has run.resume and org_admin inherits member, so a same-org org
+      // admin PASSES the kernel gate for execute and reaches policyAllows. The
+      // "admin" tier must refuse to widen the execute-tier field to them —
+      // admin execute-widening lives in the kernel DIRECT_GRANTS, not here.
+      const p = policyOf("admin");
+      for (const op of ["execute", "approveHitl", "respondToHitl", "cancel"] as const) {
+        expect(policyAllows(p, op, buildActor({ orgRole: "org_admin" }))).toBe(false);
+        expect(policyAllows(p, op, buildActor({ orgRole: "org_owner" }))).toBe(false);
+      }
+    });
+
+    it("platform_admin is still admitted (short-circuited before the token)", () => {
+      expect(
+        policyAllows(
+          policyOf("admin"),
+          "read",
+          buildActor({ platformRole: "platform_admin", orgRole: "member" }),
+        ),
+      ).toBe(true);
+    });
+
+    it("admin token in a union admits an org_admin via the admin token itself", () => {
+      const p: AgentAuthPolicy = {
+        runListVisibility: ["admin", `team:${TEAM_A}`] as [
+          AgentAuthPolicyVisibility,
+          ...AgentAuthPolicyVisibility[],
+        ],
+        runDataVisibility: ["admin", `team:${TEAM_A}`] as [
+          AgentAuthPolicyVisibility,
+          ...AgentAuthPolicyVisibility[],
+        ],
+        runExecuteVisibility: ["admin", `team:${TEAM_A}`] as [
+          AgentAuthPolicyVisibility,
+          ...AgentAuthPolicyVisibility[],
+        ],
+        allowRunSharing: false,
+      };
+      // org_admin with NO team membership is admitted purely via the admin token
+      expect(
+        policyAllows(p, "read", buildActor({ orgRole: "org_admin", teamIds: [] })),
+      ).toBe(true);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Multi-scope W2 — any-match run matcher. Each field is a NON-EMPTY token
 // array (a union of grants); policyAllows admits iff SOME token admits the
 // actor. platform_admin bypasses before any token is consulted; the run-path
-// "admin" tier is platform-admin-only (NOT a positive grant for a plain
-// member).
+// "admin" tier is OWNER-AWARE (admin-parity P4) — it admits platform_admin OR
+// an org admin/owner of the run's org, but NOT a plain member.
 // ---------------------------------------------------------------------------
 describe("policyAllows — any-match token arrays (multi-scope W2)", () => {
   const anyOf = (...tokens: AgentAuthPolicyVisibility[]): AgentAuthPolicy => {
@@ -761,11 +907,12 @@ describe("policyAllows — any-match token arrays (multi-scope W2)", () => {
     expect(policyAllows(p, "list", buildActor({ teamIds: [TEAM_A] }))).toBe(true);
   });
 
-  it("run-path admin is not a positive grant for a non-admin, but the union's other tokens still admit", () => {
+  it("run-path admin is not a positive grant for a plain member, but the union's other tokens still admit", () => {
     const p = anyOf("admin", `team:${TEAM_A}`);
-    // admitted via team:A (NOT via admin)
+    // plain member (default orgRole="member") admitted via team:A (NOT via admin)
     expect(policyAllows(p, "read", buildActor({ teamIds: [TEAM_A] }))).toBe(true);
-    // neither admin (non platform_admin) nor team:A matches
+    // plain member matching neither admin (owner-aware, needs org_admin/owner)
+    // nor team:A
     expect(policyAllows(p, "read", buildActor({ teamIds: [TEAM_B] }))).toBe(false);
     // platform_admin still bypasses before tokens are consulted
     expect(

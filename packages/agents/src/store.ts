@@ -41,7 +41,7 @@ import type { ExtensionOrigin, ConnectorDependencyMap } from "./schema";
 // agent_templates.agent_auth_policy and (per-run override) agent_runs.auth_policy.
 // enforceRunAccess is the policy enforcer; PrimitiveActorContext is the actor
 // envelope every MCP / route call site already constructs.
-import type { AgentAuthPolicy, ActorRoleHints } from "./auth-policy";
+import type { AgentAuthPolicy, ActorRoleHints, AgentTemplateVisibilityOptions } from "./auth-policy";
 import {
   enforceRunAccess,
   DEFAULT_AGENT_AUTH_POLICY,
@@ -640,7 +640,7 @@ export function slugifyAgentTemplateName(value: string): string {
 
 export async function readAgentTemplateBySlug(
   slug: string,
-  options?: { actorUserId?: string | null; includeNonPublished?: boolean },
+  options?: AgentTemplateVisibilityOptions,
 ): Promise<AgentTemplateRecord | null> {
   const normalized = slug.trim().toLowerCase();
   if (!normalized) return null;
@@ -697,12 +697,23 @@ export async function readAgentTemplateBySlug(
 
 function applyAgentTemplateVisibility(
   record: AgentTemplateRecord,
-  options?: { actorUserId?: string | null; includeNonPublished?: boolean },
+  options?: AgentTemplateVisibilityOptions,
 ): AgentTemplateRecord | null {
   // Published templates are visible to everyone.
   if (record.status === "published") return record;
   // Non-published (draft/archived) require an explicit opt-in.
   if (!options?.includeNonPublished) return null;
+  // Admin standing over the template's org (admin-parity P4, cinatra#1129):
+  // platform_admin sees every non-published template; an org admin/owner of the
+  // OWNING org sees its org's (org-id MATCH keeps a different-org admin out).
+  if (options?.actorPlatformRole === "platform_admin") return record;
+  if (
+    record.orgId &&
+    options?.actorOrganizationId === record.orgId &&
+    (options?.actorOrgRole === "org_admin" || options?.actorOrgRole === "org_owner")
+  ) {
+    return record;
+  }
   // Creator-owned: only visible to the creator.
   if (record.creatorId) {
     return options?.actorUserId && record.creatorId === options.actorUserId ? record : null;
@@ -2293,6 +2304,12 @@ export async function updateAgentRunAuthPolicy(
     .set({ authPolicy: policy ? JSON.stringify(policy) : null })
     .where(eq(agentRuns.id, id));
 }
+
+// `updateAgentTemplateAuthPolicy` (admin-parity P4 dual-write, cinatra#1129) is
+// a vertical-slice extraction into ./store-agent-template-policy to keep this
+// hub under the file-size ratchet ceiling; re-exported here so
+// `@cinatra-ai/agents/store` consumers are unchanged.
+export { updateAgentTemplateAuthPolicy } from "./store-agent-template-policy";
 
 // ---------------------------------------------------------------------------
 // run_co_owners DAO. addRunCoOwner uses ON CONFLICT DO NOTHING
