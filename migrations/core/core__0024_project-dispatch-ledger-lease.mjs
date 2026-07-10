@@ -1,4 +1,4 @@
-// core__0023 — dynamic-dispatch primitive storage (cinatra#1032 deliverable 2).
+// core__0024 — dynamic-dispatch primitive storage (cinatra#1032 deliverable 2).
 //
 // Adds the two tables the project dynamic-dispatch primitive persists to:
 //
@@ -73,7 +73,7 @@ export function up(pgm) {
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
   // Reversible: both tables are fresh #1032 additions, so down() restores the
-  // exact pre-0023 shape on any lineage (indexes ride the table drops, listed
+  // exact pre-0024 shape on any lineage (indexes ride the table drops, listed
   // explicitly for symmetry with up()).
   pgm.sql(`DROP INDEX IF EXISTS project_dispatch_attempts_item_action_uniq;`);
   pgm.sql(`DROP INDEX IF EXISTS project_dispatch_attempts_project_idx;`);

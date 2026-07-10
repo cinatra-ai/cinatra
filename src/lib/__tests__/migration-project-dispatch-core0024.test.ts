@@ -1,5 +1,5 @@
 // Contract test for the dynamic-dispatch primitive storage migration
-// (migrations/core/core__0023_project-dispatch-ledger-lease.mjs, cinatra#1032
+// (migrations/core/core__0024_project-dispatch-ledger-lease.mjs, cinatra#1032
 // deliverable 2).
 //
 // The migration module is imported by RELATIVE PATH so the real SQL is
@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { up, down } from "../../../migrations/core/core__0023_project-dispatch-ledger-lease.mjs";
+import { up, down } from "../../../migrations/core/core__0024_project-dispatch-ledger-lease.mjs";
 import { projectDispatchSchemaQueries } from "@/lib/extension-grant-schema";
 
 function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
@@ -28,7 +28,7 @@ const upJoined = collectSql(up as (b: { sql: (s: string) => void }) => void)
   .join("\n")
   .toLowerCase();
 
-describe("core__0023 up()", () => {
+describe("core__0024 up()", () => {
   it("creates the dispatch-attempt ledger table idempotently", () => {
     expect(upJoined).toContain("create table if not exists project_dispatch_attempts");
     for (const col of [
@@ -80,7 +80,7 @@ describe("core__0023 up()", () => {
   });
 });
 
-describe("core__0023 down()", () => {
+describe("core__0024 down()", () => {
   const stmts = collectSql(down as (b: { sql: (s: string) => void }) => void);
   const joined = stmts.join("\n").toLowerCase();
 
@@ -137,13 +137,13 @@ describe("bootstrap-DDL parity (projectDispatchSchemaQueries)", () => {
 });
 
 describe("migrations/manifest.json entry", () => {
-  it("ships the appended, non-destructive 0023 entry naming both tables", () => {
+  it("ships the appended, non-destructive 0024 entry naming both tables", () => {
     const manifest = JSON.parse(readFileSync("migrations/manifest.json", "utf-8")) as {
       migrations: Array<{ seq: string; file: string; destructive: boolean; tables: string[] }>;
     };
-    const entry = manifest.migrations.find((m) => m.seq === "0023");
+    const entry = manifest.migrations.find((m) => m.seq === "0024");
     expect(entry).toBeTruthy();
-    expect(entry?.file).toBe("core/core__0023_project-dispatch-ledger-lease.mjs");
+    expect(entry?.file).toBe("core/core__0024_project-dispatch-ledger-lease.mjs");
     expect(entry?.destructive).toBe(false);
     expect(entry?.tables).toEqual(["project_dispatch_attempts", "project_leases"]);
   });

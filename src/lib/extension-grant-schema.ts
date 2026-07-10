@@ -20,7 +20,7 @@
 //     ships with migrations/core/core__0022 — see that function's own note).
 //   - projectDispatchSchemaQueries — the cinatra#1032 dynamic-dispatch
 //     primitive's dispatch-attempt ledger + project lease (NET-NEW tables;
-//     additive, ships with migrations/core/core__0023 per the core__0007
+//     additive, ships with migrations/core/core__0024 per the core__0007
 //     keep-paths-aligned precedent).
 
 /** DDL for the admin-approved `extension_capability_ownership_grant` table +
@@ -165,7 +165,7 @@ export function versionIdentitySchemaQueries(schemaName: string): { text: string
 
 // ---------------------------------------------------------------------------
 // Dynamic-dispatch primitive storage (cinatra#1032 deliverable 2).
-// Two brand-new ADDITIVE tables (companion migration core__0023 ships the same
+// Two brand-new ADDITIVE tables (companion migration core__0024 ships the same
 // DDL for the operator-upgrade path per the core__0007 precedent; the Drizzle
 // mirrors live in packages/agents/src/schema.ts):
 //   project_dispatch_attempts — the dispatch-attempt LEDGER: one row per

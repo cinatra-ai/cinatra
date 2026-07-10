@@ -1221,7 +1221,7 @@ END $$` },
     // project_dispatch_attempts + project_leases: the dynamic-dispatch
     // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
     // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
-    // (src/lib/extension-grant-schema.ts); companion migration core__0023.
+    // (src/lib/extension-grant-schema.ts); companion migration core__0024.
     ...projectDispatchSchemaQueries(schemaName),
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
