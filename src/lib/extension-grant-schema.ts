@@ -1,15 +1,23 @@
-// Bootstrap DDL for the capability-ownership grant table — a pure string builder
-// with ZERO imports (a synchronous leaf, safe for `drizzle-store.ts`'s
-// synchronous `require()` composition; see the postgres-sync-leaf-imports test).
+// Extracted bootstrap-DDL string leaves for `drizzle-store.ts`.
 //
-// The DDL is spread into `buildCreateStoreSchemaQueries` so a fresh DB provisions
-// the table (per migrations/README.md); it lives here rather than inline because
-// drizzle-store.ts is a baselined file-size-ratchet bottleneck at its ceiling.
-// This is a NET-NEW table (additive), so no migration artifact is required — the
-// schema-migration gate only demands one for DESTRUCTIVE changes to existing
-// tables. The SIBLING host-port grant DDL deliberately stays inline in
-// drizzle-store.ts (moving pre-existing table DDL out would read as a destructive
-// drop to that gate).
+// This module is a small collection of pure string builders with ZERO imports
+// (a synchronous leaf, safe for `drizzle-store.ts`'s synchronous `require()`
+// composition; see the postgres-sync-leaf-imports test). Each exported function
+// returns DDL `{ text }[]` spread into `buildCreateStoreSchemaQueries` so a fresh
+// DB provisions the shape (per migrations/README.md). The DDL lives HERE rather
+// than inline because drizzle-store.ts is a baselined file-size-ratchet
+// bottleneck at its ceiling — AND because keeping every such leaf in ONE already
+// route-graph-counted module (rather than one file per concern) keeps the locked
+// routes' reachable first-party graph UNCHANGED (no new node per DDL extraction).
+// The file name is retained (not renamed) so the `**/extension-*grant*`
+// high-risk-path glob keeps covering the grant DDL below.
+//
+// Contents:
+//   - capabilityOwnershipGrantSchemaQueries — the S0 capability-ownership grant
+//     table + anti-squat indexes (a NET-NEW table; additive, no migration).
+//   - versionIdentitySchemaQueries — the cinatra#1040 S1 version-identity
+//     evolution of installed_extension + extension_install_ops (transformational;
+//     ships with migrations/core/core__0022 — see that function's own note).
 
 /** DDL for the admin-approved `extension_capability_ownership_grant` table +
  * its anti-squat partial unique indexes. Spread into
@@ -65,5 +73,88 @@ export function capabilityOwnershipGrantSchemaQueries(schemaName: string): { tex
             CHECK (status IN ('pending', 'approved', 'revoked'));
         END IF;
       END $$;` },
+  ];
+}
+
+/**
+ * DDL for the version-identity evolution of `installed_extension` and
+ * `extension_install_ops` (cinatra#1040 S1). Spread into
+ * `buildCreateStoreSchemaQueries` AFTER both tables' CREATE statements (every
+ * statement references its table by name).
+ *
+ * This bootstrap mirrors migration `migrations/core/core__0022_extension-version-identity.mjs`
+ * idempotently: a FRESH database is born at the target shape (and ledger-fakes
+ * the migration chain), and an UPGRADED database converges through this pass
+ * before the runner executes 0022 as a no-op. Every statement is IF [NOT] EXISTS
+ * / guarded, so re-running on any lineage is a no-op. The change is
+ * transformational (a NOT NULL column + new unique indexes over tables that
+ * already hold rows), so it ALSO ships the core__0022 runner module + its
+ * manifest entry — the schema-migration / upgrade-proof gates' required artifact.
+ */
+export function versionIdentitySchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier-position quote
+  return [
+    // -------------------------------------------------------------------------
+    // installed_extension — VERSION becomes part of the storage identity, and
+    // is_default marks the one version that owns the package's unversioned
+    // global name (cinatra#1040 S1).
+    // -------------------------------------------------------------------------
+    // version: additive nullable first (safe on a populated table), backfilled
+    // from the source's own version, then constrained NOT NULL. verdaccio /
+    // bundled sources carry `source.version`; github / local sources carry NONE
+    // — the COALESCE floor '0.0.0' for those is LOAD-BEARING (a NULL version
+    // could never satisfy the NOT NULL identity column).
+    { text: `ALTER TABLE "${q}"."installed_extension" ADD COLUMN IF NOT EXISTS version text` },
+    { text: `UPDATE "${q}"."installed_extension" SET version = COALESCE(source->>'version', '0.0.0') WHERE version IS NULL` },
+    { text: `ALTER TABLE "${q}"."installed_extension" ALTER COLUMN version SET NOT NULL` },
+    // is_default: NOT NULL DEFAULT true self-backfills every existing row to the
+    // default (each is the sole row for its identity today — see the one-default
+    // index note below), so no separate backfill statement is needed.
+    { text: `ALTER TABLE "${q}"."installed_extension" ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT true` },
+    // Identity now includes version: drop the pre-#1040 identity indexes (keyed
+    // on org/owner/package WITHOUT version) and recreate them WITH version under
+    // new names (a same-name CREATE IF NOT EXISTS would skip the rebuild on an
+    // upgraded DB that still carries the old-shape index).
+    { text: `DROP INDEX IF EXISTS "${q}".installed_extension_identity_org_idx` },
+    { text: `DROP INDEX IF EXISTS "${q}".installed_extension_identity_platform_idx` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_org_v_idx
+  ON "${q}"."installed_extension"
+    (organization_id, owner_level, owner_id, package_name, version)
+  WHERE organization_id IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_platform_v_idx
+  ON "${q}"."installed_extension"
+    (owner_level, owner_id, package_name, version)
+  WHERE organization_id IS NULL` },
+    // ONE DEFAULT PER (org, owner, package): at most one is_default row per
+    // identity-minus-version. SAFE to build on existing data because the
+    // pre-#1040 identity indexes were unique on (org, owner, package) WITHOUT
+    // version, so every existing row is the SOLE row for its identity and its
+    // self-backfilled is_default=true can never collide. Postgres treats NULLs
+    // as distinct under a plain unique, so the org-NULL scope needs its own twin.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_one_default_org_idx
+  ON "${q}"."installed_extension"
+    (organization_id, owner_level, owner_id, package_name)
+  WHERE is_default AND organization_id IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_one_default_platform_idx
+  ON "${q}"."installed_extension"
+    (owner_level, owner_id, package_name)
+  WHERE is_default AND organization_id IS NULL` },
+    // -------------------------------------------------------------------------
+    // extension_install_ops — re-key the append-only finalized-anchor
+    // uniqueness (cinatra#158 / core__0005) to include version (cinatra#1040 S1),
+    // so one finalized op is the anchor PER (package, org, version).
+    // -------------------------------------------------------------------------
+    // NOT NULL DEFAULT '0.0.0' (no source column to derive from). A NULLABLE
+    // version would be a correctness trap: SQL treats NULLs as distinct under a
+    // unique index, so two NULL-version finalized rows for one scope would BOTH
+    // be admitted — defeating the single-anchor invariant. The '0.0.0' floor
+    // preserves it and matches the installed_extension floor.
+    { text: `ALTER TABLE "${q}"."extension_install_ops" ADD COLUMN IF NOT EXISTS version text NOT NULL DEFAULT '0.0.0'` },
+    { text: `DROP INDEX IF EXISTS "${q}".extension_install_ops_one_finalized` },
+    { text: `DROP INDEX IF EXISTS "${q}".extension_install_ops_one_finalized_global` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_v
+  ON "${q}"."extension_install_ops" (package_name, org_id, version) WHERE phase = 'finalized'` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_v_global
+  ON "${q}"."extension_install_ops" (package_name, version) WHERE phase = 'finalized' AND org_id IS NULL` },
   ];
 }

@@ -39,7 +39,7 @@ const LIVE_STATUSES = new Set(["active", "locked"]);
 /** The minimal install-row + actor fields the pick needs (DI-friendly). */
 export type InstallRowForPick = Pick<
   InstalledExtension,
-  "id" | "status" | "organizationId" | "ownerId" | "ownerLevel"
+  "id" | "status" | "organizationId" | "ownerId" | "ownerLevel" | "isDefault"
 >;
 
 export type ActorScopeForPick = {

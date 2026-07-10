@@ -7,7 +7,10 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
-import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
+import {
+  capabilityOwnershipGrantSchemaQueries,
+  versionIdentitySchemaQueries,
+} from "@/lib/extension-grant-schema";
 
 type QueryInput = {
   text: string;
@@ -619,13 +622,11 @@ END $$` },
     { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_org_uniq` },
     { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_global_uniq` },
     // The TRUST INVARIANT moves to the DB: AT MOST ONE `finalized` op per
-    // (package, org) — that single finalized op IS the install anchor. The
-    // partial unique index makes it provable + serializes concurrent finalizes
-    // (finalizeInstallOp's supersession demotes the prior finalized op first). A
-    // GLOBAL (org_id IS NULL) twin is needed because Postgres treats NULLs as
-    // distinct under a plain unique.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id) WHERE phase = 'finalized'` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_global ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE phase = 'finalized' AND org_id IS NULL` },
+    // (package, org) — that single finalized op IS the install anchor. cinatra#1040
+    // S1 re-keys that uniqueness to include version (one anchor per package/org/
+    // version): the version-keyed partial-unique indexes (+ their GLOBAL org-NULL
+    // twins) are created by `versionIdentitySchemaQueries` (spread below), which
+    // also drops the pre-#1040 org-only names on an upgraded DB.
     // Anchor / non-finalized-window / sweeper reads scan by (package, org, phase).
     { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_scope_phase_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id, phase)` },
     { text: `DO $$
@@ -2727,18 +2728,17 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // The RESOLVED connector access declaration cache (cinatra#951); NULL for
     // non-connector kinds / pre-reader rows. Additive → bootstrap ADD COLUMN.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS access_declaration jsonb` },
-    // Identity is (organization_id, owner_level, owner_id, package_name).
+    // Identity is (organization_id, owner_level, owner_id, package_name, VERSION).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'
     // in owner_id). Postgres treats NULLs as distinct in unique constraints by
-    // default — partial indexes handle both cases.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_org_idx
-  ON "${schemaName.replaceAll('"', '""')}"."installed_extension"
-    (organization_id, owner_level, owner_id, package_name)
-  WHERE organization_id IS NOT NULL` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_platform_idx
-  ON "${schemaName.replaceAll('"', '""')}"."installed_extension"
-    (owner_level, owner_id, package_name)
-  WHERE organization_id IS NULL` },
+    // default — partial indexes handle both cases. cinatra#1040 S1 adds version to
+    // the identity (multiple versions installable side by side) plus is_default +
+    // a one-default-per-identity index: the version column, backfill, the
+    // version-keyed identity indexes and the one-default indexes (and the
+    // extension_install_ops re-key above) all live in the pure-strings leaf
+    // `versionIdentitySchemaQueries`, spread here AFTER both tables' CREATE
+    // statements. The leaf drops the pre-#1040 org-only identity index names.
+    ...versionIdentitySchemaQueries(schemaName),
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_kind_status_idx
   ON "${schemaName.replaceAll('"', '""')}"."installed_extension" (kind, status)` },
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_package_name_idx
