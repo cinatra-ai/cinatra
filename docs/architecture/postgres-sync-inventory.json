@@ -148,6 +148,10 @@
       "calls": 16
     },
     {
+      "file": "src/lib/demo-seed-runner.ts",
+      "calls": 2
+    },
+    {
       "file": "src/lib/dev-auto-setup.ts",
       "calls": 8
     },

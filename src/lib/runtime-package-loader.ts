@@ -46,6 +46,7 @@ import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
+import { markPackageSignedActivated } from "@/lib/extension-capabilities-registry";
 
 /**
  * Resolve the TRUSTED install anchor for a package from a source OUTSIDE the
@@ -366,7 +367,7 @@ export async function loadRuntimePackageExtensions(
     }
   }
 
-  return runRuntimePackageActivation(dataRoot, {
+  const activationResults = await runRuntimePackageActivation(dataRoot, {
     fs: realStoreFs,
     records: orderedActivatable,
     importModule: async (abs, rec) => {
@@ -416,4 +417,32 @@ export async function loadRuntimePackageExtensions(
       );
     },
   });
+
+  // engineering#534 S1 — publish the SUCCESSFULLY-ACTIVATED `trusted-signed`
+  // set for actor-free, request-time lookup by the widget-auth owner resolver.
+  // Gate on the FINAL per-package activation success, NOT the pre-activation
+  // `signedTrustedNames` classification alone: a package emits ONE result per
+  // phase (register, then bootstrap), so a register-passes/bootstrap-throws
+  // activation yields BOTH a `registered` AND a `failed` result. Success ==
+  // registered|bootstrapped AND no failure (the exact rule of
+  // `summarizeActivation`, replicated inline to avoid a static edge onto that
+  // heavy module, which dynamically imports THIS loader). Only a package that
+  // truly registered may satisfy a credential-store ownership boundary.
+  // `signedTrustedNames` is the trust tier; `ambiguousNames` were already fenced
+  // out of activation, re-excluded here as defense in depth. The capability
+  // teardown chokepoint clears these markers.
+  const failedNames = new Set(
+    activationResults.filter((r) => r.status === "failed").map((r) => r.packageName),
+  );
+  for (const result of activationResults) {
+    if (
+      (result.status === "registered" || result.status === "bootstrapped") &&
+      !failedNames.has(result.packageName) &&
+      signedTrustedNames.has(result.packageName) &&
+      !ambiguousNames.has(result.packageName)
+    ) {
+      markPackageSignedActivated(result.packageName);
+    }
+  }
+  return activationResults;
 }
