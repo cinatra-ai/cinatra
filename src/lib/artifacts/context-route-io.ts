@@ -147,9 +147,25 @@ function enforceContextAttestation(input: {
     runOas,
     slotId,
     expectedKind,
+    // #1192: v2 attestations carry a signed expiry (replay window closed). A
+    // legacy v1 (no-expiry) attestation is accepted transitionally so a freshly
+    // deployed verifier still authenticates an as-yet-unrolled wayflow minter.
+    // Set CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0 to enforce v2-only once the wayflow
+    // image has rolled.
+    acceptLegacyV1: process.env.CINATRA_CONTEXT_ATTEST_ACCEPT_V1 !== "0",
   });
   if (!result.ok) {
     throw new ContextRouteError(403, result.code, result.message);
+  }
+  if (result.legacyV1) {
+    // Transitional visibility: a legacy v1 (no-expiry) attestation was accepted.
+    // Post-rollout this should stop appearing; then enforce v2-only via
+    // CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0.
+    console.warn(
+      "[context-attestation] accepted a legacy v1 (no-expiry) attestation — " +
+        "transitional; the intra-run replay window is only closed for v2. Once " +
+        "the wayflow minter image has rolled, set CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0.",
+    );
   }
 }
 

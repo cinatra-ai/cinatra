@@ -50,6 +50,7 @@ const MODULE_TO_HANDLERS: Record<string, string> = {
   createMetricCostMcpModule: "packages/metric-cost-api/src/mcp/handlers.ts",
   createMetricUsageMcpModule: "packages/metric-usage-api/src/mcp/handlers.ts",
   createAgentsModule: "packages/agents/src/mcp/handlers.ts",
+  createApprovalsMcpModule: "src/app/configuration/approvals/approvals-mcp.ts",
   createExtensionsModule: "packages/extensions/src/mcp/handlers.ts",
   createChatModule: "packages/chat/src/mcp/handlers.ts",
   createTriggerModule: "packages/trigger/src/mcp/handlers.ts",

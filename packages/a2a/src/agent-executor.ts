@@ -25,6 +25,13 @@ import {
 } from "@cinatra-ai/agents";
 import { getActorContext } from "@cinatra-ai/llm/actor-context"; // ALS-frame org read
 
+// Stable code thrown by the store's child-run OBO ceiling composition
+// (OboCeilingCompositionError, @cinatra-ai/mcp-server/obo-ceiling). Matched
+// structurally — the class is intentionally branched on by `code`, not
+// `instanceof`, to avoid cross-package/cross-bundle coupling (a2a does not
+// depend on mcp-server).
+const OBO_CEILING_DISJOINT_CODE = "AGENT_OBO_CEILING_DISJOINT";
+
 import type { CinatraA2AConfig } from "./types";
 import { CinatraTaskStatusMap, TERMINAL_A2A_STATES } from "./types";
 import { publishRunEvent } from "./streaming-bridge";
@@ -474,14 +481,41 @@ export class InProcessAgentExecutor implements AgentExecutor {
       const pinnedTaskId =
         requestContext.taskId ?? requestContext.contextId ?? "";
       const pinnedVersion = this.getPinnedVersionForTask?.(pinnedTaskId);
-      await createAgentRun({
-        id: runId,
-        templateId: this.config.templateId,
-        inputParams,
-        packageVersion: pinnedVersion,
-        orgId,
-        runBy,
-      });
+      // Child-run OBO ceiling composition (epic W5). This is the creation site
+      // for orchestrator fan-out children. When the A2A caller is itself an
+      // agent-run OBO actor, `actorCtx.oboCeiling` is its ceiling chain; the
+      // store folds it onto the freshly-derived child anchor (satisfy-all). A
+      // human / external caller has no oboCeiling → no composition. A provably-
+      // disjoint composition fails the dispatch CLOSED (no run created) with a
+      // terminal failed event, mirroring the ORG_CONTEXT_REQUIRED shape above.
+      try {
+        await createAgentRun({
+          id: runId,
+          templateId: this.config.templateId,
+          inputParams,
+          packageVersion: pinnedVersion,
+          orgId,
+          runBy,
+          parentOboCeiling: actorCtx.oboCeiling ?? null,
+        });
+      } catch (dispatchErr) {
+        const code = (dispatchErr as { code?: unknown } | null)?.code;
+        if (code === OBO_CEILING_DISJOINT_CODE) {
+          eventBus.publish(
+            buildStatusUpdate(requestContext, "failed", {
+              final: true,
+              errorMessage:
+                dispatchErr instanceof Error
+                  ? dispatchErr.message
+                  : "child-run OBO ceiling composition is provably disjoint",
+              errorCode: OBO_CEILING_DISJOINT_CODE,
+            }),
+          );
+          eventBus.finished();
+          return;
+        }
+        throw dispatchErr;
+      }
       this.taskToRun.set(requestContext.taskId, runId);
 
       // Dual-write the A2A taskId so the UI execution panel can subscribe by
