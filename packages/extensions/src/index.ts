@@ -1223,6 +1223,35 @@ class ExtensionRegistryImpl {
     // HARD-DELETE (platform-admin-only): handler.uninstall + data-teardown are
     // package-global, so the canonical cleanup is the EXPLICIT platform-admin-
     // only per-row bulk (not the retired fan-out).
+    //
+    // Pre-destruction provenance parity with forceDelete (cinatra#1276): this
+    // package-global hard-delete tears down the handler backing AND fires
+    // durable teardown of org-scoped rows below, so it records the SAME richer
+    // provenance entry forceDelete writes — destroyed-row snapshot + computed
+    // dangling references + the resolved-row identities of every canonical row
+    // removed — written BEFORE the destructive calls so a provenance-write
+    // failure aborts the destroy (no silent deletion without a provenance
+    // trail). Unlike forceDelete, this branch is reached only when the extension
+    // was never used (no run history), so there are no RESTRICT-FK source rows
+    // to pre-clean here.
+    const { readAgentTemplateByPackageName } = await import("@cinatra-ai/agents");
+    const snapshot = await readAgentTemplateByPackageName(ref.packageName);
+    const { computeDanglingReferences, writeExtensionLifecycleAuditEntry } =
+      await import("./audit-log");
+    const danglingReferences = await computeDanglingReferences(ref);
+    const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+    const { resolvedRowIdentity } = await import("./lifecycle-target-resolver");
+    const affectedRows = (
+      await readInstalledExtensionsByPackageName(ref.packageName)
+    ).map(resolvedRowIdentity);
+    await writeExtensionLifecycleAuditEntry({
+      actor,
+      operation: "uninstall",
+      packageRef: ref,
+      destroyedRowSnapshot: snapshot ?? null,
+      danglingReferences,
+      resolvedRows: affectedRows,
+    });
     await handler.uninstall(ref, actor);
     await syncCanonicalPackageGlobalTransition(ref.packageName, "uninstall", actor);
     // Process-local deregistration — fires for the HARD-DELETE branch too (then
