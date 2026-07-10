@@ -20,8 +20,10 @@ describe("agent_run (MCP execution) routes through the config-needs run gate", (
   it("handleAgentBuilderRun calls assertAgentRunReadyByPackage and returns its refusal", () => {
     expect(handlers).toMatch(/assertAgentRunReadyByPackage/);
     expect(handlers).toMatch(/agent-run-readiness/);
-    // fail-closed early return on a refusal
-    expect(handlers).toMatch(/const notConfigured = await assertAgentRunReadyByPackage/);
+    // fail-closed early return on a refusal (compact inline-import call form)
+    expect(handlers).toMatch(
+      /const notConfigured = await \(await import\("@\/lib\/agent-run-readiness"\)\)\.assertAgentRunReadyByPackage/,
+    );
     expect(handlers).toMatch(/if \(notConfigured\) return notConfigured/);
   });
 
