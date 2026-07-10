@@ -35,6 +35,13 @@ export const installedExtensionTable = canonicalSchema.table("installed_extensio
   kind: text("kind").notNull(),
   status: text("status").notNull().default("active"),
   source: jsonb("source").notNull(),
+  // Version identity (cinatra#1040 S1). `version` is NOT NULL in the DB (the
+  // core__0022 backfill floors legacy github/local rows to '0.0.0'); `is_default`
+  // marks the version that owns the package's unversioned global name. Schema DDL
+  // lives in src/lib/extension-grant-schema.ts (versionIdentitySchemaQueries) +
+  // migrations/core/core__0022.
+  version: text("version").notNull(),
+  isDefault: boolean("is_default").notNull().default(true),
   requiredInProd: boolean("required_in_prod").notNull().default(false),
   dependencies: jsonb("dependencies").notNull().default(sql`'[]'::jsonb`),
   manifestHash: text("manifest_hash"),
@@ -57,6 +64,8 @@ function rowToCanonical(row: InstalledExtensionRow): InstalledExtension {
     kind: row.kind as ExtensionKind,
     status: row.status as ExtensionLifecycleStatus,
     source: row.source as ExtensionSource,
+    version: row.version,
+    isDefault: row.isDefault,
     requiredInProd: row.requiredInProd,
     dependencies: (row.dependencies as ExtensionDependency[] | null) ?? [],
     manifestHash: row.manifestHash ?? null,
@@ -275,10 +284,29 @@ export async function listInstalledExtensions(filters: {
   return rows.map(rowToCanonical);
 }
 
+/**
+ * Derive the storage `version` from a source when the writer did not supply one
+ * (cinatra#1040 S1). Mirrors the core__0022 backfill: verdaccio / bundled
+ * sources carry `version`; github / local sources carry none, so they floor to
+ * `0.0.0`. Keeping the derivation here means existing install-row writers do NOT
+ * have to thread version through — the version-aware write path (a writer that
+ * chooses version + default explicitly) is a later slice.
+ */
+function deriveVersionFromSource(source: ExtensionSource): string {
+  const v = (source as { version?: unknown }).version;
+  return typeof v === "string" && v.length > 0 ? v : "0.0.0";
+}
+
 // Internal — used only by the lifecycle primitive. Static checks prevent
 // other callers from importing these functions.
 export async function _internalInsertInstalledExtension(
-  row: Omit<InstalledExtension, "createdAt" | "updatedAt">,
+  // version / isDefault are OPTIONAL on the input (cinatra#1040 S1): the store
+  // derives version from the source and defaults isDefault to true, matching the
+  // DB column defaults, so no existing install-row writer has to supply them.
+  row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "version" | "isDefault"> & {
+    version?: string;
+    isDefault?: boolean;
+  },
 ): Promise<InstalledExtension> {
   const db = await getDb();
   const ownerId = platformizeOwnerId(row.ownerLevel, row.ownerId);
@@ -293,6 +321,8 @@ export async function _internalInsertInstalledExtension(
       kind: row.kind,
       status: row.status,
       source: row.source as unknown,
+      version: row.version ?? deriveVersionFromSource(row.source),
+      isDefault: row.isDefault ?? true,
       requiredInProd: row.requiredInProd,
       dependencies: row.dependencies as unknown,
       manifestHash: row.manifestHash,
