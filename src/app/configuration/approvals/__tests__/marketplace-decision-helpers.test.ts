@@ -81,7 +81,7 @@ describe("decideMarketplaceSubmission", () => {
   });
 
   it("rejects an unknown action and a reason-less reject", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     expect(await decideMarketplaceSubmission({ rowId: "s1", action: "frob" }, admin)).toMatchObject({
       ok: false,
       code: "unknown_action",
@@ -92,14 +92,24 @@ describe("decideMarketplaceSubmission", () => {
     });
   });
 
-  it("refuses cleanly when the instance token is not configured", async () => {
+  it("refuses cleanly when the admin token is not configured (#1224)", async () => {
+    const r = await decideMarketplaceSubmission({ rowId: "s1", action: "approve" }, admin);
+    expect(r).toMatchObject({ ok: false, code: "not_configured" });
+    expect(h.approve).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fall back to the instance token — instance present, admin absent → fail closed (#1224)", async () => {
+    // The consumer/instance token is present but the admin token is not; the
+    // PRINCIPAL_ADMIN-bound approve must NEVER reuse the consumer credential
+    // (confused-deputy) — it fails closed instead.
+    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
     const r = await decideMarketplaceSubmission({ rowId: "s1", action: "approve" }, admin);
     expect(r).toMatchObject({ ok: false, code: "not_configured" });
     expect(h.approve).not.toHaveBeenCalled();
   });
 
   it("approve → ok, enqueues the shared catalog reconcile, invalidates counts", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     // Prime the count cache so we can prove the decision clears it.
     const loader = vi.fn().mockResolvedValue(4);
     await cachedMarketplaceCount("marketplace-submission-moderation:inbox", loader);
@@ -115,7 +125,7 @@ describe("decideMarketplaceSubmission", () => {
   });
 
   it("classifies a 409 separation-of-duties error as a readable business refusal", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     h.approve.mockRejectedValueOnce(
       new MarketplaceMcpError("approver_separation_violation", 409, JSON.stringify({ code: "approver_separation_violation" })),
     );
@@ -126,7 +136,7 @@ describe("decideMarketplaceSubmission", () => {
   });
 
   it("invalidates the count cache even on a refusal (a 404/409 means remote state changed)", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     const loader = vi.fn().mockResolvedValue(2);
     await cachedMarketplaceCount("marketplace-submission-moderation:inbox", loader);
     h.approve.mockRejectedValueOnce(new MarketplaceMcpError("gone", 404, ""));
@@ -139,7 +149,7 @@ describe("decideMarketplaceSubmission", () => {
   });
 
   it("reject with a reason → ok, calls reject with the reason", async () => {
-    process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
+    h.adminToken = "admin";
     const r = await decideMarketplaceSubmission({ rowId: "s1", action: "reject", reason: "bad tarball" }, admin);
     expect(r).toEqual({ ok: true });
     expect(h.reject).toHaveBeenCalledWith({ submission_id: "s1", reason: "bad tarball" });
