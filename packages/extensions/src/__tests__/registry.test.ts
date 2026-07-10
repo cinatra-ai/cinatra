@@ -23,6 +23,9 @@ vi.mock("@cinatra-ai/agents", () => ({
 vi.mock("../audit-log", () => ({
   computeDanglingReferences: vi.fn(async () => ({})),
   writeExtensionLifecycleAuditEntry: vi.fn(async () => {}),
+  // P5 (cinatra#1130): the durable per-transition audit written by the
+  // row-scoped archive/restore/soft-uninstall path.
+  writeExtensionLifecycleTransitionAudit: vi.fn(async () => {}),
 }));
 
 // The dispatcher reads/writes the canonical manifest
@@ -31,8 +34,29 @@ vi.mock("../audit-log", () => ({
 // Mock the canonical store so these tests isolate the DISPATCH contract without
 // a live DB. Defaults: no installed rows (no lock, no closure block), empty
 // effective-status map (dependents default to "active" = fail-safe block).
+// P5 (cinatra#1130): the destructive dispatcher now RESOLVES a single canonical
+// row (org-equality) + gates standing before transitioning. Seed ONE platform
+// NULL-org row per package so the default platform-admin contract actor
+// resolves a target and the pre-existing branch/predicate assertions still run
+// (a NULL-org row is addressable only by a platform admin — makeActor is one).
 vi.mock("../canonical-store", () => ({
-  readInstalledExtensionsByPackageName: vi.fn(async () => []),
+  readInstalledExtensionsByPackageName: vi.fn(async (pkg: string) => [
+    {
+      id: "iext_seed",
+      packageName: pkg,
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      kind: "agent",
+      status: "active",
+      source: { type: "verdaccio", version: "1.0.0" },
+      requiredInProd: false,
+      dependencies: [],
+      manifestHash: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  ]),
   readInstalledExtensionById: vi.fn(async () => null),
   listInstalledExtensions: vi.fn(async () => []),
   readEffectiveStatusByPackageNames: vi.fn(async () => new Map<string, "active" | "archived">()),
