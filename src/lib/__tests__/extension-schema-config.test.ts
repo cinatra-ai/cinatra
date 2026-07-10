@@ -67,6 +67,32 @@ describe("parseSchemaConfig (the schema-config vocabulary)", () => {
     if (r.ok) expect((r.surface.fields[0] as { role?: string }).role).toBeUndefined();
   });
 
+  it("rejects a duplicate connection role across the surface (fail-closed)", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        { kind: "named-action", label: "Connect", actionId: "saveA", role: "connect" },
+        { kind: "named-action", label: "Connect again", actionId: "saveB", role: "connect" },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/role "connect" is declared 2 times/);
+  });
+
+  it("rejects connection roles split across a base field and a tab (must share one group)", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "named-action", label: "Connect", actionId: "saveConn", role: "connect" }],
+      tabs: [
+        {
+          id: "extra",
+          label: "Extra",
+          fields: [{ kind: "named-action", label: "Disconnect", actionId: "clearConn", role: "disconnect" }],
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join(" ")).toMatch(/split across multiple tabs\/groups/);
+  });
+
   it("rejects an out-of-allowlist named-action role (fail-closed)", () => {
     const r = parseSchemaConfig({
       fields: [{ kind: "named-action", label: "X", actionId: "doThing", role: "delete" }],

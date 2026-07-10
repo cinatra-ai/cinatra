@@ -26,6 +26,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
   Field,
@@ -550,16 +551,20 @@ function DisconnectButton({
   }, [installId, field.actionId, onDisconnected, onActionResult]);
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
-      <Button
-        type="button"
-        variant="destructive"
-        data-testid="connector-disconnect"
-        disabled={!connected}
-        onClick={() => setOpen(true)}
-      >
-        <Unplug />
-        {field.label}
-      </Button>
+      {/* asChild trigger (not a bare Button) so Radix owns the trigger ref and
+          restores focus to it on Cancel/close — a plain controlled Button leaves
+          focus on <body>. `disabled` gates opening until connected. */}
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="destructive"
+          data-testid="connector-disconnect"
+          disabled={!connected}
+        >
+          <Unplug />
+          {field.label}
+        </Button>
+      </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Disconnect connector?</AlertDialogTitle>

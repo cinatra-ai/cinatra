@@ -406,7 +406,11 @@ describe("SchemaConfigConnectorForm — canonical Connect/Disconnect pair (#1101
   });
 
   it("a successful Connect flips the state so Disconnect becomes enabled", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ result: { banner: "saved" } }), { status: 200 }));
+    const seenUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      seenUrls.push(String(url));
+      return new Response(JSON.stringify({ result: { banner: "saved" } }), { status: 200 });
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const surface = surfaceOf(CONN_SURFACE);
     await renderForm({ installId: "i9", packageName: "@x/y", surface, initialConnected: false });
@@ -417,13 +421,17 @@ describe("SchemaConfigConnectorForm — canonical Connect/Disconnect pair (#1101
       await Promise.resolve();
     });
     // saveConnection was POSTed to the host action endpoint…
-    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/saveConnection"))).toBe(true);
+    expect(seenUrls.some((u) => u.includes("/api/extensions/i9/actions/saveConnection"))).toBe(true);
     // …and Disconnect is now enabled.
     expect(container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]')?.disabled).toBe(false);
   });
 
   it("Disconnect opens the neutral AlertDialog; confirming POSTs clearConnection + flips state", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ result: { banner: "cleared" } }), { status: 200 }));
+    const seenUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      seenUrls.push(String(url));
+      return new Response(JSON.stringify({ result: { banner: "cleared" } }), { status: 200 });
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const surface = surfaceOf(CONN_SURFACE);
     await renderForm({ installId: "i9", packageName: "@x/y", surface, initialConnected: true });
@@ -441,7 +449,7 @@ describe("SchemaConfigConnectorForm — canonical Connect/Disconnect pair (#1101
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i9/actions/clearConnection"))).toBe(true);
+    expect(seenUrls.some((u) => u.includes("/api/extensions/i9/actions/clearConnection"))).toBe(true);
     // State flipped back → Disconnect disabled again.
     expect(container.querySelector<HTMLButtonElement>('[data-testid="connector-disconnect"]')?.disabled).toBe(true);
   });

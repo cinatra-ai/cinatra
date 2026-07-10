@@ -502,6 +502,33 @@ export function parseSchemaConfig(raw: unknown): ParseResult {
   // namespace). Absent/empty → the surface stays flat (back-compat).
   const tabs = raw.tabs !== undefined ? parseTabs(raw.tabs, errors, seenKeys) : [];
 
+  // Fail-closed on a malformed connection-action contract. The renderer composes
+  // ONE canonical connection-actions row per surface, so: (1) each `role` value
+  // is UNIQUE across the whole surface (two "connect" actions would silently drop
+  // one), and (2) all role-bearing actions live in the SAME group (base `fields`
+  // OR one tab) so a single row can hold the whole pair (a connect in the base
+  // and a disconnect in a tab would render two incomplete rows). Reject rather
+  // than silently misrender.
+  const groups: SchemaConfigField[][] = [fields, ...tabs.map((t) => t.fields)];
+  const roleCounts = new Map<ConnectorActionRole, number>();
+  const roleGroupIdxs = new Set<number>();
+  groups.forEach((group, gi) => {
+    for (const f of group) {
+      if (f.kind === "named-action" && f.role) {
+        roleCounts.set(f.role, (roleCounts.get(f.role) ?? 0) + 1);
+        roleGroupIdxs.add(gi);
+      }
+    }
+  });
+  for (const [role, n] of roleCounts) {
+    if (n > 1) {
+      errors.push(`configSchema: connection role ${JSON.stringify(role)} is declared ${n} times — a role must be unique across the surface`);
+    }
+  }
+  if (roleGroupIdxs.size > 1) {
+    errors.push(`configSchema: connection-action roles are split across multiple tabs/groups — the connect/disconnect pair must live in the same group`);
+  }
+
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
