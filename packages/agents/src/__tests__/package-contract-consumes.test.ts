@@ -111,18 +111,18 @@ describe("cinatra.consumes install-parse round-trip (SDK-parity zod mirror)", ()
 });
 
 describe("carryManifestConsumes (publisher carry — SDK parser, fail-loud)", () => {
-  it("returns undefined for an undeclared block (absence stays absent)", () => {
-    expect(carryManifestConsumes({ name: PM_PKG, cinatra: {} }, PM_PKG)).toBeUndefined();
-    expect(carryManifestConsumes({ name: PM_PKG }, PM_PKG)).toBeUndefined();
+  it("returns undefined for an undeclared block (absence stays absent)", async () => {
+    expect(await carryManifestConsumes({ name: PM_PKG, cinatra: {} }, PM_PKG)).toBeUndefined();
+    expect(await carryManifestConsumes({ name: PM_PKG }, PM_PKG)).toBeUndefined();
   });
 
-  it("preserves an explicitly empty array", () => {
-    expect(carryManifestConsumes({ cinatra: { consumes: [] } }, PM_PKG)).toEqual([]);
+  it("preserves an explicitly empty array", async () => {
+    expect(await carryManifestConsumes({ cinatra: { consumes: [] } }, PM_PKG)).toEqual([]);
   });
 
-  it("projects well-formed entries to the exact contract shape (extra keys stripped)", () => {
+  it("projects well-formed entries to the exact contract shape (extra keys stripped)", async () => {
     expect(
-      carryManifestConsumes(
+      await carryManifestConsumes(
         {
           cinatra: {
             consumes: [{ primitive: "pm-work-store", requirement: "required", note: "x" }],
@@ -133,7 +133,7 @@ describe("carryManifestConsumes (publisher carry — SDK parser, fail-loud)", ()
     ).toEqual([{ primitive: "pm-work-store", requirement: "required" }]);
   });
 
-  it("FAILS LOUD on a malformed block — explicit null, blank primitive, bad requirement, duplicates", () => {
+  it("FAILS LOUD on a malformed block — explicit null, blank primitive, bad requirement, duplicates", async () => {
     for (const consumes of [
       null,
       [{ primitive: "  ", requirement: "required" }],
@@ -144,7 +144,7 @@ describe("carryManifestConsumes (publisher carry — SDK parser, fail-loud)", ()
       ],
       "pm-work-store",
     ]) {
-      expect(() => carryManifestConsumes({ cinatra: { consumes } }, PM_PKG)).toThrow();
+      await expect(carryManifestConsumes({ cinatra: { consumes } }, PM_PKG)).rejects.toThrow();
     }
   });
 });

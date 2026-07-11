@@ -71,7 +71,8 @@ import {
 // shipping cinatra/project-template.json must satisfy the typed template
 // contract + the exact-match worker-ref rule against its own
 // cinatra.dependencies edges, or the install refuses in the inert window.
-import { enforceProjectTemplateInstallContract } from "./project-template-install-gate";
+// Imported DYNAMICALLY at the call site (route-graph ratchet: keeps the gate
+// module + its sdk contract off every locked route's static graph).
 
 export type InstallAgentFromPackageInput = {
   packageName: string;
@@ -377,11 +378,16 @@ async function _installAgentFromPackageImpl(
     // materialize and any agent_templates write, so a refusal (a structured
     // ProjectTemplateContractViolationError) mutates nothing. Packages with no
     // template file no-op here.
-    await enforceProjectTemplateInstallContract({
-      extractedTempDir: extracted.tempDir,
-      packageName: extracted.packageName,
-      dependencyEdges,
-    });
+    {
+      const { enforceProjectTemplateInstallContract } = await import(
+        "./project-template-install-gate"
+      );
+      await enforceProjectTemplateInstallContract({
+        extractedTempDir: extracted.tempDir,
+        packageName: extracted.packageName,
+        dependencyEdges,
+      });
+    }
 
     // RUNTIME-GATE PROJECTION (cinatra#1056): derive the two runtime-gate
     // columns the template row carries from ONE truth source — the canonical

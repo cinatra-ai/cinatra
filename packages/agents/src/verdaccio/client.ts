@@ -33,13 +33,10 @@ import {
   ARTIFACT_PRODUCES_ENFORCEMENT,
   evaluateProducesMaterializationContract,
 } from "./package-contract";
-// The AUTHORITATIVE `cinatra.consumes` parser (fail-loud on a malformed
-// block). Static import is fine: packages/agents already depends on
-// @cinatra-ai/sdk-extensions (a leaf) with no cycle.
-import {
-  parseConsumedPrimitives,
-  type ConsumedPrimitive,
-} from "@cinatra-ai/sdk-extensions/consumes";
+// The AUTHORITATIVE `cinatra.consumes` parser is imported DYNAMICALLY inside
+// carryManifestConsumes (route-graph ratchet: keeps the sdk consumes module
+// off every locked route's static graph); only the erased type rides here.
+import type { ConsumedPrimitive } from "@cinatra-ai/sdk-extensions/consumes";
 
 export type PublishAgentPackageInput = BuildAgentPackageInput;
 
@@ -57,12 +54,13 @@ export type PublishAgentPackageInput = BuildAgentPackageInput;
  * absent), and `[]` when the source EXPLICITLY declares an empty array
  * (declared-nothing is preserved, not erased).
  */
-export function carryManifestConsumes(
+export async function carryManifestConsumes(
   gitPkgJson: Record<string, unknown>,
   packageName: string,
-): ConsumedPrimitive[] | undefined {
+): Promise<ConsumedPrimitive[] | undefined> {
   const raw = (gitPkgJson.cinatra as Record<string, unknown> | undefined)?.consumes;
   if (raw === undefined) return undefined;
+  const { parseConsumedPrimitives } = await import("@cinatra-ai/sdk-extensions/consumes");
   return parseConsumedPrimitives({ name: packageName, cinatra: { consumes: raw } }, { packageName });
 }
 
@@ -409,7 +407,7 @@ export async function publishAgentPackageFromGitDir(
   // capability-binding claim is exactly the failure mode the field closes).
   // An explicitly-present empty array is PRESERVED (declared-nothing !=
   // undeclared); absence stays absent.
-  const consumesEntries = carryManifestConsumes(gitPkgJson, packageName);
+  const consumesEntries = await carryManifestConsumes(gitPkgJson, packageName);
   const hasApprovalGates = approvalPolicy.steps.some((s) => s.requiresApproval);
   const publishedAt = new Date().toISOString();
 

@@ -58,7 +58,6 @@ import {
   TERMINAL_RUN_STATUSES,
   type AgentRunStatus,
 } from "@cinatra-ai/agents";
-import { readProjectInstance } from "@cinatra-ai/agents/project-instance-store";
 import { isAgentRuntimeRunnable } from "@cinatra-ai/agents/runtime-install-gate";
 import {
   beginDispatchAttempt,
@@ -66,7 +65,6 @@ import {
   type DispatchAttemptRecord,
 } from "@cinatra-ai/agents/project-dispatch-ledger-store";
 import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
-import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 
 /** Stable code carried by OboCeilingCompositionError — branch on the CODE, not
  *  instanceof, to avoid cross-bundle class-identity coupling (the documented
@@ -83,11 +81,11 @@ import {
   type WorkerAgentRef,
 } from "@cinatra-ai/sdk-extensions/project-template-contract";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
-import {
-  agentManifestDeclaresPmSeat,
-  resolveInstalledAgentManifest,
-  resolveInstalledProjectTemplate,
-} from "@/lib/project-template-resolve";
+// DELIBERATELY DYNAMIC (route-graph ratchet): the deliverable-3 gate modules
+// (project-instance store, the finalized-payload resolvers, the manifest
+// dependency-edge parser) are imported lazily inside dispatchProjectWorker so
+// this module's STATIC first-party graph — reachable from the locked routes —
+// stays at its baseline; the checks themselves are unconditional.
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -286,6 +284,7 @@ export async function dispatchProjectWorker(
     // (deliverable 3). The instance pins the template package/id, the PM
     // seat, and the cinatra project refinement — dispatch never proceeds on
     // an un-instantiated project scope.
+    const { readProjectInstance } = await import("@cinatra-ai/agents/project-instance-store");
     const instance = await readProjectInstance(input.orgId, input.projectRef);
     if (!instance) {
       return {
@@ -343,6 +342,8 @@ export async function dispatchProjectWorker(
     }
     // The seat must STILL carry the pm-work-store binding (fail-closed against
     // a reinstall/downgrade that dropped it after instantiation).
+    const { agentManifestDeclaresPmSeat, resolveInstalledAgentManifest, resolveInstalledProjectTemplate } =
+      await import("@/lib/project-template-resolve");
     const seatManifest = await resolveInstalledAgentManifest(instance.pmAgentPackage, input.orgId);
     if (!seatManifest || !agentManifestDeclaresPmSeat(seatManifest.manifest)) {
       return {
@@ -382,6 +383,9 @@ export async function dispatchProjectWorker(
     // being compensated) must never allowlist a worker the manifest does not
     // declare. Fail-closed on unreadable edges.
     try {
+      const { parseManifestDependencyEdges } = await import(
+        "@cinatra-ai/extensions/manifest-dependencies"
+      );
       const edges = parseManifestDependencyEdges(templateResolution.manifest, {
         packageName: instance.templatePackage,
       }).edges;
