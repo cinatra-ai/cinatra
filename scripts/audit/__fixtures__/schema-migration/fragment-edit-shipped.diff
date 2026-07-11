@@ -1,0 +1,14 @@
+diff --git a/migrations/manifest.d/core__0014_pinned-shipped-fragment.json b/migrations/manifest.d/core__0014_pinned-shipped-fragment.json
+--- a/migrations/manifest.d/core__0014_pinned-shipped-fragment.json
++++ b/migrations/manifest.d/core__0014_pinned-shipped-fragment.json
+@@ -1,9 +1,9 @@
+ {
+   "seq": "0014",
+   "file": "core/core__0014_pinned-shipped-fragment.mjs",
+-  "summary": "Pinned fixture snapshot fragment for seq 0014 \u2014 a shipped per-migration manifest fragment; the gate reads it as base ledger state (its seq is the max shipped, and editing it is tampering).",
++  "summary": "REWRITTEN shipped fragment summary — tampering.",
+   "destructive": false,
+   "tables": [
+     "metadata"
+   ]
+ }

@@ -1,0 +1,6 @@
+diff --git a/migrations/manifest.d/NOTES.txt b/migrations/manifest.d/NOTES.txt
+new file mode 100644
+--- /dev/null
++++ b/migrations/manifest.d/NOTES.txt
+@@ -0,0 +1,1 @@
++manifest.d holds per-migration fragments only — this file must be rejected.

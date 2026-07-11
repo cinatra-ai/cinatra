@@ -155,13 +155,72 @@ A migration artifact is **both** of:
      edit, rename, or delete a migration that has shipped — supersede it with
      a new one.
    - `short-description` is lowercase, hyphen-separated, and names the change.
-2. **An entry appended to [`migrations/manifest.json`](manifest.json)**
-   describing the migration (see the `_doc` block in that file for the entry
-   shape; `file` is relative to `migrations/`, e.g.
-   `core/core__0003_….mjs`).
+2. **A per-migration manifest fragment at
+   `migrations/manifest.d/core__NNNN_short-description.json`** — one file per
+   migration, with the **same filename stem as the module**, carrying a
+   single JSON object with the ledger entry shape (see the `_doc` block in
+   [`migrations/manifest.json`](manifest.json)): `seq` (the `NNNN`, as a
+   string), `file` (relative to `migrations/`, always
+   `core/core__NNNN_….mjs` — the module the fragment names), `summary`,
+   `destructive`, `tables`.
 
 A PR that needs a migration must add both pieces **in the same PR** as the
 schema change.
+
+> **The legacy array is frozen.** `migrations/manifest.json` used to be the
+> ledger — one positional JSON array every migration PR appended to. That
+> shared tail made any two concurrently open migration PRs conflict textually
+> and forced renumber rounds (see the collision ledger in #1335). It is now
+> **frozen shipped history**: the CI gate rejects any change to its entries
+> AND any new entry appended to it. New migrations author fragments under
+> `migrations/manifest.d/` instead — two concurrent PRs then add *different*
+> files, so neither conflicts, and merged in seq order neither needs a
+> renumber.
+
+### The ledger union (how consumers read it)
+
+The ledger every consumer sees is the **deterministic union** of the frozen
+legacy array and the fragments, computed by the shared reader
+[`migrations/manifest-reader.mjs`](manifest-reader.mjs) (plain runtime ESM —
+it ships inside the production image with the rest of `migrations/`). The
+union contract:
+
+- concatenate legacy entries + fragments and **validate — never dedupe**: a
+  seq present in both the legacy array and a fragment (or in two fragments)
+  is a hard error;
+- per fragment: the filename matches `core__NNNN_<slug>.json`, `seq` equals
+  the filename's `NNNN`, and `file` is `core/<fragment stem>.mjs` — the
+  fragment stem and the runner-module stem are equal by contract;
+- `seq` and `file` are unique over the whole union; entries come back sorted
+  by numeric seq;
+- malformed or unrecognized files under `manifest.d/` are **errors, not
+  skips**.
+
+Consumers: the CI gate (`scripts/audit/schema-migration-gate.mjs`), the
+upgrade proof's ledger cross-check (`scripts/ci/upgrade-proof.sh`), and the
+per-migration contract tests all resolve entries through this reader — never
+by parsing `manifest.json` directly.
+
+Because two PRs claiming the same seq add *differently named* files
+(different slugs), a seq double-claim is not a git conflict — it surfaces as
+a deterministic duplicate-seq failure in the gate/reader. Merging two
+fragment PRs out of seq order fails the gate's monotonicity check
+deterministically; the fix is renaming the two files of the later PR, not
+array surgery.
+
+### Staged transition (#1335)
+
+1. **Union reader + dual-form gate** (this stage): every consumer reads the
+   union; the legacy array is frozen (its entries immutable, appends
+   rejected); new migrations author fragments.
+2. Optionally, a one-time bijective split PR later **moves** (never copies)
+   the shipped runner-module entries (seq `0003`+) from the frozen array into
+   fragments — the union reader makes both endpoints equivalent to every
+   consumer, so this is an implementation choice, not a behavior change. The
+   two legacy psql-artifact entries (seq `0001`/`0002`, whose `file` points
+   at loose SQL rather than a `core__` module) stay in the frozen legacy
+   array permanently — the fragment-stem ↔ module-stem rule applies only to
+   runner-module entries.
 
 > **Legacy artifacts.** `migrations/0001_*.sql` and `migrations/0002_*.sql`
 > are the pre-runner psql artifacts (applied by hand per release notes;
@@ -270,14 +329,20 @@ This convention is enforced by
 (the `schema-migration-gate` job in `build-image.yml`): it diffs a PR against
 its base, classifies in-scope schema changes per the definitions above, and
 fails when a destructive change ships no migration artifact (or ships the
-retired loose-SQL form). Independently of any schema change, it also fails a
-PR that tampers with shipped migration state — deleting, renaming, or editing
-a shipped artifact, rewriting a manifest entry, or adding a
-`migrations/core/` file (malformed name, re-used sequence number) that would
-break the runner's boot preflight — and any migration-state inconsistency in
-the diff itself: a valid executable `migrations/core/` module without its
-manifest entry (the runner executes every valid module regardless of the
-manifest), a manifest entry without its module, or sequence drift. The labelled sample diffs its classifier must
+retired loose-SQL form, or appends its ledger entry to the frozen legacy
+array instead of a fragment). Independently of any schema change, it also
+fails a PR that tampers with shipped migration state — deleting, renaming, or
+editing a shipped artifact **or a shipped manifest fragment**, rewriting a
+legacy manifest entry, adding an unrecognized file under
+`migrations/manifest.d/`, or adding a `migrations/core/` file (malformed
+name, re-used sequence number) that would break the runner's boot preflight —
+and any ledger inconsistency in the diff itself: a valid executable
+`migrations/core/` module without its manifest fragment (the runner executes
+every valid module regardless of the ledger), a fragment without its module,
+a duplicate seq anywhere in the union (including a fragment re-claiming a
+legacy seq), or a fragment seq at/below the max shipped seq. The gate
+enumerates the **base-side** `manifest.d/` directory, so collisions with
+shipped fragments the diff never touches are caught too. The labelled sample diffs its classifier must
 reproduce live in
 [`scripts/audit/__fixtures__/schema-migration/`](../scripts/audit/__fixtures__/schema-migration/)
 — they are the executable form of the definitions above, and the gate's test
