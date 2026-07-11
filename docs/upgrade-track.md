@@ -34,7 +34,7 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | nango-db | docker-compose.yml | `postgres:17-alpine@sha256:979c…59ca` (was `15-alpine`; **consolidated + digest-pinned** — §3 rationale, applied §8) | postgres 18-alpine | now on the platform Postgres major; the 17/15 spread reconciled |
 | twenty-db | docker-compose.yml | `postgres:16` | follows Twenty upstream | profile `twenty`; upstream-dictated major, not ours |
 | plane-db | docker-compose.yml | `postgres:15.7-alpine` | follows Plane upstream | profile `plane`; upstream-dictated, track don't lead |
-| redis (platform) | docker-compose.yml | `redis:7-alpine` | redis 8-alpine | major deferred to its own lane |
+| redis (platform) | docker-compose.yml | `redis:8-alpine@sha256:9d31…7005` (was `redis:7-alpine`, **major applied + digest-pinned** — §9) | at target (latest stable 8.8.0) | BullMQ works-after arm gates it (§9) |
 | twenty-redis | docker-compose.yml | `redis:7` | redis 8 | profile `twenty` |
 | plane-redis | docker-compose.yml | `valkey/valkey:7.2.11-alpine` | valkey 8 | profile `plane`; Plane-dictated |
 | neo4j | docker-compose.yml | `neo4j:2026.05-community@sha256:b91a…9604` (was `5.26-community`, **major applied** — §7) | at target (CalVer latest) | graphiti-coupled; CalVer line is the 5.x semver successor |
@@ -523,9 +523,61 @@ The §1 row is updated to match; §3's rationale stays as the first-pass record.
 The platform Postgres **18** major itself remains deferred to its own staged
 upgrade lane (data-migration-bearing; `pg_upgrade`/dump-restore), unchanged.
 
+## 9. Refresh 2026-07-11 — Redis 8 applied + platform digest currency pass
+
+The non-Postgres platform-image currency pass against the live registries
+(index digests re-resolved via the Docker Hub API, observed 2026-07-11).
+Postgres (platform + nango-db) is explicitly untouched here — it has its own
+staged upgrade lane (§3).
+
+### 9.1 Redis — MAJOR applied (`7-alpine` → `8-alpine`, digest-pinned)
+
+Applied in this PR: the platform `redis` pin moves to
+`redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005`
+— the multi-arch OCI index digest of the latest stable line (8.8.0; the
+`8-alpine` index digest has been stable since 2026-06-23). Redis is the
+BullMQ cache/queue backend; the works-after redis arm proves a real bullmq
+enqueue → worker-run → complete round-trip on the candidate (the CI arm runs
+the derived candidate TAG; the digest identity is grounded against the
+registry index digest at resolve time). Harness/local defaults
+(`scripts/ci/works-after/redis.sh`, `scripts/ci/works-after/nango.sh`'s redis
+sidecar, `scripts/ci/works-after-proof.sh` diagnostics) and the prod-boot e2e
+stand-in (`scripts/ci/prod-boot-e2e.sh`) move with the pin.
+
+**Rollback:** repoint to
+`redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99`
+and CLEAR any persisted dump first — Redis 8.8 writes RDB format v14, Redis
+7.4 reads only ≤v12 and refuses a newer dump (crash-loop). The volume holds
+regenerable cache/queue state; discarding it is the documented downgrade path.
+
+**Still on Redis 7 after this section (deliberate):** the CI service
+containers in `.github/workflows/*` (build-image, e2e-app-suites,
+dashboard-live-verify, design-visual-verify, wp-drupal-uat, dev-hmr-smoke) —
+a workflow-path change rides a separate review-gated PR; and the
+profile-gated demo fixtures (`twenty-redis`, plane's valkey), which are
+upstream-dictated (§1).
+
+### 9.2 The rest of the platform set — currency state (re-grounded 2026-07-11)
+
+- **neo4j:** the calendar line still tops out at `2026.05-community`
+  (no newer stable calendar release offered), but the tag was REPUBLISHED
+  upstream on 2026-07-02 — the index digest moved off the pinned
+  `sha256:b91a…9604`. A digest re-resolve rides its own PR (same version, new
+  bytes → digest-bound graphiti works-after dispatch gates it).
+- **graphiti:** `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0…c4d6`
+  still equals upstream `latest` — CURRENT, no change.
+- **verdaccio:** `6.7.4` (= the pinned `sha256:e3ac…3575`) is still the latest
+  stable; the 7 line remains prerelease-only (`-next`) — CURRENT, no change
+  (§8.2 pin unchanged).
+- **nango-server:** the `hosted` moving tag drifted again upstream. The pin
+  converge (this compose onto the smoke-validated digest) rides its own PR,
+  merge-gated on the hosted deployment's OAuth round-trip smoke — see the
+  nango-server compose comment for the validation contract.
+
+
 ---
 
-## 9. OpenTelemetry SDK 1.x → 2.x — applied (the stack-majors OTel group)
+## 10. OpenTelemetry SDK 1.x → 2.x — applied (the stack-majors OTel group)
 
 The `@opentelemetry/*` SDK-suite lift the §4.2 / §5 notes deferred is applied
 (the stack-layer-majors lane, cinatra#1149; in-repo tracker cinatra#673). The
