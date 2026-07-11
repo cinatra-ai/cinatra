@@ -36,6 +36,26 @@ export const cinatraAuthAdditionalUserFields = {
     defaultValue: null,
     input: false,
   },
+  // Per-user Avatar accent (nullable; NULL = "derive"). This is the ONLY
+  // provisioning path for `public."user".accent_color` on a fresh install:
+  // core migrations are ledger-faked on a fresh schema (setup's
+  // `isFreshCoreSchema`), so core__0016 — which only reconciles the
+  // `user_accent_color_check` CHECK and is a guarded no-op when the column is
+  // absent — never creates it, and the bootstrap DDL carries no accent
+  // structures. Without this field Better Auth's `getMigrations()` builds the
+  // `user` table without the column, and every `getUserAccent()` read
+  // (`SELECT accent_color FROM public."user"`, src/lib/accent-color-store.ts)
+  // 500s — which broke the WP/Drupal session-token path and reddened the
+  // wp-drupal-uat suite. `fieldName` pins the snake_case column name (Better
+  // Auth names the column from fieldName, not the key) to match the app's raw
+  // SQL, the CHECK constraint, and the RBAC dump fixture.
+  accentColor: {
+    type: "string",
+    required: false,
+    defaultValue: null,
+    input: false,
+    fieldName: "accent_color",
+  },
 } as const;
 
 // Schema-relevant options for the `organization` plugin: `teams` enablement

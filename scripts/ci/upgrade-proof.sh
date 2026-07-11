@@ -143,7 +143,7 @@ HOST_PORT=""             # filled once we know the published port (host-side can
 DB_URL_IN_NET="postgresql://postgres:postgres@${PG}:5432/postgres"
 
 cleanup() {
-  # -v also drops the anonymous postgres:17 data volume so repeated CI/local
+  # -v also drops the anonymous postgres:18 data volume so repeated CI/local
   # runs leave no dangling volumes behind.
   docker rm -fv "$PG" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
@@ -240,7 +240,7 @@ fi
 docker network create "$NET" >/dev/null
 docker run -d --name "$PG" --network "$NET" -p 127.0.0.1::5432 \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
-  postgres:17 >/dev/null
+  postgres:18 >/dev/null
 
 HOST_PORT="$(docker port "$PG" 5432/tcp | head -1 | sed -E 's/.*:([0-9]+)$/\1/')"
 if [ -z "$HOST_PORT" ]; then
@@ -259,7 +259,8 @@ done
 # One-shot `cinatra setup prod` from the previous-release image: provisions the
 # OLD schema shape (incl. the `metadata` table — the freshness key) exactly as
 # that release deployed. Asserting exit 0 proves the previous image still boots
-# its setup against a current postgres:17.
+# its setup against a current postgres:18 (the platform candidate major — the
+# state the 17->18 cutover produces: the released app on an 18 server).
 # Pick the provisioning entrypoint the previous release actually ships (see
 # the cinatra#402 header note): 0.1.6+ images carry the published CLI and
 # provision via `instance setup prod`; older images only have the legacy

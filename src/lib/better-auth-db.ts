@@ -92,6 +92,7 @@ export const betterAuthUsers = pgTable("user", {
   image: text("image"),
   userType: text("userType"),
   clientId: text("clientId"),
+  accentColor: text("accent_color"),
 });
 
 export const betterAuthAccounts = pgTable("account", {
