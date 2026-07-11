@@ -452,8 +452,9 @@ export async function POST(
   // real reason is server-side only) and create NO run.
   if (!(await reassertWidgetStreamGrantBeforeOboRun(resolved))) {
     console.warn(
-      `[agent-stream:${agentSlug}] point-of-use grant re-assert failed before OBO run ` +
+      "[agent-stream:%s] point-of-use grant re-assert failed before OBO run " +
         "creation — refusing (fail closed)",
+      agentSlug,
     );
     return NextResponse.json({ error: "Unknown agent" }, { status: 404, headers: corsHeaders });
   }

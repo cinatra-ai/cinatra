@@ -326,9 +326,12 @@ async function resolveRuntimeWidgetStreamAgent(
       },
     };
   } catch (err) {
+    // Constant format string: agentSlug is request-controlled and must never
+    // sit in console's printf position (tainted-format-string).
     console.error(
-      `[widget-stream:${agentSlug}] runtime resolver arm failed (failing closed on the ` +
+      "[widget-stream:%s] runtime resolver arm failed (failing closed on the " +
         "runtime arm; the build-time arm is unaffected):",
+      agentSlug,
       err instanceof Error ? err.message : err,
     );
     return null;
@@ -379,7 +382,8 @@ async function isPinnedGrantStillAuthorized(
     return true;
   } catch (err) {
     console.error(
-      `[widget-stream:${grant.agentSlug}] point-of-use grant re-assert errored — refusing (fail closed):`,
+      "[widget-stream:%s] point-of-use grant re-assert errored — refusing (fail closed):",
+      grant.agentSlug,
       err instanceof Error ? err.message : err,
     );
     return false;
