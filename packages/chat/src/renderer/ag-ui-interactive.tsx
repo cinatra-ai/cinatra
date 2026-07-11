@@ -5,7 +5,9 @@
 // (cinatra#1311). Draws the reduced view model produced by `./ag-ui-reducer`:
 // tool-call chips, thinking groups, citations, inline agent-run-card mount
 // points, HITL interrupt forms, streaming/partial text (incl. incomplete-embed
-// trimming), and the RUN_ERROR banner.
+// trimming), the RUN_ERROR banner, and the S4 (#1220) renderable-view cards
+// (the reducer's carried-through `dataParts`, dispatched via the registered
+// view registry — see `RenderableViewParts`).
 //
 // DECOUPLING / EMBEDDABILITY. This layer is deliberately framework-light and
 // carries NO heavy dependency (no `@cinatra-ai/agents` run panel, no markdown
@@ -31,12 +33,14 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { renderableViewType } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
   formatToolCallLabel,
   trimIncompleteEmbeds,
   type AssistantMessagePart,
   type AssistantToolCallPart,
 } from "../assistant-parts";
+import { RenderableViewCard } from "../renderable-views/index";
 import type { UiCitation, UiThoughtGroup, UiToolCall } from "../types";
 import type {
   ConversationViewState,
@@ -239,6 +243,49 @@ export function HitlInterruptFallback({ interrupt }: { interrupt: HitlInterruptS
 }
 
 // ---------------------------------------------------------------------------
+// Renderable-view dispatch (S4, #1220) — the reducer's carried-through
+// `dataParts` drawn via the registered view registry.
+// ---------------------------------------------------------------------------
+// The reducer consumes the `DATA_PART` payloads it understands structurally
+// (`agent_run` run-card pins, `citations`) and carries every other structured
+// payload through in `state.dataParts` FOR THIS DISPATCH. Here each payload
+// that IS a renderable view (a non-empty string `viewType`) is drawn through
+// `RenderableViewCard` — validate → registered component → safe fallback for
+// an unknown/invalid/forward-incompatible view. A plain data part (no
+// `viewType`) is NOT a view and renders nothing.
+//
+// DELIBERATELY NOT host-injectable (unlike `renderText`/`renderRunCard`/
+// `renderInterrupt`): the epic's acceptance criterion is that every surface
+// draws the registered inventory IDENTICALLY — the dispatch being definitional
+// is the point, and the in-package cards carry no heavy dependency.
+
+export function RenderableViewParts({
+  dataParts,
+}: {
+  dataParts: Record<string, unknown>[];
+}) {
+  const views = dataParts.filter((d) => {
+    // Classification must not pierce the never-throw boundary: a hostile
+    // `viewType` getter / Proxy trap counts as a view so the GUARDED
+    // `RenderableViewCard` path (parseRenderableView never throws) renders the
+    // safe fallback instead of the whole turn crashing.
+    try {
+      return renderableViewType(d) !== undefined;
+    } catch {
+      return true;
+    }
+  });
+  if (views.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2" data-renderable-views>
+      {views.map((view, idx) => (
+        <RenderableViewCard key={`view-${idx}`} data={view} />
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Ordered parts (chronologically interleaved text + tool chips + run cards)
 // ---------------------------------------------------------------------------
 
@@ -314,6 +361,8 @@ export function ConversationTurn({
       {message.thoughtGroups.map((g) => (
         <ThinkingGroup key={g.id} group={g} />
       ))}
+
+      <RenderableViewParts dataParts={state.dataParts} />
 
       {showLiveStatus ? <LiveStatusLine status={message.liveStatus as string} /> : null}
 
