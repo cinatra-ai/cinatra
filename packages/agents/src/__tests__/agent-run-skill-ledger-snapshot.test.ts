@@ -121,6 +121,7 @@ function makeRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     workflowId: null,
     workflowTaskId: null,
     oboCeiling: null,
+    dependentInstallId: null,
     ...overrides,
   };
 }

@@ -193,6 +193,46 @@ describe("buildActorContextFromRun — organizationId from run.orgId", () => {
   });
 });
 
+describe("buildActorContextFromRun — dependent install id carrier (cinatra#1392 Gap 2)", () => {
+  it("carries run.dependentInstallId onto a worker-originated (InternalWorker) actor", async () => {
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-dep-1",
+      runBy: null,
+      orgId: "org-A",
+      dependentInstallId: "iext_dep",
+    });
+    expect(ctx.principalType).toBe("InternalWorker");
+    expect(ctx.dependentInstallId).toBe("iext_dep");
+  });
+
+  it("carries run.dependentInstallId onto a human-originated (HumanUser) actor", async () => {
+    betterAuthDb.readOrgsWithTeamsForUser.mockResolvedValueOnce([
+      { id: "org-A", name: "Org A", teams: [] },
+    ]);
+    betterAuthDb.readProjectGrantsForUser.mockResolvedValueOnce([]);
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-dep-2",
+      runBy: "user-1",
+      orgId: "org-A",
+      dependentInstallId: "iext_dep",
+    });
+    expect(ctx.principalType).toBe("HumanUser");
+    expect(ctx.dependentInstallId).toBe("iext_dep");
+  });
+
+  it("leaves dependentInstallId undefined when the run row carries none", async () => {
+    const { buildActorContextFromRun } = await import(MODULE_PATH);
+    const ctx = await buildActorContextFromRun({
+      id: "run-dep-3",
+      runBy: null,
+      orgId: "org-A",
+    });
+    expect(ctx.dependentInstallId).toBeUndefined();
+  });
+});
+
 describe("buildActorContextFromRun — admin standing (platformRole/orgRole) parity (P6 #1131)", () => {
   it("attaches platformRole:platform_admin when the run user is a platform admin", async () => {
     betterAuthDb.readOrgsWithTeamsForUser.mockResolvedValueOnce([

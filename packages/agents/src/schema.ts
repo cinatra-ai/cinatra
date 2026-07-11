@@ -276,6 +276,15 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0020
   //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
   runTokenHash: text("run_token_hash"),
+  // dependent_install_id: the installed_extension row id a run executes AS
+  // (cinatra#1392 Gap 2). Threaded onto the signed run lineage (ActorContext)
+  // so the A2A dispatch seam resolves edge-bound serving against a TRUSTED
+  // dependent identity. SERVER-ONLY: written only from the trusted dispatch
+  // identity via an explicit column whitelist (never client input). Unlike
+  // runTokenHash it IS surfaced by deserializeRun — buildActorContextFromRun
+  // reads run.dependentInstallId to carry it onto the ActorContext.
+  // Migration: src/lib/drizzle-store.ts dependent_install_id entry + core__0030.
+  dependentInstallId: text("dependent_install_id"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),

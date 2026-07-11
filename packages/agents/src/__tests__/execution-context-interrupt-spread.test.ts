@@ -92,6 +92,7 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
     workflowId: null,
     workflowTaskId: null,
     oboCeiling: null,
+    dependentInstallId: null,
   };
 }
 
