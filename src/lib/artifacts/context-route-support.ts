@@ -322,6 +322,10 @@ export function buildSelectionRows(input: {
 // ---------------------------------------------------------------------------
 
 const CONTEXT_RESOLUTION_PURPOSE_PREFIX = "author-placed-context-resolution-for-";
+// cinatra#1194 — the loader-injected marker family (mount-time injection;
+// never in installed bytes today). ANY marker family present for the slot
+// keeps the legacy structural join authoritative.
+const LOADER_INJECTED_PURPOSE_PREFIX = "loader-injected-context-resolution-for-";
 
 function metadataCinatra(
   node: Record<string, unknown>,
@@ -346,6 +350,25 @@ function isFlowDefinition(node: Record<string, unknown>): boolean {
   );
 }
 
+function isPlainObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** cinatra#1194 — loader/verifier CARRIER-PREDICATE PARITY (Codex round-1):
+ *  the declaration JOIN counts a contextSlots declaration only on a node the
+ *  loader's `_is_flow_definition` recognizes (plain-object refs / string-or-
+ *  plain-object start_node / nodes array). The looser legacy isFlowDefinition
+ *  stays untouched for walk-boundary attribution. */
+function isStrictFlowCarrier(rec: Record<string, unknown>): boolean {
+  return (
+    typeof rec["id"] === "string" &&
+    (isPlainObject(rec["$referenced_components"]) ||
+      typeof rec["start_node"] === "string" ||
+      isPlainObject(rec["start_node"]) ||
+      Array.isArray(rec["nodes"]))
+  );
+}
+
 /** Which child package does an ORCHESTRATOR'S OWN installed OAS bind to a
  *  context slot?
  *
@@ -364,10 +387,29 @@ function isFlowDefinition(node: Record<string, unknown>): boolean {
 export function findBoundChildPackageForSlot(
   oas: Record<string, unknown>,
   slotId: string,
+  opts?: {
+    /** cinatra#1194 — allow the DECLARATION join for slim (declaration-only)
+     *  compositions: a nested Flow definition whose own
+     *  metadata.cinatra.contextSlots declares `slotId`, owned by the unique
+     *  packageName among its referencing FlowNodes. Enabled by the IO caller
+     *  ONLY on the run-token-authenticated path. ANY marker for the slot
+     *  (either family) keeps the legacy structural join authoritative. */
+    allowDeclarationBinding?: boolean;
+  },
 ): string | null {
   const marker = `${CONTEXT_RESOLUTION_PURPOSE_PREFIX}${slotId}`;
+  const injectedMarker = `${LOADER_INJECTED_PURPOSE_PREFIX}${slotId}`;
   const markedDefinitionIds = new Set<string>();
   const packageByDefinitionId = new Map<string, Set<string>>();
+  // cinatra#1194 — definition ids whose OWN metadata declares `slotId`
+  // (declaration attribution never crosses a nested-definition boundary:
+  // the carrier is the definition node the metadata sits on). The root
+  // document carries no referencing FlowNode, so a root declaration
+  // correctly contributes no owner here (a top-level slot belongs to the
+  // run package itself; this function serves the composed path only).
+  const declaringDefinitionIds = new Set<string>();
+  const declaredCountByDefinition = new Map<string, number>();
+  let markerSeenAnyFamily = false;
 
   const walk = (node: unknown, enclosingDefinitionId: string | null): void => {
     if (Array.isArray(node)) {
@@ -380,6 +422,9 @@ export function findBoundChildPackageForSlot(
 
     if (cin?.["purpose"] === marker && enclosingDefinitionId) {
       markedDefinitionIds.add(enclosingDefinitionId);
+    }
+    if (cin?.["purpose"] === marker || cin?.["purpose"] === injectedMarker) {
+      markerSeenAnyFamily = true;
     }
 
     const subflow = rec["subflow"];
@@ -396,7 +441,34 @@ export function findBoundChildPackageForSlot(
       packageByDefinitionId.set(componentRef, set);
     }
 
-    const nextDefinitionId = isFlowDefinition(rec)
+    const isDefinition = isFlowDefinition(rec);
+    // Declaration recognition uses the STRICT (loader-parity) predicate;
+    // boundary attribution below keeps the legacy predicate.
+    if (isStrictFlowCarrier(rec) && cin) {
+      const rawSlots = cin["contextSlots"];
+      if (Array.isArray(rawSlots)) {
+        const defId = rec["id"] as string;
+        let declaredHere = 0;
+        for (const entry of rawSlots) {
+          const entrySlot =
+            typeof entry === "object" && entry !== null
+              ? (entry as Record<string, unknown>)["slotId"]
+              : null;
+          if (entrySlot === slotId) declaredHere += 1;
+        }
+        if (declaredHere > 0) {
+          declaringDefinitionIds.add(defId);
+          // ACCUMULATE across same-id definitions: two definitions sharing
+          // one id that both declare the slot must read as ambiguous.
+          declaredCountByDefinition.set(
+            defId,
+            (declaredCountByDefinition.get(defId) ?? 0) + declaredHere,
+          );
+        }
+      }
+    }
+
+    const nextDefinitionId = isDefinition
       ? (rec["id"] as string)
       : enclosingDefinitionId;
     for (const value of Object.values(rec)) walk(value, nextDefinitionId);
@@ -404,10 +476,25 @@ export function findBoundChildPackageForSlot(
 
   walk(oas, null);
 
-  const owners = new Set<string>();
-  for (const defId of markedDefinitionIds) {
-    for (const pkg of packageByDefinitionId.get(defId) ?? []) owners.add(pkg);
+  // Legacy structural join — authoritative whenever ANY marker family names
+  // the slot (mirrors the loader's injection-skip rule).
+  if (markedDefinitionIds.size > 0 || markerSeenAnyFamily) {
+    const owners = new Set<string>();
+    for (const defId of markedDefinitionIds) {
+      for (const pkg of packageByDefinitionId.get(defId) ?? []) owners.add(pkg);
+    }
+    if (owners.size !== 1) return null;
+    return [...owners][0] ?? null;
   }
-  if (owners.size !== 1) return null;
+
+  // cinatra#1194 — declaration join (run-token path only).
+  if (!opts?.allowDeclarationBinding) return null;
+  // Exactly ONE definition declares the slot, exactly ONCE (a duplicate
+  // in-carrier declaration or a multi-carrier slot is ambiguous → null).
+  if (declaringDefinitionIds.size !== 1) return null;
+  const declaringDefId = [...declaringDefinitionIds][0];
+  if (declaredCountByDefinition.get(declaringDefId) !== 1) return null;
+  const owners = packageByDefinitionId.get(declaringDefId);
+  if (!owners || owners.size !== 1) return null;
   return [...owners][0] ?? null;
 }

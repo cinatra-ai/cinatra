@@ -22,6 +22,8 @@ const VALID: Record<string, Record<string, unknown>> = {
     schemaVersion: 1,
     surface: "wordpress",
     postId: "42",
+    proposalId: "wp-42-prop-1",
+    changeSetId: "rev-311",
     rich: false,
     fields: [
       { field: "title", before: "Old", after: "New" },
@@ -167,6 +169,62 @@ describe("hostile / malformed payloads → null (never throws)", () => {
     if (parsed && parsed.viewType === "content_change_proposal") {
       expect(parsed.fields[0].after).toBe("<script>alert(1)</script>");
     }
+  });
+});
+
+describe("content_change_proposal correlation ids (Option A: refresh of the already-written draft)", () => {
+  it("preserves proposalId / changeSetId through validation (the S5 refresh consumer keys on them)", () => {
+    const parsed = parseRenderableView(VALID.content_change_proposal);
+    expect(parsed).not.toBeNull();
+    if (parsed && parsed.viewType === "content_change_proposal") {
+      expect(parsed.proposalId).toBe("wp-42-prop-1");
+      expect(parsed.changeSetId).toBe("rev-311");
+    }
+  });
+
+  it("both ids stay optional — a proposal without them still parses (no draft correlation)", () => {
+    const bare = { ...VALID.content_change_proposal };
+    delete (bare as { proposalId?: string }).proposalId;
+    delete (bare as { changeSetId?: string }).changeSetId;
+    const parsed = parseRenderableView(bare);
+    expect(parsed).not.toBeNull();
+    if (parsed && parsed.viewType === "content_change_proposal") {
+      expect(parsed.proposalId).toBeUndefined();
+      expect(parsed.changeSetId).toBeUndefined();
+    }
+  });
+
+  it("rejects an over-long correlation id (bounds enforced)", () => {
+    expect(
+      parseRenderableView({
+        ...VALID.content_change_proposal,
+        proposalId: "p".repeat(201),
+      }),
+    ).toBeNull();
+    expect(
+      parseRenderableView({
+        ...VALID.content_change_proposal,
+        changeSetId: "c".repeat(201),
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects an empty-string correlation id (present means non-empty)", () => {
+    expect(
+      parseRenderableView({ ...VALID.content_change_proposal, proposalId: "" }),
+    ).toBeNull();
+    expect(
+      parseRenderableView({ ...VALID.content_change_proposal, changeSetId: "" }),
+    ).toBeNull();
+  });
+
+  it("rejects a non-string correlation id (opaque STRING, never an object)", () => {
+    expect(
+      parseRenderableView({
+        ...VALID.content_change_proposal,
+        proposalId: { $oid: "x" },
+      }),
+    ).toBeNull();
   });
 });
 
