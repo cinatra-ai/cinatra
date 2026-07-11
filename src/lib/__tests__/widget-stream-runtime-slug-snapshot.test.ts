@@ -442,8 +442,11 @@ describe("refresher lifecycle — single-flight, idempotent start, signal hook",
   });
 });
 
-describe("createApprovedWidgetStreamSlugEnumerator — narrow local enumerator (seam for slice-2 list)", () => {
+describe("createApprovedWidgetStreamSlugEnumerator — cross-org list swap (slice 5)", () => {
   // Capture the SQL text via a closure (the injected query is untyped test glue).
+  // After the slice-5 swap the enumerator issues NO SQL of its own — it delegates
+  // to the grant module's cross-org `listAllApprovedWidgetStreamMetadataGrants`,
+  // so this captures the SQL THAT function issues through the injected query.
   function makeQuery(rows: { agent_slug: string }[]): {
     query: (text: string) => Promise<{ agent_slug: string }[]>;
     lastSql: () => string;
@@ -458,14 +461,29 @@ describe("createApprovedWidgetStreamSlugEnumerator — narrow local enumerator (
     };
   }
 
-  it("maps DISTINCT agent_slug rows to slugs via the injected query", async () => {
+  it("maps approved rows to DISTINCT slugs via the cross-org grant-module list", async () => {
     const { query, lastSql } = makeQuery([{ agent_slug: "acme-editor" }, { agent_slug: "beta-editor" }]);
     const enumerate = createApprovedWidgetStreamSlugEnumerator({ query: query as never });
     expect(await enumerate()).toEqual(["acme-editor", "beta-editor"]);
     const sql = lastSql().replace(/\s+/g, " ");
-    expect(sql).toContain("SELECT DISTINCT agent_slug");
+    // Cross-org: filter on status ONLY, no org_id PREDICATE (every scope's rows).
+    // (org_id still appears as a SELECTED column — that is not a scope filter.)
     expect(sql).toContain("status = 'approved'");
+    expect(sql).not.toContain("org_id IS NULL");
+    expect(sql).not.toContain("org_id =");
     expect(sql).toContain(`"cinatra"."extension_widget_stream_metadata_grant"`);
+  });
+
+  it("dedupes a slug approved in more than one org scope to a single redirect-skip candidate", async () => {
+    // Cross-org read: the SAME slug can be approved at global scope AND in an org.
+    // The liveness snapshot only needs the slug once.
+    const { query } = makeQuery([
+      { agent_slug: "acme-editor" },
+      { agent_slug: "acme-editor" },
+      { agent_slug: "beta-editor" },
+    ]);
+    const enumerate = createApprovedWidgetStreamSlugEnumerator({ query: query as never });
+    expect(await enumerate()).toEqual(["acme-editor", "beta-editor"]);
   });
 
   it("uses the provided schema and quotes a stray double-quote (identifier safety)", async () => {

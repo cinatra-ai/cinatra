@@ -97,6 +97,19 @@ import type { InstallTrustAnchor } from "@/lib/extension-package-store";
 
 export type WidgetStreamAgent = GeneratedWidgetStreamAgentEntry;
 
+/** Own-property build-map lookup. A bare `GENERATED_WIDGET_STREAM_AGENTS[slug]`
+ * is PROTOTYPE-CHAIN sensitive: a request-controlled slug like `constructor` /
+ * `toString` / `__proto__` resolves to an INHERITED `Object` member (truthy) and
+ * would be mis-classified as a baked build-time entry — and a build-time entry
+ * carries `grant: null`, so the point-of-use re-assert is skipped as baked host
+ * trust (a fail-OPEN on this unauthenticated, attacker-controlled slug surface).
+ * Own key only: an inherited key falls through to the fail-closed runtime arm. */
+function lookupBuildWidgetStreamEntry(agentSlug: string): WidgetStreamAgent | undefined {
+  return Object.hasOwn(GENERATED_WIDGET_STREAM_AGENTS, agentSlug)
+    ? GENERATED_WIDGET_STREAM_AGENTS[agentSlug]
+    : undefined;
+}
+
 /**
  * Resolve a widget-stream agent from the BUILD-TIME generated map only
  * (null = not baked). This is the build arm + the collision backstop — for any
@@ -106,7 +119,7 @@ export type WidgetStreamAgent = GeneratedWidgetStreamAgentEntry;
  * too; this stays fail-closed for them (a runtime-only slug is null here).
  */
 export function resolveWidgetStreamAgent(agentSlug: string): WidgetStreamAgent | null {
-  return GENERATED_WIDGET_STREAM_AGENTS[agentSlug] ?? null;
+  return lookupBuildWidgetStreamEntry(agentSlug) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -497,19 +510,225 @@ async function resolveRuntimeWidgetStreamAgent(
   }
 }
 
+// ---------------------------------------------------------------------------
+// PUBLIC-SURFACE HARDENING (widget-stream runtime trust, slice 5 — design §7b)
+//
+// The stream/token/capabilities routes are UNAUTHENTICATED-reachable, and the
+// RUNTIME arm above does per-request DB reads + on-disk canon re-hashing + store
+// integrity verification — an amplification / error-oracle surface. This layer
+// wraps the runtime arm at the single union entry point with:
+//   - SINGLE-FLIGHT per slug: concurrent identical verifications coalesce to ONE
+//     (N simultaneous requests for slug X ⇒ 1 DB+FS verification);
+//   - a POSITIVE cache of a successful resolution for a SHORT ttl;
+//   - a NEGATIVE cache of unknown/failed slugs with a SHORT bounded backoff (so a
+//     freshly-approved slug self-heals within the backoff — never permanent);
+//   - a per-source RATE LIMIT charged ONLY on the expensive (cache-missing)
+//     verification path — a legit widget resolves its slug once, then rides the
+//     positive cache (never charged); only a source cycling MANY distinct
+//     uncached slugs burns budget (the amplification target);
+//   - OPAQUE outcomes to the caller (null ⇒ the routes' existing 404 / opaque
+//     body); the detailed rate-limit reason goes to an injectable AUDIT sink,
+//     never the response.
+//
+// NOT THE AUTHZ BOUNDARY. The cache holds a RESOLUTION, never authorization to
+// act. Every side effect (OBO-carrier run creation, widget-chat-tool load) RE-
+// ASSERTS the pinned grant LIVE and uncached (isPinnedGrantStillAuthorized /
+// buildWidgetChatTool), so a grant revoked within the positive ttl still fails
+// closed at point of use: the cache can only ever cause a self-healing liveness
+// blip (a briefly-stale, 404-eligible resolution), never serve a revoked widget.
+// The BUILD-TIME arm is NEVER cached / single-flighted / rate-limited — it is a
+// cheap constant-map lookup that wins absolutely and must always answer.
+// The injected-deps path (tests / bespoke authorities) BYPASSES this layer so
+// injected-authority resolutions stay deterministic and never cross-contaminate.
+// ---------------------------------------------------------------------------
+
+const WS_SERVE_POSITIVE_TTL_MS = 5_000;
+const WS_SERVE_NEGATIVE_TTL_MS = 3_000;
+const WS_SERVE_RATE_WINDOW_MS = 60_000;
+const WS_SERVE_RATE_MAX = 240; // expensive runtime verifications / minute / source
+
+/** The one opaque outcome this layer produces that is otherwise INVISIBLE (a
+ * rate-limited request returns null → an indistinguishable 404). Emitted to the
+ * audit sink for ops; never surfaced in a response body. */
+export type WidgetStreamServeAuditEvent = {
+  agentSlug: string;
+  outcome: "rate-limited";
+  /** The per-source rate-limit key (an x-forwarded-for hop, or `unknown`). */
+  source?: string;
+};
+
+export type WidgetStreamServeHardeningState = {
+  positive: Map<string, { resolved: ResolvedWidgetStreamAgent; expiresAt: number }>;
+  negative: Map<string, number>;
+  inflight: Map<string, Promise<ResolvedWidgetStreamAgent | null>>;
+  rate: Map<string, { count: number; resetAt: number }>;
+};
+
+export function createWidgetStreamServeHardeningState(): WidgetStreamServeHardeningState {
+  return { positive: new Map(), negative: new Map(), inflight: new Map(), rate: new Map() };
+}
+
+declare global {
+  var __cinatraWidgetStreamServeHardening: WidgetStreamServeHardeningState | undefined;
+}
+
+/** Process-global state (globalThis-anchored so Turbopack HMR / multiple route
+ * compilations share ONE set of caches instead of resetting on recompile). */
+function serveHardeningState(): WidgetStreamServeHardeningState {
+  if (!globalThis.__cinatraWidgetStreamServeHardening) {
+    globalThis.__cinatraWidgetStreamServeHardening = createWidgetStreamServeHardeningState();
+  }
+  return globalThis.__cinatraWidgetStreamServeHardening;
+}
+
+export type WidgetStreamServeHardeningSeams = {
+  state?: WidgetStreamServeHardeningState;
+  now?: () => number;
+  audit?: (event: WidgetStreamServeAuditEvent) => void;
+};
+
+function defaultServeAudit(event: WidgetStreamServeAuditEvent): void {
+  // Constant format string: agentSlug + source are request-controlled and must
+  // never sit in console's printf position (tainted-format-string).
+  console.warn(
+    "[widget-stream:%s] runtime verification rate-limited for source %s — opaque 404 to the " +
+      "caller (fail closed; the negative/positive caches + single-flight already cap the DB+FS " +
+      "amplification, this is the per-source backstop)",
+    event.agentSlug,
+    event.source ?? "unknown",
+  );
+}
+
+/** Charge the per-source rate limiter on the EXPENSIVE verification path. Fixed
+ * sliding window per source. Returns true if ALLOWED. No source ⇒ never limited
+ * (the limiter is a per-source backstop; a missing source identity must never be
+ * able to throttle a legitimate serve). */
+function chargeServeVerification(
+  state: WidgetStreamServeHardeningState,
+  source: string | undefined,
+  now: number,
+): boolean {
+  if (!source) return true;
+  const bucket = state.rate.get(source);
+  if (!bucket || bucket.resetAt <= now) {
+    state.rate.set(source, { count: 1, resetAt: now + WS_SERVE_RATE_WINDOW_MS });
+    return true;
+  }
+  if (bucket.count >= WS_SERVE_RATE_MAX) return false;
+  bucket.count += 1;
+  return true;
+}
+
+/**
+ * The hardened runtime-resolve core — injectable (state + clock + audit + the
+ * expensive resolver) so it is unit-testable DB-free. Order (cheap → expensive):
+ *   positive-cache hit → negative-cache hit → single-flight join →
+ *   [expensive:] rate-limit charge → run the resolver → cache the outcome.
+ * ONLY the genuine expensive verification charges the limiter; cache hits and
+ * coalesced single-flight joiners are free. `resolveExpensive` already fails
+ * closed to null (the runtime arm's own try/catch); a null is negative-cached, a
+ * hit positive-cached, and a rate-limited refusal is NOT cached (so it self-heals
+ * the instant the window resets).
+ */
+export async function hardenedResolveWidgetStreamRuntime(
+  agentSlug: string,
+  options: { requestSource?: string } | undefined,
+  resolveExpensive: () => Promise<ResolvedWidgetStreamAgent | null>,
+  seams?: WidgetStreamServeHardeningSeams,
+): Promise<ResolvedWidgetStreamAgent | null> {
+  const state = seams?.state ?? serveHardeningState();
+  const clock = seams?.now ?? Date.now;
+  const audit = seams?.audit ?? defaultServeAudit;
+  const source = options?.requestSource;
+  const t = clock();
+
+  // Positive cache (short ttl) — a successful resolution. Safe because the
+  // descriptor is re-asserted LIVE at every point of use, never here.
+  const pos = state.positive.get(agentSlug);
+  if (pos) {
+    if (pos.expiresAt > t) return pos.resolved;
+    state.positive.delete(agentSlug);
+  }
+  // Negative cache (short bounded backoff) — unknown / failed. A fresh approval
+  // self-heals within the backoff.
+  const negExpiresAt = state.negative.get(agentSlug);
+  if (negExpiresAt !== undefined) {
+    if (negExpiresAt > t) return null;
+    state.negative.delete(agentSlug);
+  }
+  // Single-flight — coalesce concurrent verifications for the same slug onto one.
+  const existing = state.inflight.get(agentSlug);
+  if (existing) return existing;
+
+  const run = (async (): Promise<ResolvedWidgetStreamAgent | null> => {
+    // Rate-limit the EXPENSIVE path per source (cache / coalesced hits never reach
+    // here). Exhausted ⇒ opaque null (routes 404) + audit; NOT cached.
+    if (!chargeServeVerification(state, source, clock())) {
+      audit({ agentSlug, outcome: "rate-limited", source });
+      return null;
+    }
+    const resolved = await resolveExpensive();
+    const settledAt = clock();
+    if (resolved) {
+      state.positive.set(agentSlug, { resolved, expiresAt: settledAt + WS_SERVE_POSITIVE_TTL_MS });
+    } else {
+      state.negative.set(agentSlug, settledAt + WS_SERVE_NEGATIVE_TTL_MS);
+    }
+    return resolved;
+  })();
+  state.inflight.set(agentSlug, run);
+  try {
+    return await run;
+  } finally {
+    state.inflight.delete(agentSlug);
+  }
+}
+
+/** Test seam: reset the process-global serve-hardening caches. */
+export function __resetWidgetStreamServeHardeningForTests(): void {
+  globalThis.__cinatraWidgetStreamServeHardening = createWidgetStreamServeHardeningState();
+}
+
+/**
+ * Derive the per-source rate-limit key for an unauthenticated widget serve
+ * request: the FIRST `x-forwarded-for` hop (the closest client the edge asserts),
+ * else a shared `unknown` bucket. Used ONLY as an amplification-backstop key —
+ * never for authorization (the in-handler resolver is the wall).
+ */
+export function widgetStreamRequestSource(request: Request): string {
+  const xff = request.headers.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return "unknown";
+}
+
 /**
  * The UNION resolver — the single entry point every serving surface uses.
  * Build-time arm wins absolutely for its slugs (a stray runtime grant row for
  * a build slug is ignored, never a null); otherwise the runtime arm resolves
  * with full serve-time re-verification. Null = 404 (fail closed).
+ *
+ * PRODUCTION serve callers pass no `deps`: the runtime arm is then wrapped by the
+ * §7b public-surface hardening (single-flight + positive/negative cache + per-
+ * source rate limit; `options.requestSource` keys the limiter). Callers that
+ * inject `deps` (tests / bespoke authorities) get the raw, deterministic runtime
+ * arm — the hardening's shared caches are a production concern and would
+ * cross-contaminate injected-authority resolutions. The build-time arm short-
+ * circuits before either path.
  */
 export async function resolveWidgetStreamAgentUnion(
   agentSlug: string,
   deps?: WidgetStreamRuntimeResolveDeps,
+  options?: { requestSource?: string },
 ): Promise<ResolvedWidgetStreamAgent | null> {
-  const build = GENERATED_WIDGET_STREAM_AGENTS[agentSlug];
+  const build = lookupBuildWidgetStreamEntry(agentSlug);
   if (build) return { agentSlug, entry: build, grant: null };
-  return resolveRuntimeWidgetStreamAgent(agentSlug, withRuntimeDefaults(deps));
+  if (deps) return resolveRuntimeWidgetStreamAgent(agentSlug, withRuntimeDefaults(deps));
+  return hardenedResolveWidgetStreamRuntime(agentSlug, options, () =>
+    resolveRuntimeWidgetStreamAgent(agentSlug, withRuntimeDefaults(undefined)),
+  );
 }
 
 /**
@@ -776,7 +995,7 @@ export async function inAdminCmsContentEditorAgentPackages(
       runtimeDeps.metadataGrantDeps,
     );
     for (const grant of approved) {
-      if (GENERATED_WIDGET_STREAM_AGENTS[grant.agentSlug]) continue; // build wins
+      if (lookupBuildWidgetStreamEntry(grant.agentSlug)) continue; // build wins
       const resolved = await resolveRuntimeWidgetStreamAgent(grant.agentSlug, runtimeDeps);
       if (resolved?.entry.relayAgentPackage && resolved.grant?.packageName === grant.packageName) {
         packages.add(resolved.entry.relayAgentPackage);
