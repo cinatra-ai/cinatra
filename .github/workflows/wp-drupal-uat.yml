@@ -165,7 +165,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'redis:7-alpine' || '' }}
+        image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'redis:8-alpine' || '' }}
         ports:
           - 6379:6379
         options: >-
@@ -313,7 +313,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:7-alpine
+        image: redis:8-alpine
         ports:
           - 6379:6379
         options: >-
