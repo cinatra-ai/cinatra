@@ -30,8 +30,8 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 
 | Service / artifact | File | Current pin | Upstream major target | Notes |
 |---|---|---|---|---|
-| postgres (platform) | docker-compose.yml | `postgres:17-alpine` | postgres 18-alpine | platform DB; consolidation + defer per §3 |
-| nango-db | docker-compose.yml | `postgres:17-alpine@sha256:979c…59ca` (was `15-alpine`; **consolidated + digest-pinned** — §3 rationale, applied §8) | postgres 18-alpine | now on the platform Postgres major; the 17/15 spread reconciled |
+| postgres (platform) | docker-compose.yml | `postgres:18-alpine@sha256:9a8a…de15` (was `17-alpine` floating; **major applied + digest-pinned 2026-07-11** — §3) | at target (latest stable 18.4; 19 is prerelease-only) | platform DB; 18 needs the PARENT volume mount (§3); live cutovers ride the owner-gated deploy wave |
+| nango-db | docker-compose.yml | `postgres:17-alpine@sha256:979c…59ca` (was `15-alpine`; consolidated + digest-pinned) | **HELD at 17 — current validated hold**; follows Nango upstream support | app-coupled to Nango (upstream reference compose pins postgres 16; 17 is already a validated divergence); revisit when upstream moves (§3) |
 | twenty-db | docker-compose.yml | `postgres:16` | follows Twenty upstream | profile `twenty`; upstream-dictated major, not ours |
 | plane-db | docker-compose.yml | `postgres:15.7-alpine` | follows Plane upstream | profile `plane`; upstream-dictated, track don't lead |
 | redis (platform) | docker-compose.yml | `redis:8-alpine@sha256:9d31…7005` (was `redis:7-alpine`, **major applied + digest-pinned** — §9) | at target (latest stable 8.8.0) | BullMQ works-after arm gates it (§9) |
@@ -94,36 +94,45 @@ immutable pin is used.
 
 ---
 
-## 3. Postgres spread decision
+## 3. Postgres majors — 18 applied (platform), holds recorded
 
-Current Postgres pins across the compose: `17-alpine` (platform),
-`15-alpine` (nango-db), `16` (twenty-db, profile), `15.7-alpine` (plane-db,
-profile). Upstream major target is postgres 18.
+*(Supersedes the earlier "record the target, defer the bump" state of this
+section; the deferred bump has now been executed by the staged Postgres lane.)*
 
-**Decision: record the consolidation target, defer the actual image bump.**
+**Applied 2026-07-11 — platform `postgres` → `postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15`**
+(18.4-alpine3.24, the CONFIRMED multi-arch OCI index digest; postgres 19 is
+prerelease-only, so 18.4 is the latest-stable bar). Two coupled facts:
 
-- The two cinatra-owned, always-on services — platform `postgres` and
-  `nango-db` — get the **consolidation target recorded as postgres 17-alpine**
-  (one major), reconciling the 17/15 split. This pass does **not** also jump to
-  18: that is a separate major handled by the staged upgrade lane with a
-  data/extension-compatibility check.
-- `twenty-db` (postgres 16) and `plane-db` (postgres 15.7) are profile-gated and
-  their Postgres major is **chosen by Twenty / Plane upstream**, not by us. We
-  record their current pin and a target of "follow upstream"; we do **not**
-  renumber them onto our major (that would diverge from what those apps test
-  and migrate against).
+- **Layout change:** the 18 image moved PGDATA to
+  `/var/lib/postgresql/18/docker` and requires the volume mounted at the
+  **parent** `/var/lib/postgresql` (docker-library/postgres#1259). The compose
+  mount moved accordingly. An 18 container REFUSES both a volume mounted at
+  the legacy `.../data` target and a parent-mounted volume holding a 17
+  cluster at its root — fail-closed in both directions (verified empirically;
+  the works-after postgres arm asserts the refusal as its negative test).
+- **Existing dev volumes:** a 17-era `cinatra-postgres` volume makes 18 refuse
+  to start (data untouched). Migrate via the documented dump/restore into a
+  fresh volume (the mechanism `scripts/ci/works-after/postgres.sh` proves), or
+  discard disposable dev data and let 18 initdb fresh. Deployed environments
+  migrate ONLY via the ops runbook's owner-gated dump/restore cutover — the
+  live stacks are pinned back to 17 by their ops overrides until then.
 
-Why defer the bump (the safer choice): a Postgres **major** bump is not a
-drop-in `image:` edit. It needs a `pg_upgrade` / dump+restore of the on-disk
-`cinatra-postgres` / `nango-postgres` volumes; a bare tag bump against an
-existing PGDATA volume makes Postgres refuse to start
-(`database files are incompatible with server`). This inventory pass must stay
-non-breaking, so it records the target and reconciles the spread rationale here;
-the data-migration-bearing image bump is owned by the staged upgrade lane (which
-runs it on a non-production environment first, with a restore check) plus the
-per-environment upgrade work. Net change to the compose in this pass: **no
-`image:` change for Postgres** — only the recorded-target comments on the two
-cinatra-owned services pointing here.
+**Holds (deliberate, recorded):**
+
+- `nango-db` — **current validated hold at `17-alpine@sha256:979c…59ca`**:
+  app-coupled to Nango, whose upstream reference compose still pins
+  postgres 16, so 17 is already a deliberate validated divergence and 18 is
+  unvalidated by upstream (the works-after nango arm proves fresh-init, not a
+  restored 17 cluster under 18). It keeps the legacy `.../data` mount while it
+  is a <=17 image. Revisit when Nango upstream moves.
+- `twenty-db` (postgres 16) and `plane-db` (postgres 15.7) are profile-gated
+  and their Postgres major is **chosen by Twenty / Plane upstream**, not by
+  us; we track upstream and do not renumber them onto our major (unchanged
+  policy).
+- `scripts/ci/prod-boot-e2e.sh` keeps a `postgres:17` stand-in until the live
+  cutover wave: it boots the RELEASED image, which deploys against the live
+  platform postgres (17 until the owner-gated cutover). The forward proofs
+  (works-after 17→18 arm, upgrade-proof on 18, the CI e2e suites) run on 18.
 
 ---
 

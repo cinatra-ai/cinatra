@@ -1,5 +1,5 @@
 diff --git a/src/lib/better-auth-schema.ts b/src/lib/better-auth-schema.ts
-index 8143b25..67820dd 100644
+index 2590f88d..d53e8ac5 100644
 --- a/src/lib/better-auth-schema.ts
 +++ b/src/lib/better-auth-schema.ts
 @@ -30,12 +30,6 @@ export const cinatraAuthAdditionalUserFields = {
@@ -12,6 +12,6 @@ index 8143b25..67820dd 100644
 -    defaultValue: null,
 -    input: false,
 -  },
- } as const;
- 
- // Schema-relevant options for the `organization` plugin: `teams` enablement
+   // Per-user Avatar accent (nullable; NULL = "derive"). This is the ONLY
+   // provisioning path for `public."user".accent_color` on a fresh install:
+   // core migrations are ledger-faked on a fresh schema (setup's
