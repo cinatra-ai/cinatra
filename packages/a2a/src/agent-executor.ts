@@ -333,6 +333,15 @@ export type InProcessAgentExecutorOptions = CinatraA2AConfig & {
    */
   getPinnedVersionForTask?: (taskId: string) => string | undefined;
   /**
+   * Constructor-injected lookup (cinatra#1040 S7) for the server-resolved
+   * REQUIRED-pin snapshot id (the immutable agent_template_versions id) for a
+   * taskId. Returning a string persists it on the run's `versionId` so the
+   * execution worker enforces the pin FAIL-CLOSED; undefined leaves it null (a
+   * default resolution stays best-effort). Set ONLY when an explicit
+   * requestedVersion resolved to a published snapshot.
+   */
+  getPinnedSnapshotIdForTask?: (taskId: string) => string | undefined;
+  /**
    * The InMemoryTaskStore from the A2A server bundle. Required for the
    * background-poll path: execute() closes the eventBus immediately after
    * publishing the initial Task (so send_message returns in < 1s), then a
@@ -358,10 +367,14 @@ export class InProcessAgentExecutor implements AgentExecutor {
   private readonly getPinnedVersionForTask?: (
     taskId: string,
   ) => string | undefined;
+  private readonly getPinnedSnapshotIdForTask?: (
+    taskId: string,
+  ) => string | undefined;
 
   constructor(options: InProcessAgentExecutorOptions) {
     this.config = options;
     this.getPinnedVersionForTask = options.getPinnedVersionForTask;
+    this.getPinnedSnapshotIdForTask = options.getPinnedSnapshotIdForTask;
   }
 
   async execute(
@@ -481,6 +494,11 @@ export class InProcessAgentExecutor implements AgentExecutor {
       const pinnedTaskId =
         requestContext.taskId ?? requestContext.contextId ?? "";
       const pinnedVersion = this.getPinnedVersionForTask?.(pinnedTaskId);
+      // cinatra#1040 S7 — the REQUIRED-pin snapshot id (present ONLY for an
+      // explicit requestedVersion). Persisted as the run's `versionId` so the
+      // worker enforces the pin fail-closed; a default resolution leaves it
+      // undefined (best-effort live-template).
+      const pinnedSnapshotId = this.getPinnedSnapshotIdForTask?.(pinnedTaskId);
       // Child-run OBO ceiling composition (epic W5). This is the creation site
       // for orchestrator fan-out children. When the A2A caller is itself an
       // agent-run OBO actor, `actorCtx.oboCeiling` is its ceiling chain; the
@@ -494,6 +512,9 @@ export class InProcessAgentExecutor implements AgentExecutor {
           templateId: this.config.templateId,
           inputParams,
           packageVersion: pinnedVersion,
+          // cinatra#1040 S7 — the exact snapshot id for a REQUIRED pin. Together
+          // with packageVersion it forms the fail-closed marker the worker reads.
+          versionId: pinnedSnapshotId,
           orgId,
           runBy,
           parentOboCeiling: actorCtx.oboCeiling ?? null,

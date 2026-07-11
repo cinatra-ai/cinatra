@@ -69,6 +69,12 @@ export class MultiAgentExecutor implements AgentExecutor {
   // Pinned version per taskId — consumed by the owning InProcessAgentExecutor
   // via a constructor-injected lookup function, NOT via metadata mutation.
   private readonly pinnedVersionByTaskId: Map<string, string> = new Map();
+  // Pinned REQUIRED-snapshot id per taskId (cinatra#1040 S7). Set ONLY when the
+  // request-time seam resolved an explicit requestedVersion to an immutable
+  // agent_template_versions snapshot — threaded into the created run's
+  // `versionId` so the execution worker enforces the pin FAIL-CLOSED. Absent for
+  // a default resolution (the run stays best-effort live-template).
+  private readonly pinnedSnapshotIdByTaskId: Map<string, string> = new Map();
   // Ownership map — taskId → packageName. Used by ownsTask() to short-circuit
   // cancelTask broadcasts.
   private readonly ownerByTaskId: Map<string, string> = new Map();
@@ -78,6 +84,8 @@ export class MultiAgentExecutor implements AgentExecutor {
     this.templateByPackageName = new Map();
     const pinnedLookup = (taskId: string): string | undefined =>
       this.pinnedVersionByTaskId.get(taskId);
+    const pinnedSnapshotIdLookup = (taskId: string): string | undefined =>
+      this.pinnedSnapshotIdByTaskId.get(taskId);
     for (const t of opts.templates) {
       if (!t.packageName) continue;
       this.templateByPackageName.set(t.packageName, t);
@@ -91,6 +99,7 @@ export class MultiAgentExecutor implements AgentExecutor {
           enqueueJob: opts.enqueueJob,
           createAndEnqueueAgentRun: opts.createAndEnqueueAgentRun,
           getPinnedVersionForTask: pinnedLookup,
+          getPinnedSnapshotIdForTask: pinnedSnapshotIdLookup,
           taskStore: opts.taskStore,
         }),
       );
@@ -156,16 +165,24 @@ export class MultiAgentExecutor implements AgentExecutor {
     // can route correctly.
     const taskId = ctx.taskId ?? ctx.contextId ?? "unknown";
     this.pinnedVersionByTaskId.set(taskId, pinned.resolvedVersion);
+    // Thread the REQUIRED-pin snapshot id — present ONLY for an explicit
+    // requestedVersion — so the created run carries the fail-closed marker
+    // (versionId + packageVersion both set). A default resolution leaves it
+    // unset and the run stays best-effort.
+    if (pinned.snapshotId) {
+      this.pinnedSnapshotIdByTaskId.set(taskId, pinned.snapshotId);
+    }
     this.ownerByTaskId.set(taskId, skillId);
 
     try {
       return await sub.execute(ctx, eventBus);
     } finally {
-      // Prune pinnedVersion after run — the sub-executor has already persisted
-      // it on the agent_runs row. Leave ownerByTaskId so a subsequent
-      // cancelTask can still route correctly. Cleanup is bounded by process
-      // lifetime until a finished() hook owns full cleanup.
+      // Prune pinnedVersion + snapshot id after run — the sub-executor has
+      // already persisted them on the agent_runs row. Leave ownerByTaskId so a
+      // subsequent cancelTask can still route correctly. Cleanup is bounded by
+      // process lifetime until a finished() hook owns full cleanup.
       this.pinnedVersionByTaskId.delete(taskId);
+      this.pinnedSnapshotIdByTaskId.delete(taskId);
     }
   }
 
