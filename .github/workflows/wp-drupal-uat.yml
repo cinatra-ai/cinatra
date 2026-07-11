@@ -150,9 +150,9 @@ jobs:
     # required check, while the real-run path gets a live Postgres + Redis.
     services:
       postgres:
-        # postgres:17-alpine matches docker-compose.yml's Postgres major so CI
+        # postgres:18-alpine matches docker-compose.yml's Postgres major so CI
         # exercises the same engine `cinatra setup dev` provisions against.
-        image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'postgres:17-alpine' || '' }}
+        image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'postgres:18-alpine' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
@@ -298,9 +298,9 @@ jobs:
     timeout-minutes: 50
     services:
       postgres:
-        # postgres:17-alpine matches docker-compose.yml's Postgres major so CI
+        # postgres:18-alpine matches docker-compose.yml's Postgres major so CI
         # exercises the same engine `cinatra setup dev` provisions against.
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres

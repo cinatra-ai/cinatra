@@ -153,3 +153,126 @@ export type McpRequestContext = {
  * is the only writer of an authenticated frame; downstream registries read it.
  */
 export const mcpRequestContextStorage = new AsyncLocalStorage<McpRequestContext>();
+
+// ---------------------------------------------------------------------------
+// Run-context precedence for one MCP request (#1195, first slice).
+//
+// Pure and synchronous so the contract is directly unit-testable; the MCP
+// transport handler (index.tsx) resolves the durable binding ONCE per request
+// (an immutable result — no second read may race the first) and feeds every
+// channel in here. Lives in THIS module (the request-context frame it fills)
+// rather than a new file so the locked route graphs don't grow (route-graph
+// ratchet): request-context.ts is already reachable wherever index.tsx is.
+//
+// Channel precedence for the run id:
+//   1. "obo"      — a delegated agent-run OBO token (signed at mint; carries
+//                   the run id). Independent of redis state: it survives a
+//                   durable "invalid" outcome.
+//   2. "durable"  — the durable binding resolved through the run row
+//                   (readAgentRunByTokenHash) — verified run identity.
+//   3. "registry" — the legacy in-process registry (transition fallback,
+//                   consulted ONLY when the durable outcome is "absent").
+//   4. "header"   — the legacy x-cinatra-* headers (last resort, same gate).
+//
+// FAIL-CLOSED SUPPRESSION: a durable outcome of "invalid" (present-but-
+// malformed value, token-miss, or verification error after a binding was
+// found) suppresses the registry AND header channels entirely — the run id
+// AND every provenance field. A positive stale/corrupt-credential signal is
+// never downgraded into weaker, forgeable channels. Provenance metadata
+// (agentId / packageVersion / agentSpecVersion) is UNTRUSTED tagging input
+// on every channel — never an authorization input.
+// ---------------------------------------------------------------------------
+
+export type DurableRunContextResolution =
+  | {
+      outcome: "resolved";
+      ctx: {
+        runId: string;
+        agentId?: string;
+        packageVersion?: string;
+        agentSpecVersion?: string;
+      };
+    }
+  | { outcome: "invalid" }
+  | { outcome: "absent" };
+
+export type RunContextServedBy =
+  | "obo"
+  | "durable"
+  | "registry"
+  | "header"
+  | "none";
+
+export type RegistryRunContext = {
+  runId?: string;
+  agentId?: string;
+  packageVersion?: string;
+  agentSpecVersion?: string;
+};
+
+export type ResolvedRequestRunContext = {
+  runId?: string;
+  agentId?: string;
+  packageVersion?: string;
+  agentSpecVersion?: string;
+  /** Which channel supplied the run id (the cutover metric dimension). */
+  servedBy: RunContextServedBy;
+  /** True when a durable "invalid" outcome suppressed the legacy channels. */
+  suppressed: boolean;
+};
+
+export function resolveRequestRunContext(input: {
+  /** delegatedActor.runId when delegation === "agent_run"; else undefined. */
+  delegatedRunId?: string;
+  /** The ONE per-request durable resolution (undefined when not consulted —
+   *  e.g. a delegated request or no bearer). */
+  durable?: DurableRunContextResolution;
+  registryCtx?: RegistryRunContext;
+  headerRunId?: string;
+  headerAgentId?: string;
+  headerPackageVersion?: string;
+  headerAgentSpecVersion?: string;
+}): ResolvedRequestRunContext {
+  const suppressed = input.durable?.outcome === "invalid";
+  const durableCtx =
+    input.durable?.outcome === "resolved" ? input.durable.ctx : undefined;
+
+  // Legacy channels are gated by suppression as a UNIT (run id + provenance).
+  const registryCtx = suppressed ? undefined : input.registryCtx;
+  const headerRunId = suppressed ? undefined : input.headerRunId;
+  const headerAgentId = suppressed ? undefined : input.headerAgentId;
+  const headerPackageVersion = suppressed
+    ? undefined
+    : input.headerPackageVersion;
+  const headerAgentSpecVersion = suppressed
+    ? undefined
+    : input.headerAgentSpecVersion;
+
+  const legacyRunId = registryCtx?.runId ?? headerRunId;
+  const runId = input.delegatedRunId ?? durableCtx?.runId ?? legacyRunId;
+
+  const servedBy: RunContextServedBy = input.delegatedRunId
+    ? "obo"
+    : durableCtx?.runId
+      ? "durable"
+      : registryCtx?.runId
+        ? "registry"
+        : headerRunId
+          ? "header"
+          : "none";
+
+  return {
+    runId,
+    agentId: durableCtx?.agentId ?? registryCtx?.agentId ?? headerAgentId,
+    packageVersion:
+      durableCtx?.packageVersion ??
+      registryCtx?.packageVersion ??
+      headerPackageVersion,
+    agentSpecVersion:
+      durableCtx?.agentSpecVersion ??
+      registryCtx?.agentSpecVersion ??
+      headerAgentSpecVersion,
+    servedBy,
+    suppressed,
+  };
+}

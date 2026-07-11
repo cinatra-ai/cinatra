@@ -46,3 +46,25 @@ export async function readAgentRunByTokenHash(
     .limit(1);
   return row ?? null;
 }
+
+/**
+ * #1195 durable run-context binding: narrow bridge-internal read of a run's
+ * credential hash BY RUN ID — used ONLY by /api/llm-bridge to key the durable
+ * MCP run-context binding to the run credential (which the MCP reader then
+ * resolves back through `readAgentRunByTokenHash` above, keeping the run row
+ * the single source of truth). The general `AgentRunRecord` read path
+ * deliberately continues to never expose the hash; do not widen this into a
+ * general accessor. Null for a run without a dispatch-minted credential
+ * (legacy dispatches, resumed/cloned runs — the hash is never copied).
+ */
+export async function readAgentRunTokenHashById(
+  runId: string,
+): Promise<string | null> {
+  if (!runId) return null;
+  const [row] = await db
+    .select({ runTokenHash: agentRuns.runTokenHash })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, runId))
+    .limit(1);
+  return row?.runTokenHash ?? null;
+}

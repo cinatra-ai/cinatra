@@ -137,6 +137,10 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      # packages: read is needed ONLY by the trusted gate-mode dispatch lane's
+      # ghcr login below (pulling the private previous-release image for the
+      # postgres prev-release upgrade-proof arm). PR runs never login.
+      packages: read
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
@@ -288,6 +292,18 @@ jobs:
       - name: Unit tests (works-after static invariants)
         if: ${{ needs.detect.outputs.run == 'true' }}
         run: pnpm run works-after:test
+
+      # The prev-release arm pulls the last-published PRIVATE image from ghcr;
+      # an anonymous pull is `unauthorized` (this hard-failed the first gate
+      # dispatch). Login ONLY on the trusted dispatch lane that supplies
+      # prev_image — PR/merge_group runs never authenticate to the registry.
+      - name: Login to ghcr (gate-mode prev-release pull only)
+        if: ${{ needs.detect.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.prev_image != '' }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run works-after proof harness
         if: ${{ needs.detect.outputs.run == 'true' }}
