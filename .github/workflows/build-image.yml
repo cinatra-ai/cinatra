@@ -207,6 +207,45 @@ jobs:
       # container. That topology lets the suite gate independently of the
       # agents-suite baseline.
 
+  # Full packages/skills unit suite (#1359). Runs in its OWN top-level job —
+  # NOT appended to `test` — for the same reason as rbac-authz-unit / auth-
+  # schema-drift: the shared `test` job has a well-known packages/agents
+  # baseline that would skip any step added after it. packages/skills is not in
+  # the root `src/` vitest include, so before this job only a hand-pinned 2-file
+  # slice ran in CI (formerly in the Better Auth schema parity job); the rest of
+  # the suite had no runner, so #1174's 15-test repair regressed within 48h
+  # (#1306) undetected. This job runs the ENTIRE suite (`pnpm test` = vitest run;
+  # the live golden-eval tests self-skip without OPENAI_API_KEY) and is made a
+  # REQUIRED gate STRUCTURALLY: the `build` job `needs` it and its "Guard
+  # prerequisite gates" step hard-fails the (branch-protection-required) `build`
+  # if this job did not succeed — the exact mechanism that makes `test`
+  # required, so no branch-protection contexts change is needed. The suite is
+  # self-contained (mocks DB/LLM; imports only in-repo workspace source), so no
+  # companion-extension clone is required.
+  skills-unit:
+    name: Skills unit tests
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Skills unit tests (full packages/skills suite)
+        run: cd packages/skills && pnpm test
+
   # RBAC authz unit tests — runs the whole `src/lib/authz` suite (20 files /
   # 160 tests), including the resolver matrix used by the e2e job as the
   # primary CI proof of resolver correctness. Lives in its own job (not
@@ -352,18 +391,13 @@ jobs:
       - name: MCP auth-plugins pure builder test
         run: cd packages/mcp-server && pnpm exec vitest run src/__tests__/auth-plugins.test.ts
 
-      # The generic, install/uninstall-aware skill resolver that
-      # replaces the per-consumer hardcoded skill self-heals. packages/skills is
-      # not in the root vitest include, so pin this contract test explicitly.
-      - name: Extension skill resolver test
-        run: cd packages/skills && pnpm exec vitest run --no-coverage src/extension-skill-resolver.test.ts
-
-      # Skills delete-race fix: deletePersonalSkillAction must REDIRECT on success
-      # (not return a MutationResult) so the /skills/<id>/edit page never re-renders
-      # to notFound() under the deleted row and 404s before the toast. packages/skills
-      # is not in the root vitest include, so pin this regression test explicitly.
-      - name: Skills delete-redirect action test (delete-race fix)
-        run: cd packages/skills && pnpm exec vitest run --no-coverage src/__tests__/delete-personal-skill-action.test.ts
+      # NOTE: the two pinned packages/skills contract tests that previously ran
+      # here (Extension skill resolver + Skills delete-redirect action) are now
+      # SUBSUMED by the full packages/skills suite, which runs as its own
+      # required `skills-unit` job (gated structurally via the `build`
+      # prerequisite guard). Pinning a 2-file slice let the rest of the suite
+      # regress uncaught (#1174 repaired 15 tests; #1306 re-broke them within
+      # 48h). See #1359.
 
       - name: Native Node smoke (migration loads via plain Node strip-types)
         run: |
@@ -1980,8 +2014,8 @@ jobs:
     # `needs: detect` is added so a docs-only PR skips the build entirely (the
     # `skip` gate below has no value without that edge); the publish-after-
     # test dependency is preserved.
-    needs: [detect, test]
-    # Run even when a prerequisite (`detect`/`test`) FAILED, so the guard step
+    needs: [detect, test, skills-unit]
+    # Run even when a prerequisite (`detect`/`test`/`skills-unit`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
     # `build` would NOT block a merge gated on the build status. The guard closes
@@ -2010,10 +2044,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
