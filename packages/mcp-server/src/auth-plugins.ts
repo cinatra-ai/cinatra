@@ -24,8 +24,37 @@
 // tuple that is not assignable to Better Auth's mutable plugin-array type)
 // would erase the typed plugin-contributed fields app-wide.
 
+import { randomUUID } from "node:crypto";
+
 import { jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
+
+/**
+ * #1195 — stamp a cryptographically random `jti` (RFC 7519 registered claim)
+ * into every SIGNED access token minted at the token endpoint. Better Auth
+ * derives `iat` at one-second granularity and emits no `jti`, so two
+ * same-second `client_credentials` exchanges for the same client could
+ * otherwise produce BYTE-IDENTICAL JWTs. The durable MCP run-context binding
+ * keys on sha256(access token) (src/lib/agent-run-context-durable.ts) and
+ * requires every mint to be unique so concurrent runs can never alias each
+ * other's binding. Verifiers ignore unknown claims.
+ *
+ * Gated on `resource` (codex round-1): Better Auth invokes
+ * `customAccessTokenClaims` from TWO sites — the JWT mint (which always
+ * carries the requested `resource`; no resource ⇒ no audience ⇒ the token is
+ * OPAQUE, i.e. random-unique already) and the RFC 7662 introspection response
+ * builder for opaque tokens (no `resource` in its info). An unconditional
+ * random `jti` would make repeated introspections of the SAME opaque token
+ * report different, never-minted `jti` values. Resource-gating stamps every
+ * signed mint and leaves introspection payloads stable.
+ *
+ * Exported for the hermetic uniqueness/stability tests.
+ */
+export function mintAccessTokenJtiClaims(info: {
+  resource?: string;
+}): { jti: string } | Record<string, never> {
+  return info.resource ? { jti: randomUUID() } : {};
+}
 
 export const DEFAULT_MCP_SCOPES = [
   "openid",
@@ -137,6 +166,7 @@ export function buildMcpAuthPlugins(
       consentPage: options.consentPage,
       signup: { page: options.signupPage },
       validAudiences,
+      customAccessTokenClaims: mintAccessTokenJtiClaims,
       accessTokenExpiresIn:
         options.accessTokenExpiresIn ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
       refreshTokenExpiresIn:
