@@ -38,15 +38,25 @@ describe("chat explicit-dispatch surface routes through the config-needs run gat
 });
 
 describe("chat runner is covered transitively by its two gated dispatch mechanisms", () => {
+  // cinatra#1037 P2a extracted the conversational orchestration out of
+  // app/api/chat/runner.ts into the assistant-config-parameterized runtime
+  // (lib/assistant-runtime/runtime.ts); runner.ts is now a thin binding that
+  // delegates to it, so the dispatch surface these assertions pin lives in the
+  // runtime module.
   const runner = read("app/api/chat/runner.ts");
+  const runtime = read("lib/assistant-runtime/runtime.ts");
 
   it("dispatches only via serverSideExplicitDispatch (gated) or the MCP agent_run primitive (gated)", () => {
-    // runner has no un-gated dispatch path of its own: the explicit path goes
-    // through serverSideExplicitDispatch (config-gated), and the LLM path goes
-    // through the MCP agent_run primitive (config-gated in handlers.ts).
-    expect(runner).toMatch(/serverSideExplicitDispatch/);
+    // the runtime has no un-gated dispatch path of its own: the explicit path
+    // goes through serverSideExplicitDispatch (config-gated), and the LLM path
+    // goes through the MCP agent_run primitive (config-gated in handlers.ts).
+    expect(runtime).toMatch(/serverSideExplicitDispatch/);
     // and it honours the terminal short-circuit the gate returns.
-    expect(runner).toMatch(/terminal/);
+    expect(runtime).toMatch(/terminal/);
+    // runner.ts stays the thin delegate onto that runtime — it must not grow a
+    // dispatch path of its own outside the gated runtime.
+    expect(runner).toMatch(/runAssistantTurn/);
+    expect(runner).not.toMatch(/serverSideExplicitDispatch/);
   });
 });
 
