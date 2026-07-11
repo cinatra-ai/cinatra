@@ -385,34 +385,73 @@ export async function runRuntimePackageActivation(
   const all =
     deps.records ?? (await discoverPackageStoreRecords(storeRoot, deps.fs));
 
-  // FAIL-CLOSED on ambiguous identity: if the store holds more than one record
-  // for the same packageName (e.g. two digest snapshots), we cannot safely
-  // decide which one the ABI gate verified vs which one gets imported — that
-  // could ABI-check record A while importing record B, and double-register. So
-  // we refuse EVERY record for a duplicated name and surface one error per name,
-  // rather than silently picking one.
-  const countByName = new Map<string, number>();
+  // FAIL-CLOSED on ambiguous identity, keyed by (packageName, version)
+  // (cinatra#1040 S4). Side-by-side versions are legitimate: two records for one
+  // packageName with DIFFERENT versions (each its own digest) both activate.
+  // Ambiguity is a per-PACKAGE question:
+  //   - a SINGLE record for a name -> never ambiguous, activate it regardless of
+  //     whether it carries a version (the pre-S4 single-version case is
+  //     behavior-preserving; the host wrapper sets version only for versioned
+  //     side-by-side installs);
+  //   - MULTIPLE records where ANY carries no version -> the WHOLE package is
+  //     fenced (an un-versioned record cannot be disambiguated against its
+  //     versioned siblings, the codex S4 ruling; same fail-closed outcome the
+  //     pre-S4 duplicate-name fence produced);
+  //   - MULTIPLE records all versioned but the SAME (name, version) twice -> that
+  //     identity is fenced (cannot decide which digest the ABI gate verified vs
+  //     which gets imported).
+  const identityKey = (r: PackageStoreRecord): string => `${r.packageName} ${r.version ?? ""}`;
+  const recsByName = new Map<string, PackageStoreRecord[]>();
   for (const r of all) {
-    countByName.set(r.packageName, (countByName.get(r.packageName) ?? 0) + 1);
+    const bucket = recsByName.get(r.packageName);
+    if (bucket) bucket.push(r);
+    else recsByName.set(r.packageName, [r]);
   }
-  const duplicated = new Set(
-    [...countByName].filter(([, n]) => n > 1).map(([name]) => name),
+  const fencedNames = new Set<string>();
+  const fencedIdentities = new Set<string>();
+  for (const [name, recs] of recsByName) {
+    if (recs.length <= 1) continue; // a sole record is never ambiguous
+    if (recs.some((r) => r.version === undefined || r.version === "")) {
+      fencedNames.add(name);
+      continue;
+    }
+    const countByVersion = new Map<string, number>();
+    for (const r of recs) {
+      countByVersion.set(r.version as string, (countByVersion.get(r.version as string) ?? 0) + 1);
+    }
+    for (const [version, n] of countByVersion) if (n > 1) fencedIdentities.add(`${name} ${version}`);
+  }
+  const records = all.filter(
+    (r) => !fencedNames.has(r.packageName) && !fencedIdentities.has(identityKey(r)),
   );
-  const records = all.filter((r) => !duplicated.has(r.packageName));
-  const dupResults: ActivationResult[] = [...duplicated].map((packageName) => ({
-    packageName,
-    status: "failed",
-    error: new Error(
-      `[runtime-package-loader] refusing ambiguous package ${packageName}: ` +
-        `multiple store records found (fail-closed)`,
-    ),
-  }));
+  const dupResults: ActivationResult[] = [
+    ...[...fencedNames].map((packageName) => ({
+      packageName,
+      status: "failed" as const,
+      error: new Error(
+        `[runtime-package-loader] refusing package ${packageName}: multiple store records but one ` +
+          `carries no version identity (fail-closed)`,
+      ),
+    })),
+    ...[...fencedIdentities].map((key) => {
+      const [packageName, version] = key.split(" ");
+      return {
+        packageName,
+        status: "failed" as const,
+        error: new Error(
+          `[runtime-package-loader] refusing ambiguous identity ${packageName}@${version}: ` +
+            `multiple store records found for the same (name, version) (fail-closed)`,
+        ),
+      };
+    }),
+  ];
 
-  const byName = new Map(records.map((r) => [r.packageName, r] as const));
-
+  // The driver passes the FULL record alongside the name (cinatra#1040 S4):
+  // side-by-side versions share a `packageName`, so the exact record — not a
+  // name lookup — is what identifies the version/digest to import.
   const activated = await runStaticBundleActivation(records, {
-    importServerEntry: async (packageName) => {
-      const rec = byName.get(packageName);
+    importServerEntry: async (packageName, record) => {
+      const rec = record as PackageStoreRecord;
       if (!rec || !rec.serverEntry) return undefined; // genuinely no server entry
       // A DECLARED exports key with an out-of-contract target is refused
       // BEFORE path resolution — the literal fallback would be fail-open

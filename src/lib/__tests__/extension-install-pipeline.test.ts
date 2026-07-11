@@ -34,6 +34,9 @@ describe("resolveInstallAnchor (closes the runtime-loader trust loop)", () => {
       // cinatra#792: the canonical row's kind (null — this row view omits it).
       kind: null,
       closureHash: null,
+      // cinatra#1040 S4: the anchor now surfaces the row's default flag; a row
+      // view omitting `isDefault` counts as the default (single-version/legacy).
+      isDefault: true,
     });
   });
 

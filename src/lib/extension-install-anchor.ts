@@ -19,6 +19,14 @@ import type { InstallTrustAnchor } from "@/lib/extension-package-store";
 export type InstallAnchorRow = {
   status: string;
   /**
+   * The canonical row's `is_default` (cinatra#1040 S4) — surfaced on the resolved
+   * anchor so the loader elects the DEFAULT version to own the package's
+   * unversioned global names and activates non-default siblings side-by-side
+   * against a side-effect-free host context. Optional so pure unit tests /
+   * legacy rows omit it (treated as default — the pre-S4 single-version behavior).
+   */
+  isDefault?: boolean;
+  /**
    * The canonical row's extension KIND (cinatra#792) — surfaced on the resolved
    * anchor so the loader can bind it to the store record's PATH kind
    * (`<root>/<kind>/<slug>/<digest>`), fail-closed on a mismatch. Optional so
@@ -238,6 +246,9 @@ export async function resolveInstallAnchor(
     trustDecision: true,
     approvedPorts: portsApproved ? grantForScope!.approvedPorts : [],
     version: row.source.version ?? null,
+    // cinatra#1040 S4: the canonical row's default flag rides the anchor so the
+    // loader elects the default version for global-name ownership. Absent = default.
+    isDefault: row.isDefault !== false,
     signature: row.source.signature ?? null,
     // cinatra#158/#792: the journal-gated active digest — the loader binds it
     // to the on-disk store dir digest (fail-closed on mismatch).
@@ -323,5 +334,98 @@ export async function makeDefaultInstallAnchorResolver(
       },
       readInstallOp: (pkg, oid) => readInstallOp(pkg, oid),
     });
+  };
+}
+
+/**
+ * MULTI-VERSION anchor resolver (cinatra#1040 S4) — the side-by-side counterpart
+ * of `makeDefaultInstallAnchorResolver`. Returns `(packageName) =>
+ * Promise<InstallTrustAnchor[]>`: ONE anchor per LIVE version row (the default +
+ * any non-default siblings), each carrying its OWN version/digest/approvedPorts/
+ * isDefault. Boot + re-election wire THIS resolver so side-by-side versions
+ * activate together; the singular `makeDefaultInstallAnchorResolver` stays for
+ * legacy/pre-verify callers that need exactly the default.
+ *
+ * It REUSES the per-row trust gate `resolveInstallAnchor` UNCHANGED (journal-
+ * finalized, integrity, digest selection, grant scope) — invoked once per
+ * version with a per-version `readActiveInstall` (the specific row) and a
+ * version-scoped journal read (`readInstallOpForVersion`). The authoritative org
+ * is derived EXACTLY as the single-anchor path (the one live default across orgs
+ * for a platform-global boot; the fixed org for exact-org), so multi-org
+ * side-by-side never fans out here. Per-version cross-owner ambiguity (two owner
+ * rows for one version in the derived org) fails closed for THAT version; two
+ * resolved defaults fail closed for the whole package.
+ */
+export async function makeDefaultInstallAnchorsResolver(
+  orgId: string | null = null,
+  scope: InstallAnchorResolutionScope = orgId == null ? "platform-global" : "exact-org",
+): Promise<(packageName: string) => Promise<InstallTrustAnchor[]>> {
+  const { readInstalledExtensionsByPackageName } = await import("@cinatra-ai/extensions/canonical-store");
+  const { readGrant } = await import("@/lib/extension-host-port-grants");
+  const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
+  return async (packageName: string) => {
+    const rows = await readInstalledExtensionsByPackageName(packageName);
+    // Derive the authoritative org exactly as the single-anchor path.
+    let derivedOrgId: string | null = orgId;
+    if (scope === "platform-global") {
+      const live = pickSingleLiveRowAcrossOrgs(rows);
+      if (!live) return [];
+      derivedOrgId = live.organizationId ?? null;
+    }
+    // Live version rows for THAT org: the default + any non-default siblings.
+    const orgRows = rows.filter(
+      (r) => (r.status === "active" || r.status === "locked") && (r.organizationId ?? null) === derivedOrgId,
+    );
+    // Group by version so a per-version cross-owner ambiguity fails closed for
+    // that version alone (never resolving one owner's source against another's).
+    const byVersion = new Map<string, typeof orgRows>();
+    for (const r of orgRows) {
+      // `version` is NOT NULL in the DB (the S1 backfill floors legacy rows to
+      // "0.0.0"); coerce defensively so the grouping key is always a string.
+      const v = r.version ?? "0.0.0";
+      const bucket = byVersion.get(v);
+      if (bucket) bucket.push(r);
+      else byVersion.set(v, [r]);
+    }
+    const anchors: InstallTrustAnchor[] = [];
+    for (const [version, verRows] of byVersion) {
+      if (verRows.length !== 1) {
+        console.warn(
+          `[extension-install-anchor] refusing ambiguous version ${packageName}@${version}: ` +
+            `${verRows.length} live owner rows in org ${derivedOrgId ?? "(null)"} — skipping (fail-closed)`,
+        );
+        continue;
+      }
+      const versionRow = verRows[0];
+      const anchor = await resolveInstallAnchor(packageName, {
+        orgId: derivedOrgId,
+        readActiveInstall: async () => ({
+          status: versionRow.status,
+          kind: versionRow.kind,
+          isDefault: versionRow.isDefault,
+          source: versionRow.source as InstallAnchorRow["source"],
+        }),
+        readGrant: async (pkg, oid) => {
+          const g = await readGrant({ packageName: pkg, orgId: oid });
+          return g ? { status: g.status, approvedPorts: g.approvedPorts, orgId: g.orgId } : null;
+        },
+        // Version-scoped journal read (cinatra#1040 S3) — the finalized op for
+        // THIS version namespace, never the default's op.
+        readInstallOp: (pkg, oid) => readInstallOpForVersion(pkg, oid, version),
+      });
+      if (anchor) anchors.push(anchor);
+    }
+    // Defense in depth: the DB enforces at most one default per (org, owner,
+    // package); if two versions resolved as default here, the package identity is
+    // ambiguous — refuse ALL rather than let two versions own the global names.
+    const defaults = anchors.filter((a) => a.isDefault !== false);
+    if (defaults.length > 1) {
+      console.warn(
+        `[extension-install-anchor] refusing ${packageName}: ${defaults.length} live DEFAULT versions ` +
+          `resolved — fail-closed (no version activated)`,
+      );
+      return [];
+    }
+    return anchors;
   };
 }
