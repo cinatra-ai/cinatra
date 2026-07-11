@@ -192,6 +192,136 @@ export function resetDurableRunContextCountersForTest(): void {
   c.durableOutcome.clear();
 }
 
+// --- cutover readiness gate (#1195) -----------------------------------------
+//
+// #1195 acceptance requires PROOF that no production traffic still rides the
+// legacy in-process registry before it is deleted (and before the fail-closed
+// deny posture is activated). This turns that acceptance clause into a single
+// mechanical predicate over the served-by metric, so the owner-gated
+// registry-removal (flip) slice consults one function instead of eyeballing
+// counters.
+//
+// PURE. The caller supplies a served-by tally AGGREGATED over an agreed
+// production window across EVERY app instance/worker. The per-process
+// getDurableRunContextCounterSnapshot() is a single-instance convenience and
+// is NOT sufficient proof on its own (a resettable, one-process view cannot
+// speak for the fleet); the authoritative input is the aggregated
+// `[mcp-run-ctx] served-by=` log stream. This function only decides — it never
+// reads live counters — so the same predicate governs a local test and a
+// fleet-wide readiness check.
+
+export type RegistryCutoverReadiness = {
+  /** True only when the legacy channels served nothing over a sufficient,
+   *  genuinely-active sample — the green light for the flip slice. */
+  ready: boolean;
+  /** Human-readable why (the not-ready cause, or the ready confirmation). */
+  reason: string;
+  /** registry + header served counts (the traffic that must reach zero). */
+  legacyServed: number;
+  /** obo + durable served counts (verified identity — must be non-zero, or
+   *  the window proves nothing). */
+  verifiedServed: number;
+  /** Every served-by observation in the window, including "none". */
+  total: number;
+};
+
+/**
+ * Decide whether the legacy registry can be retired, from an aggregated
+ * served-by tally (keys: obo | durable | registry | header | none).
+ *
+ * ready ⇔ (registry + header served === 0)          — no legacy traffic, AND
+ *         (total >= minObservations)                 — a real sample, AND
+ *         (obo + durable served > 0)                 — the window was actually
+ *                                                        serving verified runs.
+ *
+ * The verified-non-zero clause guards against a silent/idle window (zero
+ * legacy traffic because there was NO run traffic at all) being mistaken for a
+ * completed cutover.
+ */
+/** The closed set of served-by channels the gate understands. Kept in lockstep
+ *  with RunContextServedBy in the mcp-server request-context module; an
+ *  unrecognized key in the tally is treated as a schema drift and fails the
+ *  gate closed rather than being silently ignored. */
+const READINESS_KNOWN_CHANNELS: readonly string[] = [
+  "obo",
+  "durable",
+  "registry",
+  "header",
+  "none",
+];
+
+export function evaluateRegistryCutoverReadiness(
+  servedBy: Record<string, number>,
+  opts: { minObservations: number },
+): RegistryCutoverReadiness {
+  // Fail CLOSED on any input the gate cannot fully trust — this predicate
+  // green-lights an IRREVERSIBLE deletion, so a NaN/negative/Infinity count, a
+  // non-integer, an unknown channel, or a malformed threshold must NEVER be
+  // silently coerced to a passing zero. Every reject path still reports the
+  // best-effort tallies it could parse (for the operator), but ready === false.
+  const cleanCount = (v: unknown): number | null =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+
+  const counts: Record<string, number> = {};
+  let malformed: string | null = null;
+  for (const [key, value] of Object.entries(servedBy)) {
+    if (!READINESS_KNOWN_CHANNELS.includes(key)) {
+      malformed ??= `unrecognized served-by channel "${key}"`;
+      continue;
+    }
+    const c = cleanCount(value);
+    if (c === null) {
+      malformed ??= `malformed count for channel "${key}"`;
+      continue;
+    }
+    counts[key] = c;
+  }
+  const at = (key: string): number => counts[key] ?? 0;
+  const legacyServed = at("registry") + at("header");
+  const verifiedServed = at("obo") + at("durable");
+  const total = legacyServed + verifiedServed + at("none");
+
+  const minOk =
+    typeof opts.minObservations === "number" &&
+    Number.isInteger(opts.minObservations) &&
+    opts.minObservations >= 1;
+
+  if (malformed !== null) {
+    return {
+      ready: false,
+      reason: `not ready: ${malformed}`,
+      legacyServed,
+      verifiedServed,
+      total,
+    };
+  }
+  if (!minOk) {
+    return {
+      ready: false,
+      reason: "not ready: minObservations must be a positive integer",
+      legacyServed,
+      verifiedServed,
+      total,
+    };
+  }
+
+  let ready = true;
+  let reason = `cutover-ready: 0 legacy-served over ${total} observation(s) (${verifiedServed} verified)`;
+  if (legacyServed > 0) {
+    ready = false;
+    reason = `not ready: ${legacyServed} request(s) still served by a legacy channel (registry+header)`;
+  } else if (total < opts.minObservations) {
+    ready = false;
+    reason = `not ready: insufficient sample (${total} < ${opts.minObservations} observations)`;
+  } else if (verifiedServed === 0) {
+    ready = false;
+    reason =
+      "not ready: no verified (obo/durable) traffic in the window — an idle sample cannot prove cutover";
+  }
+
+  return { ready, reason, legacyServed, verifiedServed, total };
+}
+
 // --- writer ------------------------------------------------------------------
 
 /**

@@ -35,6 +35,7 @@ import {
   validateNamespacedMigrationsDir,
 } from "@cinatra-ai/migrations";
 import { recordDeclaresHostMigrations } from "@cinatra-ai/sdk-extensions";
+import { comparePluginVersions } from "@cinatra-ai/registries";
 
 const DEFAULT_SCHEMA = "cinatra";
 
@@ -206,6 +207,13 @@ export type DiscoveredMigrationResult = {
 export type TrustedMigrationRecord = {
   packageName: string;
   storeDir: string;
+  /**
+   * The record's resolved version (cinatra#1040 S5). Present for side-by-side
+   * version rows; `undefined`/null for the legacy single-version / unversioned
+   * floor. Used only to ORDER a package's migration union (semver asc) — the
+   * ledger namespace stays name-keyed.
+   */
+  version?: string | null;
   migrationsDir?: string;
   legacyMigrationsDeclared?: boolean;
   invalidMigrationsDirDeclared?: boolean;
@@ -242,5 +250,120 @@ export async function applyMigrationsForTrustedRecords(
       refused.push({ packageName: rec.packageName, error: e instanceof Error ? e.message : String(e) });
     }
   }
+  return { applied, refused };
+}
+
+/**
+ * Deterministic semver-ASCENDING comparator for a package's side-by-side
+ * version rows (cinatra#1040 S5). The unversioned/legacy floor (null/undefined)
+ * sorts FIRST. Two versions that are semver-EQUAL but differ only in build
+ * metadata (e.g. `1.0.0+a` vs `1.0.0+b`) are ordered by the raw version string
+ * so the union order is stable across runs (codex round-0 determinism ruling).
+ */
+export function compareMigrationUnionVersionAsc(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return -1;
+  if (b == null) return 1;
+  const cmp = comparePluginVersions(a, b); // a=installed, b=latest
+  if (cmp === "update-available") return -1; // b > a  → a first
+  if (cmp === "installed-newer") return 1; //  a > b  → a later
+  // "current" (semver-equal, incl. build-metadata ties) → stable string order.
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The CROSS-VERSION migration UNION (cinatra#1040 S5). Lifts S4's default-only
+ * restriction: when a package is installed at SEVERAL versions side by side,
+ * EVERY signed version's declared `cinatra.migrationsDir` contributes to the
+ * package's single append-only ledger namespace, applied as an ORDERED UNION.
+ *
+ * Ordering: records group by packageName; each group applies in (semver ASC,
+ * then the runner's per-dir filename order) — the shared name-keyed ledger is
+ * idempotent per filename, so applying versions low→high realizes the ordered
+ * union (a higher version that re-ships lower files is a no-op; its genuinely
+ * new files append). This is "ordered PENDING migrations", not an absolute
+ * historical replay: the append-only per-package namespace + authors owning
+ * intra-package cross-version schema compat is the #1040 policy.
+ *
+ * Fail-closed, WHOLE-PACKAGE:
+ *   1. PACKAGE-WIDE PREFLIGHT — every contributing version is validated
+ *      (containment / namespace / no legacy JSON-DSL) BEFORE any DDL runs for
+ *      that package. A single preflight failure refuses the WHOLE package with
+ *      ZERO DDL applied (its schema would be partial / from an unverified dir).
+ *   2. ORDERED APPLY — versions apply low→high; the FIRST apply failure STOPS
+ *      the group and refuses the whole package (name-keyed): no later version
+ *      of it may activate against a half-migrated schema.
+ *
+ * The caller (the runtime loader) supplies ONLY per-identity `trusted-signed`,
+ * non-ambiguous records — an unsigned sibling that declares migrations is
+ * refused UPSTREAM (never contributes DDL), exactly as in S4.
+ */
+export async function applyMigrationUnionForTrustedRecords(
+  records: readonly TrustedMigrationRecord[],
+  deps: {
+    applyOne?: typeof applyExtensionMigrationsFromStore;
+    preflightOne?: typeof preflightExtensionMigrationsFromStore;
+  } = {},
+): Promise<{ applied: DiscoveredMigrationResult[]; refused: { packageName: string; error: string }[] }> {
+  const applyOne = deps.applyOne ?? applyExtensionMigrationsFromStore;
+  const preflightOne = deps.preflightOne ?? preflightExtensionMigrationsFromStore;
+
+  const byName = new Map<string, TrustedMigrationRecord[]>();
+  for (const rec of records) {
+    if (!recordDeclaresHostMigrations(rec)) continue;
+    const bucket = byName.get(rec.packageName);
+    if (bucket) bucket.push(rec);
+    else byName.set(rec.packageName, [rec]);
+  }
+
+  const applied: DiscoveredMigrationResult[] = [];
+  const refused: { packageName: string; error: string }[] = [];
+
+  for (const [packageName, recs] of byName) {
+    const ordered = [...recs].sort((a, b) =>
+      compareMigrationUnionVersionAsc(a.version, b.version),
+    );
+
+    // (1) PACKAGE-WIDE PREFLIGHT — validate every version BEFORE any DDL.
+    try {
+      for (const rec of ordered) {
+        await preflightOne({ storeDir: rec.storeDir, packageName: rec.packageName });
+      }
+    } catch (e) {
+      refused.push({
+        packageName,
+        error:
+          `[migration-union] preflight failed for ${packageName} (no DDL applied for any of its ` +
+          `${ordered.length} version(s)): ${e instanceof Error ? e.message : String(e)}`,
+      });
+      continue;
+    }
+
+    // (2) ORDERED APPLY — low→high; STOP the group on the first failure.
+    try {
+      const appliedNames: string[] = [];
+      for (const rec of ordered) {
+        const result = await applyOne({
+          storeDir: rec.storeDir,
+          packageName: rec.packageName,
+          ...(rec.version ? { packageVersion: rec.version } : {}),
+        });
+        appliedNames.push(...result.applied);
+      }
+      if (appliedNames.length > 0) {
+        console.log(
+          `[ext-migration] ${packageName}: applied ${appliedNames.length} migration(s) as the ordered ` +
+            `union across ${ordered.length} live version(s)`,
+        );
+      }
+      applied.push({ packageName, result: { applied: appliedNames } });
+    } catch (e) {
+      refused.push({ packageName, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   return { applied, refused };
 }

@@ -12,10 +12,12 @@
 // covered by the DB-gated project-dispatch-ledger-lease integration test in
 // packages/agents and by scripts/ci/upgrade-proof.sh.
 
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { up, down } from "../../../migrations/core/core__0024_project-dispatch-ledger-lease.mjs";
+// The ledger every consumer sees is the manifest.json + manifest.d/ union,
+// computed by the shared reader (plain runtime ESM, same import form).
+import { readManifestUnion } from "../../../migrations/manifest-reader.mjs";
 import { projectDispatchSchemaQueries } from "@/lib/extension-grant-schema";
 
 function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
@@ -136,12 +138,14 @@ describe("bootstrap-DDL parity (projectDispatchSchemaQueries)", () => {
   });
 });
 
-describe("migrations/manifest.json entry", () => {
-  it("ships the appended, non-destructive 0024 entry naming both tables", () => {
-    const manifest = JSON.parse(readFileSync("migrations/manifest.json", "utf-8")) as {
-      migrations: Array<{ seq: string; file: string; destructive: boolean; tables: string[] }>;
+describe("ledger union entry (manifest.json + manifest.d/ via the shared reader)", () => {
+  it("ships the non-destructive 0024 entry naming both tables", () => {
+    const { entries, errors } = readManifestUnion("migrations") as {
+      entries: Array<{ seq: string; file: string; destructive: boolean; tables: string[] }>;
+      errors: string[];
     };
-    const entry = manifest.migrations.find((m) => m.seq === "0024");
+    expect(errors).toEqual([]);
+    const entry = entries.find((m) => m.seq === "0024");
     expect(entry).toBeTruthy();
     expect(entry?.file).toBe("core/core__0024_project-dispatch-ledger-lease.mjs");
     expect(entry?.destructive).toBe(false);

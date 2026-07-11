@@ -227,7 +227,7 @@ describe("installExtensionVersionSideBySide — pipeline wiring", () => {
     expect(act.reason).toContain("S4");
   });
 
-  it("SHARED-STATE DISCIPLINE: empty port request no-ops; covered request no-ops; uncovered request REFUSES; ownership keys REFUSE; declared migrations REFUSE", async () => {
+  it("SHARED-STATE DISCIPLINE: empty port request no-ops; covered request no-ops; uncovered request REFUSES; ownership keys REFUSE; declared migrations are ALLOWED (S5 union, deferred to activation)", async () => {
     await installExtensionVersionSideBySide(INPUT);
     const [, pipeDeps] = installExtensionFromRegistry.mock.calls[0]! as [
       unknown,
@@ -252,14 +252,18 @@ describe("installExtensionVersionSideBySide — pipeline wiring", () => {
         tokenConfigKey: "k",
       }),
     ).rejects.toMatchObject({ code: "DECLARES_OWNERSHIP_KEYS" });
-    // Declared migrations refuse (real preflight consulted first).
+    // cinatra#1040 S5: a declared migration is NO LONGER refused — the base
+    // preflight is still consulted (validation stands) and its `true` return is
+    // passed through so the pipeline trust gate can still reject an UNSIGNED
+    // declarer, but a SIGNED declarer proceeds; application is deferred to the
+    // loader's cross-version union at activation.
     basePreflightMigrations.mockResolvedValueOnce(true);
     await expect(
       (pipeDeps.preflightMigrations as (i: unknown) => Promise<boolean>)({
         storeDir: "/x",
         packageName: PKG,
       }),
-    ).rejects.toMatchObject({ code: "DECLARES_MIGRATIONS" });
+    ).resolves.toBe(true);
     // No declared migrations → false (pipeline proceeds).
     basePreflightMigrations.mockResolvedValueOnce(false);
     await expect(
@@ -268,6 +272,13 @@ describe("installExtensionVersionSideBySide — pipeline wiring", () => {
         packageName: PKG,
       }),
     ).resolves.toBe(false);
+    // applyMigrations stays a no-op at install (deferred to the activation union).
+    await expect(
+      (pipeDeps.applyMigrations as (i: unknown) => Promise<unknown>)({
+        storeDir: "/x",
+        packageName: PKG,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("a pipeline failure ROLLS BACK the placeholder this attempt created (version-scoped non-finalized check) and rethrows", async () => {

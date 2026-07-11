@@ -28,6 +28,7 @@ import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
   readAgentRunByContextId,
   readAgentRunById,
+  readAgentRunByTokenHash,
   readAgentRunTokenHashById,
   readAgentTemplateById,
   OasCinatraLlmSchema,
@@ -58,6 +59,7 @@ import {
 import { issueAgentRunMcpActorToken } from "@/lib/agent-run-mcp-actor-token";
 import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
 import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
+import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import {
@@ -757,23 +759,97 @@ export async function POST(req: Request): Promise<Response> {
   // ---------------------------------------------------------------------------
   // Resolve effective run ID — WayFlow Python containers always send
   // agent_run_id="" (empty string) because the StartNode binding bug prevents
-  // the run ID from flowing into the DFE context. Fall back to the
-  // X-Cinatra-A2A-Context-Id header (injected by the ContextVar patch in
-  // agent_loader.py) which maps to a unique context_id per WayFlow task.
-  // Artifact resolver ports MUST be built only from a request-bound run
-  // resolved via the auth-injected x-cinatra-a2a-context-id header
-  // (agent_loader.py inserts it). A caller-supplied body.agent_run_id alone
-  // is forgeable and would let a bridge token select another tenant's orgId
-  // as the resolver namespace. If BOTH context-id and body.agent_run_id
-  // resolve, they MUST match.
-  let runFromContext: Awaited<ReturnType<typeof readAgentRunByContextId>> = null;
+  // the run ID from flowing into the DFE context.
+  //
+  // #1193 run-token spine (W3) — resolve the run TOKEN-FIRST off the ONE
+  // dispatch-minted credential before the legacy context-id / dispatcher-signed
+  // binding channels. The loader attaches X-Cinatra-Run-Token on the host-
+  // anchored llm-bridge call (a per-task ContextVar the OAS author cannot
+  // write); the verifier hashes it and resolves the run by the unique index
+  // (never a body id). Semantics, mirroring the context route (W2) and the
+  // durable-binding posture (#1195):
+  //   - token ABSENT            ⇒ the legacy context-id + binding paths below
+  //                               run UNCHANGED (additive + reversible against
+  //                               the not-yet-rebuilt WayFlow image);
+  //   - token PRESENT+resolved  ⇒ it selects the run; a co-present context-id
+  //                               MUST name the same run or OBO is refused;
+  //   - token PRESENT+unresolvable (or a probe/re-read divergence) ⇒ FAIL
+  //                               CLOSED: suppress the weaker context-id +
+  //                               binding channels and degrade to the anonymous
+  //                               machine-token path — never downgrade a
+  //                               tampered token to a forgeable selector.
+  let runFromToken: Awaited<ReturnType<typeof readAgentRunById>> = null;
+  let tokenResolvedRunId: string | undefined;
+  let runTokenInvalid = false;
+  // Only consult the verifier when the loader actually attached the credential
+  // on this host-anchored call. A null/empty header is the "absent" case — the
+  // legacy context-id + binding paths below then run entirely UNCHANGED
+  // (additive + reversible against the not-yet-rebuilt WayFlow image).
+  const rawRunToken = isBridgeAuthorized
+    ? req.headers.get(RUN_TOKEN_HEADER)
+    : null;
+  if (rawRunToken) {
+    const tokenResult = await verifyRunToken(rawRunToken, readAgentRunByTokenHash);
+    if (tokenResult.ok) {
+      try {
+        // Re-read the FULL row by the SERVER-DERIVED id (the unique-index probe
+        // returns {id,orgId,runBy} only; the resolver ports + the OBO mint need
+        // the whole record). Deny on any divergence between the probe and the
+        // fresh read (fail closed) — never a body id.
+        const runById = await readAgentRunById(tokenResult.run.id);
+        if (
+          runById &&
+          runById.id === tokenResult.run.id &&
+          runById.orgId === tokenResult.run.orgId &&
+          runById.runBy === tokenResult.run.runBy
+        ) {
+          runFromToken = runById;
+          tokenResolvedRunId = runById.id;
+        } else {
+          runTokenInvalid = true;
+        }
+      } catch {
+        runTokenInvalid = true;
+      }
+    } else if (tokenResult.reason === "unresolvable") {
+      // Present-but-unresolvable ⇒ fail closed (a non-empty token that hashes to
+      // no row is tampering / a bug, never a legacy dispatch).
+      runTokenInvalid = true;
+    }
+  }
+
+  // Legacy channel — the auth-injected X-Cinatra-A2A-Context-Id header
+  // (agent_loader.py inserts it), mapping to a unique context_id per WayFlow
+  // task. Read unconditionally so a resolved token can cross-check it, but it
+  // only SELECTS a run when no token was presented. Artifact resolver ports
+  // MUST be built only from a request-bound run; a caller-supplied
+  // body.agent_run_id alone is forgeable and would let a bridge token select
+  // another tenant's orgId as the resolver namespace. If BOTH context-id and
+  // body.agent_run_id resolve, they MUST match.
+  let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
+    null;
   try {
     const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
     if (a2aContextId) {
-      runFromContext = await readAgentRunByContextId(a2aContextId);
+      runFromContextId = await readAgentRunByContextId(a2aContextId);
     }
   } catch {
-    // non-fatal — fall through to body.agent_run_id fallback below
+    // non-fatal — fall through to the binding / body.agent_run_id paths below
+  }
+
+  // Selection precedence: run-token (W3) > context-id > dispatcher-signed
+  // binding. A resolved token wins; a co-present context-id that names a
+  // DIFFERENT run refuses OBO selection (the W2 divergence invariant carried to
+  // the bridge). An invalid token suppresses the context-id channel entirely.
+  let runFromContext: Awaited<ReturnType<typeof readAgentRunByContextId>> = null;
+  let runTokenDivergent = false;
+  if (runFromToken) {
+    runFromContext = runFromToken;
+    if (runFromContextId && runFromContextId.id !== runFromToken.id) {
+      runTokenDivergent = true;
+    }
+  } else if (!runTokenInvalid) {
+    runFromContext = runFromContextId;
   }
   // Fallback for the FIRST bridge call of a run. The context-id lookup
   // misses on the first call because `updateAgentRunA2AContextId` only runs
@@ -807,6 +883,7 @@ export async function POST(req: Request): Promise<Response> {
   let bindingVerifiedRunId: string | undefined;
   if (
     !runFromContext &&
+    !runTokenInvalid &&
     isBridgeAuthorized &&
     typeof body.cinatra_run_binding === "string" &&
     body.cinatra_run_binding.length > 0
@@ -837,8 +914,11 @@ export async function POST(req: Request): Promise<Response> {
   // for objects_save run tagging. It may use the caller-supplied
   // body.agent_run_id (no token minting depends on it) but prefers the
   // binding-verified / context-resolved run id when available.
-  const effectiveRunId =
-    bindingVerifiedRunId || runFromContext?.id || body.agent_run_id || undefined;
+  // An invalid/tampered token suppresses even the best-effort run-context
+  // registry tagging (never let a bad token drive tagging off a body id).
+  const effectiveRunId = runTokenInvalid
+    ? undefined
+    : bindingVerifiedRunId || runFromContext?.id || body.agent_run_id || undefined;
   // Run usable for building the artifact resolver ports AND for minting the
   // MCP OBO actor token — ONLY a run resolved via the auth-injected
   // context-id OR a verified dispatcher-signed binding. `body.agent_run_id`
@@ -849,12 +929,41 @@ export async function POST(req: Request): Promise<Response> {
     body.agent_run_id &&
     runFromContext?.id &&
     body.agent_run_id !== runFromContext.id &&
-    bindingVerifiedRunId !== runFromContext.id
+    bindingVerifiedRunId !== runFromContext.id &&
+    tokenResolvedRunId !== runFromContext.id
   ) {
+    // A non-empty body.agent_run_id that disagrees with the selected run refuses
+    // OBO — UNLESS the run was established by an authoritative credential (the
+    // dispatcher-signed binding or, W3, the run token), which outranks a
+    // forgeable body id.
+    runForPorts = null;
+  }
+  if (runTokenDivergent) {
+    // Token-selected run but a co-present context-id named a DIFFERENT run.
     runForPorts = null;
   }
   if (!runFromContext) {
     runForPorts = null;
+  }
+
+  // #1193 run-token spine (W3) — which-path-served metric for the legacy-
+  // removal gate (a follow-up retires the context-id + binding precedence once
+  // the run-token path dominates production). Ids and outcome flags only — the
+  // raw token and its hash are NEVER logged.
+  if (isBridgeAuthorized) {
+    const runSelectServedBy: "run_token" | "binding" | "context_id" | "none" =
+      tokenResolvedRunId
+        ? "run_token"
+        : bindingVerifiedRunId
+          ? "binding"
+          : runFromContext
+            ? "context_id"
+            : "none";
+    console.info(
+      `[llm-bridge-run-select] served-by=${runSelectServedBy} ` +
+        `run=${runForPorts?.id ?? "-"} org=${runForPorts?.orgId ?? "-"} ` +
+        `token-invalid=${runTokenInvalid} token-divergent=${runTokenDivergent}`,
+    );
   }
 
   let registryClientId: string | undefined;
@@ -1126,7 +1235,23 @@ export async function POST(req: Request): Promise<Response> {
               // Any other agent run resolves to `null` (unrestricted, unchanged).
               const cinatraMcpAllowedTools =
                 resolveAgentRunCinatraMcpAllowedTools(
-                  isInAdminCmsContentEditorPackage(template?.packageName),
+                  // RUN-LEVEL STICKY PIN first (widget-stream runtime trust,
+                  // slice 2): a `public_site_widget` carrier run IS an
+                  // in-admin CMS content-editor relay by construction, so it
+                  // stays CMS-pinned for its whole lifetime — a runtime grant
+                  // revoked/drifted AFTER run creation (or a transient
+                  // runtime-arm lookup failure) can never widen a live
+                  // widget-carrier run to unrestricted self-MCP access. The
+                  // async package-membership check (the widget-stream UNION:
+                  // build map ∪ approved runtime grants) covers the
+                  // non-widget dispatch surfaces of the same relay agents.
+                  runForPorts.sourceType === "public_site_widget" ||
+                    // ...same construction argument for the headless/legacy
+                    // content-editor carrier discriminator.
+                    runForPorts.sourceType === "content_editor_dispatch" ||
+                    (await isInAdminCmsContentEditorPackage(
+                      template?.packageName,
+                    )),
                 );
               const oboTool = await buildLlmMcpServerToolForAgentRun(
                 mcpEffectiveProvider as "openai" | "anthropic",
