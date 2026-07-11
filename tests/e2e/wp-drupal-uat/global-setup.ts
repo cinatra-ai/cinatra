@@ -252,6 +252,91 @@ async function establishCinatraSession(actor: DevActor): Promise<void> {
   }
 }
 
+/**
+ * Warm every dev-server route on the widget's dual-token path BEFORE the specs
+ * run, so Next.js dev-mode first-compile latency is absorbed here instead of
+ * inside a spec's assertion window.
+ *
+ * Why this exists (observed on the 2026-07-11 dispatch run): under dev
+ * cold-compile the first `POST /api/agents/{slug}/token` took 10.0s — at/over
+ * the WP plugin broker's 10s server-to-server HTTP timeout — so the broker
+ * returned its generic 502 and the widget surfaced "Could not obtain a Cinatra
+ * session token (Could not reach the Cinatra instance…)" (spec 4, attempt 1).
+ * On the retry the token minted fine but the FIRST CORS preflight
+ * `OPTIONS /api/agents/{slug}/stream` took 26.9s (route first-compile), pushing
+ * the sentinel render just past the 30s expect window (spec 4, retry). Both are
+ * dev-compile artifacts, not plugin/product defects — production runs a built
+ * server where these routes respond in well under a second, so the fix belongs
+ * in the harness, not in the shipped plugin's timeout.
+ *
+ * Every warm request is side-effect-free: OPTIONS is a bare CORS preflight, the
+ * POSTs carry no/invalid credentials so they terminate at auth (4xx) AFTER the
+ * route module has compiled, and the GETs are read-only. Statuses are logged
+ * but never asserted — compile warmth is the only goal; real behavior stays
+ * proven by the specs.
+ */
+async function warmDevRoutes(): Promise<void> {
+  const ctx = await playwrightRequest.newContext({ baseURL: CINATRA_BASE });
+  try {
+    const targets: Array<{ label: string; run: () => Promise<{ status(): number }> }> = [];
+    // Shared widget-auth surface (init route, hosted page, redeem route).
+    targets.push(
+      { label: "POST /api/widget-auth/init", run: () => ctx.post("/api/widget-auth/init", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
+      { label: "GET /widget-auth", run: () => ctx.get("/widget-auth", { failOnStatusCode: false, timeout: 120_000 }) },
+      { label: "POST /api/widget-auth/token", run: () => ctx.post("/api/widget-auth/token", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
+    );
+    // Per-agent surface. The dynamic [agentSlug] segments share one compiled
+    // module, but warm both slugs anyway: first-hit per-agent work (extension
+    // service registration) also shows up as multi-second latency in run logs.
+    for (const [slug, cmsOrigin] of [
+      ["wordpress-content-editor", process.env.UAT_WP_BASE_URL ?? "http://localhost:8080"],
+      ["drupal-content-editor", process.env.UAT_DRUPAL_BASE_URL ?? "http://localhost:8082"],
+    ] as const) {
+      targets.push(
+        { label: `GET /api/agents/${slug}/capabilities`, run: () => ctx.get(`/api/agents/${slug}/capabilities`, { failOnStatusCode: false, timeout: 120_000 }) },
+        {
+          label: `POST /api/agents/${slug}/token`,
+          run: () =>
+            ctx.post(`/api/agents/${slug}/token`, {
+              headers: { Authorization: "Bearer warmup-invalid", Origin: CINATRA_BASE },
+              data: { contractVersion: "v1" },
+              failOnStatusCode: false,
+              timeout: 120_000,
+            }),
+        },
+        {
+          label: `OPTIONS /api/agents/${slug}/stream`,
+          run: () =>
+            ctx.fetch(`/api/agents/${slug}/stream`, {
+              method: "OPTIONS",
+              headers: {
+                Origin: cmsOrigin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type,x-cinatra-widget-user-token",
+              },
+              failOnStatusCode: false,
+              timeout: 120_000,
+            }),
+        },
+      );
+    }
+    for (const target of targets) {
+      const startedAt = Date.now();
+      try {
+        const res = await target.run();
+        console.log(`[wp-drupal-uat] warm ${target.label} -> HTTP ${res.status()} in ${Date.now() - startedAt}ms`);
+      } catch (err) {
+        // A transport failure here must not fail the suite setup — the specs
+        // will surface any real breakage. Log it: a warm miss explains a later
+        // cold-compile latency spike.
+        console.log(`[wp-drupal-uat] warm ${target.label} FAILED after ${Date.now() - startedAt}ms: ${String(err)}`);
+      }
+    }
+  } finally {
+    await ctx.dispose();
+  }
+}
+
 export default async function globalSetup(): Promise<void> {
   const seed: UatSeed = {
     wordpress: seedWordPress(),
@@ -264,4 +349,6 @@ export default async function globalSetup(): Promise<void> {
   // The hosted-login popup needs a logged-in Cinatra session (member of the
   // connect-site's org). Sign the dev UAT user in + save the storageState.
   await establishCinatraSession(readDevActor());
+  // Absorb dev-server first-compile latency BEFORE any spec's timing window.
+  await warmDevRoutes();
 }

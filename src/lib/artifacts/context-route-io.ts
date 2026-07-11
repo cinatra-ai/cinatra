@@ -1,9 +1,7 @@
 import "server-only";
 
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
+import { resolveInstalledOasPathForRead } from "@cinatra-ai/agents/installed-oas-path";
 import {
   readAgentRunById,
   readAgentRunByContextId,
@@ -52,20 +50,18 @@ import {
 // stays unit-testable without the agents / MCP import chain.
 // ---------------------------------------------------------------------------
 
-function inRepoSlug(packageName: string | null | undefined): string | null {
-  if (typeof packageName !== "string") return null;
-  const m = /^@cinatra-ai\/([a-z0-9][a-z0-9-]*)$/.exec(packageName);
-  return m ? m[1] : null;
-}
-
 async function readInstalledOas(
   packageName: string,
 ): Promise<Record<string, unknown> | null> {
-  const slug = inRepoSlug(packageName);
-  if (!slug) return null;
-  const root = resolveAgentRuntimeMountDir();
-  const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
-  if (!existsSync(oasPath)) return null;
+  // cinatra#1196 — multi-vendor trust root: resolve the installed OAS via the
+  // SHARED runtime-mount resolver (scope-derived
+  // `<mount>/<vendor>/<slug>/cinatra/oas.json`), not the historical
+  // first-party-only regex + literal "cinatra-ai" path segment. An operator/
+  // third-party-vendor agent resolves identically to a first-party one; an
+  // unscoped/malformed name or an uninstalled package still yields null
+  // (→ oas_missing at the front door, unchanged #1197 rejection surface).
+  const oasPath = resolveInstalledOasPathForRead(packageName);
+  if (!oasPath) return null;
   try {
     return JSON.parse(await readFile(oasPath, "utf8")) as Record<string, unknown>;
   } catch {
