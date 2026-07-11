@@ -7,9 +7,13 @@ set -euo pipefail
 # mounts the committed no-LLM echo-flow fixture
 # (tests/fixtures/works-after-agent/), boots the runtime, then drives BOTH A2A
 # surfaces against the candidate runtime: the blocking message/send → completed
-# round-trip (rt/wayflow-a2a-send.mjs) AND the streaming message/stream SSE →
-# completed round-trip (rt/wayflow-a2a-stream.mjs, cinatra#1148), each asserting
-# the round-tripped nonce surfaces via the EndNode output (not merely the echoed
+# round-trip (rt/wayflow-a2a-send.mjs) AND — CAPABILITY-AWARE (owner Option B,
+# cinatra#1148) — the streaming message/stream SSE round-trip
+# (rt/wayflow-a2a-stream.mjs): that arm reads the runtime agent card's
+# capabilities.streaming and only REQUIRES the stream round-trip when the card
+# advertises it (recording an explicit n/a otherwise; a card that claims
+# streaming:true yet fails the round-trip FAILS). Both arms assert the
+# round-tripped nonce surfaces via the EndNode output (not merely the echoed
 # user input).
 #
 # This proves "wayflow works after a python/wayflowcore-major bump" with a
@@ -120,15 +124,19 @@ WAYFLOW_BASE_URL="$WAYFLOW_URL" WAYFLOW_AGENT_PATH="$AGENT_PATH" WORKS_AFTER_NON
   wa_node "${REPO_ROOT}/scripts/ci/works-after/rt/wayflow-a2a-send.mjs" \
   || fail "wayflow A2A message/send round-trip failed (task did not complete with the nonce)."
 
-# cinatra#1148: also prove the STREAMING surface against the bumped runtime.
-# message/stream (SSE) is a distinct, load-bearing path (the @a2a-js multi-line-
-# SSE `data:` fix exists because it broke); the host-side packages/a2a SSE tests
-# MOCK the streaming bridge, so only this boots the candidate runtime and drives
-# its native fasta2a SSE stream. A fresh nonce so the stream proof cannot pass on
-# the send arm's echoed input.
+# cinatra#1148 (owner Option B — CAPABILITY-AWARE): prove the STREAMING surface
+# against the bumped runtime WHEN the runtime advertises it. message/stream (SSE)
+# is a distinct, load-bearing path (the @a2a-js multi-line-SSE `data:` fix exists
+# because it broke); the host-side packages/a2a SSE tests MOCK the streaming
+# bridge, so only this boots the candidate runtime and drives its native fasta2a
+# SSE stream. The probe itself reads the agent card's capabilities.streaming: it
+# records an explicit n/a (exit 0) when the runtime declares no streaming, runs
+# the REQUIRED round-trip when it does, and FAILS (exit 1) if a card that claims
+# streaming:true cannot deliver it. A fresh nonce so the stream proof cannot pass
+# on the send arm's echoed input.
 STREAM_NONCE="wa-stream-$(date +%s)-${RANDOM}"
 WAYFLOW_BASE_URL="$WAYFLOW_URL" WAYFLOW_AGENT_PATH="$AGENT_PATH" WORKS_AFTER_NONCE="$STREAM_NONCE" \
   wa_node "${REPO_ROOT}/scripts/ci/works-after/rt/wayflow-a2a-stream.mjs" \
-  || fail "wayflow A2A message/stream round-trip failed (stream did not complete with the nonce)."
+  || fail "wayflow A2A message/stream arm failed (card advertised streaming:true but the round-trip did not complete with the nonce)."
 
-echo "${_WA_GREEN}==> works-after wayflow PASSED${_WA_RST} — candidate wayflow ran an agent over A2A (message/send → completed AND message/stream SSE → completed, nonce surfaced on both)."
+echo "${_WA_GREEN}==> works-after wayflow PASSED${_WA_RST} — candidate wayflow ran an agent over A2A (message/send → completed REQUIRED; message/stream SSE proved when the card advertises streaming, else recorded n/a; nonce surfaced wherever it ran)."
