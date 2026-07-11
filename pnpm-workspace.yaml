@@ -86,9 +86,13 @@ overrides:
   # in-range patched vite (8.0.16) ALSO breaks vitest module mocking
   # (vi.resetModules + dynamic import of a vi.mock'd module stops
   # intercepting -> sentry.test.ts / background-jobs-sentry.test.ts go red).
-  # vite 8.1.x (>=8.1.0, 2026-06-23) is now in-range and MAY fix that mocking
-  # regression — retest it in the next weekly Renovate window before renewing
-  # this deferral. Bounded-currency rule: keep CI green, defer the
+  # RETESTED 2026-07-11 (stack-majors Vitest+Vite group, vitest 4.1.10):
+  # vite 8.1.4 STILL reproduces the regression — the same two suites go red
+  # (mocked capture spy never called: 3/26 fail), while vitest 4.1.10 on the
+  # held vite 8.0.3 is 26/26 green. So the 8.1.x line did NOT fix the
+  # module-mocking break and this deferral is RENEWED, not retired. Retest on
+  # the next vite release (or a vitest release whose vite floor is the patched
+  # line with mocking intact). Bounded-currency rule: keep CI green, defer the
   # no-prod-exposure bump.
   lodash@<4.17.24: ">=4.17.24 <5" # chevrotain (mermaid) pins 4.17.21 (GHSA-r5fr/-f23m)
   lodash-es@<4.17.24: ">=4.17.24 <5"
