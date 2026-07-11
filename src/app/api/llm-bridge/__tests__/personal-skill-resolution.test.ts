@@ -1,23 +1,36 @@
 /**
- * Tests customSkillContent + assigned skillIds plumbing through the WayFlow
- * llm-bridge route.
+ * Personal delta-skill delivery through the WayFlow llm-bridge route.
  *
- * Includes a clearRunContext-in-finally regression-lock test. When the
+ * #1360 — the personal delta skill is USER-SCOPED. Its owner is derived SOLELY
+ * from the TRUSTED resolved run context (`runForPorts.runBy` — the same run the
+ * route vetted to mint the user's MCP OBO actor token), never from a
+ * caller-supplied identifier. This suite exercises the fail-closed contract at
+ * the ROUTE boundary by making the `getCustomSkillForCurrentUserAndAgent` mock
+ * FAITHFUL to the real resolver: it returns content only when a truthy
+ * `ownerUserId` is passed and otherwise THROWS (mirroring
+ * personal-skills.ts:143-157). The route's `.catch(() => null)` then turns an
+ * unattributable call into "no personal delta", which is exactly the behaviour
+ * under test:
+ *   - a verified run bound to a user delivers that user's delta;
+ *   - an absent run token delivers NO personal delta (no error noise);
+ *   - a forged / unresolvable token is refused (and suppresses a co-present
+ *     context-id — fail closed);
+ *   - a token/context-id divergence is refused;
+ *   - org/shared skill delivery (`getAssignedSkillIdsForAgent`) is unchanged.
+ *
+ * Also includes a clearRunContext-in-finally regression-lock test: when the
  * personal-skill lookup throws, the route's finally block must still call
  * clearRunContext.
  *
- * Tests assert that firstCallArg().skillIds equals the assigned skill IDs
- * resolved from agent_id via getAssignedSkillIdsForAgent.
- *
- * This route has related tests in this directory
- * (auth-bridge-token.test.ts, run-context-wiring.test.ts); this file covers
- * personal skill resolution alongside them.
- *
- * Mock topology mirrors run-context-wiring.test.ts: vi.hoisted handles,
- * vi.mock without importOriginal, dynamic import("../route") in beforeEach,
- * and CINATRA_BRIDGE_TOKEN test fixture for auth.
+ * Mock topology mirrors run-context-wiring.test.ts / run-binding-mcp-actor.test.ts:
+ * vi.hoisted handles, vi.mock without importOriginal, dynamic import("../route")
+ * in beforeEach, and CINATRA_BRIDGE_TOKEN test fixture for auth. The real
+ * `@/lib/agent-run-token` module is used (verifyRunToken is pure sha256) and
+ * driven via the `readAgentRunByTokenHash` mock.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const PERSONAL_DELTA = "PERSONAL-DELTA-WAYFLOW-XYZ";
 
 const {
   runResolvedSkillAwareDeterministicLlmTaskMock,
@@ -26,21 +39,38 @@ const {
   clearRunContextMock,
   setRunContextMock,
   getLlmMcpCredentialsMock,
+  readAgentRunByContextIdMock,
+  readAgentRunByIdMock,
+  readAgentRunByTokenHashMock,
+  readAgentRunTokenHashByIdMock,
+  readAgentTemplateByIdMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn(async () => ({
     text: "ok",
     artifacts: [],
   })),
+  // Owner-FAITHFUL: content only when a truthy ownerUserId is supplied,
+  // otherwise throw — mirroring the real resolver's "ownerUserId is required".
   getCustomSkillForCurrentUserAndAgentMock: vi.fn<
-    (agentId: string) => Promise<{ id: string; name: string; description: string; content: string; level: "personal"; scope: string } | null>
-  >(async (_agentId: string) => ({
-    id: "p1",
-    name: "P",
-    description: "D",
-    content: "PERSONAL-DELTA-WAYFLOW-XYZ",
-    level: "personal" as const,
-    scope: "user",
-  })),
+    (
+      agentId: string,
+      ownerUserId?: string,
+    ) => Promise<{ id: string; name: string; description: string; content: string; level: "personal"; scope: string } | null>
+  >(async (_agentId: string, ownerUserId?: string) => {
+    if (!ownerUserId) {
+      throw new Error(
+        "getCustomSkillForCurrentUserAndAgent: ownerUserId is required.",
+      );
+    }
+    return {
+      id: "p1",
+      name: "P",
+      description: "D",
+      content: PERSONAL_DELTA,
+      level: "personal" as const,
+      scope: "user",
+    };
+  }),
   getAssignedSkillIdsForAgentMock: vi.fn(async (_agentId: string) => [
     "@cinatra-ai/asset-blog:generate-blog-ideas",
   ]),
@@ -51,6 +81,20 @@ const {
       clientId: "mock-client-id-1",
       clientSecret: "secret",
     }),
+  ),
+  readAgentRunByContextIdMock: vi.fn(
+    async (): Promise<Record<string, unknown> | null> => null,
+  ),
+  readAgentRunByIdMock: vi.fn(
+    async (): Promise<Record<string, unknown> | null> => null,
+  ),
+  readAgentRunByTokenHashMock: vi.fn(
+    async (): Promise<{ id: string; orgId: string; runBy: string | null } | null> =>
+      null,
+  ),
+  readAgentRunTokenHashByIdMock: vi.fn(async (): Promise<string | null> => null),
+  readAgentTemplateByIdMock: vi.fn(
+    async (): Promise<Record<string, unknown> | null> => null,
   ),
 }));
 
@@ -93,11 +137,16 @@ vi.mock("@/lib/agents-store", () => ({
   getAssignedSkillIdsForAgent: getAssignedSkillIdsForAgentMock,
 }));
 
-// Route imports OasCinatraLlmSchema + ALLOWED_MODEL_IDS.
+// Route imports OasCinatraLlmSchema + ALLOWED_MODEL_IDS + the run reads used by
+// the token-first / context-id run-selection spine (#1193 W3).
 vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
-    readAgentRunByContextId: vi.fn(async () => null),
+    readAgentRunByContextId: readAgentRunByContextIdMock,
+    readAgentRunById: readAgentRunByIdMock,
+    readAgentRunByTokenHash: readAgentRunByTokenHashMock,
+    readAgentRunTokenHashById: readAgentRunTokenHashByIdMock,
+    readAgentTemplateById: readAgentTemplateByIdMock,
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
     // actionable 503 message resolve without the heavy real barrel.
@@ -182,6 +231,30 @@ vi.mock("@/lib/a2a-auth", () => ({
 
 let POST: (req: Request) => Promise<Response>;
 
+// The honest, user-attributable run. `runBy` is the verified owner whose
+// personal delta must be delivered.
+const VERIFIED_RUN = {
+  id: "run-1",
+  orgId: "org-1",
+  runBy: "user-1",
+  sourceType: null,
+  templateId: "tpl-1",
+  projectId: null,
+};
+// A different run — used to prove a token/context-id divergence is refused.
+const OTHER_RUN = {
+  id: "run-2",
+  orgId: "org-2",
+  runBy: "user-2",
+  sourceType: null,
+  templateId: "tpl-2",
+  projectId: null,
+};
+// Probe row (unique-index shape) the run-token verifier returns before the
+// full re-read; must agree with VERIFIED_RUN's identity tuple.
+const PROBE = { id: VERIFIED_RUN.id, orgId: VERIFIED_RUN.orgId, runBy: VERIFIED_RUN.runBy };
+const RUN_TOKEN = "raw-run-token-xyz";
+
 afterEach(() => {
   // env hygiene — cleared so other test files start from a known state
 });
@@ -190,6 +263,8 @@ beforeEach(async () => {
   vi.clearAllMocks();
   // Bridge-token fixture for authenticated bridge requests.
   process.env.CINATRA_BRIDGE_TOKEN = "test-token-32chars-XYZXYZXYZXYZ";
+  // Run-token hashing is pure sha256, but keep binding secrets deterministic.
+  process.env.BETTER_AUTH_SECRET = "test-better-auth-secret-for-personal-skill";
   const mod = await import("../route");
   POST = mod.POST;
   // Restore defaults after vi.clearAllMocks resets implementations.
@@ -201,17 +276,33 @@ beforeEach(async () => {
     text: "ok",
     artifacts: [],
   });
-  getCustomSkillForCurrentUserAndAgentMock.mockResolvedValue({
-    id: "p1",
-    name: "P",
-    description: "D",
-    content: "PERSONAL-DELTA-WAYFLOW-XYZ",
-    level: "personal" as const,
-    scope: "user",
-  });
+  // Owner-faithful default: deliver ONLY when a truthy owner is passed.
+  getCustomSkillForCurrentUserAndAgentMock.mockImplementation(
+    async (_agentId: string, ownerUserId?: string) => {
+      if (!ownerUserId) {
+        throw new Error(
+          "getCustomSkillForCurrentUserAndAgent: ownerUserId is required.",
+        );
+      }
+      return {
+        id: "p1",
+        name: "P",
+        description: "D",
+        content: PERSONAL_DELTA,
+        level: "personal" as const,
+        scope: "user",
+      };
+    },
+  );
   getAssignedSkillIdsForAgentMock.mockResolvedValue([
     "@cinatra-ai/asset-blog:generate-blog-ideas",
   ]);
+  // No run resolves by default (unattributable) unless a test opts in.
+  readAgentRunByContextIdMock.mockResolvedValue(null);
+  readAgentRunByIdMock.mockResolvedValue(null);
+  readAgentRunByTokenHashMock.mockResolvedValue(null);
+  readAgentRunTokenHashByIdMock.mockResolvedValue(null);
+  readAgentTemplateByIdMock.mockResolvedValue(null);
 });
 
 /** Read the first argument of the first call to the LLM task mock. */
@@ -236,28 +327,156 @@ function makeRequest(body: unknown): Request {
   });
 }
 
-describe("/api/llm-bridge personal skill resolution", () => {
-  it("forwards customSkillContent when agent_id is in body", async () => {
-    // Route must call getCustomSkillForCurrentUserAndAgent when agent_id is present.
-    const req = makeRequest({ user: "hi", agent_id: "agent-x" });
+/** Request variant that carries loader-injected internal run-selection headers. */
+function makeRequestH(body: unknown, headers: Record<string, string>): Request {
+  return new Request("http://localhost:3000/api/llm-bridge", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-cinatra-bridge-token": "test-token-32chars-XYZXYZXYZXYZ",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
+  it("VERIFIED run (token-first): delivers the run owner's personal delta, keyed on the verified runBy", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      { "x-cinatra-run-token": RUN_TOKEN },
+    );
     await POST(req);
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledOnce();
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith("agent-x");
-    expect(firstCallArg().customSkillContent).toBe("PERSONAL-DELTA-WAYFLOW-XYZ");
+    // Identity comes ONLY from the verified run context (runBy), not the caller.
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      VERIFIED_RUN.runBy,
+    );
+    expect(firstCallArg().customSkillContent).toBe(PERSONAL_DELTA);
   });
 
-  it("forwards assigned skillIds resolved from agent_id", async () => {
-    // Route must resolve skillIds via getAssignedSkillIdsForAgent(agent_id),
-    // not hardcode an empty list.
+  it("VERIFIED run (context-id channel): delivers the run owner's personal delta", async () => {
+    readAgentRunByContextIdMock.mockResolvedValue(VERIFIED_RUN);
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      { "x-cinatra-a2a-context-id": "ctx-1" },
+    );
+    await POST(req);
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      VERIFIED_RUN.runBy,
+    );
+    expect(firstCallArg().customSkillContent).toBe(PERSONAL_DELTA);
+  });
+
+  it("ABSENT run: no verified identity ⇒ NO personal delta (owner undefined, resolver fails closed)", async () => {
+    // No run token, no context-id → runForPorts is null → owner undefined.
     const req = makeRequest({ user: "hi", agent_id: "agent-x" });
+    await POST(req);
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      undefined,
+    );
+    expect(firstCallArg().customSkillContent).toBeUndefined();
+  });
+
+  it("FORGED/unresolvable run token: refused, and it SUPPRESSES a co-present context-id (fail closed)", async () => {
+    // A non-empty token that hashes to no row is tampering: it must NOT downgrade
+    // to the weaker context-id selector, even though the context-id WOULD resolve.
+    readAgentRunByTokenHashMock.mockResolvedValue(null); // unresolvable
+    readAgentRunByContextIdMock.mockResolvedValue(VERIFIED_RUN); // would resolve
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      {
+        "x-cinatra-run-token": "garbage-token",
+        "x-cinatra-a2a-context-id": "ctx-1",
+      },
+    );
+    await POST(req);
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      undefined,
+    );
+    expect(firstCallArg().customSkillContent).toBeUndefined();
+  });
+
+  it("MISMATCH: token selects one run but a co-present context-id names a DIFFERENT run ⇒ refused (no personal delta)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE); // token → run-1
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(OTHER_RUN); // context-id → run-2
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      {
+        "x-cinatra-run-token": RUN_TOKEN,
+        "x-cinatra-a2a-context-id": "ctx-2",
+      },
+    );
+    await POST(req);
+    // Divergence nulls runForPorts → owner undefined → no personal delta.
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      undefined,
+    );
+    expect(firstCallArg().customSkillContent).toBeUndefined();
+  });
+
+  it("MISMATCH: token probe resolves but the fresh re-read row DIVERGES (orgId changed) ⇒ refused", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue({ ...VERIFIED_RUN, orgId: "org-changed" });
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      { "x-cinatra-run-token": RUN_TOKEN },
+    );
+    await POST(req);
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      undefined,
+    );
+    expect(firstCallArg().customSkillContent).toBeUndefined();
+  });
+
+  it("a forged body.agent_run_id can NEVER select the owner (only a verified run can)", async () => {
+    // body.agent_run_id is caller-controlled; with no verified run it must not
+    // promote any identity. readAgentRunById must never be called from a body id.
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN); // would resolve IF called
+    const req = makeRequest({ user: "hi", agent_id: "agent-x", agent_run_id: VERIFIED_RUN.id });
+    await POST(req);
+    expect(readAgentRunByIdMock).not.toHaveBeenCalled();
+    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+      "agent-x",
+      undefined,
+    );
+    expect(firstCallArg().customSkillContent).toBeUndefined();
+  });
+});
+
+describe("/api/llm-bridge org/shared skill delivery is unchanged (#1360)", () => {
+  it("forwards assigned skillIds resolved from agent_id (verified run present)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      { "x-cinatra-run-token": RUN_TOKEN },
+    );
     await POST(req);
     expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledOnce();
     expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x");
     expect(firstCallArg().skillIds).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
   });
 
+  it("delivers org/shared skillIds even when NO personal delta applies (unattributable run)", async () => {
+    // The org/shared path is agent-scoped, not user-scoped: it is delivered
+    // byte-identically regardless of whether a personal owner resolved.
+    const req = makeRequest({ user: "hi", agent_id: "agent-x" });
+    await POST(req);
+    expect(getAssignedSkillIdsForAgentMock).toHaveBeenCalledWith("agent-x");
+    expect(firstCallArg().skillIds).toEqual(["@cinatra-ai/asset-blog:generate-blog-ideas"]);
+    expect(firstCallArg().customSkillContent).toBeUndefined();
+  });
+
   it("does NOT call personal-skill or skill-id resolvers when agent_id is omitted", async () => {
-    // The companion tests above prove resolver use when agent_id IS present.
     const req = makeRequest({ user: "hi" });
     await POST(req);
     expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
@@ -265,19 +484,26 @@ describe("/api/llm-bridge personal skill resolution", () => {
     expect(firstCallArg().skillIds).toEqual([]);
     expect(firstCallArg().customSkillContent).toBeUndefined();
   });
+});
 
-  it("forwards customSkillContent === undefined when getCustomSkillForCurrentUserAndAgent returns null", async () => {
-    // Route must omit customSkillContent when no personal skill exists.
+describe("/api/llm-bridge personal skill resolution — resolver-null + cleanup", () => {
+  it("forwards customSkillContent === undefined when the resolver returns null for a verified owner", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    // Verified owner, but no personal skill exists for this (owner, agent).
     getCustomSkillForCurrentUserAndAgentMock.mockResolvedValueOnce(null);
-    const req = makeRequest({ user: "hi", agent_id: "agent-x" });
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      { "x-cinatra-run-token": RUN_TOKEN },
+    );
     await POST(req);
     expect(firstCallArg().customSkillContent).toBeUndefined();
   });
 
-  it("clearRunContext still runs in finally even if personal-skill lookup throws", async () => {
-    // Regression lock: the personal-skill lookup must be INSIDE the
-    // try block (with the LLM task) so the finally always calls clearRunContext.
-    // Cleanup is required even when the lookup fails before the LLM task runs.
+  it("clearRunContext still runs in finally even if the personal-skill lookup throws", async () => {
+    // Regression lock: the personal-skill lookup must be INSIDE the try block
+    // (with the LLM task) so the finally always calls clearRunContext, even when
+    // the lookup fails before the LLM task runs.
     getCustomSkillForCurrentUserAndAgentMock.mockRejectedValueOnce(
       new Error("personal-skill lookup failed"),
     );
@@ -287,7 +513,6 @@ describe("/api/llm-bridge personal skill resolution", () => {
       agent_id: "agent-x",
     });
     await POST(req);
-    // clearRunContext must have been called in the finally block
     expect(clearRunContextMock).toHaveBeenCalledOnce();
   });
 });
