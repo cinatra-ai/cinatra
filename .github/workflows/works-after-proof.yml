@@ -108,7 +108,7 @@ jobs:
     steps:
       - id: filter
         if: ${{ github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         with:
           filters: |
             upgrade:
@@ -299,7 +299,7 @@ jobs:
       # prev_image — PR/merge_group runs never authenticate to the registry.
       - name: Login to ghcr (gate-mode prev-release pull only)
         if: ${{ needs.detect.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.prev_image != '' }}
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
