@@ -26,18 +26,50 @@ import "server-only";
 // SLICE-1 SCOPE BOUNDS (each is re-checked per cycle, fail-closed):
 //   - PLATFORM-SCOPED (NULL-org) rows only. The system actor is built with
 //     `orgId: null`, so the dispatcher's lifecycle-target resolver can only
-//     ever address NULL-org rows — org-scoped installs are skipped with a
-//     recorded reason (an org-scoped policy is a later slice). This bound is
-//     structural, not just a filter: even a bug in candidate selection cannot
-//     make the dispatch touch an org row.
+//     ever address NULL-org rows. This bound is structural, not just a
+//     filter: even a bug in candidate selection cannot make the dispatch
+//     touch an org row.
+//   - ORG-ROWS COMPENSATION FENCE: if the instance has ANY org-scoped
+//     install row (any package, any status), the cycle executes NOTHING.
+//     Rationale (codex round-1 blocker): a mid-batch failure compensates by
+//     `extensionRegistry.uninstall` of freshly-installed members, and the
+//     platform-admin hard-delete branch of that dispatcher is PACKAGE-GLOBAL
+//     (it tears down same-package org rows too). The candidate's dependency
+//     closure is not knowable pre-plan, so slice 1 fences the whole cycle on
+//     any org-scoped presence; multi-org instances are excluded until a
+//     row-scoped compensation primitive exists (follow-up on #1042).
 //   - NON-REQUIRED extensions only (`isSystemExtension` scope): the
 //     required/image-baked set keeps riding release images + the boot seed.
 //   - Verdaccio-sourced live (active|locked) rows only — other source types
 //     have no registry update semantics.
-//   - EXACTLY ONE live NULL-org row per package: side-by-side installed
-//     versions of one package (#1040 S1) make `(package, org)` ambiguous for
-//     the package-addressed dispatcher, so a non-singleton scope is skipped
-//     as `ambiguous-install-scope` until a row-scoped update API exists.
+//   - EXACTLY ONE NULL-org row per package COUNTING EVERY STATUS: the
+//     dispatcher re-activates archived same-scope siblings before updating,
+//     and side-by-side installed versions (#1040 S1) make `(package, org)`
+//     ambiguous for the package-addressed dispatcher — so any second NULL-org
+//     row (live OR archived) skips the package as `ambiguous-install-scope`
+//     until a row-scoped update API exists.
+//   - PRE-DISPATCH TOCTOU RECHECK (the gc-reaper cinatra#850 "re-verify
+//     against FRESH reads immediately before each mutation" discipline): the
+//     candidate set is a snapshot, and an operator can archive / uninstall /
+//     source-switch / manually advance a package between selection and
+//     dispatch — the dispatch itself would resurrect an archived row or
+//     overwrite a manual advance (the batch planner exempts the update root
+//     from installed-version conflict checks). So EVERY candidate re-runs
+//     `evaluateCandidateRecheck` over a FRESH row read immediately before its
+//     dispatch; ANY drift (row gone/replaced, no longer live, new sibling or
+//     org-scoped rows appeared, source switched, installed version moved in
+//     EITHER direction, kind changed) skips as `state-drift`, never executes.
+//     Version equality also preserves the selection verdict — the target
+//     stays strictly newer than the version the comparator approved. KNOWN
+//     LIMIT, on record (codex final-round divergence, reported not hidden):
+//     this recheck runs BEFORE the dispatch, not atomically at the mutation
+//     boundary — a manual update that already holds the lifecycle lock can
+//     advance the package after the recheck, and the queued auto-update then
+//     applies its cached (now older) target over it. Closing that residue
+//     needs an expected-version CAS threaded through the SHARED registry
+//     dispatch (`extensionRegistry.update` / the batch root), which is a
+//     cross-surface change deliberately out of this slice — tracked as a
+//     follow-up on #1042.
 //   - sdkAbiRange compatibility via `evaluateHostSdkCompat` — the loaders'
 //     own verdict; an incompatible/malformed declared range skips the
 //     candidate (the install pipeline re-checks this gate at execution).
@@ -132,7 +164,7 @@ export type AutoUpdateInstalledRow = {
 
 export type AutoUpdateSkipReason =
   | "non-verdaccio-source"
-  | "org-scoped"
+  | "org-rows-compensation-fence"
   | "ambiguous-install-scope"
   | "required-in-prod-scope"
   | "read-model-unwired"
@@ -140,7 +172,8 @@ export type AutoUpdateSkipReason =
   | "no-comparable-latest"
   | "up-to-date"
   | "abi-incompatible"
-  | "signature-readiness";
+  | "signature-readiness"
+  | "state-drift";
 
 export type ExtensionAutoUpdateRunSummary = {
   /** False = the master flag was off at cycle time; nothing was read. */
@@ -154,12 +187,14 @@ export type ExtensionAutoUpdateRunSummary = {
   applied: {
     packageName: string;
     rowId: string;
+    organizationId: string | null;
     fromVersion: string;
     toVersion: string;
   }[];
   failed: {
     packageName: string;
     rowId: string;
+    organizationId: string | null;
     fromVersion: string;
     toVersion: string;
     error: string;
@@ -267,6 +302,61 @@ export function buildDefaultExtensionAutoUpdateDeps(): ExtensionAutoUpdateDeps {
 }
 
 /**
+ * Pure pre-dispatch drift verdict over a FRESH row read (exported for direct
+ * testing; the execution loop feeds it a fresh `listInstalledRows()` result
+ * immediately before each dispatch — the TOCTOU guard, see the module
+ * header). FAIL-CLOSED: anything that no longer looks EXACTLY like the
+ * selected candidate refuses with a structured detail.
+ */
+export function evaluateCandidateRecheck(
+  freshRows: AutoUpdateInstalledRow[],
+  selected: {
+    rowId: string;
+    packageName: string;
+    kind: string;
+    expectedVersion: string;
+  },
+): { ok: true } | { ok: false; detail: string } {
+  // The org-rows compensation fence holds at DISPATCH time too — an org row
+  // created mid-cycle re-arms the package-global hard-delete hazard.
+  if (freshRows.some((r) => (r.organizationId ?? null) !== null)) {
+    return { ok: false, detail: "org-scoped install rows appeared since selection" };
+  }
+  const nullOrgRows = freshRows.filter(
+    (r) =>
+      r.packageName === selected.packageName && (r.organizationId ?? null) === null,
+  );
+  if (nullOrgRows.length === 0) {
+    return { ok: false, detail: "row removed since selection" };
+  }
+  if (nullOrgRows.length > 1) {
+    return { ok: false, detail: "scope became ambiguous since selection (new sibling row)" };
+  }
+  const fresh = nullOrgRows[0];
+  if (fresh.id !== selected.rowId) {
+    return { ok: false, detail: "row replaced since selection (different rowId)" };
+  }
+  if (!LIVE_STATUSES.has(fresh.status)) {
+    return { ok: false, detail: `row no longer live since selection (status=${fresh.status})` };
+  }
+  if (fresh.kind !== selected.kind) {
+    return { ok: false, detail: "kind changed since selection" };
+  }
+  if (fresh.source.type !== "verdaccio") {
+    return { ok: false, detail: "source switched off verdaccio since selection" };
+  }
+  if ((fresh.source.version ?? null) !== selected.expectedVersion) {
+    return {
+      ok: false,
+      detail:
+        `installed version moved ${selected.expectedVersion} -> ` +
+        `${fresh.source.version ?? "(none)"} since selection`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * The manual-update dispatch, minus the cookie-session admin gate (this is a
  * worker; the explicit system Actor is the identity). MUST stay behaviorally
  * aligned with `updateExtensionPackage` in `packages/extensions/src/actions.ts`
@@ -359,6 +449,22 @@ export async function runExtensionAutoUpdateCycle(
     }
   };
 
+  // Everything after the flag check writes the per-run audit event on the way
+  // out — INCLUDING a thrown enumeration/read failure (the throw still
+  // propagates to runRecurringLoop, which reports it and re-delays).
+  try {
+    await runEnabledCycle(deps, summary, writeAudit);
+  } finally {
+    await writeAudit(buildRunAuditEvent(summary));
+  }
+  return summary;
+}
+
+async function runEnabledCycle(
+  deps: ExtensionAutoUpdateDeps,
+  summary: ExtensionAutoUpdateRunSummary,
+  writeAudit: (event: AutoUpdateAuditEvent) => Promise<void>,
+): Promise<void> {
   const allRows = await deps.listInstalledRows();
 
   // ---- candidate-scope selection (slice-1 bounds; see module header) ------
@@ -368,34 +474,28 @@ export async function runExtensionAutoUpdateCycle(
     summary.skipped.push({ packageName, reason });
   };
 
-  const live = allRows.filter((r) => LIVE_STATUSES.has(r.status));
-  // Group the live rows by package to detect non-singleton NULL-org scopes.
-  const nullOrgLiveByPackage = new Map<string, AutoUpdateInstalledRow[]>();
-  for (const row of live) {
+  // Group ALL NULL-org rows (EVERY status) by package: an archived same-scope
+  // sibling is disqualifying too — the dispatcher re-activates archived rows
+  // at the actor's scope before updating, so "one live + one archived" could
+  // end as two live rows after a failed update (codex round-1 finding 2).
+  const nullOrgByPackage = new Map<string, AutoUpdateInstalledRow[]>();
+  for (const row of allRows) {
     if ((row.organizationId ?? null) !== null) continue;
-    const bucket = nullOrgLiveByPackage.get(row.packageName) ?? [];
+    const bucket = nullOrgByPackage.get(row.packageName) ?? [];
     bucket.push(row);
-    nullOrgLiveByPackage.set(row.packageName, bucket);
+    nullOrgByPackage.set(row.packageName, bucket);
   }
 
-  // Org-scoped installs are out of slice-1 scope (and structurally
-  // unaddressable by the orgId:null system actor). One skip per package.
-  const seenOrgScoped = new Set<string>();
-  for (const row of live) {
-    if ((row.organizationId ?? null) === null) continue;
-    if (seenOrgScoped.has(row.packageName)) continue;
-    seenOrgScoped.add(row.packageName);
-    skip(row.packageName, "org-scoped");
-  }
-
-  for (const [packageName, rows] of nullOrgLiveByPackage) {
+  for (const [packageName, rows] of nullOrgByPackage) {
     if (rows.length > 1) {
-      // Side-by-side versions (#1040 S1): the package-addressed dispatcher
-      // cannot target a specific row — skip until a row-scoped update exists.
+      // Side-by-side versions (#1040 S1) or an archived sibling: the
+      // package-addressed dispatcher cannot safely target ONE row — skip
+      // until a row-scoped update API exists.
       skip(packageName, "ambiguous-install-scope");
       continue;
     }
     const row = rows[0];
+    if (!LIVE_STATUSES.has(row.status)) continue; // a lone archived row is simply not scanned
     if (row.source.type !== "verdaccio") {
       skip(packageName, "non-verdaccio-source");
       continue;
@@ -415,6 +515,19 @@ export async function runExtensionAutoUpdateCycle(
   }
   summary.scanned = scoped.length;
 
+  // ---- org-rows compensation fence (see module header; codex round-1
+  // blocker): ANY org-scoped row on the instance halts execution — a
+  // mid-batch compensation uninstall of a freshly-installed dependency can
+  // take the platform-admin PACKAGE-GLOBAL hard-delete branch, and the
+  // dependency closure is unknowable before planning.
+  if (allRows.some((r) => (r.organizationId ?? null) !== null)) {
+    console.warn(
+      "[extension-auto-update] org-scoped install rows present on this instance — auto-update fenced off (compensation is not row-scoped yet; see extension-auto-update.ts header)",
+    );
+    for (const s of scoped) skip(s.row.packageName, "org-rows-compensation-fence");
+    return;
+  }
+
   // ---- update-availability via the cached read model ----------------------
   const store = await deps.resolveUpdateReadModelStore();
   if (store === null) {
@@ -424,8 +537,7 @@ export async function runExtensionAutoUpdateCycle(
       "[extension-auto-update] enabled but no persistent update read-model store is wired on this deployment — zero candidates (see extension-auto-update.ts header)",
     );
     for (const s of scoped) skip(s.row.packageName, "read-model-unwired");
-    await writeAudit(buildRunAuditEvent(summary));
-    return summary;
+    return;
   }
   summary.readModelWired = true;
 
@@ -470,8 +582,7 @@ export async function runExtensionAutoUpdateCycle(
         "[extension-auto-update] fleet signature-readiness predicate is NOT-READY — zero candidates executed this cycle (fail-closed)",
       );
       for (const c of candidates) skip(c.row.packageName, "signature-readiness");
-      await writeAudit(buildRunAuditEvent(summary));
-      return summary;
+      return;
     }
   }
 
@@ -479,6 +590,25 @@ export async function runExtensionAutoUpdateCycle(
   const actor = buildExtensionAutoUpdateActor();
   for (const c of candidates) {
     try {
+      // PRE-DISPATCH TOCTOU RECHECK (see module header): re-verify against a
+      // FRESH row read immediately before the dispatch. Drift ⇒ structured
+      // `state-drift` skip, never an execution; a re-read THROW lands in the
+      // catch below as a per-candidate failure (fail closed).
+      const recheck = evaluateCandidateRecheck(await deps.listInstalledRows(), {
+        rowId: c.row.id,
+        packageName: c.row.packageName,
+        kind: c.row.kind,
+        expectedVersion: c.currentVersion,
+      });
+      if (!recheck.ok) {
+        console.warn(
+          "[extension-auto-update] pre-dispatch recheck refused %s: %s",
+          c.row.packageName,
+          recheck.detail,
+        );
+        skip(c.row.packageName, "state-drift");
+        continue;
+      }
       await deps.executeUpdate(
         { packageName: c.row.packageName, kind: c.row.kind, toVersion: c.toVersion },
         actor,
@@ -486,6 +616,7 @@ export async function runExtensionAutoUpdateCycle(
       summary.applied.push({
         packageName: c.row.packageName,
         rowId: c.row.id,
+        organizationId: c.row.organizationId,
         fromVersion: c.currentVersion,
         toVersion: c.toVersion,
       });
@@ -499,7 +630,7 @@ export async function runExtensionAutoUpdateCycle(
         decision: "allowed",
         metadata: {
           rowId: c.row.id,
-          organizationId: null,
+          organizationId: c.row.organizationId,
           fromVersion: c.currentVersion,
           toVersion: c.toVersion,
         },
@@ -512,6 +643,7 @@ export async function runExtensionAutoUpdateCycle(
       summary.failed.push({
         packageName: c.row.packageName,
         rowId: c.row.id,
+        organizationId: c.row.organizationId,
         fromVersion: c.currentVersion,
         toVersion: c.toVersion,
         error: message,
@@ -532,7 +664,7 @@ export async function runExtensionAutoUpdateCycle(
         operation: "extension_auto_update_failed",
         metadata: {
           rowId: c.row.id,
-          organizationId: null,
+          organizationId: c.row.organizationId,
           fromVersion: c.currentVersion,
           toVersion: c.toVersion,
           error: message,
@@ -540,9 +672,6 @@ export async function runExtensionAutoUpdateCycle(
       });
     }
   }
-
-  await writeAudit(buildRunAuditEvent(summary));
-  return summary;
 }
 
 function buildRunAuditEvent(

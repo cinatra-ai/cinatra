@@ -40,6 +40,7 @@ import {
   runExtensionAutoUpdateCycle,
   defaultExecuteUpdate,
   buildExtensionAutoUpdateActor,
+  evaluateCandidateRecheck,
   isExtensionAutoUpdateEnabled,
   EXTENSION_AUTO_UPDATE_ACTOR_ID,
   EXTENSION_AUTO_UPDATE_READ_MODEL_TTL_MS,
@@ -172,7 +173,13 @@ describe("candidate selection", () => {
       }),
     );
     expect(summary.applied).toEqual([
-      { packageName: "@acme/foo", rowId: "row-1", fromVersion: "1.0.0", toVersion: "1.1.0" },
+      {
+        packageName: "@acme/foo",
+        rowId: "row-1",
+        organizationId: null,
+        fromVersion: "1.0.0",
+        toVersion: "1.1.0",
+      },
     ]);
     expect(summary.failed).toEqual([]);
     expect(summary.scanned).toBe(1);
@@ -218,17 +225,44 @@ describe("candidate selection", () => {
     ]);
   });
 
-  it("org-scoped rows are out of slice-1 scope (one skip per package)", async () => {
+  it("ANY org-scoped row on the instance fences the whole cycle (compensation is not row-scoped)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const resolveUpdateReadModelStore = vi.fn(async () => makeStore([makeEntry()]));
     const deps = makeDeps({
       listInstalledRows: async () => [
-        makeRow({ id: "r1", organizationId: "org-1" }),
-        makeRow({ id: "r2", organizationId: "org-2" }),
+        makeRow(), // an otherwise perfectly eligible NULL-org candidate
+        makeRow({ id: "r-org", packageName: "@acme/other", organizationId: "org-1" }),
+      ],
+      resolveUpdateReadModelStore,
+    });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(deps.executeUpdate).not.toHaveBeenCalled();
+    expect(resolveUpdateReadModelStore).not.toHaveBeenCalled(); // fenced before any read-model work
+    expect(summary.skipped).toEqual([
+      { packageName: "@acme/foo", reason: "org-rows-compensation-fence" },
+    ]);
+    expect(
+      warn.mock.calls.some((c) => String(c[0]).includes("org-scoped install rows present")),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("an ARCHIVED org row still fences (hard-delete tears down org rows regardless of status)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = makeDeps({
+      listInstalledRows: async () => [
+        makeRow(),
+        makeRow({ id: "r-org", packageName: "@acme/other", organizationId: "org-1", status: "archived" }),
       ],
     });
     const summary = await runExtensionAutoUpdateCycle(deps);
     expect(deps.executeUpdate).not.toHaveBeenCalled();
-    expect(summary.scanned).toBe(0);
-    expect(summary.skipped).toEqual([{ packageName: "@acme/foo", reason: "org-scoped" }]);
+    expect(summary.skipped).toEqual([
+      { packageName: "@acme/foo", reason: "org-rows-compensation-fence" },
+    ]);
+    warn.mockRestore();
   });
 
   it("side-by-side NULL-org rows of one package are ambiguous → skipped", async () => {
@@ -385,13 +419,20 @@ describe("execution isolation + audit trail", () => {
       {
         packageName: "@acme/foo",
         rowId: "r1",
+        organizationId: null,
         fromVersion: "1.0.0",
         toVersion: "1.1.0",
         error: "member install failed; batch compensated",
       },
     ]);
     expect(summary.applied).toEqual([
-      { packageName: "@acme/bar", rowId: "r2", fromVersion: "1.0.0", toVersion: "1.5.0" },
+      {
+        packageName: "@acme/bar",
+        rowId: "r2",
+        organizationId: null,
+        fromVersion: "1.0.0",
+        toVersion: "1.5.0",
+      },
     ]);
 
     // Audit rows: one failed event, one applied event, one run summary — every
@@ -440,6 +481,127 @@ describe("execution isolation + audit trail", () => {
     expect(summary.failed).toHaveLength(0);
     expect(summary.auditWriteFailures).toBe(2); // applied event + run event
     warn.mockRestore();
+  });
+});
+
+describe("pre-dispatch TOCTOU recheck (state-drift)", () => {
+  it("a candidate archived between selection and dispatch is skipped state-drift; the rest still applies", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const initialRows = [
+      makeRow({ id: "r1", packageName: "@acme/foo" }),
+      makeRow({ id: "r2", packageName: "@acme/bar" }),
+    ];
+    let reads = 0;
+    const deps = makeDeps({
+      listInstalledRows: async () => {
+        reads += 1;
+        // Read 1 = the selection scan; later reads = the pre-dispatch
+        // rechecks — @acme/foo has been archived in between.
+        return reads === 1
+          ? initialRows
+          : [
+              makeRow({ id: "r1", packageName: "@acme/foo", status: "archived" }),
+              makeRow({ id: "r2", packageName: "@acme/bar" }),
+            ];
+      },
+      resolveUpdateReadModelStore: async () =>
+        makeStore([
+          makeEntry({ packageName: "@acme/foo" }),
+          makeEntry({ packageName: "@acme/bar", latestVersion: "1.5.0" }),
+        ]),
+    });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(deps.executeUpdate).toHaveBeenCalledTimes(1);
+    expect(deps.executeUpdate.mock.calls[0][0]).toMatchObject({ packageName: "@acme/bar" });
+    expect(summary.skipped).toContainEqual({ packageName: "@acme/foo", reason: "state-drift" });
+    expect(summary.applied).toEqual([
+      {
+        packageName: "@acme/bar",
+        rowId: "r2",
+        organizationId: null,
+        fromVersion: "1.0.0",
+        toVersion: "1.5.0",
+      },
+    ]);
+    expect(
+      warn.mock.calls.some((c) => String(c[0]).includes("pre-dispatch recheck refused")),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("a manual advance beyond the cached target is refused (never overwritten/downgraded)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let reads = 0;
+    const deps = makeDeps({
+      listInstalledRows: async () => {
+        reads += 1;
+        return reads === 1
+          ? [makeRow()] // selected at 1.0.0 (cached target 1.1.0)
+          : [makeRow({ source: { type: "verdaccio", version: "3.0.0" } })];
+      },
+    });
+    const summary = await runExtensionAutoUpdateCycle(deps);
+    expect(deps.executeUpdate).not.toHaveBeenCalled();
+    expect(summary.skipped).toContainEqual({ packageName: "@acme/foo", reason: "state-drift" });
+    warn.mockRestore();
+  });
+
+  it("a recheck re-read THROW is a per-candidate failure (fail closed), never an execution", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let reads = 0;
+    const deps = makeDeps({
+      listInstalledRows: async () => {
+        reads += 1;
+        if (reads === 1) return [makeRow()];
+        throw new Error("db unavailable");
+      },
+    });
+    const summary = await runExtensionAutoUpdateCycle(deps);
+    expect(deps.executeUpdate).not.toHaveBeenCalled();
+    expect(summary.failed).toHaveLength(1);
+    expect(summary.failed[0]).toMatchObject({
+      packageName: "@acme/foo",
+      error: "db unavailable",
+    });
+    error.mockRestore();
+  });
+
+  it("evaluateCandidateRecheck — the drift verdict matrix", () => {
+    const selected = {
+      rowId: "row-1",
+      packageName: "@acme/foo",
+      kind: "connector",
+      expectedVersion: "1.0.0",
+    };
+    // Exact match → ok.
+    expect(evaluateCandidateRecheck([makeRow()], selected)).toEqual({ ok: true });
+    const refusals: [AutoUpdateInstalledRow[], string][] = [
+      // Row gone (uninstall race).
+      [[], "row removed"],
+      // New NULL-org sibling (side-by-side race) — every status counts.
+      [[makeRow(), makeRow({ id: "row-2", status: "archived" })], "ambiguous"],
+      // Row replaced (uninstall + reinstall race).
+      [[makeRow({ id: "row-9" })], "different rowId"],
+      // No longer live (archive race).
+      [[makeRow({ status: "archived" })], "no longer live"],
+      // Kind changed.
+      [[makeRow({ kind: "agent" })], "kind changed"],
+      // Source switched off verdaccio.
+      [[makeRow({ source: { type: "github" } })], "source switched"],
+      // Version moved FORWARD (manual advance beyond the cached target).
+      [[makeRow({ source: { type: "verdaccio", version: "3.0.0" } })], "1.0.0 -> 3.0.0"],
+      // Version moved BACKWARD.
+      [[makeRow({ source: { type: "verdaccio", version: "0.9.0" } })], "1.0.0 -> 0.9.0"],
+      // Org-scoped rows appeared (compensation fence holds at dispatch time).
+      [[makeRow(), makeRow({ id: "r-org", packageName: "@acme/other", organizationId: "org-1" })], "org-scoped"],
+    ];
+    for (const [rows, needle] of refusals) {
+      const verdict = evaluateCandidateRecheck(rows, selected);
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) expect(verdict.detail).toContain(needle);
+    }
   });
 });
 
