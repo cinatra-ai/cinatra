@@ -46,7 +46,10 @@ export type ActivationTransition =
   | "activate"
   | "hot-update"
   | "rollback"
-  | "teardown";
+  | "teardown"
+  // cinatra#1040 S4: an atomic default re-election (a package's default version
+  // changed; global names moved from the old default to the new).
+  | "reelect-default";
 
 /** A recorded transition in the bounded history ring. */
 export type ActivationTransitionRecord = {
