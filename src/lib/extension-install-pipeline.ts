@@ -542,9 +542,9 @@ export async function installExtensionFromRegistry(
 
   const requestedPorts = await deps.readRequestedPorts(mat.storeDir);
 
-  // Widget-auth token keys this manifest DECLARES (SRI-verified bytes); [] when
-  // unwired/none. (capability-ownership grant S0)
+  // Widget-auth token keys + widget-stream metadata claims this manifest DECLARES (SRI-verified bytes); [] when unwired/none.
   const declaredTokenKeys = deps.readWidgetAuthTokenKeys ? await deps.readWidgetAuthTokenKeys(mat.storeDir) : [];
+  const widgetMetadataClaims = deps.readWidgetStreamMetadataClaims ? await deps.readWidgetStreamMetadataClaims(mat.storeDir) : [];
 
   // Read the CURRENT (package, org) journal op EARLY — read-only. Two consumers:
   // (1) the HOST-COMPAT GATE's GC guard just below (a same-version re-install
@@ -787,8 +787,8 @@ export async function installExtensionFromRegistry(
   const isUpdate = priorOp?.phase === "finalized";
   const priorSource = isUpdate ? (await deps.readCurrentSource?.(input.packageName, input.orgId)) ?? null : null;
   const priorGrant = isUpdate ? (await deps.readGrantForScope?.(input.packageName, input.orgId)) ?? null : null;
-  // Prior ownership grants (per declared key) for durable rollback of a failed update.
-  const priorOwnershipGrants = await capturePriorOwnershipGrants(deps, { isUpdate, packageName: input.packageName, orgId: input.orgId, declaredTokenKeys });
+  // Prior ownership + widget-metadata grants (per declared claim) for durable rollback of a failed update.
+  const priorOwnershipGrants = await capturePriorOwnershipGrants(deps, { isUpdate, packageName: input.packageName, orgId: input.orgId, declaredTokenKeys, widgetMetadataClaims });
   // (d) the prior canonical row's persisted dependency EDGES (#180) — the NEW
   // manifest's edges land at the finalize seam below, so a failed update must
   // restore these on BOTH unwind paths or every closure gate reads the failed
@@ -830,8 +830,8 @@ export async function installExtensionFromRegistry(
       grantStatus = "approved";
     }
     // Record a PENDING ownership grant per declared token key, auto-approved ONLY
-    // for `trusted-signed` (same split as ports/DDL). (capability-ownership grant S0)
-    await recordAndAutoApproveOwnershipGrants(deps, { declaredTokenKeys, autoGrantPrivileged, packageName: input.packageName, orgId: input.orgId, approvedBy: input.actorUserId ?? "system:auto-trusted-signed" });
+    // for `trusted-signed` (same split as ports/DDL) — widget METADATA claims pend with NO auto-approve on ANY tier.
+    await recordAndAutoApproveOwnershipGrants(deps, { declaredTokenKeys, widgetMetadataClaims, autoGrantPrivileged, packageName: input.packageName, orgId: input.orgId, approvedBy: input.actorUserId ?? "system:auto-trusted-signed" });
     await deps.advanceInstallOpPhase?.({ installOpId, phase: "granted" });
 
     // Apply the extension's declared, host-run node-pg-migrate migrations
@@ -988,14 +988,14 @@ export async function installExtensionFromRegistry(
     // existed) RESTORE the captured OLD provenance/grant/edges. Best-effort +
     // isolated; each FAILED step emits a structured operational event (cinatra#158
     // (d)) AND logs, never masking the original error. A FRESH install captured none.
-    // Undo this attempt's ownership grant writes — OUTSIDE the isUpdate guard: a
-    // fresh install auto-approved grants too and must revoke them, else a failed
-    // install leaves an approved credential-store owner. (capability-ownership grant S0)
+    // Undo this attempt's capability-grant writes (ownership + widget metadata) —
+    // OUTSIDE the isUpdate guard: a fresh install auto-approved ownership grants
+    // too and must revoke them, else a failed install leaves an approved owner.
     await unwindOwnershipGrants({
       deps,
       packageName: input.packageName,
       orgId: input.orgId,
-      declaredTokenKeys,
+      declaredTokenKeys, widgetMetadataClaims,
       priorOwnershipGrants,
       onFailure: (e) =>
         emitDurableRestoreFailure(deps, {
@@ -1209,15 +1209,15 @@ export async function installExtensionFromRegistry(
           recordFailure("grant", e);
         }
       }
-      // (i-c2) unwind the capability-ownership grants: re-pin each captured OLD
-      // row; revoke any NEW key this attempt added — so the re-pinned OLD install
-      // keeps its exact prior ownership and no failed key leaks authority.
-      // (capability-ownership grant S0)
+      // (i-c2) unwind the capability grants (ownership + widget metadata): re-pin
+      // each captured OLD row; revoke/delete any NEW key/slug this attempt added —
+      // so the re-pinned OLD install keeps its exact prior grant state and no
+      // failed key leaks authority.
       await unwindOwnershipGrants({
         deps,
         packageName: input.packageName,
         orgId: input.orgId,
-        declaredTokenKeys,
+        declaredTokenKeys, widgetMetadataClaims,
         priorOwnershipGrants,
         onFailure: (e) => recordFailure("ownership-grant", e),
       });
