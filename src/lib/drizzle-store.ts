@@ -9,7 +9,9 @@ import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
 import {
   capabilityOwnershipGrantSchemaQueries,
+  dependencyEdgeSchemaQueries,
   versionIdentitySchemaQueries,
+  projectDispatchSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import {
@@ -1219,6 +1221,11 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_pm_links_provider_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (provider)` },
+    // project_dispatch_attempts + project_leases: the dynamic-dispatch
+    // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
+    // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
+    // (src/lib/extension-grant-schema.ts); companion migration core__0024.
+    ...projectDispatchSchemaQueries(schemaName),
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
     // gate). PK is (run_id, node_id) to support multiple TriggerWaitNodes per
@@ -2628,7 +2635,6 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   status text NOT NULL DEFAULT 'active',
   source jsonb NOT NULL,
   required_in_prod boolean NOT NULL DEFAULT false,
-  dependencies jsonb NOT NULL DEFAULT '[]'::jsonb,
   manifest_hash text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -2647,6 +2653,13 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // `versionIdentitySchemaQueries`, spread here AFTER both tables' CREATE
     // statements. The leaf drops the pre-#1040 org-only identity index names.
     ...versionIdentitySchemaQueries(schemaName),
+    // Dependency edges are FIRST-CLASS ROWS since cinatra#1040 S2: the
+    // extension_dependency_edge table + the guarded jsonb->edge-rows migration
+    // mirror (the legacy `dependencies` jsonb column is GONE from the CREATE
+    // above — a fresh DB is born at the post-core__0025 shape; an upgraded DB
+    // converges through the leaf's guarded DO block). Lives in the same
+    // pure-strings leaf module (`dependencyEdgeSchemaQueries`).
+    ...dependencyEdgeSchemaQueries(schemaName),
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_kind_status_idx
   ON "${schemaName.replaceAll('"', '""')}"."installed_extension" (kind, status)` },
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_package_name_idx

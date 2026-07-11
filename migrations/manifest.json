@@ -21,6 +21,14 @@
     "Never renumber or rewrite an entry once its migration has shipped;",
     "supersede it with a new sequence number."
   ],
+  "_seq_coordination": [
+    "SEQ COORDINATION — seq 0023 is HELD for open PR cinatra-ai/cinatra#1304",
+    "(assistant-threads-turns, migrations/core/core__0023_assistant-threads-turns.mjs),",
+    "which is reviewed ahead of this branch. This deliverable was originally cut at",
+    "0023 too; to avoid a duplicate-seq collision at merge it is renumbered to 0024 and",
+    "appended AFTER #1304's held 0023. Whichever of the two lands second must confirm it",
+    "still holds the next free sequence number before merge."
+  ],
   "migrations": [
     {
       "seq": "0001",
@@ -237,6 +245,26 @@
       "tables": [
         "assistant_threads",
         "assistant_turns"
+      ]
+    },
+    {
+      "seq": "0024",
+      "file": "core/core__0024_project-dispatch-ledger-lease.mjs",
+      "summary": "Dynamic-dispatch primitive storage (cinatra-ai/cinatra#1032 deliverable 2): two brand-new tables. project_dispatch_attempts is the dispatch-attempt ledger — one row per deliberate dispatch attempt keyed UNIQUE (org_id, item_natural_key, action_version), written AHEAD of createAgentRun and carrying the deterministically derived idempotency_key passed VERBATIM to createAgentRun, so a tick crashing between dispatch and record cannot double-dispatch (the next tick re-begins the same key and agent_runs_idempotency_key_uniq resolves to the same child run); run_id is provenance with deliberately NO FK (append-only history outlives the run row); version is the optimistic-CAS counter (core__0007 shape). project_leases is the project-level lease keyed (org_id, project_ref) with heartbeat/expiry columns and a fencing version bumped on every (re)acquisition; stale-lease recovery = a conditional-upsert acquire that only wins when expires_at <= now() or the caller is the live holder. Both tables ride the idempotent bootstrap DDL (projectDispatchSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops both tables (fresh additions; exact pre-0024 shape on any lineage). destructive=false: brand-new tables, no user-land data affected.",
+      "destructive": false,
+      "tables": [
+        "project_dispatch_attempts",
+        "project_leases"
+      ]
+    },
+    {
+      "seq": "0025",
+      "file": "core/core__0025_extension-dependency-edge.mjs",
+      "summary": "Dependency edges move off the row jsonb (cinatra-ai/cinatra#1040 S2, edge-storage half). Creates extension_dependency_edge: one row per DECLARED manifest edge of an installed_extension row — declared_package_name / declared_kind / edge_type / requirement / version_constraint (the VersionConstraint union as jsonb, lossless round-trip) / declared_index (manifest array position; UNIQUE per dependent — positional, not a semantic dedupe) — plus the write-time RESOLUTION: resolved_install_id (WHICH installed row satisfied the edge; FK ON DELETE SET NULL) and resolution_reason (free-form provenance). The closure gates (boot/archive/restore/forward) validate resolved edges and fall back to the scoped name-lookup for unresolved ones. PREFLIGHT fails loudly on malformed legacy edges (naming dependent id + declared index) before any destructive work; the backfill resolves per-DECLARING-row scope (own-org live row first, then platform — a platform dependent binds only platform rows; default version preferred, deterministic id tie-break; missing target backfills unresolved) with DETERMINISTIC ids ('iede_' || md5(dependent:index)); then installed_extension.dependencies is DROPPED. The table rides the idempotent bootstrap DDL (dependencyEdgeSchemaQueries spread into buildCreateStoreSchemaQueries, same PR; the bootstrap CREATE of installed_extension no longer declares the jsonb column) so a fresh install is born at the target shape and ledger-fakes this chain; the backfill + column DROP over an already-populated table are the transformational half this module carries on the operator upgrade path. Coordinated NON-rolling deploy boundary (core__0022/core__0005): a pre-0025 process naming the dropped column fails closed (undefined column), never a silent wrong read. Idempotent/lineage-tolerant: CREATE TABLE/indexes IF NOT EXISTS; preflight+backfill+drop live in ONE DO block guarded on the legacy column's existence, so a re-run — or a run after the bootstrap leaf already converged — is a no-op. down() re-adds the jsonb column, re-serializes each dependent's edges in declared order (optional kind key only when present), and drops the table; resolution provenance is lost by design. destructive=true because it backfills from and drops a column on a table that already holds rows on main.",
+      "destructive": true,
+      "tables": [
+        "installed_extension",
+        "extension_dependency_edge"
       ]
     }
   ]

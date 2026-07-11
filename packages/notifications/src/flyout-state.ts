@@ -227,3 +227,97 @@ export function filterAgentCreationProgressByRunId(
     })
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
+
+// ---------------------------------------------------------------------------
+// Agent post-install "needs configuration" flyout entry (cinatra #1057 ruling
+// (c)). ONE entry per affected agent: an installed AGENT whose REQUIRED
+// connector dependencies are not yet configured. The entry names the agent
+// (displayName) and lists each required connector's displayName linking to its
+// setup page. It is written by the server reconciler
+// (`syncAgentConfigurationNeedsNotifications`) from the SAME per-connector
+// readiness derivation the Extensions-page card strip uses, so the bell entry
+// and the card strip stay in lock-step, and it is DELETED the moment the agent
+// becomes runnable (every required connection configured).
+//
+// The metadata SHAPE lives here (browser-safe, zero deps) so the writer and the
+// flyout renderer share ONE definition and cannot drift.
+// ---------------------------------------------------------------------------
+
+/** `metadata.category` tag identifying a config-needs flyout entry. */
+export const AGENT_CONFIGURATION_NEEDS_CATEGORY =
+  "agent_configuration_needs" as const;
+
+/** One required connector the affected agent still needs configured. */
+export type ConfigurationNeedsConnector = {
+  /** Human-readable manifest displayName — the primary rendered link label. */
+  displayName: string;
+  /** The connector's canonical package id (stable identity / signature). */
+  packageName: string;
+  /** Deep-link to the connector's setup surface, or null when unresolved. */
+  settingsHref: string | null;
+};
+
+/** The `metadata.configurationNeeds` payload carried by a config-needs entry. */
+export type ConfigurationNeedsMetadata = {
+  agentPackageName: string;
+  agentDisplayName: string;
+  connectors: ConfigurationNeedsConnector[];
+};
+
+/**
+ * True when the notification is an agent post-install configuration-needs
+ * entry (`metadata.category === AGENT_CONFIGURATION_NEEDS_CATEGORY`). Pure.
+ */
+export function isConfigurationNeedsNotification(n: AppNotification): boolean {
+  const md = n.metadata as { category?: unknown } | undefined;
+  return Boolean(md) && md?.category === AGENT_CONFIGURATION_NEEDS_CATEGORY;
+}
+
+/**
+ * Extract + validate the `configurationNeeds` payload from a notification,
+ * returning `null` for any non-config-needs or malformed row. Defensive: the
+ * flyout renderer must never throw on a hand-crafted / legacy metadata blob.
+ * Pure — never mutates the input.
+ */
+export function getConfigurationNeedsMetadata(
+  n: AppNotification,
+): ConfigurationNeedsMetadata | null {
+  const md = n.metadata as
+    | { category?: unknown; configurationNeeds?: unknown }
+    | undefined;
+  if (!md || md.category !== AGENT_CONFIGURATION_NEEDS_CATEGORY) return null;
+  const cn = md.configurationNeeds as
+    | {
+        agentPackageName?: unknown;
+        agentDisplayName?: unknown;
+        connectors?: unknown;
+      }
+    | undefined;
+  if (!cn || typeof cn !== "object") return null;
+  const agentPackageName =
+    typeof cn.agentPackageName === "string" ? cn.agentPackageName : "";
+  const agentDisplayName =
+    typeof cn.agentDisplayName === "string" ? cn.agentDisplayName : "";
+  if (!agentPackageName || !agentDisplayName) return null;
+  if (!Array.isArray(cn.connectors)) return null;
+  const connectors: ConfigurationNeedsConnector[] = [];
+  for (const raw of cn.connectors) {
+    if (!raw || typeof raw !== "object") continue;
+    const c = raw as {
+      displayName?: unknown;
+      packageName?: unknown;
+      settingsHref?: unknown;
+    };
+    if (typeof c.displayName !== "string" || typeof c.packageName !== "string") {
+      continue;
+    }
+    connectors.push({
+      displayName: c.displayName,
+      packageName: c.packageName,
+      settingsHref:
+        typeof c.settingsHref === "string" ? c.settingsHref : null,
+    });
+  }
+  if (connectors.length === 0) return null;
+  return { agentPackageName, agentDisplayName, connectors };
+}

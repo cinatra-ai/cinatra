@@ -219,11 +219,11 @@ echo "==> prod-boot e2e: image=${IMAGE} origin=${APP_ORIGIN}"
 # ── 1. Infrastructure: isolated network + fresh Postgres + Redis ────────────
 docker network create "$NET" >/dev/null
 
-# Same service images the repo's e2e jobs use (postgres:17 / redis:7).
+# Matches the platform compose Redis major (redis:8; postgres:17 as the e2e jobs use).
 docker run -d --name "$PG" --network "$NET" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
   postgres:17 >/dev/null
-docker run -d --name "$REDIS" --network "$NET" redis:7 >/dev/null
+docker run -d --name "$REDIS" --network "$NET" redis:8 >/dev/null
 
 echo "==> waiting for postgres + redis readiness"
 for i in $(seq 1 30); do

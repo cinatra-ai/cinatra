@@ -71,6 +71,7 @@ import {
   hasVisibleStreamingText,
   type AssistantMessagePart,
 } from "../assistant-parts";
+import { renderableViewType } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
   extractErrorMessage,
   mergeCitations,
@@ -434,7 +435,22 @@ function reduceDataPart(
   // Idempotence comes from each branch being a natural no-op on replay.
   const data = event.data;
 
-  if (isAgentRunDataPart(data)) {
+  // Renderable-view classification takes PRECEDENCE over the legacy structural
+  // `kind` shapes: any payload carrying a non-empty string `viewType` is a
+  // renderable view and MUST reach the interactive layer's dispatch — even if
+  // it also happens to carry a legacy `kind` (the S1 contract promises every
+  // renderable view registered rendering or the safe fallback, never a silent
+  // structural consume). A payload whose classification THROWS (hostile
+  // getter / Proxy trap) is treated as a view so the guarded dispatch renders
+  // its safe fallback instead of the reducer crashing.
+  let isRenderableView: boolean;
+  try {
+    isRenderableView = renderableViewType(data) !== undefined;
+  } catch {
+    isRenderableView = true;
+  }
+
+  if (!isRenderableView && isAgentRunDataPart(data)) {
     // Pin the inline agent-run-card runId — the mapping-gap requires this comes
     // from a DATA_PART, NEVER from TOOL_CALL_END.
     const target = state.message.parts.find(
@@ -447,7 +463,7 @@ function reduceDataPart(
     return pinRunIdOnToolCall(state, data.toolCallId, data.runId);
   }
 
-  if (isCitationsDataPart(data)) {
+  if (!isRenderableView && isCitationsDataPart(data)) {
     const normalized = normalizeCitations(data.citations);
     if (normalized.length === 0) return state;
     const merged = mergeCitations(state.message.citations, normalized);
@@ -456,11 +472,22 @@ function reduceDataPart(
     return withMessage(state, { citations: merged });
   }
 
-  // Unknown structured payload (e.g. an S4 renderable view) — carry it through
-  // for the interactive layer's renderable-view dispatch. Dedupe by structural
-  // equality so a replayed identical payload is a no-op.
-  const serialized = JSON.stringify(data);
-  if (state.dataParts.some((d) => JSON.stringify(d) === serialized)) return state;
+  // Renderable view or unknown structured payload — carry it through for the
+  // interactive layer's renderable-view dispatch. Dedupe by structural
+  // equality so a replayed identical payload is a no-op; a payload that fails
+  // to serialize (hostile getter / circular) skips dedupe rather than throwing.
+  try {
+    const serialized = JSON.stringify(data);
+    if (
+      serialized !== undefined &&
+      state.dataParts.some((d) => JSON.stringify(d) === serialized)
+    ) {
+      return state;
+    }
+  } catch {
+    // Unserializable payload — cannot dedupe structurally; append and let the
+    // guarded dispatch render its safe fallback.
+  }
   return { ...state, dataParts: [...state.dataParts, data] };
 }
 

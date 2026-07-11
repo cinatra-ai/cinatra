@@ -9,6 +9,7 @@
     ".": "./src/server.ts",
     "./server": "./src/server.ts",
     "./client": "./src/client.ts",
+    "./flyout-state": "./src/flyout-state.ts",
     "./types": "./src/types.ts",
     "./host-adapters": "./src/host-adapters.ts",
     "./perf-log": "./src/perf-log.ts"
@@ -20,6 +21,6 @@
     "@cinatra-ai/agents": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   }
 }

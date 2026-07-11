@@ -17,7 +17,7 @@
 //   3. BATCH compensation outcomes — `summarizeBatchOutcome` over a terminal
 //      ledger batch (extensions admin view).
 
-import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
+import type { ExtensionDependency, ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
 import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import type {
   BatchMemberStatus,
@@ -289,4 +289,131 @@ export function summarizeBatchOutcome(batch: InstallBatch): BatchOutcomeSummary 
  */
 export function hasActiveInstallBatch(batches: readonly InstallBatch[]): boolean {
   return batches.some((batch) => !summarizeBatchOutcome(batch).terminal);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Post-install "needs configuration" affordance (cinatra #1057)
+// ---------------------------------------------------------------------------
+//
+// SCOPE (owner ruling, issue #1057 (a)): this need arises for EXACTLY ONE case —
+// an AGENT extension whose required dependency set includes one or more
+// CONNECTORS. No other extension kind has a dependency that requires USER
+// CONFIGURATION on install, so the derivation is narrowed to agent-kind roots
+// and their REQUIRED connector dependencies only. A non-agent root, or an
+// agent whose connector dependencies are all optional, surfaces nothing.
+
+/**
+ * One required connector dependency's readiness, resolved by its OWN
+ * per-connector probe. The `connected` boolean is the connector's INDEPENDENT
+ * readiness — this module never derives it from another connector's state (see
+ * the chaining decision on {@link summarizeConfigurationNeeds}).
+ */
+export type ConnectorReadinessRow = {
+  packageName: string;
+  /**
+   * The connector's HUMAN-READABLE name — the manifest `displayName` the
+   * `/connectors` card grid and the setup-page header already render (e.g.
+   * "LinkedIn", "Gmail"). This is the PRIMARY label; the package name is only
+   * ever muted secondary text. Never the bare `packageName`.
+   */
+  displayName: string;
+  slug: string;
+  /** The connector's OWN readiness-probe result. */
+  connected: boolean;
+  /** Deep-link to the connector's setup surface, or null when unresolved. */
+  settingsHref: string | null;
+  /**
+   * True when this connector is a REQUIRED (non-peer) dependency edge of the
+   * root agent. Optional/peer connector dependencies never gate an agent (they
+   * degrade at run time) and are excluded from the configuration-needs surface.
+   */
+  required: boolean;
+};
+
+/** A single unconfigured required connector the affected agent needs. */
+export type ConfigurationNeed = {
+  packageName: string;
+  /** Human-readable manifest displayName — the primary rendered label. */
+  displayName: string;
+  slug: string;
+  settingsHref: string | null;
+};
+
+export type ConfigurationNeedsSummary = {
+  /** Required connectors that are present but NOT yet configured (ordered). */
+  needs: ConfigurationNeed[];
+  /**
+   * True when the root is an agent that declares at least one REQUIRED
+   * connector dependency (i.e. this extension is in scope at all).
+   */
+  hasConnectors: boolean;
+  /** True when every required connector is configured (nothing to surface). */
+  allConfigured: boolean;
+};
+
+const EMPTY_CONFIGURATION_NEEDS: ConfigurationNeedsSummary = {
+  needs: [],
+  hasConnectors: false,
+  allConfigured: true,
+};
+
+/**
+ * Derive the "needs configuration" affordance for a just-installed / installed
+ * extension: given the ROOT extension's kind and the readiness of its REQUIRED
+ * connector dependencies, return the unconfigured ones as ordered affordances.
+ *
+ * NARROWED SCOPE (cinatra #1057 (a)): only an AGENT root is in scope. A
+ * non-agent root — or an agent with no required connector dependency — yields
+ * an empty summary (`hasConnectors: false`, `allConfigured: true`). Optional
+ * connector dependencies (`required: false`) are dropped before considering
+ * readiness.
+ *
+ * READINESS-CHAINING DECISION (cinatra #1057, ratified — per-connector probes
+ * are AUTHORITATIVE): each required connector's readiness is its OWN probe
+ * result, NEVER folded into a facade/consumer connector's readiness. Rationale
+ * grounded in the live surface:
+ *   - the base dependencies (social-media / *-oauth / email / crm connectors)
+ *     register no readiness probe and default to not-connected, so folding
+ *     would make every facade perpetually not-ready;
+ *   - the leaf/facade probe already reflects the real chained end-state (a
+ *     saved connection cannot exist unless its required base is satisfied);
+ *   - the card grid and the setup-page badge are documented lock-step on the
+ *     SAME single per-connector probe — folding would break that invariant.
+ * This derivation therefore treats each row's `connected` as that connector's
+ * own probe result and never cross-references rows: a facade whose own probe
+ * reports connected is NOT re-surfaced because a dependency is unconfigured;
+ * that dependency appears as its own row instead.
+ *
+ * Deterministic lexicographic order by package name. PURE — the caller
+ * resolves kind + readiness + settingsHref (server probes); this only reshapes
+ * for display, performing no I/O.
+ */
+export function summarizeConfigurationNeeds(input: {
+  /** The root extension's declared kind. Only `"agent"` is in scope. */
+  rootKind: ExtensionKind | undefined;
+  /** Readiness rows for the root's connector dependencies (any requirement). */
+  connectors: readonly ConnectorReadinessRow[];
+}): ConfigurationNeedsSummary {
+  // Scope gate: only agent roots surface a configuration-needs affordance.
+  if (input.rootKind !== "agent") return EMPTY_CONFIGURATION_NEEDS;
+
+  // Optional/peer connector dependencies never gate the agent — drop them.
+  const required = input.connectors.filter((r) => r.required);
+  if (required.length === 0) return EMPTY_CONFIGURATION_NEEDS;
+
+  const needs: ConfigurationNeed[] = required
+    .filter((r) => !r.connected)
+    .map((r) => ({
+      packageName: r.packageName,
+      displayName: r.displayName,
+      slug: r.slug,
+      settingsHref: r.settingsHref,
+    }))
+    .sort((a, b) => a.packageName.localeCompare(b.packageName));
+
+  return {
+    needs,
+    hasConnectors: true,
+    allConfigured: needs.length === 0,
+  };
 }

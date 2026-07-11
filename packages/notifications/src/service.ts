@@ -133,6 +133,45 @@ export function listNotificationsForUser(userId: string): NotificationRecord[] {
   return out;
 }
 
+/**
+ * List EVERY notification for a user whose `dedupe_key` starts with a given
+ * prefix — UNCAPPED (no 200-newest window) so a caller reconciling an
+ * auto-managed, keyed notification family (e.g. the agent configuration-needs
+ * entries, dedupeKey `agent-config-needs:<pkg>`) always sees the COMPLETE set,
+ * even for a user with thousands of older notifications. Without this the paged
+ * `listNotificationsForUser` could hide a stale entry past the window, so it
+ * would never be cleared when its condition resolves.
+ *
+ * The prefix is matched with `LIKE $2 || '%'`; callers pass a literal,
+ * wildcard-free prefix (the `_`/`%` LIKE metacharacters are not escaped here).
+ */
+export function listNotificationsByDedupeKeyPrefixForUser(args: {
+  userId: string;
+  dedupeKeyPrefix: string;
+}): NotificationRecord[] {
+  if (!args.userId || !args.dedupeKeyPrefix) return [];
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+  const [result] = host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at
+          FROM ${schemaQualified("notifications")}
+          WHERE user_id = $1
+            AND dedupe_key IS NOT NULL
+            AND dedupe_key LIKE $2
+          ORDER BY created_at DESC`,
+        values: [args.userId, `${args.dedupeKeyPrefix}%`],
+      },
+    ],
+  });
+  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
+  return rows
+    .map(rowToRecord)
+    .filter((r): r is NotificationRecord => Boolean(r));
+}
+
 export function countUnreadForUser(userId: string): number {
   if (!userId) return 0;
   const host = getNotificationsHostAdapters();
@@ -372,6 +411,39 @@ export function markNotificationsReadByHrefPrefixForUser(args: {
             AND href IS NOT NULL
             AND (href = $2 OR href LIKE $3)`,
         values: [args.userId, args.hrefPrefix, `${prefixWithSlash}%`],
+      },
+    ],
+  });
+}
+
+/**
+ * Delete every notification row for a user carrying an EXACT `dedupe_key`.
+ *
+ * Unlike the read-state mutations above, this HARD-REMOVES the row. It exists
+ * for auto-managed live-reminder notifications (the agent configuration-needs
+ * entry, cinatra #1057 ruling (c)) whose meaning expires the moment the
+ * underlying condition resolves — an agent that becomes runnable has no
+ * "set up connections" reminder to keep, and its entry must vanish from every
+ * tab, not merely dim. Deleting (rather than marking read) also frees the
+ * `(user_id, dedupe_key)` slot so a later re-gating of the same agent inserts
+ * a fresh UNREAD entry instead of colliding with a stale read row via the
+ * partial unique index. Scoped to the exact key so it can never touch an
+ * unrelated notification.
+ */
+export function deleteNotificationsByDedupeKeyForUser(args: {
+  userId: string;
+  dedupeKey: string;
+}): void {
+  if (!args.userId || !args.dedupeKey) return;
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+  host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [
+      {
+        text: `DELETE FROM ${schemaQualified("notifications")}
+          WHERE user_id = $1 AND dedupe_key = $2`,
+        values: [args.userId, args.dedupeKey],
       },
     ],
   });

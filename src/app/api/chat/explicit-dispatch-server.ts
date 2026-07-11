@@ -450,6 +450,36 @@ export async function serverSideExplicitDispatch(input: {
     }
   }
 
+  // CONFIGURATION-NEEDS RUN GATE (cinatra #1057 ruling (b)): mirror the
+  // `agent_run` primitive gate at the chat explicit-dispatch surface so an agent
+  // whose REQUIRED connectors are not yet configured fails CLOSED BEFORE the
+  // input-extraction LLM round-trip below, with a TERMINAL SSE naming each
+  // unconfigured connector (runner.ts early-returns on `terminal:true` — no LLM
+  // fallthrough). The primitive gate is the authoritative backstop; this is the
+  // clean per-surface terminal. (Install is never blocked — only running.)
+  {
+    const { assertAgentRunReadyByPackage } = await import("@/lib/agent-run-readiness");
+    const notConfigured = await assertAgentRunReadyByPackage(
+      packageName,
+      packageName,
+      { userId: actor.userId ?? null },
+    );
+    if (notConfigured) {
+      send("tool_result", {
+        id: SYNTHETIC_TOOL_CALL_ID,
+        name: "agent_run",
+        status: "completed",
+        serverLabel: "cinatra-mcp",
+        resultLabel: `connections_unconfigured: ${notConfigured.unconfiguredConnectors
+          .map((c) => c.displayName)
+          .join(", ")}`,
+        result: JSON.stringify(notConfigured),
+      });
+      send("text", { content: notConfigured.error });
+      return { ok: false, terminal: true, error: notConfigured.error };
+    }
+  }
+
   // Extract inputs from prompt before dispatch.
   const inputParams = input.userPrompt
     ? await extractInputsFromPrompt(packageName, input.userPrompt, input.actor)
