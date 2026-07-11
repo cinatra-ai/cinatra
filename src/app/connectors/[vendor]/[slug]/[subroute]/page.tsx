@@ -28,6 +28,14 @@ import "@/lib/connector-readiness.server";
 // bridge module's header for the full layering story and its known
 // replacement-hazard limit (cinatra#1097).
 import "@/lib/connector-setup-action-references.server";
+// Side-effect import: loads the host extension wiring so `ctx.ui` action
+// registrations exist in THIS route's compilation before the SERVER-side
+// hydration read below resolves the registry (same reason + pattern as the
+// generic action dispatch route /api/extensions/[installId]/actions/[actionId]).
+// Hydration still fail-closes to a blank form on a registry miss.
+import "@/lib/extensions";
+import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
+import { resolveSchemaConfigInitialValues } from "@/lib/extension-config-hydration";
 import { ConnectorBadge } from "@cinatra-ai/connectors/connector-badge";
 import {
   enforceConnectorPolicy,
@@ -233,6 +241,18 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // "Connection status: Disconnected" card would MISREPRESENT such a surface
     // (gpt-5.5 convergence finding). So the presence of a declared probe is the
     // gate between the two layouts.
+    // SERVER-invoked opt-in hydration (owner-ratified contract; cinatra#1082
+    // item 3): when the connector declares a `hydrateAction`, invoke it here —
+    // at render, never from the browser — and thread the sanitized NON-SECRET
+    // saved values in as the form's initialValues. Fail-closed: no declaration
+    // (today's every-connector state), no install, a missing/erroring/slow
+    // action, or a malformed result all resolve `{}` — the pre-hydration blank
+    // form, never an error page. `installId` is the actor-scoped addressable
+    // install resolved above (proof of authorization for this render).
+    const initialValues = await resolveSchemaConfigInitialValues(
+      { surface: render.surface, packageName: packageId, installId },
+      { resolveAction: resolveExtensionUiAction },
+    );
     const statusProbeActionId = findStatusProbeActionId(render.surface);
     if (statusProbeActionId) {
       // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
@@ -263,6 +283,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
                   packageName={packageId}
                   surface={render.surface}
                   isAdmin={isAdmin}
+                  initialValues={initialValues}
                   omitFieldKinds={["status-probe"]}
                   initialConnected={badgeState.connected}
                 />
@@ -303,6 +324,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
               packageName={packageId}
               surface={render.surface}
               isAdmin={isAdmin}
+              initialValues={initialValues}
             />
           ) : (
             <InstallActivateCta displayName={displayName} />
