@@ -22,6 +22,10 @@ import {
 } from "@/lib/database";
 import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
 import { logAuditEventStrict } from "@/lib/authz/audit";
+import {
+  AgentApprovalAccessTargetSchema,
+  type AgentApprovalAccessDecision,
+} from "../auth-policy-types";
 
 // ---------------------------------------------------------------------------
 // Agent-Creation Approval Workflow — MCP primitive handlers.
@@ -73,6 +77,11 @@ const DecideInput = z.object({
   decision: z.enum(["approve", "reject"]),
   reason: z.string().optional(),
   expectedSnapshotHash: z.string().min(1),
+  // Who can access the agent once approved+published (cinatra#1327). REQUIRED
+  // for an approve (enforced in handleAgentCreationRequestDecide, fail-closed —
+  // a publish is unreachable without it); ignored for a reject. Optional in the
+  // schema so a reject need not carry it.
+  accessTarget: AgentApprovalAccessTargetSchema.optional(),
 });
 
 type ActorEnvelope = {
@@ -244,6 +253,12 @@ export async function handleAgentCreationRequestPropose(
       decidedBy: userId,
       expectedSnapshotHash: row.snapshotHash,
       decisionOrigin: "admin_authoring_instant_grant",
+      // cinatra#1327 fork: a chat surface cannot show the access-scope dialog,
+      // so the documented platform_admin instant grant (cinatra#382) keeps its
+      // pre-existing default access — no explicit org/team/project scope is
+      // written here. Behavior is deliberately UNCHANGED; the required
+      // access-scope step is added to the approvals-UI reviewer path only.
+      accessDecision: { mode: "instant_grant_default" },
     })) as { error?: string; structuredContent?: Record<string, unknown> };
     // On a materialize/publish failure the row stays at `approved`; surface the
     // error to the admin (recoverable via agent_creation_request_retry_publish),
@@ -461,8 +476,18 @@ async function approveAndPublishCreationRequest(input: {
   /** Distinguishes the auto instant-grant from a manual reviewer decision in
    *  the audit trail. */
   decisionOrigin: "reviewer_decide" | "admin_authoring_instant_grant";
+  /** The approval-time access decision (cinatra#1327) — REQUIRED, so the
+   *  publish pipeline is structurally unreachable without the caller having
+   *  decided who can access the agent. `scoped` carries the reviewer's chosen
+   *  org/team/project target; the actual access WRITE happens in the app layer
+   *  (decision-helpers.ts, via setExtensionInstallAccess — the agents package
+   *  cannot import @cinatra-ai/extensions), keyed by the `agentTemplateId`
+   *  returned in the success envelope. `instant_grant_default` is the
+   *  documented platform_admin chat instant grant, which keeps the pre-existing
+   *  default access unchanged (a chat surface cannot show the scope dialog). */
+  accessDecision: AgentApprovalAccessDecision;
 }): Promise<unknown> {
-  const { current: cur, adminActor, orgId, decidedBy, expectedSnapshotHash, decisionOrigin } = input;
+  const { current: cur, adminActor, orgId, decidedBy, expectedSnapshotHash, decisionOrigin, accessDecision } = input;
 
   // CAS update proposed → approved. StaleProposalError if the snapshot hash
   // changed since this approval was prepared.
@@ -499,6 +524,13 @@ async function approveAndPublishCreationRequest(input: {
       packageName: cur.packageName,
       authorId: cur.authorId,
       decisionOrigin,
+      // Record the access decision applied at approval (cinatra#1327) so the
+      // audit trail shows WHO the agent was scoped to (or that the documented
+      // instant-grant default was kept).
+      accessScope:
+        accessDecision.mode === "scoped"
+          ? { level: accessDecision.target.level, id: accessDecision.target.id }
+          : "instant_grant_default",
     },
   });
 
@@ -522,7 +554,28 @@ async function approveAndPublishCreationRequest(input: {
     orgId,
     publishResult: result.publishResult,
   });
-  return toEnvelope(published);
+
+  // Resolve the published agent_template's canonical id so the app-layer caller
+  // (decision-helpers.ts) can persist the chosen access scope through the SAME
+  // install path (setExtensionInstallAccess, kind "agent_template"). The agents
+  // package cannot import @cinatra-ai/extensions (it would create a package
+  // cycle — extensions depends on agents), so the persistence is performed one
+  // layer up; this envelope hands it the template id + the decision it must
+  // apply. Best-effort lookup: on a miss the caller surfaces a retryable error
+  // (the agent is published but stays at its restrictive default — fail-closed,
+  // never over-broad). `instant_grant_default` needs no scope write.
+  let agentTemplateId: string | null = null;
+  try {
+    const { readAgentTemplateByPackageName } = await import("../store");
+    const tmpl = await readAgentTemplateByPackageName(cur.packageName);
+    agentTemplateId = tmpl?.id ?? null;
+  } catch {
+    agentTemplateId = null;
+  }
+  return toEnvelope(published, {
+    agentTemplateId,
+    accessDecision,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +590,19 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
   const orgId = actorOrgIdOrThrow(req.actor as ActorEnvelope & { organizationId?: string });
   if (!isPlatformAdminActor(req.actor)) {
     return { error: "Unauthorized — admin session required to decide an agent creation request." };
+  }
+
+  // cinatra#1327 — fail-closed: an APPROVE must carry the access scope (who can
+  // access the agent once published). Enforced BEFORE any state read / CAS /
+  // publish, so no approve-publish path can bypass the access decision. A
+  // reject needs no scope. The approvals UI also requires the selection
+  // client-side; this is the server-side structural guarantee for EVERY caller
+  // of the primitive.
+  if (input.decision === "approve" && !input.accessTarget) {
+    return {
+      error:
+        "An access scope is required to approve and publish this agent — choose who can access it (organization, team, or project).",
+    };
   }
 
   const cur = readAgentCreationRequestById(input.id, orgId);
@@ -610,7 +676,15 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
     return toEnvelope(after);
   }
 
-  // Approve path — delegate to the shared approve→publish pipeline.
+  // Approve path — delegate to the shared approve→publish pipeline. Presence of
+  // accessTarget was enforced above (fail-closed); re-assert here so the
+  // scoped decision is well-typed for the pipeline.
+  if (!input.accessTarget) {
+    return {
+      error:
+        "An access scope is required to approve and publish this agent — choose who can access it (organization, team, or project).",
+    };
+  }
   return approveAndPublishCreationRequest({
     current: cur,
     adminActor: req.actor,
@@ -618,6 +692,7 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
     decidedBy: userId,
     expectedSnapshotHash: input.expectedSnapshotHash,
     decisionOrigin: "reviewer_decide",
+    accessDecision: { mode: "scoped", target: input.accessTarget },
   });
 }
 

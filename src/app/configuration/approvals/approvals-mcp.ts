@@ -68,6 +68,16 @@ const decideSchema = z.object({
    *  refuses `version_required` without it). Sources with no concurrency token
    *  ignore it. */
   expectedVersion: z.string().min(1).optional(),
+  /** Access scope for an approve — who can access the resource once approved
+   *  (cinatra#1327). REQUIRED by the agent-creation source's approve (the
+   *  install-equivalent moment); it refuses `access_scope_required` without it.
+   *  Other sources (e.g. vendor catalog moderation) ignore it. */
+  accessTarget: z
+    .object({
+      level: z.enum(["organization", "team", "project"]),
+      id: z.string().min(1),
+    })
+    .optional(),
 });
 
 const TOOL_META = {
@@ -83,7 +93,7 @@ const TOOL_META = {
   },
   approvals_decide: {
     description:
-      "Approve or reject one approval AT ITS SOURCE. Input `{ sourceId, id, decision: 'approve'|'reject', reason?, expectedVersion? }` — sourceId is REQUIRED so an unqualified id can never be routed to the wrong source. Delegates to the source's own decision helper, so authorization, separation-of-duties (incl. the single-admin bypass), audit writes, and structured errors are IDENTICAL to the UI. `expectedVersion` is the `version` from `approvals_get`: a source that guards edit-after-view (agent creation requests) refuses `version_required` without it and `stale_snapshot` if it changed. A rejection requires `reason`. Returns `{ ok: true, ... }` or a structured `{ ok: false, error: { code, kind, message, httpStatus? } }` refusal (e.g. SoD, conflict) surfaced readably. NOT available to delegated chat.",
+      "Approve or reject one approval AT ITS SOURCE. Input `{ sourceId, id, decision: 'approve'|'reject', reason?, expectedVersion?, accessTarget? }` — sourceId is REQUIRED so an unqualified id can never be routed to the wrong source. `accessTarget` ({ level: 'organization'|'team'|'project', id }) is REQUIRED to approve an agent-creation request (the install-equivalent moment — it refuses `access_scope_required` without it); other sources ignore it. Delegates to the source's own decision helper, so authorization, separation-of-duties (incl. the single-admin bypass), audit writes, and structured errors are IDENTICAL to the UI. `expectedVersion` is the `version` from `approvals_get`: a source that guards edit-after-view (agent creation requests) refuses `version_required` without it and `stale_snapshot` if it changed. A rejection requires `reason`. Returns `{ ok: true, ... }` or a structured `{ ok: false, error: { code, kind, message, httpStatus? } }` refusal (e.g. SoD, conflict) surfaced readably. NOT available to delegated chat.",
     inputSchema: decideSchema,
   },
 } as const;
@@ -277,7 +287,7 @@ async function handleGet(input: unknown) {
 }
 
 async function handleDecide(input: unknown) {
-  const { sourceId, id, decision, reason, expectedVersion } = decideSchema.parse(input);
+  const { sourceId, id, decision, reason, expectedVersion, accessTarget } = decideSchema.parse(input);
   const viewer = resolveViewer();
 
   const source = approvalSourceRegistry.find((s) => s.id === sourceId);
@@ -293,6 +303,7 @@ async function handleDecide(input: unknown) {
       action: decision,
       ...(reason ? { reason } : {}),
       ...(expectedVersion ? { expectedVersion } : {}),
+      ...(accessTarget ? { accessTarget } : {}),
     },
     viewer,
   );
