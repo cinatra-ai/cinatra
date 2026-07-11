@@ -1,5 +1,5 @@
 // Contract test for the structured-threads migration
-// (migrations/core/core__0023_assistant-threads-turns.mjs, cinatra#1037 P2a).
+// (migrations/core/core__0026_assistant-threads-turns.mjs, cinatra#1037 P2a).
 //
 // The migration module is imported by RELATIVE PATH so the real SQL is
 // exercised. Pure unit test (no DB): it pins the shape of up()/down() — the two
@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { up, down } from "../../../migrations/core/core__0023_assistant-threads-turns.mjs";
+import { up, down } from "../../../migrations/core/core__0026_assistant-threads-turns.mjs";
 
 function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
   const out: string[] = [];
@@ -17,7 +17,7 @@ function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
   return out;
 }
 
-describe("core__0023 up()", () => {
+describe("core__0026 up()", () => {
   const stmts = collectSql(up as (b: { sql: (s: string) => void }) => void);
   const joined = stmts.join("\n").toLowerCase();
 
@@ -66,7 +66,7 @@ describe("core__0023 up()", () => {
   });
 });
 
-describe("core__0023 down()", () => {
+describe("core__0026 down()", () => {
   const stmts = collectSql(down as (b: { sql: (s: string) => void }) => void);
   const joined = stmts.join("\n").toLowerCase();
 

@@ -22,12 +22,12 @@
     "supersede it with a new sequence number."
   ],
   "_seq_coordination": [
-    "SEQ COORDINATION — seq 0023 is HELD for open PR cinatra-ai/cinatra#1304",
-    "(assistant-threads-turns, migrations/core/core__0023_assistant-threads-turns.mjs),",
-    "which is reviewed ahead of this branch. This deliverable was originally cut at",
-    "0023 too; to avoid a duplicate-seq collision at merge it is renumbered to 0024 and",
-    "appended AFTER #1304's held 0023. Whichever of the two lands second must confirm it",
-    "still holds the next free sequence number before merge."
+    "SEQ COORDINATION — resolved: the 0023 hold for PR cinatra-ai/cinatra#1304",
+    "(assistant-threads-turns) is retired. core__0024 (#1329) and core__0025 (#1331)",
+    "shipped first, and the shipped ledger is an append-only positional prefix with",
+    "strictly-increasing tail seqs, so #1304 renumbered its migration to core__0026",
+    "(rename-only; no SQL change). 0021 and 0023 are permanent gaps — the runner",
+    "tolerates sequence gaps."
   ],
   "migrations": [
     {
@@ -238,16 +238,6 @@
       ]
     },
     {
-      "seq": "0023",
-      "file": "core/core__0023_assistant-threads-turns.mjs",
-      "summary": "Structured assistant threads + assistant_turns (cinatra-ai/cinatra#1037 P2a, the assistant-runtime persistence half). SEQ COORDINATION: this slice originally reserved 0021 behind the sibling's 0020, but the version-identity slice (#1040 S1) shipped on main as 0022 first — the shipped ledger skips 0021 entirely and is append-only, so this P2a table pair takes 0023, the next free sequence after the shipped head. Adds two typed tables: assistant_threads (the structured thread — owner_user_id, org_id, the bound assistant PRINCIPAL assistant_user_id, the A2A context_id continuity handle, title, ordering timestamps) and assistant_turns (one AG-UI RUN in a thread — thread_id FK, run_id keying the durable Redis-Streams AG-UI event log cinatra:a2a:events:{run_id}, assistant_user_id principal attribution, role, status). These own the #1037-P2 side of the assistant-stream boundary named in @cinatra-ai/agent-ui-protocol CONTRACT.md section 1 (thread model, message persistence, attribution, turn<->run linkage); the stream contract owns the durable event log itself, so assistant_turns stores metadata + the run pointer and NOT the events (no double persistence model). The legacy chat_threads JSON-payload table STAYS in place — the /chat persistence subroutes + chat_thread_send are rewired/deleted in P2b/P3 — so this migration is purely additive and introduces no double-write. Additive: bootstrap DDL (buildCreateStoreSchemaQueries, same PR) creates both via CREATE TABLE IF NOT EXISTS so a fresh install is born at target and ledger-fakes this chain; this module carries the same creates onto the operator upgrade path. Idempotent/lineage-tolerant: tables + indexes IF NOT EXISTS; the FK (assistant_turns.thread_id -> assistant_threads.id ON DELETE CASCADE) and the status/role CHECKs added only when absent (pg_constraint lookup against current_schema()); unqualified names resolve to the runner's search_path schema. down() drops the child assistant_turns then the parent assistant_threads (true reverse; loses structured thread/turn data by design — structural addition, not a rename). destructive=false (additive new tables holding no pre-existing data).",
-      "destructive": false,
-      "tables": [
-        "assistant_threads",
-        "assistant_turns"
-      ]
-    },
-    {
       "seq": "0024",
       "file": "core/core__0024_project-dispatch-ledger-lease.mjs",
       "summary": "Dynamic-dispatch primitive storage (cinatra-ai/cinatra#1032 deliverable 2): two brand-new tables. project_dispatch_attempts is the dispatch-attempt ledger — one row per deliberate dispatch attempt keyed UNIQUE (org_id, item_natural_key, action_version), written AHEAD of createAgentRun and carrying the deterministically derived idempotency_key passed VERBATIM to createAgentRun, so a tick crashing between dispatch and record cannot double-dispatch (the next tick re-begins the same key and agent_runs_idempotency_key_uniq resolves to the same child run); run_id is provenance with deliberately NO FK (append-only history outlives the run row); version is the optimistic-CAS counter (core__0007 shape). project_leases is the project-level lease keyed (org_id, project_ref) with heartbeat/expiry columns and a fencing version bumped on every (re)acquisition; stale-lease recovery = a conditional-upsert acquire that only wins when expires_at <= now() or the caller is the live holder. Both tables ride the idempotent bootstrap DDL (projectDispatchSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops both tables (fresh additions; exact pre-0024 shape on any lineage). destructive=false: brand-new tables, no user-land data affected.",
@@ -265,6 +255,16 @@
       "tables": [
         "installed_extension",
         "extension_dependency_edge"
+      ]
+    },
+    {
+      "seq": "0026",
+      "file": "core/core__0026_assistant-threads-turns.mjs",
+      "summary": "Structured assistant threads + assistant_turns (cinatra-ai/cinatra#1037 P2a, the assistant-runtime persistence half). SEQ COORDINATION: this slice originally reserved 0021 behind the sibling's 0020, then held 0023 (the claim ledger's hold after #1040 S1 shipped 0022) — but core__0024 (#1329) and core__0025 (#1331) shipped on main while this PR awaited final approval, and the shipped ledger is append-only with strictly-increasing tail seqs, so the pair lands at 0026, the next free sequence after the shipped head; 0021 and 0023 stay permanent gaps (rename-only renumber, no SQL change). Adds two typed tables: assistant_threads (the structured thread — owner_user_id, org_id, the bound assistant PRINCIPAL assistant_user_id, the A2A context_id continuity handle, title, ordering timestamps) and assistant_turns (one AG-UI RUN in a thread — thread_id FK, run_id keying the durable Redis-Streams AG-UI event log cinatra:a2a:events:{run_id}, assistant_user_id principal attribution, role, status). These own the #1037-P2 side of the assistant-stream boundary named in @cinatra-ai/agent-ui-protocol CONTRACT.md section 1 (thread model, message persistence, attribution, turn<->run linkage); the stream contract owns the durable event log itself, so assistant_turns stores metadata + the run pointer and NOT the events (no double persistence model). The legacy chat_threads JSON-payload table STAYS in place — the /chat persistence subroutes + chat_thread_send are rewired/deleted in P2b/P3 — so this migration is purely additive and introduces no double-write. Additive: bootstrap DDL (buildCreateStoreSchemaQueries, same PR) creates both via CREATE TABLE IF NOT EXISTS so a fresh install is born at target and ledger-fakes this chain; this module carries the same creates onto the operator upgrade path. Idempotent/lineage-tolerant: tables + indexes IF NOT EXISTS; the FK (assistant_turns.thread_id -> assistant_threads.id ON DELETE CASCADE) and the status/role CHECKs added only when absent (pg_constraint lookup against current_schema()); unqualified names resolve to the runner's search_path schema. down() drops the child assistant_turns then the parent assistant_threads (true reverse; loses structured thread/turn data by design — structural addition, not a rename). destructive=false (additive new tables holding no pre-existing data).",
+      "destructive": false,
+      "tables": [
+        "assistant_threads",
+        "assistant_turns"
       ]
     }
   ]
