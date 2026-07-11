@@ -31,7 +31,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, type DelegatedMcpActor, type McpRequestContext } from "./request-context";
+import { mcpRequestContextStorage, resolveRequestRunContext, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -135,6 +135,14 @@ export type CreateMcpServerMountOptions = {
    * agent run-context propagation omit it.
    */
   getRunContext?: (key: string) => { runId?: string; agentId?: string; packageVersion?: string; agentSpecVersion?: string } | undefined;
+  /** #1195 durable run-context binding resolver (run-token-keyed redis binding
+   *  written by /api/llm-bridge; resolved via readAgentRunByTokenHash), called ONCE
+   *  per request with the RAW bearer. "resolved" beats registry/header; "invalid"
+   *  FAILS CLOSED and suppresses them; "absent" falls through. App-wired in
+   *  src/lib/mcp-server.ts; precedence contract in request-context.ts. */
+  resolveDurableRunContext?: (rawBearerToken: string) => Promise<DurableRunContextResolution>;
+  /** #1195 cutover metric: which channel served the run id (ids only). */
+  onRunContextServedBy?: (channel: RunContextServedBy, info: { runId?: string; suppressed?: boolean }) => void;
   /**
    * Optional app-layer verifier for delegated on-behalf-of actor tokens.
    * Packages must not import the Next app layer directly; the
@@ -1055,6 +1063,15 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     const requestClientId = delegatedActor
       ? undefined
       : decodeJwtClientId(authHeader) ?? rawToken ?? undefined;
+    // #1195 — durable binding resolved ONCE per request; the immutable result
+    // feeds the dev-bypass early org-fallback below AND the final request store
+    // (a second read could race the first). Skipped when delegated (OBO wins).
+    // A defensive throw is "invalid" (fail closed; transport failures are
+    // classified "absent" by the app resolver itself, which never throws).
+    const durableRunContext: DurableRunContextResolution | undefined =
+      !delegatedActor && rawToken && options.resolveDurableRunContext
+        ? await options.resolveDurableRunContext(rawToken).catch((): DurableRunContextResolution => ({ outcome: "invalid" }))
+        : undefined;
     // Also carry orgId + userId from the better-auth session so tool handlers
     // (e.g. objects_save) can enforce org-scoped writes. The
     // session has already been authenticated by the enclosing MCP route handler;
@@ -1156,8 +1173,12 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // authenticated llm-bridge call before the LLM step), treat it as a
     // trusted internal actor and apply the same org fallback.
     if (!resolvedOrgId && process.env.A2A_DEV_BYPASS === "true") {
-      const earlyCtx = requestClientId ? options.getRunContext?.(requestClientId) : undefined;
-      if (earlyCtx?.runId) {
+      // #1195 — durable first; "invalid" suppresses the registry consult.
+      const earlyRunId =
+        durableRunContext?.outcome === "resolved" ? durableRunContext.ctx.runId
+        : durableRunContext?.outcome === "invalid" ? undefined
+        : requestClientId ? options.getRunContext?.(requestClientId)?.runId : undefined;
+      if (earlyRunId) {
         try {
           const result = await betterAuthPool.query<{ id: string }>(
             'SELECT id FROM public.organization ORDER BY "createdAt" ASC LIMIT 1',
@@ -1203,44 +1224,27 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       userId: resolvedUserId,
       pool: betterAuthPool,
     });
-    // Resolve agent run-context.
-    //
-    // Primary path: options.getRunContext callback (written by the bridge route
-    // into src/lib/agent-run-context-registry.ts before each LLM
-    // step). The callback lives in the Next.js app bundle — a true singleton
-    // regardless of how Turbopack chunks the packages/mcp-server module.
-    //
-    // Fallback path: X-Cinatra-* headers (for non-OpenAI callers that preserve
-    // custom headers, e.g. direct Python→MCP calls when a real auth header exists).
-    // OpenAI strips all custom headers when relaying MCP tool calls, so the
-    // in-process registry is the only reliable mechanism for agent runs.
-    const registryCtx =
-      (requestClientId ? options.getRunContext?.(requestClientId) : undefined);
-    const requestRunId =
-      registryCtx?.runId ?? request.headers.get("x-cinatra-run-id") ?? undefined;
-    const requestAgentId =
-      registryCtx?.agentId ?? request.headers.get("x-cinatra-agent-id") ?? undefined;
-    const requestPackageVersion =
-      registryCtx?.packageVersion ?? request.headers.get("x-cinatra-package-version") ?? undefined;
-    const requestAgentSpecVersion =
-      registryCtx?.agentSpecVersion ??
-      request.headers.get("x-cinatra-agent-spec-version") ?? undefined;
+    // Resolve agent run-context (#1195): obo > durable > registry > header;
+    // durable-"invalid" suppresses the legacy channels (contract + rationale in
+    // request-context.ts); the cutover metric hook gets the channel.
+    const runContext = resolveRequestRunContext({
+      delegatedRunId: delegatedActor?.delegation === "agent_run" ? delegatedActor.runId : undefined,
+      durable: durableRunContext,
+      registryCtx: requestClientId ? options.getRunContext?.(requestClientId) : undefined,
+      headerRunId: request.headers.get("x-cinatra-run-id") ?? undefined,
+      headerAgentId: request.headers.get("x-cinatra-agent-id") ?? undefined,
+      headerPackageVersion: request.headers.get("x-cinatra-package-version") ?? undefined,
+      headerAgentSpecVersion: request.headers.get("x-cinatra-agent-spec-version") ?? undefined,
+    });
+    options.onRunContextServedBy?.(runContext.servedBy, { runId: runContext.runId, suppressed: runContext.suppressed });
     const requestStore: McpRequestContext = {
       clientId: requestClientId,
       orgId: resolvedOrgId,
       userId: resolvedUserId,
-      // For agent-run delegated tokens, prefer the runId encoded in the
-      // delegated actor — it's authoritative (signed at mint time), not
-      // a forgeable header. The registry-resolved + header runId is kept
-      // as a fallback for non-delegated callers (legacy A2A bridge token
-      // paths that haven't been migrated yet).
-      runId:
-        delegatedActor?.delegation === "agent_run"
-          ? delegatedActor.runId
-          : requestRunId,
-      agentId: requestAgentId,
-      packageVersion: requestPackageVersion,
-      agentSpecVersion: requestAgentSpecVersion,
+      runId: runContext.runId,
+      agentId: runContext.agentId,
+      packageVersion: runContext.packageVersion,
+      agentSpecVersion: runContext.agentSpecVersion,
       platformRole: resolvedPlatformRole,
       orgRole: resolvedOrgRole,
       // delegated-chat allowlist is keyed on the CHAT delegation type only.
