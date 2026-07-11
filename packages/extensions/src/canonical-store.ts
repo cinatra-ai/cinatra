@@ -646,7 +646,8 @@ export async function _internalUpdateInstalledExtensionMetadata(
  *     blocking teardown surfaces as a loud compensation failure (fail closed);
  *  3. delete the row — its own edge rows cascade.
  *
- * Internal — drift-gate invariant: only the lifecycle primitive calls it.
+ * Internal — used only by the lifecycle primitive. Static checks prevent
+ * other callers from importing this function.
  */
 export async function _internalDeleteSideBySideRowIfUnbound(
   rowId: string,

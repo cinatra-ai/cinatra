@@ -395,7 +395,7 @@ export async function transitionExtensionLifecycle(
  * is deliberately NOT touched — the store legitimately holds multiple digests
  * and the retention GC (#796) owns reaping. Callers MUST hold the per-package
  * install lock. Keeping the `_internal*` writer call inside the canonical
- * primitive preserves the drift-gate invariant.
+ * primitive preserves the single-writer rule the static reach checks enforce.
  */
 export async function deleteSideBySideVersionRow(rowId: string): Promise<void> {
   const ext = await readInstalledExtensionById(rowId);
