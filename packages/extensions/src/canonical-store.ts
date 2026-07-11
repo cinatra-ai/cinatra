@@ -7,6 +7,7 @@
 import "server-only";
 
 import { sql } from "drizzle-orm";
+import { satisfiesVersionRange } from "@cinatra-ai/registries";
 import { eq, and, inArray, asc } from "drizzle-orm";
 import { pgSchema } from "drizzle-orm/pg-core";
 import { text, timestamp, jsonb, boolean, integer } from "drizzle-orm/pg-core";
@@ -260,21 +261,42 @@ async function resolveDeclaredEdges(
         inArray(installedExtensionTable.status, ["active", "locked"]),
       ),
     );
-  const pickInScope = (name: string, scopeOrg: string | null) => {
+  // Does a candidate row's installed VERSION satisfy the declared constraint
+  // (cinatra#1040 S3 — side-by-side versions)? Evaluated on the canonical
+  // `version` column (S1). Non-evaluable constraints (git-ref) and the
+  // wildcard admit every candidate; a `0.0.0`-floored row (github/local
+  // source) is presence-only and admits too — the closure gates keep their
+  // own version validation on the resolved row.
+  const satisfies = (dep: ExtensionDependency, version: string): boolean => {
+    if (version === "0.0.0") return true;
+    const vc = dep.versionConstraint;
+    if (vc.kind === "semver-range") return vc.range === "*" || satisfiesVersionRange(version, vc.range);
+    if (vc.kind === "exact") return vc.version === version;
+    return true; // git-ref: not evaluable against a registry version
+  };
+  const pickInScope = (dep: ExtensionDependency, scopeOrg: string | null) => {
     const inScope = candidates
       .filter(
         (c) =>
-          c.packageName === name &&
+          c.packageName === dep.packageName &&
           (scopeOrg === null ? c.organizationId === null : c.organizationId === scopeOrg),
       )
-      .sort((a, b) =>
-        a.isDefault === b.isDefault ? (a.id < b.id ? -1 : 1) : a.isDefault ? -1 : 1,
+      .sort(
+        (a, b) =>
+          // A SATISFYING version outranks a non-satisfying one (side-by-side:
+          // the dependent binds the sibling version that admits its range,
+          // even when the default does not)…
+          Number(satisfies(dep, b.version)) - Number(satisfies(dep, a.version)) ||
+          // …then the DEFAULT version, then deterministic id order (the S2
+          // rule, unchanged when zero or all candidates satisfy).
+          Number(b.isDefault) - Number(a.isDefault) ||
+          (a.id < b.id ? -1 : 1),
       );
     return inScope[0];
   };
   return dependencies.map((dep) => {
-    const orgPick = organizationId != null ? pickInScope(dep.packageName, organizationId) : undefined;
-    const pick = orgPick ?? pickInScope(dep.packageName, null);
+    const orgPick = organizationId != null ? pickInScope(dep, organizationId) : undefined;
+    const pick = orgPick ?? pickInScope(dep, null);
     return {
       ...dep,
       resolvedInstallId: pick?.id ?? null,
@@ -599,6 +621,57 @@ export async function _internalUpdateInstalledExtensionMetadata(
       await replaceDependencyEdgesInTx(tx, id, patch.dependencies, result[0].organizationId);
     }
     return hydrateSingleRow(tx, result[0]);
+  });
+}
+
+/**
+ * Guarded HARD-DELETE of a SIDE-BY-SIDE (non-default) version row
+ * (cinatra#1040 S3) — the ATOMICITY half of the teardown (the lifecycle
+ * primitive owns the semantic guards). ONE transaction:
+ *
+ *  1. lock the target row `FOR UPDATE` — this conflicts with the FK
+ *     `KEY SHARE` locks concurrent edge INSERTs take on their resolution
+ *     targets, so a racing dependent install either committed its edge BEFORE
+ *     the check below (→ refused) or blocks here and then fails its FK insert
+ *     against the deleted row — closing the check-then-delete TOCTOU (codex
+ *     round-1) where a dependent bound between check and delete would be
+ *     silently SET-NULL-unbound;
+ *  2. refuse when ANY dependent's persisted edge resolves to the row,
+ *     REGARDLESS of the dependent's status (codex round-2): a status
+ *     transition (archived → active restore) never creates an edge and takes
+ *     no lock on this row, so a live-only check would race it — an archived
+ *     dependent restored mid-delete would come back silently unbound. Since
+ *     edges can only APPEAR via inserts (fenced by 1.), refusing on any
+ *     existing edge makes the guard complete; a stale archived-dependent edge
+ *     blocking teardown surfaces as a loud compensation failure (fail closed);
+ *  3. delete the row — its own edge rows cascade.
+ *
+ * Internal — drift-gate invariant: only the lifecycle primitive calls it.
+ */
+export async function _internalDeleteSideBySideRowIfUnbound(
+  rowId: string,
+): Promise<{ deleted: boolean; boundDependents: string[] }> {
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const target = await tx
+      .select({ id: installedExtensionTable.id })
+      .from(installedExtensionTable)
+      .where(eq(installedExtensionTable.id, rowId))
+      .for("update");
+    if (!target[0]) return { deleted: false, boundDependents: [] }; // already gone — idempotent
+    const bound = await tx
+      .select({ packageName: installedExtensionTable.packageName })
+      .from(extensionDependencyEdgeTable)
+      .innerJoin(
+        installedExtensionTable,
+        eq(extensionDependencyEdgeTable.dependentInstallId, installedExtensionTable.id),
+      )
+      .where(eq(extensionDependencyEdgeTable.resolvedInstallId, rowId));
+    if (bound.length > 0) {
+      return { deleted: false, boundDependents: [...new Set(bound.map((b) => b.packageName))] };
+    }
+    await tx.delete(installedExtensionTable).where(eq(installedExtensionTable.id, rowId));
+    return { deleted: true, boundDependents: [] };
   });
 }
 

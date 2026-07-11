@@ -85,8 +85,36 @@ export type PlannedMember = {
    *    (only fresh `install` members roll back). Emitted ONLY on the
    *    non-gatekept path; the gatekept path keeps the hard refusal (its
    *    host-computed-set dedupe rides the deferred durable-restore subsystem).
+   *  - `"install-side-by-side"` (cinatra#1040 S3): a shared dependency whose
+   *    conflict class is `disjoint-dependents` — the admissible-range
+   *    intersection is EMPTY (the installed default is OLDER, and at least one
+   *    live dependent's edge refuses the pin), so no single version can serve
+   *    both. The new version installs SIDE BY SIDE as its own NON-DEFAULT
+   *    canonical row (storage + journal + resolved edges only — versioned
+   *    runtime activation is the S4 slice; the default keeps every global-name
+   *    surface). Emitted ONLY on the non-gatekept path (`closure === null` —
+   *    "dev path" is shorthand for non-gatekept throughout this module); EVERY
+   *    class on the gatekept path keeps the evidence-carrying hard refusal per
+   *    the ratified Option-B contract (#1296 fence untouched). Rolled back
+   *    (version-scoped teardown) if a later member fails.
    */
-  action: "install" | "update";
+  action: "install" | "update" | "install-side-by-side";
+  /**
+   * For an `"install-side-by-side"` member: the computed conflict evidence
+   * (the live dependents whose edges refuse the pin + the closure engine's
+   * dependent+constraint message) — carried so the surface can say WHY the
+   * install went side-by-side instead of dedupe-upward.
+   */
+  sideBySideEvidence?: { dependents: string[]; detail: string };
+  /**
+   * For an `"install-side-by-side"` member: the RESOLVED conflict row's org
+   * scope (codex round-1). The scope resolution may have fallen back to the
+   * PLATFORM row (org install, platform default) — the side-by-side row must
+   * install NEXT TO that resolved default (same scope), and its version-scoped
+   * journal/compensation/sweep must address the same scope, NOT the requesting
+   * actor's org (which has no default sibling there).
+   */
+  sideBySideScopeOrgId?: string | null;
 };
 
 export type DependencyInstallPlan = {
@@ -175,20 +203,45 @@ function kindToTypeId(
   return kind;
 }
 
-/** The live row a scope-aware install check resolves: the org's own row wins, else the platform row. */
-function findLiveRow(
+/**
+ * The live rows a scope-aware install check resolves: the org's own scope wins
+ * when it holds ANY live row, else the platform scope. Since cinatra#1040 a
+ * scope can hold MULTIPLE version rows of one package (side-by-side), so this
+ * returns the full scope SET; `defaultLiveRow` picks the conflict basis.
+ */
+function findLiveRowsInScope(
   rows: InstalledExtension[],
   packageName: string,
   organizationId: string | null,
-): InstalledExtension | null {
+): InstalledExtension[] {
   const live = rows.filter(
     (r) => r.packageName === packageName && (r.status === "active" || r.status === "locked"),
   );
-  return (
-    live.find((r) => (r.organizationId ?? null) === organizationId) ??
-    live.find((r) => (r.organizationId ?? null) === null) ??
-    null
-  );
+  const org = live.filter((r) => (r.organizationId ?? null) === organizationId);
+  if (org.length > 0) return org;
+  return live.filter((r) => (r.organizationId ?? null) === null);
+}
+
+/**
+ * The DEFAULT row of a scope set — the conflict-classification basis
+ * (cinatra#1040 S3). A row/fixture without `isDefault` counts as default.
+ * Returns null when the set holds no default OR more than one (cross-owner
+ * ambiguity) — callers fail closed rather than classifying against an
+ * arbitrary owner's install.
+ */
+function defaultLiveRow(scopeRows: InstalledExtension[]): InstalledExtension | null {
+  const defaults = scopeRows.filter((r) => r.isDefault !== false);
+  return defaults.length === 1 ? defaults[0]! : null;
+}
+
+/** The row's REGISTRY version: the canonical `version` column (S1) when it is a
+ *  real registry version, else the verdaccio source version, else null
+ *  (presence-only dev/github/local rows — the `0.0.0` floor is presence-only). */
+function registryVersionOfRow(row: InstalledExtension): string | null {
+  if (typeof row.version === "string" && row.version.length > 0 && row.version !== "0.0.0") {
+    return row.version;
+  }
+  return installedVersionOfRow(row);
 }
 
 /** Item-7 cross-check: the target's exact pin must SATISFY the edge's constraint. */
@@ -311,16 +364,19 @@ export function classifyInstalledVersionConflict(args: {
   const unmetDeps: string[] = [];
   for (const edge of newEdges) {
     if (!isAutoInstallableEdge(edge)) continue;
-    const depRow = findLiveRow(installedRows, edge.packageName, orgId);
-    if (!depRow) {
+    const depRows = findLiveRowsInScope(installedRows, edge.packageName, orgId);
+    if (depRows.length === 0) {
       unmetDeps.push(edge.packageName);
       continue;
     }
-    const depVersion = installedVersionOfRow(depRow);
-    // A dev/local-sourced row (no registry version) is presence-only — it
-    // satisfies the edge (the planner never auto-reinstalls over it).
-    const satisfied =
-      depVersion === null
+    // Satisfied when ANY live row in the resolved scope admits the edge
+    // (side-by-side versions, cinatra#1040 S3): the write-time edge resolver
+    // binds the satisfying sibling. A dev/local-sourced row (no registry
+    // version) is presence-only — it satisfies the edge (the planner never
+    // auto-reinstalls over it).
+    const satisfied = depRows.some((depRow) => {
+      const depVersion = registryVersionOfRow(depRow);
+      return depVersion === null
         ? true
         : edge.versionConstraint.kind === "semver-range"
           ? edge.versionConstraint.range === "*" ||
@@ -328,6 +384,7 @@ export function classifyInstalledVersionConflict(args: {
           : edge.versionConstraint.kind === "exact"
             ? edge.versionConstraint.version === depVersion
             : false; // git-ref: not satisfiable against a registry version
+    });
     if (!satisfied) unmetDeps.push(edge.packageName);
   }
   if (unmetDeps.length > 0) return { kind: "upgradable-needs-own-deps", unmetDeps };
@@ -491,6 +548,8 @@ export async function planDependencyInstall(
     //    durable update pipeline instead of a fresh install.
     let alreadyInstalled = false;
     let action: PlannedMember["action"] = "install";
+    let sideBySideEvidence: PlannedMember["sideBySideEvidence"];
+    let sideBySideScopeOrgId: string | null | undefined;
     if (packageName === root.packageName) {
       // #1039 Option B (update-time): the ROOT of an UPDATE is a committed
       // `action:"update"` member on the non-gatekept path. A fresh install
@@ -501,11 +560,24 @@ export async function planDependencyInstall(
         action = "update";
       }
     } else {
-      const row = findLiveRow(installedRows, packageName, orgId);
-      const installedVersion =
-        row?.source && (row.source as { version?: string }).version
-          ? (row.source as { version: string }).version
-          : null;
+      // Scope-resolved live SET (cinatra#1040 S3): a scope can hold multiple
+      // side-by-side version rows. A row already at the EXACT pin (any
+      // sibling) → the member is present, skipped (idempotent re-plans with
+      // side-by-side rows installed). Otherwise the conflict basis is the
+      // scope's DEFAULT row — ambiguity (0 or >1 defaults across owners)
+      // fails closed rather than classifying an arbitrary owner's install.
+      const scopeRows = findLiveRowsInScope(installedRows, packageName, orgId);
+      const atPin = scopeRows.find((r) => registryVersionOfRow(r) === pin);
+      const row = atPin ?? (scopeRows.length > 0 ? defaultLiveRow(scopeRows) : null);
+      if (scopeRows.length > 0 && row === null) {
+        throw new DependencyPlanError(
+          "MEMBER_UNRESOLVABLE",
+          `${packageName}: ${scopeRows.length} live installed rows in scope but no single DEFAULT ` +
+            `version row (cross-owner ambiguity) — cannot classify the installed-version conflict; ` +
+            `fail closed.`,
+        );
+      }
+      const installedVersion = row ? registryVersionOfRow(row) : null;
       if (row && installedVersion && installedVersion !== pin) {
         // DEDUPE-UPWARD (#1039, Option B): classify the conflict and CARRY the
         // computed evidence. On the non-gatekept path a CLEAN upward-dedupe
@@ -524,8 +596,8 @@ export async function planDependencyInstall(
           pin,
           newEdges: edges,
           installedRows,
-          // The conflict is about the ROW ACTUALLY INSTALLED, which `findLiveRow`
-          // may have resolved to the PLATFORM row (org fell back). Admissibility
+          // The conflict is about the ROW ACTUALLY INSTALLED, which the scope
+          // resolution may have bound to the PLATFORM row (org fell back). Admissibility
           // + self-satisfiability MUST be evaluated at THAT row's scope, not the
           // requested `orgId`: a platform-scoped conflict is checked against
           // platform dependents/rows (an org-scoped check would see no target
@@ -541,6 +613,22 @@ export async function planDependencyInstall(
         // switch below runs for every class as before.
         if (conflict.kind === "upgradable-clean" && closure === null) {
           action = "update";
+        } else if (conflict.kind === "disjoint-dependents" && closure === null) {
+          // SIDE-BY-SIDE (cinatra#1040 S3, non-gatekept path only): the
+          // admissible-range intersection is EMPTY — the installed default is
+          // older AND at least one live dependent's edge refuses the pin, so
+          // neither dedupe-upward nor staying put can serve every dependent.
+          // Instead of the evidence-carrying refusal, the new version installs
+          // SIDE BY SIDE as its own NON-DEFAULT canonical row; the write-time
+          // edge resolver binds the new dependent to it, while the default row
+          // keeps every global-name surface (versioned runtime activation is
+          // the S4 slice). The gatekept path (`closure !== null`) keeps the
+          // hard refusal below for EVERY class — ratified Option-B contract,
+          // #1296 fence untouched.
+          action = "install-side-by-side";
+          sideBySideEvidence = { dependents: conflict.dependents, detail: conflict.detail };
+          // The RESOLVED basis row's scope (may be the platform fallback).
+          sideBySideScopeOrgId = row.organizationId ?? null;
         } else {
         const requestedFrom = requestedBy?.from ?? root.packageName;
         const base =
@@ -598,6 +686,8 @@ export async function planDependencyInstall(
       edges,
       alreadyInstalled,
       action,
+      ...(sideBySideEvidence ? { sideBySideEvidence } : {}),
+      ...(sideBySideScopeOrgId !== undefined ? { sideBySideScopeOrgId } : {}),
     };
     if (summary.kind) memberKinds.set(packageName, summary.kind);
     resolved.set(packageName, member);
