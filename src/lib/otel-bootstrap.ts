@@ -27,8 +27,15 @@ export async function initializeOtelTracing(): Promise<void> {
   // is not called (e.g. during tests, client bundle).
   const { NodeTracerProvider } = await import("@opentelemetry/sdk-trace-node");
   const { BatchSpanProcessor } = await import("@opentelemetry/sdk-trace-base");
-  const { Resource } = await import("@opentelemetry/resources");
-  const { SemanticResourceAttributes } = await import(
+  // SDK 2.x: the `Resource` class export is gone — resources are built with
+  // resourceFromAttributes(). And unlike 1.x, the 2.x provider uses the
+  // supplied resource AS-IS (no implicit default-resource merge), so the SDK
+  // default resource (telemetry.sdk.* attributes) is merged explicitly to
+  // preserve the 1.x behavior.
+  const { defaultResource, resourceFromAttributes } = await import(
+    "@opentelemetry/resources"
+  );
+  const { ATTR_SERVICE_NAME } = await import(
     "@opentelemetry/semantic-conventions"
   );
   const { PostgresSpanExporter } = await import(
@@ -85,37 +92,36 @@ export async function initializeOtelTracing(): Promise<void> {
     }
   }
 
+  // SDK 2.x: provider.addSpanProcessor() was removed — span processors are
+  // supplied via the constructor's `spanProcessors` array.
+  const spanProcessors: import("@opentelemetry/sdk-trace-base").SpanProcessor[] =
+    [new BatchSpanProcessor(new PostgresSpanExporter())];
+  if (sentryProcessor) {
+    spanProcessors.push(sentryProcessor);
+  }
+
   const provider = new NodeTracerProvider({
-    resource: new Resource({
-      [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
-    }),
+    resource: defaultResource().merge(
+      resourceFromAttributes({ [ATTR_SERVICE_NAME]: serviceName }),
+    ),
+    spanProcessors,
     ...(sentrySampler ? { sampler: sentrySampler } : {}),
   });
 
-  provider.addSpanProcessor(new BatchSpanProcessor(new PostgresSpanExporter()));
-  if (sentryProcessor) {
-    provider.addSpanProcessor(sentryProcessor);
-  }
-  // Propagator: ALWAYS pass an explicit value. When Sentry is unavailable we
-  // pass `null`, NOT undefined. With `undefined`, BasicTracerProvider.register()
-  // falls back to OTEL_PROPAGATORS (default `tracecontext,baggage`) and installs
-  // a W3CBaggagePropagator as the global propagator. cinatra never extracts or
-  // propagates W3C baggage, and @opentelemetry/core's baggage parse path carries
-  // an unbounded-allocation advisory (GHSA-8988-4f7v-96qf, patched only in the
-  // 2.x SDK we don't yet ship). Passing `null` suppresses the default global
-  // propagator entirely, so the vulnerable parser is never wired to inbound
-  // headers — the no-exposure stance is enforced by code, not incidental.
-  //
-  // Tradeoff: with Sentry off this also drops the (safe, non-vulnerable) default
-  // W3C `tracecontext` global propagator. That is acceptable here: cinatra does
-  // no cross-service context propagation in app code (no propagation.extract/
-  // inject anywhere), spans are exported locally to Postgres regardless, and
-  // production always runs with Sentry, whose propagator already carries
-  // tracecontext. We deliberately do NOT add a direct @opentelemetry/core import
-  // for W3CTraceContextPropagator — that would make the vulnerable core@1.30.1 a
-  // direct dependency. Restore tracecontext via the SDK-2.x lift when it lands.
+  // Propagator: Sentry's when available (production always runs with Sentry;
+  // its propagator carries tracecontext). Without Sentry the property is
+  // OMITTED so the 2.x register() installs its default composite propagator
+  // (W3C tracecontext + baggage) — restoring the default W3C tracecontext
+  // propagator that the 1.x bootstrap had to suppress. History: on the 1.x
+  // SDK this call passed an explicit `propagator: null` to keep the then-
+  // vulnerable W3CBaggagePropagator parse path (GHSA-8988-4f7v-96qf,
+  // unbounded allocation, patched >=2.8.0) off the wire; the 2.x SDK ships
+  // the patched parser, so the code-enforced suppression is retired exactly
+  // as that hardening note planned ("restore tracecontext via the SDK-2.x
+  // lift"). cinatra itself still does no cross-service propagation in app
+  // code (no propagation.extract/inject).
   provider.register({
-    propagator: sentryPropagator ?? null,
+    ...(sentryPropagator ? { propagator: sentryPropagator } : {}),
     ...(sentryContextManager ? { contextManager: sentryContextManager } : {}),
   });
 

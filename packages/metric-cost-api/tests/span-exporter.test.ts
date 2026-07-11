@@ -43,7 +43,15 @@ function makeSpan(overrides: {
       spanId:  overrides.spanId  ?? "span-001",
       traceFlags: 1,
     }),
-    parentSpanId: overrides.parentSpanId,
+    // SDK 2.x fixture shape: parentSpanId was replaced by parentSpanContext
+    // (a full SpanContext; absent for root spans).
+    parentSpanContext: overrides.parentSpanId
+      ? {
+          traceId: overrides.traceId ?? "trace-abc",
+          spanId: overrides.parentSpanId,
+          traceFlags: 1,
+        }
+      : undefined,
     name:         overrides.name ?? "test.span",
     startTime:    [1700000000, 0] as [number, number],
     endTime:      [1700000001, 0] as [number, number],

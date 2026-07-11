@@ -80,7 +80,9 @@ export class PostgresSpanExporter implements SpanExporter {
         .values({
           traceId:      ctx.traceId,
           spanId:       ctx.spanId,
-          parentSpanId: span.parentSpanId ?? null,
+          // SDK 2.x: ReadableSpan.parentSpanId was replaced by
+          // parentSpanContext (a full SpanContext; absent for root spans).
+          parentSpanId: span.parentSpanContext?.spanId ?? null,
           name:         span.name,
           service,
           startedAt,
