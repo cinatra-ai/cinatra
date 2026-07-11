@@ -45,6 +45,11 @@ import { resolveInstalledVendorName } from "./installed-vendor";
 // (unit-testable without the server-only loader graph); re-exported here for
 // the card + any existing importer.
 import { settingsHrefFor } from "./extension-settings-model";
+// Card icon source resolver (cinatra#1325) — mirrors /connectors'
+// `manifest?.logo ?? null` so the installed card resolves the extension's own
+// logo, not the generic kind emblem. Pure module (no server-only graph), so the
+// unit test imports it directly.
+import { normalizeManifestLogo } from "./installed-card-icon";
 
 export { settingsHrefFor };
 
@@ -86,6 +91,15 @@ export type InstalledCardRow = {
    */
   settingsHref: string;
   visibility: "public" | "private";
+  /**
+   * The extension's own logo — the sanitized inline-SVG data URI from
+   * `cinatra.logo`/`manifest.logo`, or null (cinatra#1325). Resolved from the
+   * SAME `STATIC_EXTENSION_MANIFEST` source `/connectors` uses, so the card's
+   * icon tile shows the extension's logo (winning over the kind emblem) instead
+   * of the generic emblem. Null (absent/blank/malformed) → the card falls back
+   * to the kind emblem exactly as before.
+   */
+  logo: string | null;
 };
 
 /** `kind::packageName` — the per-package identity the card list collapses to. */
@@ -240,6 +254,7 @@ function collapseKindRows(input: {
       settingsHref,
       visibility:
         nativeVisibility ?? (origin?.visibility === "private" ? "private" : "public"),
+      logo: normalizeManifestLogo(STATIC_EXTENSION_MANIFEST[packageName]?.logo),
     });
   }
 
@@ -292,6 +307,7 @@ function runtimeOnlyConnectorRows(input: {
       requiredInProd: canonical?.requiredInProd ?? false,
       settingsHref: settingsHrefFor("connector", packageName),
       visibility: summary?.origin?.visibility === "private" ? "private" : "public",
+      logo: normalizeManifestLogo(STATIC_EXTENSION_MANIFEST[packageName]?.logo),
     });
   }
   return rows;

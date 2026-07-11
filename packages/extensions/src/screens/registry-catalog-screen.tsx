@@ -20,6 +20,9 @@ import {
   rowKey,
   type InstalledCardRow,
 } from "./installed-rows";
+// Icon-tile source resolver (cinatra#1325): the extension's own logo on an
+// active card, null (→ muted kind emblem) on a greyed archived/needs-review one.
+import { installedCardIconUrl } from "./installed-card-icon";
 import { Button } from "@/components/ui/button";
 import {
   Toolbar,
@@ -258,32 +261,48 @@ export async function RegistryCatalogScreen({
     </>
   );
 
-  const renderCard = (row: InstalledCardRow, isArchived: boolean) => (
-    <InstalledExtensionCard
-      key={rowKey(row.kind, row.packageName)}
-      name={row.displayName}
-      accentColor={deriveExtensionAccent(row.packageName)}
-      emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
-      kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
-      kindLabel={KIND_LABEL[row.kind]}
-      vendor={row.vendor}
-      description={row.description}
-      version={row.versionLabel}
-      status={renderStatus(row)}
-      actions={renderCardActions(row, isArchived)}
-      // Archived extensions render the fully-greyed §VI card (cinatra#957):
-      // category ground → light grey, muted logo tile, all text/status/actions
-      // muted. Active cards keep their category colour.
-      archived={isArchived}
-      // Post-install "needs configuration" (cinatra#1057): an active agent with
-      // unconfigured required connectors wears the same greyed treatment + a
-      // needs-review strip. Only active rows carry it — an archived card is
-      // already greyed and unrunnable.
-      configurationNeeds={
-        isArchived ? undefined : configurationNeedsByPackage[row.packageName]?.needs
-      }
-    />
-  );
+  const renderCard = (row: InstalledCardRow, isArchived: boolean) => {
+    // Post-install "needs configuration" (cinatra#1057): an active agent with
+    // unconfigured required connectors wears the same greyed treatment + a
+    // needs-review strip. Only active rows carry it — an archived card is
+    // already greyed and unrunnable.
+    const configurationNeeds = isArchived
+      ? undefined
+      : configurationNeedsByPackage[row.packageName]?.needs;
+    // A greyed card (archived OR needs-review) must keep its MUTED kind emblem
+    // so it reads inactive at a glance (fully-greyed contract, cinatra#957) —
+    // surfacing a full-colour logo image would defeat the greying. Only an
+    // active card resolves the extension's own logo (cinatra#1325).
+    const greyed = isArchived || (configurationNeeds?.length ?? 0) > 0;
+    return (
+      <InstalledExtensionCard
+        key={rowKey(row.kind, row.packageName)}
+        name={row.displayName}
+        accentColor={deriveExtensionAccent(row.packageName)}
+        emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
+        // cinatra#1325 — resolve the icon tile from the extension's OWN logo
+        // (`cinatra.logo`/`manifest.logo`), the same source `/connectors` uses,
+        // so a connector-kind card shows the connector's logo instead of the
+        // generic kind emblem. `iconUrl` wins over `emblem` in
+        // ExtensionCardListingBanner; a null logo (absent/blank/malformed, or a
+        // greyed card) falls back to the kind emblem, and a present-but-
+        // unloadable value degrades to it at render (#1003).
+        iconUrl={installedCardIconUrl(row.logo, { greyed })}
+        kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
+        kindLabel={KIND_LABEL[row.kind]}
+        vendor={row.vendor}
+        description={row.description}
+        version={row.versionLabel}
+        status={renderStatus(row)}
+        actions={renderCardActions(row, isArchived)}
+        // Archived extensions render the fully-greyed §VI card (cinatra#957):
+        // category ground → light grey, muted logo tile, all text/status/actions
+        // muted. Active cards keep their category colour.
+        archived={isArchived}
+        configurationNeeds={configurationNeeds}
+      />
+    );
+  };
 
   return (
     <Main className="min-h-screen">
