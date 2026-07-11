@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { describe, it, expect, vi } from "vitest";
+import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, vi, type Mock } from "vitest";
 
 // Widget-stream runtime trust, slice 2 — the UNION resolver (build-time map ∪
 // admin-approved runtime metadata grants), the pinned ResolvedWidgetStreamGrant
@@ -179,6 +182,19 @@ type Harness = {
   anchor: InstallTrustAnchor | null;
   verified: { storeDir: string; digest: string } | null;
   claims: WidgetStreamMetadataGrantClaim[];
+  /** Spy for the injectable runtime module importer. Default returns a module
+   * namespace exporting the happy-path widget-chat-tool factory; the loader
+   * tests assert WHETHER it is reached (it must be the ONLY runtime load path,
+   * and only after the full pre-factory gate). */
+  importModule: Mock<(args: ImportRuntimeModuleArgs) => Promise<unknown>>;
+};
+
+type ImportRuntimeModuleArgs = {
+  storeDir: string;
+  moduleExportKey: string;
+  packageName: string;
+  agentSlug: string;
+  reverifyPinnedIntegrity: () => Promise<boolean>;
 };
 
 function makeHarness(overrides?: {
@@ -208,6 +224,17 @@ function makeHarness(overrides?: {
         ? { storeDir: "/data/extensions/packages/connector/x/" + DIGEST, digest: DIGEST }
         : overrides.verified,
     claims: overrides?.claims ?? [makeClaim(makeCanon())],
+    importModule: vi.fn(async (args: ImportRuntimeModuleArgs): Promise<unknown> => {
+      void args; // default spy ignores its args; individual tests assert the call shape
+      return {
+        createWordPressWidgetChatTool: () => ({
+          name: "wp_widget_tool",
+          description: "edit the post",
+          parameters: { type: "object" },
+          execute: async () => "ok",
+        }),
+      };
+    }),
     deps: undefined as unknown as WidgetStreamRuntimeResolveDeps,
   };
   h.deps = {
@@ -217,6 +244,7 @@ function makeHarness(overrides?: {
     resolveInstallAnchor: async () => h.anchor,
     resolveVerifiedStoreDir: async () => h.verified,
     readClaimsFromStore: async () => h.claims,
+    importRuntimeModule: (args) => h.importModule(args),
   };
   return h;
 }
@@ -269,6 +297,7 @@ describe("resolveWidgetStreamAgentUnion — runtime arm (serve-time re-verificat
       anchorDigest: DIGEST,
       grantRowVersion: 1,
       tokenConfigKey: TOKEN_KEY,
+      moduleExportKey: "./widget-chat-tool",
     });
     expect(entry.packageName).toBe(PKG);
     expect(entry.factory).toBe("createWordPressWidgetChatTool");
@@ -281,8 +310,10 @@ describe("resolveWidgetStreamAgentUnion — runtime arm (serve-time re-verificat
     ]);
     // The flat pilot rule: a runtime entry ALWAYS enforces the per-user token.
     expect(entry.auth.requireUserToken).toBe(true);
-    // NO module loading in this slice: the runtime entry's load fails loudly.
-    await expect(entry.load()).rejects.toThrow(/not\s+available yet/);
+    // The runtime entry's own load() is a FAIL-CLOSED backstop: a runtime
+    // widget-chat-tool loads ONLY through the gated buildWidgetChatTool path, so
+    // a bare entry.load() is refused (the W3 hot-install prohibition, structural).
+    await expect(entry.load()).rejects.toThrow(/gated buildWidgetChatTool path/);
   });
 
   it("no approved grant → null (fail closed)", async () => {
@@ -385,7 +416,7 @@ describe("resolveWidgetStreamAgentUnion — runtime arm (serve-time re-verificat
     expect(await resolveWidgetStreamAgentUnion(SLUG, h.deps)).toBeNull();
   });
 
-  it("a RELAY-LESS runtime canon is refused in THIS slice (no servable surface until the loader slice)", async () => {
+  it("a RELAY-LESS runtime canon is still refused (opaque 404) — lifting is coupled to the unwired host-LLM serving surface", async () => {
     const relayless = makeCanon({ relayAgentPackage: null });
     const claim = makeClaim(relayless);
     const h = makeHarness({
@@ -499,33 +530,6 @@ describe("reassertWidgetStreamGrantBeforeOboRun (point-of-use, B-series lineariz
 // Point-of-use re-assert — before widget-chat-tool load/factory invocation
 // ---------------------------------------------------------------------------
 
-function toolEntryResolved(h: Harness, load: () => Promise<unknown>): ResolvedWidgetStreamAgent {
-  const canon = makeCanon();
-  return {
-    agentSlug: SLUG,
-    entry: {
-      resolution: "guardedOptional",
-      load,
-      packageName: canon.packageName,
-      factory: canon.factory,
-      label: canon.label,
-      subjectNoun: canon.subjectNoun,
-      skillCapability: canon.skillCapability,
-      relayAgentPackage: canon.relayAgentPackage ?? undefined,
-      contextFields: canon.contextFields,
-      auth: { ...canon.auth },
-    },
-    grant: {
-      agentSlug: SLUG,
-      packageName: PKG,
-      bindingHashV2: computeWidgetStreamBindingHashV2(canon),
-      anchorDigest: DIGEST,
-      grantRowVersion: 1,
-      tokenConfigKey: TOKEN_KEY,
-    },
-  };
-}
-
 const WIDGET_TOOL = {
   name: "wp_widget_tool",
   description: "edit the post",
@@ -533,50 +537,229 @@ const WIDGET_TOOL = {
   execute: async () => "ok",
 };
 
-describe("buildWidgetChatTool — pre-factory re-assert (runtime entries)", () => {
-  it("re-asserts BEFORE load: a revoked grant never loads or invokes the module", async () => {
+/** A resolved RUNTIME widget-stream agent for the loader tests. `entry.load` is
+ * a fail-closed BACKSTOP spy that must NEVER be reached — a runtime
+ * widget-chat-tool loads ONLY through the gated importer. */
+function runtimeResolved(): {
+  resolved: ResolvedWidgetStreamAgent;
+  loadBackstop: ReturnType<typeof vi.fn>;
+} {
+  const canon = makeCanon();
+  const loadBackstop = vi.fn(async () => {
+    throw new Error("entry.load() backstop must not be reached for a runtime entry");
+  });
+  return {
+    loadBackstop,
+    resolved: {
+      agentSlug: SLUG,
+      entry: {
+        resolution: "guardedOptional",
+        load: loadBackstop,
+        packageName: canon.packageName,
+        factory: canon.factory,
+        label: canon.label,
+        subjectNoun: canon.subjectNoun,
+        skillCapability: canon.skillCapability,
+        relayAgentPackage: canon.relayAgentPackage ?? undefined,
+        contextFields: canon.contextFields,
+        auth: { ...canon.auth },
+      },
+      grant: {
+        agentSlug: SLUG,
+        packageName: PKG,
+        bindingHashV2: computeWidgetStreamBindingHashV2(canon),
+        anchorDigest: DIGEST,
+        grantRowVersion: 1,
+        tokenConfigKey: TOKEN_KEY,
+        moduleExportKey: "./widget-chat-tool",
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// buildWidgetChatTool — pre-factory GATE + gated runtime load (loader slice).
+// Every fail-closed factor must refuse BEFORE the module importer is reached;
+// the happy path imports from the JUST-verified store dir and never touches the
+// entry.load() backstop.
+// ---------------------------------------------------------------------------
+
+describe("buildWidgetChatTool — gated runtime load (injected importer)", () => {
+  it("REVOKED-before-load: a revoked grant refuses BEFORE the module import", async () => {
     const h = makeHarness();
-    const load = vi.fn(async () => ({ createWordPressWidgetChatTool: () => WIDGET_TOOL }));
-    const resolved = toolEntryResolved(h, load);
+    const { resolved, loadBackstop } = runtimeResolved();
     h.rows = [makeRow({ status: "revoked", row_version: 2 })];
     await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
       /pre-factory grant re-assert failed/,
     );
-    expect(load).not.toHaveBeenCalled();
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
   });
 
-  it("refuses when the trusted anchor moved to a NEW digest mid-request (pinned anchorDigest)", async () => {
+  it("DIGEST-mismatch: an anchor that moved to a NEW digest refuses before import", async () => {
     const h = makeHarness();
-    const load = vi.fn(async () => ({ createWordPressWidgetChatTool: () => WIDGET_TOOL }));
-    const resolved = toolEntryResolved(h, load);
+    const { resolved, loadBackstop } = runtimeResolved();
     h.anchor = { ...h.anchor!, digest: "b".repeat(64) };
-    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
-      /anchor re-check failed/,
-    );
-    expect(load).not.toHaveBeenCalled();
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(/anchor re-check failed/);
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
   });
 
-  it("refuses when integrity re-verification against the anchor fails", async () => {
+  it("DRIFT-mid-load: integrity re-verification against the anchor fails → refuse before import", async () => {
     const h = makeHarness();
-    const load = vi.fn(async () => ({ createWordPressWidgetChatTool: () => WIDGET_TOOL }));
-    const resolved = toolEntryResolved(h, load);
-    h.verified = null;
+    const { resolved, loadBackstop } = runtimeResolved();
+    h.verified = null; // resolveVerifiedStoreDir integrity failure
     await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
       /integrity re-verification failed/,
     );
-    expect(load).not.toHaveBeenCalled();
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
   });
 
-  it("a live, unchanged grant loads the module and builds the validated tool", async () => {
+  it("DRIFT-mid-load: the re-verified store dir binds a DIFFERENT digest → refuse before import", async () => {
     const h = makeHarness();
-    const load = vi.fn(async () => ({ createWordPressWidgetChatTool: () => WIDGET_TOOL }));
-    const resolved = toolEntryResolved(h, load);
+    const { resolved, loadBackstop } = runtimeResolved();
+    // Anchor still reports the pinned digest, but the re-resolved verified store
+    // dir reports a different digest (a mid-request re-materialization) → refuse.
+    h.verified = { storeDir: "/data/x", digest: "c".repeat(64) };
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
+      /integrity re-verification failed/,
+    );
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
+  });
+
+  it("UNSIGNED: a de-signed package refuses before import", async () => {
+    const h = makeHarness();
+    const { resolved, loadBackstop } = runtimeResolved();
+    h.signed.delete(PKG);
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
+      /pre-factory grant re-assert failed/,
+    );
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
+  });
+
+  it("a rowVersion bump (re-pend/re-approve at the same hash) refuses before import", async () => {
+    const h = makeHarness();
+    const { resolved, loadBackstop } = runtimeResolved();
+    h.rows = [makeRow({ row_version: 7 })];
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
+      /pre-factory grant re-assert failed/,
+    );
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
+  });
+
+  it("a moved ownership conjunction refuses before import", async () => {
+    const h = makeHarness();
+    const { resolved, loadBackstop } = runtimeResolved();
+    h.owners.set(TOKEN_KEY, OTHER);
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
+      /pre-factory grant re-assert failed/,
+    );
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
+  });
+
+  it("a thrown pre-factory re-assert error refuses before import (fail closed)", async () => {
+    const h = makeHarness();
+    const { resolved, loadBackstop } = runtimeResolved();
+    h.deps.metadataGrantDeps = {
+      query: async () => {
+        throw new Error("db down");
+      },
+    };
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
+      /pre-factory grant re-assert failed/,
+    );
+    expect(h.importModule).not.toHaveBeenCalled();
+    expect(loadBackstop).not.toHaveBeenCalled();
+  });
+
+  it("HAPPY PATH: imports from the freshly-verified store dir with the pinned export key, builds the tool, never touches the backstop", async () => {
+    const h = makeHarness();
+    const { resolved, loadBackstop } = runtimeResolved();
     const tool = await buildWidgetChatTool(resolved, { postId: "1" }, h.deps);
     expect(tool.name).toBe("wp_widget_tool");
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(h.importModule).toHaveBeenCalledTimes(1);
+    expect(h.importModule).toHaveBeenCalledWith({
+      storeDir: h.verified!.storeDir,
+      moduleExportKey: "./widget-chat-tool",
+      packageName: PKG,
+      agentSlug: SLUG,
+      reverifyPinnedIntegrity: expect.any(Function),
+    });
+    expect(loadBackstop).not.toHaveBeenCalled();
   });
 
-  it("build-time entries (grant:null) build with no grant machinery", async () => {
+  it("the reverify thunk fails closed when the store dir drifts between the pre-read verify and the read", async () => {
+    const h = makeHarness();
+    const { resolved } = runtimeResolved();
+    // First resolveVerifiedStoreDir (pre-read gate) succeeds; the SECOND call
+    // (the importer's immediately-before-read re-verify) reports drift.
+    let calls = 0;
+    const good = h.verified;
+    h.deps.resolveVerifiedStoreDir = async () => (++calls === 1 ? good : null);
+    // The importer spy exercises the passed reverify thunk, as the real importer does.
+    h.importModule.mockImplementation(async (args) =>
+      (await args.reverifyPinnedIntegrity())
+        ? { createWordPressWidgetChatTool: () => WIDGET_TOOL }
+        : (() => {
+            throw new Error("reverify said drift");
+          })(),
+    );
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(/reverify said drift/);
+    expect(calls).toBe(2);
+  });
+
+  it("the importer is reached ONLY after the pre-read gate stages — ORDER: grant re-assert (incl. ownership/trust) → anchor → integrity → import", async () => {
+    const h = makeHarness();
+    const { resolved } = runtimeResolved();
+    const order: string[] = [];
+    const grantQuery = h.deps.metadataGrantDeps!.query!;
+    h.deps.metadataGrantDeps = {
+      query: async (t, v) => {
+        if (String(t).includes("package_name = $1 AND agent_slug = $2")) order.push("grant-reassert");
+        return grantQuery(t, v);
+      },
+    };
+    const anchorFn = h.deps.resolveInstallAnchor!;
+    h.deps.resolveInstallAnchor = async (p) => {
+      order.push("anchor");
+      return anchorFn(p);
+    };
+    const verifyFn = h.deps.resolveVerifiedStoreDir!;
+    h.deps.resolveVerifiedStoreDir = async (p, a) => {
+      order.push("integrity");
+      return verifyFn(p, a);
+    };
+    h.importModule.mockImplementation(async () => {
+      order.push("import");
+      return { createWordPressWidgetChatTool: () => WIDGET_TOOL };
+    });
+    await buildWidgetChatTool(resolved, {}, h.deps);
+    expect(order).toEqual(["grant-reassert", "anchor", "integrity", "import"]);
+  });
+
+  it("a factory that returns a non-tool shape throws AFTER a real gated import (no partial tool)", async () => {
+    const h = makeHarness();
+    const { resolved } = runtimeResolved();
+    h.importModule.mockResolvedValue({ createWordPressWidgetChatTool: () => ({ nope: true }) });
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(/did not return a function tool/);
+  });
+
+  it("a missing factory export in the imported module throws", async () => {
+    const h = makeHarness();
+    const { resolved } = runtimeResolved();
+    h.importModule.mockResolvedValue({ somethingElse: () => WIDGET_TOOL });
+    await expect(buildWidgetChatTool(resolved, {}, h.deps)).rejects.toThrow(
+      /is not an exported function of the widget-chat-tool module/,
+    );
+  });
+
+  it("build-time entries (grant:null) load via entry.load(), no grant machinery, no runtime importer", async () => {
+    const h = makeHarness();
     const load = vi.fn(async () => ({ createWordPressWidgetChatTool: () => WIDGET_TOOL }));
     const canon = makeCanon();
     const resolved: ResolvedWidgetStreamAgent = {
@@ -594,7 +777,237 @@ describe("buildWidgetChatTool — pre-factory re-assert (runtime entries)", () =
       },
       grant: null,
     };
-    const tool = await buildWidgetChatTool(resolved, {});
+    const tool = await buildWidgetChatTool(resolved, {}, h.deps);
     expect(tool.name).toBe("wp_widget_tool");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(h.importModule).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DEFAULT runtime importer against a REAL materialized store dir on disk:
+// package.json exports re-resolution, realpath containment (link-escape),
+// missing-artifact refusal, and an end-to-end import of a built ESM factory.
+// Exercised through the public buildWidgetChatTool with the real default
+// importer (no injected importRuntimeModule) — the whole pre-factory gate is
+// satisfied via injected authorities so only the on-disk load path varies.
+// ---------------------------------------------------------------------------
+
+function realLoaderDeps(
+  storeDir: string,
+  verifiedOverride?: () => Promise<{ storeDir: string; digest: string } | null>,
+): WidgetStreamRuntimeResolveDeps {
+  // No importRuntimeModule → the real defaultImportRuntimeWidgetChatToolModule runs.
+  return {
+    metadataGrantDeps: { query: grantQueryFor(() => [makeRow()]) },
+    ownershipGrantDeps: { query: ownershipQueryFor(() => new Map([[TOKEN_KEY, PKG]])) },
+    isSignedActivated: (pkg) => new Set([PKG, RELAY]).has(pkg),
+    resolveInstallAnchor: async () => ({
+      integrity: "sha512-trusted",
+      contentHash: "trusted-content-hash",
+      registryUrl: null,
+      digest: DIGEST,
+      kind: "connector",
+    }),
+    resolveVerifiedStoreDir: verifiedOverride ?? (async () => ({ storeDir, digest: DIGEST })),
+    readClaimsFromStore: async () => [makeClaim(makeCanon())],
+  };
+}
+
+function realResolved(): ResolvedWidgetStreamAgent {
+  const canon = makeCanon();
+  return {
+    agentSlug: SLUG,
+    entry: {
+      resolution: "guardedOptional",
+      load: async () => {
+        throw new Error("backstop must not be reached");
+      },
+      packageName: canon.packageName,
+      factory: canon.factory,
+      label: canon.label,
+      subjectNoun: canon.subjectNoun,
+      skillCapability: canon.skillCapability,
+      relayAgentPackage: canon.relayAgentPackage ?? undefined,
+      contextFields: canon.contextFields,
+      auth: { ...canon.auth },
+    },
+    grant: {
+      agentSlug: SLUG,
+      packageName: PKG,
+      bindingHashV2: computeWidgetStreamBindingHashV2(canon),
+      anchorDigest: DIGEST,
+      grantRowVersion: 1,
+      tokenConfigKey: TOKEN_KEY,
+      moduleExportKey: "./widget-chat-tool",
+    },
+  };
+}
+
+const PKG_JSON = (exports: unknown): string =>
+  JSON.stringify({ name: PKG, version: "0.1.0", exports });
+const WCT_MJS =
+  'export function createWordPressWidgetChatTool() {\n' +
+  '  return { name: "wp_widget_tool", description: "edit", parameters: { type: "object" }, execute: async () => "ok" };\n' +
+  "}\n";
+
+describe("buildWidgetChatTool — default runtime importer (real on-disk store)", () => {
+  it("resolves the exports key, realpath-contains, and imports the built factory end-to-end", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-good-"));
+    try {
+      await writeFile(join(dir, "package.json"), PKG_JSON({ "./widget-chat-tool": "./widget-chat-tool.mjs" }));
+      await writeFile(join(dir, "widget-chat-tool.mjs"), WCT_MJS);
+      const tool = await buildWidgetChatTool(realResolved(), { postId: "1" }, realLoaderDeps(dir));
+      expect(tool.name).toBe("wp_widget_tool");
+      expect(typeof tool.execute).toBe("function");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a moduleExportKey that no longer resolves in package.json exports fails loud (never guessed)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-noexport-"));
+    try {
+      // Only an unrelated export; the approved "./widget-chat-tool" key is gone.
+      await writeFile(join(dir, "package.json"), PKG_JSON({ "./other": "./other.mjs" }));
+      await writeFile(join(dir, "widget-chat-tool.mjs"), WCT_MJS);
+      await expect(buildWidgetChatTool(realResolved(), {}, realLoaderDeps(dir))).rejects.toThrow(
+        /no longer resolves/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a conditional (non-string) exports mapping is refused (single contained string only)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-conditional-"));
+    try {
+      await writeFile(
+        join(dir, "package.json"),
+        PKG_JSON({ "./widget-chat-tool": { import: "./widget-chat-tool.mjs" } }),
+      );
+      await writeFile(join(dir, "widget-chat-tool.mjs"), WCT_MJS);
+      await expect(buildWidgetChatTool(realResolved(), {}, realLoaderDeps(dir))).rejects.toThrow(
+        /no longer resolves/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a missing built entry throws the actionable BUILT-artifacts-only refusal (ENOENT)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-missing-"));
+    try {
+      await writeFile(join(dir, "package.json"), PKG_JSON({ "./widget-chat-tool": "./widget-chat-tool.mjs" }));
+      // no widget-chat-tool.mjs written
+      await expect(buildWidgetChatTool(realResolved(), {}, realLoaderDeps(dir))).rejects.toThrow(
+        /serves BUILT artifacts only/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an export target that symlinks OUTSIDE the verified store dir is refused (realpath containment)", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "wct-escape-"));
+    try {
+      const dir = join(parent, "store");
+      await mkdir(dir);
+      const outside = join(parent, "evil.mjs");
+      await writeFile(outside, WCT_MJS);
+      await writeFile(join(dir, "package.json"), PKG_JSON({ "./widget-chat-tool": "./widget-chat-tool.mjs" }));
+      // The subpath is string-contained, but the file is a symlink escaping the
+      // store dir — only the realpath containment guard catches it.
+      await symlink(outside, join(dir, "widget-chat-tool.mjs"));
+      await expect(buildWidgetChatTool(realResolved(), {}, realLoaderDeps(dir))).rejects.toThrow(
+        /resolves OUTSIDE its/,
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("a package.json that cannot be read/parsed fails closed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-badjson-"));
+    try {
+      await writeFile(join(dir, "package.json"), "{ not valid json");
+      await expect(buildWidgetChatTool(realResolved(), {}, realLoaderDeps(dir))).rejects.toThrow(
+        /cannot read\/parse package\.json/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a package.json with DUPLICATE `exports` keys is refused (strict parse matching the record-time gate)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-dupkey-"));
+    try {
+      // A last-wins JSON.parse would silently take the SECOND exports block; the
+      // record-time gate rejects duplicate keys, so the loader must too. Written
+      // raw because JSON.stringify cannot emit duplicate keys.
+      await writeFile(
+        join(dir, "package.json"),
+        '{"name":"' + PKG + '","version":"0.1.0",' +
+          '"exports":{"./widget-chat-tool":"./a.mjs"},' +
+          '"exports":{"./widget-chat-tool":"./widget-chat-tool.mjs"}}',
+      );
+      await writeFile(join(dir, "widget-chat-tool.mjs"), WCT_MJS);
+      await expect(buildWidgetChatTool(realResolved(), {}, realLoaderDeps(dir))).rejects.toThrow(
+        /cannot read\/parse package\.json/,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("integrity that DRIFTS after the pre-read verify refuses at the gate BEFORE the module evaluates", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-drift-"));
+    try {
+      await writeFile(join(dir, "package.json"), PKG_JSON({ "./widget-chat-tool": "./widget-chat-tool.mjs" }));
+      // SENTINEL: this module THROWS on top-level evaluation. If the gate failed
+      // to block the read, the rejection would carry THIS message — asserting the
+      // /drifted/ message (and NOT the sentinel) independently proves the module
+      // was never evaluated.
+      await writeFile(
+        join(dir, "widget-chat-tool.mjs"),
+        'throw new Error("SENTINEL: widget-chat-tool module EVALUATED — the integrity gate failed to block the read");\n',
+      );
+      let calls = 0;
+      const deps = realLoaderDeps(dir, async () => (++calls === 1 ? { storeDir: dir, digest: DIGEST } : null));
+      const err = await buildWidgetChatTool(realResolved(), {}, deps).then(
+        () => {
+          throw new Error("expected buildWidgetChatTool to reject");
+        },
+        (e) => e as Error,
+      );
+      expect(err.message).toMatch(/integrity drifted between resolution and read/);
+      expect(err.message).not.toMatch(/SENTINEL/);
+      expect(calls).toBe(2); // step-c pre-read verify + the importer's first-gate re-verify
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the integrity gate runs BEFORE the package.json READ — a MISSING manifest is never read when the gate fails (bind-to-verified-snapshot)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wct-gatefirst-"));
+    try {
+      // No package.json at all: a pre-gate READ would ENOENT and surface
+      // /cannot read\/parse/. With the gate first, the read never happens, so the
+      // rejection is /drifted/ — strictly proving no store read precedes the gate
+      // (a malformed-but-present file would only fail at PARSE, not at READ, so it
+      // could not distinguish read-order; an absent file fails at the read itself).
+      let calls = 0;
+      const deps = realLoaderDeps(dir, async () => (++calls === 1 ? { storeDir: dir, digest: DIGEST } : null));
+      const err = await buildWidgetChatTool(realResolved(), {}, deps).then(
+        () => {
+          throw new Error("expected buildWidgetChatTool to reject");
+        },
+        (e) => e as Error,
+      );
+      expect(err.message).toMatch(/integrity drifted between resolution and read/);
+      expect(err.message).not.toMatch(/cannot read\/parse/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

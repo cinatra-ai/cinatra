@@ -1354,7 +1354,16 @@ function isPlainContainedSubpath(subpath: string): boolean {
   return segments.every((s) => s !== "" && s !== "." && s !== ".." && s !== "node_modules");
 }
 
-function resolveSingleStringExport(exportsField: unknown, key: string): string | null {
+/**
+ * Resolve a `moduleExportKey` against a materialized `package.json` `exports`
+ * field to its SINGLE plain string target (or null on any missing / non-string /
+ * conditional / patterned / non-contained mapping). Exported so the runtime
+ * widget-chat-tool loader (widget-stream-agents.server.ts) re-resolves the SAME
+ * key at load with the SAME rules the record-time gate applied — the resolved
+ * relative target is then realpath-contained inside the verified store dir and
+ * `file://`-imported. A mapping that no longer resolves at load fails loud.
+ */
+export function resolveSingleStringExport(exportsField: unknown, key: string): string | null {
   if (!isObj(exportsField)) return null;
   if (!Object.prototype.hasOwnProperty.call(exportsField, key)) return null;
   const target = (exportsField as Record<string, unknown>)[key];
