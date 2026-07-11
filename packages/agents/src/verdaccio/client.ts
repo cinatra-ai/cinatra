@@ -33,8 +33,38 @@ import {
   ARTIFACT_PRODUCES_ENFORCEMENT,
   evaluateProducesMaterializationContract,
 } from "./package-contract";
+// The AUTHORITATIVE `cinatra.consumes` parser (fail-loud on a malformed
+// block). Static import is fine: packages/agents already depends on
+// @cinatra-ai/sdk-extensions (a leaf) with no cycle.
+import {
+  parseConsumedPrimitives,
+  type ConsumedPrimitive,
+} from "@cinatra-ai/sdk-extensions/consumes";
 
 export type PublishAgentPackageInput = BuildAgentPackageInput;
+
+/**
+ * Carry a source package.json's `cinatra.consumes` declarations into the
+ * publisher's REBUILT cinatra block (cinatra#1032 deliverable 3).
+ *
+ * ONE truth source: the SDK's `parseConsumedPrimitives` validates — a
+ * malformed block (non-array, explicit null, malformed entry, blank
+ * primitive, duplicate primitive) THROWS `ConsumesManifestError` and ABORTS
+ * the publish; nothing is silently dropped or normalized into validity.
+ * Well-formed entries are projected to the exact `{ primitive, requirement }`
+ * contract shape (extra keys are claims-metadata the contract does not carry).
+ * Returns `undefined` when the source declares nothing (absence stays
+ * absent), and `[]` when the source EXPLICITLY declares an empty array
+ * (declared-nothing is preserved, not erased).
+ */
+export function carryManifestConsumes(
+  gitPkgJson: Record<string, unknown>,
+  packageName: string,
+): ConsumedPrimitive[] | undefined {
+  const raw = (gitPkgJson.cinatra as Record<string, unknown> | undefined)?.consumes;
+  if (raw === undefined) return undefined;
+  return parseConsumedPrimitives({ name: packageName, cinatra: { consumes: raw } }, { packageName });
+}
 
 export type PublishAgentPackageResult = {
   packageName: string;
@@ -368,6 +398,18 @@ export async function publishAgentPackageFromGitDir(
         )
         .filter((e): e is { extension: string } => e !== null)
     : [];
+  // Carry the source `cinatra.consumes` declarations through the generated
+  // distribution manifest (same reasoning as `produces` above: this path
+  // BUILDS a fresh cinatra block, so an un-carried field is lost on publish).
+  // Losing it would erase a capability-binding claim the host enforces — the
+  // pm-work-store PM-seat gate (cinatra#1032 deliverable 3) reads
+  // `cinatra.consumes` from the INSTALLED manifest. ONE truth source, FAIL
+  // LOUD: the SDK parser (parseConsumedPrimitives) validates — a malformed
+  // block ABORTS the publish (silently dropping or laundering a
+  // capability-binding claim is exactly the failure mode the field closes).
+  // An explicitly-present empty array is PRESERVED (declared-nothing !=
+  // undeclared); absence stays absent.
+  const consumesEntries = carryManifestConsumes(gitPkgJson, packageName);
   const hasApprovalGates = approvalPolicy.steps.some((s) => s.requiresApproval);
   const publishedAt = new Date().toISOString();
 
@@ -411,6 +453,7 @@ export async function publishAgentPackageFromGitDir(
       ...(Object.keys(connectorDeps).length > 0 ? { connectorDependencies: connectorDeps } : {}),
       ...(Array.isArray(cinatraDeps) && cinatraDeps.length > 0 ? { dependencies: cinatraDeps } : {}),
       ...(producesEntries.length > 0 ? { produces: producesEntries } : {}),
+      ...(consumesEntries !== undefined ? { consumes: consumesEntries } : {}),
       ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
       // Unconditionally force kind + apiVersion on the published manifest.
       // Without normalization, chat-created packages can lack `cinatra.kind`,

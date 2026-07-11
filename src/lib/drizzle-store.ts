@@ -11,6 +11,7 @@ import {
   capabilityOwnershipGrantSchemaQueries,
   versionIdentitySchemaQueries,
   projectDispatchSchemaQueries,
+  projectInstancesSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
@@ -1223,6 +1224,12 @@ END $$` },
     // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
     // (src/lib/extension-grant-schema.ts); companion migration core__0024.
     ...projectDispatchSchemaQueries(schemaName),
+    // project_instances: the sticky instantiation-time binding record —
+    // template provenance, PM seat, and the once-selected PM work-store
+    // provider (cinatra#1032 deliverable 3). DDL lives in the
+    // projectInstancesSchemaQueries leaf (src/lib/extension-grant-schema.ts);
+    // companion migration core__0026.
+    ...projectInstancesSchemaQueries(schemaName),
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
     // gate). PK is (run_id, node_id) to support multiple TriggerWaitNodes per

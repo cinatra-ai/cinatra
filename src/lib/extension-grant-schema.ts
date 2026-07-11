@@ -22,6 +22,9 @@
 //     primitive's dispatch-attempt ledger + project lease (NET-NEW tables;
 //     additive, ships with migrations/core/core__0024 per the core__0007
 //     keep-paths-aligned precedent).
+//   - projectInstancesSchemaQueries — the cinatra#1032 deliverable-3
+//     project-instance registry (NET-NEW table; additive, ships with
+//     migrations/core/core__0026 per the same precedent).
 
 /** DDL for the admin-approved `extension_capability_ownership_grant` table +
  * its anti-squat partial unique indexes. Spread into
@@ -227,6 +230,48 @@ export function projectDispatchSchemaQueries(schemaName: string): { text: string
       expires_at timestamptz NOT NULL,
       version integer NOT NULL DEFAULT 1,
       PRIMARY KEY (org_id, project_ref)
+    )`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Project-instance registry (cinatra#1032 deliverable 3).
+// One brand-new ADDITIVE table (companion migration core__0026 ships the same
+// DDL for the operator-upgrade path; the Drizzle mirror lives in
+// packages/agents/src/schema.ts):
+//   project_instances — the STICKY instantiation-time binding record, keyed
+//   (org_id, project_ref): which installed package's project template the
+//   project was instantiated from (template_package/template_id), the PM SEAT
+//   (pm_agent_package — the pm-work-store capability binding proven at
+//   instantiation; only this agent's tick runs may dispatch the project's
+//   workers), and the PM work-store provider chosen ONCE at instantiation
+//   (provider_id/provider_mode — configured wins; auto only when exactly one
+//   connected; fail-closed on none/several). No runtime path re-runs provider
+//   selection; a project can never silently migrate between PM tools.
+// ---------------------------------------------------------------------------
+
+/** project_instances CREATE TABLE DDL. Spread into
+ * buildCreateStoreSchemaQueries after the project-dispatch block. */
+export function projectInstancesSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."project_instances" (
+      org_id text NOT NULL,
+      project_ref text NOT NULL,
+      project_id text,
+      template_package text NOT NULL,
+      template_id text NOT NULL,
+      template_digest text NOT NULL,
+      pm_agent_package text NOT NULL,
+      provider_id text NOT NULL,
+      provider_mode text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (org_id, project_ref),
+      CONSTRAINT project_instances_provider_mode_check
+        CHECK (provider_mode IN ('configured', 'auto'))
     )`,
     },
   ];

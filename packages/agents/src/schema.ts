@@ -603,3 +603,40 @@ export const projectLeases = cinatraSchema.table("project_leases", {
 }, (t) => ({
   pk: primaryKey({ columns: [t.orgId, t.projectRef] }),
 }));
+
+// ---------------------------------------------------------------------------
+// project_instances — the project-instance registry (cinatra#1032
+// deliverable 3): the STICKY instantiation-time binding record, keyed
+// (org_id, project_ref).
+//
+//   template_package / template_id — which installed agent package's
+//   `cinatra/project-template.json` the project was instantiated from; the
+//   template's stable id is pinned so dispatch refuses a template swap under
+//   the same project ref.
+//   pm_agent_package — the PM SEAT: the project-management agent (the
+//   pm-work-store capability binding, proven at instantiation). Only this
+//   agent's tick runs may dispatch workers for the project.
+//   provider_id / provider_mode — the PM work-store provider chosen ONCE at
+//   instantiation ('configured' = an explicitly configured provider won;
+//   'auto' = exactly one connected provider existed; CHECK in DDL). Selection
+//   fails closed on none/several; no runtime path re-runs selection, so a
+//   project can never silently migrate between PM tools.
+//   project_id — nullable cinatra project refinement (mirrors
+//   agent_runs.project_id semantics).
+// ---------------------------------------------------------------------------
+
+export const projectInstances = cinatraSchema.table("project_instances", {
+  orgId:           text("org_id").notNull(),
+  projectRef:      text("project_ref").notNull(),
+  projectId:       text("project_id"),
+  templatePackage: text("template_package").notNull(),
+  templateId:      text("template_id").notNull(),
+  templateDigest:  text("template_digest").notNull(), // finalized-install digest at instantiation (provenance)
+  pmAgentPackage:  text("pm_agent_package").notNull(),
+  providerId:      text("provider_id").notNull(),
+  providerMode:    text("provider_mode").notNull(), // 'configured' | 'auto' (CHECK in DDL)
+  createdAt:       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.orgId, t.projectRef] }),
+}));
