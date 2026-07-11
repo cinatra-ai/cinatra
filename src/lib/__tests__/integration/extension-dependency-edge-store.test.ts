@@ -256,4 +256,171 @@ suite("extension_dependency_edge store path (cinatra#1040 S2)", () => {
       }),
     ]);
   });
+
+  it("#1040 S3: write-time resolution prefers the CONSTRAINT-SATISFYING sibling version (side-by-side), default-first only among satisfying candidates", async () => {
+    const { installExtensionManifest, recordExtensionDependencies } = await import(
+      "@cinatra-ai/extensions/lifecycle-primitive"
+    );
+    const { readInstalledExtensionById, listInstalledExtensions } = await import(
+      "@cinatra-ai/extensions/canonical-store"
+    );
+    const { computeClosure, makeScopedManifestLookup } = await import(
+      "@cinatra-ai/extensions/dependency-closure"
+    );
+
+    // The acceptance topology: D DEFAULT at 0.1.4, D side-by-side (non-default)
+    // at 0.2.0, both platform-scoped.
+    const dDefault = await installExtensionManifest(
+      {
+        id: "iext_t_sbs_D_default",
+        packageName: "@sbs-test/D",
+        ownerLevel: "platform",
+        ownerId: null,
+        organizationId: null,
+        kind: "skill",
+        source: VSRC("@sbs-test/D", "0.1.4"),
+        requiredInProd: false,
+        dependencies: [],
+        manifestHash: null,
+      },
+      actor,
+    );
+    const dSide = await installExtensionManifest(
+      {
+        id: "iext_t_sbs_D_020",
+        packageName: "@sbs-test/D",
+        ownerLevel: "platform",
+        ownerId: null,
+        organizationId: null,
+        kind: "skill",
+        source: VSRC("@sbs-test/D", "0.2.0"),
+        requiredInProd: false,
+        dependencies: [],
+        manifestHash: null,
+        version: "0.2.0",
+        isDefault: false,
+      },
+      actor,
+    );
+    expect(dDefault.version).toBe("0.1.4");
+    expect(dSide.isDefault).toBe(false);
+
+    // C requires D@^0.2.0 — its edge must bind the SIDE-BY-SIDE row, even
+    // though the default (0.1.4) would win the pre-S3 default-first rule.
+    const c = await installExtensionManifest(
+      {
+        id: "iext_t_sbs_C",
+        packageName: "@sbs-test/C",
+        ownerLevel: "platform",
+        ownerId: null,
+        organizationId: null,
+        kind: "skill",
+        source: VSRC("@sbs-test/C", "1.0.0"),
+        requiredInProd: false,
+        dependencies: [],
+        manifestHash: null,
+      },
+      actor,
+    );
+    await recordExtensionDependencies(
+      c.id,
+      [
+        {
+          packageName: "@sbs-test/D",
+          edgeType: "runtime",
+          versionConstraint: { kind: "semver-range", range: "^0.2.0" },
+          requirement: "required",
+        },
+      ],
+      actor,
+    );
+    const cRead = (await readInstalledExtensionById(c.id))!;
+    expect(cRead.dependencyEdges![0]!.resolvedInstallId).toBe(dSide.id);
+
+    // A requires D@^0.1.0 — its edge binds the DEFAULT row (satisfying +
+    // default-first among satisfying candidates).
+    const a2 = await installExtensionManifest(
+      {
+        id: "iext_t_sbs_A",
+        packageName: "@sbs-test/A",
+        ownerLevel: "platform",
+        ownerId: null,
+        organizationId: null,
+        kind: "skill",
+        source: VSRC("@sbs-test/A", "1.0.0"),
+        requiredInProd: false,
+        dependencies: [],
+        manifestHash: null,
+      },
+      actor,
+    );
+    await recordExtensionDependencies(
+      a2.id,
+      [
+        {
+          packageName: "@sbs-test/D",
+          edgeType: "runtime",
+          versionConstraint: { kind: "semver-range", range: "^0.1.0" },
+          requirement: "required",
+        },
+      ],
+      actor,
+    );
+    const aRead = (await readInstalledExtensionById(a2.id))!;
+    expect(aRead.dependencyEdges![0]!.resolvedInstallId).toBe(dDefault.id);
+
+    // Closure-gate green over the snapshot: each dependent validates against
+    // ITS pinned row — no range violation despite two live versions of D.
+    const snapshot = await listInstalledExtensions({});
+    for (const dependent of [cRead, aRead]) {
+      const result = computeClosure(
+        dependent,
+        makeScopedManifestLookup(snapshot, dependent.organizationId),
+        snapshot,
+      );
+      expect(result.rangeViolations).toEqual([]);
+      expect(result.missingRequired).toEqual([]);
+    }
+  });
+
+  it("#1040 S3: the guarded side-by-side teardown refuses while a LIVE dependent's edge resolves to the row, then deletes once unbound", async () => {
+    const { recordExtensionDependencies, deleteSideBySideVersionRow } = await import(
+      "@cinatra-ai/extensions/lifecycle-primitive"
+    );
+    const { readInstalledExtensionById } = await import(
+      "@cinatra-ai/extensions/canonical-store"
+    );
+
+    // Reuses the acceptance topology from the previous case: C (live) is
+    // resolved-edge-bound to the side-by-side row iext_t_sbs_D_020.
+    await expect(deleteSideBySideVersionRow("iext_t_sbs_D_020")).rejects.toThrow(
+      /live dependent\(s\) still resolve to 'iext_t_sbs_D_020'/,
+    );
+    await expect(deleteSideBySideVersionRow("iext_t_sbs_D_020")).rejects.toThrow(/@sbs-test\/C/);
+    expect(await readInstalledExtensionById("iext_t_sbs_D_020")).not.toBeNull();
+
+    // codex round-2: even an ARCHIVED dependent's edge refuses (a concurrent
+    // restore could re-activate it; status transitions never lock the target).
+    const { transitionExtensionLifecycle } = await import(
+      "@cinatra-ai/extensions/lifecycle-primitive"
+    );
+    await transitionExtensionLifecycle("iext_t_sbs_C", "archive", actor);
+    await expect(deleteSideBySideVersionRow("iext_t_sbs_D_020")).rejects.toThrow(/@sbs-test\/C/);
+    await transitionExtensionLifecycle("iext_t_sbs_C", "activate", actor);
+
+    // Unbind C (compensation removes dependents first), then teardown succeeds.
+    await recordExtensionDependencies("iext_t_sbs_C", [], actor);
+    await deleteSideBySideVersionRow("iext_t_sbs_D_020");
+    expect(await readInstalledExtensionById("iext_t_sbs_D_020")).toBeNull();
+    // The DEFAULT row and the other dependent are untouched.
+    expect((await readInstalledExtensionById("iext_t_sbs_D_default"))?.status).toBe("active");
+    expect((await readInstalledExtensionById("iext_t_sbs_A"))?.status).toBe("active");
+    // Idempotent re-delete is a no-op.
+    await deleteSideBySideVersionRow("iext_t_sbs_D_020");
+
+    // Guard regression: the DEFAULT row itself is refused.
+    await expect(deleteSideBySideVersionRow("iext_t_sbs_D_default")).rejects.toThrow(
+      /is the DEFAULT row/,
+    );
+  });
 });

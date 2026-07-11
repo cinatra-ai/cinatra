@@ -233,7 +233,7 @@ function makeDeps(
 const ROOT = "@cinatra-ai/root";
 
 describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe evidence (#1039)", () => {
-  it("disjoint refusal names the blocking dependent + its range (outcome 5)", async () => {
+  it("GATEKEPT disjoint refusal names the blocking dependent + its range (outcome 5; #1040 S3 keeps the gatekept fence)", async () => {
     const deps = makeDeps(
       {
         [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.3.0" } })] },
@@ -246,11 +246,19 @@ describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe ev
         ]),
       ],
     );
-    await expect(
-      planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, deps),
-    ).rejects.toMatchObject({ code: "INSTALLED_VERSION_CONFLICT" });
+    const gatekept = {
+      root: { packageName: ROOT, version: "1.0.0" },
+      orgId: null,
+      closure: [
+        { name: ROOT, version: "1.0.0" },
+        { name: D, version: "0.3.0" },
+      ],
+    };
+    await expect(planDependencyInstall(gatekept, deps)).rejects.toMatchObject({
+      code: "INSTALLED_VERSION_CONFLICT",
+    });
     try {
-      await planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, deps);
+      await planDependencyInstall(gatekept, deps);
     } catch (e) {
       const msg = (e as Error).message;
       expect(msg).toContain("already installed at 0.2.1");
@@ -324,7 +332,7 @@ describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe ev
     }
   });
 
-  it("Option B (dev path): a DISJOINT conflict still refuses even though clean ones now execute", async () => {
+  it("#1040 S3 (dev path): a DISJOINT conflict (empty admissible intersection) EMITS an action:'install-side-by-side' member carrying the evidence", async () => {
     const deps = makeDeps(
       {
         [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.3.0" } })] },
@@ -337,9 +345,113 @@ describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe ev
         ]),
       ],
     );
+    const plan = await planDependencyInstall(
+      { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+      deps,
+    );
+    const dMember = plan.ordered.find((m) => m.packageName === D)!;
+    expect(dMember.action).toBe("install-side-by-side");
+    expect(dMember.version).toBe("0.3.0");
+    expect(dMember.alreadyInstalled).toBe(false);
+    // The evidence names the dependent whose constraint forced the split.
+    expect(dMember.sideBySideEvidence?.dependents).toContain("@cinatra-ai/pinned-consumer");
+    expect(dMember.sideBySideEvidence?.detail).toContain("@cinatra-ai/pinned-consumer");
+    // The resolved conflict scope rides the member (platform rows here).
+    expect(dMember.sideBySideScopeOrgId).toBeNull();
+    // Dependencies-first; the root stays a fresh install and closes the plan.
+    const rootMember = plan.ordered.find((m) => m.packageName === ROOT)!;
+    expect(rootMember.action).toBe("install");
+    expect(plan.ordered.indexOf(dMember)).toBeLessThan(plan.ordered.indexOf(rootMember));
+  });
+
+  it("#1040 S3: dedupe-upward stays PREFERRED — a non-empty admissible intersection (upgradable-clean) still emits 'update', never side-by-side", async () => {
+    const deps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.2.3" } })] },
+        [D]: { version: "0.2.3" },
+      },
+      [
+        row(D, "0.2.1"),
+        row("@cinatra-ai/consumer", "1.0.0", [
+          edge(D, { versionConstraint: { kind: "semver-range", range: "^0.2.0" } }),
+        ]),
+      ],
+    );
+    const plan = await planDependencyInstall(
+      { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+      deps,
+    );
+    const dMember = plan.ordered.find((m) => m.packageName === D)!;
+    expect(dMember.action).toBe("update");
+    expect(dMember.sideBySideEvidence).toBeUndefined();
+  });
+
+  it("#1040 S3: 'upgradable-needs-own-deps' and 'installed-newer' classes STILL refuse on the dev path (side-by-side is disjoint-dependents only)", async () => {
+    // installed-newer: D is installed NEWER than the pin the root needs.
+    const newerDeps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "exact", version: "0.2.1" } })] },
+        [D]: { version: "0.2.1" },
+      },
+      [row(D, "0.3.0")],
+    );
+    await expect(
+      planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, newerDeps),
+    ).rejects.toMatchObject({ code: "INSTALLED_VERSION_CONFLICT" });
+
+    // upgradable-needs-own-deps: every dependent admits the pin but the NEW
+    // version needs a transitive dep not present in a satisfying state.
+    const needsOwnDeps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.2.3" } })] },
+        [D]: { version: "0.2.3", dependencies: [edge("@cinatra-ai/new-transitive", { versionConstraint: { kind: "semver-range", range: "^1.0.0" } })] },
+      },
+      [row(D, "0.2.1")],
+    );
+    await expect(
+      planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, needsOwnDeps),
+    ).rejects.toMatchObject({ code: "INSTALLED_VERSION_CONFLICT" });
+  });
+
+  it("#1040 S3: a sibling row ALREADY AT THE PIN (side-by-side installed earlier) makes the member alreadyInstalled — idempotent re-plan", async () => {
+    const deps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.3.0" } })] },
+        [D]: { version: "0.3.0" },
+      },
+      [
+        // The DEFAULT row at the old version…
+        row(D, "0.2.1"),
+        // …and the NON-DEFAULT side-by-side row already at the pin.
+        { ...row(D, "0.3.0"), id: "row-shared-sbs", isDefault: false, version: "0.3.0" } as unknown as InstalledExtension,
+        row("@cinatra-ai/pinned-consumer", "1.0.0", [
+          edge(D, { versionConstraint: { kind: "semver-range", range: "~0.2.0" } }),
+        ]),
+      ],
+    );
+    const plan = await planDependencyInstall(
+      { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+      deps,
+    );
+    const dMember = plan.ordered.find((m) => m.packageName === D)!;
+    expect(dMember.alreadyInstalled).toBe(true);
+    expect(dMember.action).toBe("install");
+  });
+
+  it("#1040 S3: multiple live DEFAULT rows in one scope (cross-owner ambiguity) fail CLOSED (MEMBER_UNRESOLVABLE), never an arbitrary conflict basis", async () => {
+    const deps = makeDeps(
+      {
+        [ROOT]: { version: "1.0.0", dependencies: [edge(D, { versionConstraint: { kind: "semver-range", range: "^0.3.0" } })] },
+        [D]: { version: "0.3.0" },
+      },
+      [
+        row(D, "0.2.1"),
+        { ...row(D, "0.2.2"), id: "row-shared-second-owner" } as unknown as InstalledExtension,
+      ],
+    );
     await expect(
       planDependencyInstall({ root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null }, deps),
-    ).rejects.toMatchObject({ code: "INSTALLED_VERSION_CONFLICT" });
+    ).rejects.toMatchObject({ code: "MEMBER_UNRESOLVABLE" });
   });
 
   it("org-scoped install conflicting with a PLATFORM row evaluates dependents at the PLATFORM scope (scope-fallback regression)", async () => {
@@ -366,19 +478,22 @@ describe("planDependencyInstall — INSTALLED_VERSION_CONFLICT carries dedupe ev
         ),
       ],
     );
-    try {
-      await planDependencyInstall(
-        { root: { packageName: ROOT, version: "1.0.0" }, orgId: "org-1", closure: null },
-        deps,
-      );
-      expect.unreachable("should refuse — the platform dependent blocks 0.3.0");
-    } catch (e) {
-      expect(e).toBeInstanceOf(DependencyPlanError);
-      const msg = (e as Error).message;
-      // Proves the platform dependent was NOT missed under the org-scoped install.
-      expect(msg).toContain("would break");
-      expect(msg).toContain("@cinatra-ai/platform-consumer");
-    }
+    const plan = await planDependencyInstall(
+      { root: { packageName: ROOT, version: "1.0.0" }, orgId: "org-1", closure: null },
+      deps,
+    );
+    // #1040 S3: the dev-path disjoint class now goes SIDE-BY-SIDE — but the
+    // scope-fallback regression this test guards is unchanged: the PLATFORM
+    // dependent must be the one the classification caught (a naive org-scoped
+    // check would see no target row, classify clean, and emit an in-place
+    // update instead).
+    const dMember = plan.ordered.find((m) => m.packageName === D)!;
+    expect(dMember.action).toBe("install-side-by-side");
+    expect(dMember.sideBySideEvidence?.dependents).toContain("@cinatra-ai/platform-consumer");
+    // codex round-1: the member carries the RESOLVED (platform) scope — the
+    // executor must install the side-by-side row next to the platform default,
+    // not at the requesting org (which has no default sibling).
+    expect(dMember.sideBySideScopeOrgId).toBeNull();
   });
 });
 
