@@ -33,6 +33,7 @@ export {
   MARKETPLACE_CATALOG_SYNC_LOOP_JOB_ID,
   VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID,
   PM_SCHEDULE_RECONCILE_LOOP_JOB_ID, EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
+  EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 import type { BackgroundJobName } from "@/lib/background-jobs-names";
 

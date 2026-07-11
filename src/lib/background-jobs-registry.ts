@@ -19,10 +19,14 @@ import {
   VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID,
   PM_SCHEDULE_RECONCILE_LOOP_JOB_ID,
   EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
+  EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 // TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
 // boot-registered through the slot below, never imported here.
 import type { ExtensionStoreReapReport } from "@/lib/extension-store-reaper";
+// TYPE-ONLY (erased at compile; not a route-graph edge) — the auto-update
+// cycle VALUE is boot-registered through its slot below, never imported here.
+import type { ExtensionAutoUpdateRunSummary } from "@/lib/extension-auto-update";
 
 // ---------------------------------------------------------------------------
 // Extension-store GC reaper slot (cinatra#796).
@@ -54,6 +58,35 @@ export function registerExtensionStoreReaper(runner: ExtensionStoreReaperRunner)
 
 function resolveExtensionStoreReaper(): ExtensionStoreReaperRunner | null {
   return globalThis.__cinatraExtensionStoreReaperRunner ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Extension auto-update runner slot (cinatra#1042).
+//
+// Same posture as the GC-reaper slot above: the cycle implementation
+// (`@/lib/extension-auto-update`, which reaches the planner/batch + dispatcher
+// graph) is BOOT-REGISTERED by the system-loops seed phase — never imported
+// here, even dynamically, so the locked routes' reachable graph stays free of
+// the update machinery (route-graph ratchet). The handler below no-ops LOUDLY
+// (and re-delays) when the slot is empty: auto-update is maintenance, a
+// skipped cycle is safe, and the boot seed registers before it seeds the loop
+// job. The slot stays empty on every boot where the master flag
+// (CINATRA_EXTENSION_AUTO_UPDATE, default OFF) is disabled.
+// ---------------------------------------------------------------------------
+
+type ExtensionAutoUpdateRunner = () => Promise<ExtensionAutoUpdateRunSummary>;
+
+declare global {
+  var __cinatraExtensionAutoUpdateRunner: ExtensionAutoUpdateRunner | undefined;
+}
+
+/** Boot-time registration (system-loops phase). Idempotent (last write wins). */
+export function registerExtensionAutoUpdateRunner(runner: ExtensionAutoUpdateRunner): void {
+  globalThis.__cinatraExtensionAutoUpdateRunner = runner;
+}
+
+function resolveExtensionAutoUpdateRunner(): ExtensionAutoUpdateRunner | null {
+  return globalThis.__cinatraExtensionAutoUpdateRunner ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +747,54 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
             });
           } else {
             console.log(`[extension-store-gc-reap] ${summary}`);
+          }
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.EXTENSION_AUTO_UPDATE]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // In-app extension auto-update loop (cinatra#1042). The cycle itself
+      // (candidate selection through the cached update read model, the
+      // scope/ABI/signature gates, and the planner/batch execution under the
+      // system Actor) lives in the BOOT-REGISTERED runner (see the slot
+      // above — route-graph ratchet). The runner re-checks the master flag
+      // (default OFF) and no-ops when disabled; a cycle error propagates to
+      // runRecurringLoop, which reports it and always re-delays (cinatra#849).
+      const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
+        delayMs: TWENTY_FOUR_HOURS_MS,
+        label: "extension-auto-update",
+        run: async () => {
+          const runner = resolveExtensionAutoUpdateRunner();
+          if (!runner) {
+            console.warn(
+              "[extension-auto-update] no runner registered (the boot system-loops phase did not run — or ran with the flag disabled — in this process); skipping this cycle",
+            );
+            return;
+          }
+          const summary = await runner();
+          if (!summary.enabled) {
+            console.log(
+              "[extension-auto-update] master flag disabled at cycle time — skipped cycle",
+            );
+            return;
+          }
+          const line =
+            `readModelWired=${summary.readModelWired} signatureReady=${summary.signatureReady ?? "n/a"} ` +
+            `scanned=${summary.scanned} applied=${summary.applied.length} ` +
+            `failed=${summary.failed.length} skipped=${summary.skipped.length} ` +
+            `auditWriteFailures=${summary.auditWriteFailures}`;
+          if (summary.applied.length > 0 || summary.failed.length > 0) {
+            console.log(`[extension-auto-update] ${line}`, {
+              applied: summary.applied,
+              failed: summary.failed,
+            });
+          } else {
+            console.log(`[extension-auto-update] ${line}`);
           }
         },
       });
