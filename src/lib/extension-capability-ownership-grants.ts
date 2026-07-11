@@ -38,6 +38,16 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
+import {
+  capturePriorWidgetStreamMetadataGrants,
+  makeWidgetStreamMetadataGrantInstallDeps,
+  recordWidgetStreamMetadataGrants,
+  unwindWidgetStreamMetadataGrants,
+  type CapturedWidgetStreamMetadataGrant,
+  type WidgetStreamMetadataGrantClaim,
+  type WidgetStreamMetadataGrantInstallHooks,
+} from "@/lib/extension-widget-stream-metadata-grants";
+
 const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
 
 /** Minimal async query surface (injected → unit-testable without a DB). */
@@ -519,8 +529,11 @@ export async function restoreOwnershipGrant(
  * (widget-auth token-key ownership). Mirrors the host-port grant hooks. All
  * optional so existing pipeline unit tests can omit them (then no ownership
  * grant is recorded — a pure no-op leaving the resolver's runtime authority axis
- * empty); `makeOwnershipGrantInstallDeps()` wires all six. */
-export type OwnershipGrantInstallHooks = {
+ * empty); `makeOwnershipGrantInstallDeps()` wires all six — PLUS the sibling
+ * widget-stream METADATA grant hooks (same lifecycle seam, distinct axis; see
+ * `extension-widget-stream-metadata-grants.ts`), carried in this one type so
+ * the install pipeline reaches only this module. */
+export type OwnershipGrantInstallHooks = WidgetStreamMetadataGrantInstallHooks & {
   /** Read the widget-auth token keys the materialized (SRI-verified) manifest
    * DECLARES (`cinatra.widgetStream[.auth].tokenConfigKey`). */
   readWidgetAuthTokenKeys?: (storeDir: string) => Promise<string[]>;
@@ -572,23 +585,39 @@ export type CapturedOwnershipGrant = {
   approvedBy: string | null;
 };
 
+/** The combined prior-state capture the pipeline threads from capture to
+ * unwind: the ownership rows (per declared token key) AND the widget-stream
+ * metadata rows (per claimed agent slug). */
+export type CapturedPriorCapabilityGrants = {
+  ownership: CapturedOwnershipGrant[];
+  widgetMetadata: CapturedWidgetStreamMetadataGrant[];
+};
+
 /**
- * Capture the prior ownership grants (one per token key the OLD manifest
- * declared) for durable rollback: `recordRequestedOwnershipGrant` may reset a
- * prior approval against the new claim before a later throw, so a failed update
- * must re-pin the OLD install's ownership grant state on the unwind paths. Empty
- * on a fresh install or when the reader is unwired.
+ * Capture the prior capability grants — ownership rows (one per token key the
+ * manifest declares) AND widget-stream metadata rows (one per claimed slug) —
+ * for durable rollback: the record steps may reset a prior approval against
+ * the new claim before a later throw, so a failed update must re-pin the OLD
+ * install's grant state on the unwind paths. Empty on a fresh install or when
+ * the readers are unwired.
  */
 export async function capturePriorOwnershipGrants(
-  deps: Pick<OwnershipGrantInstallHooks, "readOwnershipGrant">,
+  deps: Pick<OwnershipGrantInstallHooks, "readOwnershipGrant" | "readWidgetStreamMetadataGrant">,
   args: {
     isUpdate: boolean;
     packageName: string;
     orgId: string | null;
     declaredTokenKeys: readonly string[];
+    widgetMetadataClaims?: readonly WidgetStreamMetadataGrantClaim[];
   },
-): Promise<CapturedOwnershipGrant[]> {
-  if (!args.isUpdate || !deps.readOwnershipGrant) return [];
+): Promise<CapturedPriorCapabilityGrants> {
+  const widgetMetadata = await capturePriorWidgetStreamMetadataGrants(deps, {
+    isUpdate: args.isUpdate,
+    packageName: args.packageName,
+    orgId: args.orgId,
+    claims: args.widgetMetadataClaims ?? [],
+  });
+  if (!args.isUpdate || !deps.readOwnershipGrant) return { ownership: [], widgetMetadata };
   const read = deps.readOwnershipGrant;
   const captured = await Promise.all(
     args.declaredTokenKeys.map(async (tokenConfigKey) => {
@@ -596,7 +625,10 @@ export async function capturePriorOwnershipGrants(
       return g ? { tokenConfigKey, ...g } : null;
     }),
   );
-  return captured.filter((g): g is CapturedOwnershipGrant => g !== null);
+  return {
+    ownership: captured.filter((g): g is CapturedOwnershipGrant => g !== null),
+    widgetMetadata,
+  };
 }
 
 /**
@@ -609,56 +641,94 @@ export async function capturePriorOwnershipGrants(
  * second package for a token key another package already owns fails with a
  * unique violation, aborting the install. A pure no-op when the recorder is
  * unwired.
+ *
+ * The sibling widget-stream METADATA grants (per claimed slug) are recorded
+ * AFTER the ownership pass — the metadata axis is conjoined to the ownership
+ * axis, so the record-time conjunction check needs the (possibly just
+ * auto-approved) owner in place. `autoGrantPrivileged` deliberately does NOT
+ * reach the metadata axis: a metadata grant is NEVER auto-approved for any
+ * trust tier — it always pends for an explicit admin approval of the displayed
+ * canon.
  */
 export async function recordAndAutoApproveOwnershipGrants(
-  deps: Pick<OwnershipGrantInstallHooks, "recordRequestedOwnershipGrant" | "approveOwnershipGrant">,
+  deps: Pick<
+    OwnershipGrantInstallHooks,
+    "recordRequestedOwnershipGrant" | "approveOwnershipGrant" | "recordWidgetStreamMetadataGrant"
+  >,
   args: {
     declaredTokenKeys: readonly string[];
     autoGrantPrivileged: boolean;
     packageName: string;
     orgId: string | null;
     approvedBy: string;
+    widgetMetadataClaims?: readonly WidgetStreamMetadataGrantClaim[];
   },
 ): Promise<void> {
-  if (!deps.recordRequestedOwnershipGrant) return;
-  for (const tokenConfigKey of args.declaredTokenKeys) {
-    await deps.recordRequestedOwnershipGrant({
-      packageName: args.packageName,
-      orgId: args.orgId,
-      tokenConfigKey,
-    });
-    if (args.autoGrantPrivileged && deps.approveOwnershipGrant) {
-      await deps.approveOwnershipGrant({
+  if (deps.recordRequestedOwnershipGrant) {
+    for (const tokenConfigKey of args.declaredTokenKeys) {
+      await deps.recordRequestedOwnershipGrant({
         packageName: args.packageName,
         orgId: args.orgId,
         tokenConfigKey,
-        approvedBy: args.approvedBy,
       });
+      if (args.autoGrantPrivileged && deps.approveOwnershipGrant) {
+        await deps.approveOwnershipGrant({
+          packageName: args.packageName,
+          orgId: args.orgId,
+          tokenConfigKey,
+          approvedBy: args.approvedBy,
+        });
+      }
     }
   }
+  await recordWidgetStreamMetadataGrants(deps, {
+    claims: args.widgetMetadataClaims ?? [],
+    packageName: args.packageName,
+    orgId: args.orgId,
+  });
 }
 
 /**
- * Undo THIS install attempt's capability-ownership grant writes on a rollback
- * path. For each token key the (new) manifest declared: if a prior OLD row was
- * captured (an update) re-pin its EXACT state; otherwise (a fresh install, or a
- * NEW key this attempt added) REVOKE the just-recorded/auto-approved grant so a
- * failed, unfinalized install never leaves an approved credential-store owner
- * behind (fail-closed). Best-effort + isolated per key: a failure is reported via
- * `onFailure` (the pipeline routes it to its structured durable-restore-failure
- * event / completeness tracking) and never masks the original install error.
+ * Undo THIS install attempt's capability-grant writes on a rollback path —
+ * BOTH axes. Ownership: for each token key the (new) manifest declared, if a
+ * prior OLD row was captured (an update) re-pin its EXACT state; otherwise (a
+ * fresh install, or a NEW key this attempt added) REVOKE the
+ * just-recorded/auto-approved grant so a failed, unfinalized install never
+ * leaves an approved credential-store owner behind (fail-closed). Widget
+ * metadata: captured prior rows are re-pinned (revocation-sticky); a fresh
+ * pending row this attempt inserted is DELETED (it was never authority — no
+ * auto-approve exists on that axis — and revoking it would fabricate an
+ * admin-meaning tombstone). Best-effort + isolated per key/slug: a failure is
+ * reported via `onFailure` (the pipeline routes it to its structured
+ * durable-restore-failure event / completeness tracking) and never masks the
+ * original install error.
  */
 export async function unwindOwnershipGrants(args: {
-  deps: Pick<OwnershipGrantInstallHooks, "restoreOwnershipGrant" | "revokeOwnershipGrant">;
+  deps: Pick<
+    OwnershipGrantInstallHooks,
+    | "restoreOwnershipGrant"
+    | "revokeOwnershipGrant"
+    | "restoreWidgetStreamMetadataGrant"
+    | "deleteUnapprovedWidgetStreamMetadataGrant"
+  >;
   packageName: string;
   orgId: string | null;
   declaredTokenKeys: readonly string[];
-  priorOwnershipGrants: readonly CapturedOwnershipGrant[];
+  widgetMetadataClaims?: readonly WidgetStreamMetadataGrantClaim[];
+  priorOwnershipGrants: CapturedPriorCapabilityGrants;
   onFailure: (error: unknown) => void;
 }): Promise<void> {
   const { deps, packageName, orgId, declaredTokenKeys, priorOwnershipGrants, onFailure } = args;
+  await unwindWidgetStreamMetadataGrants({
+    hooks: deps,
+    packageName,
+    orgId,
+    claims: args.widgetMetadataClaims ?? [],
+    priorGrants: priorOwnershipGrants.widgetMetadata,
+    onFailure,
+  });
   if (!deps.restoreOwnershipGrant && !deps.revokeOwnershipGrant) return;
-  const priorByKey = new Map(priorOwnershipGrants.map((g) => [g.tokenConfigKey, g]));
+  const priorByKey = new Map(priorOwnershipGrants.ownership.map((g) => [g.tokenConfigKey, g]));
   for (const tokenConfigKey of declaredTokenKeys) {
     const prior = priorByKey.get(tokenConfigKey);
     try {
@@ -681,14 +751,19 @@ export async function unwindOwnershipGrants(args: {
 }
 
 /**
- * The capability-ownership grant lifecycle hooks for
- * `makeDefaultInstallPipelineDeps` — widget-auth token-key ownership, mirroring
- * the host-port grant wiring. Synchronous: every hook wraps a function defined in
- * THIS module, so no dynamic import is needed and the pipeline reaches only this
- * one new module.
+ * The capability-grant lifecycle hooks for `makeDefaultInstallPipelineDeps` —
+ * widget-auth token-key ownership (this module) PLUS the widget-stream
+ * metadata grant lifecycle (the sibling module), mirroring the host-port grant
+ * wiring. The metadata factory receives THIS module's `resolveOwnershipOwner`
+ * as its conjunction resolver (the dependency direction stays acyclic: the
+ * metadata module never imports this one).
  */
 export function makeOwnershipGrantInstallDeps(): OwnershipGrantInstallHooks {
   return {
+    ...makeWidgetStreamMetadataGrantInstallDeps({
+      resolveCredentialStoreOwner: (tokenConfigKey, orgId) =>
+        resolveOwnershipOwner({ tokenConfigKey, orgId }),
+    }),
     readWidgetAuthTokenKeys: (storeDir) => readWidgetAuthTokenKeysFromStore(storeDir),
     recordRequestedOwnershipGrant: (g) =>
       recordRequestedOwnershipGrant({
