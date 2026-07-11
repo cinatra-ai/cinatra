@@ -1,7 +1,7 @@
 import "server-only";
 
 import * as path from "node:path";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -221,23 +221,123 @@ const RequestSchema = z.object({
 // skills/ trees are projected, and where auto-discovery now resolves).
 // path.relative(root, p) escapes a root when it starts with ".." or is
 // absolute; empty rel ("" — candidate equals the root) counts as inside.
-// Conventional SKILL.md auto-discovery for an agent id (cinatra#793): probe
-// the agent RUNTIME MOUNT first (installed agents' projected skills/ trees),
-// then the dev/authoring tree (git-native dev agents that are never
-// mount-projected). Each root probes the canonical `<root>/cinatra-ai/<slug>/
-// skills/<slug>/SKILL.md` layout, then the legacy flat `<root>/<slug>/…`.
-// Returns the first EXISTING candidate; falls back to the mount-canonical path
-// (the downstream existsSync gate rejects it anyway).
+// Single filesystem-safe path segment (cinatra#1196). Mirrors the inline guard
+// the sibling run-mount slice (13bb6b97) added to `read-llm-requirement-from-
+// mount.ts` / `input-schema-resolver.ts`: rejects `.`/`..`/separators/backslash
+// so a segment can never escape the mount before it is join()ed. Kept INLINE
+// (no `@cinatra-ai/registries` barrel import) — this route module is in the
+// run-start route graph and the no-new-rot dev-perf ratchet is exact.
+function isSafeMountSegment(s: string): boolean {
+  return (
+    s !== "." &&
+    s !== ".." &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s)
+  );
+}
+
+// Conventional SKILL.md auto-discovery for an agent id (cinatra#793).
+//
+// Scope-derived multi-vendor (cinatra#1196): the request carries only the BARE
+// agent slug (never a `@vendor/slug` — the caller guard rejects any `/`), so the
+// vendor cannot be split off the name the way the sibling run-mount slice does.
+// Instead the vendor scope is DERIVED from the projection actually on disk: each
+// root is probed for the first-party `<root>/cinatra-ai/<slug>/skills/<slug>/
+// SKILL.md` FIRST (first-party precedence is byte-identical to the legacy
+// single-vendor probe), and only on a first-party miss do we consider the OTHER
+// vendor dirs projected under the mount (`<root>/<vendor>/<slug>/…`), each vendor
+// segment validated filesystem-safe. Because a bare slug cannot disambiguate two
+// vendors shipping the same slug, resolution FAILS CLOSED when 2+ vendor dirs
+// project the slug (returns the non-existent first-party path — the downstream
+// existsSync gate then rejects it, identical to a probe-miss). The legacy flat
+// `<root>/<slug>/…` fallback is preserved when no vendor projects the slug.
+// No registries import (the route-graph ratchet).
 function discoverBridgeSkillPath(agentId: string): string {
-  const candidates: string[] = [];
+  // Defense-in-depth: a `.`-only / otherwise-unsafe slug (which the caller's
+  // `..`/`/`/`\\` guard lets through) must not collapse into a probe path.
+  if (!isSafeMountSegment(agentId)) return "";
+
+  const firstPartyCandidates: string[] = [];
+  const vendorCandidates: string[] = [];
+  const flatCandidates: string[] = [];
   for (const root of [resolveAgentRuntimeMountDir(), path.join(process.cwd(), "extensions")]) {
-    candidates.push(path.join(root, "cinatra-ai", agentId, "skills", agentId, "SKILL.md"));
-    candidates.push(path.join(root, agentId, "skills", agentId, "SKILL.md"));
+    firstPartyCandidates.push(
+      path.join(root, "cinatra-ai", agentId, "skills", agentId, "SKILL.md"),
+    );
+    let vendors: string[] = [];
+    try {
+      vendors = readdirSync(root, { withFileTypes: true })
+        .filter(
+          (e) =>
+            e.isDirectory() &&
+            e.name !== "cinatra-ai" &&
+            isSafeMountSegment(e.name),
+        )
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      // Root absent / unreadable — no additional vendors from this root.
+    }
+    for (const vendor of vendors) {
+      vendorCandidates.push(
+        path.join(root, vendor, agentId, "skills", agentId, "SKILL.md"),
+      );
+    }
+    flatCandidates.push(
+      path.join(root, agentId, "skills", agentId, "SKILL.md"),
+    );
   }
-  for (const candidate of candidates) {
+
+  // First-party precedence — unchanged from the single-vendor probe.
+  for (const candidate of firstPartyCandidates) {
     if (existsSync(candidate)) return candidate;
   }
-  return candidates[0];
+  // Scope-derived multi-vendor: resolve ONLY when exactly one vendor projects
+  // the slug. 2+ = ambiguous (no vendor in the bare-slug request to pick one) →
+  // fail closed to the miss path below.
+  const vendorHits = vendorCandidates.filter((c) => existsSync(c));
+  if (vendorHits.length === 1) return vendorHits[0];
+  if (vendorHits.length === 0) {
+    for (const candidate of flatCandidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  // Miss (or ambiguous multi-vendor): the first-party canonical path — the
+  // downstream existsSync gate rejects it (identical to the legacy fallback).
+  return firstPartyCandidates[0];
+}
+
+// Derive the extension package name from a RESOLVED SKILL.md path (cinatra#1196).
+// Scope-derived multi-vendor replacement for the old `resolvedPath.includes(
+// "/cinatra-ai/")` substring test (which mislabelled EVERY dev-tree path because
+// the repo itself lives under a `cinatra-ai/` folder). The vendor is the first
+// segment under whichever skill root contains the file, in the exact projection
+// shape `<root>/<vendor>/<slug-dir>/skills/<skill-dir>/SKILL.md`; the package
+// slug stays `skillSlug` (the SKILL.md's own dir — the agent dir and skill dir
+// legitimately differ, e.g. `email-delivery-agent`/`email-delivery`). `cwd` is
+// deliberately NOT a root here (a bare `packages/<x>/skills/<x>/SKILL.md` would
+// mislabel `packages` as a vendor). Anything not matching the canonical shape
+// (legacy-flat, arbitrary explicit `skill_source_path`) has no vendor scope and
+// resolves to the bare slug. Inline; no registries import (route-graph ratchet).
+function deriveSkillPackageName(resolvedPath: string, skillSlug: string): string {
+  if (isSafeMountSegment(skillSlug)) {
+    for (const root of [
+      resolveAgentRuntimeMountDir(),
+      path.join(process.cwd(), "extensions"),
+    ]) {
+      const rel = path.relative(root, resolvedPath);
+      if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      const seg = rel.split(path.sep);
+      if (
+        seg.length === 5 &&
+        seg[2] === "skills" &&
+        seg[4] === "SKILL.md" &&
+        isSafeMountSegment(seg[0])
+      ) {
+        return `@${seg[0]}/${skillSlug}`;
+      }
+    }
+  }
+  return skillSlug;
 }
 
 function isInsideBridgeSkillRoots(resolvedPath: string): boolean {
@@ -697,12 +797,12 @@ export async function POST(req: Request): Promise<Response> {
         // `ensureChatSkillRegistered`. This closes the bridge↔chat asymmetry
         // and eliminates the prior need to widen `readSkillFileContent`'s
         // containment with `allowedRoots`.
-        const isCanonicalLayout = resolvedPath.includes(
-          `${path.sep}cinatra-ai${path.sep}`,
-        );
-        const packageName = isCanonicalLayout
-          ? `@cinatra-ai/${skillSlug}`
-          : skillSlug;
+        // Scope-derived multi-vendor package name (cinatra#1196): the vendor is
+        // read from the resolved path's projection shape, not a `/cinatra-ai/`
+        // substring. First-party canonical paths still yield `@cinatra-ai/<slug>`
+        // byte-identically; an operator/third-party `<mount>/<vendor>/<slug>/…`
+        // now yields `@<vendor>/<slug>` instead of collapsing to a bare slug.
+        const packageName = deriveSkillPackageName(resolvedPath, skillSlug);
         const skillId = `${packageName}:${skillSlug}`;
         let mountedSourcePath = resolvedPath;
         let mountedDirectoryPath = skillDirPath;
