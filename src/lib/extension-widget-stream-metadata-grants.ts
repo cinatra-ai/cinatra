@@ -239,7 +239,10 @@ const HOST_RESERVED_PACKAGES: ReadonlySet<string> = new Set([
   "@cinatra-ai/google-oauth-connection",
   "@cinatra-ai/llm",
   "@cinatra-ai/marketplace-application-reconcile",
-  "@cinatra-ai/marketplace-mcp-client",
+  // (the legacy vendored marketplace client is intentionally NOT named here —
+  // the org bans new textual references to it; it is not an installable
+  // extension, and the use-time trusted-signed re-assert denies it anyway)
+  "@cinatra-ai/marketplace-mcp-contract",
   "@cinatra-ai/marketplace-sync",
   "@cinatra-ai/mcp-client",
   "@cinatra-ai/mcp-server",
