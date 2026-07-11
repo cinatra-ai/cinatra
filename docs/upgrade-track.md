@@ -522,3 +522,59 @@ platform Postgres major AND digest-pinned to a confirmed multi-arch manifest).
 The §1 row is updated to match; §3's rationale stays as the first-pass record.
 The platform Postgres **18** major itself remains deferred to its own staged
 upgrade lane (data-migration-bearing; `pg_upgrade`/dump-restore), unchanged.
+
+---
+
+## 9. OpenTelemetry SDK 1.x → 2.x — applied (the stack-majors OTel group)
+
+The `@opentelemetry/*` SDK-suite lift the §4.2 / §5 notes deferred is applied
+(the stack-layer-majors lane, cinatra#1149; in-repo tracker cinatra#673). The
+suite moves together as one coupled group:
+
+| Pin | Before | After |
+|---|---|---|
+| `@opentelemetry/resources` (root) | `^1.30.1` | `^2.9.0` |
+| `@opentelemetry/sdk-trace-base` (root + metric-cost-api) | `^1.30.1` | `^2.9.0` |
+| `@opentelemetry/sdk-trace-node` (root) | `^1.30.1` | `^2.9.0` |
+| `@opentelemetry/core` (metric-cost-api) | `^1.30.1` | `^2.9.0` |
+| `@opentelemetry/semantic-conventions` (root) | `^1.41.1` | `^1.43.0` (in-range) |
+| `@opentelemetry/api` | `^1.9.1` | unchanged (2.x SDK peers api 1.x) |
+
+**Code adaptation** (the breakage the §4.2 note predicted, plus one more):
+
+1. `src/lib/otel-bootstrap.ts`: `new Resource({...})` →
+   `defaultResource().merge(resourceFromAttributes({...}))` (the 2.x provider
+   uses the supplied resource AS-IS — the explicit merge preserves the
+   `telemetry.sdk.*` default attributes 1.x merged implicitly);
+   `provider.addSpanProcessor(...)` → the `spanProcessors` constructor array;
+   `SemanticResourceAttributes.SERVICE_NAME` → `ATTR_SERVICE_NAME`.
+2. `packages/metric-cost-api/src/span-exporter.ts`: 2.x replaced
+   `ReadableSpan.parentSpanId` with `parentSpanContext` → the exporter reads
+   `span.parentSpanContext?.spanId ?? null` (DB column unchanged).
+3. **Propagator suppression retired (obsolete-on-upgrade):** the 1.x
+   bootstrap passed `propagator: null` to keep the then-vulnerable
+   W3CBaggagePropagator (GHSA-8988-4f7v-96qf, patched >=2.8.0) off the wire.
+   On 2.x the default parsers are patched, so the bootstrap now omits the
+   propagator when Sentry is off — restoring the default W3C tracecontext
+   propagation exactly as the 1.x hardening note planned. The pnpm-workspace
+   GHSA-8988 triage comment is retired with it; the contract test
+   (`otel-bootstrap-propagator.test.ts`) now pins the 2.x wiring (Sentry
+   propagator when on; property ABSENT when off; ctor `spanProcessors`;
+   default-resource merge).
+
+`@sentry/opentelemetry@10.x` peers `^1.30.1 || ^2.1.0` for core /
+sdk-trace-base, so the Sentry co-ownership wiring is unchanged. No other
+in-repo OTel call sites exist (verified: the four files above are the whole
+surface; `packages/metric-cost-api`'s `ExportResult` / `ExportResultCode`
+imports are still exported by core 2.x).
+
+**Proof.** This group touches no datastore-client boundary the works-after
+harness covers; the proof is full CI at the named commit (the works-after
+`proof` context still runs the real harness via the manifest/lockfile path
+filter). Local at the new pins: otel-bootstrap contract 5/5,
+metric-cost-api 30/30, root `tsgo --noEmit` clean, eslint clean.
+
+**Rollback.** Revert the lane commit (manifests + lockfile + the four code
+files move together). No persisted-state migration: span export is
+append-only rows in `cinatra.traces`; the `parentSpanId` column shape is
+unchanged.
