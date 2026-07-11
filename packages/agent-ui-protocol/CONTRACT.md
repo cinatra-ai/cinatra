@@ -199,6 +199,25 @@ designed so S4 registers a view **without forking the contract**:
   type — so the renderer shows its safe fallback and never crashes. This is the
   "unknown `DATA_PART` payloads" case in the render-parity checklist.
 
+**The registered inventory (S4 survey result).** The epic's full
+assistant-specific-view inventory splits into two classes — per its own "no
+bespoke frames" criterion:
+
+- **Registered `DATA_PART` renderable views** (versioned schemas in
+  `renderable-views/`, one renderer component each):
+  `content_change_proposal` (the change-diff), `artifact_preview`,
+  `citation_group`, `change_history`.
+- **Mapped onto existing top-level events — NOT re-registered as views**:
+  tool-call progress/result cards, inline agent-run cards, HITL interrupt
+  forms, thinking groups, and streaming/partial states fold from
+  `TEXT_MESSAGE_*` / `TOOL_CALL_*` / `INTERRUPT`/`RESUME` / structural
+  `DATA_PART`s in the renderer's event-to-UI reducer; error states are
+  `RUN_ERROR`; capabilities and recoverable-auth / capability-denied states
+  ride the capability handshake (§3).
+
+Adding a view later stays a registry augmentation (schema + component); the
+mapped class never grows a bespoke frame.
+
 The change-diff is the primary S4 porting target: it moves from the bespoke
 `changes` SSE frame (`{ fields, nodeId, postId }`, applied by a full page
 reload) to a `content_change_proposal` renderable view **refreshed in place**
