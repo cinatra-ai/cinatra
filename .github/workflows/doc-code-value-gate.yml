@@ -32,7 +32,7 @@ jobs:
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit, so the gate
     # engine is never pulled from mutable main.
-    uses: cinatra-ai/ci/.github/workflows/doc-code-value-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/doc-code-value-gate.yml@696c647dbbd8eb605e6e71a2243605b0a50c7dd1 # v0.1.0
     with:
       config: .github/doc-code-value-gate.config.json
       ref: 83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # same SHA as the workflow @ref
