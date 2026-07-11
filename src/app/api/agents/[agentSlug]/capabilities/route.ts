@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
+import {
+  resolveWidgetStreamAgentUnion,
+  widgetStreamRequestSource,
+} from "@/lib/widget-stream-agents.server";
 import { buildCapabilities } from "@/lib/widget-capabilities";
 
 export const runtime = "nodejs";
@@ -41,23 +44,29 @@ const CAPABILITIES_CORS_HEADERS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export async function OPTIONS(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
   // Union resolution (widget-stream runtime trust, slice 2): build-time map ∪
-  // admin-approved, serve-time-re-verified runtime entries. Null = 404.
-  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  // admin-approved, serve-time-re-verified runtime entries. Null = 404. The
+  // per-source key (slice 5, §7b) rate-limits only the expensive runtime
+  // verification path on this unauthenticated route.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
   if (!resolved) return new NextResponse(null, { status: 404 });
   return new NextResponse(null, { status: 200, headers: CAPABILITIES_CORS_HEADERS });
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
   if (!resolved) {
     return NextResponse.json(
       { error: "Unknown agent" },

@@ -1,45 +1,38 @@
 /**
- * Narrow local enumerator of APPROVED runtime widget-stream slugs (widget-stream
- * runtime trust, slice 4 — the seam the guard-snapshot refresher reads from).
+ * Enumerator of APPROVED runtime widget-stream slugs (widget-stream runtime
+ * trust — the seam the guard-snapshot refresher reads from).
  *
- * WHY THIS EXISTS (and its swap point). The snapshot refresher needs the SET of
- * currently-approved runtime widget-stream slugs. Slice 1's read surface exposes
- * only a per-slug resolve (`resolveApprovedWidgetStreamMetadataGrant`) and a
- * per-store claim read (`readWidgetStreamMetadataClaimsFromStore`) — there is no
- * list-of-approved surface on main. Slice 2 adds a read-only
- * `listApprovedWidgetStreamMetadataGrants`; when it merges, replace the body of
- * `createApprovedWidgetStreamSlugEnumerator` with a call to it (and drop the
- * local SELECT). This file is the single swap point.
+ * WHAT THIS FEEDS. The per-replica guard snapshot needs the SET of currently-
+ * approved runtime widget-stream slugs across the WHOLE fleet's org scopes, to
+ * redirect-skip their `/api/agents/<slug>/{stream,token,capabilities}` paths so
+ * those routes reach their self-authenticating handlers. It is pure liveness.
  *
- * NOT GRANT VALIDATION. This is a PLAIN ENUMERATION read of `status='approved'`
+ * SWAP DONE (slice 5). This used to carry a local
+ * `SELECT DISTINCT agent_slug WHERE status='approved'` with a documented swap
+ * point. The slice-2 read surface exposed only `listApprovedWidgetStreamMetadata
+ * Grants`, which is EXACT-scope (one org / the global rows) — swapping onto it
+ * would have NARROWED this all-orgs liveness read to a single scope and dropped
+ * cross-org runtime widgets from the redirect-skip set. So slice 5 added the
+ * cross-org `listAllApprovedWidgetStreamMetadataGrants` (all org scopes, read-
+ * only, same NOT-GRANT-VALIDATION caveats) and this enumerator now delegates to
+ * it and maps to the DISTINCT approved slugs. The local SELECT is gone; the
+ * grant module is the single place the SQL lives.
+ *
+ * NOT GRANT VALIDATION. This is a PLAIN cross-org ENUMERATION of `approved`
  * slugs — it deliberately does NOT re-derive approval, the canon hash, trust
  * classification, or the credential-store-owner conjunction. Those are the
- * authority checks, and they are re-asserted at the in-handler runtime resolver
- * (slice 2), which is the real wall. The snapshot this feeds is pure liveness
- * (redirect-skip only), so an over-inclusive read is safe: a slug that should no
- * longer serve still 404s at the handler. Because it is pure liveness, org-scope
- * precedence is intentionally NOT applied here (any approved row's slug is a
- * redirect-skip candidate; the handler re-resolves with precedence).
+ * authority checks, and they are re-asserted at the in-handler runtime resolver,
+ * which is the real wall. The snapshot this feeds is pure liveness (redirect-skip
+ * only), so an over-inclusive read is safe: a slug that should no longer serve
+ * still 404s at the handler. Because it is pure liveness, org-scope precedence is
+ * intentionally NOT applied here (any approved row's slug is a redirect-skip
+ * candidate; the handler re-resolves with precedence).
  */
-import type {
-  ApprovedWidgetStreamSlugEnumerator,
-} from "@/lib/widget-stream-runtime-slug-snapshot";
-import type { WidgetStreamMetadataGrantQuery } from "@/lib/extension-capability-ownership-grants";
-
-// Kept in sync with the grant module's own default (extension-capability-
-// ownership-grants.ts): `process.env.SUPABASE_SCHEMA?.trim() || "cinatra"`.
-function resolveSchema(schema?: string): string {
-  if (schema !== undefined) return schema;
-  return process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
-}
-
-// Mirror the grant module's identifier-quoting so a schema with a stray quote
-// cannot break out of the identifier (defense in depth; the value is env-fixed).
-function qualifiedGrantsTable(schema: string): string {
-  return `"${schema.replaceAll('"', '""')}"."extension_widget_stream_metadata_grant"`;
-}
-
-type ApprovedSlugRow = { agent_slug: string };
+import type { ApprovedWidgetStreamSlugEnumerator } from "@/lib/widget-stream-runtime-slug-snapshot";
+import {
+  listAllApprovedWidgetStreamMetadataGrants,
+  type WidgetStreamMetadataGrantQuery,
+} from "@/lib/extension-capability-ownership-grants";
 
 export type CreateApprovedWidgetStreamSlugEnumeratorDeps = {
   query: WidgetStreamMetadataGrantQuery;
@@ -49,19 +42,20 @@ export type CreateApprovedWidgetStreamSlugEnumeratorDeps = {
 
 /**
  * Build the enumerator over an injected query — unit-testable without a DB.
- * Issues ONE narrow read: the distinct `agent_slug`s of all `approved` grant
- * rows. When slice 2 merges, this body becomes
- * `return () => listApprovedWidgetStreamMetadataGrants(deps).then(gs => gs.map(g => g.agentSlug))`.
+ * Delegates to the grant module's cross-org `listAllApprovedWidgetStreamMetadata
+ * Grants` (one narrow all-orgs read of `status='approved'` rows) and returns the
+ * DISTINCT approved slugs (a slug approved in more than one org scope is a single
+ * redirect-skip candidate).
  */
 export function createApprovedWidgetStreamSlugEnumerator(
   deps: CreateApprovedWidgetStreamSlugEnumeratorDeps,
 ): ApprovedWidgetStreamSlugEnumerator {
-  const table = qualifiedGrantsTable(resolveSchema(deps.schema));
   return async () => {
-    const rows = await deps.query<ApprovedSlugRow>(
-      `SELECT DISTINCT agent_slug FROM ${table} WHERE status = 'approved'`,
-    );
-    return rows.map((r) => r.agent_slug);
+    const grants = await listAllApprovedWidgetStreamMetadataGrants({
+      query: deps.query,
+      schema: deps.schema,
+    });
+    return [...new Set(grants.map((g) => g.agentSlug))];
   };
 }
 
