@@ -38,7 +38,20 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    # MAJOR: Redis 7 -> 8 (upgrade track; see docs/upgrade-track.md §9). Pinned
+    # to the CONFIRMED multi-arch OCI index digest of redis:8-alpine (8.8.0,
+    # resolved 2026-07-11 via the registry API; index digest unchanged since
+    # 2026-06-23) — the tag is human-readable, the @sha256 is the binding pin.
+    # Redis here is a cache/queue backend (BullMQ): Redis 8 reads a Redis 7
+    # RDB/AOF forward-compatibly, and the works-after redis arm proves a real
+    # BullMQ enqueue -> worker-run -> complete on 8-alpine with this repo's
+    # pinned bullmq + ioredis. ROLLBACK: repoint to
+    # redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    # AND clear any persisted dump first (rm /data/dump.rdb /data/appendonly*
+    # in the cinatra-redis volume): Redis 8.8 writes RDB format v14, Redis 7.4
+    # reads only <=v12 and refuses a newer dump (crash-loop class). Re-resolve
+    # at bump time: `docker buildx imagetools inspect redis:8-alpine`.
+    image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 6379 on 0.0.0.0.
     volumes:
