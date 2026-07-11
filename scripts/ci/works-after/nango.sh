@@ -29,7 +29,7 @@ set -euo pipefail
 # major when proving nango-server↔db compatibility.
 #
 # Env: NANGO_SERVER_IMAGE (default = the origin/main digest pin),
-#      NANGO_DB_TAG (default 15-alpine), REDIS_TAG (default 7-alpine).
+#      NANGO_DB_TAG (default 15-alpine), REDIS_TAG (default 8-alpine).
 
 WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
@@ -37,7 +37,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-nangohq/nango-server:hosted@sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869}"
 NANGO_DB_TAG="${NANGO_DB_TAG:-15-alpine}"
-REDIS_TAG="${REDIS_TAG:-7-alpine}"
+REDIS_TAG="${REDIS_TAG:-8-alpine}"
 RUN_ID="wa-nango-$$"
 NET="${RUN_ID}-net"
 PG="${RUN_ID}-ndb"
