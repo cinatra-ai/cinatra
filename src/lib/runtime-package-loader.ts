@@ -370,14 +370,20 @@ export async function loadRuntimePackageExtensions(
         `before the migration pass (multiple store records; fail-closed): ${[...ambiguousIdentities].join(", ")}`,
     );
   }
-  // Host migrations run for the DEFAULT version only (cinatra#1040 S4): migrations
-  // are a PER-PACKAGE append-only namespace (not per-version), so the default
-  // version's pass establishes the package's schema that every side-by-side
-  // sibling shares. The cross-version migration UNION (a non-default version that
-  // declares more migrations than the default) is threaded in a later slice (S5).
+  // CROSS-VERSION migration UNION (cinatra#1040 S5): migrations are a PER-PACKAGE
+  // append-only namespace, not per-version — so EVERY signed live version of a
+  // package contributes its declared `cinatra.migrationsDir` to the one shared
+  // ledger, applied as an ordered union (semver asc, filename tiebreak) with a
+  // package-wide preflight BEFORE any DDL and a whole-package refusal on the first
+  // failure (`applyMigrationUnionForTrustedRecords`). This lifts S4's default-only
+  // restriction: a non-default sibling that ships migrations beyond the default no
+  // longer silently activates against a schema missing its tables. The per-IDENTITY
+  // signed gate is preserved — only per-(name, version) `trusted-signed`,
+  // non-ambiguous records are eligible; an unsigned sibling that DECLARES migrations
+  // is still a WHOLE-PACKAGE refusal (its DDL would be unverified privileged code and
+  // its absence leaves the shared schema incomplete for every version).
   const signedTrusted = trusted.filter(
     (rec) =>
-      rec.isDefault !== false &&
       signedIdentities.has(identityKey(rec.packageName, rec.version)) &&
       !ambiguousIdentities.has(identityKey(rec.packageName, rec.version)),
   );
@@ -391,8 +397,8 @@ export async function loadRuntimePackageExtensions(
         bootstrapWithDeclaredMigrations.map((r) => r.packageName).join(", "),
     );
   }
-  const { applyMigrationsForTrustedRecords } = await import("@/lib/extension-migration-host");
-  const migration = await applyMigrationsForTrustedRecords(signedTrusted);
+  const { applyMigrationUnionForTrustedRecords } = await import("@/lib/extension-migration-host");
+  const migration = await applyMigrationUnionForTrustedRecords(signedTrusted);
   if (migration.refused.length > 0) {
     console.warn(
       `[runtime-package-loader] refusing ${migration.refused.length} package(s) whose migrations failed: ` +
