@@ -39,6 +39,9 @@ import {
   up as backfillUp,
   down as backfillDown,
 } from "../../../../migrations/core/core__0017_org-anchor-backfill.mjs";
+// The ledger every consumer sees is the manifest.json + manifest.d/ union,
+// computed by the shared reader (plain runtime ESM, same import form).
+import { readManifestUnion } from "../../../../migrations/manifest-reader.mjs";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
@@ -102,16 +105,20 @@ describe("core__0017 org-anchor backfill — artifact shape (no DB needed)", () 
     expect(REPORT_METADATA_KEY).toBe("org_anchor_backfill_report:v1");
   });
 
-  it("ships its append-only ledger entry (migrations/manifest.json seq 0017)", () => {
-    const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, "migrations/manifest.json"), "utf8"));
-    const entry = manifest.migrations.find((m: { seq: string }) => m.seq === "0017");
+  it("ships its append-only ledger entry (union ledger seq 0017 — manifest.json + manifest.d/ fragments)", () => {
+    const { entries, errors } = readManifestUnion(path.join(REPO_ROOT, "migrations")) as {
+      entries: Array<{ seq: string; file: string; destructive: boolean; tables: string[] }>;
+      errors: string[];
+    };
+    expect(errors).toEqual([]);
+    const entry = entries.find((m) => m.seq === "0017");
     expect(entry).toBeDefined();
-    expect(entry.file).toBe("core/core__0017_org-anchor-backfill.mjs");
-    expect(entry.destructive).toBe(true);
-    expect(entry.tables).toContain("installed_extension");
-    expect(entry.tables).toContain("nango_connection");
-    expect(entry.tables).toContain("extension_access_policy");
-    expect(entry.tables).toContain("extension_co_owners");
+    expect(entry?.file).toBe("core/core__0017_org-anchor-backfill.mjs");
+    expect(entry?.destructive).toBe(true);
+    expect(entry?.tables).toContain("installed_extension");
+    expect(entry?.tables).toContain("nango_connection");
+    expect(entry?.tables).toContain("extension_access_policy");
+    expect(entry?.tables).toContain("extension_co_owners");
   });
 });
 

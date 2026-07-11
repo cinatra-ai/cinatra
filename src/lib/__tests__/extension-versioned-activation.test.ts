@@ -59,14 +59,16 @@ vi.mock("@/lib/extension-trust", () => ({
   untrustedActivationMode: () => "refuse",
 }));
 
-const applyMigrationsForTrustedRecords =
+const applyMigrationUnionForTrustedRecords =
   vi.fn<(recs: { packageName: string; version?: string }[]) => Promise<unknown>>(async () => ({
     applied: [],
     refused: [],
   }));
 vi.mock("@/lib/extension-migration-host", () => ({
   applyMigrationsForTrustedRecords: (...a: unknown[]) =>
-    applyMigrationsForTrustedRecords(...(a as [{ packageName: string; version?: string }[]])),
+    applyMigrationUnionForTrustedRecords(...(a as [{ packageName: string; version?: string }[]])),
+  applyMigrationUnionForTrustedRecords: (...a: unknown[]) =>
+    applyMigrationUnionForTrustedRecords(...(a as [{ packageName: string; version?: string }[]])),
 }));
 
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";
@@ -114,7 +116,7 @@ describe("loadRuntimePackageExtensions — versioned side-by-side activation (ci
     vi.clearAllMocks();
     runRuntimePackageActivation.mockResolvedValue([]);
     resolveSignatureVerdict.mockReturnValue(undefined);
-    applyMigrationsForTrustedRecords.mockResolvedValue({ applied: [], refused: [] });
+    applyMigrationUnionForTrustedRecords.mockResolvedValue({ applied: [], refused: [] });
   });
 
   it("activates BOTH versions side-by-side, each bound to its OWN digest, carrying version + isDefault", async () => {
@@ -187,7 +189,7 @@ describe("loadRuntimePackageExtensions — versioned side-by-side activation (ci
     expect(recs[0]).toMatchObject({ version: "1.0.0", isDefault: true, requestedHostPorts: ["settings"] });
   });
 
-  it("a SIGNED non-default sibling does NOT authorize the UNSIGNED default's privileged migrations (signature scope is per-identity)", async () => {
+  it("a SIGNED non-default sibling runs ITS OWN migrations in the union, but never authorizes the UNSIGNED default's (per-identity scope, cinatra#1040 S5)", async () => {
     // The non-default sibling (0.1.4) is signed; the DEFAULT (0.2.0) is NOT.
     resolveSignatureVerdict.mockImplementation((input) => (input.version === "0.1.4" ? true : undefined));
     discoverPackageStoreRecords.mockResolvedValue([rec(DEF_DIGEST, []), rec(SIB_DIGEST, [])]);
@@ -200,10 +202,14 @@ describe("loadRuntimePackageExtensions — versioned side-by-side activation (ci
       ],
     });
 
-    // The migration pass runs for DEFAULT + signed only. The default is UNSIGNED
-    // and the signed version is NON-DEFAULT, so NEITHER may run host DDL — the
-    // signed sibling must not lend its signature to the default's migrations.
-    const migrated = applyMigrationsForTrustedRecords.mock.calls.at(-1)?.[0] ?? [];
-    expect(migrated).toEqual([]);
+    // S5 lifts the default-only restriction: the migration union is keyed PER
+    // IDENTITY. The signed non-default sibling (0.1.4) contributes ITS OWN
+    // migrations; the UNSIGNED default (0.2.0) is excluded — a signed sibling
+    // can never lend its signature to the default's DDL. So the union receives
+    // exactly the signed identity, and never the unsigned default.
+    const migrated = (applyMigrationUnionForTrustedRecords.mock.calls.at(-1)?.[0] ?? []) as {
+      version?: string;
+    }[];
+    expect(migrated.map((r) => r.version)).toEqual(["0.1.4"]);
   });
 });

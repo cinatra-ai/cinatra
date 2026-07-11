@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgent } from "@/lib/widget-stream-agents.server";
+import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import { buildCapabilities } from "@/lib/widget-capabilities";
 
 export const runtime = "nodejs";
@@ -45,8 +45,10 @@ export async function OPTIONS(
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const entry = resolveWidgetStreamAgent(agentSlug);
-  if (!entry) return new NextResponse(null, { status: 404 });
+  // Union resolution (widget-stream runtime trust, slice 2): build-time map ∪
+  // admin-approved, serve-time-re-verified runtime entries. Null = 404.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  if (!resolved) return new NextResponse(null, { status: 404 });
   return new NextResponse(null, { status: 200, headers: CAPABILITIES_CORS_HEADERS });
 }
 
@@ -55,8 +57,8 @@ export async function GET(
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const entry = resolveWidgetStreamAgent(agentSlug);
-  if (!entry) {
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  if (!resolved) {
     return NextResponse.json(
       { error: "Unknown agent" },
       { status: 404, headers: CAPABILITIES_CORS_HEADERS },

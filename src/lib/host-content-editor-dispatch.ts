@@ -109,7 +109,44 @@ export type ContentEditorDispatchInput = {
     instanceId: string;
     sourceType: "public_site_widget";
   };
+  /**
+   * POINT-OF-USE authorization re-assert (widget-stream runtime trust, slice
+   * 2, design point B — revocation linearization). Invoked IMMEDIATELY before
+   * EVERY carrier `agent_run` insert in this dispatch, so no template/version
+   * read gap exists between the caller's own check and the actual run
+   * creation. `false` (or a throw) refuses the dispatch with NO run created —
+   * fail closed. The widget-stream route passes its pinned-grant re-assert
+   * here; callers with build-time (baked) trust may omit it (no-op).
+   */
+  preCreateAuthorize?: () => Promise<boolean>;
 };
+
+/** Thrown when `preCreateAuthorize` refuses at the run-creation boundary. */
+export class ContentEditorDispatchRefusedError extends Error {
+  constructor() {
+    super(
+      "[content-editor-dispatch] point-of-use authorization re-assert failed at the " +
+        "run-creation boundary — refusing to create the OBO-carrier run (fail closed)",
+    );
+    this.name = "ContentEditorDispatchRefusedError";
+  }
+}
+
+/** Run the caller's point-of-use re-assert (fail-closed: absent hook = allow
+ * ONLY for callers that never supplied one — baked-trust paths; any throw or
+ * false refuses). */
+async function assertPreCreateAuthorized(
+  input: ContentEditorDispatchInput,
+): Promise<void> {
+  if (!input.preCreateAuthorize) return;
+  let ok = false;
+  try {
+    ok = await input.preCreateAuthorize();
+  } catch {
+    ok = false;
+  }
+  if (!ok) throw new ContentEditorDispatchRefusedError();
+}
 
 /**
  * Resolve the A2A message text. When we can establish a production OBO
@@ -188,6 +225,13 @@ async function prepareDispatch(
     }
     const latestVersionId =
       (await readLatestAgentVersionIdForTemplate(template.id)) ?? undefined;
+    // LAST relay-path observation before initiating the bounded store
+    // operation (createAgentRun) — no relay-path reads intervene. A revocation
+    // landing during the store call's own internal awaits is unobserved by
+    // this request and the initiated operation may complete (the ratified
+    // revocation-linearization semantics); transactional grant-read/insert
+    // serialization is recorded as optional future hardening.
+    await assertPreCreateAuthorized(input);
     const overrideRunId = `run_${randomUUID()}`;
     const overrideRun = await createAgentRun({
       id: overrideRunId,
@@ -250,6 +294,9 @@ async function prepareDispatch(
   const latestVersionId =
     (await readLatestAgentVersionIdForTemplate(template.id)) ?? undefined;
 
+  // LAST relay-path observation before initiating the bounded store operation
+  // (see the override-path note above for the linearization semantics).
+  await assertPreCreateAuthorized(input);
   const runId = `run_${randomUUID()}`;
   const run = await createAgentRun({
     id: runId,

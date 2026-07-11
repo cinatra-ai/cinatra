@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgent } from "@/lib/widget-stream-agents.server";
+import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import { isConfiguredOrigin } from "@/lib/widget-stream-auth";
 import {
   isAuthorizedLongLivedKey,
@@ -54,11 +54,14 @@ export async function POST(
 ): Promise<Response> {
   const { agentSlug } = await params;
 
-  // 1. Unknown slug → 404 (cheap, no body read).
-  const entry = resolveWidgetStreamAgent(agentSlug);
-  if (!entry) {
+  // 1. Unknown slug → 404 (no body read). Union resolution (widget-stream
+  // runtime trust, slice 2): build-time map ∪ admin-approved, serve-time-
+  // re-verified runtime entries — fail closed.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  if (!resolved) {
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }
+  const entry = resolved.entry;
 
   // 2. Bearer auth FIRST — before parsing/validating any body — so an
   // unauthenticated caller cannot drive JSON-parse / schema-validator work

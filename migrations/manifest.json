@@ -1,17 +1,23 @@
 {
   "_doc": [
-    "Append-only ledger of versioned migration artifacts for the first-party",
+    "FROZEN legacy ledger of versioned migration artifacts for the first-party",
     "core store schema (buildCreateStoreSchemaQueries / createStoreTables in",
-    "src/lib/drizzle-store.ts). See migrations/README.md for the convention:",
-    "every migrations/core/core__NNNN_short-description.mjs runner module",
-    "ships with an entry here, in the same PR as the schema change it",
-    "accompanies. Entry shape:",
+    "src/lib/drizzle-store.ts). This array is shipped history: the CI gate",
+    "rejects ANY change to its entries and ANY new entry appended to it.",
+    "NEW migrations author a per-migration fragment at",
+    "migrations/manifest.d/core__NNNN_short-description.json instead (same",
+    "filename stem as the runner module; one file per migration, so",
+    "concurrent migration PRs never conflict on a shared tail — cinatra#1335).",
+    "Every consumer reads the ledger as the deterministic UNION of this array",
+    "and the fragments, via migrations/manifest-reader.mjs. Entry shape (both",
+    "forms):",
     "  seq         — the NNNN sequence number, as a string ('0001')",
-    "  file        — the artifact path relative to migrations/ (new entries:",
-    "                'core/core__NNNN_short-description.mjs'; seq 0001/0002",
-    "                predate the node-pg-migrate runner and point at the",
-    "                legacy psql artifacts — their runner forms live at",
-    "                core/core__0001_… and core/core__0002_…)",
+    "  file        — the artifact path relative to migrations/ (runner-module",
+    "                entries: 'core/core__NNNN_short-description.mjs'; seq",
+    "                0001/0002 predate the node-pg-migrate runner and point at",
+    "                the legacy psql artifacts — their runner forms live at",
+    "                core/core__0001_… and core/core__0002_…; those two",
+    "                entries stay in this frozen array permanently)",
     "  summary     — one line: what the migration does and why",
     "  destructive — true when the change affects user-land data (the case",
     "                that REQUIRES an artifact); false for optional artifacts",
@@ -19,15 +25,10 @@
     "  tables      — the affected core-store table names (no schema prefix;",
     "                the schema name is variable, see the README)",
     "Never renumber or rewrite an entry once its migration has shipped;",
-    "supersede it with a new sequence number."
-  ],
-  "_seq_coordination": [
-    "SEQ COORDINATION — resolved: the 0023 hold for PR cinatra-ai/cinatra#1304",
-    "(assistant-threads-turns) is retired. core__0024 (#1329) and core__0025 (#1331)",
-    "shipped first, and the shipped ledger is an append-only positional prefix with",
-    "strictly-increasing tail seqs, so #1304 renumbered its migration to core__0026",
-    "(rename-only; no SQL change). 0021 and 0023 are permanent gaps — the runner",
-    "tolerates sequence gaps."
+    "supersede it with a new sequence number. 0021 and 0023 are permanent",
+    "gaps — the runner tolerates sequence gaps. (The hand-maintained SEQ",
+    "COORDINATION note that used to live here is retired: seq claims are now",
+    "per-file fragments, and the gate reds duplicate claims deterministically.)"
   ],
   "migrations": [
     {
@@ -265,6 +266,15 @@
       "tables": [
         "assistant_threads",
         "assistant_turns"
+      ]
+    },
+    {
+      "seq": "0027",
+      "file": "core/core__0027_project-instances.mjs",
+      "summary": "Project-instance registry (cinatra-ai/cinatra#1032 deliverable 3): one brand-new table. SEQ COORDINATION: authored at core__0026, renumbered to core__0027 because PR #1304 (assistant-threads-turns, #1037 P2a) landed core__0026 on main first; per the coordinator decision #1304 keeps 0026 and this slice takes the next free sequence — a rename-only renumber, zero SQL change (0021/0023 stay permanent gaps; the runner tolerates gaps). project_instances is the sticky instantiation-time binding record keyed (org_id, project_ref): template_package/template_id pin which installed agent package's cinatra/project-template.json the project was instantiated from (dispatch refuses a template swap under the same project ref); template_digest records the finalized-install digest the template bytes came from (provenance for the future rebinding/migration valve — deliberately NOT a dispatch gate, template evolution stays legal); pm_agent_package is the PM seat (the pm-work-store capability binding proven at instantiation — only this agent's tick runs may dispatch workers for the project); provider_id/provider_mode persist the PM work-store provider chosen ONCE at instantiation (configured wins; auto only when exactly one connected; fail-closed on none/several) so no runtime path ever re-runs selection and a project can never silently migrate between PM tools; project_id is the nullable cinatra project refinement (mirrors agent_runs.project_id semantics). Rides the idempotent bootstrap DDL (projectInstancesSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007/core__0024 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the table (fresh addition; exact pre-0027 shape on any lineage). destructive=false: brand-new table, no user-land data affected.",
+      "destructive": false,
+      "tables": [
+        "project_instances"
       ]
     }
   ]

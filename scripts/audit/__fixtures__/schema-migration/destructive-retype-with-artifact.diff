@@ -1,42 +1,31 @@
-diff --git a/migrations/core/core__0013_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0013_narrow-usage-events-cost-usd.mjs
+diff --git a/migrations/core/core__0015_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0015_narrow-usage-events-cost-usd.mjs
 new file mode 100644
 --- /dev/null
-+++ b/migrations/core/core__0013_narrow-usage-events-cost-usd.mjs
-@@ -0,0 +1,16 @@
-+// core__0013 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
-+// The extra scale was never populated (ingest rounds to 4 decimal places)
-+// and the narrower type matches the rollup views. Safe to re-run: converting
-+// a column to the type it already has succeeds as a no-op.
++++ b/migrations/core/core__0015_narrow-usage-events-cost-usd.mjs
+@@ -0,0 +1,11 @@
++// core__0015 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +
 +/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 +export function up(pgm) {
-+  pgm.sql(`ALTER TABLE usage_events
-+  ALTER COLUMN cost_usd TYPE numeric(12,4);`);
++  pgm.sql(`ALTER TABLE usage_events ALTER COLUMN cost_usd TYPE numeric(12,4);`);
 +}
 +
 +/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 +export function down(pgm) {
-+  pgm.sql(`ALTER TABLE usage_events
-+  ALTER COLUMN cost_usd TYPE numeric(12,8);`);
++  pgm.sql(`ALTER TABLE usage_events ALTER COLUMN cost_usd TYPE numeric(12,8);`);
 +}
-diff --git a/migrations/manifest.json b/migrations/manifest.json
---- a/migrations/manifest.json
-+++ b/migrations/manifest.json
-@@ -105,6 +105,13 @@
-       "summary": "Pinned fixture snapshot entry for seq 0012 — real ledger summary elided; the schema-migration gate does not read this field.",
-       "destructive": true,
-       "tables": ["metadata", "startups", "startup_overrides", "skill_packages", "skills", "notifications", "campaigns", "chat_threads"]
-+    },
-+    {
-+      "seq": "0013",
-+      "file": "core/core__0013_narrow-usage-events-cost-usd.mjs",
-+      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
-+      "destructive": true,
-+      "tables": ["usage_events"]
-     }
-   ]
- }
-
+diff --git a/migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json b/migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json
+new file mode 100644
+--- /dev/null
++++ b/migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json
+@@ -0,0 +1,7 @@
++{
++  "seq": "0015",
++  "file": "core/core__0015_narrow-usage-events-cost-usd.mjs",
++  "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
++  "destructive": true,
++  "tables": ["usage_events"]
++}
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts

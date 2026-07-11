@@ -24,11 +24,20 @@ import "server-only";
 //     binds new dependents' edges to it and the closure gates validate them.
 //
 // SHARED-STATE DISCIPLINE (codex-converged): this path mutates NOTHING that
-// the default install owns. Host-port grants: an empty request is a no-op, a
-// request already covered by the scope's APPROVED grant is a no-op, anything
-// else REFUSES (the grant-union + hash-reset choreography is S4/S5).
-// Capability-ownership grants and host migrations REFUSE outright in S3. The
-// compensation inverse (`uninstallExtensionVersionSideBySide`) is therefore a
+// the default install owns EXCEPT the host-migration ledger, which is a shared
+// append-only per-package namespace whose ordering is owned elsewhere.
+//   - Host MIGRATIONS (cinatra#1040 S5): a side-by-side version MAY declare
+//     `cinatra.migrationsDir`; the S3 DECLARES_MIGRATIONS refusal is LIFTED.
+//     Application is deferred to the loader's ordered cross-version UNION
+//     (`applyMigrationUnionForTrustedRecords`) at boot/activation — install
+//     preflight only VALIDATES (and its `true` return still lets the pipeline
+//     trust gate reject an UNSIGNED declarer before finalize).
+//   - Host-port grants + capability-OWNERSHIP grants: STILL refuse here
+//     (PORTS_NOT_COVERED / DECLARES_OWNERSHIP_KEYS). Their non-refusing grant
+//     UNION needs a DURABLE rollback capsule reconciled through batch
+//     compensation, boot recovery, and orphan GC (codex round-1 D1-D3) — a
+//     dedicated slice (S6), not this migration-union slice.
+// The compensation inverse (`uninstallExtensionVersionSideBySide`) is therefore a
 // pure version-scoped teardown: delete the non-default row (lifecycle
 // primitive, dependent-bound-edge + default-row guards), terminalize its
 // version-scoped journal op. Store digest dirs are left to the retention GC.
@@ -275,25 +284,22 @@ async function runLocked(input: {
             `shared state; side-by-side for ownership-declaring packages is a later slice.`,
         );
       },
-      // Host migrations are irreversible shared DDL — refuse in S3 (the
-      // per-package append-only union policy is the S5 slice).
-      preflightMigrations: async (i) => {
-        const declares = await base.preflightMigrations?.(i);
-        if (declares) {
-          throw new SideBySideInstallError(
-            "DECLARES_MIGRATIONS",
-            `side-by-side install of ${i.packageName}@${version} refused — it declares host ` +
-              `migrations (cinatra.migrationsDir); the cross-version migration-union policy is ` +
-              `a later slice.`,
-          );
-        }
-        return false;
-      },
-      // NO-OP, not a throw (codex round-1): the pipeline calls this hook for
-      // EVERY trusted-signed install, including packages that declare no
-      // migrations — the declaration refusal is already enforced (fail-closed
-      // throw) by the preflight override above, so nothing can reach here with
-      // migrations to apply.
+      // cinatra#1040 S5 — cross-version migration UNION lifts the S3
+      // DECLARES_MIGRATIONS refusal: a side-by-side version MAY now declare host
+      // migrations (`cinatra.migrationsDir`). We still run the base preflight so
+      // its VALIDATION stands (containment / namespace / retired-JSON-DSL reject)
+      // and its `true` return lets the pipeline's own trust gate reject an
+      // UNSIGNED migration-declaring candidate BEFORE finalize — an unsigned
+      // sibling must never durably poison the shared package schema (codex Q2).
+      // No refusal for a SIGNED declarer.
+      preflightMigrations: async (i) => (await base.preflightMigrations?.(i)) ?? false,
+      // Application is DEFERRED to the loader's ordered union
+      // (`applyMigrationUnionForTrustedRecords`) at boot/activation: migrations
+      // are a per-package append-only namespace, so this new version's dir joins
+      // the ordered (semver asc, filename) union with the default + siblings, and
+      // the shared ledger dedupes (codex Q6: no double-application). Applying at
+      // install would run this non-default version's DDL out of the cross-version
+      // order — a no-op at install keeps the ordering owned by the union seam.
       applyMigrations: async () => undefined,
       // NO in-process activation — versioned runtime activation is S4. The
       // finalized row is durable; the S4 loader slice makes it addressable.

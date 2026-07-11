@@ -47,9 +47,25 @@ export async function resolveVersionBeforeRun(
       template.id,
       input.requestedVersion,
     );
+    // REFUSE-WITH-EVIDENCE (cinatra#1040 S5) — at the REQUEST-TIME pinning seam:
+    // a pinned version with no immutable `agent_template_versions` snapshot is
+    // UNREACHABLE (a side-by-side NON-DEFAULT install whose template snapshot was
+    // never published), so the run is never even enqueued — fail closed naming
+    // the (package, version) rather than resolving to the template's current
+    // default `packageVersion`.
+    //   SCOPE NOTE: this closes the REQUEST-TIME hole only. The execution worker
+    //   still best-effort falls back to the LIVE template if a REQUESTED-and-
+    //   present snapshot is PURGED mid-flight (agents `execution.ts`), because the
+    //   run row records only the resolved semver, not whether the pin was a
+    //   REQUIRED explicit pin vs. a default resolution. Closing that end-to-end
+    //   (a persisted required-pin marker + a fail-closed worker) is folded into
+    //   the positive edge-bound-serving slice (cinatra#1040 S7) — a snapshot
+    //   purge of an in-flight run is the only residual window.
     if (!match) {
       throw A2AError.invalidParams(
-        `Version ${input.requestedVersion} not found for ${input.packageName}`,
+        `Version ${input.requestedVersion} not found for ${input.packageName} — no published ` +
+          `agent_template_versions snapshot to pin the run to (an unreachable non-default version); ` +
+          `refusing rather than serving the default.`,
       );
     }
     return {
