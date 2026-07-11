@@ -25,8 +25,6 @@ import {
   type WidgetStreamMetadataGrantClaim,
   type WidgetStreamMetadataGrantDeps,
   type WidgetStreamMetadataRecordGuards,
-} from "@/lib/extension-widget-stream-metadata-grants";
-import {
   capturePriorOwnershipGrants,
   recordAndAutoApproveOwnershipGrants,
 } from "@/lib/extension-capability-ownership-grants";
