@@ -65,7 +65,8 @@ type ConnectorsClientProps = {
    * (which writes the token back to the URL); the server is what filters the
    * cards.
    */
-  scopeValue: string;
+  /** The active scope selection (server-resolved by the canonical parser). */
+  scopeValue: string[];
   /** The actor's accessible scopes, used to populate the scope picker. */
   scopes: AvailableScopes;
 };
