@@ -217,6 +217,14 @@ export {
 } from "./connector-config";
 export type { ExtensionConnectorConfigStore } from "./connector-config";
 
+// The opt-in setup-form hydration read-action contract (cinatra#1082 item 3;
+// owner-ratified) lives behind the `@cinatra-ai/sdk-extensions/config-hydration`
+// SUBPATH ONLY — deliberately NOT re-exported from this root barrel: the barrel
+// sits on the reachable graph of every locked dev-perf route, and the
+// route-graph ratchet forbids growing those graphs with a module none of them
+// uses. Consumers (the host hydration seam; adopting connectors) import the
+// subpath.
+
 export {
   setExtensionMcpOAuthClientStore,
   listExternalMcpOAuthClients,

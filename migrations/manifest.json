@@ -23,10 +23,10 @@
   ],
   "_seq_coordination": [
     "SEQ COORDINATION — seq 0023 is HELD for open PR cinatra-ai/cinatra#1304",
-    "(assistant-threads-turns) and seq 0025 is HELD for open PR cinatra-ai/cinatra#1331",
-    "(extension-dependency-edge); both were re-verified by an open-PR scan when 0026 was",
-    "claimed for the project-instance registry. Whichever branch lands last must confirm",
-    "it still holds the next free sequence number before merge."
+    "(assistant-threads-turns); seq 0025 landed on main (cinatra-ai/cinatra#1331). 0026 was",
+    "claimed for the project-instance registry after an open-PR scan re-verified both.",
+    "Whichever branch lands last must confirm it still holds the next free sequence",
+    "number before merge."
   ],
   "migrations": [
     {
@@ -247,9 +247,19 @@
       ]
     },
     {
+      "seq": "0025",
+      "file": "core/core__0025_extension-dependency-edge.mjs",
+      "summary": "Dependency edges move off the row jsonb (cinatra-ai/cinatra#1040 S2, edge-storage half). Creates extension_dependency_edge: one row per DECLARED manifest edge of an installed_extension row — declared_package_name / declared_kind / edge_type / requirement / version_constraint (the VersionConstraint union as jsonb, lossless round-trip) / declared_index (manifest array position; UNIQUE per dependent — positional, not a semantic dedupe) — plus the write-time RESOLUTION: resolved_install_id (WHICH installed row satisfied the edge; FK ON DELETE SET NULL) and resolution_reason (free-form provenance). The closure gates (boot/archive/restore/forward) validate resolved edges and fall back to the scoped name-lookup for unresolved ones. PREFLIGHT fails loudly on malformed legacy edges (naming dependent id + declared index) before any destructive work; the backfill resolves per-DECLARING-row scope (own-org live row first, then platform — a platform dependent binds only platform rows; default version preferred, deterministic id tie-break; missing target backfills unresolved) with DETERMINISTIC ids ('iede_' || md5(dependent:index)); then installed_extension.dependencies is DROPPED. The table rides the idempotent bootstrap DDL (dependencyEdgeSchemaQueries spread into buildCreateStoreSchemaQueries, same PR; the bootstrap CREATE of installed_extension no longer declares the jsonb column) so a fresh install is born at the target shape and ledger-fakes this chain; the backfill + column DROP over an already-populated table are the transformational half this module carries on the operator upgrade path. Coordinated NON-rolling deploy boundary (core__0022/core__0005): a pre-0025 process naming the dropped column fails closed (undefined column), never a silent wrong read. Idempotent/lineage-tolerant: CREATE TABLE/indexes IF NOT EXISTS; preflight+backfill+drop live in ONE DO block guarded on the legacy column's existence, so a re-run — or a run after the bootstrap leaf already converged — is a no-op. down() re-adds the jsonb column, re-serializes each dependent's edges in declared order (optional kind key only when present), and drops the table; resolution provenance is lost by design. destructive=true because it backfills from and drops a column on a table that already holds rows on main.",
+      "destructive": true,
+      "tables": [
+        "installed_extension",
+        "extension_dependency_edge"
+      ]
+    },
+    {
       "seq": "0026",
       "file": "core/core__0026_project-instances.mjs",
-      "summary": "Project-instance registry (cinatra-ai/cinatra#1032 deliverable 3): one brand-new table. project_instances is the sticky instantiation-time binding record keyed (org_id, project_ref): template_package/template_id pin which installed agent package's cinatra/project-template.json the project was instantiated from (dispatch refuses a template swap under the same project ref); pm_agent_package is the PM seat (the pm-work-store capability binding proven at instantiation — only this agent's tick runs may dispatch workers for the project); provider_id/provider_mode persist the PM work-store provider chosen ONCE at instantiation (configured wins; auto only when exactly one connected; fail-closed on none/several) so no runtime path ever re-runs selection and a project can never silently migrate between PM tools; project_id is the nullable cinatra project refinement (mirrors agent_runs.project_id semantics). Rides the idempotent bootstrap DDL (projectInstancesSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007/core__0024 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the table (fresh addition; exact pre-0026 shape on any lineage). destructive=false: brand-new table, no user-land data affected.",
+      "summary": "Project-instance registry (cinatra-ai/cinatra#1032 deliverable 3): one brand-new table. project_instances is the sticky instantiation-time binding record keyed (org_id, project_ref): template_package/template_id pin which installed agent package's cinatra/project-template.json the project was instantiated from (dispatch refuses a template swap under the same project ref); template_digest records the finalized-install digest the template bytes came from (provenance for the future rebinding/migration valve — deliberately NOT a dispatch gate, template evolution stays legal); pm_agent_package is the PM seat (the pm-work-store capability binding proven at instantiation — only this agent's tick runs may dispatch workers for the project); provider_id/provider_mode persist the PM work-store provider chosen ONCE at instantiation (configured wins; auto only when exactly one connected; fail-closed on none/several) so no runtime path ever re-runs selection and a project can never silently migrate between PM tools; project_id is the nullable cinatra project refinement (mirrors agent_runs.project_id semantics). Rides the idempotent bootstrap DDL (projectInstancesSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007/core__0024 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the table (fresh addition; exact pre-0026 shape on any lineage). destructive=false: brand-new table, no user-land data affected.",
       "destructive": false,
       "tables": [
         "project_instances"

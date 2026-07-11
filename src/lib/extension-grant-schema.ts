@@ -22,9 +22,12 @@
 //     primitive's dispatch-attempt ledger + project lease (NET-NEW tables;
 //     additive, ships with migrations/core/core__0024 per the core__0007
 //     keep-paths-aligned precedent).
+//   - dependencyEdgeSchemaQueries — the cinatra#1040 S2 extension_dependency_edge
+//     table + the jsonb→edge-rows migration mirror (transformational; ships with
+//     migrations/core/core__0025 — see that function's own note).
 //   - projectInstancesSchemaQueries — the cinatra#1032 deliverable-3
 //     project-instance registry (NET-NEW table; additive, ships with
-//     migrations/core/core__0026 per the same precedent).
+//     migrations/core/core__0026 per the core__0007/core__0024 precedent).
 
 /** DDL for the admin-approved `extension_capability_ownership_grant` table +
  * its anti-squat partial unique indexes. Spread into
@@ -235,6 +238,141 @@ export function projectDispatchSchemaQueries(schemaName: string): { text: string
   ];
 }
 
+/**
+ * DDL for the `extension_dependency_edge` table (cinatra#1040 S2): dependency
+ * edges move OFF the `installed_extension.dependencies` row jsonb into
+ * first-class rows carrying the declared edge (package / kind / edgeType /
+ * versionConstraint / requirement, declared order) PLUS the write-time
+ * resolution (`resolved_install_id` — WHICH installed row satisfied the edge —
+ * and a free-form `resolution_reason` provenance note). Spread into
+ * `buildCreateStoreSchemaQueries` AFTER the installed_extension CREATE (the
+ * FKs reference it).
+ *
+ * This bootstrap mirrors migration `migrations/core/core__0025_extension-dependency-edge.mjs`
+ * idempotently (the S1 convention): a FRESH database is born at the target
+ * shape — edge table present, NO `dependencies` jsonb column (the
+ * installed_extension CREATE above no longer declares it) — and ledger-fakes
+ * the chain; an UPGRADED database converges through the guarded DO block below
+ * (preflight-validate → backfill with per-declaring-row scoped resolution →
+ * drop the jsonb column) before the runner executes 0025 as a no-op. The
+ * block only runs while the legacy column exists, so re-running on any
+ * lineage is a no-op. The change is transformational (a backfill + a column
+ * drop over a table that already holds rows), so it ALSO ships the core__0025
+ * runner module + manifest entry — the schema-migration / upgrade-proof
+ * gates' required artifact.
+ *
+ * Resolution rule (the SINGLE rule, mirrored by the canonical store's
+ * write-time resolver and the closure engine's name-lookup fallback): the
+ * DECLARING row's own-org live (active|locked) row first, then the platform
+ * row — a platform-scoped dependent binds only platform rows — preferring the
+ * DEFAULT version, deterministic id tie-break. A missing target backfills
+ * UNRESOLVED (NULL) so the gates' name-fallback keeps pre-S2 healing
+ * semantics.
+ */
+export function dependencyEdgeSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier-position quote
+  const lit = schemaName.replaceAll("'", "''"); // literal-position quote
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."extension_dependency_edge" (
+  id text PRIMARY KEY,
+  dependent_install_id text NOT NULL REFERENCES "${q}"."installed_extension"(id) ON DELETE CASCADE,
+  declared_package_name text NOT NULL,
+  declared_kind text,
+  edge_type text NOT NULL CHECK (edge_type IN ('runtime','install-time','peer')),
+  requirement text NOT NULL CHECK (requirement IN ('required','optional')),
+  version_constraint jsonb NOT NULL,
+  declared_index integer NOT NULL DEFAULT 0,
+  resolved_install_id text REFERENCES "${q}"."installed_extension"(id) ON DELETE SET NULL,
+  resolution_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+)` },
+    // One row per manifest-array position (NOT a semantic-dedupe constraint —
+    // duplicate declared packages stay representable; the manifest reader owns
+    // dedupe). Doubles as the hydration index (dependent, declared order).
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_dependency_edge_dependent_pos_uniq
+  ON "${q}"."extension_dependency_edge" (dependent_install_id, declared_index)` },
+    // The archive/GC direction: "which edges resolve to THIS install row".
+    { text: `CREATE INDEX IF NOT EXISTS extension_dependency_edge_resolved_idx
+  ON "${q}"."extension_dependency_edge" (resolved_install_id)` },
+    // Transformational mirror of core__0025 (guarded: runs ONLY while the
+    // legacy jsonb column still exists — i.e. exactly once per upgraded DB).
+    { text: `DO $$
+DECLARE bad record;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = '${lit}' AND table_name = 'installed_extension'
+      AND column_name = 'dependencies'
+  ) THEN
+    -- Preflight: FAIL LOUD on malformed legacy edges BEFORE any destructive
+    -- work (silently skipping them and then dropping the source column would
+    -- silently weaken the closure gates). STRICT MIRROR of the TS writer's
+    -- validateExtensionDependencyShape (manifest-dependencies.ts): non-empty
+    -- packageName, no self-edge, enum-valid edgeType/requirement/kind, and a
+    -- discriminant-valid versionConstraint ({} or an unknown kind would
+    -- hydrate as a constraint that silently bypasses range enforcement).
+    -- IS DISTINCT FROM catches MISSING keys (jsonb_typeof(NULL) evades <>).
+    SELECT ie.id AS dependent_id, (d.ord - 1)::int AS declared_index INTO bad
+    FROM "${q}"."installed_extension" ie
+    CROSS JOIN LATERAL jsonb_array_elements(ie.dependencies) WITH ORDINALITY AS d(elem, ord)
+    WHERE jsonb_typeof(d.elem) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(d.elem->'packageName') IS DISTINCT FROM 'string'
+       OR coalesce(d.elem->>'packageName', '') = ''
+       OR (d.elem->>'packageName') = ie.package_name
+       OR (d.elem->>'edgeType') IS NULL
+       OR (d.elem->>'edgeType') NOT IN ('runtime','install-time','peer')
+       OR (d.elem->>'requirement') IS NULL
+       OR (d.elem->>'requirement') NOT IN ('required','optional')
+       OR (d.elem ? 'kind' AND ((d.elem->>'kind') IS NULL
+           OR (d.elem->>'kind') NOT IN ('agent','connector','artifact','skill','workflow')))
+       OR jsonb_typeof(d.elem->'versionConstraint') IS DISTINCT FROM 'object'
+       OR ((
+            ((d.elem->'versionConstraint'->>'kind') = 'semver-range'
+              AND jsonb_typeof(d.elem->'versionConstraint'->'range') = 'string'
+              AND (d.elem->'versionConstraint'->>'range') <> '')
+         OR ((d.elem->'versionConstraint'->>'kind') = 'exact'
+              AND jsonb_typeof(d.elem->'versionConstraint'->'version') = 'string'
+              AND (d.elem->'versionConstraint'->>'version') <> '')
+         OR ((d.elem->'versionConstraint'->>'kind') = 'git-ref'
+              AND jsonb_typeof(d.elem->'versionConstraint'->'ref') = 'string'
+              AND (d.elem->'versionConstraint'->>'ref') <> '')
+       ) IS NOT TRUE)
+    LIMIT 1;
+    IF FOUND THEN
+      RAISE EXCEPTION 'extension_dependency_edge backfill: malformed dependency edge on installed_extension % (declared index %) — repair the row jsonb before upgrading', bad.dependent_id, bad.declared_index;
+    END IF;
+    INSERT INTO "${q}"."extension_dependency_edge"
+      (id, dependent_install_id, declared_package_name, declared_kind, edge_type,
+       requirement, version_constraint, declared_index, resolved_install_id, resolution_reason)
+    SELECT
+      'iede_' || md5(ie.id || ':' || (d.ord - 1)::text),
+      ie.id,
+      d.elem->>'packageName',
+      d.elem->>'kind',
+      d.elem->>'edgeType',
+      d.elem->>'requirement',
+      d.elem->'versionConstraint',
+      (d.ord - 1)::int,
+      r.id,
+      CASE WHEN r.id IS NULL THEN NULL
+           WHEN r.organization_id IS NOT NULL THEN 'backfill:org'
+           ELSE 'backfill:platform' END
+    FROM "${q}"."installed_extension" ie
+    CROSS JOIN LATERAL jsonb_array_elements(ie.dependencies) WITH ORDINALITY AS d(elem, ord)
+    LEFT JOIN LATERAL (
+      SELECT t.id, t.organization_id
+      FROM "${q}"."installed_extension" t
+      WHERE t.package_name = d.elem->>'packageName'
+        AND t.status IN ('active','locked')
+        AND (t.organization_id IS NULL OR t.organization_id = ie.organization_id)
+      ORDER BY (t.organization_id IS NOT NULL) DESC, t.is_default DESC, t.id
+      LIMIT 1
+    ) r ON TRUE;
+    ALTER TABLE "${q}"."installed_extension" DROP COLUMN dependencies;
+  END IF;
+END $$;` },
+
 // ---------------------------------------------------------------------------
 // Project-instance registry (cinatra#1032 deliverable 3).
 // One brand-new ADDITIVE table (companion migration core__0026 ships the same
@@ -274,5 +412,6 @@ export function projectInstancesSchemaQueries(schemaName: string): { text: strin
         CHECK (provider_mode IN ('configured', 'auto'))
     )`,
     },
+
   ];
 }

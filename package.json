@@ -264,10 +264,10 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nangohq/node": "^0.70.7",
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/resources": "^1.30.1",
-    "@opentelemetry/sdk-trace-base": "^1.30.1",
-    "@opentelemetry/sdk-trace-node": "^1.30.1",
-    "@opentelemetry/semantic-conventions": "^1.41.1",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.9.0",
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
     "@queuedash/api": "^3.19.0",
     "@queuedash/ui": "^3.19.0",
     "@radix-ui/react-avatar": "^1.2.0",
@@ -290,7 +290,7 @@
     "@trpc/server": "^11.17.0",
     "better-auth": "^1.6.19",
     "bpmn-moddle": "10.0.0",
-    "bullmq": "^5.79.1",
+    "bullmq": "^5.80.1",
     "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -341,7 +341,7 @@
     "tar": "^7.5.16",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@11.1.2+sha512.415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499"
 }

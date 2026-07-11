@@ -1,11 +1,15 @@
 // Extension-to-extension dependency closure.
 //
 // Dependencies are declared on the canonical manifest row as
-// ExtensionDependency[] (see canonical-types.ts). The closure is computed
-// over `active | locked` rows only — an `archived` dependency counts as
-// MISSING. Required-missing fails install + blocks archive/uninstall/restore
-// when the resulting closure would break. Optional-missing has per-kind
-// declared behavior.
+// ExtensionDependency[] (see canonical-types.ts) and PERSISTED as
+// `extension_dependency_edge` rows (cinatra#1040 S2) whose resolved half pins
+// WHICH installed row satisfied each edge at write time. The closure is
+// computed over `active | locked` rows only — an `archived` dependency counts
+// as MISSING. Gates VALIDATE the resolved edge (the pinned row's status +
+// version) when one is persisted, and fall back to the scoped name-lookup for
+// unresolved edges / hand-built fixtures. Required-missing fails install +
+// blocks archive/uninstall/restore when the resulting closure would break.
+// Optional-missing has per-kind declared behavior.
 import "server-only";
 
 import { satisfiesVersionRange } from "@cinatra-ai/registries";
@@ -13,6 +17,7 @@ import type {
   ExtensionDependency,
   ExtensionKind,
   InstalledExtension,
+  ResolvedDependencyEdge,
 } from "./canonical-types";
 
 /**
@@ -129,6 +134,59 @@ export function edgeVersionViolation(
 export type ManifestLookup = (packageName: string) => InstalledExtension | undefined;
 
 /**
+ * The dependency edges of a row in RESOLVED form (cinatra#1040 S2). A row
+ * hydrated from the DB carries `dependencyEdges` (persisted resolution); a
+ * hand-built fixture carries only `dependencies` — its edges are treated as
+ * UNRESOLVED, which routes every consumer through the scoped name-lookup
+ * fallback (the exact pre-S2 semantics).
+ */
+export function edgesOf(row: InstalledExtension): readonly ResolvedDependencyEdge[] {
+  return (
+    row.dependencyEdges ??
+    row.dependencies.map((dep) => ({ ...dep, resolvedInstallId: null, resolutionReason: null }))
+  );
+}
+
+/**
+ * Resolve ONE edge's target row for closure evaluation — the single
+ * resolution seam every gate keys on (cinatra#1040 S2):
+ *
+ *  1. A PERSISTED resolution (`resolvedInstallId`) present in the snapshot
+ *     wins — the gate then VALIDATES that exact row (status + version), which
+ *     is what makes side-by-side versions addressable per-dependent.
+ *  2. Otherwise (unresolved edge, resolved row deleted since — the FK sets the
+ *     column NULL — or a fixture without persisted edges): the scoped
+ *     name-lookup over the DECLARING row's own scope (own-org live row first,
+ *     then platform; a platform dependent binds only platform rows). This
+ *     fallback preserves the pre-S2 healing behavior: a dependency installed
+ *     AFTER its dependent satisfies the edge without a re-resolution pass.
+ *
+ * NOTE (intentional semantic correction, ratified with the S2 design): the
+ * fallback is scoped to the DECLARING row, not the traversal ROOT. Before S2
+ * the transitive walk reused the root's lookup, so an org-rooted walk could
+ * satisfy a PLATFORM intermediate's edge from the root org's row —
+ * cross-scope bleed the update gate already refused. Backfilled/persisted
+ * edges resolve per-declaring-row, and the fallback follows the same rule.
+ */
+function resolveEdgeTarget(
+  edge: ResolvedDependencyEdge,
+  dependent: InstalledExtension,
+  rootLookup: ManifestLookup,
+  snapshot?: readonly InstalledExtension[],
+): InstalledExtension | undefined {
+  if (snapshot) {
+    if (edge.resolvedInstallId != null) {
+      const pinned = snapshot.find((r) => r.id === edge.resolvedInstallId);
+      if (pinned) return pinned;
+    }
+    return makeScopedManifestLookup(snapshot, dependent.organizationId)(edge.packageName);
+  }
+  // No snapshot (legacy engine-unit call shape): the root-scoped lookup is all
+  // we have — unchanged pre-S2 behavior.
+  return rootLookup(edge.packageName);
+}
+
+/**
  * Scope-aware manifest lookup over a full snapshot: a dependent at org scope
  * X resolves a dependency from X's own live (active|locked) row first, then
  * from the platform-scoped row (organizationId null). A live row in a
@@ -138,17 +196,29 @@ export type ManifestLookup = (packageName: string) => InstalledExtension | undef
  * platform-scoped rows.
  */
 export function makeScopedManifestLookup(
-  rows: InstalledExtension[],
+  rows: readonly InstalledExtension[],
   organizationId: string | null,
 ): ManifestLookup {
+  // Within a scope the DEFAULT version wins, deterministic id tie-break
+  // (cinatra#1040 S2) — the same preference the write-time resolver and the
+  // core__0025 backfill apply, so an unresolved edge's name-fallback can never
+  // bind an arbitrary non-default sibling version. A fixture row without
+  // `isDefault` counts as default (DB reads always carry the boolean).
+  const pickInScope = (live: InstalledExtension[], scopeOrg: string | null) =>
+    live
+      .filter((r) => (scopeOrg === null ? r.organizationId == null : r.organizationId === scopeOrg))
+      .sort(
+        (a, b) =>
+          (a.isDefault === false ? 1 : 0) - (b.isDefault === false ? 1 : 0) ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )[0];
   return (name) => {
     const live = rows.filter(
       (r) => r.packageName === name && PRESENT_STATUSES.has(r.status),
     );
     return (
-      (organizationId != null
-        ? live.find((r) => r.organizationId === organizationId)
-        : undefined) ?? live.find((r) => r.organizationId == null)
+      (organizationId != null ? pickInScope(live, organizationId) : undefined) ??
+      pickInScope(live, null)
     );
   };
 }
@@ -157,26 +227,37 @@ export function makeScopedManifestLookup(
  * Compute the transitive dependency closure of a root extension over the
  * provided manifest snapshot. Cycles are handled (visited set). The lookup
  * returns the canonical row for a package name, or undefined if not installed.
+ *
+ * When `snapshot` is provided (every production gate passes it — cinatra#1040
+ * S2), each edge is resolved through the persisted-resolution seam
+ * (`resolveEdgeTarget`): a pinned `resolvedInstallId` is VALIDATED directly;
+ * an unresolved edge falls back to the DECLARING row's scoped name-lookup.
+ * Without a snapshot (engine unit fixtures) the root lookup is reused —
+ * unchanged pre-S2 behavior.
  */
 export function computeClosure(
   root: InstalledExtension,
   lookup: ManifestLookup,
+  snapshot?: readonly InstalledExtension[],
 ): ClosureResult {
-  const visited = new Set<string>();
+  const visitedNames = new Set<string>();
+  // Traversal identity is the ROW (id when available): with side-by-side
+  // versions two rows of one package can be reached via different resolved
+  // edges, and each row's own edges must be walked.
+  const visitedRows = new Set<string>();
   const missingRequired: ClosureNode[] = [];
   const missingOptional: ClosureNode[] = [];
   const missingPeer: ClosureNode[] = [];
   const rangeViolations: RangeViolation[] = [];
 
-  const stack: { from: string; deps: ExtensionDependency[] }[] = [
-    { from: root.packageName, deps: root.dependencies },
-  ];
-  visited.add(root.packageName);
+  const stack: InstalledExtension[] = [root];
+  visitedNames.add(root.packageName);
+  visitedRows.add(root.id ?? root.packageName);
 
   while (stack.length > 0) {
-    const { from, deps } = stack.pop()!;
-    for (const dep of deps) {
-      const installed = lookup(dep.packageName);
+    const dependent = stack.pop()!;
+    for (const dep of edgesOf(dependent)) {
+      const installed = resolveEdgeTarget(dep, dependent, lookup, snapshot);
       const present = installed && PRESENT_STATUSES.has(installed.status);
 
       if (!present) {
@@ -205,16 +286,18 @@ export function computeClosure(
         if (violated !== null) {
           rangeViolations.push({
             packageName: dep.packageName,
-            via: from,
+            via: dependent.packageName,
             installedVersion: installedVersionOfRow(installed!) ?? "(unknown)",
             constraint: violated,
           });
         }
       }
 
-      if (!visited.has(dep.packageName)) {
-        visited.add(dep.packageName);
-        stack.push({ from: dep.packageName, deps: installed!.dependencies });
+      const rowKey = installed!.id ?? installed!.packageName;
+      if (!visitedRows.has(rowKey)) {
+        visitedRows.add(rowKey);
+        visitedNames.add(installed!.packageName);
+        stack.push(installed!);
       }
     }
   }
@@ -225,7 +308,7 @@ export function computeClosure(
     missingOptional,
     missingPeer,
     rangeViolations,
-    visited: [...visited],
+    visited: [...visitedNames],
   };
 }
 
@@ -304,8 +387,9 @@ export type ExecutionClosureVerdict = {
 export function evaluateExecutionClosure(
   target: InstalledExtension,
   lookup: ManifestLookup,
+  snapshot?: readonly InstalledExtension[],
 ): ExecutionClosureVerdict {
-  const result = computeClosure(target, lookup);
+  const result = computeClosure(target, lookup, snapshot);
   // PEER edges ride the per-kind ACTIVATION-TIME behaviors (#180): a missing
   // peer is never install/boot/restore-blocking (computeClosure buckets it
   // out of missingRequired), but at the execution/instantiate surfaces it is
@@ -358,7 +442,7 @@ export function findBrokenClosures(
   const broken: { packageName: string; missingRequired: string[]; rangeViolations: string[] }[] = [];
   for (const row of rows) {
     if (!PRESENT_STATUSES.has(row.status)) continue;
-    const result = computeClosure(row, makeScopedManifestLookup(rows, row.organizationId));
+    const result = computeClosure(row, makeScopedManifestLookup(rows, row.organizationId), rows);
     if (result.missingRequired.length > 0 || result.rangeViolations.length > 0) {
       broken.push({
         packageName: row.packageName,
@@ -443,15 +527,20 @@ export function assertUpdateDoesNotBreakDependents(
   for (const row of allRows) {
     if (row.packageName === packageName) continue;
     if (!PRESENT_STATUSES.has(row.status)) continue;
-    // A dependent binds IFF its OWN scoped lookup resolves THE row being
-    // updated (row identity, not just name): an org-scoped dependent falling
-    // back to the platform row blocks a platform update; a platform dependent
-    // resolving the platform row never blocks an ORG-scoped update.
-    const resolved = makeScopedManifestLookup(allRows, row.organizationId)(packageName);
-    if (!resolved || !targetIds.has(resolved.id)) continue;
-    for (const dep of row.dependencies) {
+    for (const dep of edgesOf(row)) {
       if (dep.packageName !== packageName) continue;
       if (!isInstallBlockingEdge(dep)) continue;
+      // A dependent binds IFF its edge resolves THE row being updated (row
+      // identity, not just name — cinatra#1040 S2): a PERSISTED resolution
+      // pins the exact row; an unresolved edge falls back to the dependent's
+      // own scoped lookup (an org-scoped dependent falling back to the
+      // platform row blocks a platform update; a platform dependent resolving
+      // the platform row never blocks an ORG-scoped update).
+      const resolved =
+        dep.resolvedInstallId != null
+          ? allRows.find((r) => r.id === dep.resolvedInstallId)
+          : makeScopedManifestLookup(allRows, row.organizationId)(packageName);
+      if (!resolved || !targetIds.has(resolved.id)) continue;
       const violated = edgeVersionViolation(dep, newVersion);
       if (violated !== null) violations.push({ dependent: row.packageName, constraint: violated });
     }
@@ -525,8 +614,9 @@ export function orderPackagesByDependencyFirst(
 export function assertInstallClosure(
   candidate: InstalledExtension,
   lookup: ManifestLookup,
+  snapshot?: readonly InstalledExtension[],
 ): ClosureResult {
-  const result = computeClosure(candidate, lookup);
+  const result = computeClosure(candidate, lookup, snapshot);
   // VERSION AWARENESS (#180 item 6): a restore whose install-blocking deps
   // are present at VIOLATING versions is as broken as one with missing deps.
   if (result.ok && result.rangeViolations.length > 0) {
@@ -579,8 +669,18 @@ export function listArchiveClosureBlockers(
     // whose edge the current version already violates would let the archive
     // orphan it further). A version-violating dependent therefore still
     // blocks; the violation itself is surfaced by the boot/forward gates.
-    const requiresTarget = row.dependencies.some(
-      (d) => d.packageName === target.packageName && isInstallBlockingEdge(d),
+    //
+    // RESOLVED-EDGE NARROWING (cinatra#1040 S2): an edge that PERSISTED a
+    // resolution binds the EXACT row it resolved to — it blocks archiving
+    // only THAT row, so a sibling version with zero resolved dependents can
+    // be archived/orphaned for GC (the epic's acceptance). An UNRESOLVED
+    // edge keeps the conservative package-name block (over-block, never
+    // under-block). In the single-version world both arms name the same row.
+    const requiresTarget = edgesOf(row).some(
+      (d) =>
+        d.packageName === target.packageName &&
+        isInstallBlockingEdge(d) &&
+        (d.resolvedInstallId != null ? d.resolvedInstallId === target.id : true),
     );
     if (requiresTarget) blockingDependents.push(row.packageName);
   }
@@ -588,9 +688,35 @@ export function listArchiveClosureBlockers(
 }
 
 /**
+ * PACKAGE-LEVEL archive/uninstall blocker list (cinatra#1040 S2): the union of
+ * `listArchiveClosureBlockers` over EVERY row of the package. The dispatcher
+ * and removal gates operate on a package NAME (the exact actor-scoped row is
+ * resolved only AFTER the gate), so they must consider every row the archive
+ * could touch — picking one arbitrary row and applying the resolved-edge
+ * narrowing there would let a dependent pinned to a SIBLING row slip through.
+ * Because a persisted resolution always points at a row of the declared
+ * package, this union is exactly the pre-S2 name-based conservative set; the
+ * per-ROW narrowing in `listArchiveClosureBlockers` becomes operative for
+ * row-scoped callers (version GC, a later slice).
+ */
+export function listArchiveClosureBlockersForPackage(
+  packageName: string,
+  allRows: InstalledExtension[],
+): string[] {
+  const names = new Set<string>();
+  for (const target of allRows) {
+    if (target.packageName !== packageName) continue;
+    for (const n of listArchiveClosureBlockers(target, allRows)) names.add(n);
+  }
+  return [...names];
+}
+
+/**
  * Archive/uninstall closure gate: refuse when archiving the target would break
  * a REQUIRED edge from a still-active dependent. `allRows` is the full
- * manifest snapshot; `target` is the package about to be archived/uninstalled.
+ * manifest snapshot; `target` is the EXACT row about to be archived/uninstalled
+ * (resolved-edge narrowing applies — see listArchiveClosureBlockers). A caller
+ * that only knows the package NAME must use the ForPackage variant below.
  */
 export function assertArchiveDoesNotBreakClosure(
   target: InstalledExtension,
@@ -601,6 +727,25 @@ export function assertArchiveDoesNotBreakClosure(
     throw new DependencyClosureError(
       "ARCHIVE_BREAKS_CLOSURE",
       `Cannot archive/uninstall ${target.packageName} — required by active dependents: ${blockingDependents.join(", ")}. Archive or detach them first.`,
+      blockingDependents,
+    );
+  }
+}
+
+/**
+ * PACKAGE-LEVEL twin of `assertArchiveDoesNotBreakClosure` for the dispatcher /
+ * removal gates, which archive by package name (every row the archive could
+ * touch is gated — see listArchiveClosureBlockersForPackage).
+ */
+export function assertArchivePackageDoesNotBreakClosure(
+  packageName: string,
+  allRows: InstalledExtension[],
+): void {
+  const blockingDependents = listArchiveClosureBlockersForPackage(packageName, allRows);
+  if (blockingDependents.length > 0) {
+    throw new DependencyClosureError(
+      "ARCHIVE_BREAKS_CLOSURE",
+      `Cannot archive/uninstall ${packageName} — required by active dependents: ${blockingDependents.join(", ")}. Archive or detach them first.`,
       blockingDependents,
     );
   }
@@ -638,7 +783,11 @@ export function assertForwardInstallClosureForPackage(
         (r.organizationId ?? null) === (opts.organizationId ?? null)),
   );
   for (const target of targets) {
-    const result = computeClosure(target, makeScopedManifestLookup(allRows, target.organizationId));
+    const result = computeClosure(
+      target,
+      makeScopedManifestLookup(allRows, target.organizationId),
+      allRows,
+    );
     // VERSION AWARENESS (#180 item 6): present-but-violating install-blocking
     // deps refuse the fresh install exactly like missing ones.
     if (result.rangeViolations.length > 0) {
