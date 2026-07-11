@@ -47,10 +47,29 @@ import "server-only";
 // Every check fails CLOSED (null/refuse), and a runtime-arm lookup error never
 // disturbs the build-time arm (mirrors the widget-auth-provider posture).
 //
-// NO MODULE LOADING in this slice: a runtime entry's `load()` fails loudly —
-// the verified runtime `widget-chat-tool` loader is a later slice. The relay
-// stream route never calls `load()` (it is a relay, not an LLM), so runtime
-// relay widgets are servable while runtime host-side tools stay fenced.
+// GATED RUNTIME MODULE LOADING (widget-stream runtime trust, slice 3 — the
+// loader slice). `buildWidgetChatTool`, for a runtime grant, loads the approved
+// connector's `widget-chat-tool` module from its integrity-verified, anchor-
+// pinned store dir — but ONLY after the point-of-use re-assert (pinned grant
+// still approved at the same hash + rowVersion + ownership + trust — the
+// revocation linearization) AND an integrity re-verification against the
+// TRUSTED install anchor at the PINNED anchorDigest performed IMMEDIATELY before
+// the module read (an anchor that moved to a new digest, or a store dir that no
+// longer hashes to the trusted content, refuses — no read, no factory call).
+// The load re-resolves the approved `moduleExportKey` against the CURRENT
+// materialized `package.json` exports and realpath-binds the resolved entry
+// INSIDE the verified store dir (link-escape refused), mirroring the runtime
+// package loader's `importModule`.
+//
+// The W3 HOT-INSTALL PROHIBITION holds for everything OUTSIDE an approved +
+// serve-time-verified + point-of-use-re-asserted grant: a runtime entry's own
+// `load()` is a fail-closed backstop that refuses outright (the ONLY runtime
+// load path is the gated `buildWidgetChatTool` above), the resolver still
+// operates purely on the already-materialized, anchor-pinned store (never a hot
+// install/activation), and a build-time entry is unchanged baked host trust.
+// The relay stream route never loads (it is a relay, not an LLM), so runtime
+// relay widgets serve via the relay path while a runtime host-side widget-chat-
+// tool loads only through this gate.
 
 import type { LlmFunctionTool } from "@cinatra-ai/llm";
 import {
@@ -63,10 +82,12 @@ import {
 } from "@/lib/extension-load-guard";
 import {
   listApprovedWidgetStreamMetadataGrants,
+  parseJsonRejectingDuplicateKeys,
   readWidgetStreamMetadataClaimsFromStore,
   readWidgetStreamMetadataGrant,
   resolveApprovedWidgetStreamMetadataGrant,
   resolveOwnershipOwner,
+  resolveSingleStringExport,
   type OwnershipGrantDeps,
   type WidgetStreamMetadataGrantClaim,
   type WidgetStreamMetadataGrantDeps,
@@ -112,6 +133,11 @@ export type ResolvedWidgetStreamGrant = {
   /** The canon's declared credential-store key — re-checked for the ownership
    * conjunction at every point of use. */
   tokenConfigKey: string;
+  /** The canon's `package.json` `exports` key for the widget-chat-tool module
+   * (bound by `bindingHashV2`, so the serve-time hash equality pins it). The
+   * gated loader (`buildWidgetChatTool`, runtime branch) re-resolves EXACTLY
+   * this key against the CURRENT materialized package.json at load. */
+  moduleExportKey: string;
 };
 
 /** A resolved widget-stream agent: the entry plus its pinned runtime grant
@@ -158,6 +184,24 @@ export type WidgetStreamRuntimeResolveDeps = {
   /** Re-read the CURRENT on-disk widget-stream claims (default: the slice-1
    * strict canonicalizing reader — any invalid entry means NO claims). */
   readClaimsFromStore?: (storeDir: string) => Promise<WidgetStreamMetadataGrantClaim[]>;
+  /** Import the runtime widget-chat-tool module from the integrity-verified
+   * store dir. Default order (security contract): re-verify integrity at the
+   * pinned digest FIRST (the last store-content gate), then — bound to that
+   * verified snapshot — strict-parse the materialized package.json, re-resolve
+   * `moduleExportKey`, realpath-bind INSIDE the store dir rejecting link-escape,
+   * and `file://`-import. Nothing read before the gate determines the import.
+   * Injected in tests; production loads the real module. Any failure throws
+   * (fail loud — never a silent skip). */
+  importRuntimeModule?: (args: {
+    storeDir: string;
+    moduleExportKey: string;
+    packageName: string;
+    agentSlug: string;
+    /** Re-hash the store dir vs the trusted anchor at the pinned digest,
+     * IMMEDIATELY before the module read (closes the resolve-time TOCTOU
+     * window). Returns false on any drift/miss → the importer refuses. */
+    reverifyPinnedIntegrity: () => Promise<boolean>;
+  }) => Promise<unknown>;
 };
 
 async function defaultResolveInstallAnchor(
@@ -202,6 +246,105 @@ async function defaultResolveVerifiedStoreDir(
   return { storeDir: record.storeDir, digest: anchor.digest };
 }
 
+/**
+ * Load the runtime widget-chat-tool module from an integrity-verified,
+ * anchor-pinned store dir. The integrity re-verify runs FIRST, and EVERY
+ * import-determining read is then bound to that verified snapshot — nothing
+ * captured before the gate is reused.
+ *
+ * Sequence (fail-loud on every branch — a silently skipped tool would be
+ * fail-open): (1) `reverifyPinnedIntegrity()` — the store dir's bytes re-hashed
+ * against the trusted anchor at the pinned digest, the LAST store-content gate;
+ * (2) on the now-verified store, re-read `<storeDir>/package.json` with the SAME
+ * duplicate-key-REJECTING parser the record-time approval gate used (a last-wins
+ * `JSON.parse` would accept a manifest shape — e.g. duplicate `exports` keys —
+ * the gate refuses) and re-resolve the approved `moduleExportKey` to a single
+ * plain contained string target; (3) realpath-bind the resolved entry INSIDE the
+ * store dir (link-escape refused), mirroring the runtime package loader, and
+ * `file://`-import it. Because the export target AND the realpaths are computed
+ * ONLY after the gate, a store dir swapped-and-restored during an earlier read
+ * can never leave a stale external path to import; the only residual window is
+ * the gate -> import read itself (the irreducible one the runtime loader carries).
+ */
+async function defaultImportRuntimeWidgetChatToolModule(args: {
+  storeDir: string;
+  moduleExportKey: string;
+  packageName: string;
+  agentSlug: string;
+  reverifyPinnedIntegrity: () => Promise<boolean>;
+}): Promise<unknown> {
+  const { storeDir, moduleExportKey, packageName, agentSlug, reverifyPinnedIntegrity } = args;
+  const { readFile, realpath } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
+  const { isContainedRealpath } = await import("@/lib/fs-safety");
+
+  // (1) FINAL integrity re-verify at the pinned digest FIRST — the LAST
+  // store-content gate. Every import-determining read below is bound to THIS
+  // verified snapshot; no path/target captured before the gate is reused.
+  if (!(await reverifyPinnedIntegrity())) {
+    throw new Error(
+      `[widget-stream:${agentSlug}] store integrity drifted between resolution and read for ` +
+        `${packageName} — refusing the runtime widget-chat-tool load (fail closed)`,
+    );
+  }
+
+  // (2) On the now-verified store: strict-parse package.json (duplicate-key-
+  // REJECTING, identical to the record-time gate) and re-resolve the approved
+  // export key to a single plain contained string target (conditional/patterned/
+  // missing mapping refused — never guessed).
+  let exportsField: unknown;
+  try {
+    const raw = await readFile(join(storeDir, "package.json"), "utf8");
+    const manifest = parseJsonRejectingDuplicateKeys(raw);
+    exportsField =
+      typeof manifest === "object" && manifest !== null
+        ? (manifest as { exports?: unknown }).exports
+        : undefined;
+  } catch (err) {
+    throw new Error(
+      `[widget-stream:${agentSlug}] cannot read/parse package.json for ${packageName} in the ` +
+        "verified store dir — refusing the runtime widget-chat-tool load (fail closed): " +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+  const target = resolveSingleStringExport(exportsField, moduleExportKey);
+  if (target === null) {
+    throw new Error(
+      `[widget-stream:${agentSlug}] moduleExportKey "${moduleExportKey}" no longer resolves in ` +
+        `${packageName} package.json exports to a single contained string target — refusing ` +
+        "the runtime widget-chat-tool load (fail closed)",
+    );
+  }
+
+  // (3) realpath-bind (mirrors runtime-package-loader.ts importModule) — the
+  // resolved entry must stay INSIDE the verified store dir even after following
+  // filesystem links. Computed AFTER the gate, so the imported path can never be
+  // one captured while the store was compromised.
+  const abs = join(storeDir, target);
+  let realAbs: string;
+  let realStore: string;
+  try {
+    [realAbs, realStore] = await Promise.all([realpath(abs), realpath(storeDir)]);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      throw new Error(
+        `[widget-stream:${agentSlug}] the widget-chat-tool entry "${target}" (or its store dir) ` +
+          `for ${packageName} is missing — the runtime store serves BUILT artifacts only; publish ` +
+          "a built ESM widget-chat-tool export and reinstall from the marketplace (fail closed)",
+      );
+    }
+    throw err;
+  }
+  if (!isContainedRealpath(realAbs, realStore)) {
+    throw new Error(
+      `[widget-stream:${agentSlug}] widget-chat-tool entry for ${packageName} resolves OUTSIDE its ` +
+        "verified store dir — refusing import (fail closed)",
+    );
+  }
+  return import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(realAbs).href);
+}
+
 type ResolvedRuntimeDeps = {
   metadataGrantDeps?: WidgetStreamMetadataGrantDeps;
   ownershipGrantDeps?: OwnershipGrantDeps;
@@ -212,6 +355,13 @@ type ResolvedRuntimeDeps = {
     anchor: InstallTrustAnchor,
   ) => Promise<VerifiedWidgetStreamStoreDir | null>;
   readClaimsFromStore: (storeDir: string) => Promise<WidgetStreamMetadataGrantClaim[]>;
+  importRuntimeModule: (args: {
+    storeDir: string;
+    moduleExportKey: string;
+    packageName: string;
+    agentSlug: string;
+    reverifyPinnedIntegrity: () => Promise<boolean>;
+  }) => Promise<unknown>;
 };
 
 function withRuntimeDefaults(deps?: WidgetStreamRuntimeResolveDeps): ResolvedRuntimeDeps {
@@ -222,20 +372,26 @@ function withRuntimeDefaults(deps?: WidgetStreamRuntimeResolveDeps): ResolvedRun
     resolveInstallAnchor: deps?.resolveInstallAnchor ?? defaultResolveInstallAnchor,
     resolveVerifiedStoreDir: deps?.resolveVerifiedStoreDir ?? defaultResolveVerifiedStoreDir,
     readClaimsFromStore: deps?.readClaimsFromStore ?? readWidgetStreamMetadataClaimsFromStore,
+    importRuntimeModule: deps?.importRuntimeModule ?? defaultImportRuntimeWidgetChatToolModule,
   };
 }
 
 /** Build the servable entry for a serve-time-verified runtime claim. The
- * entry's `load()` FAILS LOUDLY: the verified runtime widget-chat-tool loader
- * is a later slice, and silently skipping the tool would be fail-open. */
+ * entry's own `load()` is a FAIL-CLOSED BACKSTOP that refuses outright: a
+ * runtime widget-chat-tool module loads ONLY through the gated
+ * `buildWidgetChatTool` path (point-of-use re-assert + integrity re-verify at
+ * the pinned anchor digest immediately before the read), NEVER by a bare
+ * `entry.load()` that would bypass those gates — that is the W3 hot-install
+ * prohibition made structural (silently skipping the tool would be fail-open). */
 function runtimeEntryFromClaim(claim: WidgetStreamMetadataGrantClaim): WidgetStreamAgent {
   const canon = claim.canon;
   return {
     resolution: "guardedOptional",
     load: async () => {
       throw new Error(
-        `[widget-stream:${canon.agentSlug}] runtime widget-chat-tool module loading is not ` +
-          "available yet (the verified runtime loader is a later slice) — refusing (fail closed)",
+        `[widget-stream:${canon.agentSlug}] a runtime widget-chat-tool module must load through ` +
+          "the gated buildWidgetChatTool path (point-of-use re-assert + integrity re-verify at the " +
+          "pinned anchor digest) — a direct entry.load() is refused (fail closed)",
       );
     },
     packageName: canon.packageName,
@@ -298,11 +454,13 @@ async function resolveRuntimeWidgetStreamAgent(
     // never opt out of the fail-closed per-user-token 401.
     if (claim.canon.auth.requireUserToken !== true) return null;
 
-    // THIS SLICE ONLY: a relay-less runtime canon has NO servable surface —
-    // the host-LLM widget-tool path needs `load()`, which is fenced until the
-    // runtime loader slice. Refuse it here (opaque 404) rather than resolving
-    // an entry whose only reachable outcome is a descriptive public wiring
-    // error on the stream route. The loader slice lifts this refusal.
+    // A relay-less runtime canon is still refused here (opaque 404). The gated
+    // loader below makes the host-LLM widget-tool path VERIFIABLE, but it has no
+    // production caller yet: the stream route is relay-only and returns a
+    // descriptive error for a relay-less resolved agent. Lifting this refusal is
+    // therefore COUPLED to wiring the host-LLM serving surface (a separate
+    // serving-surface slice) — lifting it alone would resolve a relay-less canon
+    // straight into that descriptive public error. Lift + serve land together.
     if (claim.canon.relayAgentPackage === null) return null;
 
     // (iii) ownership conjunction: the grant package must BE the currently-
@@ -323,6 +481,7 @@ async function resolveRuntimeWidgetStreamAgent(
         anchorDigest: verified.digest,
         grantRowVersion: grant.rowVersion,
         tokenConfigKey: claim.canon.auth.tokenConfigKey,
+        moduleExportKey: claim.canon.moduleExportKey,
       },
     };
   } catch (err) {
@@ -418,14 +577,19 @@ export async function reassertWidgetStreamGrantBeforeOboRun(
  * LlmFunctionTool-shaped object (validated structurally here: the route gates
  * its `changes` SSE frame on this tool's `name`).
  *
- * POINT-OF-USE RE-ASSERT (runtime entries): BEFORE the module is loaded or the
- * factory invoked, the pinned grant is re-asserted live (approved + same hash
- * + same rowVersion + conjunction + trust) PLUS the store integrity is
- * re-verified against the trusted anchor at the PINNED anchorDigest (an anchor
- * that moved to a new digest mid-request refuses — the next request re-resolves
- * freshly). Any failure throws — no load, no factory call, no partial tool. A
- * revoked-but-still-module-cache-resident package can therefore never be
- * invoked. Build-time entries (`grant: null`) are unchanged baked trust.
+ * POINT-OF-USE RE-ASSERT + GATED LOAD (runtime entries): BEFORE the module is
+ * read or the factory invoked, the pinned grant is re-asserted live (approved +
+ * same hash + same rowVersion + conjunction + trust — the revocation
+ * linearization) PLUS the store integrity is re-verified against the trusted
+ * anchor at the PINNED anchorDigest (an anchor that moved to a new digest
+ * mid-request refuses — the next request re-resolves freshly). ONLY THEN is the
+ * runtime widget-chat-tool module read — from the store dir JUST verified, via
+ * the gated importer that re-resolves the approved `moduleExportKey` and
+ * realpath-binds the entry inside that dir (never the runtime entry's own
+ * fail-closed `load()` backstop). Any failure throws — no load, no factory
+ * call, no partial tool. A revoked-but-still-module-cache-resident package can
+ * therefore never be invoked. Build-time entries (`grant: null`) are unchanged
+ * baked trust (the manifest's literal dynamic import via `entry.load()`).
  */
 export async function buildWidgetChatTool(
   resolved: ResolvedWidgetStreamAgent,
@@ -433,16 +597,21 @@ export async function buildWidgetChatTool(
   deps?: WidgetStreamRuntimeResolveDeps,
 ): Promise<LlmFunctionTool> {
   const { agentSlug, entry, grant } = resolved;
+  let loaded: unknown;
   if (grant) {
     const runtimeDeps = withRuntimeDefaults(deps);
+    // (a) REVOCATION LINEARIZATION: the pinned grant must STILL be approved at
+    // the exact hash + rowVersion, the ownership conjunction still hold, and the
+    // package still classify trusted-signed + activated. A revocation observed
+    // here refuses — no NEW side effect (no load, no factory) starts after it.
     if (!(await isPinnedGrantStillAuthorized(grant, runtimeDeps))) {
       throw new Error(
         `[widget-stream:${agentSlug}] pre-factory grant re-assert failed — refusing to load ` +
           "or invoke the widget-chat-tool (fail closed)",
       );
     }
-    // Integrity-vs-anchor at the PINNED digest: re-resolve the trusted anchor,
-    // require it to still bind the SAME digest, and re-verify the store bytes.
+    // (b) the trusted anchor must still bind the SAME pinned digest (an anchor
+    // that moved to a new digest mid-request refuses).
     const anchor = await runtimeDeps.resolveInstallAnchor(grant.packageName).catch(() => null);
     if (!anchor || anchor.digest !== grant.anchorDigest) {
       throw new Error(
@@ -450,6 +619,9 @@ export async function buildWidgetChatTool(
           "digest moved) — refusing to load or invoke the widget-chat-tool (fail closed)",
       );
     }
+    // (c) INTEGRITY RE-VERIFY the store bytes against the trusted anchor at the
+    // PINNED digest — IMMEDIATELY before the module read below, with no
+    // observation gap. Byte drift (a re-materialized store) fails here.
     const verified = await runtimeDeps
       .resolveVerifiedStoreDir(grant.packageName, anchor)
       .catch(() => null);
@@ -459,8 +631,31 @@ export async function buildWidgetChatTool(
           "to load or invoke the widget-chat-tool (fail closed)",
       );
     }
+    // (d) GATED MODULE READ. The importer re-verifies integrity at the pinned
+    // digest via `reverifyPinnedIntegrity` FIRST, then binds every
+    // import-determining read (package.json, export target, realpath) to that
+    // verified snapshot — so no path/target captured while the store was
+    // compromised is ever reused (a swapped-and-restored store dir cannot leave a
+    // stale external path to import). A runtime widget-chat-tool loads ONLY here —
+    // the runtime entry's own entry.load() is a fail-closed backstop that is
+    // never taken (the W3 hot-install prohibition holds outside this gate).
+    loaded = await runtimeDeps.importRuntimeModule({
+      storeDir: verified.storeDir,
+      moduleExportKey: grant.moduleExportKey,
+      packageName: grant.packageName,
+      agentSlug,
+      reverifyPinnedIntegrity: async () => {
+        const rv = await runtimeDeps
+          .resolveVerifiedStoreDir(grant.packageName, anchor)
+          .catch(() => null);
+        return !!rv && rv.digest === grant.anchorDigest && rv.storeDir === verified.storeDir;
+      },
+    });
+  } else {
+    // Build-time entry (`grant: null`): unchanged baked host trust — the
+    // manifest's literal dynamic import, no point-of-use grant to re-assert.
+    loaded = await entry.load();
   }
-  const loaded = await entry.load();
   if (isDegradedExtensionLoad(loaded)) {
     // cinatra#7: an absent optional widget-chat-tool module throws the
     // TYPED absent error — the stream route catches it and responds with a
