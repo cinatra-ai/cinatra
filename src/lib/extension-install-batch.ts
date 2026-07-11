@@ -68,6 +68,18 @@ export type BatchInstallResult = {
    * (which keeps the hard refusal).
    */
   updated: { packageName: string; version: string }[];
+  /**
+   * Shared dependencies THIS call installed SIDE BY SIDE as non-default
+   * version rows (cinatra#1040 S3 `action:"install-side-by-side"` members —
+   * the disjoint-dependents class on the non-gatekept path). STORAGE-LEVEL
+   * installs: resolved edges bind the new dependents, but versioned RUNTIME
+   * activation is deferred to the S4 loader slice — until then the DEFAULT
+   * version keeps serving every runtime surface. `evidence` names the live
+   * dependents whose constraints forced the split. Rolled back (version-
+   * scoped teardown) if a later member fails. Always empty on the gatekept
+   * path (hard refusal preserved).
+   */
+  installedSideBySide: { packageName: string; version: string; evidence?: string }[];
   /** Closure members that were already present at the pin and were skipped. */
   alreadyInstalled: string[];
   batchId: string | null; // null = root-only fast path (no ledger row)
@@ -156,6 +168,37 @@ export type InstallBatchSagaDeps = {
   updateMemberPackage: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
   /** Uninstall ONE package through the real dispatcher (compensation inverse). */
   uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  /**
+   * Install ONE shared dependency SIDE BY SIDE as a non-default version row
+   * (cinatra#1040 S3 `action:"install-side-by-side"` member) — the storage-
+   * level installer (real pipeline, row-bound, version-scoped journal, NO
+   * runtime activation until S4). Distinct from `installMember`: the package's
+   * DEFAULT row stays installed and untouched.
+   */
+  installMemberSideBySide: (
+    member: { typeId: string; packageName: string; version: string; scopeOrgId: string | null },
+    actor: Actor,
+  ) => Promise<void>;
+  /**
+   * The VERSION-SCOPED compensation inverse for a side-by-side member: tears
+   * down ONLY the non-default (package, org, version) row + its version-scoped
+   * journal op. NEVER the package-scoped uninstall (which would remove the
+   * default install).
+   */
+  uninstallSideBySideMember: (
+    member: { typeId: string; packageName: string; version: string; scopeOrgId: string | null },
+    actor: Actor,
+  ) => Promise<void>;
+  /**
+   * Version-scoped journal read (cinatra#1040 S3) — the ledger linkage for a
+   * side-by-side member's op (the versionless `readInstallOp` would observe
+   * the DEFAULT install's anchor).
+   */
+  readInstallOpForVersion: (
+    packageName: string,
+    orgId: string | null,
+    version: string,
+  ) => Promise<{ installOpId: string; phase: string } | null>;
   /**
    * Fire the SINGLE WayFlow agent-runtime reload at the batch SUCCESS boundary
    * (#157). The agent handler no longer reloads per-member (it installs
@@ -311,6 +354,35 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
       );
+    },
+    installMemberSideBySide: async (member, actor) => {
+      const { installExtensionVersionSideBySide } = await import(
+        "@/lib/extension-side-by-side-install"
+      );
+      await installExtensionVersionSideBySide({
+        packageName: member.packageName,
+        version: member.version,
+        typeId: member.typeId,
+        // The RESOLVED conflict scope (codex round-1): an org request that
+        // fell back to the platform default installs the side-by-side row at
+        // the PLATFORM scope, next to that default.
+        orgId: member.scopeOrgId,
+        actorUserId: actor.userId ?? null,
+      });
+    },
+    uninstallSideBySideMember: async (member) => {
+      const { uninstallExtensionVersionSideBySide } = await import(
+        "@/lib/extension-side-by-side-install"
+      );
+      await uninstallExtensionVersionSideBySide({
+        packageName: member.packageName,
+        version: member.version,
+        orgId: member.scopeOrgId,
+      });
+    },
+    readInstallOpForVersion: async (pkg, oid, version) => {
+      const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
+      return readInstallOpForVersion(pkg, oid, version);
     },
     readLiveRowVersion: async (packageName, orgId) => {
       const { readInstalledExtensionsByPackageName } = await import(
@@ -486,6 +558,14 @@ export async function installExtensionWithDependencies(
           typeId: m.typeId,
           status: m.alreadyInstalled ? "already-installed" : "planned",
           action: m.action,
+          // The RESOLVED side-by-side scope rides the ledger so compensation
+          // and the boot sweeper address the same scope (codex round-1).
+          ...(m.action === "install-side-by-side"
+            ? // NULL is a meaningful (platform) scope — only an ABSENT value
+              // falls back to the request org (?? would swallow the platform
+              // fallback).
+              { scopeOrgId: m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId }
+            : {}),
           preState: {
             present: row.present,
             ...(row.version ? { version: row.version } : {}),
@@ -534,6 +614,9 @@ export async function installExtensionWithDependencies(
         // An in-place root update is surfaced under `updated`, mirroring the
         // committed dedupe-upward result partition on the batched path.
         updated: rootIsUpdate ? [rootEntry] : [],
+        // The ROOT is never a side-by-side member (root conflicts are the
+        // caller-chosen install/update flow).
+        installedSideBySide: [],
         alreadyInstalled,
         batchId: null,
       };
@@ -556,8 +639,11 @@ export async function installExtensionWithDependencies(
       packageName: string;
       version: string;
       typeId: string;
-      action: "install" | "update";
+      action: "install" | "update" | "install-side-by-side";
+      sideBySideScopeOrgId?: string | null;
     }[] = [];
+    const sideBySideScopeOf = (m: { sideBySideScopeOrgId?: string | null }): string | null =>
+      m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId;
     for (const member of toInstall) {
       try {
         // P2-5 GRANT TTL: refresh near expiry; refusal/unavailability aborts.
@@ -616,17 +702,36 @@ export async function installExtensionWithDependencies(
         // (`preState.present`), the newly-installed-only compensation loop below
         // and the boot sweeper both skip it, so a later member's failure leaves
         // it at the new (provably non-breaking) version.
+        // cinatra#1040 S3: an `install-side-by-side` member routes through the
+        // version-scoped storage installer — NEVER the package-scoped install
+        // (which would resolve/short-circuit against the DEFAULT row) and never
+        // an upgraded/derived action: only the PLANNER emits this action, on
+        // the non-gatekept path exclusively.
         await deps.withSagaOwnedFanout(input.packageName, () =>
           member.action === "update"
             ? deps.updateMemberPackage(member, input.actor)
-            : deps.installMember(member, input.actor),
+            : member.action === "install-side-by-side"
+              ? deps.installMemberSideBySide(
+                  { ...member, scopeOrgId: sideBySideScopeOf(member) },
+                  input.actor,
+                )
+              : deps.installMember(member, input.actor),
         );
         // Track the durable install/update IMMEDIATELY — before the ledger write —
         // so a ledger failure right after a successful member op still routes it
         // correctly (an install compensates; a committed update is skipped by the
         // pre-existing-member guard in compensation).
         installedThisBatch.push(member);
-        const op = await deps.readInstallOp(member.packageName, orgId).catch(() => null);
+        const op =
+          member.action === "install-side-by-side"
+            ? await deps
+                .readInstallOpForVersion(
+                  member.packageName,
+                  sideBySideScopeOf(member),
+                  member.version,
+                )
+                .catch(() => null)
+            : await deps.readInstallOp(member.packageName, orgId).catch(() => null);
         await deps.ledger.updateMember(batch.batchId, member.packageName, {
           status: "installed",
           ...(op ? { installOpId: op.installOpId } : {}),
@@ -666,6 +771,14 @@ export async function installExtensionWithDependencies(
       updated: installedThisBatch
         .filter((m) => m.action === "update")
         .map(({ packageName, version }) => ({ packageName, version })),
+      installedSideBySide: installedThisBatch
+        .filter((m) => m.action === "install-side-by-side")
+        .map(({ packageName, version }) => {
+          const evidence = planned.plan.ordered.find(
+            (pm) => pm.packageName === packageName,
+          )?.sideBySideEvidence?.detail;
+          return { packageName, version, ...(evidence ? { evidence } : {}) };
+        }),
       alreadyInstalled,
       batchId: batch.batchId,
     };
@@ -683,11 +796,22 @@ export async function installExtensionWithDependencies(
       const compensated: string[] = [];
       const failures: string[] = [];
       // NEWLY-INSTALLED members only (pre-state absent), INVERSE install order.
+      // A SIDE-BY-SIDE member (cinatra#1040 S3) is newly installed even though
+      // its package-scoped preState.present is TRUE (the default row exists) —
+      // it compensates through the VERSION-SCOPED teardown, which can never
+      // touch the default install.
       for (const m of [...installedThisBatch].reverse()) {
         const ledgerMember = batch!.members.find((x) => x.packageName === m.packageName);
-        if (ledgerMember?.preState.present) continue; // never remove a pre-existing install
+        if (m.action !== "install-side-by-side" && ledgerMember?.preState.present) continue; // never remove a pre-existing install
         try {
-          await deps.uninstallMember(m, input.actor);
+          if (m.action === "install-side-by-side") {
+            await deps.uninstallSideBySideMember(
+              { ...m, scopeOrgId: sideBySideScopeOf(m) },
+              input.actor,
+            );
+          } else {
+            await deps.uninstallMember(m, input.actor);
+          }
           await deps.ledger.updateMember(batch!.batchId, m.packageName, { status: "compensated" });
           compensated.push(m.packageName);
         } catch (err) {
@@ -796,6 +920,13 @@ export async function sweepStaleInstallBatches(
       patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
     ) => Promise<InstallBatch>;
     uninstallMember?: (member: { typeId: string; packageName: string; version: string }) => Promise<void>;
+    /** Version-scoped teardown for `install-side-by-side` members (cinatra#1040 S3). */
+    uninstallSideBySideMember?: (member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      orgId: string | null;
+    }) => Promise<void>;
   },
   batchOpsDeps?: InstallBatchOpsDeps,
 ): Promise<{ swept: number }> {
@@ -824,21 +955,49 @@ export async function sweepStaleInstallBatches(
         sweeperActor,
       );
     });
+  const uninstallSideBySideMember =
+    depsOverride?.uninstallSideBySideMember ??
+    (async (member: { typeId: string; packageName: string; version: string; orgId: string | null }) => {
+      const { uninstallExtensionVersionSideBySide } = await import(
+        "@/lib/extension-side-by-side-install"
+      );
+      await uninstallExtensionVersionSideBySide({
+        packageName: member.packageName,
+        version: member.version,
+        orgId: member.orgId,
+      });
+    });
 
   const stale = await listStale(olderThanMs);
   let swept = 0;
   for (const batch of stale) {
     // Inverse install order = reverse ledger order (the ledger is topo-ordered).
+    // A side-by-side member (cinatra#1040 S3) is a stale NEWLY-CREATED version
+    // row even though its package-scoped preState.present is TRUE — it sweeps
+    // through the VERSION-SCOPED teardown (never the package uninstall, which
+    // would remove the default install).
     const candidates = [...batch.members]
       .reverse()
       .filter(
         (m) =>
-          !m.preState.present && (m.status === "installed" || m.status === "installing"),
+          (m.status === "installed" || m.status === "installing") &&
+          (!m.preState.present || m.action === "install-side-by-side"),
       );
     let failures = 0;
     for (const m of candidates) {
       try {
-        await uninstallMember({ typeId: m.typeId, packageName: m.packageName, version: m.version });
+        if (m.action === "install-side-by-side") {
+          await uninstallSideBySideMember({
+            typeId: m.typeId,
+            packageName: m.packageName,
+            version: m.version,
+            // The RESOLVED scope from the ledger (codex round-1); legacy rows
+            // without it fall back to the batch's org.
+            orgId: m.scopeOrgId === undefined ? (batch.orgId ?? null) : m.scopeOrgId,
+          });
+        } else {
+          await uninstallMember({ typeId: m.typeId, packageName: m.packageName, version: m.version });
+        }
         await updateMember(batch.batchId, m.packageName, { status: "compensated" });
       } catch (err) {
         failures += 1;

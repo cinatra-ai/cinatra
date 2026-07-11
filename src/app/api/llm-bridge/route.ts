@@ -13,6 +13,7 @@ import {
   createLocalSkillShellTool,
   openAiModelSupportsShell,
   buildLlmMcpServerToolForAgentRun,
+  buildLlmMcpServerTool,
   getLlmMcpCredentials,
   PreferredProviderUnavailableError,
   type LlmTool,
@@ -27,6 +28,7 @@ import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
   readAgentRunByContextId,
   readAgentRunById,
+  readAgentRunTokenHashById,
   readAgentTemplateById,
   OasCinatraLlmSchema,
   type LlmProvider,
@@ -49,6 +51,10 @@ import { parseUserEnvelope, UserEnvelopeParseError } from "./user-envelope";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
 import { setRunContext, clearRunContext } from "@/lib/agent-run-context-registry";
+import {
+  writeDurableRunContextBinding,
+  clearDurableRunContextBindings,
+} from "@/lib/agent-run-context-durable";
 import { issueAgentRunMcpActorToken } from "@/lib/agent-run-mcp-actor-token";
 import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
 import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
@@ -852,6 +858,10 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   let registryClientId: string | undefined;
+  // #1195 — redis keys of the durable run-context bindings THIS request wrote
+  // (one per machine-token mint inside cinatraMcpToolOverride below). Keys are
+  // per-invocation-unique, so the finally-clear can plain-DEL exactly these.
+  const durableBindingKeys: string[] = [];
   if (effectiveRunId) {
     try {
       let registryKey: string | undefined;
@@ -995,17 +1005,82 @@ export async function POST(req: Request): Promise<Response> {
       // bridge has resolved a real agent_run row with both an `orgId`
       // and a `runBy`. The resolver does a LIVE platform-role +
       // membership check at mint time — a demoted user gets `null` and
-      // the orchestration layer falls back to the legacy machine
-      // `client_credentials` Bearer (same behavior as pre-fix, will
+      // the override falls back to the machine `client_credentials`
+      // Bearer it now mints itself (same authz outcome as pre-fix, will
       // fail at `enforceMcpBoundary` with `not_org_member`, never an
       // elevation).
+      //
+      // The provider gate keys on the provider the task actually RUNS on
+      // (#1195 codex round-1): a `cinatra_llm` dispatch overrides the
+      // configured runtime, and the orchestration attaches MCP tools for
+      // THAT provider. Gating on the configured provider would silently
+      // skip the OBO + durable-binding path whenever dispatch diverges
+      // (configured gemini, dispatched openai), leaving that run's machine
+      // token unbound on the alias-prone process-local registry.
+      const mcpEffectiveProvider =
+        dispatch.kind === "dispatch"
+          ? dispatch.effectiveProvider
+          : resolvedRuntime.provider;
       const cinatraMcpToolOverride =
         runForPorts?.orgId &&
         runForPorts?.runBy &&
         runForPorts?.id &&
-        (resolvedRuntime.provider === "openai" ||
-          resolvedRuntime.provider === "anthropic")
+        (mcpEffectiveProvider === "openai" ||
+          mcpEffectiveProvider === "anthropic")
           ? async () => {
+              // #1195 durable run-context binding — the machine-token fallback,
+              // minted HERE (byte-identical to the orchestration-layer fallback
+              // in packages/llm/src/registry.ts resolveCinatraMcpTool) so the
+              // bridge can read the exact per-mint access token back off the
+              // tool and key the durable binding to it. Every token-endpoint
+              // mint carries a random `jti`, so the key is unique per mint:
+              // concurrent runs can never alias each other's binding, and the
+              // finally-clear's plain DEL can never delete another request's.
+              // The binding value is the run's dispatch-minted credential HASH
+              // (never a raw run id): the MCP reader resolves it back through
+              // readAgentRunByTokenHash, keeping the run ROW the source of
+              // truth. Legacy runs without a credential hash write nothing and
+              // stay on the in-process registry (the measured transition
+              // fallback). Redis failure ⇒ no binding, same registry fallback:
+              // availability is never worse than today.
+              const buildMachineToolWithDurableBinding = async () => {
+                // Byte-equivalence with the orchestration fallback this
+                // replaces requires the EFFECTIVE provider (the gate above
+                // already keys on it): registry.ts would have minted the
+                // machine token for the OAuth client of the provider the
+                // task actually runs on.
+                const machineTool = await buildLlmMcpServerTool(
+                  mcpEffectiveProvider,
+                );
+                if (!machineTool) return null;
+                try {
+                  const authorization = machineTool.headers?.Authorization;
+                  const bearer =
+                    typeof authorization === "string" &&
+                    authorization.startsWith("Bearer ")
+                      ? authorization.slice("Bearer ".length)
+                      : undefined;
+                  if (bearer) {
+                    const runTokenHash = await readAgentRunTokenHashById(
+                      runForPorts.id,
+                    );
+                    if (runTokenHash) {
+                      const key = await writeDurableRunContextBinding(bearer, {
+                        tokenHash: runTokenHash,
+                        // Untrusted provenance for tagging only — mirrors the
+                        // legacy registry payload; never an authz input.
+                        agentId: body.agent_id,
+                        packageVersion: body.package_version,
+                        agentSpecVersion: body.agent_spec_version,
+                      });
+                      if (key) durableBindingKeys.push(key);
+                    }
+                  }
+                } catch {
+                  // best-effort — binding absent ⇒ registry fallback covers.
+                }
+                return machineTool;
+              };
               const actor = await resolveAgentRunMcpActor({
                 runId: runForPorts.id,
                 runBy: runForPorts.runBy!,
@@ -1018,7 +1093,7 @@ export async function POST(req: Request): Promise<Response> {
                 // and the end-user's rights gate the write (with #409).
                 sourceType: runForPorts.sourceType,
               });
-              if (!actor) return null;
+              if (!actor) return buildMachineToolWithDurableBinding();
               // Re-derive the OBO scope-ceiling from the run's LOCKED template
               // anchor + project launch and compare (containment) against the
               // persisted dispatch ceiling. A corrupt anchor, or a persisted
@@ -1041,7 +1116,7 @@ export async function POST(req: Request): Promise<Response> {
                 !recomputed ||
                 !oboCeilingContains(runForPorts.oboCeiling, recomputed)
               ) {
-                return null;
+                return buildMachineToolWithDurableBinding();
               }
               // #1214 — pin the cinatra self-MCP tool allowlist for in-admin
               // CMS content-editor agent runs (wordpress-agent / drupal-agent)
@@ -1053,12 +1128,16 @@ export async function POST(req: Request): Promise<Response> {
                 resolveAgentRunCinatraMcpAllowedTools(
                   isInAdminCmsContentEditorPackage(template?.packageName),
                 );
-              return buildLlmMcpServerToolForAgentRun(
-                resolvedRuntime.provider as "openai" | "anthropic",
+              const oboTool = await buildLlmMcpServerToolForAgentRun(
+                mcpEffectiveProvider as "openai" | "anthropic",
                 { ...actor, oboCeiling: runForPorts.oboCeiling! },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
               );
+              // The OBO token carries the run id itself (the reader's
+              // delegated-actor path wins) — no durable binding needed.
+              if (oboTool) return oboTool;
+              return buildMachineToolWithDurableBinding();
             }
           : undefined;
       result = await runResolvedSkillAwareDeterministicLlmTask({
@@ -1147,5 +1226,10 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "Internal server error", detail: message }, { status: 500 });
   } finally {
     if (registryClientId) clearRunContext(registryClientId);
+    // #1195 — clear exactly the durable bindings this request wrote (keys are
+    // per-invocation-unique; the 300s TTL is the crash backstop).
+    if (durableBindingKeys.length > 0) {
+      await clearDurableRunContextBindings(durableBindingKeys);
+    }
   }
 }

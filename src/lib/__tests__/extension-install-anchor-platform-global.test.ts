@@ -15,6 +15,8 @@ type Row = {
   id: string;
   status: string;
   organizationId: string | null;
+  /** cinatra#1040 S3: default-version flag (absent = default, legacy rows). */
+  isDefault?: boolean;
   source: {
     type?: string;
     registryUrl?: string;
@@ -52,6 +54,7 @@ vi.mock("@/lib/extension-install-ops", () => ({
 
 import {
   makeDefaultInstallAnchorResolver,
+  pickSingleActiveRow,
   pickSingleLiveRowAcrossOrgs,
 } from "@/lib/extension-install-anchor";
 
@@ -102,6 +105,57 @@ describe("pickSingleLiveRowAcrossOrgs (pure)", () => {
       realRow({ id: "b", status: "active", organizationId: "org-2" }),
     ];
     expect(pickSingleLiveRowAcrossOrgs(rows)?.id).toBe("b");
+  });
+
+  // cinatra#1040 S3 — EXACT-ONE-DEFAULT semantics with side-by-side versions.
+  it("#1040 S3: resolves the DEFAULT row when a non-default side-by-side sibling exists", () => {
+    const rows = [
+      { ...realRow({ id: "default" }), isDefault: true },
+      { ...realRow({ id: "sbs" }), isDefault: false },
+    ];
+    expect(pickSingleLiveRowAcrossOrgs(rows)?.id).toBe("default");
+  });
+  it("#1040 S3: a legacy row WITHOUT isDefault counts as default next to a non-default sibling", () => {
+    const rows = [realRow({ id: "legacy" }), { ...realRow({ id: "sbs" }), isDefault: false }];
+    expect(pickSingleLiveRowAcrossOrgs(rows)?.id).toBe("legacy");
+  });
+  it("#1040 S3: ZERO live defaults (only non-default siblings) fails CLOSED — a non-default version is never promoted", () => {
+    const rows = [{ ...realRow({ id: "sbs" }), isDefault: false }];
+    expect(pickSingleLiveRowAcrossOrgs(rows)).toBeNull();
+  });
+  it("#1040 S3: two DEFAULTS across orgs stay ambiguous → null (unchanged fail-closed posture)", () => {
+    const rows = [
+      { ...realRow({ id: "a", organizationId: "org-1" }), isDefault: true },
+      { ...realRow({ id: "b", organizationId: "org-2" }), isDefault: true },
+    ];
+    expect(pickSingleLiveRowAcrossOrgs(rows)).toBeNull();
+  });
+});
+
+describe("pickSingleActiveRow (pure) — #1040 S3 exact-one-default", () => {
+  it("resolves the default among side-by-side siblings at the exact (package, org) scope", () => {
+    const rows = [
+      { ...realRow({ id: "default", organizationId: "org-1" }), isDefault: true },
+      { ...realRow({ id: "sbs", organizationId: "org-1" }), isDefault: false },
+      // A foreign-org row never matches the exact scope.
+      { ...realRow({ id: "foreign", organizationId: "org-2" }), isDefault: true },
+    ];
+    expect(pickSingleActiveRow(rows, "org-1")?.id).toBe("default");
+  });
+  it("zero defaults in scope (sole non-default survivor) → null", () => {
+    const rows = [{ ...realRow({ id: "sbs", organizationId: null }), isDefault: false }];
+    expect(pickSingleActiveRow(rows, null)).toBeNull();
+  });
+  it("single legacy row without isDefault keeps resolving (back-compat)", () => {
+    const rows = [realRow({ id: "legacy", organizationId: null })];
+    expect(pickSingleActiveRow(rows, null)?.id).toBe("legacy");
+  });
+  it("two defaults in one scope (cross-owner) stay ambiguous → null", () => {
+    const rows = [
+      { ...realRow({ id: "a", organizationId: null }), isDefault: true },
+      { ...realRow({ id: "b", organizationId: null }), isDefault: true },
+    ];
+    expect(pickSingleActiveRow(rows, null)).toBeNull();
   });
 });
 

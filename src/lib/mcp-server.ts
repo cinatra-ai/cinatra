@@ -2,6 +2,11 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import { createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
 import { getRunContext } from "./agent-run-context-registry";
+import {
+  resolveDurableRunContext,
+  recordMcpRunContextServedBy,
+} from "./agent-run-context-durable";
+import { readAgentRunByTokenHash } from "@cinatra-ai/agents";
 import { verifyChatMcpActorToken } from "./chat-mcp-actor-token";
 import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
@@ -320,6 +325,17 @@ export const mcpServerMount = createMcpServerMount({
   serverExperimental: CINATRA_MCP_EXPERIMENTAL,
   writeSettings: writeMcpServerSettings,
   getRunContext,
+  // #1195 durable run-context binding: resolve the run-token-keyed redis
+  // binding through the ONE run-token seam (readAgentRunByTokenHash — the run
+  // row stays the source of truth). App-wired because packages/mcp-server
+  // cannot import the app layer. The resolver classifies its own failures
+  // (transport ⇒ absent, present-but-unresolvable ⇒ invalid) and never throws.
+  resolveDurableRunContext: (rawBearerToken: string) =>
+    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash),
+  // #1195 cutover metric — counts which channel attributed each MCP request
+  // (the registry-removal gate needs proof no production traffic still rides
+  // the in-process registry).
+  onRunContextServedBy: recordMcpRunContextServedBy,
   readConfiguredLlmProviders: async () => {
     const providers = ["openai", "anthropic", "gemini"] as const;
     const results = await Promise.all(

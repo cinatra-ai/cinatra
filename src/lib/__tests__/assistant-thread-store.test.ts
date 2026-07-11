@@ -159,6 +159,21 @@ describe("query assembly", () => {
     expect(q.values).toEqual(["tn1", "th1", "run-1", "au1", "assistant", "running"]);
   });
 
+  it("appendAssistantTurn fail-loud rejects ids in the reserved legacy-mirror namespace (P2b)", async () => {
+    // The mirror's reconcile DELETE is scoped to this prefix; a store-minted
+    // row inside it could be deleted by a legacy chat_threads write.
+    expect(() =>
+      appendAssistantTurn({ id: "legacy:2:th:m1", threadId: "th1" }),
+    ).toThrow(/reserved for the legacy chat_threads mirror/);
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+    // Cross-module pin: the store's reserved prefix must equal the mirror's.
+    const store = await import("../assistant-thread-store");
+    const inheritance = await import("../project-inheritance");
+    expect(store.RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX).toBe(
+      inheritance.LEGACY_MIRROR_TURN_ID_PREFIX,
+    );
+  });
+
   it("updateAssistantTurn builds a partial SET with status + run binding", () => {
     runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
     updateAssistantTurn("tn1", { status: "completed", runId: "run-1" });

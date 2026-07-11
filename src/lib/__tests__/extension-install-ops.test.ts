@@ -5,6 +5,7 @@ import {
   finalizeInstallOp,
   failInstallOp,
   readInstallOp,
+  readInstallOpForVersion,
   readLatestInstallOpPhase,
   listUnfinalizedInstallOps,
   type InstallOpsDeps,
@@ -31,7 +32,9 @@ function makeFakeDeps(): { deps: InstallOpsDeps; rows: () => Array<Record<string
     const sqlOrgNull = /org_id IS NULL/.test(text);
     if (/^INSERT/.test(text)) {
       // begin: INSERT ... ON CONFLICT (install_op_id) DO UPDATE ... WHERE phase NOT IN (terminal).
-      const [install_op_id, package_name, org_id, phase, digest] = v as unknown[];
+      // cinatra#1040 S3: the INSERT now carries the version column ($6; the
+      // column default '0.0.0' is passed explicitly by the store).
+      const [install_op_id, package_name, org_id, phase, digest, version] = v as unknown[];
       const existing = store.find((r) => r.install_op_id === install_op_id);
       if (existing) {
         // TERMINAL-PRESERVING: the conflict WHERE skips a terminal row (no RETURNING
@@ -41,7 +44,7 @@ function makeFakeDeps(): { deps: InstallOpsDeps; rows: () => Array<Record<string
         Object.assign(existing, { phase, digest: digest ?? null, updated_at: `t${seq++}` });
         return [existing] as T[];
       }
-      const row = { install_op_id, package_name, org_id, phase, digest: digest ?? null, started_at: `t${seq}`, updated_at: `t${seq++}` };
+      const row = { install_op_id, package_name, org_id, phase, digest: digest ?? null, version: version ?? "0.0.0", started_at: `t${seq}`, updated_at: `t${seq++}` };
       store.push(row);
       return [row] as T[];
     }
@@ -57,14 +60,34 @@ function makeFakeDeps(): { deps: InstallOpsDeps; rows: () => Array<Record<string
         .filter((r) => !terminal.includes(r.phase as string))
         .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at))) as T[];
     }
-    if (/^\s*SELECT/.test(text)) {
-      // anchor / latest read: WHERE package_name=$1 AND <org> ORDER BY (phase='finalized') DESC ... LIMIT 1.
+    if (/^\s*SELECT/.test(text) && /AND version = \$2 AND/.test(text)) {
+      // readInstallOpForVersion (cinatra#1040 S3): WHERE package_name=$1 AND
+      // version=$2 AND <org> — one version namespace only.
       const pkg = v[0] as string;
-      const matching = store.filter((r) => orgMatch(r, pkg, sqlOrgNull, v[1]));
+      const version = v[1] as string;
+      const matching = store.filter(
+        (r) => r.version === version && orgMatch(r, pkg, sqlOrgNull, v[2]),
+      );
       if (matching.length === 0) return [] as T[];
       const fin = matching.find((r) => r.phase === "finalized");
       const latest = [...matching].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
       return [fin ?? latest] as T[];
+    }
+    if (/^\s*SELECT/.test(text)) {
+      // versionless anchor / latest read: finalized first, then the LEGACY
+      // '0.0.0' namespace first among finalized (cinatra#1040 S3), then newest.
+      const pkg = v[0] as string;
+      const matching = store.filter((r) => orgMatch(r, pkg, sqlOrgNull, v[1]));
+      if (matching.length === 0) return [] as T[];
+      const fins = matching
+        .filter((r) => r.phase === "finalized")
+        .sort((a, b) => {
+          const legacy = Number(b.version === "0.0.0") - Number(a.version === "0.0.0");
+          if (legacy !== 0) return legacy;
+          return String(b.updated_at).localeCompare(String(a.updated_at));
+        });
+      const latest = [...matching].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
+      return [fins[0] ?? latest] as T[];
     }
     if (/^\s*UPDATE/.test(text) && /SET phase = 'superseded'/.test(text)) {
       // finalize demote: demote the prior finalized op for self's scope (install_op_id <> $1).
@@ -72,7 +95,12 @@ function makeFakeDeps(): { deps: InstallOpsDeps; rows: () => Array<Record<string
       const self = store.find((r) => r.install_op_id === selfId);
       if (!self) return [] as T[];
       for (const r of store) {
-        if (r.install_op_id !== selfId && orgMatch(r, self.package_name as string, self.org_id === null, self.org_id) && r.phase === "finalized") {
+        if (
+          r.install_op_id !== selfId &&
+          orgMatch(r, self.package_name as string, self.org_id === null, self.org_id) &&
+          r.version === self.version && // cinatra#1040 S3: demote is version-scoped
+          r.phase === "finalized"
+        ) {
           r.phase = "superseded";
         }
       }
@@ -84,7 +112,7 @@ function makeFakeDeps(): { deps: InstallOpsDeps; rows: () => Array<Record<string
       if (!row) return [] as T[];
       // Enforce the partial-unique-on-finalized invariant (one finalized per scope).
       const dupe = store.find(
-        (r) => r !== row && r.phase === "finalized" && orgMatch(r, row.package_name as string, row.org_id === null, row.org_id),
+        (r) => r !== row && r.phase === "finalized" && r.version === row.version && orgMatch(r, row.package_name as string, row.org_id === null, row.org_id),
       );
       if (dupe) { const e = new Error("duplicate finalized") as Error & { code?: string }; e.code = "23505"; throw e; }
       row.phase = "finalized";
@@ -102,7 +130,7 @@ function makeFakeDeps(): { deps: InstallOpsDeps; rows: () => Array<Record<string
       // (a raw advance to finalized that bypasses the supersession seam trips it).
       if (phase === "finalized") {
         const dupe = store.find(
-          (r) => r !== row && r.phase === "finalized" && orgMatch(r, row.package_name as string, row.org_id === null, row.org_id),
+          (r) => r !== row && r.phase === "finalized" && r.version === row.version && orgMatch(r, row.package_name as string, row.org_id === null, row.org_id),
         );
         if (dupe) { const e = new Error("duplicate finalized") as Error & { code?: string }; e.code = "23505"; throw e; }
       }
@@ -260,5 +288,64 @@ describe("extension-install-ops journal store", () => {
       // Only the stuck non-terminal op is swept; finalized + superseded are never swept.
       expect(ids).toEqual(["stuck"]);
     });
+  });
+});
+
+// cinatra#1040 S3 — VERSION-NAMESPACED journal ops (side-by-side installs).
+describe("extension-install-ops — version namespaces (#1040 S3)", () => {
+  const PKG = "@cinatra-ai/shared";
+
+  it("a version-scoped finalize NEVER demotes the legacy/default ('0.0.0') anchor — and vice versa", async () => {
+    const { deps } = makeFakeDeps();
+    // The default install's journal (legacy versionless writer → '0.0.0').
+    await beginInstallOp({ installOpId: "def-op", packageName: PKG, orgId: null }, deps);
+    await finalizeInstallOp("def-op", deps);
+    // A side-by-side install at 2.0.0 journals + finalizes in ITS namespace.
+    await beginInstallOp({ installOpId: "sbs-op", packageName: PKG, orgId: null, version: "2.0.0" }, deps);
+    await finalizeInstallOp("sbs-op", deps);
+    // BOTH anchors remain finalized (partial-unique is per (pkg, org, version)).
+    expect((await readInstallOpForVersion(PKG, null, "2.0.0", deps))?.phase).toBe("finalized");
+    const legacy = await readInstallOp(PKG, null, deps);
+    expect(legacy?.installOpId).toBe("def-op");
+    expect(legacy?.phase).toBe("finalized");
+    // A SECOND side-by-side attempt at the SAME version supersedes only its sibling.
+    await beginInstallOp({ installOpId: "sbs-op-2", packageName: PKG, orgId: null, version: "2.0.0" }, deps);
+    await finalizeInstallOp("sbs-op-2", deps);
+    expect((await readInstallOpForVersion(PKG, null, "2.0.0", deps))?.installOpId).toBe("sbs-op-2");
+    expect((await readInstallOp(PKG, null, deps))?.installOpId).toBe("def-op");
+  });
+
+  it("the VERSIONLESS anchor read prefers the '0.0.0' legacy namespace among multiple finalized ops (trust gate stays on the default)", async () => {
+    const { deps } = makeFakeDeps();
+    // Side-by-side finalizes FIRST (newer updated_at would win a naive read).
+    await beginInstallOp({ installOpId: "sbs-op", packageName: PKG, orgId: null, version: "2.0.0" }, deps);
+    await finalizeInstallOp("sbs-op", deps);
+    await beginInstallOp({ installOpId: "def-op", packageName: PKG, orgId: null }, deps);
+    await finalizeInstallOp("def-op", deps);
+    // Re-finalize order shuffled: make the side-by-side row the most recent.
+    await beginInstallOp({ installOpId: "sbs-op-2", packageName: PKG, orgId: null, version: "2.0.0" }, deps);
+    await finalizeInstallOp("sbs-op-2", deps);
+    const anchor = await readInstallOp(PKG, null, deps);
+    expect(anchor?.installOpId).toBe("def-op");
+  });
+
+  it("readInstallOpForVersion observes ONLY its version namespace (fresh-install semantics for a new side-by-side pin)", async () => {
+    const { deps } = makeFakeDeps();
+    await beginInstallOp({ installOpId: "def-op", packageName: PKG, orgId: null }, deps);
+    await finalizeInstallOp("def-op", deps);
+    expect(await readInstallOpForVersion(PKG, null, "2.0.0", deps)).toBeNull();
+    await beginInstallOp({ installOpId: "sbs-op", packageName: PKG, orgId: null, version: "2.0.0" }, deps);
+    expect((await readInstallOpForVersion(PKG, null, "2.0.0", deps))?.phase).toBe("materialized");
+    expect((await readInstallOpForVersion(PKG, null, "3.0.0", deps))).toBeNull();
+  });
+
+  it("version namespaces are org-scoped too (an org side-by-side op never shadows the global one)", async () => {
+    const { deps } = makeFakeDeps();
+    await beginInstallOp({ installOpId: "g", packageName: PKG, orgId: null, version: "2.0.0" }, deps);
+    await beginInstallOp({ installOpId: "o", packageName: PKG, orgId: "org1", version: "2.0.0" }, deps);
+    await finalizeInstallOp("g", deps);
+    await finalizeInstallOp("o", deps);
+    expect((await readInstallOpForVersion(PKG, null, "2.0.0", deps))?.installOpId).toBe("g");
+    expect((await readInstallOpForVersion(PKG, "org1", "2.0.0", deps))?.installOpId).toBe("o");
   });
 });
