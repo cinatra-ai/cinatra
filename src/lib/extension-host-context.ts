@@ -915,3 +915,55 @@ export function createExtensionProbeHostContext(
 
   return { ctx, recorder };
 }
+
+/**
+ * Build the host ctx for a NON-DEFAULT side-by-side version (cinatra#1040 S4).
+ *
+ * A package may now be installed at several versions at once; the DEFAULT version
+ * alone owns the package's unversioned GLOBAL names (MCP tool names, capability
+ * providers, connector routes, agent mounts, object types, UI surfaces) and runs
+ * bootstrap. A NON-DEFAULT sibling still `register(ctx)`s (proving it activates
+ * and enforcing its own declared∩approved ports) but must claim NOTHING global
+ * and mutate NO package-keyed shared state — otherwise it would clobber the
+ * default version's registrations, settings, or credentials (settings/secrets are
+ * keyed by packageName and SHARED across versions).
+ *
+ * This is the register-only, SIDE-EFFECT-FREE context: it starts from the probe
+ * context (register-channel ports mcp/capabilities/objects.registerType/ui +
+ * world-mutating action ports jobs/notifications/telemetry already inert) and
+ * ADDITIONALLY inerts the package-keyed PERSISTENCE writers — settings/secrets
+ * `set`/`delete`, `objects.write`, and `nango.ensureConnectSession`. Every READ
+ * (settings/secrets `get`, nango status/connection getters, objects read/history,
+ * authSession, logger, runtime) stays the REAL grant-gated impl, and an ungranted
+ * privileged port still fails loud exactly as in real activation. Edge-bound
+ * SERVING of a non-default version (routing a resolved dependent to (name,
+ * version)) is threaded in a later slice (S5).
+ */
+export function createNonDefaultVersionHostContext(
+  packageName: string,
+  grantedPorts: readonly HostPortName[] = [],
+  envInput: ExtensionEnvOverrideInput = {},
+): ExtensionHostContext {
+  const { ctx: base } = createExtensionProbeHostContext(packageName, grantedPorts, envInput);
+  const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
+  const inertVoid = async () => {};
+
+  // Inert the package-keyed persistence writers ONLY when the port is granted —
+  // touching an UNGRANTED port's fail-loud proxy would itself throw at build time
+  // (same lazy-construction rule the probe follows), and an ungranted write must
+  // keep failing loud exactly as in real activation.
+  const settings: ExtensionHostContext["settings"] = granted.has("settings")
+    ? { get: base.settings.get.bind(base.settings), set: inertVoid, delete: inertVoid }
+    : base.settings;
+  const secrets: ExtensionHostContext["secrets"] = granted.has("secrets")
+    ? { get: base.secrets.get.bind(base.secrets), set: inertVoid, delete: inertVoid }
+    : base.secrets;
+  const objects: ExtensionHostContext["objects"] = granted.has("objects")
+    ? { ...base.objects, write: async () => ({ id: "non-default-version-noop" }) }
+    : base.objects;
+  const nango: ExtensionHostContext["nango"] = granted.has("nango")
+    ? { ...base.nango, ensureConnectSession: async () => ({}) }
+    : base.nango;
+
+  return { ...base, settings, secrets, objects, nango };
+}

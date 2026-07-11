@@ -119,9 +119,14 @@ export function extensionActivationPhases(
           }
         }
         const { loadRuntimePackageExtensions } = await import("@/lib/runtime-package-loader");
-        const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-        const resolveInstallAnchor = await makeDefaultInstallAnchorResolver();
-        const results = await loadRuntimePackageExtensions(undefined, { resolveInstallAnchor });
+        // cinatra#1040 S4: boot wires the MULTI-VERSION resolver so side-by-side
+        // installed versions activate together (the default owns global names; a
+        // non-default sibling activates against a side-effect-free context). A
+        // single-version package resolves to exactly its one default anchor, so
+        // this is behavior-preserving for the common case.
+        const { makeDefaultInstallAnchorsResolver } = await import("@/lib/extension-install-anchor");
+        const resolveInstallAnchors = await makeDefaultInstallAnchorsResolver();
+        const results = await loadRuntimePackageExtensions(undefined, { resolveInstallAnchors });
         bootActivationResults.push(...results);
         // Control-plane generation (#310): one bump per loader (see static-bundle).
         const { bumpActivationGeneration } = await import("@/lib/extension-activation-generation");
