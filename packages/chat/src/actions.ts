@@ -220,7 +220,10 @@ export async function saveChatThread(thread: Thread): Promise<void> {
   const orgId =
     (session.session as { activeOrganizationId?: string | null } | undefined)
       ?.activeOrganizationId ?? null;
-  upsertChatThreadInDatabase(thread, { orgId });
+  // assistantMirrorOrgId: org tenancy anchor for the structured
+  // assistant_threads mirror (cinatra#1037 P2b) — distinct from the pin-sync
+  // orgId option; team threads resolve to NULL centrally from the payload.
+  upsertChatThreadInDatabase(thread, { orgId, assistantMirrorOrgId: orgId });
 }
 
 export async function deleteChatThread(threadId: string): Promise<void> {

@@ -160,6 +160,27 @@ function makeHarness(opts: {
     uninstallMember: vi.fn(async (m) => {
       events.push(`uninstall:${m.packageName}`);
     }),
+    // cinatra#1040 S3: version-scoped side-by-side install + teardown seams.
+    installMemberSideBySide: vi.fn(async (m) => {
+      const fail =
+        typeof opts.installFail === "function"
+          ? opts.installFail(m.packageName)
+          : opts.installFail === m.packageName;
+      if (fail) {
+        events.push(`side-by-side-FAIL:${m.packageName}`);
+        throw new Error(`side-by-side installer refused ${m.packageName}`);
+      }
+      events.push(`side-by-side:${m.packageName}@${m.version}@scope=${m.scopeOrgId ?? "(platform)"}`);
+    }),
+    uninstallSideBySideMember: vi.fn(async (m) => {
+      events.push(
+        `uninstall-side-by-side:${m.packageName}@${m.version}@scope=${m.scopeOrgId ?? "(platform)"}`,
+      );
+    }),
+    readInstallOpForVersion: async (pkg, _oid, version) => ({
+      installOpId: `${pkg}@${version}@op`,
+      phase: "finalized",
+    }),
     readLiveRowVersion: async (pkg) =>
       (opts.preInstalled ?? []).includes(pkg) ? { present: true, version: "0.9.0" } : { present: false },
     readInstallOp: async (pkg) => ({ installOpId: `${pkg}@op`, phase: "finalized" }),
@@ -1122,5 +1143,201 @@ describe("sweepStaleInstallBatches — boot recovery (compensate-never-resume)",
       },
     );
     expect(phases).toEqual(["failed"]);
+  });
+});
+
+// cinatra#1040 S3 — SIDE-BY-SIDE members (disjoint-dependents on the non-gatekept path).
+describe("installExtensionWithDependencies — #1040 S3 side-by-side members", () => {
+  const SHARED = "@cinatra-ai/shared";
+
+  it("an action:'install-side-by-side' member routes through installMemberSideBySide (never installMember/updateMemberPackage) and is surfaced in result.installedSideBySide", async () => {
+    const h = makeHarness({
+      preInstalled: [SHARED], // the DEFAULT row exists at another version
+      plan: [
+        member(SHARED, {
+          version: "2.0.0",
+          action: "install-side-by-side",
+          sideBySideEvidence: { dependents: ["@cinatra-ai/dep-old"], detail: "dep-old requires ^0.9.0" },
+        }),
+        member(ROOT),
+      ],
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    );
+    expect(h.events).toContain(`side-by-side:${SHARED}@2.0.0@scope=(platform)`);
+    expect(h.events).not.toContain(`install:${SHARED}`);
+    expect(h.events).not.toContain(`update:${SHARED}`);
+    expect(res.installedSideBySide).toEqual([
+      { packageName: SHARED, version: "2.0.0", evidence: "dep-old requires ^0.9.0" },
+    ]);
+    // Disjoint partitions: not double-reported as a fresh install or an update.
+    expect(res.installed.map((m) => m.packageName)).toEqual([ROOT]);
+    expect(res.updated).toEqual([]);
+    // Ledger linkage uses the VERSION-SCOPED journal read.
+    const batch = [...h.ledgerRows.values()][0]!;
+    const ledgerMember = batch.members.find((m) => m.packageName === SHARED)!;
+    expect(ledgerMember.installOpId).toBe(`${SHARED}@2.0.0@op`);
+  });
+
+  it("a LATER member failure compensates the side-by-side member through the VERSION-SCOPED teardown (never the package uninstall), even though preState.present is true", async () => {
+    const h = makeHarness({
+      preInstalled: [SHARED],
+      installFail: ROOT,
+      plan: [
+        member(SHARED, { version: "2.0.0", action: "install-side-by-side" }),
+        member(ROOT),
+      ],
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow(BatchMemberInstallError);
+    expect(h.events).toContain(`uninstall-side-by-side:${SHARED}@2.0.0@scope=(platform)`);
+    // The package-scoped uninstall is NEVER used for the side-by-side member
+    // (it would tear down the DEFAULT install).
+    expect(h.events).not.toContain(`uninstall:${SHARED}`);
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.members.find((m) => m.packageName === SHARED)!.status).toBe("compensated");
+  });
+
+  it("PLATFORM-FALLBACK scope: an ORG actor's side-by-side member installs (and compensates) at the member's RESOLVED scope, not the actor's org", async () => {
+    const orgActor: Actor = { actorType: "human", source: "ui", userId: "u1", orgId: "org-9" };
+    const h = makeHarness({
+      preInstalled: [SHARED],
+      installFail: ROOT,
+      plan: [
+        // The planner resolved the conflict against the PLATFORM default.
+        member(SHARED, {
+          version: "2.0.0",
+          action: "install-side-by-side",
+          sideBySideScopeOrgId: null,
+        }),
+        member(ROOT),
+      ],
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor: orgActor }, h.deps),
+    ).rejects.toThrow(BatchMemberInstallError);
+    // Install AND compensation both addressed the PLATFORM scope.
+    expect(h.events).toContain(`side-by-side:${SHARED}@2.0.0@scope=(platform)`);
+    expect(h.events).toContain(`uninstall-side-by-side:${SHARED}@2.0.0@scope=(platform)`);
+    // The ledger member carries the resolved scope for the boot sweeper.
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.members.find((m) => m.packageName === SHARED)!.scopeOrgId).toBeNull();
+  });
+
+  it("a committed dedupe-upward ('update') member stays committed while a side-by-side member compensates", async () => {
+    const OTHER = "@cinatra-ai/other-shared";
+    const h = makeHarness({
+      preInstalled: [SHARED, OTHER],
+      installFail: ROOT,
+      plan: [
+        member(OTHER, { version: "1.5.0", action: "update" }),
+        member(SHARED, { version: "2.0.0", action: "install-side-by-side" }),
+        member(ROOT),
+      ],
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow(BatchMemberInstallError);
+    // Update member: committed (pre-existing) — never compensated.
+    expect(h.events).not.toContain(`uninstall:${OTHER}`);
+    expect(h.events.filter((e) => e.startsWith("uninstall-side-by-side:"))).toEqual([
+      `uninstall-side-by-side:${SHARED}@2.0.0@scope=(platform)`,
+    ]);
+  });
+});
+
+describe("sweepStaleInstallBatches — #1040 S3 side-by-side members", () => {
+  function staleBatch(members: InstallBatchMember[]): InstallBatch {
+    return {
+      batchId: "stale-sbs-1",
+      rootPackage: ROOT,
+      orgId: "org-1",
+      phase: "installing",
+      members,
+      createdAt: "then",
+      updatedAt: "then",
+    };
+  }
+
+  it("sweeps an installed side-by-side member through the VERSION-SCOPED teardown despite preState.present, at the batch's org scope", async () => {
+    const swept: string[] = [];
+    const packageUninstalls: string[] = [];
+    const batch = staleBatch([
+      {
+        packageName: "@cinatra-ai/shared",
+        version: "2.0.0",
+        typeId: "connector",
+        status: "installed",
+        action: "install-side-by-side",
+        // A legacy ledger row WITHOUT scopeOrgId falls back to the batch org.
+        preState: { present: true, version: "0.9.0" },
+      },
+      {
+        packageName: "@cinatra-ai/platform-shared",
+        version: "3.0.0",
+        typeId: "connector",
+        status: "installed",
+        action: "install-side-by-side",
+        // The RESOLVED platform scope from the ledger wins over the batch org.
+        scopeOrgId: null,
+        preState: { present: true, version: "1.0.0" },
+      },
+      { packageName: ROOT, version: "1.0.0", typeId: "connector", status: "planned", preState: { present: false } },
+    ]);
+    const res = await sweepStaleInstallBatches(
+      { olderThanMs: 1000 },
+      {
+        listStale: async () => [batch],
+        setPhase: async (_id, _phase) => batch,
+        updateMember: async () => batch,
+        uninstallMember: async (m) => {
+          packageUninstalls.push(m.packageName);
+        },
+        uninstallSideBySideMember: async (m) => {
+          swept.push(`${m.packageName}@${m.version}@${m.orgId}`);
+        },
+      },
+    );
+    expect(res.swept).toBe(1);
+    // Inverse ledger order; the resolved platform scope wins over the batch org.
+    expect(swept).toEqual([
+      "@cinatra-ai/platform-shared@3.0.0@null",
+      "@cinatra-ai/shared@2.0.0@org-1",
+    ]);
+    expect(packageUninstalls).toEqual([]);
+  });
+
+  it("a PRE-EXISTING non-side-by-side member (preState.present) is still never swept", async () => {
+    const packageUninstalls: string[] = [];
+    const sbs: string[] = [];
+    const batch = staleBatch([
+      {
+        packageName: "@cinatra-ai/pre",
+        version: "1.0.0",
+        typeId: "connector",
+        status: "installed",
+        action: "install",
+        preState: { present: true, version: "0.9.0" },
+      },
+    ]);
+    await sweepStaleInstallBatches(
+      { olderThanMs: 1000 },
+      {
+        listStale: async () => [batch],
+        setPhase: async (_id, _phase) => batch,
+        updateMember: async () => batch,
+        uninstallMember: async (m) => {
+          packageUninstalls.push(m.packageName);
+        },
+        uninstallSideBySideMember: async (m) => {
+          sbs.push(m.packageName);
+        },
+      },
+    );
+    expect(packageUninstalls).toEqual([]);
+    expect(sbs).toEqual([]);
   });
 });

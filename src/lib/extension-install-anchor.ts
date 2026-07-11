@@ -118,15 +118,27 @@ export function selectActiveDigest(input: {
  * so multiple live rows for one (package, org) are legal (different owners). The
  * runtime trust gate must resolve exactly ONE row, so an ambiguous match FAILS
  * CLOSED rather than trusting (and activating) an arbitrary owner's install.
+ *
+ * SIDE-BY-SIDE VERSIONS (cinatra#1040 S3): with versioned identity a scope can
+ * also hold NON-DEFAULT sibling version rows (`isDefault === false`). Single-row
+ * surfaces resolve the DEFAULT row — the picker selects EXACTLY ONE live default
+ * (a legacy row/fixture without `isDefault` counts as default; the DB enforces
+ * at most one default per (org, owner, package)):
+ *   - one default + any number of non-default siblings → the default;
+ *   - two defaults (cross-owner ambiguity) → null (fail closed, as before);
+ *   - ZERO defaults (only non-default siblings remain) → null — a non-default
+ *     version row is INVISIBLE to single-row runtime surfaces until the
+ *     versioned-activation slice (S4); resolving one here would prematurely
+ *     promote it.
  */
-export function pickSingleActiveRow<T extends { status: string; organizationId: string | null }>(
-  rows: readonly T[],
-  orgId: string | null,
-): T | null {
+export function pickSingleActiveRow<
+  T extends { status: string; organizationId: string | null; isDefault?: boolean },
+>(rows: readonly T[], orgId: string | null): T | null {
   const matching = rows.filter(
     (r) => (r.status === "active" || r.status === "locked") && (r.organizationId ?? null) === orgId,
   );
-  return matching.length === 1 ? matching[0] : null;
+  const defaults = matching.filter((r) => r.isDefault !== false);
+  return defaults.length === 1 ? defaults[0] : null;
 }
 
 /**
@@ -142,11 +154,15 @@ export function pickSingleActiveRow<T extends { status: string; organizationId: 
  * the grant/journal for THAT row's actual org. Still FAILS CLOSED on ambiguity
  * (>1 live row across orgs) — the trust gate must resolve exactly one row.
  */
-export function pickSingleLiveRowAcrossOrgs<T extends { status: string; organizationId: string | null }>(
-  rows: readonly T[],
-): T | null {
+export function pickSingleLiveRowAcrossOrgs<
+  T extends { status: string; organizationId: string | null; isDefault?: boolean },
+>(rows: readonly T[]): T | null {
   const matching = rows.filter((r) => r.status === "active" || r.status === "locked");
-  return matching.length === 1 ? matching[0] : null;
+  // Same exact-one-default rule as pickSingleActiveRow (cinatra#1040 S3): a
+  // non-default side-by-side version row must not un-anchor (or replace) the
+  // default at boot; zero live defaults stays fail-closed.
+  const defaults = matching.filter((r) => r.isDefault !== false);
+  return defaults.length === 1 ? defaults[0] : null;
 }
 
 /**

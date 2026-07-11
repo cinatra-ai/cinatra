@@ -80,8 +80,24 @@ export type InstallBatchMember = {
    * `preState.present` member, so the newly-installed-only compensation loop
    * and the boot sweeper both skip it (never rolled back) — no per-field durable
    * restore is captured for it (that is the deferred Option A subsystem).
+   *
+   * An `"install-side-by-side"` member (cinatra#1040 S3) is a NEW NON-DEFAULT
+   * version row of a package whose default stays installed — so its
+   * `preState.present` is TRUE (package-scoped presence; a legacy sweeper that
+   * predates this action therefore safely skips it), and BOTH the batch
+   * compensation loop and the boot sweeper route it through the VERSION-SCOPED
+   * side-by-side teardown instead of the package-scoped uninstall (which would
+   * tear down the default install).
    */
-  action?: "install" | "update";
+  action?: "install" | "update" | "install-side-by-side";
+  /**
+   * For an `"install-side-by-side"` member: the RESOLVED conflict scope the
+   * side-by-side row installs at (cinatra#1040 S3 / codex round-1) — may be
+   * NULL (platform) when the org request fell back to the platform default.
+   * The batch executor, compensation, and the boot sweeper all address this
+   * scope, never the requesting actor's org.
+   */
+  scopeOrgId?: string | null;
   preState: BatchMemberPreState;
   /** The member's install-op id once its install began (journal linkage). */
   installOpId?: string;

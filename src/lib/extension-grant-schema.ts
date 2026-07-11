@@ -15,6 +15,9 @@
 // Contents:
 //   - capabilityOwnershipGrantSchemaQueries — the S0 capability-ownership grant
 //     table + anti-squat indexes (a NET-NEW table; additive, no migration).
+//   - widgetStreamMetadataGrantSchemaQueries — the widget-stream metadata grant
+//     table + anti-squat indexes (widget-stream runtime trust, slice 1; a
+//     NET-NEW table; additive, no migration — same precedent as S0 above).
 //   - versionIdentitySchemaQueries — the cinatra#1040 S1 version-identity
 //     evolution of installed_extension + extension_install_ops (transformational;
 //     ships with migrations/core/core__0022 — see that function's own note).
@@ -83,6 +86,60 @@ export function capabilityOwnershipGrantSchemaQueries(schemaName: string): { tex
             CHECK (status IN ('pending', 'approved', 'revoked'));
         END IF;
       END $$;` },
+  ];
+}
+
+/** DDL for the admin-approved `extension_widget_stream_metadata_grant` table
+ * (widget-stream runtime trust, slice 1) + its anti-squat partial unique
+ * indexes. Spread into `buildCreateStoreSchemaQueries`. */
+export function widgetStreamMetadataGrantSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [
+    // Runtime installer — admin-approved WIDGET-STREAM METADATA grants (the
+    // sibling of `extension_capability_ownership_grant` above; same mechanism
+    // shape, distinct capability discriminator: the AGENT SLUG). Decides which
+    // runtime-installed package may serve a widget-stream agent slug, at
+    // EXACTLY which approved definition: `binding_hash_v2` is sha256 over the
+    // strict canonical v:2 canon (slug, module/factory, relay target, skill
+    // capability, context fields, label/subjectNoun, auth incl. the pinned
+    // requireUserToken:true) — ANY canon change re-pends. NEVER auto-approved
+    // (no trust tier bypasses the admin); a `revoked` row is a durable
+    // tombstone an install can never resurrect; approval is a CAS on the exact
+    // displayed hash. `canon_json` is stored for admin display; the hash
+    // comparison is authoritative. `row_version` feeds the point-of-use
+    // re-assert descriptor of the runtime resolver arm (a later slice).
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."extension_widget_stream_metadata_grant" (
+      id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      package_name text NOT NULL,
+      org_id text,
+      agent_slug text NOT NULL,
+      binding_hash_v2 text NOT NULL,
+      canon_json text NOT NULL,
+      status text NOT NULL DEFAULT 'pending',
+      approved_by text,
+      revoked_by text,
+      revoked_at timestamptz,
+      row_version integer NOT NULL DEFAULT 1,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT extension_widget_stream_metadata_grant_status_check
+        CHECK (status IN ('pending', 'approved', 'revoked')),
+      UNIQUE (package_name, org_id, agent_slug)
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS extension_widget_stream_metadata_grant_slug_idx ON "${q}"."extension_widget_stream_metadata_grant" (agent_slug, org_id)` },
+    // Global-scope (org_id IS NULL) uniqueness of a package's grant per slug:
+    // the table UNIQUE(package_name, org_id, agent_slug) does NOT dedupe NULL
+    // org_id (SQL NULLs are distinct), so a partial index enforces one global
+    // row per (package, slug) — the DURABLE grant identity a revocation
+    // tombstone lives on.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_widget_stream_metadata_grant_pkg_slug_global_uniq ON "${q}"."extension_widget_stream_metadata_grant" (package_name, agent_slug) WHERE org_id IS NULL` },
+    // ANTI-SQUATTING: at most ONE approved metadata grant per (slug, org
+    // scope) — REGARDLESS of package (the runtime resolver serves by slug). A
+    // squatting approval fails with a unique violation, never a silent second
+    // server. A plain partial index does NOT constrain org_id IS NULL (NULLs
+    // are distinct), so the global scope has its own index.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_widget_stream_metadata_grant_approved_slug_uniq ON "${q}"."extension_widget_stream_metadata_grant" (agent_slug, org_id) WHERE status = 'approved' AND org_id IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_widget_stream_metadata_grant_approved_slug_global_uniq ON "${q}"."extension_widget_stream_metadata_grant" (agent_slug) WHERE status = 'approved' AND org_id IS NULL` },
   ];
 }
 

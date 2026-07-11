@@ -199,6 +199,11 @@ type InstallOpRow = {
   org_id: string | null;
   phase: string;
   digest: string | null;
+  /** cinatra#1040: the journaled install VERSION. Legacy/default-path writers
+   *  omit it, so the column default `'0.0.0'` is the LEGACY/DEFAULT journal
+   *  namespace; only the version-scoped side-by-side path (S3) writes a real
+   *  version. */
+  version: string;
   started_at: string;
   updated_at: string;
 };
@@ -209,6 +214,8 @@ export type InstallOp = {
   orgId: string | null;
   phase: InstallOpPhase;
   digest: string | null;
+  /** `'0.0.0'` = the legacy/default journal namespace (see InstallOpRow). */
+  version: string;
   startedAt: string;
   updatedAt: string;
 };
@@ -220,12 +227,13 @@ function rowToInstallOp(row: InstallOpRow): InstallOp {
     orgId: row.org_id,
     phase: row.phase as InstallOpPhase,
     digest: row.digest,
+    version: row.version,
     startedAt: row.started_at,
     updatedAt: row.updated_at,
   };
 }
 
-const SELECT_COLUMNS = "install_op_id, package_name, org_id, phase, digest, started_at, updated_at";
+const SELECT_COLUMNS = "install_op_id, package_name, org_id, phase, digest, version, started_at, updated_at";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -238,6 +246,16 @@ export type BeginInstallOpInput = {
   /** Initial phase; defaults to `materialized` (the first saga step). */
   phase?: InstallOpPhase;
   digest?: string | null;
+  /**
+   * The journaled install VERSION (cinatra#1040 S3, side-by-side installs).
+   * OMITTED by every legacy/default-path caller — the column default `'0.0.0'`
+   * keeps those journals in the legacy/default namespace byte-identically.
+   * A version-scoped caller (the side-by-side installer) passes the REAL pin
+   * so its ops journal in a SIBLING namespace: `finalizeInstallOp`'s demote and
+   * the version-scoped anchor read are both scoped by this value, so a
+   * side-by-side finalize can never supersede the default install's anchor.
+   */
+  version?: string;
 };
 
 /**
@@ -274,8 +292,8 @@ export async function beginInstallOp(
     );
   }
   const rows = await query<InstallOpRow>(
-    `INSERT INTO ${table} (install_op_id, package_name, org_id, phase, digest)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO ${table} (install_op_id, package_name, org_id, phase, digest, version)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (install_op_id) DO UPDATE
        SET phase = EXCLUDED.phase,
            digest = EXCLUDED.digest,
@@ -283,7 +301,7 @@ export async function beginInstallOp(
            updated_at = now()
        WHERE ${table}.phase NOT IN ('finalized', 'superseded', 'failed', 'rolled_back')
      RETURNING ${SELECT_COLUMNS}`,
-    [input.installOpId, input.packageName, input.orgId, phase, input.digest ?? null],
+    [input.installOpId, input.packageName, input.orgId, phase, input.digest ?? null, input.version ?? "0.0.0"],
   );
   if (rows[0]) return rowToInstallOp(rows[0]);
   // No RETURNING row: either the conflict hit a TERMINAL row (the WHERE skipped the
@@ -371,11 +389,18 @@ export async function finalizeInstallOp(
       // (1) DEMOTE the prior finalized op for this scope (if any), excluding self.
       const demoteValues: unknown[] = [installOpId];
       if (value !== null) demoteValues.push(value);
+      // Demote is scoped by the op's own VERSION namespace (cinatra#1040 S3;
+      // matches the core__0022 partial-unique re-key to (package, org,
+      // version)). Legacy/default ops all live at '0.0.0', so their demote
+      // behavior is unchanged; a version-scoped side-by-side finalize demotes
+      // ONLY a prior finalized op of the SAME version — never the default
+      // install's anchor.
       await q(
         `UPDATE ${table}
            SET phase = 'superseded', updated_at = now()
          WHERE package_name = (SELECT package_name FROM ${table} WHERE install_op_id = $1)
            AND ${value === null ? "org_id IS NULL" : "org_id = $2"}
+           AND version = (SELECT version FROM ${table} WHERE install_op_id = $1)
            AND phase = 'finalized'
            AND install_op_id <> $1`,
         demoteValues,
@@ -443,11 +468,49 @@ export async function readInstallOp(
   const { clause, value } = orgClause(orgId, 2);
   const values: unknown[] = [packageName];
   if (value !== null) values.push(value);
-  // Prefer the finalized anchor (one, by the partial-unique invariant); else the
-  // latest attempt. `phase = 'finalized'` sorts first, then most-recent.
+  // Prefer the finalized anchor; else the latest attempt. With side-by-side
+  // versions (cinatra#1040 S3) MULTIPLE finalized ops can exist per (package,
+  // org) — one per version namespace. This VERSIONLESS read is the trust-gate /
+  // legacy anchor read, and the default install's journal lives in the
+  // '0.0.0' legacy namespace (legacy writers never set version), so among
+  // finalized rows the '0.0.0' namespace sorts first, then most-recent.
+  // TRANSITIONAL until the versioned-anchor slice (S4) keys the trust gate by
+  // version; version-scoped consumers use `readInstallOpForVersion`.
   const rows = await query<InstallOpRow>(
     `SELECT ${SELECT_COLUMNS} FROM ${table}
       WHERE package_name = $1 AND ${clause}
+      ORDER BY (phase = 'finalized') DESC, (version = '0.0.0') DESC, updated_at DESC, started_at DESC
+      LIMIT 1`,
+    values,
+  );
+  const row = rows[0] ?? null;
+  return row
+    ? { phase: row.phase as InstallOpPhase, installOpId: row.install_op_id, digest: row.digest }
+    : null;
+}
+
+/**
+ * Read the anchor install-op for an exact (package, org, VERSION) namespace
+ * (cinatra#1040 S3 — the side-by-side journal read). Same finalized-first
+ * preference as `readInstallOp`, scoped to one version namespace. The
+ * versionless `readInstallOp` (trust gate/legacy callers) is left untouched —
+ * a separate reader instead of a new optional parameter so no existing
+ * `(packageName, orgId, deps)` call site can silently change meaning.
+ */
+export async function readInstallOpForVersion(
+  packageName: string,
+  orgId: string | null,
+  version: string,
+  deps?: InstallOpsDeps,
+): Promise<{ phase: InstallOpPhase; installOpId: string; digest: string | null } | null> {
+  const { query, schema } = await resolveDeps(deps);
+  const table = qualifiedTable(schema);
+  const { clause, value } = orgClause(orgId, 3);
+  const values: unknown[] = [packageName, version];
+  if (value !== null) values.push(value);
+  const rows = await query<InstallOpRow>(
+    `SELECT ${SELECT_COLUMNS} FROM ${table}
+      WHERE package_name = $1 AND version = $2 AND ${clause}
       ORDER BY (phase = 'finalized') DESC, updated_at DESC, started_at DESC
       LIMIT 1`,
     values,

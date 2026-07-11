@@ -13,6 +13,7 @@ import {
   versionIdentitySchemaQueries,
   projectDispatchSchemaQueries,
   projectInstancesSchemaQueries,
+  widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import {
@@ -492,6 +493,7 @@ END $$` },
         END IF;
       END $$;` },
     ...capabilityOwnershipGrantSchemaQueries(schemaName), // capability-ownership grant (S0), additive
+    ...widgetStreamMetadataGrantSchemaQueries(schemaName), // widget-stream metadata grant (runtime trust slice 1), additive
 
     // Runtime installer — snapshot leases. An in-flight run that imports
     // a digest-pinned package dir holds a lease so the GC reaper never deletes
