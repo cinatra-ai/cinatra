@@ -15,6 +15,7 @@ import {
   readWidgetStreamMetadataGrant,
   recordRequestedWidgetStreamMetadataGrant,
   reopenRevokedWidgetStreamMetadataGrant,
+  listApprovedWidgetStreamMetadataGrants,
   resolveApprovedWidgetStreamMetadataGrant,
   restoreWidgetStreamMetadataGrant,
   revokeWidgetStreamMetadataGrant,
@@ -151,6 +152,13 @@ function fakeDb() {
     const t = text.trimStart();
 
     if (t.startsWith("SELECT")) {
+      if (/ORDER BY agent_slug/.test(text)) {
+        // listApproved: WHERE [org_id IS NULL | org_id = $1] AND status = 'approved'
+        const orgId = /org_id IS NULL/.test(text) ? null : String(v[0]);
+        return [...rows.values()]
+          .filter((r) => (r.org_id ?? null) === orgId && r.status === "approved")
+          .sort((a, b) => a.agent_slug.localeCompare(b.agent_slug)) as T[];
+      }
       if (/WHERE agent_slug = \$1/.test(text)) {
         // resolveApproved: agent_slug = $1 [AND org_id = $2 | AND org_id IS NULL] AND status = 'approved'
         const slug = String(v[0]);
@@ -1200,5 +1208,59 @@ describe("install-step orchestrators", () => {
         approvedBy: "x", widgetMetadataClaims: [makeClaim()],
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listApprovedWidgetStreamMetadataGrants (widget-stream runtime trust, slice 2)
+// ---------------------------------------------------------------------------
+
+describe("listApprovedWidgetStreamMetadataGrants", () => {
+  it("lists ONLY approved rows at the exact scope (pending/revoked/org rows excluded)", async () => {
+    const db = fakeDb();
+    const approved = makeClaim();
+    await recordOk(db, approved);
+    await approveWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, agentSlug: SLUG, approvedBy: "a", expectedBindingHashV2: approved.bindingHashV2 },
+      depsFor(db),
+    );
+    // A pending sibling slug and an org-scoped approved row must not appear.
+    const pending = makeClaim({ agentSlug: "another-runtime-editor", skillCapability: "widget-chat.another-runtime-editor" });
+    await recordRequestedWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, claim: pending },
+      makeGuards(),
+      depsFor(db),
+    );
+    const orgClaim = makeClaim();
+    await recordRequestedWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: "org-1", claim: orgClaim },
+      makeGuards(),
+      depsFor(db),
+    );
+    await approveWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: "org-1", agentSlug: SLUG, approvedBy: "a", expectedBindingHashV2: orgClaim.bindingHashV2 },
+      depsFor(db),
+    );
+    const listed = await listApprovedWidgetStreamMetadataGrants({ orgId: null }, depsFor(db));
+    expect(listed.map((g) => [g.agentSlug, g.status, g.orgId])).toEqual([[SLUG, "approved", null]]);
+    // The org scope lists its own row only.
+    const orgListed = await listApprovedWidgetStreamMetadataGrants({ orgId: "org-1" }, depsFor(db));
+    expect(orgListed.map((g) => [g.agentSlug, g.orgId])).toEqual([[SLUG, "org-1"]]);
+  });
+
+  it("a revoked row disappears from the list (authority read stays fail-closed)", async () => {
+    const db = fakeDb();
+    const claim = makeClaim();
+    await recordOk(db, claim);
+    await approveWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, agentSlug: SLUG, approvedBy: "a", expectedBindingHashV2: claim.bindingHashV2 },
+      depsFor(db),
+    );
+    expect(await listApprovedWidgetStreamMetadataGrants({ orgId: null }, depsFor(db))).toHaveLength(1);
+    await revokeWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, agentSlug: SLUG, revokedBy: "a" },
+      depsFor(db),
+    );
+    expect(await listApprovedWidgetStreamMetadataGrants({ orgId: null }, depsFor(db))).toEqual([]);
   });
 });

@@ -1985,6 +1985,42 @@ export async function resolveApprovedWidgetStreamMetadataGrant(
   return null; // 0 approved (fail closed) or >1 (defensive)
 }
 
+export type ListApprovedWidgetStreamMetadataInput = {
+  /** EXACT scope — `null` lists the global-scope rows (the pilot's recording
+   * scope); an org id lists that org's rows only (no global fallback). */
+  orgId: string | null;
+};
+
+/**
+ * Enumerate every `approved` metadata grant at the EXACT given scope
+ * (widget-stream runtime trust, slice 2). READ-ONLY authority enumeration for
+ * the union consumers that need the whole approved set rather than a single
+ * slug — the in-admin CMS content-editor package derivation (the relay-target
+ * union in widget-stream-agents.server.ts) and the route-guard's approved-slug
+ * liveness snapshot (a later slice). Callers MUST re-assert the serve-time
+ * checks per grant (on-disk canon re-hash, ownership conjunction, trust
+ * classification) — a listed row alone authorizes nothing.
+ */
+export async function listApprovedWidgetStreamMetadataGrants(
+  input: ListApprovedWidgetStreamMetadataInput,
+  deps?: WidgetStreamMetadataGrantDeps,
+): Promise<WidgetStreamMetadataGrant[]> {
+  const { query, schema } = await wsmResolveDeps(deps);
+  const table = wsmQualifiedTable(schema);
+  const rows =
+    input.orgId === null
+      ? await query<MetadataRow>(
+          `SELECT ${WSM_SELECT_COLUMNS} FROM ${table}
+            WHERE org_id IS NULL AND status = 'approved' ORDER BY agent_slug`,
+        )
+      : await query<MetadataRow>(
+          `SELECT ${WSM_SELECT_COLUMNS} FROM ${table}
+            WHERE org_id = $1 AND status = 'approved' ORDER BY agent_slug`,
+          [input.orgId],
+        );
+  return rows.map(wsmRowToGrant);
+}
+
 export type RestoreWidgetStreamMetadataInput = {
   packageName: string;
   orgId: string | null;

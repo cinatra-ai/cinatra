@@ -40,9 +40,11 @@ set -euo pipefail
 #      the chain EXECUTES against the seeded data;
 #   5. ASSERT, on the upgraded DB:
 #      (a) MIGRATION-LEDGER INTEGRITY — every candidate core__NNNN migration
-#          listed in migrations/manifest.json is present in the `pgmigrations`
-#          ledger with a non-null run_on, the ledger count matches, and ledger
-#          ids are strictly distinct (no double-apply);
+#          declared in the ledger union (migrations/manifest.json + the
+#          migrations/manifest.d/ fragments, via migrations/manifest-reader.mjs)
+#          is present in the `pgmigrations` ledger with a non-null run_on, the
+#          ledger count matches, and ledger ids are strictly distinct (no
+#          double-apply);
 #      (b) DATA PRESERVATION — every seeded row still exists, byte-identical
 #          payload;
 #      (c) re-running the chain is a NO-OP (idempotent — "No migrations to run").
@@ -395,31 +397,49 @@ fi
 # carries the core__ runner name for every migration). The ledger name == the
 # module filename sans .mjs. Every shipped module must be in the ledger with a
 # non-null run_on; the core ledger count must equal it; ledger ids must be
-# distinct. We cross-check the module set against migrations/manifest.json so a
-# module shipped without a manifest entry (or vice-versa) is caught too.
+# distinct. We cross-check the module set against the declared ledger — the
+# union of migrations/manifest.json and the migrations/manifest.d/ fragments,
+# via the shared reader migrations/manifest-reader.mjs — so a module shipped
+# without a ledger entry (or vice-versa) is caught too.
 echo "==> assert: migration-ledger integrity"
 EXPECTED_CORE_JS='
   const fs = require("fs");
-  // The runner-executed set: every core__NNNN_*.mjs runner module.
-  const modules = fs.readdirSync("migrations/core")
-    .filter((f) => /^core__\d{4}_[a-z0-9-]+\.mjs$/.test(f))
-    .map((f) => f.replace(/\.mjs$/, ""))
-    .sort();
-  // Cross-check: the manifest must describe the same NNNN sequence set.
-  const m = JSON.parse(fs.readFileSync("migrations/manifest.json", "utf8"));
-  const manifestSeqs = new Set(m.migrations.map((e) => String(e.seq)));
-  const moduleSeqs = modules.map((n) => n.match(/^core__(\d{4})_/)[1]);
-  for (const seq of moduleSeqs) {
-    if (!manifestSeqs.has(seq)) {
-      console.error(`module seq ${seq} has no migrations/manifest.json entry`);
+  const path = require("path");
+  const { pathToFileURL } = require("url");
+  (async () => {
+    // The declared ledger is the deterministic UNION of the frozen legacy
+    // migrations/manifest.json array and the per-migration fragments under
+    // migrations/manifest.d/ — computed by the SHARED reader every ledger
+    // consumer uses (it rides migrations/ into the image), so a duplicate
+    // seq across forms or a malformed fragment fails here too.
+    const { readManifestUnion } = await import(
+      pathToFileURL(path.resolve("migrations/manifest-reader.mjs")).href
+    );
+    const { entries, errors } = readManifestUnion(path.resolve("migrations"));
+    if (errors.length > 0) {
+      for (const e of errors) console.error(`ledger union: ${e}`);
       process.exit(3);
     }
-  }
-  if (manifestSeqs.size !== moduleSeqs.length) {
-    console.error(`manifest entry count ${manifestSeqs.size} != core module count ${moduleSeqs.length}`);
-    process.exit(3);
-  }
-  console.log(modules.join("\n"));
+    // The runner-executed set: every core__NNNN_*.mjs runner module.
+    const modules = fs.readdirSync("migrations/core")
+      .filter((f) => /^core__\d{4}_[a-z0-9-]+\.mjs$/.test(f))
+      .map((f) => f.replace(/\.mjs$/, ""))
+      .sort();
+    // Cross-check: the union ledger must describe the same NNNN sequence set.
+    const manifestSeqs = new Set(entries.map((e) => String(e.seq)));
+    const moduleSeqs = modules.map((n) => n.match(/^core__(\d{4})_/)[1]);
+    for (const seq of moduleSeqs) {
+      if (!manifestSeqs.has(seq)) {
+        console.error(`module seq ${seq} has no ledger entry (manifest.json + manifest.d/ union)`);
+        process.exit(3);
+      }
+    }
+    if (manifestSeqs.size !== moduleSeqs.length) {
+      console.error(`ledger union entry count ${manifestSeqs.size} != core module count ${moduleSeqs.length}`);
+      process.exit(3);
+    }
+    console.log(modules.join("\n"));
+  })().catch((err) => { console.error(err); process.exit(3); });
 '
 if [ -n "$CANDIDATE_IMAGE" ]; then
   # The candidate's shipped migration set is read from INSIDE THE IMAGE

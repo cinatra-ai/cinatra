@@ -9,9 +9,15 @@
     "  pass — the gate exits 0 (additive change, artifact shipped, or the",
     "         touched DDL is out of scope: Better Auth / extension-owned)",
     "  fail — the gate exits non-zero (destructive in-scope change with no",
-    "         migrations/core/core__NNNN_*.mjs runner module + manifest entry",
-    "         in the same diff — the legacy migrations/NNNN_*.sql psql form",
-    "         is retired for new migrations and also fails)",
+    "         migrations/core/core__NNNN_*.mjs runner module + per-migration",
+    "         manifest fragment migrations/manifest.d/core__NNNN_*.json in",
+    "         the same diff — the legacy migrations/NNNN_*.sql psql form is",
+    "         retired for new migrations and also fails, and appending to the",
+    "         frozen migrations/manifest.json array fails too)",
+    "The pinned base a fixture replays against is base-manifest.json (the",
+    "frozen legacy array snapshot, max seq 0012) + base-manifest.d/ (the",
+    "shipped-fragment snapshot: seq 0014, leaving 0013 a deliberate gap for",
+    "the non-monotonic fixture).",
     "The gate's classifier test must run every fixture and assert its label.",
     "When the convention gains a new destructive/additive case, add a fixture",
     "here in the same PR that documents it."
@@ -26,8 +32,44 @@
     {
       "file": "destructive-retype-with-artifact.diff",
       "expect": "pass",
-      "category": "destructive, has artifact",
-      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0012_narrow-usage-events-cost-usd.mjs plus its manifest entry in the same diff (the artifact form adopted in cinatra#116)."
+      "category": "destructive, has artifact (fragment form)",
+      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0015_narrow-usage-events-cost-usd.mjs plus its per-migration manifest fragment migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json in the same diff (the fragment authoring form adopted in cinatra#1335; seq 0015 > the max shipped base seq 0014)."
+    },
+    {
+      "file": "legacy-array-append.diff",
+      "expect": "fail",
+      "category": "destructive, artifact via legacy-array append (frozen)",
+      "description": "Same retype + runner module, but the ledger entry is APPENDED to the legacy migrations/manifest.json array instead of authored as a fragment. The legacy array is frozen shipped history (cinatra#1335) — the shared positional tail was the merge hotspot — so the gate rejects the append and points at migrations/manifest.d/."
+    },
+    {
+      "file": "fragment-double-claim-duplicate-seq.diff",
+      "expect": "fail",
+      "category": "fragment double-claim (duplicate seq within the diff)",
+      "description": "Two module+fragment pairs both claim seq 0015 under different slugs — the double-claim collision class from the cinatra#1335 ledger. Module-aligned fragment names mean the two PRs add DIFFERENT paths (no git add/add conflict); merged together the union gate reds deterministically on the duplicate seq instead of misreading shipped history."
+    },
+    {
+      "file": "fragment-duplicate-seq-legacy-overlap.diff",
+      "expect": "fail",
+      "category": "fragment duplicate seq (legacy/fragment overlap)",
+      "description": "A fragment (plus module) re-claims seq 0012, which is already shipped in the frozen legacy array. The union never dedupes across forms — a seq present in both the legacy array and a fragment is a hard error."
+    },
+    {
+      "file": "fragment-non-monotonic-seq.diff",
+      "expect": "fail",
+      "category": "fragment non-monotonic seq (union monotonicity)",
+      "description": "A fragment (plus module) claims seq 0013 — unique over the union (0013 is a gap) but NOT strictly greater than the max shipped base seq (fragment 0014 in the pinned base-manifest.d/). Monotonicity over the union is what keeps a seq below an already-deployed ledger head from ever landing; this also proves the gate enumerates the BASE manifest.d/ directory, not just diff-touched paths."
+    },
+    {
+      "file": "fragment-edit-shipped.diff",
+      "expect": "fail",
+      "category": "shipped-fragment edit (tampering)",
+      "description": "Rewrites the summary of the shipped pinned fragment migrations/manifest.d/core__0014_pinned-shipped-fragment.json. A shipped fragment is immutable ledger history — editing, deleting, or renaming it is tampering, exactly like rewriting a legacy array entry."
+    },
+    {
+      "file": "fragment-unrecognized-file.diff",
+      "expect": "fail",
+      "category": "unrecognized file under manifest.d/",
+      "description": "Adds migrations/manifest.d/NOTES.txt. Malformed or unrecognized files under manifest.d/ are errors, not skips — every consumer's union read refuses them, so the gate stops them at the PR."
     },
     {
       "file": "destructive-retype-legacy-sql-artifact.diff",

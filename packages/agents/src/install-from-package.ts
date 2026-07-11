@@ -67,6 +67,12 @@ import {
   triggerWayflowReload,
   type ReloadResult,
 } from "./wayflow-reload-client";
+// PROJECT-TEMPLATE install gate (cinatra#1032 deliverable 3): an agent package
+// shipping cinatra/project-template.json must satisfy the typed template
+// contract + the exact-match worker-ref rule against its own
+// cinatra.dependencies edges, or the install refuses in the inert window.
+// Imported DYNAMICALLY at the call site (route-graph ratchet: keeps the gate
+// module + its sdk contract off every locked route's static graph).
 
 export type InstallAgentFromPackageInput = {
   packageName: string;
@@ -363,6 +369,25 @@ async function _installAgentFromPackageImpl(
     const dependencyEdgeTargets = await resolveLiveCanonicalEdgeTargets({
       packageName: extracted.packageName,
     });
+
+    // PROJECT-TEMPLATE KIND GATE (cinatra#1032 deliverable 3): a shipped
+    // cinatra/project-template.json must validate against the typed template
+    // contract AND every template worker ref must EXACT-MATCH a
+    // cinatra.dependencies edge (the "one truth source" rule). Runs in the
+    // same inert window as the other manifest validations — BEFORE the disk
+    // materialize and any agent_templates write, so a refusal (a structured
+    // ProjectTemplateContractViolationError) mutates nothing. Packages with no
+    // template file no-op here.
+    {
+      const { enforceProjectTemplateInstallContract } = await import(
+        "./project-template-install-gate"
+      );
+      await enforceProjectTemplateInstallContract({
+        extractedTempDir: extracted.tempDir,
+        packageName: extracted.packageName,
+        dependencyEdges,
+      });
+    }
 
     // RUNTIME-GATE PROJECTION (cinatra#1056): derive the two runtime-gate
     // columns the template row carries from ONE truth source — the canonical

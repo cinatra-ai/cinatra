@@ -32,6 +32,18 @@ import "server-only";
 //      the parent tick run's chain is passed as the compose operand
 //      (`parentOboCeiling`), NEVER copied onto the child (the clone-copy
 //      trap). A provably-disjoint composition fails closed before any insert.
+//   6. SEAT- AND INSTANCE-GATED (deliverable 3, the install/kind-gate wiring):
+//      dispatch requires an INSTANTIATED project (a `project_instances` row —
+//      see src/lib/project-instantiation.ts) and runs ON BEHALF OF the
+//      project's persisted PM SEAT: the caller supplies only the parent tick
+//      run's ID (`parentRunId`); the run row, its org, its agent package, its
+//      cinatra project, and its persisted OBO ceiling chain are all read
+//      SERVER-SIDE (never trusted from input). The parent run's agent must BE
+//      the instance's pm_agent_package and must STILL declare the
+//      pm-work-store capability binding (fail-closed against a reinstall that
+//      dropped it). The template is resolved from the instance's pinned
+//      template package's FINALIZED store payload — never caller-supplied
+//      bytes — and its stable id must equal the instance's pinned template_id.
 //
 // Never throws: every failure resolves to a structured outcome, mirroring the
 // workflow executor's contract.
@@ -40,8 +52,11 @@ import { randomUUID } from "node:crypto";
 import {
   createAgentRun,
   readAgentRunById,
+  readAgentTemplateById,
   readAgentTemplateByPackageName,
   readAgentVersionsByTemplate,
+  TERMINAL_RUN_STATUSES,
+  type AgentRunStatus,
 } from "@cinatra-ai/agents";
 import { isAgentRuntimeRunnable } from "@cinatra-ai/agents/runtime-install-gate";
 import {
@@ -50,23 +65,27 @@ import {
   type DispatchAttemptRecord,
 } from "@cinatra-ai/agents/project-dispatch-ledger-store";
 import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
-import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 /** Stable code carried by OboCeilingCompositionError — branch on the CODE, not
  *  instanceof, to avoid cross-bundle class-identity coupling (the documented
  *  site-level pattern; see packages/a2a/src/agent-executor.ts). */
 const OBO_CEILING_DISJOINT_CODE = "AGENT_OBO_CEILING_DISJOINT";
 import {
+  checkTemplateWorkerRefsAgainstDependencies,
   itemNotReadyReason,
   indexItemStatusByKey,
   templateWorkerAllowlist,
   PROJECT_TEMPLATE_NATURAL_KEY_SEPARATOR,
   type NotReadyReason,
-  type ProjectTemplate,
   type ReadyItemView,
   type WorkerAgentRef,
 } from "@cinatra-ai/sdk-extensions/project-template-contract";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
+// DELIBERATELY DYNAMIC (route-graph ratchet): the deliverable-3 gate modules
+// (project-instance store, the finalized-payload resolvers, the manifest
+// dependency-edge parser) are imported lazily inside dispatchProjectWorker so
+// this module's STATIC first-party graph — reachable from the locked routes —
+// stays at its baseline; the checks themselves are unconditional.
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -92,6 +111,10 @@ function versionConstraintFingerprint(vc: WorkerAgentRef["versionConstraint"]): 
  *  run was created (or could ever have been). */
 export type ProjectDispatchRejectionCode =
   | "INVALID_INPUT"
+  | "PROJECT_NOT_INSTANTIATED"
+  | "NOT_PM_SEAT"
+  | "PROJECT_TEMPLATE_MISMATCH"
+  | "TEMPLATE_WORKER_REFS_INVALID"
   | "WORKER_NOT_ALLOWLISTED"
   | "PICK_UNKNOWN"
   | "ITEM_NOT_READY"
@@ -102,8 +125,12 @@ export type ProjectDispatchRejectionCode =
  *  DISPATCH_RUN_MISSING, preserved as-is); no NEW child run exists.
  *  DISPATCH_ATTEMPT_CONFLICT appears here too for the post-dispatch settle
  *  conflict (the child run exists; the ledger row was concurrently settled to
- *  a different result — surfaced, never overwritten). */
+ *  a different result — surfaced, never overwritten). TEMPLATE_UNRESOLVED is
+ *  pre-ledger (no attempt row was consumed): the instance's pinned template
+ *  package stopped resolving to a finalized install carrying a valid
+ *  template — an environment/lifecycle fault, not a caller policy error. */
 export type ProjectDispatchFailureCode =
+  | "TEMPLATE_UNRESOLVED"
   | "AGENT_UNRESOLVED"
   | "AGENT_CROSS_ORG"
   | "AGENT_NOT_INSTALLED"
@@ -139,10 +166,11 @@ export type ProjectDispatchOutcome =
 export type ProjectWorkerDispatchInput = {
   /** Auth-derived tenant org — NEVER a body id (tenancy operand). */
   orgId: string;
-  /** The PM project scope — the natural-key prefix of every item in `items`. */
+  /** The PM project scope — the natural-key prefix of every item in `items`.
+   *  Must be an INSTANTIATED project (see src/lib/project-instantiation.ts);
+   *  the persisted instance pins the template package/id, the PM seat, and
+   *  the cinatra project refinement the child run inherits. */
   projectRef: string;
-  /** cinatra project refinement for the child run (null = none). */
-  projectId?: string | null;
   /** Every cinatra-managed item in the project scope (dependency resolution
    *  context for the ready validator). */
   items: readonly ReadyItemView[];
@@ -156,8 +184,6 @@ export type ProjectWorkerDispatchInput = {
   /** The proposed worker ROLE (validated against the template task's binding
    *  and the template allowlist — role, never a parsed package string). */
   role: string;
-  /** The VALIDATED project template (run validateProjectTemplate first). */
-  template: ProjectTemplate;
   /** Input params for the child run. */
   runInput: Record<string, unknown>;
   /** The user on whose behalf the project runs (delegated attribution). */
@@ -165,9 +191,18 @@ export type ProjectWorkerDispatchInput = {
   /** The caller's LIVE project lease (from acquireProjectLease) — its fencing
    *  version guards the ledger claim. */
   lease: { holderId: string; version: number };
-  /** The dispatching tick run (the PM agent's own run): linked as the child's
-   *  parent, and its persisted OBO ceiling chain is the compose operand. */
-  parentRun?: { id: string; oboCeiling: OboCeilingChain | null } | null;
+  /** The dispatching tick run's ID (the PM agent's own run) — REQUIRED. The
+   *  run row is read SERVER-SIDE: its org must match `orgId`, it must be
+   *  NON-TERMINAL, its agent must BE the instance's persisted PM seat, the
+   *  project lease must be held AS this run (lease.holderId === parentRunId),
+   *  and its PERSISTED OBO ceiling chain is the compose operand (never
+   *  accepted from input — the clone-copy / caller-crafted-ceiling trap).
+   *  BOUNDARY NOTE: this primitive is server-only and its callers are host
+   *  code; proving the AUTHENTICATED caller IS this run (run-token ≡
+   *  parentRunId) happens at the tool boundary that exposes dispatch to an
+   *  agent run — the run-token spine's enforcement seam, wired with the
+   *  project-manager pilot. */
+  parentRunId: string;
 };
 
 /**
@@ -237,6 +272,144 @@ export async function dispatchProjectWorker(
         message: `asOf must be YYYY-MM-DD, got "${input.asOf}"`,
       };
     }
+    if (typeof input.parentRunId !== "string" || input.parentRunId.trim().length === 0) {
+      return {
+        status: "rejected",
+        code: "INVALID_INPUT",
+        message: "parentRunId (the PM seat's tick run) is required",
+      };
+    }
+
+    // ---- 0b. Instance gate: the project must be INSTANTIATED --------------
+    // (deliverable 3). The instance pins the template package/id, the PM
+    // seat, and the cinatra project refinement — dispatch never proceeds on
+    // an un-instantiated project scope.
+    const { readProjectInstance } = await import("@cinatra-ai/agents/project-instance-store");
+    const instance = await readProjectInstance(input.orgId, input.projectRef);
+    if (!instance) {
+      return {
+        status: "rejected",
+        code: "PROJECT_NOT_INSTANTIATED",
+        message: `project "${input.projectRef}" has no instance in org ${input.orgId} — instantiate it before dispatching`,
+      };
+    }
+
+    // ---- 0c. PM-SEAT gate: server-derived parent-run authority ------------
+    // The caller supplies only the run ID; org, agent package, project, and
+    // the OBO ceiling compose operand are read from the persisted run row.
+    const parentRun = await readAgentRunById(input.parentRunId);
+    if (!parentRun || parentRun.orgId !== input.orgId) {
+      return {
+        status: "rejected",
+        code: "NOT_PM_SEAT",
+        message: `parent run "${input.parentRunId}" does not exist in org ${input.orgId}`,
+      };
+    }
+    // A TERMINAL run cannot be the dispatching tick: nominating an old
+    // completed/failed PM run (e.g. one with a broader historical ceiling)
+    // is refused — only a live seat run dispatches.
+    if (TERMINAL_RUN_STATUSES.has(parentRun.status as AgentRunStatus)) {
+      return {
+        status: "rejected",
+        code: "NOT_PM_SEAT",
+        message: `parent run "${input.parentRunId}" is terminal (${parentRun.status}) — only a live PM tick run can dispatch`,
+      };
+    }
+    // Lease-identity binding: the project lease must be held AS the seat tick
+    // run (holderId === the parent run id), so a caller cannot pair one run's
+    // seat authority with a lease acquired under a different identity.
+    if (input.lease.holderId !== parentRun.id) {
+      return {
+        status: "rejected",
+        code: "NOT_PM_SEAT",
+        message: `lease holder "${input.lease.holderId}" is not the parent tick run "${parentRun.id}" — the project lease must be held by the dispatching seat run`,
+      };
+    }
+    if (instance.projectId !== null && parentRun.projectId !== instance.projectId) {
+      return {
+        status: "rejected",
+        code: "NOT_PM_SEAT",
+        message: `parent run "${input.parentRunId}" does not belong to the instance's cinatra project "${instance.projectId}"`,
+      };
+    }
+    const seatTemplate = await readAgentTemplateById(parentRun.templateId);
+    if (!seatTemplate || seatTemplate.packageName !== instance.pmAgentPackage) {
+      return {
+        status: "rejected",
+        code: "NOT_PM_SEAT",
+        message: `parent run "${input.parentRunId}" is not a run of the project's PM seat "${instance.pmAgentPackage}"`,
+      };
+    }
+    // The seat must STILL carry the pm-work-store binding (fail-closed against
+    // a reinstall/downgrade that dropped it after instantiation).
+    const { agentManifestDeclaresPmSeat, resolveInstalledAgentManifest, resolveInstalledProjectTemplate } =
+      await import("@/lib/project-template-resolve");
+    const seatManifest = await resolveInstalledAgentManifest(instance.pmAgentPackage, input.orgId);
+    if (!seatManifest || !agentManifestDeclaresPmSeat(seatManifest.manifest)) {
+      return {
+        status: "rejected",
+        code: "NOT_PM_SEAT",
+        message: `"${instance.pmAgentPackage}" no longer resolves to an installed agent declaring the required pm-work-store binding — dispatch fails closed`,
+      };
+    }
+
+    // ---- 0d. Template authority: the instance's pinned installed template --
+    // Resolved from the FINALIZED store payload (never caller bytes); the
+    // stable template id must equal the instance's pinned template_id.
+    const templateResolution = await resolveInstalledProjectTemplate(
+      instance.templatePackage,
+      input.orgId,
+    );
+    if (!templateResolution.ok) {
+      return {
+        status: "failed",
+        code: "TEMPLATE_UNRESOLVED",
+        message: `the instance's template package "${instance.templatePackage}" does not resolve to a finalized install with a valid template (${templateResolution.reason}${templateResolution.detail ? `: ${templateResolution.detail}` : ""})`,
+      };
+    }
+    const projectTemplate = templateResolution.template;
+    if (projectTemplate.id !== instance.templateId) {
+      return {
+        status: "rejected",
+        code: "PROJECT_TEMPLATE_MISMATCH",
+        message: `installed template id "${projectTemplate.id}" does not match the instance's pinned template id "${instance.templateId}" — refusing a template swap under the same project ref`,
+      };
+    }
+    // Worker-ref EXACT-MATCH re-assertion against the SAME finalized
+    // manifest's dependency edges — the install gate's "one truth source"
+    // rule, re-run HERE because the shared install pipeline finalizes the
+    // store payload BEFORE the native agent handler's gate runs: a dispatch
+    // racing that window (or reading a payload whose gate rejection is still
+    // being compensated) must never allowlist a worker the manifest does not
+    // declare. Fail-closed on unreadable edges.
+    try {
+      const { parseManifestDependencyEdges } = await import(
+        "@cinatra-ai/extensions/manifest-dependencies"
+      );
+      const edges = parseManifestDependencyEdges(templateResolution.manifest, {
+        packageName: instance.templatePackage,
+      }).edges;
+      const workerRefViolations = checkTemplateWorkerRefsAgainstDependencies(
+        projectTemplate,
+        edges,
+      );
+      if (workerRefViolations.length > 0) {
+        return {
+          status: "rejected",
+          code: "TEMPLATE_WORKER_REFS_INVALID",
+          message:
+            `installed template of "${instance.templatePackage}" violates the one-truth-source ` +
+            `worker-ref rule: ` +
+            workerRefViolations.map((v) => `[${v.code}] ${v.path}`).join("; "),
+        };
+      }
+    } catch (err) {
+      return {
+        status: "rejected",
+        code: "TEMPLATE_WORKER_REFS_INVALID",
+        message: `installed manifest of "${instance.templatePackage}" has unreadable dependency edges — dispatch fails closed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
 
     // ---- 1. Worker policy: template-task binding + allowlist -------------
     // The pick's task id is the natural-key suffix (task ids are separator-free
@@ -252,7 +425,7 @@ export async function dispatchProjectWorker(
       };
     }
     const taskId = input.pick.slice(prefix.length);
-    const task = input.template.tasks.find((t) => t.id === taskId);
+    const task = projectTemplate.tasks.find((t) => t.id === taskId);
     if (!task) {
       return {
         status: "rejected",
@@ -274,7 +447,7 @@ export async function dispatchProjectWorker(
         message: `role "${input.role}" is not task "${taskId}"'s worker binding ("${task.worker.role}")`,
       };
     }
-    const allowlisted = templateWorkerAllowlist(input.template).find(
+    const allowlisted = templateWorkerAllowlist(projectTemplate).find(
       (w) => w.role === input.role && w.packageName === task.worker?.packageName,
     );
     if (!allowlisted) {
@@ -439,14 +612,18 @@ export async function dispatchProjectWorker(
         runBy: input.runBy ?? undefined,
         // Tenant is the project's auth-derived org, never a body id.
         orgId: input.orgId,
-        projectId: input.projectId ?? null,
+        // The cinatra project refinement is the INSTANCE's persisted binding
+        // (one truth) — never a per-dispatch input.
+        projectId: instance.projectId,
         // Idempotent dispatch provenance — the ledgered key, VERBATIM.
         idempotencyKey: attempt.idempotencyKey,
         // Child linkage + OBO ceiling composition (W5): the child's ceiling is
         // server-derived over its OWN anchored scope inside createAgentRun;
-        // the parent chain is only the compose operand — never copied.
-        parentRunId: input.parentRun?.id ?? null,
-        parentOboCeiling: input.parentRun?.oboCeiling ?? null,
+        // the parent chain is the seat run's PERSISTED chain (read server-side
+        // in step 0c) as the compose operand only — never copied, never
+        // accepted from input.
+        parentRunId: parentRun.id,
+        parentOboCeiling: parentRun.oboCeiling ?? null,
       });
     } catch (err) {
       if ((err as { code?: string } | null)?.code === OBO_CEILING_DISJOINT_CODE) {
