@@ -338,3 +338,79 @@ describe("dispatchContentEditorViaA2A — per-user actorOverride (cinatra#408)",
     expect(reply).toBe('{"postId":"7"}');
   });
 });
+
+describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation boundary (widget-stream runtime trust, slice 2)", () => {
+  const overrideInput = {
+    agentUrl: "http://localhost:3021",
+    payload: { instanceId: "wp-1", postId: "7", instructions: "edit" },
+    timeoutMs: 300_000,
+    packageName: "@cinatra-ai/wordpress-agent",
+    actorOverride: {
+      runBy: "u_enduser",
+      orgId: "org_1",
+      instanceId: "wp-1",
+      sourceType: "public_site_widget" as const,
+    },
+  };
+
+  it("invokes the re-assert AFTER template/version reads and BEFORE createAgentRun (override path)", async () => {
+    const order: string[] = [];
+    readLatestAgentVersionIdForTemplate.mockImplementation(async () => {
+      order.push("version-read");
+      return "ver_1";
+    });
+    createAgentRun.mockImplementation(async (input: { id: string }) => {
+      order.push("create-run");
+      return { id: input.id, inputParams: {} };
+    });
+    const preCreateAuthorize = vi.fn(async () => {
+      order.push("re-assert");
+      return true;
+    });
+    await dispatchContentEditorViaA2A({ ...overrideInput, preCreateAuthorize });
+    expect(preCreateAuthorize).toHaveBeenCalledTimes(1);
+    // The re-assert is the LAST relay-path observation before the bounded
+    // store operation is initiated — no relay-path reads between them.
+    expect(order).toEqual(["version-read", "re-assert", "create-run"]);
+  });
+
+  it("REFUSES with NO run created when the re-assert returns false (revoked-mid-serve)", async () => {
+    const preCreateAuthorize = vi.fn(async () => false);
+    await expect(
+      dispatchContentEditorViaA2A({ ...overrideInput, preCreateAuthorize }),
+    ).rejects.toThrow(/point-of-use authorization re-assert failed/);
+    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("a THROWING re-assert refuses exactly like false (fail closed), no run created", async () => {
+    const preCreateAuthorize = vi.fn(async () => {
+      throw new Error("db down");
+    });
+    await expect(
+      dispatchContentEditorViaA2A({ ...overrideInput, preCreateAuthorize }),
+    ).rejects.toThrow(/point-of-use authorization re-assert failed/);
+    expect(createAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("guards the install-identity path's run creation too", async () => {
+    const preCreateAuthorize = vi.fn(async () => false);
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { postId: "7" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+        instancesConfigKey: "wordpress",
+        origin: "https://wp.test",
+        preCreateAuthorize,
+      }),
+    ).rejects.toThrow(/point-of-use authorization re-assert failed/);
+    expect(createAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("an ABSENT hook keeps existing callers unchanged (baked-trust paths)", async () => {
+    await dispatchContentEditorViaA2A(overrideInput);
+    expect(createAgentRun).toHaveBeenCalledTimes(1);
+  });
+});

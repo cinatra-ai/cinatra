@@ -1126,7 +1126,23 @@ export async function POST(req: Request): Promise<Response> {
               // Any other agent run resolves to `null` (unrestricted, unchanged).
               const cinatraMcpAllowedTools =
                 resolveAgentRunCinatraMcpAllowedTools(
-                  isInAdminCmsContentEditorPackage(template?.packageName),
+                  // RUN-LEVEL STICKY PIN first (widget-stream runtime trust,
+                  // slice 2): a `public_site_widget` carrier run IS an
+                  // in-admin CMS content-editor relay by construction, so it
+                  // stays CMS-pinned for its whole lifetime — a runtime grant
+                  // revoked/drifted AFTER run creation (or a transient
+                  // runtime-arm lookup failure) can never widen a live
+                  // widget-carrier run to unrestricted self-MCP access. The
+                  // async package-membership check (the widget-stream UNION:
+                  // build map ∪ approved runtime grants) covers the
+                  // non-widget dispatch surfaces of the same relay agents.
+                  runForPorts.sourceType === "public_site_widget" ||
+                    // ...same construction argument for the headless/legacy
+                    // content-editor carrier discriminator.
+                    runForPorts.sourceType === "content_editor_dispatch" ||
+                    (await isInAdminCmsContentEditorPackage(
+                      template?.packageName,
+                    )),
                 );
               const oboTool = await buildLlmMcpServerToolForAgentRun(
                 mcpEffectiveProvider as "openai" | "anthropic",
