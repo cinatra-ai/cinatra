@@ -141,8 +141,14 @@ function transitionMatrix(
  * inline note below).
  */
 export async function installExtensionManifest(
-  row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "status"> & {
+  // version / isDefault are OPTIONAL (cinatra#1040 S1): the canonical store
+  // derives version from the source and defaults isDefault to true, so existing
+  // install-row writers need no change (the version-aware write path is a later
+  // slice).
+  row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "status" | "version" | "isDefault"> & {
     status?: ExtensionLifecycleStatus;
+    version?: string;
+    isDefault?: boolean;
   },
   opts: TransitionOpts,
 ): Promise<InstalledExtension> {

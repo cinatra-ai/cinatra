@@ -175,9 +175,12 @@ designed so S4 registers a view **without forking the contract**:
     nodeId?: string;
     postId?: string;
     rich: boolean;
-    // Correlation ids for the later no-reload APPLY intent (S4 + #1214): they
-    // tie an accept back to this proposal/change-set without re-deriving it.
-    // Carried in the schema; the apply SEMANTICS are out of this stage's scope.
+    // Correlation ids (S4, Option A — owner decision 2026-07-10 on #1220):
+    // the producing agent already saved the change as a draft DURING the run
+    // through the CMS MCP integration (#1214); accept performs NO server
+    // write — it refreshes the editor in place to that saved draft. These ids
+    // tie the card (and the S5 refresh intent) to the already-written draft
+    // without re-deriving it. Opaque correlation strings, never authorization.
     proposalId?: string;
     changeSetId?: string;
   };
@@ -198,9 +201,14 @@ designed so S4 registers a view **without forking the contract**:
 
 The change-diff is the primary S4 porting target: it moves from the bespoke
 `changes` SSE frame (`{ fields, nodeId, postId }`, applied by a full page
-reload) to a `content_change_proposal` renderable view applied in place. The
-**renderer component** keyed by `viewType`, and the no-reload apply capability,
-are S4's concern — this contract owns only the payload-type seam.
+reload) to a `content_change_proposal` renderable view **refreshed in place**
+(Option A, owner decision 2026-07-10: the agent already saved the draft during
+the run through the CMS MCP integration under OBO; accepting performs no
+server write — the editor refreshes to the saved draft, correlated by
+`proposalId` / `changeSetId`). The **renderer component** keyed by `viewType`
+and the display-only applied/refresh affordance are S4's concern; the
+editor-patch consumer (the refresh executor in the CMS widgets) is S5's
+(#1221) — this contract owns only the payload-type seam.
 
 ## 6. Conformance
 

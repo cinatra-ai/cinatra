@@ -27,6 +27,15 @@ const authSessionMock = vi.hoisted(() => ({
   isPlatformAdmin: vi.fn(() => false),
 }));
 vi.mock("@/lib/auth-session", () => authSessionMock);
+// #1057(b) config-needs run gate reads the canonical store (installed_extension)
+// for the agent's required-connector readiness; this preflight suite has no DB,
+// so stub the gate to "runnable" (its own semantics are covered by
+// src/lib/__tests__/agent-run-readiness.test.ts + the wiring guard). Without
+// this the real reader would ECONNREFUSED against a non-existent DB.
+vi.mock("@/lib/agent-run-readiness", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/agent-run-readiness")>()),
+  assertAgentRunReadyByPackage: vi.fn(async () => null),
+}));
 
 const storeMock = vi.hoisted(() => ({
   readAgentTemplateById: vi.fn(),

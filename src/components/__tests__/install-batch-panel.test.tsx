@@ -105,4 +105,9 @@ describe("InstallBatchPanel", () => {
     expect(html).toContain("manual cleanup");
     expect(html).toContain("@scope/dep");
   });
+
+  // The post-install "needs configuration" affordance (cinatra #1057) no longer
+  // lives in this panel — it moved to the affected agent's Extensions-page card
+  // (see installed-extension-card.test.tsx). This panel renders no
+  // configuration follow-up at all.
 });

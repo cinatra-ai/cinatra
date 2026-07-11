@@ -1,0 +1,37 @@
+name: toast-banner-gate
+
+# cinatra-ai/cinatra#1213 (toast-notifications epic) — core adoption of the
+# toast-banner conformance gate as a standalone status check.
+#
+# Core already enforces this rule via the vitest guard
+# (src/lib/__tests__/toast-banner-guard.test.ts), but that suite does not
+# surface a `toast-banner-gate / toast-banner-gate` status context on core
+# PRs, so the check cannot become a required branch-protection context here
+# the way it is on the connector repos. This thin caller runs the SAME shared
+# detector (scripts/audit/lib/toast-banner-detect.mjs) through the reusable
+# workflow the connectors already pin, producing the identical context name
+# and the identical rule — same baseline artifact, same scan roots as the
+# core guard (src + packages).
+#
+# Unlike the connector callers (which double-pin a cinatra commit SHA), this
+# is a same-repo LOCAL call: the reusable workflow, the scanner, and the code
+# under test all come from the SAME commit — nothing is pulled from mutable
+# main, so no pin (or pin-bump choreography) is needed. `ref` is the commit
+# being checked (for a PR, the merge commit), keeping the scanner and the
+# scanned tree in lockstep.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  toast-banner-gate:
+    uses: ./.github/workflows/toast-banner-gate-reusable.yml
+    with:
+      ref: ${{ github.sha }}
+      baseline: src/lib/toast-banner-guard.baseline.json
+      scan_root: src,packages

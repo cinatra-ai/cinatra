@@ -76,6 +76,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+# cinatra#1194 — loader-owned context-subflow injection (ships next to this
+# file in the image; see context_subflow_injection.py for the contract).
+from context_subflow_injection import (
+    CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+    inject_context_subflows,
+)
+
 try:  # pragma: no cover — exercised inside the Docker image only
     from wayflowcore.agentserver import A2AServer  # type: ignore[import-not-found]
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
@@ -94,6 +101,23 @@ except Exception:  # pragma: no cover — host-side typecheck fallback
 _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_WAYFLOW_CONTEXT_ID", default=""
 )
+
+#: #1193 run-token spine (W2). Holds the RAW dispatch-minted per-run token for
+#: the task currently executing in this asyncio task / coroutine chain. Popped
+#: from the initial A2A message BEFORE it is appended to the WayFlow
+#: conversation (so the bearer never enters prompt/history/persistence), then
+#: read by the patched ApiCallStep._execute_request to attach X-Cinatra-Run-Token
+#: on host-anchored context-resolve/context-finalize callbacks. The server
+#: resolves "which run is calling" from this ONE credential (verifyRunToken →
+#: unique-index row) instead of a body-selected id. Reset to "" between tasks.
+_WAYFLOW_RUN_TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_WAYFLOW_RUN_TOKEN", default=""
+)
+
+#: The reserved initial-message key under which the Cinatra dispatcher embeds the
+#: RAW per-run token. MUST equal CINATRA_RUN_TOKEN_MESSAGE_KEY in
+#: src/lib/agent-run-token.ts — a cross-language ABI with no shared import.
+CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
 
 #: Default HTTP timeout (in seconds) applied to any ApiNode call that does
 #: not declare its own. 24 hours — matches the OpenAI batch API SLA upper
@@ -217,6 +241,55 @@ def _filter_inputs_to_flow_schema(
         return start_inputs
     declared_keys = set(declared.keys())
     return {k: v for k, v in start_inputs.items() if k in declared_keys}
+
+
+def _pop_run_token_from_message(
+    message: Optional[Dict[str, Any]],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Pop the reserved run-token key out of the initial A2A message.
+
+    #1193 run-token spine (W2). The dispatcher embeds the RAW per-run token in
+    the first text part's JSON object under ``CINATRA_RUN_TOKEN_MESSAGE_KEY``.
+    That token is a BEARER credential — it must NEVER survive into WayFlow's
+    conversation, because ``_patched_run_task`` later converts + appends +
+    persists this same message and the history can be replayed to the LLM.
+    Merely filtering it out of the Flow ``start_conversation`` inputs (which the
+    schema filter already does) does NOT scrub the appended message.
+
+    Returns ``(raw_token, scrubbed_message)``: the popped token (``""`` when
+    absent) and a SHALLOW-COPIED message whose first text part re-serialises the
+    JSON object WITHOUT the reserved key — every other key
+    (``cinatra_run_id`` / ``cinatra_run_binding`` / author inputs) is preserved.
+
+    Fails SAFE and never raises: any shape it does not recognise (no message, no
+    text part, non-JSON, non-object, key absent) returns ``("", message)``
+    unchanged so the token stays inert (the schema filter still drops it from
+    Flow inputs). The caller's message dict is never mutated in place.
+    """
+    if not isinstance(message, dict):
+        return "", message
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return "", message
+    p0 = parts[0]
+    if not (
+        isinstance(p0, dict)
+        and p0.get("kind") == "text"
+        and isinstance(p0.get("text"), str)
+    ):
+        return "", message
+    try:
+        parsed = json.loads(p0["text"])
+    except (ValueError, TypeError):
+        return "", message
+    if not isinstance(parsed, dict) or CINATRA_RUN_TOKEN_MESSAGE_KEY not in parsed:
+        return "", message
+    token = parsed.pop(CINATRA_RUN_TOKEN_MESSAGE_KEY)
+    new_p0 = dict(p0)
+    new_p0["text"] = json.dumps(parsed)
+    new_message = dict(message)
+    new_message["parts"] = [new_p0, *parts[1:]]
+    return (token if isinstance(token, str) else ""), new_message
 
 
 # Surface EndNode declared outputs as a structured A2A DataPart so the Cinatra
@@ -512,6 +585,19 @@ def _patch_api_call_step_bridge_token() -> None:
                 or "/auditor/apply" in _ctx_url
             ):
                 request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
+            # #1193 run-token spine (W2): attach the RAW per-run token on the
+            # host-anchored context callbacks (resolve/finalize) so the server
+            # resolves "which run is calling" from the ONE dispatch-minted
+            # credential (verifyRunToken → unique-index row) rather than a
+            # body-selected id. Scoped to the context routes this wave; the
+            # llm-bridge / MCP-tagging consumers move onto it in W3. Read from a
+            # per-task ContextVar the OAS author cannot write, and only ever sent
+            # to the internal host (the _is_internal gate above).
+            _run_tok = _WAYFLOW_RUN_TOKEN.get()
+            if _run_tok and (
+                "context-resolve" in _ctx_url or "context-finalize" in _ctx_url
+            ):
+                request["headers"]["X-Cinatra-Run-Token"] = _run_tok
             # #907/#1192: mint the per-node context-callback attestation for the
             # internal context-resolution ApiNodes. `self` IS the executing
             # compiled step; `self.id` is the inlined context node's id
@@ -786,6 +872,13 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         # Capture task_id BEFORE any await — the outer finally must always
         # be able to notify, even if `storage.load_task` itself raises.
         _task_id_for_notify = params["id"]
+        # #1193 run-token spine (W2): pre-initialise the ContextVar reset tokens
+        # so the outer `finally` can reset UNCONDITIONALLY and SAFELY even if
+        # `load_task` raises before either ContextVar is set. (The prior
+        # `_ctx_token` capture was dead code — set but never reset; this wave
+        # turns it into a real try/finally reset alongside the run token.)
+        _ctx_token = None
+        _rt_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -799,9 +892,37 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
 
             await self.storage.update_task(task_id=task["id"], state="working")
 
+            # #1193 run-token spine (W2): pop the RAW per-run token out of the
+            # initial A2A message BEFORE it is parsed for start-inputs OR
+            # converted + appended to the conversation (both below), so the
+            # bearer credential never enters WayFlow prompt/history/persistence.
+            # Reassign params["message"] to the scrubbed copy and hold the raw
+            # token in a per-task ContextVar the patched ApiCallStep reads to
+            # attach X-Cinatra-Run-Token on host-anchored context callbacks.
+            _run_token, _scrubbed_message = _pop_run_token_from_message(
+                params.get("message")
+            )
+            if _scrubbed_message is not None:
+                params["message"] = _scrubbed_message
+            _rt_token = _WAYFLOW_RUN_TOKEN.set(_run_token or "")
+
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+
+            # cinatra#1194 — template-version-per-run: what executes is no
+            # longer byte-identical to the published spec for agents with
+            # loader-injected context subflows, so every run records WHICH
+            # template version composed its graph (ids only; sidecar attached
+            # at mount in _mount_one_sync).
+            _ctx_inj = getattr(self.assistant, "_cinatra_context_injection", None)
+            if isinstance(_ctx_inj, dict):
+                print(
+                    f"[agent_loader] context-injection run "
+                    f"task={params['id']} "
+                    f"templateVersion={_ctx_inj.get('templateVersion')} "
+                    f"slots={_ctx_inj.get('slots')}"
+                )
 
             prioritize_task = params.get("metadata", {}).get("prioritize_task", False)
             tools_dict = self.assistant._referenced_tools_dict()
@@ -1002,6 +1123,15 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 )
             raise
         finally:
+            # #1193 run-token spine (W2): reset the per-task ContextVars so the
+            # run token / context id never leak across asyncio tasks reusing this
+            # coroutine chain. Reset ONLY when set (load_task may raise first) —
+            # this is the real try/finally reset the prior dead _ctx_token
+            # capture never performed. Reset the run token first (LIFO wrt set).
+            if _rt_token is not None:
+                _WAYFLOW_RUN_TOKEN.reset(_rt_token)
+            if _ctx_token is not None:
+                _WAYFLOW_CONTEXT_ID.reset(_ctx_token)
             # CINATRA HANG FIX: always notify, regardless of success/failure
             # path. anyio.Event.set() is idempotent, so success paths that
             # already notified are unaffected. This guarantees blocking-mode
@@ -2581,6 +2711,9 @@ class MountedAgent:
         "sub_app",
         "stack",
         "mount",
+        "composed_oas",
+        "composed_sha256",
+        "context_injection",
     )
 
     def __init__(
@@ -2592,6 +2725,9 @@ class MountedAgent:
         server: Any,
         sub_app: Any,
         mount: Mount,
+        composed_oas: Optional[Dict[str, Any]] = None,
+        composed_sha256: Optional[str] = None,
+        context_injection: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -2602,6 +2738,17 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        # cinatra#1194 — mount-time context-subflow injection sidecar. When the
+        # loader injected declared slots, `composed_oas` holds the PRE-
+        # placeholder-substitution composed document (what actually executes,
+        # minus env values — safe to expose on the gated debug view),
+        # `composed_sha256` fingerprints it (the source fingerprint alone no
+        # longer identifies the runtime graph), and `context_injection` is the
+        # per-slot report ({slot, definition, packageName, templateVersion}).
+        # All None for a legacy / declaration-free agent.
+        self.composed_oas = composed_oas
+        self.composed_sha256 = composed_sha256
+        self.context_injection = context_injection
 
 
 def _read_bridge_token() -> Optional[str]:
@@ -2635,8 +2782,59 @@ def _mount_one_sync(
             f"{actual_sha256[:12]}… (refusing to mount)"
         )
     raw_text = raw_bytes.decode("utf-8")
+
+    # cinatra#1194 — loader-owned context-subflow injection. Runs on the
+    # parsed PRE-substitution document (the template carries {{ENV}}
+    # placeholders of its own). When NO slot needs injection the original
+    # raw text reaches _substitute_placeholders byte-identically (legacy
+    # agents keep their exact historical mount path). A malformed declaration
+    # or impossible injection raises ContextInjectionError → this agent's
+    # mount fails loudly (recorded in /.health failed_agents) instead of the
+    # historical undiagnosable runtime 403.
+    label = f"{vendor}/{slug}"
+    composed_oas: Optional[Dict[str, Any]] = None
+    composed_sha256: Optional[str] = None
+    injection_report: List[Dict[str, Any]] = []
+    parsed_doc = json.loads(raw_text)
+    if isinstance(parsed_doc, dict):
+        composed_doc, injection_report = inject_context_subflows(parsed_doc, label)
+        if injection_report:
+            raw_text = json.dumps(composed_doc)
+            composed_oas = composed_doc
+            composed_sha256 = hashlib.sha256(
+                raw_text.encode("utf-8")
+            ).hexdigest()
+            print(
+                f"[agent_loader] context-subflow injection {label}: "
+                f"slots={[r['slot'] for r in injection_report]} "
+                f"templateVersion={CONTEXT_SUBFLOW_TEMPLATE_VERSION} "
+                f"composed_sha256={composed_sha256[:12]}…"
+            )
+
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+
+    if injection_report:
+        # Per-run template-version logging needs the injection info at
+        # run_task time, where only the deserialized assistant is in scope.
+        # Attach it as a plain attribute; verify it stuck (some model classes
+        # reject attribute assignment) and be LOUD when unavailable so the
+        # observability gap is never silent.
+        info = {
+            "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+            "slots": [r["slot"] for r in injection_report],
+        }
+        try:
+            setattr(agent, "_cinatra_context_injection", info)
+        except Exception:
+            pass
+        if getattr(agent, "_cinatra_context_injection", None) is not info:
+            print(
+                f"[agent_loader] WARNING: {label}: could not attach the "
+                "context-injection sidecar to the deserialized agent — "
+                "per-run templateVersion logging unavailable for this agent "
+                "(mount-time log above remains authoritative)"
+            )
 
     server = A2AServer()
     mount_url = f"{base_url}/agents/{vendor}/{slug}/"
@@ -2652,6 +2850,9 @@ def _mount_one_sync(
         server=server,
         sub_app=sub_app,
         mount=mount,
+        composed_oas=composed_oas,
+        composed_sha256=composed_sha256,
+        context_injection=injection_report or None,
     )
 
 
@@ -3056,6 +3257,11 @@ class MountedAgentRegistry:
             "last_reload_at": self._last_reload_at,
         }
 
+    def find(self, label: str) -> Optional[MountedAgent]:
+        """The mounted agent for `<vendor>/<slug>`, active-first (pre-start
+        the initial population is still in `_pending`)."""
+        return self._active.get(label) or self._pending.get(label)
+
 
 def _build_health_handler(
     registry: MountedAgentRegistry,
@@ -3116,6 +3322,51 @@ def _build_reload_handler(
             )
 
     return _reload
+
+
+def _build_composed_oas_handler(
+    registry: MountedAgentRegistry,
+) -> Callable[[Request], Any]:
+    """cinatra#1194 — composed-OAS debug view.
+
+    What executes after loader-owned context-subflow injection is no longer
+    byte-identical to the published spec, so the composed document must be
+    inspectable for debugging. Bridge-token-gated (same contract as the
+    reload endpoint); the label is validated against the ACTIVE registry
+    (never a filesystem lookup — no traversal surface). Returns the PRE-
+    placeholder-substitution composed document, so substituted env values
+    can never appear in the response.
+    """
+
+    async def _composed_oas(request: Request) -> JSONResponse:
+        guard = _check_bridge_token(request)
+        if guard is not None:
+            return guard
+        vendor = request.path_params.get("vendor", "")
+        slug = request.path_params.get("slug", "")
+        agent = registry.find(f"{vendor}/{slug}")
+        if agent is None:
+            return JSONResponse(
+                {"error": "unknown_agent", "detail": f"{vendor}/{slug}"},
+                status_code=404,
+            )
+        return JSONResponse(
+            {
+                "label": agent.label,
+                "sourceSha256": agent.fingerprint,
+                "injected": agent.context_injection is not None,
+                "templateVersion": (
+                    CONTEXT_SUBFLOW_TEMPLATE_VERSION
+                    if agent.context_injection is not None
+                    else None
+                ),
+                "injectedSlots": agent.context_injection or [],
+                "composedSha256": agent.composed_sha256,
+                "composedOas": agent.composed_oas,
+            }
+        )
+
+    return _composed_oas
 
 
 def _build_parent_lifespan(
@@ -3218,6 +3469,11 @@ def build_parent_app(agents_dir: Path) -> Starlette:
             "/.internal/reload-agents",
             _build_reload_handler(registry),
             methods=["POST"],
+        ),
+        Route(
+            "/.internal/composed-oas/{vendor}/{slug}",
+            _build_composed_oas_handler(registry),
+            methods=["GET"],
         ),
     ]
     registry.set_base_routes(base_routes)

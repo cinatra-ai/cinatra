@@ -44,6 +44,8 @@ export {
   updateAgentTemplatePackageVersion,
   readAgentRunByTaskId,
   readAgentRunByContextId,
+  readAgentRunByTokenHash,
+  setAgentRunTokenHash,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
   readAgentRunsByParent,
