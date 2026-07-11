@@ -279,3 +279,67 @@ WHERE org_id = $1 AND referrer_kind = $2 AND referrer_id = $3`,
     ],
   });
 }
+
+/**
+ * Pure helper: extract well-shaped attachment refs from a chat-thread
+ * payload's messages array, deduped by artifactId::representationRevisionId.
+ * Moved verbatim from src/lib/database.ts (its only caller —
+ * upsertChatThreadInDatabase passes the result into
+ * buildArtifactRefSyncQueries above) as a file-size-ratchet vertical slice;
+ * it belongs with the pin-sync builder it feeds. Sync-leaf safe: no imports.
+ */
+export function extractAttachmentRefsFromThreadPayload(
+  thread: { id: string } & Record<string, unknown>,
+): Array<{
+  artifactId: string;
+  representationRevisionId: string;
+  digest: string;
+  mime: string;
+  originKind: string;
+}> {
+  type AttachmentLike = {
+    artifactId?: unknown;
+    representationRevisionId?: unknown;
+    digest?: unknown;
+    mime?: unknown;
+    originKind?: unknown;
+  };
+  type MsgLike = { attachments?: unknown };
+  const raw = (thread as { messages?: unknown }).messages;
+  const messages: MsgLike[] = Array.isArray(raw) ? (raw as MsgLike[]) : [];
+  const refs: Array<{
+    artifactId: string;
+    representationRevisionId: string;
+    digest: string;
+    mime: string;
+    originKind: string;
+  }> = [];
+  const seen = new Set<string>();
+  for (const m of messages) {
+    const arr = m && Array.isArray(m.attachments)
+      ? (m.attachments as AttachmentLike[])
+      : [];
+    for (const a of arr) {
+      if (
+        typeof a?.artifactId !== "string" ||
+        typeof a?.representationRevisionId !== "string" ||
+        typeof a?.digest !== "string" ||
+        typeof a?.mime !== "string"
+      ) {
+        continue;
+      }
+      const key = `${a.artifactId}::${a.representationRevisionId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push({
+        artifactId: a.artifactId,
+        representationRevisionId: a.representationRevisionId,
+        digest: a.digest,
+        mime: a.mime,
+        originKind:
+          typeof a.originKind === "string" ? a.originKind : "upload",
+      });
+    }
+  }
+  return refs;
+}

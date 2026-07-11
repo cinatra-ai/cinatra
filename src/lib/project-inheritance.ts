@@ -171,3 +171,277 @@ export function extractTimestampFieldFromThread(
   const ms = Date.parse(trimmed);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
+
+// ---------------------------------------------------------------------------
+// Legacy chat_threads -> structured assistant_threads/assistant_turns MIRROR
+// (cinatra-ai/cinatra#1037 P2b — the persistence rewiring deferred from P2a).
+//
+// Every legacy chat-thread write (all writers funnel through
+// `upsertChatThreadInDatabase`) composes these builders into its EXISTING
+// single transaction, so the structured store is a lockstep write-through
+// projection of the legacy JSON payload:
+//
+//   • assistant_threads — thread identity/ordering/ownership shadow
+//     (id, owner_user_id, org_id set-once, title raw bytes, timestamps).
+//     `assistant_user_id` / `context_id` are NEVER touched here — those
+//     columns are owned by the AG-UI cutover (#1216 S2).
+//   • assistant_turns   — one METADATA + attribution row per legacy message.
+//     `run_id` stays NULL (no AG-UI run exists on the bespoke wire; the
+//     unified stream contract owns the durable event log and this mirror
+//     NEVER fabricates a run pointer) and message CONTENT is never copied
+//     (single content home: the legacy payload, until the S2 cutover) — so
+//     there is no double persistence model.
+//
+// Mirror rows are IDEMPOTENT and SELF-BACKFILLING: turn ids are deterministic
+// (`legacy:`-namespaced, injective length-prefixed encoding below), inserts
+// are ON CONFLICT DO NOTHING, and a reconcile DELETE scoped to the mirror
+// namespace removes rows for messages dropped by edit/regenerate truncation.
+// The namespace guarantees a legacy write can never delete a structured-store
+// row minted by the assistant runtime (which mints bare UUIDs and fail-loud
+// rejects the reserved prefix — see assistant-thread-store.ts).
+//
+// These builders are PURE (SQL text + parameter assembly only) and live in
+// this module alongside `buildChatThreadUpsertQuery` deliberately: the
+// route-graph ratchet counts every module reachable from database.ts
+// (require() edges included), so a new module here would raise the locked
+// route ceilings. Design codex-converged (AGREE, 2026-07-11).
+// ---------------------------------------------------------------------------
+
+/** Reserved id namespace for mirror-originated assistant_turns rows. The
+ *  assistant-thread-store's `appendAssistantTurn` rejects explicit ids under
+ *  this prefix (equality pinned by a unit test on both sides). */
+export const LEGACY_MIRROR_TURN_ID_PREFIX = "legacy:";
+
+/**
+ * Deterministic, INJECTIVE mirror-turn id: `legacy:{len(threadId)}:{threadId}:{messageId}`.
+ * The explicit length prefix makes the encoding injective for arbitrary text
+ * ids (colons embedded in either component cannot produce a collision:
+ * decode by parsing the decimal length, taking exactly that many chars as the
+ * threadId, skipping one `:`, remainder = messageId).
+ */
+export function buildLegacyMirrorTurnId(threadId: string, messageId: string): string {
+  return `${LEGACY_MIRROR_TURN_ID_PREFIX}${threadId.length}:${threadId}:${messageId}`;
+}
+
+/**
+ * Extract a string field from a chat thread payload PRESERVING exact bytes
+ * (no trim — the mirror must not normalize user-visible values like `title`).
+ */
+export function extractRawStringFieldFromThread(
+  thread: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = thread[field];
+  return typeof value === "string" ? value : null;
+}
+
+export type AssistantTurnMirrorRow = {
+  /** Deterministic `legacy:`-namespaced id (see buildLegacyMirrorTurnId). */
+  id: string;
+  /** Principal attribution passthrough (message.authorUserId), or null. */
+  assistantUserId: string | null;
+  role: "user" | "assistant";
+  /** Validated ISO timestamp, or null (SQL falls back to now()). */
+  createdAt: string | null;
+};
+
+/**
+ * Map a legacy thread payload's messages[] to mirror turn rows. Defensive:
+ * payloads are arbitrary JSON from many writers — messages without a
+ * non-empty string id or with an out-of-domain role are skipped (the turn
+ * table's CHECK constraints would abort the whole transaction otherwise).
+ * Content is deliberately NOT extracted.
+ */
+export function extractAssistantTurnMirrorRowsFromThread(
+  thread: { id: string } & Record<string, unknown>,
+): AssistantTurnMirrorRow[] {
+  const messages = Array.isArray(thread.messages) ? thread.messages : [];
+  const rows: AssistantTurnMirrorRow[] = [];
+  const seen = new Set<string>();
+  for (const raw of messages) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const msg = raw as Record<string, unknown>;
+    if (typeof msg.id !== "string" || msg.id.length === 0) continue;
+    if (msg.role !== "user" && msg.role !== "assistant") continue;
+    const id = buildLegacyMirrorTurnId(thread.id, msg.id);
+    if (seen.has(id)) continue; // defensive: duplicate message ids in one payload
+    seen.add(id);
+    rows.push({
+      id,
+      assistantUserId:
+        typeof msg.authorUserId === "string" && msg.authorUserId.length > 0
+          ? msg.authorUserId
+          : null,
+      role: msg.role,
+      createdAt: extractTimestampFieldFromThread(msg, "createdAt"),
+    });
+  }
+  return rows;
+}
+
+/**
+ * Resolve the org tenancy anchor the mirror persists for this write.
+ * Central, payload-derived policy (codex-converged):
+ *   - team-owned threads (payload.teamId set) mirror with org NULL — the
+ *     team→org anchoring decision is deferred to the S2 cutover; set-once
+ *     SQL semantics keep it repairable.
+ *   - otherwise the caller's EXPLICIT `assistantMirrorOrgId` option (which
+ *     never falls back to the artifact-pin `orgId` option — option presence
+ *     distinguishes explicit null from unspecified).
+ */
+export function resolveAssistantMirrorOrgId(
+  thread: Record<string, unknown>,
+  explicitMirrorOrgId: string | null,
+): string | null {
+  const teamId = extractStringFieldFromThread(thread, "teamId");
+  if (teamId) return null;
+  return explicitMirrorOrgId;
+}
+
+/**
+ * Build the assistant_threads mirror upsert. Semantics (codex-converged):
+ *   - owner_user_id / title mirror the server-sanitized payload wholesale
+ *     (the payload is the full truth on every legacy write);
+ *   - org_id is SET-ONCE (an existing non-null anchor is never reassigned);
+ *   - created_at is immutable post-INSERT; updated_at mirrors the payload
+ *     (falling back to now()) so activity ordering matches the legacy table;
+ *   - assistant_user_id / context_id are never listed (S2-owned columns).
+ */
+export function buildAssistantThreadMirrorUpsertQuery(args: {
+  schemaName: string;
+  threadId: string;
+  ownerUserId: string | null;
+  orgId: string | null;
+  title: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}): { text: string; values: unknown[] } {
+  const schema = args.schemaName.replaceAll('"', '""');
+  return {
+    text: `INSERT INTO "${schema}"."assistant_threads" (id, owner_user_id, org_id, title, created_at, updated_at)
+VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), COALESCE($6::timestamptz, now()))
+ON CONFLICT (id) DO UPDATE SET
+  owner_user_id = EXCLUDED.owner_user_id,
+  -- org tenancy anchor is SET-ONCE: never reassign an established org
+  org_id        = COALESCE(assistant_threads.org_id, EXCLUDED.org_id),
+  title         = EXCLUDED.title,
+  -- created_at is immutable post-INSERT
+  updated_at    = EXCLUDED.updated_at`,
+    values: [
+      args.threadId,
+      args.ownerUserId,
+      args.orgId,
+      args.title,
+      args.createdAt,
+      args.updatedAt,
+    ],
+  };
+}
+
+/**
+ * Build the assistant_turns mirror reconcile pair for one thread write:
+ *   1. DELETE mirror-namespace rows for messages no longer in the payload
+ *      (edit/regenerate truncation). Scoped by `id LIKE 'legacy:%'` so a
+ *      legacy write can NEVER delete a runtime-minted turn row.
+ *   2. Constant-parameter multi-row INSERT (parallel unnest arrays — no
+ *      per-message parameters, so long histories cannot hit the parameter
+ *      ceiling) ON CONFLICT (id) DO NOTHING. run_id NULL, status 'completed',
+ *      NO content column.
+ * Returns [delete] when there are no rows, else [delete, insert].
+ */
+export function buildAssistantTurnMirrorReconcileQueries(args: {
+  schemaName: string;
+  threadId: string;
+  turns: AssistantTurnMirrorRow[];
+}): Array<{ text: string; values: unknown[] }> {
+  const schema = args.schemaName.replaceAll('"', '""');
+  const ids = args.turns.map((t) => t.id);
+  const queries: Array<{ text: string; values: unknown[] }> = [
+    {
+      text: `DELETE FROM "${schema}"."assistant_turns"
+WHERE thread_id = $1
+  AND id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'
+  AND NOT (id = ANY($2::text[]))`,
+      values: [args.threadId, ids],
+    },
+  ];
+  if (args.turns.length > 0) {
+    queries.push({
+      text: `INSERT INTO "${schema}"."assistant_turns" (id, thread_id, run_id, assistant_user_id, role, status, created_at, updated_at)
+SELECT t.id, $1, NULL, t.assistant_user_id, t.role, 'completed',
+       COALESCE(t.created_at::timestamptz, now()), COALESCE(t.created_at::timestamptz, now())
+FROM unnest($2::text[], $3::text[], $4::text[], $5::text[]) AS t(id, assistant_user_id, role, created_at)
+ON CONFLICT (id) DO NOTHING`,
+      values: [
+        args.threadId,
+        ids,
+        args.turns.map((t) => t.assistantUserId),
+        args.turns.map((t) => t.role),
+        args.turns.map((t) => t.createdAt),
+      ],
+    });
+  }
+  return queries;
+}
+
+/**
+ * Guarded single-thread mirror delete: only removes the structured row when a
+ * matching LEGACY row exists (ordered BEFORE the legacy delete in the same
+ * transaction), so a post-cutover structured-only thread is untouchable by
+ * the legacy delete path. assistant_turns cascade via the FK.
+ */
+export function buildAssistantThreadMirrorDeleteQuery(
+  schemaName: string,
+  threadId: string,
+): { text: string; values: unknown[] } {
+  const schema = schemaName.replaceAll('"', '""');
+  return {
+    text: `DELETE FROM "${schema}"."assistant_threads"
+WHERE id = $1 AND EXISTS (SELECT 1 FROM "${schema}"."chat_threads" WHERE id = $1)`,
+    values: [threadId],
+  };
+}
+
+/** Mirror arm of deleteAllChatThreadsFromDatabase — same guard, set form. */
+export function buildAssistantThreadMirrorDeleteAllQuery(
+  schemaName: string,
+): { text: string; values: unknown[] } {
+  const schema = schemaName.replaceAll('"', '""');
+  return {
+    text: `DELETE FROM "${schema}"."assistant_threads"
+WHERE id IN (SELECT id FROM "${schema}"."chat_threads")`,
+    values: [],
+  };
+}
+
+/**
+ * One-call composition of the full P2b mirror for a legacy thread write: the
+ * assistant_threads upsert followed by the assistant_turns reconcile pair,
+ * with the org anchor resolved centrally (resolveAssistantMirrorOrgId).
+ * database.ts spreads the result into the legacy upsert's transaction.
+ */
+export function buildAssistantThreadMirrorQueries(args: {
+  schemaName: string;
+  thread: { id: string } & Record<string, unknown>;
+  /** The caller's EXPLICIT mirror-org option (null when unspecified). */
+  explicitMirrorOrgId: string | null;
+}): Array<{ text: string; values: unknown[] }> {
+  const { schemaName, thread } = args;
+  return [
+    buildAssistantThreadMirrorUpsertQuery({
+      schemaName,
+      threadId: thread.id,
+      ownerUserId: extractRawStringFieldFromThread(thread, "ownerUserId"),
+      orgId: resolveAssistantMirrorOrgId(thread, args.explicitMirrorOrgId),
+      title: extractRawStringFieldFromThread(thread, "title"),
+      createdAt: extractTimestampFieldFromThread(thread, "createdAt"),
+      updatedAt: extractTimestampFieldFromThread(thread, "updatedAt"),
+    }),
+    // The thread row precedes its turn rows (FK).
+    ...buildAssistantTurnMirrorReconcileQueries({
+      schemaName,
+      threadId: thread.id,
+      turns: extractAssistantTurnMirrorRowsFromThread(thread),
+    }),
+  ];
+}

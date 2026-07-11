@@ -12,13 +12,14 @@ import "server-only";
 // `src/lib/assistant-runtime/__tests__/cinatra-parity.test.ts`).
 //
 // It is retained at this path — and keeps the `runChatTurn` /
-// `hasConfiguredLlmRuntime` / `ChatRequestMessage` exports — so BOTH legacy
-// entry shapes stay unchanged:
-//   1. the HTTP SSE route      — src/app/api/chat/route.ts (POST /api/chat)
-//   2. the in-process MCP path — packages/chat/src/mcp/handlers.ts
-//                                (chat_thread_send → runChatTurn, no HTTP)
-// Rewiring those callers onto the assistant endpoint + the structured-thread
-// persistence is deferred to P2b / P3.
+// `hasConfiguredLlmRuntime` / `ChatRequestMessage` exports — so the remaining
+// legacy entry shape stays unchanged:
+//   1. the HTTP SSE route — src/app/api/chat/route.ts (POST /api/chat)
+// The in-process MCP path (chat_thread_send, packages/chat/src/mcp/handlers.ts)
+// was ported in P2b: it now calls runAssistantTurn(cinatraConfig, …) directly
+// (byte-identical to this shim — parity-pinned), so the P3 teardown of this
+// route folder cannot touch the MCP surface. Rewiring the HTTP route onto the
+// AG-UI assistant endpoint is P3 (#1216 S2).
 
 import {
   runAssistantTurn,

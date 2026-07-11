@@ -224,10 +224,23 @@ export function touchAssistantThread(threadId: string): void {
   });
 }
 
+/** Id namespace RESERVED for the legacy chat_threads write-through mirror
+ *  (cinatra#1037 P2b — see LEGACY_MIRROR_TURN_ID_PREFIX in
+ *  src/lib/project-inheritance.ts; a unit test pins the two constants equal).
+ *  The mirror's reconcile DELETE is scoped to this prefix, so a store-minted
+ *  row must never enter the namespace or a legacy write could delete it. */
+export const RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX = "legacy:";
+
 /** Append a turn (one AG-UI run) to a thread; returns the persisted record. The
- *  FK guarantees the thread exists. Does not touch the durable event log. */
+ *  FK guarantees the thread exists. Does not touch the durable event log.
+ *  Fail-loud rejects explicit ids in the reserved legacy-mirror namespace. */
 export function appendAssistantTurn(input: AppendAssistantTurnInput): AssistantTurn {
   ensurePostgresSchema();
+  if (input.id?.startsWith(RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX)) {
+    throw new Error(
+      `appendAssistantTurn: turn id namespace "${RESERVED_LEGACY_MIRROR_TURN_ID_PREFIX}" is reserved for the legacy chat_threads mirror (cinatra#1037 P2b)`,
+    );
+  }
   const id = input.id ?? randomUUID();
   const schema = schemaIdent();
   const [res] = runPostgresQueriesSync({

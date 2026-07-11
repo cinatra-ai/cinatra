@@ -1154,17 +1154,21 @@ export function readChatThreadForClassifier(input: {
 
 export function upsertChatThreadInDatabase(
   thread: { id: string } & Record<string, unknown>,
-  options?: { orgId?: string | null },
+  options?: {
+    orgId?: string | null;
+    // Org anchor for the STRUCTURED assistant_threads mirror row (cinatra#1037
+    // P2b). Distinct from `orgId` (which also activates the pin ref-sync) and
+    // NEVER falling back to it — option PRESENCE distinguishes an explicit
+    // null from "unspecified"; set-once SQL keeps an established anchor.
+    assistantMirrorOrgId?: string | null;
+  },
 ) {
   ensurePostgresSchema();
   // Combine pin-sync + thread JSON upsert into ONE transaction. Either BOTH
   // commit or NEITHER do. If pin-sync and thread upsert are split across
   // transactions, a later thread-upsert failure can orphan pin rows
-  // (referrer_id points at a never-persisted thread). Compose the pin-sync
-  // queries (via buildArtifactRefSyncQueries) into a single
-  // runPostgresQueriesSync call with transaction:true.
+  // (referrer_id points at a never-persisted thread).
   const orgId = options?.orgId ?? null;
-  const refs = orgId ? extractAttachmentRefsFromThreadPayload(thread) : [];
   let pinQueries: Array<{ text: string; values: unknown[] }> = [];
   if (orgId) {
     // Lazy require keeps artifact-refs-store out of this module's
@@ -1181,119 +1185,49 @@ export function upsertChatThreadInDatabase(
       orgId,
       referrerKind: "chat_thread",
       referrerId: thread.id,
-      refs,
+      refs: mod.extractAttachmentRefsFromThreadPayload(thread),
     });
   }
-  // chat_threads payload-to-column lockstep: typed `project_id`, `created_at`,
-  // and `updated_at` columns live alongside the legacy JSON `payload`.
-  // Sealed-room project chat listing reads/sorts on the columns because
-  // payload-parse filtering is unindexable. Every writer must mirror
-  // payload-to-column on every upsert so the columns and JSON stay in sync
-  // atomically (single tx, single UPSERT).
-  //
-  // Mirrors the artifact-ref pin-sync pattern: the payload remains the source
-  // of truth in the legacy field; the typed columns are an indexable projection
-  // of the same data.
-  //
-  // Builder lives in src/lib/project-inheritance.ts so the SQL shape +
-  // parameter ordering are unit-tested in isolation from the host
-  // database module (which the root vitest alias stubs).
+  // Same-transaction projections of the payload write (builders live in
+  // src/lib/project-inheritance.ts so SQL shape + parameter ordering are
+  // unit-tested in isolation from this aliased host module):
+  //  1. chat_threads payload-to-column lockstep — typed project_id/created_at/
+  //     updated_at columns as an indexable projection (sealed-room reads).
+  //  2. cinatra#1037 P2b structured-store mirror — assistant_threads identity
+  //     + assistant_turns per-message METADATA/attribution rows (run_id NULL,
+  //     never fabricated; content never copied — the legacy payload stays the
+  //     single content home until the #1216 S2 cutover). Deterministic
+  //     `legacy:`-namespaced turn ids keep it idempotent + self-backfilling.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
-  const projectIdFromPayload = inheritance.extractStringFieldFromThread(
-    thread,
-    "projectId",
-  );
-  const createdAtFromPayload = inheritance.extractTimestampFieldFromThread(
-    thread,
-    "createdAt",
-  );
-  const updatedAtFromPayload = inheritance.extractTimestampFieldFromThread(
-    thread,
-    "updatedAt",
-  );
-
-  const threadUpsertQuery = inheritance.buildChatThreadUpsertQuery({
-    schemaName: postgresSchema,
-    threadId: thread.id,
-    payloadJson: JSON.stringify(thread),
-    projectId: projectIdFromPayload,
-    createdAt: createdAtFromPayload,
-    updatedAt: updatedAtFromPayload,
-  });
-
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
     queries: [
       ...pinQueries,
-      threadUpsertQuery,
+      inheritance.buildChatThreadUpsertQuery({
+        schemaName: postgresSchema,
+        threadId: thread.id,
+        payloadJson: JSON.stringify(thread),
+        projectId: inheritance.extractStringFieldFromThread(thread, "projectId"),
+        createdAt: inheritance.extractTimestampFieldFromThread(thread, "createdAt"),
+        updatedAt: inheritance.extractTimestampFieldFromThread(thread, "updatedAt"),
+      }),
+      ...inheritance.buildAssistantThreadMirrorQueries({
+        schemaName: postgresSchema,
+        thread,
+        explicitMirrorOrgId:
+          options && "assistantMirrorOrgId" in options
+            ? (options.assistantMirrorOrgId ?? null)
+            : null,
+      }),
     ],
   });
 }
 
-// Pure helper: extract well-shaped attachment refs from a chat-thread payload's
-// messages array. Returns the deduped set (by
-// artifactId::representationRevisionId). The composing caller passes this into
-// buildArtifactRefSyncQueries.
-function extractAttachmentRefsFromThreadPayload(
-  thread: { id: string } & Record<string, unknown>,
-): Array<{
-  artifactId: string;
-  representationRevisionId: string;
-  digest: string;
-  mime: string;
-  originKind: string;
-}> {
-  type AttachmentLike = {
-    artifactId?: unknown;
-    representationRevisionId?: unknown;
-    digest?: unknown;
-    mime?: unknown;
-    originKind?: unknown;
-  };
-  type MsgLike = { attachments?: unknown };
-  const raw = (thread as { messages?: unknown }).messages;
-  const messages: MsgLike[] = Array.isArray(raw) ? (raw as MsgLike[]) : [];
-  const refs: Array<{
-    artifactId: string;
-    representationRevisionId: string;
-    digest: string;
-    mime: string;
-    originKind: string;
-  }> = [];
-  const seen = new Set<string>();
-  for (const m of messages) {
-    const arr = m && Array.isArray(m.attachments)
-      ? (m.attachments as AttachmentLike[])
-      : [];
-    for (const a of arr) {
-      if (
-        typeof a?.artifactId !== "string" ||
-        typeof a?.representationRevisionId !== "string" ||
-        typeof a?.digest !== "string" ||
-        typeof a?.mime !== "string"
-      ) {
-        continue;
-      }
-      const key = `${a.artifactId}::${a.representationRevisionId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      refs.push({
-        artifactId: a.artifactId,
-        representationRevisionId: a.representationRevisionId,
-        digest: a.digest,
-        mime: a.mime,
-        originKind:
-          typeof a.originKind === "string" ? a.originKind : "upload",
-      });
-    }
-  }
-  return refs;
-}
-
-// Attachment refs are extracted from every message so the pin-sync composes
-// into the thread upsert's transaction.
+// Attachment refs are extracted from every message (see
+// extractAttachmentRefsFromThreadPayload in artifact-refs-store.ts) so the
+// pin-sync composes into the thread upsert's transaction.
 
 export function deleteChatThreadFromDatabase(
   threadId: string,
@@ -1311,6 +1245,16 @@ export function deleteChatThreadFromDatabase(
   // kind=chat_thread) is the only coherent semantic. Both in ONE tx (atomic).
   const schema = postgresSchema.replaceAll('"', '""');
   const delThread = buildDeleteJsonRowQuery(postgresSchema, "chat_threads", threadId);
+  // Structured-store mirror delete (cinatra#1037 P2b): guarded by EXISTS on
+  // the legacy row and ordered BEFORE the legacy delete, so a post-cutover
+  // structured-only thread can never be deleted by this legacy path.
+  // assistant_turns cascade via the FK.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
+  const mirrorDelete = inheritance.buildAssistantThreadMirrorDeleteQuery(
+    postgresSchema,
+    threadId,
+  );
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
@@ -1320,6 +1264,7 @@ export function deleteChatThreadFromDatabase(
 WHERE referrer_kind = 'chat_thread' AND referrer_id = $1`,
         values: [threadId],
       },
+      mirrorDelete,
       { text: delThread.text, values: delThread.values ?? [] },
     ],
   });
@@ -1334,6 +1279,10 @@ export function deleteAllChatThreadsFromDatabase() {
   // across every org, then deletes all thread JSON rows. Authorization gating
   // (admin only) is the CALLER's responsibility (the server action layer).
   const schema = postgresSchema.replaceAll('"', '""');
+  // Mirror arm (cinatra#1037 P2b): same guard in set form, ordered before the
+  // legacy wipe — structured-only (post-cutover) threads survive.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
@@ -1343,6 +1292,7 @@ export function deleteAllChatThreadsFromDatabase() {
 WHERE referrer_kind = 'chat_thread'`,
         values: [],
       },
+      inheritance.buildAssistantThreadMirrorDeleteAllQuery(postgresSchema),
       {
         text: `DELETE FROM "${schema}"."chat_threads"`,
         values: [],
