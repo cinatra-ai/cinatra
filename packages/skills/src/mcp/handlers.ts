@@ -737,8 +737,22 @@ export function createSkillsPrimitiveHandlers() {
         request.actor as PrimitiveActorContext,
         orgId,
       );
+      // #1360 — forward the OWNER user id. createOrUpdateCustomSkillForAgent
+      // REQUIRES input.userId (personal-skills.ts throws without it outside
+      // dev-bypass), so without this the MCP create/update path always failed
+      // in production. The owner is the authenticated caller — the same
+      // identity actorCtx is derived from (actorContextFromMcpRequest sets
+      // principalId := actor.userId) — never a caller-supplied input field. An
+      // unattributable caller (no userId) leaves it undefined and the resolver
+      // fails closed (dev-bypass fills LOCAL_USER_ID; production throws): a
+      // personal skill is never created under an anonymous owner.
+      const ownerUserId =
+        typeof request.actor?.userId === "string" && request.actor.userId.length > 0
+          ? request.actor.userId
+          : undefined;
       const result = await createOrUpdateCustomSkillForAgent({
         ...(input as Parameters<typeof createOrUpdateCustomSkillForAgent>[0]),
+        userId: ownerUserId,
         actor: actorCtx,
       });
 

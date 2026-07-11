@@ -1116,12 +1116,32 @@ export async function POST(req: Request): Promise<Response> {
     // Resolve custom skill delta + assigned base skill IDs for this agent.
     // Both lookups are INSIDE the try block so clearRunContext always runs
     // in finally even if a DB lookup throws.
-    // Bridge callers (WayFlow ApiNodes, Python containers) have no user session,
-    // so getCustomSkillForCurrentUserAndAgent throws when ownerUserId is
-    // absent. Catch gracefully — no personal skill applies to sessionless callers.
+    // #1360 — the personal delta skill is USER-SCOPED content, so its owner is
+    // derived SOLELY from the TRUSTED resolved run context, never from a
+    // caller-supplied identifier. `runForPorts` is the exact run this route
+    // already vetted to mint the user's MCP OBO actor token (run-token-first →
+    // context-id → dispatcher-signed binding, minus the confused-deputy
+    // disqualifications); its `runBy` is the verified run owner. Gating personal
+    // delivery on that same handle keeps it FAIL CLOSED:
+    //   - a verified run bound to a user ⇒ that user's delta is delivered;
+    //   - an unattributable call (no verified run, or a run with no runBy), or a
+    //     forged / mismatched / divergent run token (runForPorts is null) ⇒
+    //     `personalSkillOwnerUserId` stays undefined, so
+    //     getCustomSkillForCurrentUserAndAgent resolves to none — it throws for
+    //     an absent owner outside dev-bypass and the .catch swallows that to
+    //     null (no personal delta, no error noise), never a guess.
+    // Org/shared skill delivery (getAssignedSkillIdsForAgent) is unchanged: it
+    // is agent-scoped, not user-scoped, and never consulted the run owner.
+    const personalSkillOwnerUserId =
+      typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
+        ? runForPorts.runBy
+        : undefined;
     const [personalSkill, assignedSkillIds] = body.agent_id
       ? await Promise.all([
-          getCustomSkillForCurrentUserAndAgent(body.agent_id).catch(() => null),
+          getCustomSkillForCurrentUserAndAgent(
+            body.agent_id,
+            personalSkillOwnerUserId,
+          ).catch(() => null),
           getAssignedSkillIdsForAgent(body.agent_id),
         ])
       : [null, [] as string[]];
