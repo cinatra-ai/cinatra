@@ -901,8 +901,18 @@ async function refusalFor(
   if (claim.packageName !== input.packageName || claim.canon.packageName !== input.packageName) {
     return `claim package "${claim.packageName}" does not match the installing package "${input.packageName}"`;
   }
+  // FULL claim self-consistency (codex round-2 finding): the row key
+  // (claim.agentSlug), the stored display JSON (claim.canonJson), and the
+  // stored hash must all derive from the SAME canon — otherwise the canon an
+  // admin is shown could be detached from the slug/hash being approved.
+  if (claim.agentSlug !== claim.canon.agentSlug) {
+    return `claim agentSlug "${claim.agentSlug}" does not match its canon ("${claim.canon.agentSlug}")`;
+  }
   const errors = validateWidgetStreamMetadataCanon(claim.canon);
   if (errors.length > 0) return `invalid canon: ${errors.join("; ")}`;
+  if (claim.canonJson !== canonicalJsonStringify(claim.canon)) {
+    return "claim canonJson is not the canonical serialization of its canon (stale/forged claim)";
+  }
   if (claim.bindingHashV2 !== computeWidgetStreamBindingHashV2(claim.canon)) {
     return "claim bindingHashV2 does not match its canon (stale/forged claim)";
   }
@@ -1128,6 +1138,11 @@ export async function reopenRevokedWidgetStreamMetadataGrant(
 ): Promise<WidgetStreamMetadataGrant> {
   const { query, schema } = await resolveDeps(deps);
   const table = qualifiedTable(schema);
+  if (input.agentSlug !== input.claim.agentSlug) {
+    throw new Error(
+      `reopenRevokedWidgetStreamMetadataGrant refused: claim is for slug "${input.claim.agentSlug}", not "${input.agentSlug}"`,
+    );
+  }
   const refusal = await refusalFor(
     { packageName: input.packageName, orgId: input.orgId, claim: input.claim },
     guards,
@@ -1378,19 +1393,24 @@ export type CapturedWidgetStreamMetadataGrant = {
  * Capture the prior metadata grants (one per slug the NEW manifest claims) for
  * durable rollback — `recordRequestedWidgetStreamMetadataGrant` may re-pend a
  * prior approval against the new canon before a later throw, so a failed
- * update must re-pin the OLD install's grant state on the unwind paths. Empty
- * on a fresh install or when the reader is unwired.
+ * install must re-pin the prior grant state on the unwind paths. UNLIKE the
+ * ownership capture this is NOT update-gated (codex round-2 finding): a grant
+ * row's lifetime is the durable `(package, slug)` identity, not one install's
+ * — a "fresh" reinstall after an uninstall can meet a pre-existing row, and
+ * the unwind must RESTORE it rather than treat it as this attempt's insert
+ * (the hash-pinned delete is reserved for a slug that truly had no row before
+ * this attempt; same-package installs are serialized by the install locks).
+ * Empty when the reader is unwired.
  */
 export async function capturePriorWidgetStreamMetadataGrants(
   hooks: Pick<WidgetStreamMetadataGrantInstallHooks, "readWidgetStreamMetadataGrant">,
   args: {
-    isUpdate: boolean;
     packageName: string;
     orgId: string | null;
     claims: readonly WidgetStreamMetadataGrantClaim[];
   },
 ): Promise<CapturedWidgetStreamMetadataGrant[]> {
-  if (!args.isUpdate || !hooks.readWidgetStreamMetadataGrant) return [];
+  if (!hooks.readWidgetStreamMetadataGrant) return [];
   const read = hooks.readWidgetStreamMetadataGrant;
   const captured = await Promise.all(
     args.claims.map((claim) => read(args.packageName, args.orgId, claim.agentSlug)),
@@ -1428,11 +1448,12 @@ export async function recordWidgetStreamMetadataGrants(
 
 /**
  * Undo THIS install attempt's metadata grant writes on a rollback path. For
- * each claimed slug: a captured prior row (an update) is re-pinned to its
- * EXACT state (revocation-sticky); with no prior row (a fresh install, or a
- * NEW slug this attempt added) the still-pending row this attempt inserted is
- * deleted. Best-effort + isolated per slug: a failure is reported via
- * `onFailure` and never masks the original install error.
+ * each claimed slug: a captured prior row (whatever install it came from —
+ * capture is not update-gated) is re-pinned to its EXACT state
+ * (revocation-sticky); only a slug with NO row before this attempt gets the
+ * hash-pinned delete of the still-pending row this attempt inserted.
+ * Best-effort + isolated per slug: a failure is reported via `onFailure` and
+ * never masks the original install error.
  */
 export async function unwindWidgetStreamMetadataGrants(args: {
   hooks: Pick<

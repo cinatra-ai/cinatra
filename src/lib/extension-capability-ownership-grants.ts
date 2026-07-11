@@ -598,8 +598,11 @@ export type CapturedPriorCapabilityGrants = {
  * manifest declares) AND widget-stream metadata rows (one per claimed slug) —
  * for durable rollback: the record steps may reset a prior approval against
  * the new claim before a later throw, so a failed update must re-pin the OLD
- * install's grant state on the unwind paths. Empty on a fresh install or when
- * the readers are unwired.
+ * install's grant state on the unwind paths. The ownership capture is
+ * update-gated (a fresh install's unwind REVOKES its own writes); the metadata
+ * capture is NOT — a metadata row outlives installs on its durable
+ * `(package, slug)` identity, so even a "fresh" install may meet a
+ * pre-existing row the unwind must restore rather than delete.
  */
 export async function capturePriorOwnershipGrants(
   deps: Pick<OwnershipGrantInstallHooks, "readOwnershipGrant" | "readWidgetStreamMetadataGrant">,
@@ -612,7 +615,6 @@ export async function capturePriorOwnershipGrants(
   },
 ): Promise<CapturedPriorCapabilityGrants> {
   const widgetMetadata = await capturePriorWidgetStreamMetadataGrants(deps, {
-    isUpdate: args.isUpdate,
     packageName: args.packageName,
     orgId: args.orgId,
     claims: args.widgetMetadataClaims ?? [],

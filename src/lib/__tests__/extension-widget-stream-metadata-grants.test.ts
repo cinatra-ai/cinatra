@@ -669,6 +669,27 @@ describe("recordRequestedWidgetStreamMetadataGrant", () => {
     expect(result).toEqual({ outcome: "refused", reason: expect.stringMatching(/stale\/forged/) });
   });
 
+  it("refuses an internally-inconsistent claim (slug or canonJson detached from the canon)", async () => {
+    const db = fakeDb();
+    const slugMismatch = { ...makeClaim(), agentSlug: "some-other-slug" };
+    expect(
+      await recordRequestedWidgetStreamMetadataGrant(
+        { packageName: PKG, orgId: null, claim: slugMismatch },
+        makeGuards(),
+        depsFor(db),
+      ),
+    ).toEqual({ outcome: "refused", reason: expect.stringMatching(/does not match its canon/) });
+    const jsonMismatch = { ...makeClaim(), canonJson: canonicalJsonStringify(makeCanon({ label: "Other" })) };
+    expect(
+      await recordRequestedWidgetStreamMetadataGrant(
+        { packageName: PKG, orgId: null, claim: jsonMismatch },
+        makeGuards(),
+        depsFor(db),
+      ),
+    ).toEqual({ outcome: "refused", reason: expect.stringMatching(/canonical serialization/) });
+    expect(db.rows.size).toBe(0);
+  });
+
   it("same-hash re-record leaves an APPROVED row untouched (a signed code-only patch does not re-pend)", async () => {
     const db = fakeDb();
     const claim = makeClaim();
@@ -1097,7 +1118,7 @@ describe("install-step orchestrators", () => {
     const claim = makeClaim();
     await recordOk(db, claim);
     const captured = await capturePriorOwnershipGrants(hooksFor(db), {
-      isUpdate: true,
+      isUpdate: false, // metadata capture is NOT update-gated (durable row identity)
       packageName: PKG,
       orgId: null,
       declaredTokenKeys: [],
@@ -1118,7 +1139,7 @@ describe("install-step orchestrators", () => {
       depsFor(db),
     );
     const prior = await capturePriorWidgetStreamMetadataGrants(hooksFor(db), {
-      isUpdate: true, packageName: PKG, orgId: null, claims: [claim],
+      packageName: PKG, orgId: null, claims: [claim],
     });
     const failed = makeClaim({ label: "Failed Attempt" });
     await recordOk(db, failed);
@@ -1143,9 +1164,32 @@ describe("install-step orchestrators", () => {
     expect(freshDb.rows.size).toBe(0);
   });
 
+  it("a 'fresh' install that meets a PRE-EXISTING row restores it instead of deleting it (capture is not update-gated)", async () => {
+    const db = fakeDb();
+    const claim = makeClaim();
+    // A previous install (since uninstalled) left a pending row on the durable
+    // (package, slug) identity.
+    await recordOk(db, claim);
+    // The new install captures BEFORE recording — even though it is fresh.
+    const prior = await capturePriorWidgetStreamMetadataGrants(hooksFor(db), {
+      packageName: PKG, orgId: null, claims: [claim],
+    });
+    expect(prior).toHaveLength(1);
+    await recordOk(db, claim); // same hash: untouched
+    const failures: unknown[] = [];
+    await unwindWidgetStreamMetadataGrants({
+      hooks: hooksFor(db), packageName: PKG, orgId: null,
+      claims: [claim], priorGrants: prior, onFailure: (e) => failures.push(e),
+    });
+    expect(failures).toEqual([]);
+    // The pre-existing row SURVIVES the failed fresh install.
+    expect(db.rows.size).toBe(1);
+    expect((await readWidgetStreamMetadataGrant({ packageName: PKG, orgId: null, agentSlug: SLUG }, depsFor(db)))?.status).toBe("pending");
+  });
+
   it("unwired hooks are a pure no-op (older pipeline tests keep passing)", async () => {
     await expect(
-      capturePriorWidgetStreamMetadataGrants({}, { isUpdate: true, packageName: PKG, orgId: null, claims: [makeClaim()] }),
+      capturePriorWidgetStreamMetadataGrants({}, { packageName: PKG, orgId: null, claims: [makeClaim()] }),
     ).resolves.toEqual([]);
     await expect(
       unwindWidgetStreamMetadataGrants({
