@@ -1,4 +1,4 @@
-// core__0026 — project-instance registry (cinatra#1032 deliverable 3).
+// core__0027 — project-instance registry (cinatra#1032 deliverable 3).
 //
 // Adds `project_instances`: one row per instantiated PM project, keyed
 // (org_id, project_ref). The row is the STICKY, fail-closed binding record the
@@ -28,10 +28,14 @@
 //     agent_runs.project_id semantics; the PM project scope is a PM-tool
 //     concept and need not be a cinatra project).
 //
-// NUMBER CLAIM (recorded at claim time): core__0024 is the highest number on
-// main; open PR #1304 claims core__0023 and open PR #1331 claims core__0025 —
-// re-verified via an open-PR scan when this module was authored, so 0026 is
-// the next free number.
+// NUMBER CLAIM (renumbered at merge coordination): this slice was authored at
+// core__0026, but PR #1304 (assistant-threads-turns, #1037 P2a) took 0026 —
+// it landed on main first, and per the coordinator decision (#1304 keeps 0026;
+// this deliverable-3 slice renumbers and takes the sole re-approval). 0026 is
+// therefore the sibling's on main; the next free number for this table is 0027.
+// (core__0024 was the highest at authoring time; #1331 shipped core__0025.)
+// The runner tolerates sequence gaps; this is a rename-only renumber with no
+// SQL change.
 //
 // ADDITIVE change (one brand-new table, see migrations/README.md "Additive"):
 // it rides the idempotent bootstrap DDL (`projectInstancesSchemaQueries`,
@@ -65,6 +69,6 @@ export function up(pgm) {
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
   // Reversible: the table is a fresh #1032 addition, so down() restores the
-  // exact pre-0026 shape on any lineage.
+  // exact pre-0027 shape on any lineage.
   pgm.sql(`DROP TABLE IF EXISTS project_instances;`);
 }

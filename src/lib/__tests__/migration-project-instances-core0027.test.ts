@@ -1,5 +1,5 @@
 // Contract test for the project-instance registry migration
-// (migrations/core/core__0026_project-instances.mjs, cinatra#1032
+// (migrations/core/core__0027_project-instances.mjs, cinatra#1032
 // deliverable 3).
 //
 // The migration module is imported by RELATIVE PATH so the real SQL is
@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { up, down } from "../../../migrations/core/core__0026_project-instances.mjs";
+import { up, down } from "../../../migrations/core/core__0027_project-instances.mjs";
 import { projectInstancesSchemaQueries } from "@/lib/extension-grant-schema";
 
 function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
@@ -41,7 +41,7 @@ const EXPECTED_COLUMNS = [
   "updated_at timestamptz not null default now()",
 ];
 
-describe("core__0026 up()", () => {
+describe("core__0027 up()", () => {
   it("creates the project_instances table idempotently", () => {
     expect(upJoined).toContain("create table if not exists project_instances");
     for (const col of EXPECTED_COLUMNS) {
@@ -59,8 +59,8 @@ describe("core__0026 up()", () => {
   });
 });
 
-describe("core__0026 down()", () => {
-  it("cleanly reverses the table (fresh addition — exact pre-0026 shape)", () => {
+describe("core__0027 down()", () => {
+  it("cleanly reverses the table (fresh addition — exact pre-0027 shape)", () => {
     const downJoined = collectSql(down as (b: { sql: (s: string) => void }) => void)
       .join("\n")
       .toLowerCase();

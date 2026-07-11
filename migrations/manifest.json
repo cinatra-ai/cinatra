@@ -22,11 +22,12 @@
     "supersede it with a new sequence number."
   ],
   "_seq_coordination": [
-    "SEQ COORDINATION — seq 0023 is HELD for open PR cinatra-ai/cinatra#1304",
-    "(assistant-threads-turns); seq 0025 landed on main (cinatra-ai/cinatra#1331). 0026 was",
-    "claimed for the project-instance registry after an open-PR scan re-verified both.",
-    "Whichever branch lands last must confirm it still holds the next free sequence",
-    "number before merge."
+    "SEQ COORDINATION — resolved: PR cinatra-ai/cinatra#1304 (assistant-threads-turns,",
+    "#1037 P2a) landed first on main and took core__0026; core__0025 shipped earlier",
+    "(cinatra-ai/cinatra#1331). Per the coordinator decision, #1304 keeps 0026 and this",
+    "project-instance-registry slice (#1032 deliverable 3) renumbered to core__0027 —",
+    "the next free sequence after the shipped tail — as a rename-only renumber with no",
+    "SQL change. 0021 and 0023 are permanent gaps; the runner tolerates sequence gaps."
   ],
   "migrations": [
     {
@@ -257,9 +258,9 @@
       ]
     },
     {
-      "seq": "0026",
-      "file": "core/core__0026_project-instances.mjs",
-      "summary": "Project-instance registry (cinatra-ai/cinatra#1032 deliverable 3): one brand-new table. project_instances is the sticky instantiation-time binding record keyed (org_id, project_ref): template_package/template_id pin which installed agent package's cinatra/project-template.json the project was instantiated from (dispatch refuses a template swap under the same project ref); template_digest records the finalized-install digest the template bytes came from (provenance for the future rebinding/migration valve — deliberately NOT a dispatch gate, template evolution stays legal); pm_agent_package is the PM seat (the pm-work-store capability binding proven at instantiation — only this agent's tick runs may dispatch workers for the project); provider_id/provider_mode persist the PM work-store provider chosen ONCE at instantiation (configured wins; auto only when exactly one connected; fail-closed on none/several) so no runtime path ever re-runs selection and a project can never silently migrate between PM tools; project_id is the nullable cinatra project refinement (mirrors agent_runs.project_id semantics). Rides the idempotent bootstrap DDL (projectInstancesSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007/core__0024 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the table (fresh addition; exact pre-0026 shape on any lineage). destructive=false: brand-new table, no user-land data affected.",
+      "seq": "0027",
+      "file": "core/core__0027_project-instances.mjs",
+      "summary": "Project-instance registry (cinatra-ai/cinatra#1032 deliverable 3): one brand-new table. SEQ COORDINATION: authored at core__0026, renumbered to core__0027 because PR #1304 (assistant-threads-turns, #1037 P2a) landed core__0026 on main first; per the coordinator decision #1304 keeps 0026 and this slice takes the next free sequence — a rename-only renumber, zero SQL change (0021/0023 stay permanent gaps; the runner tolerates gaps). project_instances is the sticky instantiation-time binding record keyed (org_id, project_ref): template_package/template_id pin which installed agent package's cinatra/project-template.json the project was instantiated from (dispatch refuses a template swap under the same project ref); template_digest records the finalized-install digest the template bytes came from (provenance for the future rebinding/migration valve — deliberately NOT a dispatch gate, template evolution stays legal); pm_agent_package is the PM seat (the pm-work-store capability binding proven at instantiation — only this agent's tick runs may dispatch workers for the project); provider_id/provider_mode persist the PM work-store provider chosen ONCE at instantiation (configured wins; auto only when exactly one connected; fail-closed on none/several) so no runtime path ever re-runs selection and a project can never silently migrate between PM tools; project_id is the nullable cinatra project refinement (mirrors agent_runs.project_id semantics). Rides the idempotent bootstrap DDL (projectInstancesSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007/core__0024 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the table (fresh addition; exact pre-0027 shape on any lineage). destructive=false: brand-new table, no user-land data affected.",
       "destructive": false,
       "tables": [
         "project_instances"
