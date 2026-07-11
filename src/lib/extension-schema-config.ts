@@ -11,6 +11,15 @@
 // static + ACTION-SOURCED selects, boolean toggles, numeric inputs, and
 // free-form string lists. `bundled-react` connectors stay rebuild-only (the
 // installer surfaces a clear "requires rebuild" state — see `requiresRebuildState`).
+//
+// The ROOT-level opt-in hydration read-action declaration (`hydrateAction`) is
+// the SDK-owned contract key (`CONFIG_HYDRATION_SCHEMA_KEY` in
+// @cinatra-ai/sdk-extensions/config-hydration). It is spelled as a LITERAL here
+// (not imported): this vocabulary module sits on the reachable graph of every
+// locked dev-perf route (/chat, /api/mcp, …) and the route-graph ratchet
+// forbids growing those graphs by a new SDK module edge for one constant.
+// No-drift is pinned functionally in extension-schema-config-hydration.test.ts,
+// which builds declarations FROM the SDK constant — a divergence fails the parse.
 
 export type SchemaConfigFieldKind =
   | "text"
@@ -331,6 +340,17 @@ export type SchemaConfigSurface = {
    * `fields` AND every tab's `fields` (they share one flat submit namespace).
    */
   tabs?: TabDef[];
+  /**
+   * The opt-in hydration read-action (owner-ratified contract; cinatra#1082
+   * item 3): the id of ONE connector-registered named action the HOST invokes
+   * SERVER-SIDE at setup render to pre-fill the form's `initialValues` with
+   * saved NON-SECRET values. Absent → the form keeps today's blank `{}`
+   * pre-fill (zero regression). Secret fields are never hydrated regardless of
+   * what the action returns, and any hydration failure fail-closes to `{}`
+   * (see `collectHydrationKeySets` + the host resolver). Same actionId grammar
+   * as every other declared action.
+   */
+  hydrateAction?: string;
 };
 
 export type ParseResult =
@@ -418,7 +438,16 @@ export const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<stri
 
 // Keys allowed at the configSchema ROOT (besides `fields`). Anything else is
 // rejected fail-closed (no executable/HTML carrier at the root either).
-const ROOT_KEY_ALLOWLIST: ReadonlySet<string> = new Set(["title", "description", "fields", "tabs"]);
+const ROOT_KEY_ALLOWLIST: ReadonlySet<string> = new Set([
+  "title",
+  "description",
+  "fields",
+  "tabs",
+  // The opt-in hydration read-action declaration — the SDK contract key
+  // (CONFIG_HYDRATION_SCHEMA_KEY; literal per the header note, no-drift pinned
+  // by test).
+  "hydrateAction",
+]);
 
 // Exact key allowlist for a tab group (fail-closed, same stance as the field
 // allowlists): a tab carries ONLY an id, a label, and a nested `fields` array —
@@ -494,6 +523,22 @@ export function parseSchemaConfig(raw: unknown): ParseResult {
     return { ok: false, errors };
   }
 
+  // The opt-in hydration read-action DECLARATION is validated fail-closed like
+  // every other declaration in this vocabulary: present-but-malformed fails the
+  // whole parse (→ the invalid-schema-config state), it does NOT silently
+  // degrade. (Runtime failures of the declared ACTION — missing, erroring,
+  // malformed RESULT — are what map to a blank `{}` pre-fill instead; that
+  // fail-closed path is the host hydration resolver's contract.)
+  const rawHydrate = (raw as Record<string, unknown>).hydrateAction;
+  let hydrateAction: string | undefined;
+  if (rawHydrate !== undefined) {
+    if (!str(rawHydrate) || !KEY_RE.test(rawHydrate)) {
+      errors.push(`configSchema: "hydrateAction" must be a valid actionId string`);
+    } else {
+      hydrateAction = rawHydrate;
+    }
+  }
+
   const seenKeys = new Set<string>();
   const fields = parseFieldList(rawFields, "fields", errors, seenKeys);
 
@@ -537,6 +582,7 @@ export function parseSchemaConfig(raw: unknown): ParseResult {
       description: str(raw.description) ? raw.description : undefined,
       fields,
       ...(tabs.length > 0 ? { tabs } : {}),
+      ...(hydrateAction !== undefined ? { hydrateAction } : {}),
     },
   };
 }
@@ -1010,7 +1056,68 @@ export function collectActionIds(surface: SchemaConfigSurface): string[] {
   // Actions declared INSIDE a tab must be registered too, else the host action
   // endpoint rejects a probe/named-action/record-list/dynamic-select on a tab.
   for (const tab of surface.tabs ?? []) collect(tab.fields);
+  // The root-level hydration read-action is a referenced action like any other
+  // (registered via ctx.ui). Its SERVER-invoked-at-render property is a
+  // call-path guarantee of the host render seam, not a dispatch ban — this
+  // helper carries no dispatch authority either way.
+  if (surface.hydrateAction) ids.add(surface.hydrateAction);
   return [...ids];
+}
+
+/**
+ * The key sets the hydration sanitizer filters an action result against
+ * (owner-ratified contract; cinatra#1082 item 3). PURE — derived entirely from
+ * the validated surface:
+ *
+ * - `hydratableKeys`: keys of exactly the NON-SECRET, value-carrying field
+ *   kinds the setup form hydrates from `initialValues` (text, select,
+ *   dynamic-select-options, boolean, number, free-list, copyable-credential),
+ *   across the flat `fields` AND every tab. A `repeatable-list` key is NOT
+ *   hydratable (its saved rows are not representable in the flat
+ *   `initialValues` string map), and a `secret` key never is.
+ * - `secretKeys`: keys of every `secret` field (flat + tabs) PLUS every secret
+ *   `repeatable-list` item-field key. Item keys live in a separate declared
+ *   namespace, so one MAY collide with a flat hydratable key — the sanitizer
+ *   refuses the colliding key entirely (secret wins; defense in depth).
+ */
+export function collectHydrationKeySets(surface: SchemaConfigSurface): {
+  hydratableKeys: Set<string>;
+  secretKeys: Set<string>;
+} {
+  const hydratableKeys = new Set<string>();
+  const secretKeys = new Set<string>();
+  const collect = (fields: SchemaConfigField[]) => {
+    for (const f of fields) {
+      switch (f.kind) {
+        case "text":
+        case "select":
+        case "dynamic-select-options":
+        case "boolean":
+        case "number":
+        case "free-list":
+        case "copyable-credential":
+          hydratableKeys.add(f.key);
+          break;
+        case "secret":
+          secretKeys.add(f.key);
+          break;
+        case "repeatable-list":
+          for (const item of f.itemFields) {
+            if (item.kind === "secret") secretKeys.add(item.key);
+          }
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  collect(surface.fields);
+  for (const tab of surface.tabs ?? []) collect(tab.fields);
+  // A key that is BOTH declared secret somewhere and hydratable elsewhere must
+  // never hydrate: drop it from the hydratable set too (the sanitizer also
+  // enforces secret-wins independently — belt and braces).
+  for (const k of secretKeys) hydratableKeys.delete(k);
+  return { hydratableKeys, secretKeys };
 }
 
 /** The installer state for a connector whose UI cannot hot-install. */
