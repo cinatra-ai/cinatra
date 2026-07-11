@@ -38,6 +38,9 @@ import {
   up as demoteUp,
   down as demoteDown,
 } from "../../../../migrations/core/core__0004_demote-optional-extension-anchors.mjs";
+// The ledger every consumer sees is the manifest.json + manifest.d/ union,
+// computed by the shared reader (plain runtime ESM, same import form).
+import { readManifestUnion } from "../../../../migrations/manifest-reader.mjs";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
@@ -136,13 +139,17 @@ describe("core__0004 demotion artifact shape (no DB needed)", () => {
     expect(downSql).toContain("WHEN status = 'active' THEN 'locked'"); // symmetric re-lock
   });
 
-  it("ships its append-only ledger entry (migrations/manifest.json seq 0004)", () => {
-    const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, "migrations/manifest.json"), "utf8"));
-    const entry = manifest.migrations.find((m: { seq: string }) => m.seq === "0004");
+  it("ships its append-only ledger entry (union ledger seq 0004 — manifest.json + manifest.d/ fragments)", () => {
+    const { entries, errors } = readManifestUnion(path.join(REPO_ROOT, "migrations")) as {
+      entries: Array<{ seq: string; file: string; destructive: boolean; tables: string[] }>;
+      errors: string[];
+    };
+    expect(errors).toEqual([]);
+    const entry = entries.find((m) => m.seq === "0004");
     expect(entry).toBeDefined();
-    expect(entry.file).toBe("core/core__0004_demote-optional-extension-anchors.mjs");
-    expect(entry.destructive).toBe(true);
-    expect(entry.tables).toEqual(["installed_extension"]);
+    expect(entry?.file).toBe("core/core__0004_demote-optional-extension-anchors.mjs");
+    expect(entry?.destructive).toBe(true);
+    expect(entry?.tables).toEqual(["installed_extension"]);
   });
 });
 
