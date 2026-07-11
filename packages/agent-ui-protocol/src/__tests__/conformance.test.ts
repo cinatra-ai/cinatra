@@ -8,7 +8,12 @@ import {
   FIXTURE_STREAMING_PARTIAL,
   FIXTURE_UNKNOWN_RENDERABLE_VIEW,
 } from "../conformance-fixtures";
-import { AG_UI_EVENT_TYPES } from "../events";
+import { AG_UI_EVENT_TYPES, type DataPartEvent } from "../events";
+import {
+  isKnownRenderableViewType,
+  parseRenderableView,
+  renderableViewType,
+} from "../renderable-views/index";
 
 describe("isAgUiEventType", () => {
   it("accepts every known type and rejects the rest", () => {
@@ -101,5 +106,73 @@ describe("analyzeEventLog (turn shape)", () => {
     expect(a.invalidIndices).toEqual([1]);
     expect(a.unknownTypes).toEqual(["MYSTERY_FRAME"]);
     expect(a.complete).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Corpus <-> registered-inventory schema lock (S4, cinatra#1220).
+//
+// The render-parity slice (S6) reuses this corpus as the wire input for every
+// render target, and its stated contract is that the corpus is SCHEMA-LOCKED
+// so fixtures cannot drift from the protocol. Structural `isAgUiEvent`
+// validation alone does not deliver that for renderable views: a payload can
+// be a well-formed DATA_PART yet fail its registered view schema (this
+// happened — the change-diff fixture predated S4 registration and omitted the
+// required `schemaVersion`, so the real dispatcher would have drawn the safe
+// fallback instead of the proposal card). This block binds every corpus
+// payload that claims a REGISTERED viewType to `parseRenderableView`.
+// ---------------------------------------------------------------------------
+describe("corpus renderable-view payloads validate against the registered inventory", () => {
+  const dataParts = (log: readonly unknown[]): DataPartEvent[] =>
+    log.filter(
+      (e): e is DataPartEvent =>
+        typeof e === "object" &&
+        e !== null &&
+        (e as { type?: unknown }).type === "DATA_PART",
+    );
+
+  it("every corpus DATA_PART claiming a registered viewType parses against its schema", () => {
+    let registeredSeen = 0;
+    for (const [name, log] of Object.entries(CONFORMANCE_CORPUS)) {
+      for (const part of dataParts(log)) {
+        const viewType = renderableViewType(part.data);
+        if (!isKnownRenderableViewType(viewType)) continue;
+        registeredSeen += 1;
+        expect(
+          parseRenderableView(part.data),
+          `"${name}" carries a "${viewType}" payload that fails its registered schema — ` +
+            "a conforming renderer would draw the safe fallback, not the view",
+        ).not.toBeNull();
+      }
+    }
+    // Guard against the assertion going vacuous: the corpus must keep
+    // exercising at least one registered view.
+    expect(registeredSeen).toBeGreaterThan(0);
+  });
+
+  it("full_turn carries a valid change-diff with the Option A correlation ids", () => {
+    const [part] = dataParts(FIXTURE_FULL_TURN);
+    expect(part).toBeDefined();
+    const parsed = parseRenderableView(part.data);
+    expect(parsed).not.toBeNull();
+    if (parsed === null || parsed.viewType !== "content_change_proposal") {
+      throw new Error("full_turn's DATA_PART must parse as content_change_proposal");
+    }
+    expect(parsed.schemaVersion).toBe(1);
+    // The correlation ids tie the card to the draft the agent already saved
+    // during the run (Option A) — the seed corpus models the real wire.
+    expect(parsed.proposalId).toBe("prop_fixture_1");
+    expect(parsed.changeSetId).toBe("rev_fixture_9");
+    expect(parsed.fields).toHaveLength(1);
+  });
+
+  it("the deliberately-unknown fixture stays unregistered and parses to null", () => {
+    const [unknownPart, plainPart] = dataParts(FIXTURE_UNKNOWN_RENDERABLE_VIEW);
+    expect(renderableViewType(unknownPart.data)).toBe("future_view_not_yet_registered");
+    expect(isKnownRenderableViewType(renderableViewType(unknownPart.data))).toBe(false);
+    expect(parseRenderableView(unknownPart.data)).toBeNull();
+    // The plain structured part carries no viewType at all.
+    expect(renderableViewType(plainPart.data)).toBeUndefined();
+    expect(parseRenderableView(plainPart.data)).toBeNull();
   });
 });
