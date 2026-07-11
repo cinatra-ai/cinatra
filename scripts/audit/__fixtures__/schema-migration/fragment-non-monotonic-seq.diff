@@ -1,0 +1,28 @@
+diff --git a/migrations/core/core__0013_backfill-into-the-gap.mjs b/migrations/core/core__0013_backfill-into-the-gap.mjs
+new file mode 100644
+--- /dev/null
++++ b/migrations/core/core__0013_backfill-into-the-gap.mjs
+@@ -0,0 +1,11 @@
++// core__0013 — non-monotonic fixture: fills the 0013 gap below shipped fragment 0014.
++
++/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
++export function up(pgm) {
++  pgm.sql(`SELECT 1;`);
++}
++
++/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
++export function down(pgm) {
++  pgm.sql(`SELECT 1;`);
++}
+diff --git a/migrations/manifest.d/core__0013_backfill-into-the-gap.json b/migrations/manifest.d/core__0013_backfill-into-the-gap.json
+new file mode 100644
+--- /dev/null
++++ b/migrations/manifest.d/core__0013_backfill-into-the-gap.json
+@@ -0,0 +1,7 @@
++{
++  "seq": "0013",
++  "file": "core/core__0013_backfill-into-the-gap.mjs",
++  "summary": "Non-monotonic fixture: 0013 is a gap, but 0014 already shipped.",
++  "destructive": false,
++  "tables": ["metadata"]
++}
