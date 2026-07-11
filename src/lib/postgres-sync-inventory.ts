@@ -156,6 +156,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Tenant-scoped by-id reads of the legacy chat_threads JSON sync table (thread payload + team-org membership) that gate the authenticated chat read/write routes. Follows the same synchronous sync-table access pattern as the other chat_threads readers in database.ts; migrates to async typed reads when the legacy JSON sync tables are converted.",
   },
+  "src/lib/assistant-thread-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b.",
+  },
   "packages/objects/src/graphiti-projector.ts": {
     class: "migratable-request-path",
     justification:
