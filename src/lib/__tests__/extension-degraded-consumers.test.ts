@@ -152,9 +152,10 @@ describe("widget-stream agents (buildWidgetChatTool)", () => {
       contextFields: [],
       auth: { tokenConfigKey: "t", instancesConfigKey: "i", requiredInstanceFields: [] },
     };
-    await expect(buildWidgetChatTool("media-feeds", entry, {})).rejects.toBeInstanceOf(
-      ExtensionModuleAbsentError,
-    );
+    await expect(
+      // Build-time-shaped resolution (grant: null) — no runtime grant re-assert.
+      buildWidgetChatTool({ agentSlug: "media-feeds", entry, grant: null }, {}),
+    ).rejects.toBeInstanceOf(ExtensionModuleAbsentError);
   });
 });
 
