@@ -31,8 +31,8 @@ beforeEach(() => {
 
 describe("resolveInstalledOasPathForRead (cinatra#1196)", () => {
   it("resolves a first-party @cinatra-ai package (no regression)", () => {
-    const p = writeOas("cinatra-ai", "blog-pipeline-agent", "fp");
-    expect(resolveInstalledOasPathForRead("@cinatra-ai/blog-pipeline-agent")).toBe(p);
+    const p = writeOas("cinatra-ai", "fixture-first-party-agent", "fp");
+    expect(resolveInstalledOasPathForRead("@cinatra-ai/fixture-first-party-agent")).toBe(p);
   });
 
   it("resolves an operator/third-party-vendor package identically", () => {
