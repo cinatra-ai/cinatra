@@ -2,41 +2,41 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 136,
-    "/api/mcp": 1399,
-    "/chat": 1437,
-    "/api/a2a": 1404,
-    "/api/llm-bridge": 1410
+    "/api/mcp": 1401,
+    "/chat": 1439,
+    "/api/a2a": 1406,
+    "/api/llm-bridge": 1412
   },
   "absorbs": {
-    "/api/a2a": {
-      "from": 1403,
-      "to": 1404,
-      "reason": "cinatra#1040 S3 (PR #1352): the side-by-side version installer adds ONE net-new reachable first-party module — src/lib/extension-side-by-side-install.ts, dynamically imported by the dependency-batch saga's default deps factory (extension-install-batch.ts installMemberSideBySide/uninstallSideBySideMember seams) — and the batch saga is reachable from every real install/dispatch surface (the MCP extensions_install handler, chat explicit-dispatch, the A2A and llm-bridge routes), so each dispatch-reaching locked route grows by exactly one first-party module; /sign-in does not reach the dispatch surface and is untouched. Re-anchored onto main's current ceilings (which now include cinatra#1037 P2a PR #1304's +5 assistant-runtime modules and cinatra#1195 S1 PR #1354's +1 run-context module on these four routes) by REMEASUREMENT (never arithmetic): after rebasing onto main, scripts/audit/route-graph-ratchet.mjs was run on the rebased tree with the companion extension repos cloned pinned (missingCount 0), measuring the exact +1 on all four routes against main's committed ceilings.",
-      "pr": 1352
-    },
-    "/api/llm-bridge": {
-      "from": 1409,
-      "to": 1410,
-      "reason": "cinatra#1040 S3 (PR #1352): the side-by-side version installer adds ONE net-new reachable first-party module — src/lib/extension-side-by-side-install.ts, dynamically imported by the dependency-batch saga's default deps factory (extension-install-batch.ts installMemberSideBySide/uninstallSideBySideMember seams) — and the batch saga is reachable from every real install/dispatch surface (the MCP extensions_install handler, chat explicit-dispatch, the A2A and llm-bridge routes), so each dispatch-reaching locked route grows by exactly one first-party module; /sign-in does not reach the dispatch surface and is untouched. Re-anchored onto main's current ceilings (which now include cinatra#1037 P2a PR #1304's +5 assistant-runtime modules and cinatra#1195 S1 PR #1354's +1 run-context module on these four routes) by REMEASUREMENT (never arithmetic): after rebasing onto main, scripts/audit/route-graph-ratchet.mjs was run on the rebased tree with the companion extension repos cloned pinned (missingCount 0), measuring the exact +1 on all four routes against main's committed ceilings.",
-      "pr": 1352
-    },
-    "/api/mcp": {
-      "from": 1398,
-      "to": 1399,
-      "reason": "cinatra#1040 S3 (PR #1352): the side-by-side version installer adds ONE net-new reachable first-party module — src/lib/extension-side-by-side-install.ts, dynamically imported by the dependency-batch saga's default deps factory (extension-install-batch.ts installMemberSideBySide/uninstallSideBySideMember seams) — and the batch saga is reachable from every real install/dispatch surface (the MCP extensions_install handler, chat explicit-dispatch, the A2A and llm-bridge routes), so each dispatch-reaching locked route grows by exactly one first-party module; /sign-in does not reach the dispatch surface and is untouched. Re-anchored onto main's current ceilings (which now include cinatra#1037 P2a PR #1304's +5 assistant-runtime modules and cinatra#1195 S1 PR #1354's +1 run-context module on these four routes) by REMEASUREMENT (never arithmetic): after rebasing onto main, scripts/audit/route-graph-ratchet.mjs was run on the rebased tree with the companion extension repos cloned pinned (missingCount 0), measuring the exact +1 on all four routes against main's committed ceilings.",
-      "pr": 1352
-    },
-    "/chat": {
-      "from": 1436,
-      "to": 1437,
-      "reason": "cinatra#1040 S3 (PR #1352): the side-by-side version installer adds ONE net-new reachable first-party module — src/lib/extension-side-by-side-install.ts, dynamically imported by the dependency-batch saga's default deps factory (extension-install-batch.ts installMemberSideBySide/uninstallSideBySideMember seams) — and the batch saga is reachable from every real install/dispatch surface (the MCP extensions_install handler, chat explicit-dispatch, the A2A and llm-bridge routes), so each dispatch-reaching locked route grows by exactly one first-party module; /sign-in does not reach the dispatch surface and is untouched. Re-anchored onto main's current ceilings (which now include cinatra#1037 P2a PR #1304's +5 assistant-runtime modules and cinatra#1195 S1 PR #1354's +1 run-context module on these four routes) by REMEASUREMENT (never arithmetic): after rebasing onto main, scripts/audit/route-graph-ratchet.mjs was run on the rebased tree with the companion extension repos cloned pinned (missingCount 0), measuring the exact +1 on all four routes against main's committed ceilings.",
-      "pr": 1352
-    },
     "/sign-in": {
       "from": 135,
       "to": 136,
       "reason": "cinatra#1037 P2a (PR #1304): /sign-in reaches drizzle-store (auth -> DB) but NOT the chat runner, so it gains EXACTLY 1 first-party leaf: src/lib/assistant-thread-schema.ts (the new pure-strings bootstrap-DDL leaf for the assistant_threads/assistant_turns tables, imported by drizzle-store.ts). The four assistant-runtime leaves stay off /sign-in's graph. Delta measured B-A on the identical tree. Re-anchored onto main's current post-#1234 ceilings by REMEASUREMENT (never arithmetic): after merging current main (whose ceilings now include cinatra#1057 PR #1234's +2 dispatch-surface modules and cinatra#1317's +1 co-owner-constraint leaf) into the PR branch, scripts/audit/route-graph-ratchet.mjs was run on the merged tree with the companion extension repos cloned pinned (missingCount 0), measuring 136 against main's committed ceiling 135 — the exact +1 reproduced. Absorbed raise 135->136.",
       "pr": 1304
+    },
+    "/api/mcp": {
+      "from": 1399,
+      "to": 1401,
+      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
+      "pr": 1348
+    },
+    "/chat": {
+      "from": 1437,
+      "to": 1439,
+      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
+      "pr": 1348
+    },
+    "/api/a2a": {
+      "from": 1404,
+      "to": 1406,
+      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
+      "pr": 1348
+    },
+    "/api/llm-bridge": {
+      "from": 1410,
+      "to": 1412,
+      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
+      "pr": 1348
     }
   }
 }

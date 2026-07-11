@@ -80,6 +80,40 @@ export const cinatraExtensionDependencySchema = z
 
 export const cinatraDependenciesSchema = z.array(cinatraExtensionDependencySchema);
 
+// Structured `cinatra.consumes` declaration (engineering-spec'd consumed-
+// primitive contract; SEMANTIC MIRROR of the authoritative sdk-extensions
+// consumes.ts parser — the cross-package import is skipped per the
+// `dependencies`/`produces` precedent above, so the zod shape must accept and
+// refuse EXACTLY what `parseConsumedPrimitives` does: a primitive must be
+// non-blank after trim, duplicate primitives are refused, extra entry keys are
+// TOLERATED (the SDK shape-check ignores them; here they are stripped — a
+// consumes entry is a claim, never trusted as the dependency itself). Optional
+// for back-compat; MUST be carried here because the closed cinatra object
+// strips unknown keys, and dropping it would erase a capability-binding claim
+// the host enforces (the pm-work-store PM-seat gate, cinatra#1032
+// deliverable 3, reads `cinatra.consumes` from the INSTALLED manifest).
+export const cinatraConsumedPrimitiveSchema = z.object({
+  primitive: z
+    .string()
+    .refine((s) => s.trim().length > 0, "primitive must be a non-empty string"),
+  requirement: z.enum(["required", "optional"]),
+});
+export const cinatraConsumesSchema = z
+  .array(cinatraConsumedPrimitiveSchema)
+  .superRefine((arr, ctx) => {
+    const seen = new Set<string>();
+    arr.forEach((c, i) => {
+      if (seen.has(c.primitive)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [i, "primitive"],
+          message: `duplicate consumes entry for primitive ${c.primitive}`,
+        });
+      }
+      seen.add(c.primitive);
+    });
+  });
+
 export const cinatraAgentPackageMetadataSchema = z.object({
   packageType: z.literal(CINATRA_AGENT_PACKAGE_TYPE),
   manifestVersion: z.literal(CINATRA_AGENT_MANIFEST_VERSION),
@@ -96,6 +130,10 @@ export const cinatraAgentPackageMetadataSchema = z.object({
   // already-published packages; preserved through publish (see verdaccio/client.ts)
   // so the marketplace can dependency-order extraction.
   dependencies: cinatraDependenciesSchema.optional(),
+  // Consumed cross-extension primitives/capabilities. Optional for back-compat;
+  // preserved through publish (see verdaccio/client.ts) so a capability-binding
+  // claim (e.g. the pm-work-store PM seat) survives the closed-object rebuild.
+  consumes: cinatraConsumesSchema.optional(),
   ownerOrgId: z.string().nullable(),
   uiAdapter: z.literal("ag-ui").optional(),
   // Optional execution-provider hint in manifest.cinatra.
