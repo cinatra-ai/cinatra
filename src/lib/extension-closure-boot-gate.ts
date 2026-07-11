@@ -96,8 +96,15 @@ export async function buildClosureBootReport(
   for (const row of live) {
     // Scope-aware: each row's deps resolve from its own org, then platform —
     // a foreign org's live row never satisfies the edge (mirrors
-    // findBrokenClosures, which scopes itself the same way).
-    const verdict = evaluateExecutionClosure(row, makeScopedManifestLookup(rows, row.organizationId));
+    // findBrokenClosures, which scopes itself the same way). The full snapshot
+    // is passed so PERSISTED edge resolutions are validated directly
+    // (cinatra#1040 S2) with the scoped name-lookup as the unresolved-edge
+    // fallback.
+    const verdict = evaluateExecutionClosure(
+      row,
+      makeScopedManifestLookup(rows, row.organizationId),
+      rows,
+    );
     if (verdict.advisory) {
       optionalAdvisories.push({
         packageName: row.packageName,
