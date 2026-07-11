@@ -131,9 +131,13 @@ export function buildWorkflowHandlerDeps(): WorkflowHandlerDeps {
         rows.find((r) => r.organizationId == null) ||
         rows[0];
       const all = await listInstalledExtensions({});
+      // The full snapshot is passed (cinatra#1040 S2) so PERSISTED edge
+      // resolutions are validated directly and unresolved edges fall back to
+      // each DECLARING row's own scope — not the actor-scoped root lookup.
       const verdict = evaluateExecutionClosure(
         row,
         makeScopedManifestLookup(all, actor.orgId ?? null),
+        all,
       );
       if (verdict.executionBlock) {
         const { code, missing } = verdict.executionBlock;

@@ -20,8 +20,8 @@
 
 import { assertCanRemoveExtension } from "@cinatra-ai/extensions/system-extension-inventory";
 import {
-  assertArchiveDoesNotBreakClosure,
-  listArchiveClosureBlockers,
+  assertArchivePackageDoesNotBreakClosure,
+  listArchiveClosureBlockersForPackage,
   ClosureCheckUnavailableError,
   DependencyClosureError,
 } from "@cinatra-ai/extensions/dependency-closure";
@@ -67,13 +67,13 @@ export async function assertAgentTemplateRemovable(packageName: string): Promise
   } catch {
     throw new ClosureCheckUnavailableError(packageName);
   }
-  const target = rows.find((r) => r.packageName === packageName);
-  if (target) {
-    // Throws DependencyClosureError(ARCHIVE_BREAKS_CLOSURE, dependents[]) when an
-    // ACTIVE canonical dependent requires the target — identical to the
-    // dispatcher's assertCanonicalArchiveClosure.
-    assertArchiveDoesNotBreakClosure(target, rows);
-  }
+  // PACKAGE-LEVEL gate (cinatra#1040 S2): removal operates on the package
+  // name, so every row of the package is gated (a dependent pinned by a
+  // resolved edge to ANY row blocks). Throws
+  // DependencyClosureError(ARCHIVE_BREAKS_CLOSURE, dependents[]) when an
+  // ACTIVE canonical dependent requires the target — identical to the
+  // dispatcher's assertCanonicalArchiveClosure.
+  assertArchivePackageDoesNotBreakClosure(packageName, rows);
 
   // (3) Legacy agent_templates reverse-dependents (the `agentDependencies` JSONB
   // key set). Mirrors the dispatcher's private `checkDependents` ACTIVE-only
@@ -116,10 +116,9 @@ export async function listActiveAgentTemplateDependents(packageName: string): Pr
   const names = new Set<string>();
   try {
     const rows = await listInstalledExtensions({});
-    const target = rows.find((r) => r.packageName === packageName);
-    if (target) {
-      for (const n of listArchiveClosureBlockers(target, rows)) names.add(n);
-    }
+    // Same PACKAGE-LEVEL union the gate refuses on (cinatra#1040 S2) — the
+    // preview and the refusal can never disagree.
+    for (const n of listArchiveClosureBlockersForPackage(packageName, rows)) names.add(n);
   } catch {
     // canonical preview omitted — the gate still refuses on the real removal.
   }
