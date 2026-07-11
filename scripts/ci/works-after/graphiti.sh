@@ -40,7 +40,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 NEO4J_TAG="${NEO4J_TAG:-2026.05-community}"
 # Full pinned ref (tag@sha256) — authoritative for the pull, so the proof binds
 # the DIGEST. Defaults to the compose pin so a standalone run still proves it.
-NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604}"
+NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:2026.05-community@sha256:6c162e2432f861f2c4e3da77a6ba478e7f10e2160b870541f85294532bc6ff5f}"
 GRAPHITI_IMAGE="${GRAPHITI_IMAGE:-zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2}"
 GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 RUN_ID="wa-graphiti-$$"
