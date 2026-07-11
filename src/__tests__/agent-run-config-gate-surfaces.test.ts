@@ -1,0 +1,70 @@
+// cinatra #1057 ruling (b) — wiring guards: every real DISPATCH surface must
+// route through the shared configuration-needs run gate
+// (`assertAgentRunReadyByPackage`) so an agent whose REQUIRED connectors are not
+// configured cannot be RUN. Behavioral semantics are proven in
+// `src/lib/__tests__/agent-run-readiness.test.ts` (the shared predicate). These
+// SOURCE assertions (same convention as the runtime-lifecycle
+// `runtime-discovery-surface-wiring.test.ts`) catch a future refactor silently
+// dropping the gate from a surface.
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const ROOT = join(__dirname, "..");
+const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
+
+describe("chat explicit-dispatch surface routes through the config-needs run gate", () => {
+  const src = read("app/api/chat/explicit-dispatch-server.ts");
+
+  it("calls assertAgentRunReadyByPackage before dispatch", () => {
+    expect(src).toMatch(/assertAgentRunReadyByPackage/);
+    expect(src).toMatch(/agent-run-readiness/);
+  });
+
+  it("fails closed with a TERMINAL result (no LLM fallthrough) naming the connectors", () => {
+    // A terminal:true short-circuit is how runner.ts early-returns without the
+    // LLM fallback; the unconfigured connectors are surfaced in the SSE.
+    expect(src).toMatch(/terminal:\s*true[\s\S]*notConfigured\.error|notConfigured\.error[\s\S]*terminal:\s*true/);
+    expect(src).toMatch(/unconfiguredConnectors/);
+  });
+
+  it("gates BEFORE the input-extraction LLM round-trip", () => {
+    const gateIdx = src.indexOf("assertAgentRunReadyByPackage");
+    const extractIdx = src.indexOf("extractInputsFromPrompt(packageName, input.userPrompt");
+    expect(gateIdx).toBeGreaterThan(-1);
+    expect(extractIdx).toBeGreaterThan(-1);
+    expect(gateIdx).toBeLessThan(extractIdx);
+  });
+});
+
+describe("chat runner is covered transitively by its two gated dispatch mechanisms", () => {
+  const runner = read("app/api/chat/runner.ts");
+
+  it("dispatches only via serverSideExplicitDispatch (gated) or the MCP agent_run primitive (gated)", () => {
+    // runner has no un-gated dispatch path of its own: the explicit path goes
+    // through serverSideExplicitDispatch (config-gated), and the LLM path goes
+    // through the MCP agent_run primitive (config-gated in handlers.ts).
+    expect(runner).toMatch(/serverSideExplicitDispatch/);
+    // and it honours the terminal short-circuit the gate returns.
+    expect(runner).toMatch(/terminal/);
+  });
+});
+
+describe("widget stream route routes through the config-needs run gate", () => {
+  const src = read("app/api/agents/[agentSlug]/stream/route.ts");
+
+  it("calls assertAgentRunReadyByPackage before dispatchContentEditorViaA2A", () => {
+    expect(src).toMatch(/assertAgentRunReadyByPackage/);
+    const gateIdx = src.indexOf("assertAgentRunReadyByPackage");
+    // Match the CALL site (`await dispatchContentEditorViaA2A({`), not the import.
+    const dispatchIdx = src.indexOf("await dispatchContentEditorViaA2A({");
+    expect(gateIdx).toBeGreaterThan(-1);
+    expect(dispatchIdx).toBeGreaterThan(-1);
+    expect(gateIdx).toBeLessThan(dispatchIdx);
+  });
+
+  it("fails closed with a 409 naming the unconfigured connectors", () => {
+    expect(src).toMatch(/status:\s*409/);
+    expect(src).toMatch(/NextResponse\.json\(notConfigured/);
+  });
+});

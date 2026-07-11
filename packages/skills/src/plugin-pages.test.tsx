@@ -33,16 +33,28 @@ const src = readFileSync(path.join(__dirname, "plugin-pages.tsx"), "utf8");
 
 describe("SkillsPage scope filter", () => {
   it("filters via the hierarchical scope picker wired through SkillsToolbar", () => {
-    // Rows are filtered by scopeSelectionMatches (from @/lib/scope-filter),
+    // Rows are filtered by the multi-scope OR-predicate (cinatra#1074 W5) fed
+    // by the ONE canonical `?scope=` parser — both from @/lib/scope-filter —
     // not by a flat `skill.level === levelFilter` comparison.
     expect(src).toMatch(/from\s+["']@\/lib\/scope-filter["']/);
-    expect(src).toMatch(/scopeSelectionMatches\(/);
+    expect(src).toMatch(/parseScopeFilterParam\(/);
+    expect(src).toMatch(/scopeSelectionMatchesAny\(effectiveScopeTokens/);
+    // Sortable-header hrefs carry the FULL multi-scope selection.
+    expect(src).toMatch(/serializeScopeFilterTokens\(effectiveScopeTokens\)/);
     // The picker itself lives in SkillsToolbar, fed the active scope + vocab,
     // with the admin-only tier gated behind showAdmin.
     expect(src).toMatch(/<SkillsToolbar/);
     expect(src).toMatch(/scopeValue=\{/);
     expect(src).toMatch(/scopes=\{scopes\}/);
     expect(src).toMatch(/showAdmin=\{/);
+  });
+
+  it("the raw ?scope= param never bypasses the canonical parser — regression", () => {
+    // The pre-W5 single-token reader (`pickSearchParam(resolvedSearchParams.scope)`
+    // + a scalar `effectiveScope`) must not creep back; the parser owns
+    // splitting, dedupe, accessible-set validation, and the default collapse.
+    expect(src).not.toMatch(/pickSearchParam\(resolvedSearchParams\.scope\)/);
+    expect(src).toMatch(/parseScopeFilterParam\(\s*resolvedSearchParams\.scope/);
   });
 
   it("carries the full scope-token vocabulary (personal, workspace, org, team, project, admin)", () => {

@@ -7,7 +7,12 @@
 import { describe, it, expect } from "vitest";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { buildConnectionScopeEntries } from "@/lib/connection-scope-entries";
-import { scopeSelectionMatches } from "@/lib/scope-filter";
+import {
+  isDefaultScopeSelection,
+  parseScopeFilterParam,
+  scopeSelectionMatches,
+  scopeSelectionMatchesAny,
+} from "@/lib/scope-filter";
 
 const ACTOR = "user-actor";
 const OTHER = "user-other";
@@ -157,5 +162,71 @@ describe("buildConnectionScopeEntries", () => {
       { locus: "team", locusId: "team-9" },
       { locus: "project", locusId: "proj-7" },
     ]);
+  });
+});
+
+// Multi-scope W5 (cinatra#1074): the /connectors page pipeline end-to-end —
+// real granted-connection entries × a comma-separated multi-scope ?scope=
+// URL, exactly as ConnectorsPage composes them (canonical parse → default
+// short-circuit → per-entry OR-match).
+describe("multi-scope ?scope= OR-filter over connection scope entries (W5)", () => {
+  const accessible = new Set([
+    "personal",
+    "workspace",
+    "admin",
+    `org:${ORG}`,
+    "team:team-9",
+    "project:proj-7",
+  ]);
+
+  const policyArr = (tokens: string[]): AgentAuthPolicy =>
+    ({
+      runListVisibility: tokens,
+      runDataVisibility: tokens,
+      runExecuteVisibility: tokens,
+      allowRunSharing: false,
+    }) as unknown as AgentAuthPolicy;
+
+  // Three connectors: one granted to team-9, one to proj-7, one actor-owned.
+  const TEAM_PKG = "@cinatra-ai/team-connector";
+  const PROJ_PKG = "@cinatra-ai/project-connector";
+  const MINE_PKG = "@cinatra-ai/mine-connector";
+  const entries = buildConnectionScopeEntries(
+    [
+      { id: "t", connectorPackageId: TEAM_PKG, organizationId: ORG, ownerUserId: OTHER },
+      { id: "p", connectorPackageId: PROJ_PKG, organizationId: ORG, ownerUserId: OTHER },
+      { id: "m", connectorPackageId: MINE_PKG, organizationId: ORG, ownerUserId: ACTOR },
+    ],
+    new Map([
+      ["t", policyArr(["team:team-9"])],
+      ["p", policyArr(["project:proj-7"])],
+      ["m", policyArr(["owner"])],
+    ]),
+    ACTOR,
+  );
+
+  const visible = (url: string) => {
+    const tokens = parseScopeFilterParam(url, accessible);
+    return [TEAM_PKG, PROJ_PKG, MINE_PKG].filter(
+      (pkg) =>
+        isDefaultScopeSelection(tokens) ||
+        (entries.get(pkg) ?? []).some((e) => scopeSelectionMatchesAny(tokens, e)),
+    );
+  };
+
+  it("a multi-scope URL ORs across parents of different kinds", () => {
+    expect(visible("team:team-9,project:proj-7")).toEqual([TEAM_PKG, PROJ_PKG]);
+    expect(visible("personal,team:team-9")).toEqual([TEAM_PKG, MINE_PKG]);
+  });
+
+  it("single-scope URLs keep working", () => {
+    expect(visible("team:team-9")).toEqual([TEAM_PKG]);
+    expect(visible("personal")).toEqual([MINE_PKG]);
+  });
+
+  it("invalid tokens drop; workspace-mixed and absent selections show everything", () => {
+    expect(visible("team:team-9,team:evil")).toEqual([TEAM_PKG]);
+    expect(visible("workspace,project:proj-7")).toEqual([TEAM_PKG, PROJ_PKG, MINE_PKG]);
+    expect(visible("")).toEqual([TEAM_PKG, PROJ_PKG, MINE_PKG]);
   });
 });

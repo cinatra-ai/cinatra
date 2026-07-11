@@ -7,15 +7,20 @@
 // cross-package edges. Caller passes the parsed OAS object; the reader extracts
 // and validates only the `metadata.cinatra.contextSlots` slice.
 //
-// The slot schema is deliberately contract-only in this reader; this module has
-// no runtime consumers. Resolver / MCP primitives, the interactive HITL
-// renderer, and context-selection-agent invocation are wired outside this
-// module. context-selection-agent invocation is explicit per slot in the
-// context-using agent's own OAS (an explicit FlowNode + an
-// `@cinatra-ai/context-selection-agent` agentDependencies entry; child-local).
-// Runtime auto-wiring is intentionally absent; see https://docs.cinatra.ai/guides/developer/context-slots/.
-// This module ships only the contract + parser so downstream consumers have a
-// stable schema to plug into.
+// The slot schema is contract-only in this reader. Resolver / MCP primitives,
+// the interactive HITL renderer, and context-selection-agent invocation are
+// wired outside this module.
+//
+// RUNTIME CONSUMER (cinatra#1194): the WayFlow loader
+// (docker/wayflow/context_subflow_injection.py) reads this declaration at
+// mount time and INJECTS the canonical context-resolution subflow for every
+// declared slot not already carried by an author-placed subflow — the slim
+// authoring format. The loader validates the declaration STRICTLY (a
+// present-but-malformed declaration fails the agent's mount, because there
+// it is executable input); this reader keeps its fail-quiet [] posture for
+// read-only discovery. The two schemas must stay field-mirrored — see the
+// loader's _validate_declared_slots and the byte-mirror note on __test below.
+// See https://docs.cinatra.ai/guides/developer/context-slots/.
 //
 // Why is this in `packages/extensions/` (not `packages/agents/`)? Same reason
 // as the produces reader: keeps the agents-barrel dep-direction clean
