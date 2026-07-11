@@ -183,11 +183,21 @@ const FACTORY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const CONFIG_KEY_RE = /^[a-z0-9_]+$/;
 const CONTEXT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
 const SCOPED_PACKAGE_RE = /^@[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*$/;
-const MODULE_EXPORT_KEY_RE = /^\.\/[A-Za-z0-9._/-]+$/;
 /** A context field must never name credential/secret material — the fields are
- * forwarded CMS PAGE context, and a secret-shaped key is refused outright. */
-const SECRETISH_CONTEXT_KEY_RE =
-  /password|passwd|secret|credential|token|apikey|api_key|private_key|access_key|bearer|session|cookie/i;
+ * forwarded CMS PAGE context, and a secret-shaped key is refused outright. The
+ * key is NORMALIZED before matching (lowercased, separators stripped) so
+ * `privateKey` / `private-key` / `private_key` all hit the same denylist entry
+ * (codex round-1 finding: separator-sensitive matching was bypassable). */
+const SECRETISH_CONTEXT_KEY_SUBSTRINGS = [
+  "password", "passwd", "passphrase", "secret", "credential", "token",
+  "apikey", "privatekey", "accesskey", "secretkey", "signingkey", "clientkey",
+  "bearer", "session", "cookie", "authorization", "jwt", "oauth", "otp",
+] as const;
+
+function isSecretShapedContextKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[_-]/g, "");
+  return SECRETISH_CONTEXT_KEY_SUBSTRINGS.some((s) => normalized.includes(s));
+}
 
 const MAX_SLUG_LENGTH = 64;
 const MAX_FACTORY_LENGTH = 128;
@@ -277,6 +287,7 @@ export function validateWidgetStreamMetadataCanon(canon: WidgetStreamMetadataCan
   const errors: string[] = [];
   const bounded = (value: string, max: number, at: string) => {
     if (!isNfc(value)) errors.push(`${at}: must be NFC-normalized`);
+    if (value !== value.trim()) errors.push(`${at}: must not carry surrounding whitespace`);
     if (value.length === 0 || value.length > max) errors.push(`${at}: length must be 1..${max}`);
   };
   if (canon.v !== 2) errors.push("v: must be 2");
@@ -285,12 +296,8 @@ export function validateWidgetStreamMetadataCanon(canon: WidgetStreamMetadataCan
   bounded(canon.packageName, MAX_PACKAGE_NAME_LENGTH, "packageName");
   if (!SCOPED_PACKAGE_RE.test(canon.packageName)) errors.push("packageName: must be a scoped npm package name");
   bounded(canon.moduleExportKey, MAX_MODULE_EXPORT_KEY_LENGTH, "moduleExportKey");
-  if (
-    !MODULE_EXPORT_KEY_RE.test(canon.moduleExportKey) ||
-    canon.moduleExportKey.includes("*") ||
-    canon.moduleExportKey.split("/").includes("..")
-  ) {
-    errors.push("moduleExportKey: must be a plain './'-relative subpath (no patterns, no traversal)");
+  if (!isPlainContainedSubpath(canon.moduleExportKey)) {
+    errors.push("moduleExportKey: must be a plain './'-relative subpath (no patterns, escapes, or traversal segments)");
   }
   bounded(canon.factory, MAX_FACTORY_LENGTH, "factory");
   if (!FACTORY_RE.test(canon.factory)) errors.push("factory: must be a JS identifier");
@@ -325,7 +332,7 @@ export function validateWidgetStreamMetadataCanon(canon: WidgetStreamMetadataCan
     canon.contextFields.forEach((f, i) => {
       bounded(f.key, MAX_CONTEXT_KEY_LENGTH, `contextFields[${i}].key`);
       if (!CONTEXT_KEY_RE.test(f.key)) errors.push(`contextFields[${i}].key: must be an identifier`);
-      if (SECRETISH_CONTEXT_KEY_RE.test(f.key)) {
+      if (isSecretShapedContextKey(f.key)) {
         errors.push(`contextFields[${i}].key: must not name credential/secret material`);
       }
       if (seen.has(f.key)) errors.push(`contextFields[${i}].key: duplicate "${f.key}"`);
@@ -349,6 +356,20 @@ export function validateWidgetStreamMetadataCanon(canon: WidgetStreamMetadataCan
     errors.push(
       "auth.instancesConfigKey: must be the package's OWN instances namespace " +
         `("${ownNamespace ?? "?"}"), never another package's`,
+    );
+  }
+  // ANCHOR the instances namespace to the ADMIN-APPROVED credential-store
+  // ownership axis (codex round-1 finding: the package-name derivation alone is
+  // non-injective — e.g. a cross-vendor `@evil/wordpress-connector` would
+  // derive "wordpress"). Requiring tokenConfigKey === `<instancesConfigKey>_widget_auth`
+  // means claiming an instances namespace requires OWNING that namespace's
+  // widget-auth token store, and the sibling grant's anti-squat partial-unique
+  // index makes that ownership exclusive. Matches every baked connector
+  // (`wordpress_widget_auth`/`wordpress`, `drupal_widget_auth`/`drupal`).
+  if (canon.auth.tokenConfigKey !== `${canon.auth.instancesConfigKey}_widget_auth`) {
+    errors.push(
+      "auth.tokenConfigKey: must be `<instancesConfigKey>_widget_auth` — the instances " +
+        "namespace is anchored to the admin-approved credential-store ownership of that token store",
     );
   }
   if (!Array.isArray(canon.auth.requiredInstanceFields)) {
@@ -469,11 +490,22 @@ export function parseJsonRejectingDuplicateKeys(text: string): unknown {
         skipWs();
         const key = parseString();
         if (keys.has(key)) fail(`duplicate object key "${key}"`);
+        // Fail-closed hardening (codex round-1 finding): a plain `obj[key] =`
+        // assignment would make a "__proto__" key MUTATE the prototype
+        // (differential vs JSON.parse + pollution). No legitimate manifest
+        // carries the key, so refuse it outright; every other key is written
+        // as an OWN data property, exactly like JSON.parse.
+        if (key === "__proto__") fail('forbidden object key "__proto__"');
         keys.add(key);
         skipWs();
         if (text[i] !== ":") fail("expected ':'");
         i++;
-        obj[key] = parseValue();
+        Object.defineProperty(obj, key, {
+          value: parseValue(),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
         skipWs();
         if (text[i] === ",") {
           i++;
@@ -548,13 +580,25 @@ function isObj(v: unknown): v is Record<string, unknown> {
  * slice re-resolves the same key at load; an ambiguous mapping must never be
  * approvable).
  */
+const EXPORT_TARGET_RE = /^\.\/[A-Za-z0-9._/-]+$/;
+
+/** True when a "./"-relative subpath is a plain, contained path: charset-bound
+ * (no `%` escapes, no backslashes, no `*` patterns — outside the class) and
+ * free of empty/`.`/`..`/`node_modules` segments, mirroring Node's own
+ * invalid-segment exports rules (codex round-1 finding: `..` alone was not
+ * enough). The runtime loader slice re-asserts realpath containment at load. */
+function isPlainContainedSubpath(subpath: string): boolean {
+  if (!EXPORT_TARGET_RE.test(subpath)) return false;
+  const segments = subpath.slice(2).split("/");
+  return segments.every((s) => s !== "" && s !== "." && s !== ".." && s !== "node_modules");
+}
+
 function resolveSingleStringExport(exportsField: unknown, key: string): string | null {
   if (!isObj(exportsField)) return null;
-  if (key.includes("*")) return null;
   if (!Object.prototype.hasOwnProperty.call(exportsField, key)) return null;
   const target = (exportsField as Record<string, unknown>)[key];
   if (typeof target !== "string") return null;
-  if (!target.startsWith("./") || target.includes("*") || target.split("/").includes("..")) return null;
+  if (!isPlainContainedSubpath(target)) return null;
   return target;
 }
 
@@ -564,13 +608,32 @@ type RawDeclarationResult =
   | { ok: true; claim: WidgetStreamMetadataGrantClaim }
   | { ok: false; error: string };
 
+const DECLARATION_KEYS = new Set([
+  "agentSlug", "label", "subjectNoun", "skillCapability", "relayAgentPackage",
+  "factory", "moduleExportKey", "contextFields", "auth",
+]);
+const AUTH_KEYS = new Set(["tokenConfigKey", "instancesConfigKey", "requiredInstanceFields", "requireUserToken"]);
+const CONTEXT_FIELD_KEYS = new Set(["key", "maxLength"]);
+
+/** Strict schema: an unknown key anywhere in the declaration refuses it (codex
+ * round-1 finding — a lenient schema invites semantics the canon never bound). */
+function unknownKeyOf(obj: Record<string, unknown>, allowed: ReadonlySet<string>): string | null {
+  for (const k of Object.keys(obj)) if (!allowed.has(k)) return k;
+  return null;
+}
+
 function buildClaimFromDeclaration(
   packageName: string,
   raw: unknown,
   exportsField: unknown,
 ): RawDeclarationResult {
   if (!isObj(raw)) return { ok: false, error: "declaration must be an object" };
-  const nfc = (v: unknown): string | null => (typeof v === "string" ? v.normalize("NFC").trim() : null);
+  const unknownKey = unknownKeyOf(raw, DECLARATION_KEYS);
+  if (unknownKey !== null) return { ok: false, error: `unknown declaration key "${unknownKey}"` };
+  // NFC-normalize ONLY — no trimming: surrounding whitespace is refused by the
+  // canon validator, never silently rewritten (two byte-distinct declarations
+  // must not converge onto one hash except through Unicode normalization).
+  const nfc = (v: unknown): string | null => (typeof v === "string" ? v.normalize("NFC") : null);
   const agentSlug = nfc(raw.agentSlug);
   const label = nfc(raw.label);
   const subjectNoun = nfc(raw.subjectNoun);
@@ -596,6 +659,8 @@ function buildClaimFromDeclaration(
   const contextFields: WidgetStreamMetadataContextField[] = [];
   for (const f of raw.contextFields) {
     if (!isObj(f)) return { ok: false, error: "contextFields: each entry must be an object" };
+    const unknownFieldKey = unknownKeyOf(f, CONTEXT_FIELD_KEYS);
+    if (unknownFieldKey !== null) return { ok: false, error: `contextFields: unknown key "${unknownFieldKey}"` };
     const key = nfc(f.key);
     if (key === null || typeof f.maxLength !== "number") {
       return { ok: false, error: "contextFields: each entry must be { key, maxLength }" };
@@ -604,6 +669,8 @@ function buildClaimFromDeclaration(
   }
   contextFields.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   if (!isObj(raw.auth)) return { ok: false, error: "auth: must be an object" };
+  const unknownAuthKey = unknownKeyOf(raw.auth, AUTH_KEYS);
+  if (unknownAuthKey !== null) return { ok: false, error: `auth: unknown key "${unknownAuthKey}"` };
   const tokenConfigKey = nfc(raw.auth.tokenConfigKey);
   const instancesConfigKey = nfc(raw.auth.instancesConfigKey);
   if (tokenConfigKey === null || instancesConfigKey === null) {

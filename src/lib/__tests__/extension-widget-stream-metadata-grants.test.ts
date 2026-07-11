@@ -377,8 +377,13 @@ describe("validateWidgetStreamMetadataCanon — dangerous-value refusals", () =>
     ["self as relay package", { relayAgentPackage: PKG }, /companion agent/],
     ["foreign instances namespace", { auth: { ...makeCanon().auth, instancesConfigKey: "drupal" } }, /OWN instances namespace/],
     ["secret-shaped context key", { contextFields: [{ key: "apiToken", maxLength: 32 }] }, /credential\/secret/],
+    ["camelCase secret context key (normalized matching)", { contextFields: [{ key: "privateKey", maxLength: 32 }] }, /credential\/secret/],
     ["module export key traversal", { moduleExportKey: "./../escape" }, /moduleExportKey/],
     ["module export key pattern", { moduleExportKey: "./widget-*" }, /moduleExportKey/],
+    ["module export key dot segment", { moduleExportKey: "././widget" }, /moduleExportKey/],
+    ["module export key node_modules segment", { moduleExportKey: "./node_modules/x" }, /moduleExportKey/],
+    ["unanchored tokenConfigKey", { auth: { ...makeCanon().auth, tokenConfigKey: "wordpress_auth" } }, /_widget_auth/],
+    ["surrounding whitespace", { label: " WordPress " }, /surrounding whitespace/],
   ] as const)("refuses %s", (_name, overrides, re) => {
     const errors = validateWidgetStreamMetadataCanon(makeCanon(overrides as Partial<WidgetStreamMetadataCanonV2>));
     expect(errors.join("\n")).toMatch(re);
@@ -433,6 +438,16 @@ describe("parseJsonRejectingDuplicateKeys", () => {
 
   it("throws on trailing content", () => {
     expect(() => parseJsonRejectingDuplicateKeys('{"a": 1} x')).toThrow(/trailing content/);
+  });
+
+  it("refuses __proto__ keys outright and never pollutes prototypes", () => {
+    expect(() => parseJsonRejectingDuplicateKeys('{"__proto__": {"x": 1}}')).toThrow(/__proto__/);
+    expect(() => parseJsonRejectingDuplicateKeys('{"a": {"\\u005f_proto__": 1}}')).toThrow(/__proto__/);
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
+    // Ordinary keys land as OWN data properties (JSON.parse-equivalent).
+    const parsed = parseJsonRejectingDuplicateKeys('{"constructor": 1, "hasOwnProperty": 2}') as Record<string, unknown>;
+    expect(parsed.constructor).toBe(1);
+    expect(parsed.hasOwnProperty).toBe(2);
   });
 });
 
@@ -533,6 +548,9 @@ describe("readWidgetStreamMetadataClaimsFromStore", () => {
     ["skillCapability outside own namespace", (d: Record<string, unknown>) => ({ ...d, skillCapability: "widget-chat.someone-else" })],
     ["foreign instancesConfigKey", (d: Record<string, unknown>) => ({ ...d, auth: { ...(d.auth as object), instancesConfigKey: "drupal" } })],
     ["cross-scope relayAgentPackage", (d: Record<string, unknown>) => ({ ...d, relayAgentPackage: "@evil/agent" })],
+    ["unknown declaration key (strict schema)", (d: Record<string, unknown>) => ({ ...d, extraField: true })],
+    ["unknown auth key (strict schema)", (d: Record<string, unknown>) => ({ ...d, auth: { ...(d.auth as object), debugBypass: true } })],
+    ["token key not anchored to the instances namespace", (d: Record<string, unknown>) => ({ ...d, auth: { ...(d.auth as object), tokenConfigKey: "wordpress_other" } })],
   ])("refuses the WHOLE connector on %s (fail closed, never partial)", async (_name, mutate) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const dir = await writeStore(manifest([mutate(declaration())]));
