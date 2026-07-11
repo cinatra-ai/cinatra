@@ -395,12 +395,18 @@ services:
     # digest). Digest-pinned (immutable): the tag is human-readable, the @sha256
     # is the binding pin. Re-resolve at bump time with
     # `docker buildx imagetools inspect neo4j:2026.05-community`.
+    # DIGEST RE-RESOLVED 2026-07-11: upstream REPUBLISHED the 2026.05-community
+    # tag on 2026-07-02 (same kernel 2026.05.0 — still the latest stable
+    # calendar release — new build/bytes), so the pin follows the current
+    # multi-arch index digest; the prior index digest was sha256:b91a6fa7b1d8…
+    # The digest-bound graphiti works-after dispatch gates this (NEO4J_IMAGE
+    # carries the full tag@sha256 ref).
     # See docs/upgrade-track.md §7 for the major's two behavior changes:
     #  (1) the default Cypher language is now CYPHER_25 (was 5) — pinned back to
     #      CYPHER_5 below so graphiti's Cypher-5-shaped MCP queries keep parsing;
     #  (2) a NEO4J_AUTH password now has an 8-char minimum (the default
     #      `cinatra-local` is 13 chars; a prod override must be >=8).
-    image: neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604
+    image: neo4j:2026.05-community@sha256:6c162e2432f861f2c4e3da77a6ba478e7f10e2160b870541f85294532bc6ff5f
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cinatra-local}
       # The healthcheck below expands its password var INSIDE the container, so the
