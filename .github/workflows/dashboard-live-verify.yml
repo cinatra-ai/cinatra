@@ -136,7 +136,7 @@ jobs:
       # service is NOT started. On non-dashboard PRs (the common case) the
       # stub path needs no Postgres/Redis, so they don't spin up.
       postgres:
-        image: ${{ needs.detect.outputs.run_real == 'true' && 'postgres:16' || '' }}
+        image: ${{ needs.detect.outputs.run_real == 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres

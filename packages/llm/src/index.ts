@@ -439,9 +439,10 @@ export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecution
    * userId/orgId.
    *
    * Override is consulted only for the `cinatra-mcp` toolbox id. External
-   * MCP toolboxes resolve through the normal registry path. When the
-   * override returns null the layer falls back to the machine-token path —
-   * preserves pre-fix behavior for legacy/anonymous bridge calls.
+   * MCP toolboxes resolve through the normal registry path. A present
+   * override owns the machine-token fallback too (#1195: the bridge mints
+   * it itself to key the durable run-context binding to the exact bearer);
+   * its null result is authoritative — no second mint in this layer.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
 };
@@ -554,13 +555,13 @@ export async function injectMcpTools(params: {
   preserveFunctionTools?: boolean;
   skipExternalMcpRegistry?: boolean;
   /**
-   * Optional override for the cinatra-mcp self-MCP tool. When provided AND
-   * non-null, replaces the default `client_credentials`-based machine
-   * actor token with a caller-supplied delegated-actor MCP tool (the
-   * bridge passes a run-scoped agent-run-OBO token here). When the
-   * override returns null, falls back to the machine-token path
-   * (preserves pre-fix behavior). External MCP toolboxes resolve
-   * through the normal registry path either way.
+   * Optional override for the cinatra-mcp self-MCP tool. When provided it
+   * fully owns the resolution: a delegated-actor MCP tool (run-scoped
+   * agent-run-OBO token) or the bridge-minted machine fallback whose exact
+   * bearer keys the durable run-context binding (#1195). A null result is
+   * authoritative (no cinatra self-MCP tool this step) — this layer never
+   * re-mints. External MCP toolboxes resolve through the normal registry
+   * path either way.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
 }): Promise<LlmTool[] | undefined> {

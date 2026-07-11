@@ -219,7 +219,12 @@ echo "==> prod-boot e2e: image=${IMAGE} origin=${APP_ORIGIN}"
 # ── 1. Infrastructure: isolated network + fresh Postgres + Redis ────────────
 docker network create "$NET" >/dev/null
 
-# Matches the platform compose Redis major (redis:8; postgres:17 as the e2e jobs use).
+# Redis matches the platform compose major (redis:8). Postgres DELIBERATELY
+# stays 17 here until the 17->18 cutover wave: this script boots the RELEASED
+# image, and released images deploy against the LIVE platform postgres, which
+# is 17 until the owner-gated cutover (the compose pin is already 18; this
+# stand-in is the representative released-app-on-17 proof). Flip to 18 WITH
+# the cutover wave.
 docker run -d --name "$PG" --network "$NET" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
   postgres:17 >/dev/null
