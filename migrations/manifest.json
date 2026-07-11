@@ -21,6 +21,14 @@
     "Never renumber or rewrite an entry once its migration has shipped;",
     "supersede it with a new sequence number."
   ],
+  "_seq_coordination": [
+    "SEQ COORDINATION — seq 0023 is HELD for open PR cinatra-ai/cinatra#1304",
+    "(assistant-threads-turns, migrations/core/core__0023_assistant-threads-turns.mjs),",
+    "which is reviewed ahead of this branch. This deliverable was originally cut at",
+    "0023 too; to avoid a duplicate-seq collision at merge it is renumbered to 0024 and",
+    "appended AFTER #1304's held 0023. Whichever of the two lands second must confirm it",
+    "still holds the next free sequence number before merge."
+  ],
   "migrations": [
     {
       "seq": "0001",
@@ -227,6 +235,16 @@
       "tables": [
         "installed_extension",
         "extension_install_ops"
+      ]
+    },
+    {
+      "seq": "0024",
+      "file": "core/core__0024_project-dispatch-ledger-lease.mjs",
+      "summary": "Dynamic-dispatch primitive storage (cinatra-ai/cinatra#1032 deliverable 2): two brand-new tables. project_dispatch_attempts is the dispatch-attempt ledger — one row per deliberate dispatch attempt keyed UNIQUE (org_id, item_natural_key, action_version), written AHEAD of createAgentRun and carrying the deterministically derived idempotency_key passed VERBATIM to createAgentRun, so a tick crashing between dispatch and record cannot double-dispatch (the next tick re-begins the same key and agent_runs_idempotency_key_uniq resolves to the same child run); run_id is provenance with deliberately NO FK (append-only history outlives the run row); version is the optimistic-CAS counter (core__0007 shape). project_leases is the project-level lease keyed (org_id, project_ref) with heartbeat/expiry columns and a fencing version bumped on every (re)acquisition; stale-lease recovery = a conditional-upsert acquire that only wins when expires_at <= now() or the caller is the live holder. Both tables ride the idempotent bootstrap DDL (projectDispatchSchemaQueries spread into buildCreateStoreSchemaQueries, same PR); this module ships per the core__0007 precedent to keep fresh-bootstrap and operator-upgrade paths aligned — pure CREATE IF NOT EXISTS, no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops both tables (fresh additions; exact pre-0024 shape on any lineage). destructive=false: brand-new tables, no user-land data affected.",
+      "destructive": false,
+      "tables": [
+        "project_dispatch_attempts",
+        "project_leases"
       ]
     }
   ]
