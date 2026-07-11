@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgent } from "@/lib/widget-stream-agents.server";
+import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import {
   redeemUserAuthCode,
   resolveVerifiedSiteFromCredential,
@@ -89,8 +89,11 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json(INVALID_GRANT, { status: 429 });
   }
 
-  // 2. Resolve agent + verify the client matches the agent's client.
-  const entry = resolveWidgetStreamAgent(agentSlug);
+  // 2. Resolve agent (union: build-time map ∪ admin-approved, serve-time-
+  // re-verified runtime entries — widget-stream runtime trust, slice 2) +
+  // verify the client matches the agent's client.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  const entry = resolved?.entry ?? null;
   if (!entry) {
     emitWidgetAuthAudit("redeem_failure", { ip, ua, client, agentSlug, reason: "unknown_agent" });
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });

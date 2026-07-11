@@ -535,6 +535,31 @@ describe("bridge run binding for MCP OBO minting", () => {
     ).toBe("anthropic");
   });
 
+  it("STICKY CMS PIN: a public_site_widget carrier run mints with the pinned CMS allowlist even when package membership is indeterminate (widget-stream runtime trust, slice 2)", async () => {
+    // The run-level discriminator alone pins the allowlist: the template
+    // carries NO packageName here (membership indeterminate / would be false),
+    // and a runtime grant revoked AFTER run creation looks exactly like this —
+    // the live widget-carrier run must NEVER widen to unrestricted self-MCP.
+    const binding = issueAgentRunBinding({
+      runId: VICTIM_RUN.id,
+      orgId: VICTIM_RUN.orgId,
+      runBy: VICTIM_RUN.runBy,
+    });
+    readAgentRunByIdMock.mockResolvedValue({
+      ...VICTIM_RUN,
+      sourceType: "public_site_widget",
+    });
+    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    expect(res.status).toBe(200);
+    const tool = await invokeOverride();
+    expect(tool).toEqual(expect.objectContaining({ type: "mcp-tool" }));
+    const allowlistArg = (
+      buildLlmMcpServerToolForAgentRunMock.mock.calls[0] as unknown[]
+    )[3];
+    expect(Array.isArray(allowlistArg)).toBe(true);
+    expect((allowlistArg as string[]).length).toBeGreaterThan(0);
+  });
+
   it("HAPPY PATH: a resolved x-cinatra-a2a-context-id still mints (binding-free legacy path preserved)", async () => {
     readAgentRunByContextIdMock.mockResolvedValue(VICTIM_RUN);
     const req = new Request("http://localhost:3000/api/llm-bridge", {
