@@ -13,7 +13,13 @@ import {
   deriveContextRouteContext,
   loadTrustedSlot,
   resolveCandidates,
+  type DerivedContext,
 } from "@/lib/artifacts/context-route-io";
+import {
+  extractContextRouteLogIds,
+  recordContextRouteRejection,
+  recordContextRouteSuccess,
+} from "@/lib/artifacts/context-route-observability";
 import { writeRunContextSelectionsBatchIdempotent } from "@/lib/artifacts/run-context-selections-store";
 
 // ---------------------------------------------------------------------------
@@ -36,17 +42,32 @@ const RequestSchema = z.object({
 });
 
 export async function POST(req: Request): Promise<Response> {
+  // #1197 observability: identifiers only (ids + stable codes) — never
+  // payloads/envelopes. The a2a context-id header is the legacy run binding.
+  const contextId = req.headers.get("x-cinatra-a2a-context-id");
   const raw = await req.json().catch(() => null);
   const parsed = RequestSchema.safeParse(raw);
   if (!parsed.success) {
+    const ids = extractContextRouteLogIds(raw);
+    recordContextRouteRejection({
+      kind: "finalize",
+      code: "invalid_body",
+      status: 400,
+      runId: ids.runId,
+      contextId,
+      slotId: ids.slotId,
+    });
     return NextResponse.json(
       { error: "invalid_body", issues: parsed.error.issues },
       { status: 400 },
     );
   }
   const body = parsed.data;
+  // Tracked outside the try so the rejection line can carry the SERVER-derived
+  // run id once derivation has succeeded (falls back to the body id before).
+  let ctx: DerivedContext | undefined;
   try {
-    const ctx = await deriveContextRouteContext(req, body, "finalize");
+    ctx = await deriveContextRouteContext(req, body, "finalize");
     // Load the slot from the VERIFIED owner (the run package, or the composed
     // child that the run package's own OAS binds to this slotId), never the body.
     // Actor + audit-store scoping below stays on the run package (trustedPackageName).
@@ -112,17 +133,43 @@ export async function POST(req: Request): Promise<Response> {
     });
     const writeResult = writeRunContextSelectionsBatchIdempotent(rows, selectionKey);
 
+    // #1197: debug-level lifecycle trace + per-kind ok counter.
+    recordContextRouteSuccess({
+      kind: "finalize",
+      servedBy: ctx.servedBy,
+      runId: ctx.run.id,
+      contextId,
+      slotId: body.slotId,
+    });
     return NextResponse.json({
       contextSlotBindings: [{ slotId: body.slotId, refs: trusted }],
       wrote: writeResult.wrote,
     });
   } catch (err) {
     if (err instanceof ContextRouteError) {
+      // #1197: EVERY stable-code rejection is counted + logged (ids only).
+      recordContextRouteRejection({
+        kind: "finalize",
+        code: err.code,
+        status: err.status,
+        runId: ctx?.run.id ?? body.parentRunId,
+        contextId,
+        slotId: body.slotId,
+      });
       return NextResponse.json(
         { error: err.code, message: err.message },
         { status: err.status },
       );
     }
+    // #1197: an unexpected crash lands in a stable bucket too, then rethrows.
+    recordContextRouteRejection({
+      kind: "finalize",
+      code: "internal_error",
+      status: 500,
+      runId: ctx?.run.id ?? body.parentRunId,
+      contextId,
+      slotId: body.slotId,
+    });
     throw err;
   }
 }
