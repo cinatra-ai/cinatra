@@ -207,6 +207,11 @@ const SYSTEM_JOBS = new Set<string>([
   // re-delay) enforcing `current + 2` retention over the V2 runtime store.
   // System-initiated.
   "extension-store-gc-reap",
+  // In-app extension auto-update loop (cinatra#1042). Daily self-rescheduling
+  // sweep (boot-seeded ONLY when CINATRA_EXTENSION_AUTO_UPDATE=true,
+  // canonical-id re-delay) applying eligible extension updates through the
+  // planner/batch under a system Actor. System-initiated.
+  "extension-auto-update",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

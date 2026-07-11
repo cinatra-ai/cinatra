@@ -234,6 +234,55 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-extension-auto-update",
+      policy: "retryable",
+      run: async () => {
+        // Seed the in-app extension auto-update loop (cinatra#1042) — ONLY
+        // when the master flag is enabled. Default OFF: with the flag unset
+        // the loop is NOT seeded at all this boot (no job, no runner) and
+        // this phase only logs the fact. NOTE: a canonical job left over from
+        // a previously-ENABLED boot is not removed here — it keeps re-delaying
+        // as an inert no-op (the runner slot stays empty and the cycle
+        // re-checks the flag), which is safer than boot-time queue removal.
+        //
+        // The cycle IMPLEMENTATION is registered here (boot-only graph)
+        // rather than imported by the handler registry — same route-graph-
+        // ratchet posture as the GC reaper above. Register BEFORE seeding so
+        // the loop can never fire against an empty slot in this process.
+        const { isExtensionAutoUpdateEnabled, runExtensionAutoUpdateCycle } =
+          await import("@/lib/extension-auto-update");
+        if (!isExtensionAutoUpdateEnabled()) {
+          console.log(
+            "[extension-auto-update] disabled (CINATRA_EXTENSION_AUTO_UPDATE is not \"true\") — loop not seeded this boot",
+          );
+          return;
+        }
+        const { registerExtensionAutoUpdateRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        registerExtensionAutoUpdateRunner(() => runExtensionAutoUpdateCycle());
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.EXTENSION_AUTO_UPDATE,
+          {},
+          {
+            jobId: EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
+            delay: 60 * 60 * 1000, // 1h initial (post-boot settle + one catalog-sync sweep first); 24h cadence thereafter
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log(
+          "[extension-auto-update] enabled — daily auto-update loop scheduled (1h initial delay)",
+        );
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {
