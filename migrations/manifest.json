@@ -1,17 +1,23 @@
 {
   "_doc": [
-    "Append-only ledger of versioned migration artifacts for the first-party",
+    "FROZEN legacy ledger of versioned migration artifacts for the first-party",
     "core store schema (buildCreateStoreSchemaQueries / createStoreTables in",
-    "src/lib/drizzle-store.ts). See migrations/README.md for the convention:",
-    "every migrations/core/core__NNNN_short-description.mjs runner module",
-    "ships with an entry here, in the same PR as the schema change it",
-    "accompanies. Entry shape:",
+    "src/lib/drizzle-store.ts). This array is shipped history: the CI gate",
+    "rejects ANY change to its entries and ANY new entry appended to it.",
+    "NEW migrations author a per-migration fragment at",
+    "migrations/manifest.d/core__NNNN_short-description.json instead (same",
+    "filename stem as the runner module; one file per migration, so",
+    "concurrent migration PRs never conflict on a shared tail — cinatra#1335).",
+    "Every consumer reads the ledger as the deterministic UNION of this array",
+    "and the fragments, via migrations/manifest-reader.mjs. Entry shape (both",
+    "forms):",
     "  seq         — the NNNN sequence number, as a string ('0001')",
-    "  file        — the artifact path relative to migrations/ (new entries:",
-    "                'core/core__NNNN_short-description.mjs'; seq 0001/0002",
-    "                predate the node-pg-migrate runner and point at the",
-    "                legacy psql artifacts — their runner forms live at",
-    "                core/core__0001_… and core/core__0002_…)",
+    "  file        — the artifact path relative to migrations/ (runner-module",
+    "                entries: 'core/core__NNNN_short-description.mjs'; seq",
+    "                0001/0002 predate the node-pg-migrate runner and point at",
+    "                the legacy psql artifacts — their runner forms live at",
+    "                core/core__0001_… and core/core__0002_…; those two",
+    "                entries stay in this frozen array permanently)",
     "  summary     — one line: what the migration does and why",
     "  destructive — true when the change affects user-land data (the case",
     "                that REQUIRES an artifact); false for optional artifacts",
@@ -19,15 +25,10 @@
     "  tables      — the affected core-store table names (no schema prefix;",
     "                the schema name is variable, see the README)",
     "Never renumber or rewrite an entry once its migration has shipped;",
-    "supersede it with a new sequence number."
-  ],
-  "_seq_coordination": [
-    "SEQ COORDINATION — resolved: PR cinatra-ai/cinatra#1304 (assistant-threads-turns,",
-    "#1037 P2a) landed first on main and took core__0026; core__0025 shipped earlier",
-    "(cinatra-ai/cinatra#1331). Per the coordinator decision, #1304 keeps 0026 and this",
-    "project-instance-registry slice (#1032 deliverable 3) renumbered to core__0027 —",
-    "the next free sequence after the shipped tail — as a rename-only renumber with no",
-    "SQL change. 0021 and 0023 are permanent gaps; the runner tolerates sequence gaps."
+    "supersede it with a new sequence number. 0021 and 0023 are permanent",
+    "gaps — the runner tolerates sequence gaps. (The hand-maintained SEQ",
+    "COORDINATION note that used to live here is retired: seq claims are now",
+    "per-file fragments, and the gate reds duplicate claims deterministically.)"
   ],
   "migrations": [
     {

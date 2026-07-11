@@ -14,18 +14,23 @@ new file mode 100644
 +export function down(pgm) {
 +  pgm.sql(`ALTER TABLE usage_events ALTER COLUMN cost_usd TYPE numeric(12,8);`);
 +}
-diff --git a/migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json b/migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json
-new file mode 100644
---- /dev/null
-+++ b/migrations/manifest.d/core__0015_narrow-usage-events-cost-usd.json
-@@ -0,0 +1,7 @@
-+{
-+  "seq": "0015",
-+  "file": "core/core__0015_narrow-usage-events-cost-usd.mjs",
-+  "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
-+  "destructive": true,
-+  "tables": ["usage_events"]
-+}
+diff --git a/migrations/manifest.json b/migrations/manifest.json
+--- a/migrations/manifest.json
++++ b/migrations/manifest.json
+@@ -105,6 +105,13 @@
+       "summary": "Pinned fixture snapshot entry for seq 0012 — real ledger summary elided; the schema-migration gate does not read this field.",
+       "destructive": true,
+       "tables": ["metadata", "startups", "startup_overrides", "skill_packages", "skills", "notifications", "campaigns", "chat_threads"]
++    },
++    {
++      "seq": "0015",
++      "file": "core/core__0015_narrow-usage-events-cost-usd.mjs",
++      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
++      "destructive": true,
++      "tables": ["usage_events"]
+     }
+   ]
+ }
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
