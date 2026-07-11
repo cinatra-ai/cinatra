@@ -122,7 +122,7 @@ jobs:
       # below) additionally isolates any shared/local database. Mirrors the
       # dashboard-live-verify service block (same image/port pattern).
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
