@@ -26,6 +26,7 @@ import {
   resolveDurableRunContext,
   durableRunContextKey,
   DURABLE_RUN_CONTEXT_TTL_SECONDS,
+  evaluateRegistryCutoverReadiness,
   type DurableBindingRedis,
 } from "@/lib/agent-run-context-durable";
 
@@ -249,5 +250,128 @@ describe("durable run-context binding — strict absent-vs-invalid classificatio
     });
     const r = await resolveDurableRunContext(BEARER_A, failingLookup, redis);
     expect(r.outcome).toBe("invalid");
+  });
+});
+
+describe("registry cutover readiness gate", () => {
+  const MIN = 100;
+
+  it("READY: zero legacy-served over a sufficient, verified-active window", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { obo: 120, durable: 380, none: 5, registry: 0, header: 0 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(true);
+    expect(r.legacyServed).toBe(0);
+    expect(r.verifiedServed).toBe(500);
+    expect(r.total).toBe(505);
+  });
+
+  it("NOT READY: any registry-served traffic blocks the flip", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { obo: 100, durable: 400, registry: 1 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.legacyServed).toBe(1);
+    expect(r.reason).toMatch(/legacy channel/i);
+  });
+
+  it("NOT READY: header-served traffic counts as legacy too", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { durable: 500, header: 3 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.legacyServed).toBe(3);
+  });
+
+  it("NOT READY: sample below the minimum cannot prove cutover", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { obo: 5, durable: 4 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.reason).toMatch(/insufficient sample/i);
+  });
+
+  it("NOT READY: an idle window (no verified traffic) is not a completed cutover", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { none: 500 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.verifiedServed).toBe(0);
+    expect(r.reason).toMatch(/no verified/i);
+  });
+
+  it("legacy traffic is checked BEFORE the sample-size clause (worst-cause wins)", () => {
+    // registry present AND sample tiny — the legacy cause must be reported.
+    const r = evaluateRegistryCutoverReadiness(
+      { registry: 2, durable: 1 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.reason).toMatch(/legacy channel/i);
+  });
+
+  it("FAILS CLOSED on a malformed legacy count (NaN registry never coerces to a passing zero)", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { obo: 1, durable: 999, registry: Number.NaN as unknown as number },
+      { minObservations: 1 },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.reason).toMatch(/malformed count.*registry/i);
+  });
+
+  it("FAILS CLOSED on negative or Infinity counts (unknowable traffic ≠ zero)", () => {
+    for (const bad of [-3, Number.POSITIVE_INFINITY]) {
+      const r = evaluateRegistryCutoverReadiness(
+        { obo: 500, header: bad as number },
+        { minObservations: MIN },
+      );
+      expect(r.ready).toBe(false);
+      expect(r.reason).toMatch(/malformed count.*header/i);
+    }
+  });
+
+  it("FAILS CLOSED on a non-integer count (request tallies are whole numbers)", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { obo: 250.5 as number, durable: 250 },
+      { minObservations: MIN },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.reason).toMatch(/malformed count.*obo/i);
+  });
+
+  it("FAILS CLOSED on an unrecognized channel (schema drift is not silently ignored, and never inflates total)", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { obo: 1, durable: 1, typo: 999 as number },
+      { minObservations: 1000 },
+    );
+    expect(r.ready).toBe(false);
+    expect(r.reason).toMatch(/unrecognized served-by channel.*typo/i);
+    // The unknown key must NOT be counted toward the sample size.
+    expect(r.total).toBe(2);
+  });
+
+  it("FAILS CLOSED on a malformed threshold (NaN / 0 / negative / non-integer minObservations)", () => {
+    for (const bad of [Number.NaN, 0, -5, 2.5]) {
+      const r = evaluateRegistryCutoverReadiness(
+        { obo: 10, durable: 10 },
+        { minObservations: bad as number },
+      );
+      expect(r.ready).toBe(false);
+      expect(r.reason).toMatch(/minObservations/i);
+    }
+  });
+
+  it("a valid threshold met exactly is ready (boundary)", () => {
+    const r = evaluateRegistryCutoverReadiness(
+      { durable: 10 },
+      { minObservations: 10 },
+    );
+    expect(r.ready).toBe(true);
+    expect(r.total).toBe(10);
   });
 });
