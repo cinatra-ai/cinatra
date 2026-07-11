@@ -21,7 +21,7 @@ const THREAD = "thread_fixture";
 /**
  * A complete turn covering streamed text, a tool call, and a renderable-view
  * `DATA_PART` (the change-diff, carried as the `content_change_proposal`
- * viewType S4 will register). Opens with `RUN_STARTED`, closes with
+ * viewType registered by S4). Opens with `RUN_STARTED`, closes with
  * `RUN_FINISHED`.
  */
 export const FIXTURE_FULL_TURN: readonly AgUiEvent[] = [
@@ -32,13 +32,22 @@ export const FIXTURE_FULL_TURN: readonly AgUiEvent[] = [
   { type: "TEXT_MESSAGE_END", messageId: "m1" },
   { type: "TOOL_CALL_START", toolCallId: "t1", toolCallName: "edit_post" },
   { type: "TOOL_CALL_END", toolCallId: "t1" },
-  // Renderable view: the change-diff, as a typed DATA_PART payload. In S1 this
-  // is a well-formed renderable view whose `viewType` S4 registers; here it is
-  // valid wire data the renderer routes by `viewType`.
+  // Renderable view: the change-diff, as a typed DATA_PART payload. S4
+  // registered this viewType (`renderable-views/content-change-proposal`), so
+  // the payload MUST stay valid against the registered schema: this corpus is
+  // what S6 drives through every render target, and an invalid payload would
+  // draw the safe unknown-view fallback instead of the proposal card. Locked
+  // by the registered-inventory validation block in `conformance.test.ts`.
   renderableViewDataPart({
     viewType: "content_change_proposal",
+    schemaVersion: 1,
     fields: [{ field: "title", before: "Old title", after: "New title" }],
     postId: "42",
+    // Option A correlation ids (owner decision 2026-07-10, #1220): the card
+    // correlates to the draft the agent already saved during the run — the
+    // corpus carries them so downstream targets exercise the real wire shape.
+    proposalId: "prop_fixture_1",
+    changeSetId: "rev_fixture_9",
     rich: false,
   }),
   { type: "RUN_FINISHED", threadId: THREAD, runId: "run_full", status: "completed" },
