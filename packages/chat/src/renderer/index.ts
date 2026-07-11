@@ -20,11 +20,14 @@
 // It is already decoupled from the bespoke `chat-stream-events` vocabulary:
 // `renderMarkdown(text, theme, detectWidgets)` knows nothing about the wire.
 //
-// NOT YET HERE — the AG-UI event-to-UI reducer + interactive layer (tool-call
-// chips, inline run cards, HITL, citations, thinking groups, streaming/partial
-// states, RUN_ERROR). That half is the piece coupled to `chat-stream-events`
-// today; it moves in a FOLLOW-UP gated on S1 (#1217), which defines the
-// versioned AG-UI event schema the reducer consumes. See README.md.
+// NOT IN THIS BARREL — the AG-UI event-to-UI reducer + interactive layer
+// (tool-call chips, inline run cards, HITL, citations, thinking groups,
+// streaming/partial states, RUN_ERROR, and the S4 renderable-view dispatch of
+// the reducer's carried-through dataParts). That half LANDED (the follow-up
+// gated on S1 #1217) and is deliberately exposed at its OWN subpaths —
+// `@cinatra-ai/chat/renderer/ag-ui-reducer` and
+// `@cinatra-ai/chat/renderer/ag-ui-interactive` — so this content barrel's
+// embed API stays minimal (see the export-surface guard test). See README.md.
 
 // --- Markdown → HTML content renderer (marked GFM, XSS-hardened) -------------
 export {
