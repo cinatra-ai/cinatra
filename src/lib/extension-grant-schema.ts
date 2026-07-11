@@ -18,6 +18,10 @@
 //   - versionIdentitySchemaQueries — the cinatra#1040 S1 version-identity
 //     evolution of installed_extension + extension_install_ops (transformational;
 //     ships with migrations/core/core__0022 — see that function's own note).
+//   - projectDispatchSchemaQueries — the cinatra#1032 dynamic-dispatch
+//     primitive's dispatch-attempt ledger + project lease (NET-NEW tables;
+//     additive, ships with migrations/core/core__0024 per the core__0007
+//     keep-paths-aligned precedent).
 
 /** DDL for the admin-approved `extension_capability_ownership_grant` table +
  * its anti-squat partial unique indexes. Spread into
@@ -156,5 +160,74 @@ export function versionIdentitySchemaQueries(schemaName: string): { text: string
   ON "${q}"."extension_install_ops" (package_name, org_id, version) WHERE phase = 'finalized'` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_v_global
   ON "${q}"."extension_install_ops" (package_name, version) WHERE phase = 'finalized' AND org_id IS NULL` },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic-dispatch primitive storage (cinatra#1032 deliverable 2).
+// Two brand-new ADDITIVE tables (companion migration core__0024 ships the same
+// DDL for the operator-upgrade path per the core__0007 precedent; the Drizzle
+// mirrors live in packages/agents/src/schema.ts):
+//   project_dispatch_attempts — the dispatch-attempt LEDGER: one row per
+//   deliberate dispatch attempt, UNIQUE (org_id, item_natural_key,
+//   action_version); written AHEAD of createAgentRun with the deterministically
+//   derived idempotency_key passed VERBATIM, so a crashed tick re-converges
+//   onto the SAME child run instead of dispatching a duplicate. run_id is
+//   provenance only — deliberately NO foreign key (the ledger is append-only
+//   history that outlives the operational run row). The immutable attempt
+//   identity includes the worker binding (role, package, version-constraint
+//   fingerprint).
+//   project_leases — the project-level lease (single active tick per PM
+//   project scope), keyed (org_id, project_ref), heartbeat/expiry columns and
+//   a fencing `version` bumped on every (re)acquisition.
+// ---------------------------------------------------------------------------
+
+/** project_dispatch_attempts + project_leases CREATE TABLE / CREATE INDEX DDL.
+ * Spread into buildCreateStoreSchemaQueries after the agent_run_pm_links
+ * block. */
+export function projectDispatchSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."project_dispatch_attempts" (
+      id text PRIMARY KEY,
+      org_id text NOT NULL,
+      project_ref text NOT NULL,
+      item_natural_key text NOT NULL,
+      action_version integer NOT NULL,
+      worker_role text NOT NULL,
+      worker_package text NOT NULL,
+      worker_version_constraint text NOT NULL,
+      idempotency_key text NOT NULL,
+      run_id text,
+      status text NOT NULL DEFAULT 'pending',
+      error text,
+      version integer NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT project_dispatch_attempts_status_check
+        CHECK (status IN ('pending', 'dispatched', 'failed')),
+      CONSTRAINT project_dispatch_attempts_action_version_check
+        CHECK (action_version >= 0)
+    )`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS project_dispatch_attempts_item_action_uniq ON "${q}"."project_dispatch_attempts" (org_id, item_natural_key, action_version)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS project_dispatch_attempts_project_idx ON "${q}"."project_dispatch_attempts" (org_id, project_ref)`,
+    },
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."project_leases" (
+      org_id text NOT NULL,
+      project_ref text NOT NULL,
+      holder_id text NOT NULL,
+      acquired_at timestamptz NOT NULL DEFAULT now(),
+      heartbeat_at timestamptz NOT NULL DEFAULT now(),
+      expires_at timestamptz NOT NULL,
+      version integer NOT NULL DEFAULT 1,
+      PRIMARY KEY (org_id, project_ref)
+    )`,
+    },
   ];
 }
