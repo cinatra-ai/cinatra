@@ -50,6 +50,200 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionStoreKind } from "@/lib/extension-package-store-core";
+// TYPE from the ledger module (already in the install route graph); the runtime
+// capsule module is reached ONLY via dynamic import (route-graph-ratchet).
+import type { SideBySideGrantCapsule } from "@/lib/extension-install-batch-ops";
+
+/**
+ * Ownership grant-UNION hooks a caller (the dependency-batch saga) injects to
+ * ENABLE the non-refusing capability-ownership union (cinatra#1040 S6). Their
+ * presence lifts the S3 `DECLARES_OWNERSHIP_KEYS` refusal; their ABSENCE keeps
+ * it (fail-closed — a side-by-side install must never mutate the shared
+ * ownership grant without a durable capsule to reconcile it on teardown).
+ * PORTS stay refused regardless (deferred: a grown ports union pends the shared
+ * per-(package,org) grant and would degrade the running default with no
+ * re-approval surface).
+ */
+export type SideBySideGrantUnionHooks = {
+  /** Persist the declaration capsule DURABLY (idempotent, first-capture-wins)
+   * BEFORE any ownership-grant mutation. Production: the batch ledger member's
+   * `grantCapsule` (JSONB). The capsule records WHAT this version declared, so a
+   * later batch-compensation / boot-recovery teardown can reconcile the shared
+   * grant even when this version's store is gone. */
+  persistCapsule: (capsule: SideBySideGrantCapsule) => Promise<void>;
+  /** Read the ownership keys declared by the CURRENTLY-finalized siblings
+   * (excluding `excludeVersion`) — the survivor set the teardown/unwind consults.
+   * Defaults to the real fs+db reader (`defaultReadSurvivorOwnershipKeys`);
+   * injected in tests. */
+  readSurvivorOwnershipKeys?: (excludeVersion: string) => Promise<Set<string>>;
+};
+
+/**
+ * DEFAULT survivor reader: the union of widget-auth token ownership keys the
+ * CURRENTLY-finalized `active|locked` siblings (excluding `excludeVersion`, and
+ * the platform/org scope of `orgId`) declare, read from each sibling's
+ * integrity-verified (digest-bound) materialized store manifest. A sibling
+ * without a resolvable `activeDigest` store contributes NO keys — the
+ * fail-closed direction (an un-verifiable declarer never keeps a key alive).
+ */
+export async function defaultReadSurvivorOwnershipKeys(
+  packageName: string,
+  orgId: string | null,
+  excludeVersion: string,
+): Promise<Set<string>> {
+  const { readInstalledExtensionsByPackageName } = await import(
+    "@cinatra-ai/extensions/canonical-store"
+  );
+  const { readWidgetAuthTokenKeysFromStore } = await import(
+    "@/lib/extension-capability-ownership-grants"
+  );
+  const { storeDigestDirV2 } = await import("@/lib/extension-package-store-core");
+  const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
+  const rows = await readInstalledExtensionsByPackageName(packageName);
+  const siblings = rows.filter(
+    (r) =>
+      (r.status === "active" || r.status === "locked") &&
+      (r.organizationId ?? null) === orgId &&
+      (r.version ?? null) !== excludeVersion,
+  );
+  const dataRoot = resolveExtensionDataRoot();
+  const keys = new Set<string>();
+  for (const s of siblings) {
+    const digest = (s.source as { activeDigest?: string } | null)?.activeDigest;
+    if (!digest) continue; // no digest-bound verified store → cannot attribute keys (fail closed)
+    let storeDir: string;
+    try {
+      storeDir = storeDigestDirV2(dataRoot, s.kind as ExtensionStoreKind, packageName, digest);
+    } catch {
+      continue;
+    }
+    try {
+      for (const k of await readWidgetAuthTokenKeysFromStore(storeDir)) keys.add(k);
+    } catch {
+      // an unreadable sibling store contributes no keys (fail closed)
+    }
+  }
+  return keys;
+}
+
+/**
+ * The ownership keys the TORN-DOWN version itself declared, read LIVE from its
+ * own integrity-verified store manifest. The teardown fallback when no durable
+ * capsule is present (an EXPLICIT uninstall of a committed version whose capsule
+ * was released on batch finalize) — the version's digest dir outlives the row
+ * teardown (left to the retention GC), so its declaration is still readable.
+ * Absent digest / unreadable store → [] (nothing to reconcile).
+ */
+async function readTornDownVersionDeclaredKeys(
+  packageName: string,
+  row: { kind: string; source: unknown },
+): Promise<string[]> {
+  const digest = (row.source as { activeDigest?: string } | null)?.activeDigest;
+  if (!digest) return [];
+  try {
+    const { storeDigestDirV2 } = await import("@/lib/extension-package-store-core");
+    const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
+    const { readWidgetAuthTokenKeysFromStore } = await import(
+      "@/lib/extension-capability-ownership-grants"
+    );
+    const storeDir = storeDigestDirV2(
+      resolveExtensionDataRoot(),
+      row.kind as ExtensionStoreKind,
+      packageName,
+      digest,
+    );
+    return await readWidgetAuthTokenKeysFromStore(storeDir);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ownership DECLARATION CAPSULE helpers (cinatra#1040 S6). Kept INLINE in this
+// module (not a separate file) so no NEW module enters a locked route's
+// reachable graph via the dynamic `await import` chain (route-graph-ratchet
+// follows `import("…")`). Declaration-only: the capsule records WHAT the removed
+// version declared, never a prior grant state — teardown reconciles by SURVIVOR
+// CHECK + REVOKE (never a restore), which closes a non-LIFO resurrection hole
+// (A introduces+approves K, B captures it, A removed while B survives, then B
+// removed would re-pin K with no live declarer). The mutual-survivor race is
+// closed by the per-package install lock, which serializes ALL install/teardown
+// of ANY version of a package (the survivor set is read under it, after the
+// version's row is gone). The capsule TYPE lives in `extension-install-batch-ops`
+// (the ledger that stores it, already in the route graph).
+
+/** Build a capsule from a version's declared token keys (sorted/de-duped so a
+ * retry captures a stable payload). Returns null when the version declared no
+ * ownership keys — nothing to reconcile, so no capsule is persisted. */
+export function buildSideBySideGrantCapsule(
+  declaredTokenKeys: readonly string[],
+): SideBySideGrantCapsule | null {
+  const keys = Array.from(new Set(declaredTokenKeys.map((k) => String(k)))).sort();
+  if (keys.length === 0) return null;
+  return { v: 1, declaredTokenKeys: keys };
+}
+
+/** Narrow an untrusted JSONB value (a ledger member's `grantCapsule`) to a
+ * capsule, or null. Tolerant of legacy/absent rows (null/undefined → null) and
+ * shape drift (garbage → null, never a throw). */
+export function parseSideBySideGrantCapsule(value: unknown): SideBySideGrantCapsule | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as { v?: unknown; declaredTokenKeys?: unknown };
+  if (v.v !== 1) return null;
+  if (!Array.isArray(v.declaredTokenKeys)) return null;
+  const keys = Array.from(
+    new Set(v.declaredTokenKeys.filter((k): k is string => typeof k === "string")),
+  ).sort();
+  return { v: 1, declaredTokenKeys: keys };
+}
+
+/**
+ * Reconcile the shared ownership grants when a side-by-side version is torn down
+ * (direct-failure / batch-compensation / boot-recovery). PURE orchestration over
+ * INJECTED functions — no grant-store/fs/db access of its own.
+ *
+ * For each key the removed version declared: if a SURVIVING finalized sibling
+ * still declares it (`survivorKeys`) LEAVE it (still owned); else REVOKE it
+ * (fail-closed — no live declarer). Never restores a prior approval. Best-effort
+ * + isolated per key: a revoke failure routes to `onFailure` and never masks the
+ * teardown. PRECONDITION: the caller holds `withInstallLock(packageName)` and
+ * `survivorKeys` was read UNDER that lock AFTER this version's row was removed.
+ */
+export async function reconcileSideBySideOwnershipOnTeardown(args: {
+  packageName: string;
+  orgId: string | null;
+  declaredTokenKeys: readonly string[];
+  survivorKeys: ReadonlySet<string>;
+  revokeOwnershipGrant: (input: {
+    packageName: string;
+    orgId: string | null;
+    tokenConfigKey: string;
+  }) => Promise<void>;
+  onFailure: (tokenConfigKey: string, error: unknown) => void;
+}): Promise<{ revoked: string[]; kept: string[] }> {
+  const revoked: string[] = [];
+  const kept: string[] = [];
+  const seen = new Set<string>();
+  for (const tokenConfigKey of args.declaredTokenKeys) {
+    if (seen.has(tokenConfigKey)) continue;
+    seen.add(tokenConfigKey);
+    if (args.survivorKeys.has(tokenConfigKey)) {
+      kept.push(tokenConfigKey); // a live sibling still declares it — never revoke
+      continue;
+    }
+    try {
+      await args.revokeOwnershipGrant({
+        packageName: args.packageName,
+        orgId: args.orgId,
+        tokenConfigKey,
+      });
+      revoked.push(tokenConfigKey);
+    } catch (e) {
+      args.onFailure(tokenConfigKey, e);
+    }
+  }
+  return { revoked, kept };
+}
 
 export class SideBySideInstallError extends Error {
   constructor(
@@ -88,6 +282,10 @@ export async function installExtensionVersionSideBySide(input: {
   typeId: string;
   orgId: string | null;
   actorUserId?: string | null;
+  /** cinatra#1040 S6: inject to ENABLE the capability-ownership grant union
+   * (durable capsule + survivor-aware unwind). Absent → the S3
+   * DECLARES_OWNERSHIP_KEYS refusal stands. */
+  grantUnion?: SideBySideGrantUnionHooks;
 }): Promise<{ rowId: string }> {
   const { withInstallLock } = await import("@cinatra-ai/agents");
   return withInstallLock(input.packageName, () => runLocked(input));
@@ -99,6 +297,7 @@ async function runLocked(input: {
   typeId: string;
   orgId: string | null;
   actorUserId?: string | null;
+  grantUnion?: SideBySideGrantUnionHooks;
 }): Promise<{ rowId: string }> {
   const { packageName, version, typeId, orgId } = input;
 
@@ -240,6 +439,68 @@ async function runLocked(input: {
     );
     const { beginInstallOp } = await import("@/lib/extension-install-ops");
     const base = await makeDefaultInstallPipelineDeps();
+
+    // ---- cinatra#1040 S6: capability-OWNERSHIP grant UNION ------------------
+    // Injected `grantUnion` ENABLES the non-refusing per-key union (a durable
+    // declaration capsule captured BEFORE any mutation + a survivor-aware
+    // unwind); its ABSENCE keeps the S3 DECLARES_OWNERSHIP_KEYS refusal. PORTS
+    // stay refused either way (deferred slice).
+    const grantUnion = input.grantUnion;
+    let survivorKeysCache: Promise<Set<string>> | null = null;
+    const readSurvivorKeys = (): Promise<Set<string>> =>
+      (survivorKeysCache ??= (
+        grantUnion?.readSurvivorOwnershipKeys ??
+        ((v: string) => defaultReadSurvivorOwnershipKeys(packageName, orgId, v))
+      )(version));
+    const ownershipUnionDeps: Partial<typeof base> = grantUnion
+      ? {
+          // RECORD the per-key union via base's REAL recorder (left untouched
+          // here): an unchanged key stays approved, a genuinely-new key pends.
+          // SUPPRESS auto-approve — a side-by-side declarer never auto-becomes
+          // an approved credential-store owner.
+          approveOwnershipGrant: async () => undefined,
+          // DEFER the coupled widget-metadata axis to the serving follow-up: a
+          // side-by-side version serves NO runtime surface pre-S7, so its
+          // metadata grant is not recorded here and its unwind is inert.
+          recordWidgetStreamMetadataGrant: async () => undefined,
+          restoreWidgetStreamMetadataGrant: async () => undefined,
+          deleteUnapprovedWidgetStreamMetadataGrant: async () => undefined,
+          // NEVER restore a prior ownership approval on unwind (round-1
+          // resurrection hole; a fresh side-by-side install captures none).
+          restoreOwnershipGrant: async () => undefined,
+          // Capture the DECLARATION CAPSULE the moment the pipeline reads the
+          // declared keys — DURABLE, BEFORE any recordRequestedOwnershipGrant.
+          readWidgetAuthTokenKeys: async (storeDir) => {
+            const keys = base.readWidgetAuthTokenKeys
+              ? await base.readWidgetAuthTokenKeys(storeDir)
+              : [];
+            const capsule = buildSideBySideGrantCapsule(keys);
+            if (capsule) await grantUnion.persistCapsule(capsule);
+            return keys;
+          },
+          // SURVIVOR-AWARE revoke: the pipeline's fresh-install unwind
+          // (DIRECT-FAILURE path) calls this per declared key — revoke ONLY when
+          // no surviving finalized sibling still declares it (else the shared
+          // key is still owned). Runs under the install's per-package lock.
+          revokeOwnershipGrant: async (g) => {
+            const survivors = await readSurvivorKeys();
+            if (survivors.has(g.tokenConfigKey)) return;
+            if (base.revokeOwnershipGrant) await base.revokeOwnershipGrant(g);
+          },
+        }
+      : {
+          // S3 refusal preserved: no durable capsule sink → never mutate the
+          // shared ownership grant from a non-default install.
+          recordRequestedOwnershipGrant: async (g) => {
+            throw new SideBySideInstallError(
+              "DECLARES_OWNERSHIP_KEYS",
+              `side-by-side install of ${g.packageName}@${version} refused — it declares ` +
+                `widget-auth token ownership ("${g.tokenConfigKey}"), which is package-scoped ` +
+                `shared state; enabling the ownership union requires the durable capsule sink.`,
+            );
+          },
+        };
+
     const deps: typeof base = {
       ...base,
       // Canonical-row reads/writes bound to THE NEW ROW; the package-scoped
@@ -274,16 +535,10 @@ async function runLocked(input: {
         );
       },
       approveGrant: async () => undefined,
-      // Capability-ownership grants are shared per (package, org) — refuse in
-      // S3 rather than mutate them from a non-default install.
-      recordRequestedOwnershipGrant: async (g) => {
-        throw new SideBySideInstallError(
-          "DECLARES_OWNERSHIP_KEYS",
-          `side-by-side install of ${g.packageName}@${version} refused — it declares ` +
-            `widget-auth token ownership ("${g.tokenConfigKey}"), which is package-scoped ` +
-            `shared state; side-by-side for ownership-declaring packages is a later slice.`,
-        );
-      },
+      // cinatra#1040 S6: capability-OWNERSHIP grant union (or the preserved S3
+      // refusal when no capsule sink is injected). Built above; spread AFTER
+      // `...base` so it overrides the base ownership hooks.
+      ...ownershipUnionDeps,
       // cinatra#1040 S5 — cross-version migration UNION lifts the S3
       // DECLARES_MIGRATIONS refusal: a side-by-side version MAY now declare host
       // migrations (`cinatra.migrationsDir`). We still run the base preflight so
@@ -354,6 +609,16 @@ export async function uninstallExtensionVersionSideBySide(input: {
   packageName: string;
   version: string;
   orgId: string | null;
+  /** cinatra#1040 S6: the DURABLE declaration capsule of the version being torn
+   * down (from the batch ledger member). When present, its declared ownership
+   * keys are reconciled against the survivor set (survivor-check + revoke). A
+   * legacy/absent capsule → no ownership reconcile (nothing was mutated). */
+  capsule?: SideBySideGrantCapsule | null;
+  /** Survivor reader override (tests); defaults to the fs+db reader. */
+  readSurvivorOwnershipKeys?: (excludeVersion: string) => Promise<Set<string>>;
+  /** Torn-down-version declared-keys reader override (tests) — the capsule-absent
+   * fallback; defaults to reading the version's own live store manifest. */
+  readTornDownDeclaredKeys?: () => Promise<string[]>;
 }): Promise<{ removed: boolean }> {
   const { withInstallLock } = await import("@cinatra-ai/agents");
   return withInstallLock(input.packageName, async () => {
@@ -395,6 +660,61 @@ export async function uninstallExtensionVersionSideBySide(input: {
     } catch (err) {
       console.warn(
         `[side-by-side-install] terminalizing the journal op for ${packageName}@${version} failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // ---- cinatra#1040 S6: reconcile the shared OWNERSHIP grants -------------
+    // A removed side-by-side version must not leave a key it declared owned when
+    // no surviving sibling still declares it. The survivor set is read HERE —
+    // under this per-package lock, AFTER the row teardown above — so concurrent
+    // same-package teardowns serialize and the LAST teardown of a package
+    // revokes an orphaned key (never restores a prior approval: round-1
+    // resurrection-hole fix). Best-effort; never masks the teardown result.
+    //
+    // WHAT THE VERSION DECLARED: the DURABLE capsule (batch-compensation /
+    // boot-recovery — survives a crash / store GC) OR, when NO capsule is present
+    // (an EXPLICIT uninstall of a committed version whose capsule was released on
+    // batch finalize — codex#1391 finding), a LIVE fallback read of the version's
+    // own store manifest, so an explicitly-removed version can never orphan a key.
+    try {
+      let declaredTokenKeys: string[] = input.capsule?.declaredTokenKeys ?? [];
+      if (!input.capsule && row) {
+        declaredTokenKeys = input.readTornDownDeclaredKeys
+          ? await input.readTornDownDeclaredKeys()
+          : await readTornDownVersionDeclaredKeys(packageName, row);
+      }
+      if (declaredTokenKeys.length > 0) {
+        const readSurvivor =
+          input.readSurvivorOwnershipKeys ??
+          ((v: string) => defaultReadSurvivorOwnershipKeys(packageName, orgId, v));
+        const survivorKeys = await readSurvivor(version);
+        const { revokeOwnershipGrant } = await import(
+          "@/lib/extension-capability-ownership-grants"
+        );
+        const res = await reconcileSideBySideOwnershipOnTeardown({
+          packageName,
+          orgId,
+          declaredTokenKeys,
+          survivorKeys,
+          revokeOwnershipGrant: (g) => revokeOwnershipGrant(g).then(() => undefined),
+          onFailure: (key, e) =>
+            console.warn(
+              `[side-by-side-capsule] revoke of orphaned ownership key '${key}' for ` +
+                `${packageName}@${version} failed:`,
+              e instanceof Error ? e.message : e,
+            ),
+        });
+        if (res.revoked.length > 0) {
+          console.warn(
+            `[side-by-side-capsule] ${packageName}@${version} teardown revoked orphaned ` +
+              `ownership key(s): ${res.revoked.join(", ")}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[side-by-side-capsule] ownership reconcile for ${packageName}@${version} teardown failed:`,
         err instanceof Error ? err.message : err,
       );
     }

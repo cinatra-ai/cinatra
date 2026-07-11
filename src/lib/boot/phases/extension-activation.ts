@@ -226,9 +226,8 @@ export function extensionActivationPhases(
 
         // dependency-BATCH sweep FIRST (#180). The batch sweeper OWNS batch-member
         // ops; the per-op cleanup below SKIPS ops owned by STILL-ACTIVE batches.
-        const { sweepStaleInstallBatches, collectActiveBatchMemberKeys } = await import(
-          "@/lib/extension-install-batch"
-        );
+        const { sweepStaleInstallBatches, collectActiveBatchMemberKeys, gcOrphanedSideBySideCapsules } =
+          await import("@/lib/extension-install-batch");
         // Collect the batch-owned (package, org) keys BEFORE sweeping.
         // FAIL-CLOSED (cinatra#158): if the active-batch key collection FAILS, we
         // cannot tell which orphan ops are owned by a still-active batch, so we SKIP
@@ -251,6 +250,18 @@ export function extensionActivationPhases(
           }
         } catch (err) {
           console.warn("[boot] install-batch sweep failed (non-fatal):", err);
+        }
+
+        // cinatra#1040 S6: orphan-GC — clear SPENT side-by-side declaration
+        // capsules a crash left on TERMINAL batches (after the stale sweep,
+        // which owns the capsules of still-active batches). Non-fatal.
+        try {
+          const { cleared } = await gcOrphanedSideBySideCapsules();
+          if (cleared > 0) {
+            console.info(`[boot] orphan-GC cleared ${cleared} spent side-by-side grant capsule(s)`);
+          }
+        } catch (err) {
+          console.warn("[boot] side-by-side capsule orphan-GC failed (non-fatal):", err);
         }
 
         const orphansAll = activeBatchKeys === null ? [] : await listUnfinalizedInstallOps(STALE_MS);

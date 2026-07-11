@@ -54,6 +54,7 @@ import type {
   InstallBatch,
   InstallBatchMember,
   InstallBatchOpsDeps,
+  SideBySideGrantCapsule,
 } from "@/lib/extension-install-batch-ops";
 
 export type BatchInstallResult = {
@@ -176,7 +177,17 @@ export type InstallBatchSagaDeps = {
    * DEFAULT row stays installed and untouched.
    */
   installMemberSideBySide: (
-    member: { typeId: string; packageName: string; version: string; scopeOrgId: string | null },
+    member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      scopeOrgId: string | null;
+      /** cinatra#1040 S6: persist the member's ownership DECLARATION CAPSULE
+       * durably (batch ledger member `grantCapsule`) BEFORE the side-by-side
+       * install mutates the shared ownership grant. Its presence ENABLES the
+       * ownership union; absent → the S3 DECLARES_OWNERSHIP_KEYS refusal. */
+      persistCapsule?: (capsule: SideBySideGrantCapsule) => Promise<void>;
+    },
     actor: Actor,
   ) => Promise<void>;
   /**
@@ -186,7 +197,16 @@ export type InstallBatchSagaDeps = {
    * default install).
    */
   uninstallSideBySideMember: (
-    member: { typeId: string; packageName: string; version: string; scopeOrgId: string | null },
+    member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      scopeOrgId: string | null;
+      /** cinatra#1040 S6: the torn-down member's durable declaration capsule
+       * (from the ledger member) — reconciles the shared ownership grant
+       * (survivor-check + revoke). Null/absent → no ownership reconcile. */
+      capsule?: SideBySideGrantCapsule | null;
+    },
     actor: Actor,
   ) => Promise<void>;
   /**
@@ -216,7 +236,7 @@ export type InstallBatchSagaDeps = {
   ledger: {
     begin: (input: { batchId: string; rootPackage: string; orgId: string | null; members: InstallBatchMember[] }) => Promise<InstallBatch>;
     setPhase: (batchId: string, phase: InstallBatch["phase"]) => Promise<InstallBatch>;
-    updateMember: (batchId: string, packageName: string, patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>) => Promise<InstallBatch>;
+    updateMember: (batchId: string, packageName: string, patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail" | "grantCapsule">>) => Promise<InstallBatch>;
     listActive: () => Promise<InstallBatch[]>;
   };
   now: () => number;
@@ -368,6 +388,12 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         // the PLATFORM scope, next to that default.
         orgId: member.scopeOrgId,
         actorUserId: actor.userId ?? null,
+        // cinatra#1040 S6: inject the durable capsule sink → ENABLES the
+        // ownership grant union (absent → the S3 DECLARES_OWNERSHIP_KEYS
+        // refusal stands). The default survivor reader (fs+db) is used.
+        ...(member.persistCapsule
+          ? { grantUnion: { persistCapsule: member.persistCapsule } }
+          : {}),
       });
     },
     uninstallSideBySideMember: async (member) => {
@@ -378,6 +404,8 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         packageName: member.packageName,
         version: member.version,
         orgId: member.scopeOrgId,
+        // cinatra#1040 S6: reconcile the shared ownership grant on teardown.
+        capsule: member.capsule ?? null,
       });
     },
     readInstallOpForVersion: async (pkg, oid, version) => {
@@ -712,7 +740,25 @@ export async function installExtensionWithDependencies(
             ? deps.updateMemberPackage(member, input.actor)
             : member.action === "install-side-by-side"
               ? deps.installMemberSideBySide(
-                  { ...member, scopeOrgId: sideBySideScopeOf(member) },
+                  {
+                    ...member,
+                    scopeOrgId: sideBySideScopeOf(member),
+                    // cinatra#1040 S6: the durable capsule sink for THIS member.
+                    // Persist to the ledger (DB — for cross-process boot
+                    // recovery) AND mirror into the in-memory batch member (so
+                    // same-process compensation below reads it without a
+                    // re-fetch). Called UNDER the side-by-side install's
+                    // per-package lock, BEFORE any ownership-grant mutation.
+                    persistCapsule: async (capsule) => {
+                      await deps.ledger.updateMember(batch.batchId, member.packageName, {
+                        grantCapsule: capsule,
+                      });
+                      const lm = batch.members.find(
+                        (x) => x.packageName === member.packageName,
+                      );
+                      if (lm) lm.grantCapsule = capsule;
+                    },
+                  },
                   input.actor,
                 )
               : deps.installMember(member, input.actor),
@@ -750,6 +796,30 @@ export async function installExtensionWithDependencies(
       // compensate NOW, deterministically, with the loud error.
       await abortAndCompensate(input.packageName, err);
       throw err; // unreachable — defensive.
+    }
+    // cinatra#1040 S6: RELEASE spent capsules (orphan-GC happy path). The
+    // side-by-side members are COMMITTED now — their durable declaration
+    // capsules will never be consumed by a teardown (an explicit uninstall
+    // reconciles fresh from the live store), so clear them with an evidence
+    // log. Best-effort: a crash before this leaves a capsule on a FINALIZED
+    // batch member, which the boot orphan-GC (`gcOrphanedSideBySideCapsules`)
+    // collects. After `finalized` so a clear failure never un-finalizes.
+    {
+      const released: string[] = [];
+      for (const m of installedThisBatch) {
+        if (m.action !== "install-side-by-side") continue;
+        const ok = await deps.ledger
+          .updateMember(batch.batchId, m.packageName, { grantCapsule: null })
+          .then(() => true)
+          .catch(() => false);
+        if (ok) released.push(`${m.packageName}@${m.version}`);
+      }
+      if (released.length > 0) {
+        console.warn(
+          `[side-by-side-capsule] released ${released.length} spent capsule(s) for ` +
+            `finalized batch ${batch.batchId}: ${released.join(", ")}`,
+        );
+      }
     }
     // #157: SINGLE agent-runtime reload at the batch success boundary. The
     // agent handler installed root-only per member (no per-member reload) and
@@ -806,7 +876,14 @@ export async function installExtensionWithDependencies(
         try {
           if (m.action === "install-side-by-side") {
             await deps.uninstallSideBySideMember(
-              { ...m, scopeOrgId: sideBySideScopeOf(m) },
+              {
+                ...m,
+                scopeOrgId: sideBySideScopeOf(m),
+                // cinatra#1040 S6: the member's durable capsule (mirrored into
+                // the in-memory ledger by the persist sink above) drives the
+                // ownership-grant reconcile on this compensation teardown.
+                capsule: ledgerMember?.grantCapsule ?? null,
+              },
               input.actor,
             );
           } else {
@@ -926,6 +1003,8 @@ export async function sweepStaleInstallBatches(
       packageName: string;
       version: string;
       orgId: string | null;
+      /** cinatra#1040 S6: the swept member's durable capsule → ownership reconcile. */
+      capsule?: SideBySideGrantCapsule | null;
     }) => Promise<void>;
   },
   batchOpsDeps?: InstallBatchOpsDeps,
@@ -957,7 +1036,13 @@ export async function sweepStaleInstallBatches(
     });
   const uninstallSideBySideMember =
     depsOverride?.uninstallSideBySideMember ??
-    (async (member: { typeId: string; packageName: string; version: string; orgId: string | null }) => {
+    (async (member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      orgId: string | null;
+      capsule?: SideBySideGrantCapsule | null;
+    }) => {
       const { uninstallExtensionVersionSideBySide } = await import(
         "@/lib/extension-side-by-side-install"
       );
@@ -965,6 +1050,8 @@ export async function sweepStaleInstallBatches(
         packageName: member.packageName,
         version: member.version,
         orgId: member.orgId,
+        // cinatra#1040 S6: reconcile the shared ownership grant on boot teardown.
+        capsule: member.capsule ?? null,
       });
     });
 
@@ -994,6 +1081,10 @@ export async function sweepStaleInstallBatches(
             // The RESOLVED scope from the ledger (codex round-1); legacy rows
             // without it fall back to the batch's org.
             orgId: m.scopeOrgId === undefined ? (batch.orgId ?? null) : m.scopeOrgId,
+            // cinatra#1040 S6: the DURABLE capsule persisted at install time
+            // (read from the ledger member) reconciles the shared ownership
+            // grant on this boot-recovery teardown.
+            capsule: m.grantCapsule ?? null,
           });
         } else {
           await uninstallMember({ typeId: m.typeId, packageName: m.packageName, version: m.version });
@@ -1032,4 +1123,60 @@ export async function collectActiveBatchMemberKeys(
     for (const m of b.members) keys.add(`${m.packageName}::${b.orgId ?? "(global)"}`);
   }
   return keys;
+}
+
+/**
+ * ORPHAN-GC (cinatra#1040 S6): clear SPENT side-by-side declaration capsules
+ * left on TERMINAL batches. A capsule is spent once its batch is terminal — a
+ * finalized member's version committed (no teardown consumes it); a compensated
+ * member was already reconciled on teardown. The happy path RELEASES capsules at
+ * the finalize boundary; this collects the ones a crash left behind between the
+ * boundary and the release, so they don't accumulate. Each clear is logged with
+ * evidence (the terminal phase that proves the capsule is spent). Idempotent +
+ * best-effort per member. Runs at boot AFTER the stale-batch sweep (which OWNS
+ * the capsules of still-ACTIVE batches — those are reconciled on teardown, never
+ * GC'd here).
+ */
+export async function gcOrphanedSideBySideCapsules(depsOverride?: {
+  listTerminalWithCapsules?: () => Promise<InstallBatch[]>;
+  updateMember?: (
+    batchId: string,
+    packageName: string,
+    patch: Partial<Pick<InstallBatchMember, "grantCapsule">>,
+  ) => Promise<InstallBatch>;
+}): Promise<{ cleared: number }> {
+  const batchOps = await import("@/lib/extension-install-batch-ops");
+  const listTerminal =
+    depsOverride?.listTerminalWithCapsules ??
+    (() => batchOps.listTerminalInstallBatchesWithCapsules());
+  const updateMember =
+    depsOverride?.updateMember ??
+    ((id: string, pkg: string, patch: Partial<Pick<InstallBatchMember, "grantCapsule">>) =>
+      batchOps.updateInstallBatchMember(id, pkg, patch));
+
+  const batches = await listTerminal();
+  let cleared = 0;
+  for (const b of batches) {
+    for (const m of b.members) {
+      if (m.action !== "install-side-by-side" || !m.grantCapsule) continue;
+      const ok = await updateMember(b.batchId, m.packageName, { grantCapsule: null })
+        .then(() => true)
+        .catch((err) => {
+          console.error(
+            `[side-by-side-capsule] orphan-GC clear of ${m.packageName}@${m.version} ` +
+              `(batch ${b.batchId}) failed:`,
+            err instanceof Error ? err.message : err,
+          );
+          return false;
+        });
+      if (ok) {
+        cleared += 1;
+        console.warn(
+          `[side-by-side-capsule] orphan-GC cleared a spent capsule: ${m.packageName}@${m.version} ` +
+            `on terminal batch ${b.batchId} (evidence: phase=${b.phase})`,
+        );
+      }
+    }
+  }
+  return { cleared };
 }
