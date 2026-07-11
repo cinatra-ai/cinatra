@@ -192,13 +192,14 @@ describe("resolveContextNodeProvenance", () => {
     expect(resolveContextNodeProvenance(oas, "ctx-slotA-resolve_context")).toEqual({
       slotId: "slotA",
       kind: "resolve",
+      anchor: "marker",
     });
     expect(
       resolveContextNodeProvenance(oas, "ctx-slotA-finalize_interactive"),
-    ).toEqual({ slotId: "slotA", kind: "finalize" });
+    ).toEqual({ slotId: "slotA", kind: "finalize", anchor: "marker" });
     expect(
       resolveContextNodeProvenance(oas, "ctx-slotB-finalize_autonomous"),
-    ).toEqual({ slotId: "slotB", kind: "finalize" });
+    ).toEqual({ slotId: "slotB", kind: "finalize", anchor: "marker" });
   });
 
   it("returns null for an unknown node id (fail closed)", () => {
@@ -369,14 +370,17 @@ describe("cinatra#1151 — real-grammar re-anchor + drifted-build fail-closed bo
       expect(resolveContextNodeProvenance(oas, `ctx-${slot}-resolve_context`)).toEqual({
         slotId: slot,
         kind: "resolve",
+        anchor: "marker",
       });
       expect(resolveContextNodeProvenance(oas, `ctx-${slot}-finalize_interactive`)).toEqual({
         slotId: slot,
         kind: "finalize",
+        anchor: "marker",
       });
       expect(resolveContextNodeProvenance(oas, `ctx-${slot}-finalize_autonomous`)).toEqual({
         slotId: slot,
         kind: "finalize",
+        anchor: "marker",
       });
     }
   });
@@ -497,11 +501,13 @@ describe("evaluateContextAttestation — fail-closed matrix", () => {
       ok: true,
       slotId: "slotA",
       kind: "resolve",
+      anchor: "marker",
     });
     expect(evaluateContextAttestation(goodInput("slotB", "finalize"))).toEqual({
       ok: true,
       slotId: "slotB",
       kind: "finalize",
+      anchor: "marker",
     });
   });
 
@@ -648,7 +654,7 @@ describe("#1192 — v2 expiry + legacy v1 acceptance", () => {
 
   it("ACCEPTANCE: a fresh v2 attestation passes (and is NOT flagged legacy)", () => {
     const res = evalV2(NOW_S + 60);
-    expect(res).toEqual({ ok: true, slotId: "slotA", kind: "resolve" });
+    expect(res).toEqual({ ok: true, slotId: "slotA", kind: "resolve", anchor: "marker" });
     // no legacyV1 marker on a v2 accept
     if (res.ok) expect(res.legacyV1).toBeUndefined();
   });
@@ -718,7 +724,13 @@ describe("#1192 — v2 expiry + legacy v1 acceptance", () => {
       slotId: "slotA",
       expectedKind: "resolve",
     });
-    expect(res).toEqual({ ok: true, slotId: "slotA", kind: "resolve", legacyV1: true });
+    expect(res).toEqual({
+      ok: true,
+      slotId: "slotA",
+      kind: "resolve",
+      anchor: "marker",
+      legacyV1: true,
+    });
   });
 
   it("a legacy v1 attestation is REJECTED when acceptLegacyV1=false (v2-only enforced)", () => {

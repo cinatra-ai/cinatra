@@ -543,3 +543,63 @@ export const runCoOwners = cinatraSchema.table("run_co_owners", {
   pk:        primaryKey({ columns: [t.runId, t.userId] }),
   userIdIdx: index("run_co_owners_user_id_idx").on(t.userId),
 }));
+
+// ---------------------------------------------------------------------------
+// project_dispatch_attempts — the dynamic-dispatch primitive's dispatch-attempt
+// LEDGER (cinatra#1032 deliverable 2). One row per deliberate dispatch attempt,
+// UNIQUE (org_id, item_natural_key, action_version) — the ledger key. The row
+// is written AHEAD of createAgentRun and carries the deterministically derived
+// idempotency_key passed VERBATIM to createAgentRun, so a tick that crashes
+// between dispatch and record re-converges onto the SAME child run (via
+// agent_runs_idempotency_key_uniq) instead of dispatching a duplicate.
+//
+// run_id is provenance only — deliberately NO foreign key: the ledger is
+// append-only history that outlives the operational run row (an FK SET NULL
+// would erase the historical run identity and re-open a redispatch ambiguity;
+// a dispatched row whose run cannot be read surfaces as DISPATCH_RUN_MISSING,
+// never as a fresh dispatch under the same action version).
+// version is the optimistic-CAS counter (agent_run_pm_links precedent).
+// ---------------------------------------------------------------------------
+
+export const projectDispatchAttempts = cinatraSchema.table("project_dispatch_attempts", {
+  id:             text("id").primaryKey(), // `pda_<uuid>`
+  orgId:          text("org_id").notNull(),
+  projectRef:     text("project_ref").notNull(),      // PM project scope (natural-key prefix)
+  itemNaturalKey: text("item_natural_key").notNull(), // `<projectRef>/<taskId>` (immutable)
+  actionVersion:  integer("action_version").notNull(),// deliberate-retry counter
+  workerRole:     text("worker_role").notNull(),      // allowlist binding provenance
+  workerPackage:  text("worker_package").notNull(),
+  workerVersionConstraint: text("worker_version_constraint").notNull(), // canonical `kind:value` fingerprint
+  idempotencyKey: text("idempotency_key").notNull(),  // passed VERBATIM to createAgentRun
+  runId:          text("run_id"),                     // provenance; null until settled (NO FK, see above)
+  status:         text("status").notNull().default("pending"), // 'pending' | 'dispatched' | 'failed' (CHECK in DDL)
+  error:          text("error"),                      // last dispatch error; null = healthy
+  version:        integer("version").notNull().default(0), // optimistic-CAS counter
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  itemActionUniq: uniqueIndex("project_dispatch_attempts_item_action_uniq").on(t.orgId, t.itemNaturalKey, t.actionVersion),
+  projectIdx:     index("project_dispatch_attempts_project_idx").on(t.orgId, t.projectRef),
+}));
+
+// ---------------------------------------------------------------------------
+// project_leases — the project-level lease (cinatra#1032 deliverable 2): at
+// most one active tick per PM project scope. Keyed (org_id, project_ref).
+// `version` is the FENCING token — bumped on every (re)acquisition, so a stale
+// holder (crashed/expired tick) presenting an old version is rejected by the
+// lease-fenced ledger claim even after the lease row was stolen. Stale-lease
+// recovery = an acquire whose conditional upsert only wins when
+// expires_at <= now() (or the caller is the live holder re-acquiring).
+// ---------------------------------------------------------------------------
+
+export const projectLeases = cinatraSchema.table("project_leases", {
+  orgId:       text("org_id").notNull(),
+  projectRef:  text("project_ref").notNull(),
+  holderId:    text("holder_id").notNull(),
+  acquiredAt:  timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt:   timestamp("expires_at", { withTimezone: true }).notNull(),
+  version:     integer("version").notNull().default(1), // fencing token
+}, (t) => ({
+  pk: primaryKey({ columns: [t.orgId, t.projectRef] }),
+}));

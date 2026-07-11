@@ -76,6 +76,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+# cinatra#1194 — loader-owned context-subflow injection (ships next to this
+# file in the image; see context_subflow_injection.py for the contract).
+from context_subflow_injection import (
+    CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+    inject_context_subflows,
+)
+
 try:  # pragma: no cover — exercised inside the Docker image only
     from wayflowcore.agentserver import A2AServer  # type: ignore[import-not-found]
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
@@ -902,6 +909,20 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+
+            # cinatra#1194 — template-version-per-run: what executes is no
+            # longer byte-identical to the published spec for agents with
+            # loader-injected context subflows, so every run records WHICH
+            # template version composed its graph (ids only; sidecar attached
+            # at mount in _mount_one_sync).
+            _ctx_inj = getattr(self.assistant, "_cinatra_context_injection", None)
+            if isinstance(_ctx_inj, dict):
+                print(
+                    f"[agent_loader] context-injection run "
+                    f"task={params['id']} "
+                    f"templateVersion={_ctx_inj.get('templateVersion')} "
+                    f"slots={_ctx_inj.get('slots')}"
+                )
 
             prioritize_task = params.get("metadata", {}).get("prioritize_task", False)
             tools_dict = self.assistant._referenced_tools_dict()
@@ -2690,6 +2711,9 @@ class MountedAgent:
         "sub_app",
         "stack",
         "mount",
+        "composed_oas",
+        "composed_sha256",
+        "context_injection",
     )
 
     def __init__(
@@ -2701,6 +2725,9 @@ class MountedAgent:
         server: Any,
         sub_app: Any,
         mount: Mount,
+        composed_oas: Optional[Dict[str, Any]] = None,
+        composed_sha256: Optional[str] = None,
+        context_injection: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -2711,6 +2738,17 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        # cinatra#1194 — mount-time context-subflow injection sidecar. When the
+        # loader injected declared slots, `composed_oas` holds the PRE-
+        # placeholder-substitution composed document (what actually executes,
+        # minus env values — safe to expose on the gated debug view),
+        # `composed_sha256` fingerprints it (the source fingerprint alone no
+        # longer identifies the runtime graph), and `context_injection` is the
+        # per-slot report ({slot, definition, packageName, templateVersion}).
+        # All None for a legacy / declaration-free agent.
+        self.composed_oas = composed_oas
+        self.composed_sha256 = composed_sha256
+        self.context_injection = context_injection
 
 
 def _read_bridge_token() -> Optional[str]:
@@ -2744,8 +2782,59 @@ def _mount_one_sync(
             f"{actual_sha256[:12]}… (refusing to mount)"
         )
     raw_text = raw_bytes.decode("utf-8")
+
+    # cinatra#1194 — loader-owned context-subflow injection. Runs on the
+    # parsed PRE-substitution document (the template carries {{ENV}}
+    # placeholders of its own). When NO slot needs injection the original
+    # raw text reaches _substitute_placeholders byte-identically (legacy
+    # agents keep their exact historical mount path). A malformed declaration
+    # or impossible injection raises ContextInjectionError → this agent's
+    # mount fails loudly (recorded in /.health failed_agents) instead of the
+    # historical undiagnosable runtime 403.
+    label = f"{vendor}/{slug}"
+    composed_oas: Optional[Dict[str, Any]] = None
+    composed_sha256: Optional[str] = None
+    injection_report: List[Dict[str, Any]] = []
+    parsed_doc = json.loads(raw_text)
+    if isinstance(parsed_doc, dict):
+        composed_doc, injection_report = inject_context_subflows(parsed_doc, label)
+        if injection_report:
+            raw_text = json.dumps(composed_doc)
+            composed_oas = composed_doc
+            composed_sha256 = hashlib.sha256(
+                raw_text.encode("utf-8")
+            ).hexdigest()
+            print(
+                f"[agent_loader] context-subflow injection {label}: "
+                f"slots={[r['slot'] for r in injection_report]} "
+                f"templateVersion={CONTEXT_SUBFLOW_TEMPLATE_VERSION} "
+                f"composed_sha256={composed_sha256[:12]}…"
+            )
+
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+
+    if injection_report:
+        # Per-run template-version logging needs the injection info at
+        # run_task time, where only the deserialized assistant is in scope.
+        # Attach it as a plain attribute; verify it stuck (some model classes
+        # reject attribute assignment) and be LOUD when unavailable so the
+        # observability gap is never silent.
+        info = {
+            "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+            "slots": [r["slot"] for r in injection_report],
+        }
+        try:
+            setattr(agent, "_cinatra_context_injection", info)
+        except Exception:
+            pass
+        if getattr(agent, "_cinatra_context_injection", None) is not info:
+            print(
+                f"[agent_loader] WARNING: {label}: could not attach the "
+                "context-injection sidecar to the deserialized agent — "
+                "per-run templateVersion logging unavailable for this agent "
+                "(mount-time log above remains authoritative)"
+            )
 
     server = A2AServer()
     mount_url = f"{base_url}/agents/{vendor}/{slug}/"
@@ -2761,6 +2850,9 @@ def _mount_one_sync(
         server=server,
         sub_app=sub_app,
         mount=mount,
+        composed_oas=composed_oas,
+        composed_sha256=composed_sha256,
+        context_injection=injection_report or None,
     )
 
 
@@ -3165,6 +3257,11 @@ class MountedAgentRegistry:
             "last_reload_at": self._last_reload_at,
         }
 
+    def find(self, label: str) -> Optional[MountedAgent]:
+        """The mounted agent for `<vendor>/<slug>`, active-first (pre-start
+        the initial population is still in `_pending`)."""
+        return self._active.get(label) or self._pending.get(label)
+
 
 def _build_health_handler(
     registry: MountedAgentRegistry,
@@ -3225,6 +3322,51 @@ def _build_reload_handler(
             )
 
     return _reload
+
+
+def _build_composed_oas_handler(
+    registry: MountedAgentRegistry,
+) -> Callable[[Request], Any]:
+    """cinatra#1194 — composed-OAS debug view.
+
+    What executes after loader-owned context-subflow injection is no longer
+    byte-identical to the published spec, so the composed document must be
+    inspectable for debugging. Bridge-token-gated (same contract as the
+    reload endpoint); the label is validated against the ACTIVE registry
+    (never a filesystem lookup — no traversal surface). Returns the PRE-
+    placeholder-substitution composed document, so substituted env values
+    can never appear in the response.
+    """
+
+    async def _composed_oas(request: Request) -> JSONResponse:
+        guard = _check_bridge_token(request)
+        if guard is not None:
+            return guard
+        vendor = request.path_params.get("vendor", "")
+        slug = request.path_params.get("slug", "")
+        agent = registry.find(f"{vendor}/{slug}")
+        if agent is None:
+            return JSONResponse(
+                {"error": "unknown_agent", "detail": f"{vendor}/{slug}"},
+                status_code=404,
+            )
+        return JSONResponse(
+            {
+                "label": agent.label,
+                "sourceSha256": agent.fingerprint,
+                "injected": agent.context_injection is not None,
+                "templateVersion": (
+                    CONTEXT_SUBFLOW_TEMPLATE_VERSION
+                    if agent.context_injection is not None
+                    else None
+                ),
+                "injectedSlots": agent.context_injection or [],
+                "composedSha256": agent.composed_sha256,
+                "composedOas": agent.composed_oas,
+            }
+        )
+
+    return _composed_oas
 
 
 def _build_parent_lifespan(
@@ -3327,6 +3469,11 @@ def build_parent_app(agents_dir: Path) -> Starlette:
             "/.internal/reload-agents",
             _build_reload_handler(registry),
             methods=["POST"],
+        ),
+        Route(
+            "/.internal/composed-oas/{vendor}/{slug}",
+            _build_composed_oas_handler(registry),
+            methods=["GET"],
         ),
     ]
     registry.set_base_routes(base_routes)

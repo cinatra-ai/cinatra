@@ -11,6 +11,7 @@ import {
   capabilityOwnershipGrantSchemaQueries,
   dependencyEdgeSchemaQueries,
   versionIdentitySchemaQueries,
+  projectDispatchSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
@@ -1218,6 +1219,11 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_pm_links_provider_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (provider)` },
+    // project_dispatch_attempts + project_leases: the dynamic-dispatch
+    // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
+    // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
+    // (src/lib/extension-grant-schema.ts); companion migration core__0024.
+    ...projectDispatchSchemaQueries(schemaName),
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
     // gate). PK is (run_id, node_id) to support multiple TriggerWaitNodes per

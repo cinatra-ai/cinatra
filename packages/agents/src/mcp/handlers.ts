@@ -848,12 +848,13 @@ async function handleAgentBuilderRun(
   // Resolved templateId is what every downstream code path expects.
   const resolvedTemplateId = template.id;
 
-  // RUNTIME-LIFECYCLE GATE (cinatra#659): fail-CLOSED on a runtime-archived
-  // package (refusal text + CG-1/fail-open semantics live in the shared gate).
+  // RUNTIME-LIFECYCLE GATE (cinatra#659): fail-CLOSED on a runtime-archived package (refusal text + CG-1/fail-open semantics live in the shared gate).
   const notRunnable = await assertAgentPackageRunnable(template.packageName, identifierForError);
   if (notRunnable) return notRunnable;
-
+  // #1057(b) config-needs run gate: fail-closed until required connectors are configured (src/lib/agent-run-readiness).
   const actor = request.actor as PrimitiveActorContext;
+  const notConfigured = await (await import("@/lib/agent-run-readiness")).assertAgentRunReadyByPackage(template.packageName, identifierForError, { userId: actor.userId ?? null });
+  if (notConfigured) return notConfigured;
   const roles = await resolveRoleHintsFromSession();
   const probeRun = {
     id: "probe",

@@ -378,6 +378,30 @@ export async function POST(
     );
   }
 
+  // CONFIGURATION-NEEDS RUN GATE (cinatra #1057 ruling (b)): a relayed agent whose
+  // REQUIRED connectors are not yet configured must NOT be dispatched. Fail CLOSED
+  // with a structured 409 naming each unconfigured connector, BEFORE any run is
+  // opened. Scoped to the authenticated end user (the per-user OBO runBy when
+  // present). FAIL-OPEN on a thrown INFRA error only (never strand the public
+  // widget path on a canonical-store glitch — the primitive gates downstream are
+  // the backstop); a DETERMINATE unconfigured result still blocks.
+  try {
+    const { assertAgentRunReadyByPackage } = await import("@/lib/agent-run-readiness");
+    const notConfigured = await assertAgentRunReadyByPackage(
+      relay.agentPackageName,
+      relay.agentPackageName,
+      { userId: widgetActorOverride?.runBy ?? null },
+    );
+    if (notConfigured) {
+      return NextResponse.json(notConfigured, { status: 409, headers: corsHeaders });
+    }
+  } catch (err) {
+    console.warn(
+      `[agent-stream:${agentSlug}] config-needs run gate errored — dispatching anyway (fail-open):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // The editing instruction is the latest user message. Trusted CMS context
   // (instanceId, postId, …) comes from the AUTHENTICATED request body — there is
   // no model in this path, so there are no model-supplied identity fields to

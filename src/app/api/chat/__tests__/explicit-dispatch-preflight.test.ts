@@ -45,6 +45,16 @@ vi.mock("@/lib/database", () => ({
   isAgentCreationPinActive: () => mocks.isPinActive(),
 }));
 
+// #1057(b) config-needs run gate reads the canonical store (installed_extension)
+// for the agent's required-connector readiness; this preflight suite has no DB,
+// so stub the gate to "runnable" (its semantics are covered by
+// src/lib/__tests__/agent-run-readiness.test.ts + the wiring guards). Without
+// this the real reader ECONNREFUSEDs against a non-existent DB.
+vi.mock("@/lib/agent-run-readiness", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/agent-run-readiness")>()),
+  assertAgentRunReadyByPackage: vi.fn(async () => null),
+}));
+
 vi.mock("@cinatra-ai/agents", () => ({
   preflightAgentCreation: (...args: unknown[]) => mocks.preflight(...args),
   resolveRequiredCreationSkillIds: (...args: unknown[]) =>
