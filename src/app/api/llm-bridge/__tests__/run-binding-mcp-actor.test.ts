@@ -33,6 +33,7 @@ const {
   writeDurableRunContextBindingMock,
   clearDurableRunContextBindingsMock,
   readAgentRunByContextIdMock,
+  readAgentRunByTokenHashMock,
   readAgentRunByIdMock,
   readAgentTemplateByIdMock,
   resolveAgentRunMcpActorMock,
@@ -72,6 +73,13 @@ const {
   ),
   clearDurableRunContextBindingsMock: vi.fn(async () => {}),
   readAgentRunByContextIdMock: vi.fn(),
+  readAgentRunByTokenHashMock: vi.fn(
+    async (): Promise<{
+      id: string;
+      orgId: string;
+      runBy: string | null;
+    } | null> => null,
+  ),
   readAgentRunByIdMock: vi.fn(),
   readAgentTemplateByIdMock: vi.fn(),
   resolveAgentRunMcpActorMock: vi.fn(),
@@ -124,6 +132,7 @@ vi.mock("@cinatra-ai/agents", async () => {
   return {
     readAgentRunByContextId: readAgentRunByContextIdMock,
     readAgentRunById: readAgentRunByIdMock,
+    readAgentRunByTokenHash: readAgentRunByTokenHashMock,
     readAgentRunTokenHashById: readAgentRunTokenHashByIdMock,
     readAgentTemplateById: readAgentTemplateByIdMock,
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
@@ -223,11 +232,29 @@ function makeReq(body: Record<string, unknown>): Request {
   });
 }
 
+// Variant that also sets loader-injected internal headers (the run token +
+// a2a context id) so the W3 token-first path can be exercised.
+function makeReqH(
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+): Request {
+  return new Request("http://localhost:3000/api/llm-bridge", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-cinatra-bridge-token": BRIDGE_TOKEN,
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   process.env.CINATRA_BRIDGE_TOKEN = BRIDGE_TOKEN;
   process.env.BETTER_AUTH_SECRET = AUTH_SECRET;
   readAgentRunByContextIdMock.mockResolvedValue(null);
+  readAgentRunByTokenHashMock.mockResolvedValue(null);
   // Default template anchor: org-owned by the victim's org. deriveOboCeilingChain
   // → [{organization, org-victim}], which VICTIM_RUN.oboCeiling contains, so the
   // mint-time containment check passes on the happy paths.
@@ -599,5 +626,177 @@ describe("bridge run binding for MCP OBO minting", () => {
 
   it("guards the binding purpose constant against accidental edits", () => {
     expect(AGENT_RUN_BINDING_PURPOSE).toBe("llm-bridge-run-select");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1193 run-token spine (W3) — the llm-bridge resolves the run TOKEN-FIRST off
+// the one dispatch-minted credential (X-Cinatra-Run-Token → verifyRunToken →
+// unique-index row), with the context-id + dispatcher-signed binding kept as
+// measured legacy fallbacks. Absent token ⇒ the legacy paths above are
+// UNCHANGED (proven by every binding/context-id test in the block above, which
+// sends no run-token header); present-but-unresolvable ⇒ FAIL CLOSED.
+// ---------------------------------------------------------------------------
+const RUN_TOKEN = "raw-run-token-xyz";
+const PROBE = {
+  id: VICTIM_RUN.id,
+  orgId: VICTIM_RUN.orgId,
+  runBy: VICTIM_RUN.runBy,
+};
+
+describe("bridge run-token-first selection (W3)", () => {
+  it("HAPPY: a valid run token selects the run for OBO, re-read by the SERVER-DERIVED id (never a body id)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(res.status).toBe(200);
+    // The full row is re-read by the id the TOKEN resolved, never a body id.
+    expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
+    await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: VICTIM_RUN.id,
+        orgId: VICTIM_RUN.orgId,
+        runBy: VICTIM_RUN.runBy,
+      }),
+    );
+  });
+
+  it("TOKEN WINS over a forged body.agent_run_id (token is authoritative)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH(
+        { user: "hi", agent_run_id: TARGET_RUN.id }, // forged — must be ignored
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
+    expect(readAgentRunByIdMock).not.toHaveBeenCalledWith(TARGET_RUN.id);
+    await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: VICTIM_RUN.id }),
+    );
+  });
+
+  it("TOKEN OUTRANKS a co-present dispatcher-signed binding for a DIFFERENT run (binding channel not consulted)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const attackerBinding = issueAgentRunBinding({
+      runId: TARGET_RUN.id,
+      orgId: TARGET_RUN.orgId,
+      runBy: TARGET_RUN.runBy,
+    });
+    const res = await POST(
+      makeReqH(
+        { user: "hi", cinatra_run_binding: attackerBinding },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
+    );
+    expect(res.status).toBe(200);
+    // Token selected the run first, so the binding path never reads TARGET.
+    expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
+    expect(readAgentRunByIdMock).not.toHaveBeenCalledWith(TARGET_RUN.id);
+    await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: VICTIM_RUN.id }),
+    );
+  });
+
+  it("FAIL CLOSED: a present-but-unresolvable token suppresses the context-id fallback (no OBO mint)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(null); // unresolvable
+    readAgentRunByContextIdMock.mockResolvedValue(VICTIM_RUN); // WOULD resolve
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": "garbage-token",
+          "x-cinatra-a2a-context-id": "ctx-victim",
+        },
+      ),
+    );
+    expect(res.status).toBe(200);
+    await invokeOverride();
+    // An invalid token must not downgrade to the weaker context-id selector.
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+    expect(issueAgentRunMcpActorTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL CLOSED: a present-but-unresolvable token suppresses the dispatcher-signed binding fallback (no OBO mint)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(null); // unresolvable
+    const binding = issueAgentRunBinding({
+      runId: VICTIM_RUN.id,
+      orgId: VICTIM_RUN.orgId,
+      runBy: VICTIM_RUN.runBy,
+    });
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH(
+        { user: "hi", cinatra_run_binding: binding },
+        { "x-cinatra-run-token": "garbage-token" },
+      ),
+    );
+    expect(res.status).toBe(200);
+    // The binding channel is suppressed → the signed binding is never verified.
+    expect(readAgentRunByIdMock).not.toHaveBeenCalled();
+    await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL CLOSED: token probe resolves but the fresh re-read row DIVERGES (orgId changed) → no OBO mint", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue({
+      ...VICTIM_RUN,
+      orgId: "org-changed",
+    });
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(res.status).toBe(200);
+    expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
+    await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+  });
+
+  it("DIVERGENCE: token selects a run but a co-present context-id names a DIFFERENT run → refuse OBO", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(TARGET_RUN); // disagrees
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-target",
+        },
+      ),
+    );
+    expect(res.status).toBe(200);
+    await invokeOverride();
+    // A divergent trustworthy context-id refuses the OBO mint (W2 invariant).
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+  });
+
+  it("a co-present context-id that AGREES with the token still mints (no false divergence)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(VICTIM_RUN); // same run
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-victim",
+        },
+      ),
+    );
+    expect(res.status).toBe(200);
+    await invokeOverride();
+    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: VICTIM_RUN.id }),
+    );
   });
 });
