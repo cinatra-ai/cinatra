@@ -2,20 +2,20 @@
 set -euo pipefail
 # works-after :: Redis / BullMQ arm (cinatra#352).
 #
-# Brings up a candidate Redis (REDIS_TAG, default = the current pin 7-alpine) on
+# Brings up a candidate Redis (REDIS_TAG, default = the current pin 8-alpine) on
 # an ISOLATED docker network (config-light service → ad-hoc `docker run` is
 # exactly what compose runs; design §2.2), then runs the bullmq enqueue→run
 # round-trip (rt/redis-roundtrip.ts) against it and asserts a THREE-WAY result.
 #
-# The major lane sets REDIS_TAG=8-alpine. Default keeps the arm green on main.
+# The default IS the applied pin (8-alpine); a future major lane overrides REDIS_TAG.
 #
-# Env: REDIS_TAG (default 7-alpine), WORKS_AFTER_DEADLINE_MS (default 30000).
+# Env: REDIS_TAG (default 8-alpine), WORKS_AFTER_DEADLINE_MS (default 30000).
 
 WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
-REDIS_TAG="${REDIS_TAG:-7-alpine}"
+REDIS_TAG="${REDIS_TAG:-8-alpine}"
 RUN_ID="wa-redis-$$"
 NET="${RUN_ID}-net"
 REDIS="${RUN_ID}-redis"
