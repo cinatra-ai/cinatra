@@ -228,7 +228,12 @@ export async function POST(request: Request) {
       // this, a racing caller could append a turn to a thread another user
       // claimed in the window).
       const winner = getAssistantThread(threadId);
-      if (!isAdmin && winner && winner.ownerUserId !== userId) {
+      if (!winner) {
+        // Not a lost race — the create itself failed. Fail loud instead of
+        // letting appendAssistantTurn hit the FK with no thread row.
+        return Response.json({ error: "Could not bind the chat thread." }, { status: 500 });
+      }
+      if (!isAdmin && winner.ownerUserId !== userId) {
         return Response.json({ error: "Forbidden" }, { status: 403 });
       }
     }
@@ -250,6 +255,8 @@ export async function POST(request: Request) {
   // mid-run publish failure would leave the tail waiting on a terminal frame
   // that can never arrive (until the subscriber's inactivity timeout).
   const tailAbort = new AbortController();
+  // An ALREADY-aborted request signal fires no further events — check first.
+  if (request.signal.aborted) tailAbort.abort();
   request.signal.addEventListener("abort", () => tailAbort.abort(), { once: true });
   let publishFailure: unknown = null;
 
@@ -324,6 +331,7 @@ export async function POST(request: Request) {
         runAbort.abort(new Error("assistant chat request aborted"));
         finish();
       };
+      if (request.signal.aborted) onAbort();
       request.signal.addEventListener("abort", onAbort, { once: true });
 
       try {

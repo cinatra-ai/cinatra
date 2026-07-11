@@ -302,14 +302,17 @@ export async function streamAssistantTurn(
     });
     // A clean close WITHOUT a terminal frame is still a broken wire (the
     // server closes only after the terminal, a synthetic error, or an abort):
-    // attempt the same one-shot resume rather than silently truncating.
+    // attempt the same one-shot resume rather than silently truncating. If
+    // the resume itself fails — or replays another nonterminal log — fall
+    // back to the ACCUMULATED state (legacy parity: render what arrived; a
+    // one-shot policy never loops).
     if (
       state.status !== "finished" &&
       state.status !== "error" &&
       state.runId &&
       !options.signal.aborted
     ) {
-      return await resumeOnce(state.runId);
+      return await resumeOnce(state.runId).catch(() => state);
     }
     return state;
   } catch (err) {

@@ -111,14 +111,18 @@ export function createAgUiSinkAdapter(params: {
   let terminal = false;
   let outcome: "completed" | "error" | null = null;
   let chain: Promise<void> = Promise.resolve();
+  // Separate broken flag: a thrown `null`/`undefined` must still trip the
+  // sentinel (never keyed on the error VALUE).
+  let broken = false;
   let publishError: unknown = null;
 
   function emit(event: AgUiEvent): void {
     chain = chain.then(async () => {
-      if (publishError !== null) return; // broken wire — stop appending
+      if (broken) return; // broken wire — stop appending
       try {
         await publish(event);
       } catch (err) {
+        broken = true;
         publishError = err;
         try {
           onPublishFailure?.(err);
@@ -247,7 +251,11 @@ export function createAgUiSinkAdapter(params: {
     },
     async drain(): Promise<void> {
       await chain;
-      if (publishError !== null) throw publishError;
+      if (broken) {
+        throw publishError instanceof Error
+          ? publishError
+          : new Error("assistant stream durable publish failed");
+      }
     },
     get terminal(): boolean {
       return terminal;
