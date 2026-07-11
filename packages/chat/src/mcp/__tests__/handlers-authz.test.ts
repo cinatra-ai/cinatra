@@ -43,7 +43,11 @@ vi.mock("@/lib/database", () => ({
 vi.mock("@/lib/chat-thread-store", () => ({ isActorTeamMemberForChat: () => false }));
 
 // Heavy server-only deps imported at module load — stubbed so the graph loads.
-vi.mock("@/app/api/chat/runner", () => ({ runChatTurn: vi.fn() }));
+// (P2b: handlers.ts binds the assistant runtime directly, no /api/chat runner.)
+vi.mock("@/lib/assistant-runtime/runtime", () => ({ runAssistantTurn: vi.fn() }));
+vi.mock("@/lib/assistant-runtime/cinatra-assistant-config", () => ({
+  buildCinatraAssistantRuntimeConfig: vi.fn(() => ({})),
+}));
 vi.mock("@/lib/auth-session", () => ({ resolveUserContextForUserId: vi.fn() }));
 vi.mock("@/lib/sealed-room", () => ({ assertProjectReadAccess: vi.fn() }));
 vi.mock("@/lib/project-writable", () => ({ assertProjectWritable: vi.fn() }));

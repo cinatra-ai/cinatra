@@ -84,8 +84,12 @@ vi.mock("@/lib/authz/audit", async () => {
 });
 // Force dev mode so the built-in @chatgpt / @gemini handles are active.
 vi.mock("@/lib/runtime-mode", () => ({ isAppDevelopmentMode: () => true }));
-// The LLM runner must not run for a bridge-only mention (no @cinatra).
-vi.mock("@/app/api/chat/runner", () => ({ runChatTurn: mocks.runChatTurn }));
+// The LLM runtime must not run for a bridge-only mention (no @cinatra).
+// (P2b: handlers.ts binds the assistant runtime directly, no /api/chat runner.)
+vi.mock("@/lib/assistant-runtime/runtime", () => ({ runAssistantTurn: mocks.runChatTurn }));
+vi.mock("@/lib/assistant-runtime/cinatra-assistant-config", () => ({
+  buildCinatraAssistantRuntimeConfig: vi.fn(() => ({})),
+}));
 // parseMentions runs for real (light, no DB); resolveMentions is stubbed. The
 // handler imports these from its relative `../mentions`; mocking by the
 // module's resolved absolute path intercepts that import regardless of the
