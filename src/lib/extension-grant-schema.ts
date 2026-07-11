@@ -372,6 +372,8 @@ BEGIN
     ALTER TABLE "${q}"."installed_extension" DROP COLUMN dependencies;
   END IF;
 END $$;` },
+  ];
+}
 
 // ---------------------------------------------------------------------------
 // Project-instance registry (cinatra#1032 deliverable 3).
