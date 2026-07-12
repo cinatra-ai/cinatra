@@ -109,10 +109,11 @@ export interface SkillLifecycleTransitionWrite {
  *  2. a single statement that (a) swaps lifecycle_state ONLY when it still
  *     equals `expectedFrom` (TOCTOU-safe on state), (b) sets `superseded_by`
  *     ONLY when doing so would NOT create a cycle — a WITH RECURSIVE walk of the
- *     successor chain from the proposed target rejects a self-edge, a loop back
- *     to this skill, or a walk into a pre-existing cycle (UNION dedups →
- *     terminates), and (c) writes the audit row ONLY when the swap matched (the
- *     audit SELECTs from the update CTE).
+ *     successor chain from the proposed target carries its visited-path and
+ *     flags `bad` on a self-edge, a loop back to this skill, OR any revisited
+ *     node (a cycle anywhere in the target's reachable chain); expansion stops
+ *     at the first `bad` node so it always terminates — and (c) writes the audit
+ *     row ONLY when the swap matched (the audit SELECTs from the update CTE).
  *
  * Returns `{ changed }` — false means the state moved underneath OR the
  * supersede edge would create a cycle (a fail-closed no-op, no audit written).
@@ -134,18 +135,20 @@ export function applySkillLifecycleTransitionInDatabase(input: SkillLifecycleTra
     queries: [
       { text: `SELECT pg_advisory_xact_lock(hashtext('cinatra-skill-supersede-graph'))` },
       {
-        text: `WITH RECURSIVE walk(id) AS (
-          SELECT $4::text
-          UNION
-          SELECT sk.superseded_by FROM "${s}"."skills" sk JOIN walk w ON sk.id = w.id
-           WHERE sk.superseded_by IS NOT NULL
+        text: `WITH RECURSIVE walk(id, seen, bad) AS (
+          SELECT $4::text, ARRAY[$4::text], ($4 = $1)
+          UNION ALL
+          SELECT sk.superseded_by, w.seen || sk.superseded_by,
+                 (sk.superseded_by = $1 OR sk.superseded_by = ANY(w.seen))
+            FROM "${s}"."skills" sk JOIN walk w ON sk.id = w.id
+           WHERE sk.superseded_by IS NOT NULL AND NOT w.bad
         ),
         upd AS (
           UPDATE "${s}"."skills"
              SET lifecycle_state = $3,
                  superseded_by = CASE WHEN $4::text IS NOT NULL THEN $4 ELSE superseded_by END
            WHERE id = $1 AND lifecycle_state = $2
-             AND ($4::text IS NULL OR ($4 <> $1 AND NOT EXISTS (SELECT 1 FROM walk WHERE id = $1)))
+             AND ($4::text IS NULL OR NOT EXISTS (SELECT 1 FROM walk WHERE bad))
           RETURNING id
         )
         INSERT INTO "${s}"."skill_lifecycle_audit"

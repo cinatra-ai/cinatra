@@ -51,9 +51,11 @@ describe("applySkillLifecycleTransitionInDatabase — race-free CAS + cycle guar
     const cas = queries[1].text;
     // 2) CAS on the expected prior state
     expect(cas).toMatch(/WHERE id = \$1 AND lifecycle_state = \$2/);
-    // 3) DB-side acyclicity: recursive walk + self-edge + loop-back rejection
-    expect(cas).toMatch(/WITH RECURSIVE walk\(id\) AS/);
-    expect(cas).toMatch(/\$4 <> \$1 AND NOT EXISTS \(SELECT 1 FROM walk WHERE id = \$1\)/);
+    // 3) DB-side acyclicity: path-tracking recursive walk flags reaching $1 OR
+    // a repeated node (any cycle in the target chain), and the CAS rejects on bad.
+    expect(cas).toMatch(/WITH RECURSIVE walk\(id, seen, bad\) AS/);
+    expect(cas).toMatch(/sk\.superseded_by = \$1 OR sk\.superseded_by = ANY\(w\.seen\)/);
+    expect(cas).toMatch(/NOT EXISTS \(SELECT 1 FROM walk WHERE bad\)/);
     // 4) audit written only when the swap matched
     expect(cas).toMatch(/INSERT INTO "cinatra"\."skill_lifecycle_audit"[\s\S]*SELECT \$5, \$1, \$2, \$3, \$6, \$7, \$8 FROM upd/);
   });
