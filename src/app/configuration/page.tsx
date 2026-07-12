@@ -99,12 +99,11 @@ const administrationSections = [
   },
   {
     title: "Skills",
-    description: "Installed skill packages, shell tooling, matching, and sync settings.",
+    description: "Installed skill packages, matching, and sync settings.",
     href: "/configuration/skills",
     icon: domainIcons.skills,
     links: [
       { label: "Packages", href: "/configuration/skills" },
-      { label: "Shell", href: "/configuration/skills?tab=shell" },
       { label: "Matches", href: "/configuration/skills?tab=matches" },
     ],
   },
