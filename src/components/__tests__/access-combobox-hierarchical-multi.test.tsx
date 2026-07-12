@@ -51,22 +51,37 @@ describe("AccessComboboxHierarchical checkbox multi-select (cinatra#1072)", () =
     expect(multiRow).not.toMatch(/<Check\b/); // the trailing Check icon is single-mode only
   });
 
-  it("toggles through the pure toggleAccessSelection and keeps the popover OPEN", () => {
+  it("toggles through the pure toggleAccessSelection BY DEFAULT (grant mode) and keeps the popover OPEN", () => {
     // The toggle + implication logic lives in the pure access-scope module
     // (co-located with the label helpers so it adds no new reachable module to
     // the routes that transitively reach the picker — the route-graph ratchet).
     expect(SOURCE).toMatch(
       /import \{[\s\S]*toggleAccessSelection[\s\S]*\} from "@\/components\/access-scope"/,
     );
-    expect(SOURCE).toMatch(/toggleAccessSelection\(itemValue,\s*selection\)/);
+    // Grant-mode fallback: an omitted override MUST delegate to the pure
+    // grant helper (cinatra#1074 W5 made the semantics injectable; grant
+    // surfaces pass no override and must stay behaviour-identical).
+    expect(SOURCE).toMatch(/props\.toggleSelection \?\?/);
+    expect(SOURCE).toMatch(/toggleAccessSelection\(value,\s*current\)/);
     // the multi onSelect branch does NOT close the popover
     expect(SOURCE).toMatch(/Popover stays OPEN on toggle/);
     // single mode still closes on select
     expect(SOURCE).toMatch(/props\.onChange\(itemValue\);\s*\n\s*setOpen\(false\)/);
   });
 
-  it("derives row checked/disabled state from the pure accessRowState", () => {
-    expect(SOURCE).toMatch(/accessRowState\(itemValue,\s*selection,\s*scopes\)/);
+  it("derives row checked/disabled state from the pure accessRowState BY DEFAULT (grant mode)", () => {
+    expect(SOURCE).toMatch(
+      /\(props\.rowState \?\? accessRowState\)\(itemValue,\s*selection,\s*scopes\)/,
+    );
+  });
+
+  it("multi mode accepts FILTER-surface overrides (cinatra#1074 W5) as optional props", () => {
+    // The override props live on the MULTI branch of the discriminated union
+    // only, typed against the same (value, selection) shapes as the grant
+    // helpers, so a filter surface can swap semantics without forking the
+    // picker (and single mode cannot receive them).
+    expect(SOURCE).toMatch(/toggleSelection\?:\s*\(value:\s*string,\s*selection:\s*readonly string\[\]\)\s*=>\s*string\[\]/);
+    expect(SOURCE).toMatch(/rowState\?:\s*\(/);
   });
 
   it("renders the trigger via resolveAccessSummary and a Tooltip for N>1", () => {
