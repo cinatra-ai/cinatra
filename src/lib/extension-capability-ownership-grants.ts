@@ -2030,6 +2030,43 @@ export async function listApprovedWidgetStreamMetadataGrants(
   return rows.map(wsmRowToGrant);
 }
 
+/**
+ * Enumerate every `approved` metadata grant across ALL org scopes (the global
+ * `org_id IS NULL` rows AND every org's rows), in one narrow read (widget-stream
+ * runtime trust, slice 5). READ-ONLY, cross-org.
+ *
+ * WHY THIS EXISTS. `listApprovedWidgetStreamMetadataGrants` above is EXACT-scope
+ * (one org, or the global rows) — correct for the in-admin CMS relay-target union
+ * (an org-anchored authority read). The route-guard's pure-liveness redirect-skip
+ * snapshot instead needs the WHOLE approved set regardless of org: it maintains a
+ * per-replica set of runtime-approved slugs' paths so those routes reach their
+ * self-authenticating handlers, and a slug approved at ANY scope is a redirect-
+ * skip candidate. A naive swap of that enumerator onto the exact-scope list would
+ * NARROW the snapshot to a single org and drop cross-org runtime widgets from the
+ * redirect-skip set; this cross-org variant is the correct all-orgs source.
+ *
+ * NOT GRANT VALIDATION — and even less so than the exact-scope list. This is a
+ * PLAIN cross-org ENUMERATION of `status='approved'` rows: it deliberately does
+ * NOT re-derive approval, the canon hash, trust classification, the credential-
+ * store-owner conjunction, OR org-scope precedence. Those are the AUTHORITY
+ * checks, re-asserted at the in-handler runtime resolver (the real wall), which
+ * fails closed the instant a grant drifts/revokes. The ONLY legitimate consumer
+ * is the pure-liveness snapshot: an over-inclusive, cross-org read is safe there
+ * because a slug that should no longer serve still 404s at the handler. A caller
+ * that needs authority MUST use the exact-scope resolver/list and re-assert.
+ */
+export async function listAllApprovedWidgetStreamMetadataGrants(
+  deps?: WidgetStreamMetadataGrantDeps,
+): Promise<WidgetStreamMetadataGrant[]> {
+  const { query, schema } = await wsmResolveDeps(deps);
+  const table = wsmQualifiedTable(schema);
+  const rows = await query<MetadataRow>(
+    `SELECT ${WSM_SELECT_COLUMNS} FROM ${table}
+      WHERE status = 'approved' ORDER BY agent_slug`,
+  );
+  return rows.map(wsmRowToGrant);
+}
+
 export type RestoreWidgetStreamMetadataInput = {
   packageName: string;
   orgId: string | null;

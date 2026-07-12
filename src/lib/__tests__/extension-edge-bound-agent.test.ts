@@ -76,7 +76,7 @@ describe("resolveEdgeBoundAgentVersion", () => {
       { dependentInstallId: DEP, targetPackageName: TARGET },
       deps({ [DEP]: dependent, iext_def: def }, { snapshot: false }), // snapshot not needed
     );
-    expect(out).toEqual({ resolved: true, version: "0.2.0", isDefault: true });
+    expect(out).toEqual({ resolved: true, version: "0.2.0", isDefault: true, resolvedInstallId: "iext_def" });
   });
 
   it("serves a NON-DEFAULT resolved version that HAS a published snapshot", async () => {
@@ -92,7 +92,7 @@ describe("resolveEdgeBoundAgentVersion", () => {
       { dependentInstallId: DEP, targetPackageName: TARGET },
       deps({ [DEP]: dependent, iext_sib: sib }, { snapshot: true }),
     );
-    expect(out).toEqual({ resolved: true, version: "0.1.4", isDefault: false, snapshotId: "snap-1" });
+    expect(out).toEqual({ resolved: true, version: "0.1.4", isDefault: false, resolvedInstallId: "iext_sib", snapshotId: "snap-1" });
   });
 
   it("REFUSES-WITH-EVIDENCE a NON-DEFAULT resolved version with NO snapshot (never serves the default)", async () => {

@@ -1,31 +1,18 @@
 import "server-only";
-// Consumes @cinatra-ai/registries for tarball extraction and full-tree
-// installs. Agent-specific schema validation is re-applied after the generic
-// extract, and reinstall uses upsert semantics so install-after-bootstrap does
-// not collide on the agent_templates.packageName unique index.
+// Consumes @cinatra-ai/registries for tarball extraction. Agent-specific
+// schema validation is re-applied after the generic extract, and reinstall
+// uses upsert semantics so install-after-bootstrap does not collide on the
+// agent_templates.packageName unique index. The FULL-TREE installer lives in
+// ./install-package-with-dependencies (cinatra#1039 Phase 2: unified planner).
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   cleanupExtractedAgentPackage,
-  dependencyScopePrefixesFor,
   ensureConfig,
   extractAgentPackage,
-  installPackageWithDependencies,
-  type DependencyTree,
-  type PackumentVersionEntry,
-  type PluginTypeConfig,
   type VerdaccioConfig,
 } from "@cinatra-ai/registries";
-// Canonical dependency-vocabulary reader (cinatra.dependencies wins; legacy
-// cinatra.agentDependencies projected) + the shared auto-install predicate.
-// These are pure leaf subpaths (manifest-dependencies imports only
-// canonical-types; dependency-closure imports only @cinatra-ai/registries +
-// canonical-types) — NOT the @cinatra-ai/extensions main entry, so the static
-// agents->extensions index cycle does not apply and these can be imported
-// synchronously (the resolver reads deps in a sync callback).
-import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
-import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import {
   parseAgentPackageManifestForInstall,
   CINATRA_AGENT_PACKAGE_TYPE,
@@ -35,13 +22,6 @@ import {
 // the validated package.json#cinatra block. No materialized `agent.json`
 // formatVersion:2 payload is read, synthesized, or re-parsed on the install path.
 import { buildAgentTemplateInstallSeed } from "./build-agent-template-seed";
-// Imported here so any future spawn-side install paths (e.g. an out-of-band
-// `pnpm install` invocation) can reuse the same explicit-flag construction.
-// Today the install path goes through `pacote` (HTTP, see
-// @cinatra-ai/registries), so no execFile spawn happens inside this file. The
-// helper reference keeps install-side flag construction co-located with the
-// install entry point for auditing.
-import { buildRegistryAuthArgs } from "./verdaccio/cli-flags";
 import { createLocalAgentTemplateVersion } from "./import-export-actions";
 import {
   readAgentTemplateByPackageName,
@@ -63,10 +43,6 @@ import {
   withGlobalExtensionLifecycleLock,
   type MaterializeResult,
 } from "./materialize-agent-package";
-import {
-  triggerWayflowReload,
-  type ReloadResult,
-} from "./wayflow-reload-client";
 // PROJECT-TEMPLATE install gate (cinatra#1032 deliverable 3): an agent package
 // shipping cinatra/project-template.json must satisfy the typed template
 // contract + the exact-match worker-ref rule against its own
@@ -834,238 +810,4 @@ async function registerDeclaredObjectTypes(opts: {
     // (template row written). Log and continue.
     console.warn("[install-from-package] failed to register output_object_types:", err);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Canonical dependency-vocabulary reader for the shared resolver
-// ---------------------------------------------------------------------------
-
-/**
- * Read a packument version entry's transitive AGENT dependencies using the
- * SAME canonical vocabulary the batch-install saga plans with
- * (`parseManifestDependencyEdges`: `cinatra.dependencies` wins, legacy
- * `cinatra.agentDependencies` projected, BOTH-present must agree fail-loud).
- * This is the read seam injected into the shared `resolveDependencyTree` so the
- * direct full-tree agent installer and the saga planner resolve from ONE
- * source-of-truth instead of two divergent dependency keys.
- *
- * Returns the `{ packageName: semverRange }` map the resolver already consumes.
- * Only edges this direct path can actually install are projected:
- *   - auto-installable (required && non-peer) — the shared predicate the saga's
- *     dependency phase uses; peer/optional edges are never auto-installed.
- *   - AGENT-kind (or kind-undefined, the legacy `agentDependencies` shape that
- *     never declared a kind). The direct full-tree path installs each node via
- *     `installAgentFromPackage`, an AGENT-only installer; a CROSS-KIND edge
- *     (connector/skill/artifact/workflow) cannot be satisfied here, so it is
- *     fail-loud rather than handed to the agent installer. Cross-kind closures
- *     route through the kind-aware batch saga, not this direct adapter.
- *
- * Version constraints are projected to a range string: `semver-range` → range,
- * `exact` → the exact version (a valid singleton range), `git-ref` → fail-loud
- * (the registry resolver resolves semver against published versions, not refs).
- */
-function readAgentPackumentDeps(entry: PackumentVersionEntry): Record<string, string> {
-  // parseManifestDependencyEdges reads `manifest.cinatra.{dependencies,
-  // agentDependencies}` and derives the package name from `manifest.name` for
-  // its self-edge diagnostics. Shape the version entry into that manifest form.
-  const { edges } = parseManifestDependencyEdges(
-    { name: entry.name, cinatra: entry.cinatra },
-    { packageName: entry.name },
-  );
-  const out: Record<string, string> = {};
-  for (const edge of edges) {
-    if (!isAutoInstallableEdge(edge)) continue;
-    if (edge.kind !== undefined && edge.kind !== "agent") {
-      throw new Error(
-        `[installAgentPackageWithDependencies] ${entry.name} declares a required ${edge.kind} dependency on ${edge.packageName}; the direct agent full-tree installer can only install agent dependencies. Install cross-kind closures through the batch install saga.`,
-      );
-    }
-    const vc = edge.versionConstraint;
-    let range: string;
-    if (vc.kind === "semver-range") {
-      range = vc.range;
-    } else if (vc.kind === "exact") {
-      range = vc.version;
-    } else {
-      throw new Error(
-        `[installAgentPackageWithDependencies] ${entry.name} declares a git-ref dependency on ${edge.packageName}; the registry resolver resolves semver against published versions, not git refs.`,
-      );
-    }
-    out[edge.packageName] = range;
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// installAgentPackageWithDependencies
-// ---------------------------------------------------------------------------
-
-export type InstallAgentPackageWithDependenciesInput = {
-  packageName: string;
-  packageVersion?: string;
-  orgId?: string;
-  /** cinatra#793: store-payload resolution scope for the ROOT node (see
-   *  InstallAgentFromPackageInput.anchorOrgId). */
-  anchorOrgId?: string | null;
-  /** cinatra#793: require the ROOT node's finalized store payload (the
-   *  dispatcher path); transitive dependency nodes always keep the registry
-   *  extract (they never routed through the dispatcher pipeline). */
-  requireStorePayloadForRoot?: boolean;
-  creatorId?: string;
-  // Includes "active"; mirrors InstallAgentFromPackageInput.
-  status?: "draft" | "published" | "active";
-  // Install-time owner tier. Forwarded to every transitive
-  // installAgentFromPackage call so dependencies inherit the root install's
-  // owner tuple. A team-owned root install means team-owned dependencies; the
-  // team_admin who installed the root is, by extension, allowed to take the
-  // dependencies into their team scope.
-  ownerLevel?: "user" | "team" | "organization" | "workspace" | "project";
-  ownerId?: string;
-};
-
-export type InstallAgentPackageWithDependenciesResult = {
-  rootTemplateId: string;
-  installedTemplateIds: string[];
-  tree: DependencyTree;
-  /** WayFlow reload result, fired once per tree install. */
-  wayflowReload?: ReloadResult;
-};
-
-/**
- * Full-tree installer — resolves the entire agentDependencies graph of
- * `packageName` and installs each node via installAgentFromPackage (which
- * handles upsert-on-collision). Transitive installs are supported, and the
- * dependency resolver uses the "prefer-newer" conflict policy via
- * @cinatra-ai/registries.
- */
-export async function installAgentPackageWithDependencies(
-  input: InstallAgentPackageWithDependenciesInput,
-  config?: VerdaccioConfig,
-): Promise<InstallAgentPackageWithDependenciesResult> {
-  // GLOBAL lifecycle lock before dependency resolution/extraction; serialized
-  // against extensions_purge. Re-entrant so installAgentFromPackage -> this
-  // nested call does not deadlock.
-  return withGlobalExtensionLifecycleLock(() =>
-    _installAgentPackageWithDependenciesImpl(input, config),
-  );
-}
-
-async function _installAgentPackageWithDependenciesImpl(
-  input: InstallAgentPackageWithDependenciesInput,
-  config?: VerdaccioConfig,
-): Promise<InstallAgentPackageWithDependenciesResult> {
-  const resolvedConfig = ensureConfig(config, "installAgentPackageWithDependencies");
-  // Build the explicit-flag args from the resolved config. Today the install
-  // path uses pacote (HTTP) via
-  // @cinatra-ai/registries.installPackageWithDependencies, so the flags are
-  // not spliced into a spawn argv inside this function. Constructing them here
-  // validates that the resolved config has a non-empty token early (the helper
-  // throws on empty token at the install boundary, not just at the
-  // publish/unpublish boundary) and keeps install-side flag construction
-  // co-located with the entry point so any future out-of-band `pnpm install`
-  // shell-out can splice these args directly without re-reading config.
-  const _installAuthArgs = buildRegistryAuthArgs(resolvedConfig);
-  void _installAuthArgs;
-  // Dependency-confusion gate: confine the resolved tree to the ROOT package's
-  // own vendor scope + the first-party base scope. Keying this on the root —
-  // not on the installing instance's namespace (resolvedConfig.packageScope) —
-  // is what lets ANY instance install first-party @cinatra-ai/* packages and
-  // lets a vendor package depend on the first-party base layer (issue #103).
-  // The instance namespace remains a publish-time concept only. Root
-  // authorization (which packages may be installed at all) stays with the
-  // marketplace/broker install grant + the callers' authz gates, which run
-  // before this resolver. This also subsumes the previous dev-only
-  // publish-scope-override branch: a dev-published @<override>/* root is
-  // allowed via its own scope.
-  const typeConfig: PluginTypeConfig = {
-    type: "agent",
-    scopePrefixes: dependencyScopePrefixesFor(input.packageName),
-    // packumentDepKey is the legacy default; readPackumentDeps OVERRIDES it so
-    // the shared resolver walks the canonical `cinatra.dependencies` vocabulary
-    // (legacy `agentDependencies` projected) — the SAME source-of-truth the
-    // batch-install saga plans with. ONE installer, ONE dependency vocabulary.
-    // packumentDepKey is retained as the documented fallback semantics.
-    packumentDepKey: "agentDependencies",
-    readPackumentDeps: readAgentPackumentDeps,
-  };
-  const { tree, results } = await installPackageWithDependencies<string>({
-    packageName: input.packageName,
-    packageRange: input.packageVersion ?? "*",
-    typeConfig,
-    config: resolvedConfig,
-    conflictPolicy: "prefer-newer",
-    install: async (node) => {
-      const isRootNode = node.packageName === input.packageName;
-      const res = await installAgentFromPackage(
-        {
-          packageName: node.packageName,
-          packageVersion: node.resolvedVersion,
-          orgId: input.orgId,
-          creatorId: input.creatorId,
-          status: input.status,
-          // cinatra#793: only the ROOT node is dispatcher-routed (its store
-          // payload is finalized); transitive nodes keep the registry extract.
-          ...(isRootNode && input.anchorOrgId !== undefined
-            ? { anchorOrgId: input.anchorOrgId }
-            : {}),
-          ...(isRootNode && input.requireStorePayloadForRoot ? { requireStorePayload: true } : {}),
-          // Transitively-installed dependencies inherit the
-          // root install's owner tuple. A team-owned root install means
-          // team-owned dependencies; the team_admin who installed the root
-          // is, by extension, allowed to take the dependencies into their
-          // team scope. The auth gate ran ONCE for the root; transitive
-          // installs do not re-check.
-          ownerLevel: input.ownerLevel,
-          ownerId: input.ownerId,
-        },
-        resolvedConfig,
-      );
-      return res.templateId;
-    },
-  });
-  // results[] is in the same alphabetical order installResolvedTree uses.
-  const sortedNames = [...tree.all.keys()].sort();
-  const rootIdx = sortedNames.indexOf(tree.root.packageName);
-  if (rootIdx < 0) {
-    throw new Error(`Root package ${tree.root.packageName} not present in installed results`);
-  }
-  const rootTemplateId = results[rootIdx];
-
-  // Single reload trigger per full-tree install.
-  // installAgentFromPackage does NOT reload on its own (to avoid N reloads
-  // for an N-dep tree). This is the canonical single-shot trigger.
-  // Failure is non-fatal: durable DB + disk writes have already succeeded;
-  // the reload is best-effort and the caller surfaces the result.
-  //
-  // Log reload failures here so operators see them in container/server logs
-  // even when the surrounding caller (extensionRegistry.install via
-  // packages/extensions/actions.ts) discards the wayflowReload field on its
-  // way to a `{ success: true }` response.
-  // triggerWayflowReload is designed to return a typed { ok:false } instead of
-  // throwing, but guard defensively (#157): a thrown reload (e.g. an
-  // unexpected client error) must NEVER fail a completed full-tree install —
-  // the durable DB + disk writes already landed. A throw is mapped to the
-  // typed network-failure shape so the return contract is preserved.
-  let wayflowReload: ReloadResult;
-  try {
-    wayflowReload = await triggerWayflowReload();
-  } catch (reloadErr) {
-    wayflowReload = {
-      ok: false,
-      reason: "network",
-      detail: reloadErr instanceof Error ? reloadErr.message : String(reloadErr),
-    };
-  }
-  if (!wayflowReload.ok) {
-    console.warn(
-      `[installAgentPackageWithDependencies] wayflow reload returned ok:false reason=${wayflowReload.reason} detail=${wayflowReload.detail ?? "—"} (extension ${input.packageName} is published+installed but the runtime may need a restart or another reload trigger)`,
-    );
-  }
-
-  return {
-    rootTemplateId,
-    installedTemplateIds: results,
-    tree,
-    wayflowReload,
-  };
 }

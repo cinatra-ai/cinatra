@@ -27,6 +27,7 @@ import type {
 import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import { buildSkillLifecycleRevisionQueries, buildSkillRollbackQuery, type SkillLifecycleRevisionWrite, type SkillRollbackWrite } from "@/lib/skill-lifecycle-store";
 import {
   canonicalizeSealedFields,
   hasSecretFields,
@@ -53,6 +54,20 @@ import {
 // for the existing import surface.
 export { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 export { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+export {
+  recordSkillRevisionInDatabase,
+  applySkillLifecycleTransitionInDatabase,
+  readSkillRevisionContentForRollback,
+  readSkillActiveRevisionFromDatabase,
+  readSkillLifecycleStates,
+} from "@/lib/skill-lifecycle-store";
+export type {
+  SkillLifecycleRevisionWrite,
+  SkillLifecycleTransitionWrite,
+  SkillRevisionContentRow,
+  SkillRollbackWrite,
+  SkillLifecycleStatesResult,
+} from "@/lib/skill-lifecycle-store";
 
 type ConnectorConfigCacheEntry = {
   value: unknown;
@@ -543,6 +558,10 @@ export function deriveSkillPackageIdentity(
 export function replaceSkillCatalogInDatabase(input: {
   skillPackages: Array<{ id: string } & Record<string, unknown>>;
   skills: Array<{ id: string } & Record<string, unknown>>;
+  /** Immutable revisions to write ATOMICALLY with this catalog write
+   * (cinatra#1361) — content + its revision + active-revision pointer commit
+   * together. Omit at catalog syncs / deletes that author no custom content. */
+  lifecycleWrites?: SkillLifecycleRevisionWrite[];
 }) {
   skillCatalogCacheVersion += 1; // Invalidate the in-process read cache.
   const keptPackageIds = input.skillPackages.map((row) => row.id);
@@ -569,6 +588,10 @@ export function replaceSkillCatalogInDatabase(input: {
       payload: JSON.stringify(row),
     })),
     buildDeleteRowsNotInQuery(postgresSchema, "skills", keptSkillIds),
+    // Lifecycle revision + pointer writes LAST: the skill row is already
+    // upserted (kept, never deleted), so the composite active-revision FK is
+    // satisfied within this same transaction.
+    ...buildSkillLifecycleRevisionQueries(postgresSchema, input.lifecycleWrites ?? []),
   ]);
 }
 
@@ -615,6 +638,26 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
     ],
   });
   return true;
+}
+
+/**
+ * Atomic, race-free rollback of a custom/personal skill to a prior revision's
+ * exact content (cinatra#1362). The SQL is the single data-modifying CTE built
+ * by `buildSkillRollbackQuery` (compare-and-swap on active_revision_id, gated
+ * blob + rollback-revision inserts). Returns `{ changed }`; false = the head
+ * moved underneath (the caller fails loudly). History is NEVER mutated — this
+ * only INSERTs a new revision and moves the single mutable pointer. Increments
+ * the in-process catalog cache version because the skill payload changed.
+ */
+export function applySkillRollbackInDatabase(input: SkillRollbackWrite): { changed: boolean } {
+  ensurePostgresSchema();
+  skillCatalogCacheVersion += 1; // The payload changes — invalidate the read cache.
+  const results = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [buildSkillRollbackQuery(postgresSchema, input)],
+  });
+  return { changed: (results[0]?.rows?.length ?? 0) > 0 };
 }
 
 export function readAgentCatalogFromDatabase() {

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
+import {
+  resolveWidgetStreamAgentUnion,
+  widgetStreamRequestSource,
+} from "@/lib/widget-stream-agents.server";
 import { isConfiguredOrigin } from "@/lib/widget-stream-auth";
 import {
   isAuthorizedLongLivedKey,
@@ -56,8 +59,11 @@ export async function POST(
 
   // 1. Unknown slug → 404 (no body read). Union resolution (widget-stream
   // runtime trust, slice 2): build-time map ∪ admin-approved, serve-time-
-  // re-verified runtime entries — fail closed.
-  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  // re-verified runtime entries — fail closed. The per-source key (slice 5, §7b)
+  // rate-limits only the expensive runtime verification path.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
   if (!resolved) {
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }

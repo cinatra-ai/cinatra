@@ -81,6 +81,12 @@ const installExtensionFromRegistry = vi.fn((input: unknown, deps: never) =>
 );
 const basePreflightMigrations = vi.fn(async () => false);
 const baseReadGrantForScope = vi.fn(async () => null as unknown);
+// cinatra#1040 S6: base OWNERSHIP hooks the side-by-side union path wraps.
+let baseTokenKeys: string[] = [];
+const baseReadWidgetAuthTokenKeys = vi.fn(async () => baseTokenKeys);
+const baseRecordRequestedOwnershipGrant = vi.fn(async () => undefined);
+const baseApproveOwnershipGrant = vi.fn(async () => undefined);
+const baseRevokeOwnershipGrant = vi.fn(async () => undefined);
 vi.mock("@/lib/extension-install-pipeline", () => ({
   installExtensionFromRegistry: (...a: unknown[]) =>
     installExtensionFromRegistry(...(a as [unknown, never])),
@@ -92,8 +98,22 @@ vi.mock("@/lib/extension-install-pipeline", () => ({
     readGrantForScope: (...a: unknown[]) => baseReadGrantForScope(...(a as [])),
     recordRequestedGrant: vi.fn(),
     approveGrant: vi.fn(),
+    readWidgetAuthTokenKeys: (...a: unknown[]) => baseReadWidgetAuthTokenKeys(...(a as [])),
+    recordRequestedOwnershipGrant: (...a: unknown[]) =>
+      baseRecordRequestedOwnershipGrant(...(a as [])),
+    approveOwnershipGrant: (...a: unknown[]) => baseApproveOwnershipGrant(...(a as [])),
+    revokeOwnershipGrant: (...a: unknown[]) => baseRevokeOwnershipGrant(...(a as [])),
     activateInProcess: vi.fn(async () => ({ activated: true })),
   }),
+}));
+
+// Real revoke (uninstall reconcile path) — mocked so the DI-unit test needs no DB.
+const ownershipRevoke = vi.fn(async () => null);
+const readWidgetAuthTokenKeysFromStore = vi.fn(async () => [] as string[]);
+vi.mock("@/lib/extension-capability-ownership-grants", () => ({
+  revokeOwnershipGrant: (...a: unknown[]) => ownershipRevoke(...(a as [])),
+  readWidgetAuthTokenKeysFromStore: (...a: unknown[]) =>
+    readWidgetAuthTokenKeysFromStore(...(a as [])),
 }));
 
 import {
@@ -125,6 +145,7 @@ beforeEach(() => {
   canonicalRows = [defaultRow()];
   defaultOpPhase = "finalized";
   versionOps = {};
+  baseTokenKeys = [];
   pipelineImpl = async () => {
     versionOps["0.3.0"] = { installOpId: "sbs-op", phase: "finalized" };
     return {};
@@ -380,5 +401,200 @@ describe("uninstallExtensionVersionSideBySide — version-scoped teardown", () =
     });
     expect(res.removed).toBe(false);
     expect(deleteSideBySideVersionRow).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// cinatra#1040 S6 — capability-OWNERSHIP grant UNION + durable capsule
+// ===========================================================================
+
+/** Run an install with `grantUnion` and capture the deps the installer built. */
+async function captureUnionDeps(
+  grantUnion: {
+    persistCapsule: (c: unknown) => Promise<void>;
+    readSurvivorOwnershipKeys?: (v: string) => Promise<Set<string>>;
+  },
+): Promise<Record<string, (...a: never[]) => Promise<unknown>>> {
+  let captured: Record<string, (...a: never[]) => Promise<unknown>> = {};
+  pipelineImpl = async (_input, deps) => {
+    captured = deps as unknown as typeof captured;
+    versionOps["0.3.0"] = { installOpId: "sbs-op", phase: "finalized" };
+    return {};
+  };
+  await installExtensionVersionSideBySide({ ...INPUT, grantUnion });
+  return captured;
+}
+
+describe("installExtensionVersionSideBySide — ownership grant UNION (S6)", () => {
+  it("with a capsule sink: LIFTS the DECLARES_OWNERSHIP_KEYS refusal (records via base)", async () => {
+    const deps = await captureUnionDeps({ persistCapsule: vi.fn(async () => {}) });
+    // The built recordRequestedOwnershipGrant is base's REAL recorder, not the refuse.
+    await expect(
+      (deps.recordRequestedOwnershipGrant as (g: unknown) => Promise<void>)({
+        packageName: PKG,
+        orgId: null,
+        tokenConfigKey: "wp_widget_auth",
+      }),
+    ).resolves.toBeUndefined();
+    expect(baseRecordRequestedOwnershipGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it("WITHOUT a capsule sink: the S3 DECLARES_OWNERSHIP_KEYS refusal stands", async () => {
+    let deps: Record<string, (...a: never[]) => Promise<unknown>> = {};
+    pipelineImpl = async (_i, d) => {
+      deps = d as never;
+      versionOps["0.3.0"] = { installOpId: "sbs-op", phase: "finalized" };
+      return {};
+    };
+    await installExtensionVersionSideBySide(INPUT); // no grantUnion
+    await expect(
+      (deps.recordRequestedOwnershipGrant as (g: unknown) => Promise<void>)({
+        packageName: PKG,
+        orgId: null,
+        tokenConfigKey: "wp_widget_auth",
+      }),
+    ).rejects.toMatchObject({ code: "DECLARES_OWNERSHIP_KEYS" });
+  });
+
+  it("captures the DECLARATION CAPSULE (persistCapsule) when reading declared keys, BEFORE any mutation", async () => {
+    baseTokenKeys = ["b_widget_auth", "a_widget_auth"];
+    const persistCapsule = vi.fn(async () => {});
+    const deps = await captureUnionDeps({ persistCapsule });
+    const keys = await (deps.readWidgetAuthTokenKeys as (s: string) => Promise<string[]>)("/store");
+    expect(keys).toEqual(["b_widget_auth", "a_widget_auth"]); // returns base keys unchanged
+    expect(persistCapsule).toHaveBeenCalledWith({
+      v: 1,
+      declaredTokenKeys: ["a_widget_auth", "b_widget_auth"], // sorted/de-duped
+    });
+  });
+
+  it("does NOT persist a capsule when no ownership keys are declared", async () => {
+    baseTokenKeys = [];
+    const persistCapsule = vi.fn(async () => {});
+    const deps = await captureUnionDeps({ persistCapsule });
+    await (deps.readWidgetAuthTokenKeys as (s: string) => Promise<string[]>)("/store");
+    expect(persistCapsule).not.toHaveBeenCalled();
+  });
+
+  it("SUPPRESSES ownership auto-approve (a side-by-side declarer never auto-becomes owner)", async () => {
+    const deps = await captureUnionDeps({ persistCapsule: vi.fn(async () => {}) });
+    await (deps.approveOwnershipGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      tokenConfigKey: "wp_widget_auth",
+      approvedBy: "x",
+    });
+    expect(baseApproveOwnershipGrant).not.toHaveBeenCalled();
+  });
+
+  it("revoke is SURVIVOR-AWARE: KEEPS a key a surviving sibling still declares (direct-failure unwind)", async () => {
+    const deps = await captureUnionDeps({
+      persistCapsule: vi.fn(async () => {}),
+      readSurvivorOwnershipKeys: async () => new Set(["wp_widget_auth"]),
+    });
+    await (deps.revokeOwnershipGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      tokenConfigKey: "wp_widget_auth",
+    });
+    expect(baseRevokeOwnershipGrant).not.toHaveBeenCalled(); // survivor declares it → keep
+  });
+
+  it("revoke is SURVIVOR-AWARE: REVOKES an orphaned key no surviving sibling declares", async () => {
+    const deps = await captureUnionDeps({
+      persistCapsule: vi.fn(async () => {}),
+      readSurvivorOwnershipKeys: async () => new Set<string>(),
+    });
+    await (deps.revokeOwnershipGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      tokenConfigKey: "wp_widget_auth",
+    });
+    expect(baseRevokeOwnershipGrant).toHaveBeenCalledTimes(1); // no survivor → revoke
+  });
+
+  it("DEFERS the coupled widget-metadata axis (record/restore/delete are inert no-ops)", async () => {
+    const deps = await captureUnionDeps({ persistCapsule: vi.fn(async () => {}) });
+    await expect(
+      (deps.recordWidgetStreamMetadataGrant as (g: unknown) => Promise<void>)({}),
+    ).resolves.toBeUndefined();
+    await expect(
+      (deps.restoreOwnershipGrant as (g: unknown) => Promise<void>)({}),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("uninstallExtensionVersionSideBySide — ownership reconcile (S6)", () => {
+  beforeEach(() => {
+    // A non-default side-by-side row at the pin so the teardown proceeds.
+    canonicalRows = [
+      defaultRow(),
+      defaultRow({ id: "row-sbs", isDefault: false, version: "0.3.0" }),
+    ];
+    versionOps["0.3.0"] = { installOpId: "sbs-op", phase: "finalized" };
+  });
+
+  it("REVOKES a declared key no surviving sibling still declares", async () => {
+    const res = await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      capsule: { v: 1, declaredTokenKeys: ["wp_widget_auth"] },
+      readSurvivorOwnershipKeys: async () => new Set<string>(), // default declares no keys
+    });
+    expect(res.removed).toBe(true);
+    expect(ownershipRevoke).toHaveBeenCalledWith({
+      packageName: PKG,
+      orgId: null,
+      tokenConfigKey: "wp_widget_auth",
+    });
+  });
+
+  it("KEEPS a declared key the surviving default still declares (never revoke a live key)", async () => {
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      capsule: { v: 1, declaredTokenKeys: ["wp_widget_auth"] },
+      readSurvivorOwnershipKeys: async () => new Set(["wp_widget_auth"]),
+    });
+    expect(ownershipRevoke).not.toHaveBeenCalled();
+  });
+
+  it("no capsule + no declared keys (legacy/no-ownership member) → no reconcile", async () => {
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      readTornDownDeclaredKeys: async () => [], // live fallback finds nothing declared
+    });
+    expect(ownershipRevoke).not.toHaveBeenCalled();
+  });
+
+  it("capsule-ABSENT explicit uninstall FALLS BACK to the live store keys and revokes an orphaned one", async () => {
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      // no capsule (released on batch finalize) → fall back to the version's own store
+      readTornDownDeclaredKeys: async () => ["orphan_widget_auth"],
+      readSurvivorOwnershipKeys: async () => new Set<string>(), // no survivor declares it
+    });
+    expect(ownershipRevoke).toHaveBeenCalledWith({
+      packageName: PKG,
+      orgId: null,
+      tokenConfigKey: "orphan_widget_auth",
+    });
+  });
+
+  it("capsule-ABSENT fallback still KEEPS a key a surviving sibling declares", async () => {
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      readTornDownDeclaredKeys: async () => ["shared_widget_auth"],
+      readSurvivorOwnershipKeys: async () => new Set(["shared_widget_auth"]),
+    });
+    expect(ownershipRevoke).not.toHaveBeenCalled();
   });
 });

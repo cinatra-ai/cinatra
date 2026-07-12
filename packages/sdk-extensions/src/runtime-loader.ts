@@ -371,6 +371,12 @@ export type RuntimeLoaderDeps = {
   verifyIntegrity?: (record: PackageStoreRecord) => Promise<boolean>;
   /** Records discovered (override for tests); defaults to discovering the store. */
   records?: readonly PackageStoreRecord[];
+  /**
+   * Per-record register-settle hook (cinatra#1392 Gap 1) — forwarded verbatim to
+   * the shared driver so the host can COMMIT/DISCARD a non-default side-by-side
+   * version's version-keyed serving retention. See `LoaderDeps.onRegisterSettled`.
+   */
+  onRegisterSettled?: LoaderDeps["onRegisterSettled"];
 };
 
 /**
@@ -497,6 +503,7 @@ export async function runRuntimePackageActivation(
       return deps.importModule(abs, rec);
     },
     makeContext: deps.makeContext,
+    onRegisterSettled: deps.onRegisterSettled,
     // Identical ABI verdict to the StaticBundleLoader: the frozen host SDK ABI
     // must satisfy the record's declared range; refused before any code runs.
     abiCompatible: (rec) =>

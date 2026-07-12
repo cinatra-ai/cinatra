@@ -42,6 +42,7 @@ function emptySummary(overrides: Partial<ExtensionAutoUpdateRunSummary> = {}): E
   return {
     enabled: true,
     readModelWired: false,
+    maintenanceWindowOpen: null,
     signatureReady: null,
     scanned: 0,
     applied: [],

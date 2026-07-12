@@ -88,6 +88,10 @@ vi.mock("@/lib/a2a-auth", () => ({
 
 vi.mock("@cinatra-ai/skills", () => ({
   getCustomSkillForCurrentUserAndAgent: vi.fn(async () => null),
+  // A3 (cinatra#1363): the explicit-path lifecycle gate reads the catalog. An
+  // empty catalog ⇒ the containment-test SKILL.md is not a custom skill ⇒
+  // derived ⇒ deliverable, so path-containment behaviour is unchanged.
+  readSkillsCatalog: vi.fn(async () => ({ skills: [] })),
 }));
 
 vi.mock("@/lib/agents-store", () => ({

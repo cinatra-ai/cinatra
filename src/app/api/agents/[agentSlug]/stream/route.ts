@@ -4,6 +4,7 @@ import {
   resolveWidgetStreamAgentUnion,
   resolveContentEditorRelay,
   reassertWidgetStreamGrantBeforeOboRun,
+  widgetStreamRequestSource,
 } from "@/lib/widget-stream-agents.server";
 import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
 import {
@@ -111,8 +112,12 @@ export async function OPTIONS(
 ): Promise<Response> {
   const { agentSlug } = await params;
   // Union resolution (widget-stream runtime trust, slice 2): build-time map ∪
-  // admin-approved, serve-time-re-verified runtime entries. Null = 404.
-  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  // admin-approved, serve-time-re-verified runtime entries. Null = 404. The
+  // per-source key (slice 5, §7b) rate-limits only the expensive runtime
+  // verification path on this unauthenticated route.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
   if (!resolved) return new NextResponse(null, { status: 404 });
   const entry = resolved.entry;
   const allowed = resolveWidgetStreamOrigin(request.headers.get("Origin"), entry.auth);
@@ -128,8 +133,12 @@ export async function POST(
   // Union resolution (widget-stream runtime trust, slice 2). A runtime entry
   // resolves ONLY fully re-verified (approved grant at the exact on-disk canon
   // hash, ownership conjunction, trusted-signed + integrity-vs-anchor) and pins
-  // an immutable grant descriptor for the point-of-use re-assert below.
-  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  // an immutable grant descriptor for the point-of-use re-assert below. The
+  // per-source key (slice 5, §7b) rate-limits only the expensive runtime
+  // verification path on this unauthenticated route.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
   if (!resolved) {
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }

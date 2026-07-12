@@ -53,14 +53,14 @@ export async function resolveVersionBeforeRun(
     // never published), so the run is never even enqueued — fail closed naming
     // the (package, version) rather than resolving to the template's current
     // default `packageVersion`.
-    //   SCOPE NOTE: this closes the REQUEST-TIME hole only. The execution worker
-    //   still best-effort falls back to the LIVE template if a REQUESTED-and-
-    //   present snapshot is PURGED mid-flight (agents `execution.ts`), because the
-    //   run row records only the resolved semver, not whether the pin was a
-    //   REQUIRED explicit pin vs. a default resolution. Closing that end-to-end
-    //   (a persisted required-pin marker + a fail-closed worker) is folded into
-    //   the positive edge-bound-serving slice (cinatra#1040 S7) — a snapshot
-    //   purge of an in-flight run is the only residual window.
+    //   END-TO-END (cinatra#1040 S7): the resolved `snapshotId` below is now
+    //   threaded into the created run's `versionId` (via the executor's
+    //   getPinnedSnapshotIdForTask seam), so a required pin carries BOTH the
+    //   snapshot id and the semver — an unambiguous REQUIRED-pin marker. The
+    //   execution worker (agents `execution.ts` via resolvePinnedRunSnapshot)
+    //   loads that EXACT snapshot by id and FAILS THE RUN CLOSED — never serving
+    //   the live template — if it was purged mid-flight, mis-bound, or corrupt.
+    //   A default resolution carries no snapshotId and stays best-effort.
     if (!match) {
       throw A2AError.invalidParams(
         `Version ${input.requestedVersion} not found for ${input.packageName} — no published ` +

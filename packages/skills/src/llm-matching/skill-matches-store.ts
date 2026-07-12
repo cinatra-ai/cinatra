@@ -177,6 +177,69 @@ export async function readAllMatched(): Promise<SkillMatchRow[]> {
 }
 
 /**
+ * Read EVERY persisted row (any source / status / matched value).
+ *
+ * Used by the matching-maintenance tick: the staleness sweep must consider
+ * error and unmatched rows too (their inputs can change just like matched
+ * rows), and the orphan GC must see every row to find pairs whose agent or
+ * skill has left the live catalog. Bounded by agents × non-agent-non-system
+ * skills (low thousands at the upper end of a realistic deployment), read once
+ * per tick.
+ */
+export async function readAllRows(): Promise<SkillMatchRow[]> {
+  const connectionString = getPostgresConnectionString();
+  const schema = quotedSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT * FROM ${schema}."skill_matches"`,
+        values: [],
+      },
+    ],
+  });
+  return (result.rows ?? []).map(rowFromDb);
+}
+
+/**
+ * Conditional (compare-and-delete) orphan removal for the tombstoned GC.
+ *
+ * Deletes the (agentId, skillId) row ONLY when its `evaluated_at` is STRICTLY
+ * before `notRewrittenSinceIso` — i.e. the row has NOT been rewritten at or
+ * after that instant. The caller passes `now - graceWindow`, so:
+ *
+ *   - A genuine orphan (last evaluated while the skill was still installed,
+ *     before it went absent) has `evaluated_at < now - grace` and IS deleted.
+ *   - A pair that was reinstalled and re-evaluated at or after the grace-window
+ *     boundary has `evaluated_at >= now - grace` and is NOT deleted — this
+ *     closes the TOCTOU between the GC's catalog snapshot and the DELETE: even
+ *     if a reinstall's evaluation lands in the instant before this statement
+ *     runs, the freshly-written row survives. The strict `<` (rather than `<=`)
+ *     keeps a row written exactly at the boundary out of the delete.
+ *
+ * Returns the number of rows deleted (0 or 1). Uses RETURNING so the count is
+ * exact regardless of the driver's rowCount surfacing.
+ */
+export async function deleteOrphanRowIfStale(
+  agentId: string,
+  skillId: string,
+  notRewrittenSinceIso: string,
+): Promise<number> {
+  const connectionString = getPostgresConnectionString();
+  const schema = quotedSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM ${schema}."skill_matches" WHERE agent_id = $1 AND skill_id = $2 AND evaluated_at < $3 RETURNING agent_id`,
+        values: [agentId, skillId, notRewrittenSinceIso],
+      },
+    ],
+  });
+  return (result.rows ?? []).length;
+}
+
+/**
  * Random sample for the drift sampler.
  *
  * Selects up to `sampleSize` rows where `source = 'llm' AND status = 'ok'`.

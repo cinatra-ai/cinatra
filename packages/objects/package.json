@@ -10,6 +10,7 @@
     "./renderer-types": "./src/renderer-types.ts",
     "./module": "./src/integration/module.ts",
     "./namespace": "./src/namespace.ts",
+    "./claims": "./src/claims.ts",
     "./auto-registrar": "./src/auto-registrar.ts",
     "./registry": "./src/registry.ts",
     "./sync-adapters/registry": "./src/sync-adapters/registry.ts",

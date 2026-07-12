@@ -40,6 +40,8 @@ import {
 } from "../graphiti-projector";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { addEpisode, deleteEpisode } from "../graphiti-client";
+import { objectSyncAdapterRegistry } from "../sync-adapters/registry";
+import type { ObjectSyncAdapter } from "../sync-adapters/adapter";
 
 const runPg = runPostgresQueriesSync as unknown as ReturnType<typeof vi.fn>;
 const addEp = addEpisode as unknown as ReturnType<typeof vi.fn>;
@@ -96,6 +98,78 @@ describe("projection - append-only on upsert", () => {
       }],
     }]);
     const result = await projectObjectToGraphiti({ objectId: "obj-bg", objectVersion: 1, orgId: "org-1" });
+    expect(result.skipped).toBe(true);
+    expect(addEp).not.toHaveBeenCalled();
+  });
+
+  it("source gate regression (cinatra#1427 AC1): source='route' upload artifact row projects (faceted, uploads land)", async () => {
+    // Canonical artifact creation persists source='route' for uploads
+    // (artifact-creation.ts objects INSERT, type @cinatra-ai/artifact:object).
+    // The gate previously dropped route rows terminally, so uploaded
+    // artifacts never projected. Uses the REAL upload row shape so this test
+    // also proves the route row takes the artifact-safe (faceted) projection.
+    // Call order: 1) readCanonicalRow  2) semantic_assertion read (artifact
+    // type + non-null org)  3+) markProjected etc.
+    addEp.mockResolvedValue({ uuid: "ep-up", name: "x", content: "{}", group_id: "g" });
+    runPg.mockReturnValueOnce([{
+      rows: [{
+        id: "obj-upload",
+        type: "@cinatra-ai/artifact:object",
+        data: {
+          artifactType: "document",
+          latestRepresentationRevisionId: "rep-rev-1",
+          title: "quarterly report",
+          mime: "application/pdf",
+          // A stray non-whitelisted field must NOT reach the episode body.
+          strayInternalField: "must-not-project",
+        },
+        version: 1,
+        org_id: "org-1",
+        run_id: null,
+        agent_id: null,
+        graphiti_episode_uuid: null,
+        graphiti_projected_version: null,
+        source: "route",
+        created_at: "2026-01-01T00:00:00Z",
+      }],
+    }]);
+    runPg.mockReturnValueOnce([{ rows: [] }]); // semantic_assertion: none yet
+    runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
+    const result = await projectObjectToGraphiti({
+      objectId: "obj-upload",
+      objectVersion: 1,
+      orgId: "org-1",
+    });
+    expect(result.skipped).toBeUndefined();
+    expect(result.episodeUuid).not.toBeNull();
+    expect(addEp).toHaveBeenCalledOnce();
+    // readCanonicalRow must SELECT graphiti_projected_version — the dedup
+    // guard reads it off the canonical row.
+    const selectSql = runPg.mock.calls[0][0].queries[0].text;
+    expect(selectSql).toMatch(/graphiti_projected_version/);
+    const body = JSON.parse(addEp.mock.calls[0][0].episode_body);
+    expect(body.artifactType).toBe("document");
+    expect(body.title).toBe("quarterly report");
+    expect(body.strayInternalField).toBeUndefined();
+  });
+
+  it("source gate: scheduler rows remain excluded after the route fix", async () => {
+    runPg.mockReturnValueOnce([{
+      rows: [{
+        id: "obj-sched",
+        type: "test",
+        data: {},
+        version: 1,
+        org_id: "org-1",
+        run_id: null,
+        agent_id: null,
+        graphiti_episode_uuid: null,
+        graphiti_projected_version: null,
+        source: "scheduler",
+        created_at: "2026-01-01T00:00:00Z",
+      }],
+    }]);
+    const result = await projectObjectToGraphiti({ objectId: "obj-sched", objectVersion: 1, orgId: "org-1" });
     expect(result.skipped).toBe(true);
     expect(addEp).not.toHaveBeenCalled();
   });
@@ -221,6 +295,164 @@ describe("version guard", () => {
       return /UPDATE\s+"cinatra"\."objects"\s+SET\s+graphiti_sync_status/i.test(t);
     });
     expect(markCall).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Equal-version dedup (cinatra#1427 AC2)
+// ---------------------------------------------------------------------------
+
+describe("equal-version dedup", () => {
+  const projectedRow = (over: Record<string, unknown> = {}) => ({
+    id: "obj-1",
+    type: "test",
+    data: {},
+    version: 3,
+    org_id: "org-1",
+    run_id: null,
+    agent_id: null,
+    graphiti_episode_uuid: "ep-existing",
+    graphiti_projected_version: 3,
+    source: "agent",
+    created_at: "2026-01-01T00:00:00Z",
+    ...over,
+  });
+
+  it("outbox item at an already-projected version skips addEpisode and markProjected", async () => {
+    // Re-enqueue of an unchanged row: canonical version == outbox version ==
+    // graphiti_projected_version. The old guard pair let this call addEpisode
+    // again (stale guard needs a NEWER canonical version; markProjected only
+    // advances on strictly newer), appending a duplicate episode.
+    runPg.mockReturnValueOnce([{ rows: [projectedRow()] }]);
+    const result = await projectObjectToGraphiti({
+      objectId: "obj-1",
+      objectVersion: 3,
+      orgId: "org-1",
+    });
+    expect(result.skipped).toBe(true);
+    expect(result.episodeUuid).toBeNull();
+    expect(addEp).not.toHaveBeenCalled();
+    const markCall = runPg.mock.calls.find((c) => {
+      const t = c[0]?.queries?.[0]?.text ?? "";
+      return /UPDATE\s+"cinatra"\."objects"\s+SET\s+graphiti_sync_status/i.test(t);
+    });
+    expect(markCall).toBeUndefined();
+  });
+
+  it("outbox item OLDER than the projected version also skips addEpisode", async () => {
+    // Coherent state: canonical row advanced to v3 and v3 is projected; a
+    // straggler outbox item for v2 arrives late. The stale guard fires first
+    // (canonical 3 > outbox 2); the dedup guard (2 <= 3) backstops it —
+    // either way, no episode is appended.
+    runPg.mockReturnValueOnce([{ rows: [projectedRow({ version: 3, graphiti_projected_version: 3 })] }]);
+    const result = await projectObjectToGraphiti({
+      objectId: "obj-1",
+      objectVersion: 2,
+      orgId: "org-1",
+    });
+    expect(result.skipped).toBe(true);
+    expect(addEp).not.toHaveBeenCalled();
+  });
+
+  it("adapter-owned type: equal-version re-enqueue skips adapter.export too (no duplicate adapter episode)", async () => {
+    // The dedup guard sits BEFORE adapter routing, so an adapter-backed row
+    // re-enqueued at its already-projected version never re-exports.
+    const exportFn = vi.fn();
+    objectSyncAdapterRegistry.register({
+      id: "test-graphiti-adapter",
+      targetSystem: "graphiti",
+      displayName: "Test Graphiti Adapter",
+      supportedTypes: ["adapter-owned-type"],
+      configSchema: undefined as never,
+      export: exportFn,
+    } as unknown as ObjectSyncAdapter);
+    try {
+      runPg.mockReturnValueOnce([{
+        rows: [projectedRow({ type: "adapter-owned-type" })],
+      }]);
+      const result = await projectObjectToGraphiti({
+        objectId: "obj-1",
+        objectVersion: 3,
+        orgId: "org-1",
+      });
+      expect(result.skipped).toBe(true);
+      expect(exportFn).not.toHaveBeenCalled();
+      expect(addEp).not.toHaveBeenCalled();
+    } finally {
+      objectSyncAdapterRegistry._clearForTests();
+    }
+  });
+
+  it("a NEWER outbox version than the projected one still projects", async () => {
+    addEp.mockResolvedValue({ uuid: "ep-2", name: "x", content: "{}", group_id: "g" });
+    runPg.mockReturnValueOnce([{ rows: [projectedRow({ version: 4, graphiti_projected_version: 3 })] }]);
+    runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
+    const result = await projectObjectToGraphiti({
+      objectId: "obj-1",
+      objectVersion: 4,
+      orgId: "org-1",
+    });
+    expect(result.skipped).toBeUndefined();
+    expect(addEp).toHaveBeenCalledOnce();
+  });
+
+  it("never-projected row (graphiti_projected_version NULL) projects normally", async () => {
+    addEp.mockResolvedValue({ uuid: "ep-1", name: "x", content: "{}", group_id: "g" });
+    runPg.mockReturnValueOnce([{
+      rows: [projectedRow({ graphiti_projected_version: null, graphiti_episode_uuid: null })],
+    }]);
+    runPg.mockReturnValue([{ rows: [], rowCount: 1 }]);
+    const result = await projectObjectToGraphiti({
+      objectId: "obj-1",
+      objectVersion: 3,
+      orgId: "org-1",
+    });
+    expect(result.skipped).toBeUndefined();
+    expect(addEp).toHaveBeenCalledOnce();
+  });
+
+  it("re-enqueued unchanged row settles the outbox row as done with zero new episodes (worker loop)", async () => {
+    // End-to-end at the processProjectionOutbox level: the skip is a SUCCESS
+    // outcome — the outbox row must settle 'done' (not 'failed'), and
+    // addEpisode must never fire.
+    // Call order: 1) stuck-row recovery  2) claim  3) readCanonicalRow
+    // 4) outbox status update.
+    runPg.mockReturnValueOnce([{ rows: [] }]);
+    runPg.mockReturnValueOnce([{
+      rows: [{
+        id: "ob-requeue",
+        object_id: "obj-1",
+        object_version: 3,
+        org_id: "org-1",
+        operation: "upsert",
+        payload_hash: null,
+        attempts: 1,
+      }],
+    }]);
+    runPg.mockReturnValueOnce([{ rows: [projectedRow()] }]);
+    runPg.mockReturnValue([{ rows: [] }]);
+
+    const result = await processProjectionOutbox({ batchSize: 5, maxAttempts: 3 });
+    expect(result).toEqual({ processed: 1, failed: 0 });
+    expect(addEp).not.toHaveBeenCalled();
+    const doneCall = runPg.mock.calls.find((c) => {
+      const t = c[0]?.queries?.[0]?.text ?? "";
+      return (
+        /UPDATE\s+"cinatra"\."graphiti_projection_outbox"/.test(t) &&
+        /'done'/.test(t)
+      );
+    });
+    expect(doneCall).toBeDefined();
+    expect(doneCall![0].queries[0].values).toContain("ob-requeue");
+    const failedCall = runPg.mock.calls.find((c) => {
+      const t = c[0]?.queries?.[0]?.text ?? "";
+      return (
+        /UPDATE\s+"cinatra"\."graphiti_projection_outbox"/.test(t) &&
+        /SET\s+status\s*=\s*'failed'/i.test(t) &&
+        !/recovered from stuck/.test(t)
+      );
+    });
+    expect(failedCall).toBeUndefined();
   });
 });
 

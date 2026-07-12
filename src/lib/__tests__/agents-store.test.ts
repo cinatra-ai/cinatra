@@ -41,6 +41,18 @@ const persistedMatchRows: any[] = [];
 const installedTemplates: any[] = [];
 // Mirror of replaceAgentSkillMatchesInDatabase writes for assertion.
 const agentSkillMatchesState: { matches: any[]; matchedAt: string } = { matches: [], matchedAt: "" };
+// A3 (cinatra#1363): the lifecycle-gate reader. Default = every requested id is
+// 'active' (deliverable) so existing union assertions hold; the lifecycle-gate
+// describe reassigns this to inject archived/draft/unknown states or a reader
+// error, and restores the default afterEach.
+type LifecycleReadResult =
+  | { ok: true; states: Map<string, string | null> }
+  | { ok: false };
+const defaultLifecycleReader = (ids: string[]): LifecycleReadResult => ({
+  ok: true,
+  states: new Map(ids.map((id) => [id, "active" as string | null])),
+});
+let readSkillLifecycleStatesImpl: (ids: string[]) => LifecycleReadResult = defaultLifecycleReader;
 
 vi.mock("@/lib/database", () => ({
   readAgentSkillMatchesFromDatabase: vi.fn(() => agentSkillMatchesState),
@@ -56,6 +68,7 @@ vi.mock("@/lib/database", () => ({
   // actor is supplied; these tests call without an actor.
   readCustomSkillAssignmentsForAgent: vi.fn(async () => []),
   readSystemGlobalSkillIdsForAgent: vi.fn(async () => []),
+  readSkillLifecycleStates: (ids: string[]) => readSkillLifecycleStatesImpl(ids),
 }));
 
 // Installed agents reader — resolves npm packageId for skill_matches keying.
@@ -85,8 +98,14 @@ vi.mock("@cinatra-ai/skills", async () => {
   const visibility = await vi.importActual<
     typeof import("../../../packages/skills/src/llm-matching/visibility")
   >("../../../packages/skills/src/llm-matching/visibility");
+  // A3 (cinatra#1363): the runtime-delivery predicate is a pure skill-source
+  // leaf; import the REAL implementation so the gate's semantics are exercised.
+  const skillSource = await vi.importActual<
+    typeof import("../../../packages/skills/src/skill-source")
+  >("../../../packages/skills/src/skill-source");
   return {
     filterMatchRowsByVisibility: visibility.filterMatchRowsByVisibility,
+    isRuntimeDeliverableLifecycleState: skillSource.isRuntimeDeliverableLifecycleState,
     MANUAL_VERSION: "manual",
     // W4 (#1073): getAssignedSkillIdsForAgent resolves each skill's effective
     // access policy (own override else parent package's) to feed the visibility
@@ -180,6 +199,9 @@ beforeEach(() => {
   installedTemplates.length = 0;
   agentSkillMatchesState.matches = [];
   agentSkillMatchesState.matchedAt = "";
+  // A3 (cinatra#1363): reset the lifecycle gate to deliverable-by-default so
+  // the union assertions above are unaffected; the gate describe overrides it.
+  readSkillLifecycleStatesImpl = defaultLifecycleReader;
 });
 
 describe("matchAgentsToSkills — bundled skills are NOT projected", () => {
@@ -327,5 +349,82 @@ describe("static — scoreAgentSkill is absent", () => {
       "utf8",
     );
     expect(src).not.toMatch(/scoreAgentSkill/);
+  });
+});
+
+describe("getAssignedSkillIdsForAgent — A3 lifecycle runtime-delivery gate (cinatra#1363)", () => {
+  const AGENT = "@cinatra-ai/email-recipient-selection-agent";
+  const ACTIVE = "custom:er:active";
+  const GATED = "custom:er:gated";
+
+  beforeEach(() => {
+    installedTemplates.push(template(AGENT, "Email Recipients"));
+    skillsCatalogState.skills = [seedAgentSkill(ACTIVE, AGENT), seedAgentSkill(GATED, AGENT)];
+  });
+
+  // Reseed the gate to return the given state per id (unlisted ids ⇒ 'active').
+  const seedStates = (map: Record<string, string | null>) => {
+    readSkillLifecycleStatesImpl = (ids) => ({
+      ok: true,
+      states: new Map(ids.map((id) => [id, id in map ? map[id] : "active"])),
+    });
+  };
+
+  it("drops an ARCHIVED skill from the resolved union; keeps active", async () => {
+    seedStates({ [GATED]: "archived" });
+    const ids = await getAssignedSkillIdsForAgent(AGENT);
+    expect(ids).toContain(ACTIVE);
+    expect(ids).not.toContain(GATED);
+  });
+
+  it("drops a DRAFT skill (owner-visible only, never runtime-delivered)", async () => {
+    seedStates({ [GATED]: "draft" });
+    const ids = await getAssignedSkillIdsForAgent(AGENT);
+    expect(ids).toContain(ACTIVE);
+    expect(ids).not.toContain(GATED);
+  });
+
+  it("keeps DEPRECATED (delivered + badged) and a NULL/derived (extension) skill", async () => {
+    seedStates({ [ACTIVE]: "deprecated", [GATED]: null });
+    const ids = await getAssignedSkillIdsForAgent(AGENT);
+    expect(ids).toContain(ACTIVE);
+    expect(ids).toContain(GATED);
+  });
+
+  it("FAILS CLOSED on an unknown state AND on a row missing from the lifecycle read", async () => {
+    // Only ACTIVE resolves; GATED is absent from the returned map ⇒ withheld.
+    readSkillLifecycleStatesImpl = (ids) => ({
+      ok: true,
+      states: new Map(ids.filter((id) => id === ACTIVE).map((id) => [id, "active" as string | null])),
+    });
+    const ids = await getAssignedSkillIdsForAgent(AGENT);
+    expect(ids).toContain(ACTIVE);
+    expect(ids).not.toContain(GATED);
+  });
+
+  it("FAILS CLOSED on a lifecycle READER ERROR — the whole union is withheld ([])", async () => {
+    readSkillLifecycleStatesImpl = () => ({ ok: false });
+    const ids = await getAssignedSkillIdsForAgent(AGENT);
+    expect(ids).toEqual([]);
+  });
+
+  it("gates the DEGRADED early-return path too — a catalog-read failure still drops archived", async () => {
+    // Force the catalog read to throw so the early return fires; the union then
+    // comes from customAssignmentIds, which the lifecycle gate still filters on
+    // the degraded early-return path.
+    const skills = await import("@cinatra-ai/skills");
+    vi.mocked(skills.readSkillsCatalog).mockRejectedValueOnce(new Error("catalog boom"));
+    const db = await import("@/lib/database");
+    vi.mocked(db.readCustomSkillAssignmentsForAgent).mockResolvedValueOnce([
+      { skillId: ACTIVE, ownerType: "user", ownerId: "u1" } as any,
+      { skillId: GATED, ownerType: "user", ownerId: "u1" } as any,
+    ]);
+    seedStates({ [GATED]: "archived" });
+    const ids = await getAssignedSkillIdsForAgent(AGENT, {
+      principalId: "u1",
+      organizationId: "org1",
+    });
+    expect(ids).toContain(ACTIVE);
+    expect(ids).not.toContain(GATED);
   });
 });

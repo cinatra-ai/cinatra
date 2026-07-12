@@ -21,7 +21,7 @@ jobs:
     # cinatra-ai/ci commit. gate-suite.json requiredContexts[].pinned tracks this
     # uses:@ SHA (the gate verifies referenced_workflows[] exactly) — bump them
     # together.
-    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # v0.1.2-next.4582648
+    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # v0.1.2-next.72d0b1c
     with:
       profile: ts-monorepo
       ratchet_mode: line
@@ -29,4 +29,4 @@ jobs:
       # basename: they necessarily contain the version-comment markers they
       # enforce (same exemption cinatra-ai/ci applies to its own copy).
       config: .github/source-leak-gate.config.json
-      ref: 45826486a3965bc8ebd6203a26330ad0dc1ae511 # same SHA as the workflow @ref
+      ref: 72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # same SHA as the workflow @ref

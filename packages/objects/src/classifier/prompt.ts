@@ -17,7 +17,7 @@ export function buildClassifierSystemPrompt(catalog: readonly TypeCatalogEntry[]
     "",
     "Rules:",
     "1. Pick an EXACT type ID from the list above when a good match exists. Set `objectTypeId` to that exact string.",
-    "2. When no registered type matches, set `isNewType: true` and set `objectTypeId` to a new ID of the form `@cinatra-ai/dynamic:<slug>` (lowercase, kebab-case).",
+    "2. When no registered type matches, set `isNewType: true` and set `objectTypeId` to a new ID of the form `@dynamic/types:<slug>` (lowercase, kebab-case).",
     "3. Return `normalizedData` as a JSON-encoded STRING — the input JSON coerced to the chosen type's shape (drop irrelevant fields, keep all identifying ones).",
     "4. Return a `confidence` between 0 and 1. Use < 0.4 only when truly uncertain.",
     "5. When proposing a new type, also return `inferredTypeName` (human-readable) and `inferredCategory` (one of: profile, content, project, idea, report).",

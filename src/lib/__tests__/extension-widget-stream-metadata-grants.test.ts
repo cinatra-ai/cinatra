@@ -16,6 +16,7 @@ import {
   recordRequestedWidgetStreamMetadataGrant,
   reopenRevokedWidgetStreamMetadataGrant,
   listApprovedWidgetStreamMetadataGrants,
+  listAllApprovedWidgetStreamMetadataGrants,
   resolveApprovedWidgetStreamMetadataGrant,
   restoreWidgetStreamMetadataGrant,
   revokeWidgetStreamMetadataGrant,
@@ -153,10 +154,18 @@ function fakeDb() {
 
     if (t.startsWith("SELECT")) {
       if (/ORDER BY agent_slug/.test(text)) {
-        // listApproved: WHERE [org_id IS NULL | org_id = $1] AND status = 'approved'
+        const approved = [...rows.values()].filter((r) => r.status === "approved");
+        // Detect an org PREDICATE in the WHERE (not the org_id SELECT column).
+        const hasOrgPredicate = /org_id IS NULL/.test(text) || /org_id = \$/.test(text);
+        // Cross-org list (slice 5): status-only filter, NO org predicate → every
+        // scope's approved rows (global + every org).
+        if (!hasOrgPredicate) {
+          return approved.sort((a, b) => a.agent_slug.localeCompare(b.agent_slug)) as T[];
+        }
+        // Exact-scope list: WHERE [org_id IS NULL | org_id = $1] AND status = 'approved'
         const orgId = /org_id IS NULL/.test(text) ? null : String(v[0]);
-        return [...rows.values()]
-          .filter((r) => (r.org_id ?? null) === orgId && r.status === "approved")
+        return approved
+          .filter((r) => (r.org_id ?? null) === orgId)
           .sort((a, b) => a.agent_slug.localeCompare(b.agent_slug)) as T[];
       }
       if (/WHERE agent_slug = \$1/.test(text)) {
@@ -1262,5 +1271,73 @@ describe("listApprovedWidgetStreamMetadataGrants", () => {
       depsFor(db),
     );
     expect(await listApprovedWidgetStreamMetadataGrants({ orgId: null }, depsFor(db))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listAllApprovedWidgetStreamMetadataGrants — cross-org enumeration (slice 5)
+// The pure-liveness guard snapshot needs the approved set at ANY scope, not just
+// one org. The anti-squat index is per-(agent_slug, org_id) (+ a global-NULL
+// twin), so the SAME slug can be approved at global scope AND in an org — the
+// exact-scope list would miss the org-scoped one; this cross-org variant catches
+// every scope. READ-ONLY, NOT grant validation.
+// ---------------------------------------------------------------------------
+
+describe("listAllApprovedWidgetStreamMetadataGrants (cross-org, slice 5)", () => {
+  it("lists approved rows across ALL scopes (global + every org); the exact-scope list misses the org one", async () => {
+    const db = fakeDb();
+    // Global-scope approval of SLUG.
+    const global = makeClaim();
+    await recordOk(db, global);
+    await approveWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, agentSlug: SLUG, approvedBy: "a", expectedBindingHashV2: global.bindingHashV2 },
+      depsFor(db),
+    );
+    // Org-scoped approval of the SAME slug (permitted — per-(slug, org) index).
+    const org = makeClaim();
+    await recordRequestedWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: "org-1", claim: org },
+      makeGuards(),
+      depsFor(db),
+    );
+    await approveWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: "org-1", agentSlug: SLUG, approvedBy: "a", expectedBindingHashV2: org.bindingHashV2 },
+      depsFor(db),
+    );
+    // A pending row in another org must NOT appear (approved-only, fail-closed).
+    const pending = makeClaim({ agentSlug: "pending-editor", skillCapability: "widget-chat.pending-editor" });
+    await recordRequestedWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: "org-2", claim: pending },
+      makeGuards(),
+      depsFor(db),
+    );
+
+    const all = await listAllApprovedWidgetStreamMetadataGrants(depsFor(db));
+    expect(all.map((g) => [g.agentSlug, g.status, g.orgId]).sort()).toEqual(
+      [
+        [SLUG, "approved", "org-1"],
+        [SLUG, "approved", null],
+      ].sort(),
+    );
+    // The exact-scope global list returns ONLY the global row — proving the
+    // cross-org variant is the correct all-orgs source for the guard snapshot (a
+    // naive swap onto the exact-scope list would have dropped the org-scoped one).
+    expect(await listApprovedWidgetStreamMetadataGrants({ orgId: null }, depsFor(db))).toHaveLength(1);
+  });
+
+  it("a revoked row disappears cross-org too (enumeration stays fail-closed)", async () => {
+    const db = fakeDb();
+    const claim = makeClaim();
+    await recordOk(db, claim);
+    await approveWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, agentSlug: SLUG, approvedBy: "a", expectedBindingHashV2: claim.bindingHashV2 },
+      depsFor(db),
+    );
+    expect(await listAllApprovedWidgetStreamMetadataGrants(depsFor(db))).toHaveLength(1);
+    await revokeWidgetStreamMetadataGrant(
+      { packageName: PKG, orgId: null, agentSlug: SLUG, revokedBy: "a" },
+      depsFor(db),
+    );
+    expect(await listAllApprovedWidgetStreamMetadataGrants(depsFor(db))).toEqual([]);
   });
 });

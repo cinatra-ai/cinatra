@@ -23,7 +23,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InstalledExtensionCard } from "../installed-extension-card";
+import {
+  InstalledExtensionCard,
+  UpdateAvailableChip,
+} from "../installed-extension-card";
 import { Button } from "@/components/ui/button";
 import { ACCENT_PALETTE } from "@/lib/extension-accent";
 
@@ -248,6 +251,132 @@ describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)"
     expect(banner).not.toContain("cursor-default");
     expect(banner).not.toContain("data-accent-detail");
   });
+});
+
+// ---------------------------------------------------------------------------
+// §III update affordance (cinatra#1041 outcome 3): the "Update available"
+// chip, the ABI-incompatible greyed spec line, and the fail-quiet /
+// up-to-date states that add nothing. The chip is the ONLY update information
+// the card carries (owner direction 2026-07-12): NO explanatory update text —
+// "Newer version needs a newer Cinatra" / "No registry version to compare"
+// live on the §V settings page's Maintenance · Update row, and their ABSENCE
+// from the card is pinned below.
+// ---------------------------------------------------------------------------
+
+function renderWithUpdate(over: Record<string, unknown>): string {
+  return renderToStaticMarkup(
+    <InstalledExtensionCard
+      name="Web Research Agent"
+      accentColor="green"
+      emblem={<svg data-testid="emblem" />}
+      kindLabel="Agent"
+      description="Stateless schema-driven web research enricher."
+      version="0.4.2"
+      status={<span data-testid="status-slot">status</span>}
+      actions={<Button type="button">More details</Button>}
+      {...over}
+    />,
+  );
+}
+
+describe("UpdateAvailableChip (§III blue action-accent chip)", () => {
+  it("renders the status-indicator badge treatment in the --info blue accent with a data-status hook", () => {
+    const html = renderToStaticMarkup(<UpdateAvailableChip />);
+    expect(html).toContain('data-slot="status-indicator"');
+    expect(html).toContain('data-status="update-available"');
+    expect(html).toContain("Update available");
+    // Blue action accent = --info token, NOT the green success used by Active.
+    expect(html).toContain("text-info");
+    expect(html).not.toContain("text-success");
+    // Reuses the canonical badge kicker (named tokens, no arbitrary utilities).
+    expect(html).toContain("text-badge-2xs");
+  });
+});
+
+describe("InstalledExtensionCard — §III spec-line update states", () => {
+  it("update-available: the chip renders on the spec line; the line is NOT greyed", () => {
+    const html = renderWithUpdate({ updateChip: <UpdateAvailableChip /> });
+    expect(html).toContain('data-slot="installed-extension-spec-line"');
+    expect(html).toContain('data-status="update-available"');
+    expect(html).not.toContain("opacity-55");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+  });
+
+  it("incompatible: the spec line greys (opacity-55) with NO chip and NO explanatory text", () => {
+    const html = renderWithUpdate({ specLineMuted: true });
+    expect(html).toContain("opacity-55");
+    expect(html).not.toContain('data-status="update-available"');
+    // The wording lives on the §V settings page, never in the card.
+    expect(html).not.toContain("Newer version needs a newer Cinatra");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+  });
+
+  it("non-comparable / up-to-date / fail-quiet: no update props → spec line is byte-unchanged (no chip, no text, no greying)", () => {
+    const html = renderWithUpdate({});
+    expect(html).toContain('data-slot="installed-extension-spec-line"');
+    expect(html).not.toContain('data-status="update-available"');
+    expect(html).not.toContain("No registry version to compare");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+    expect(html).not.toContain("opacity-55");
+  });
+
+  it("the card carries at most the Update-available chip — no state renders explanatory update text (§III)", () => {
+    for (const over of [
+      { updateChip: <UpdateAvailableChip /> },
+      { specLineMuted: true },
+      {},
+    ]) {
+      const html = renderWithUpdate(over as Record<string, unknown>);
+      expect(html).not.toContain("Newer version needs a newer Cinatra");
+      expect(html).not.toContain("No registry version to compare");
+      expect(html).not.toContain('data-slot="installed-update-note"');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §III description-survives-every-update-state (owner review 2026-07-10,
+// PR #1310: "Description text missing — as per spec, max 2 lines").
+//
+// The owner's screenshots came from an ad-hoc gallery seed whose synthetic
+// connector rows carried a NULL native description (installed-rows hydrates the
+// description from per-kind native descriptors, not the DB seed), so the card's
+// `{description && …}` guard correctly rendered nothing. The card + screen code
+// was already correct. These invariants pin that contract so the update-chip
+// wiring can never DISPLACE or DROP the description element in any chip state:
+// the two-line-clamped description paragraph must render alongside the chip,
+// the greyed incompatible line, AND the empty state.
+// ---------------------------------------------------------------------------
+describe("InstalledExtensionCard — §III description survives every update-chip state", () => {
+  const DESCRIPTION = "Stateless schema-driven web research enricher.";
+
+  // The description <p> is the ONLY paragraph carrying the description copy —
+  // extract it specifically (the banner's italic NAME has its own title clamp).
+  function descriptionParagraph(html: string): string | undefined {
+    return html.match(/<p class="[^"]*">[^<]*<\/p>/)?.[0];
+  }
+
+  const STATES: Array<[string, Record<string, unknown>]> = [
+    ["update-available (blue chip)", { updateChip: <UpdateAvailableChip /> }],
+    ["incompatible (greyed spec line, no text)", { specLineMuted: true }],
+    ["non-comparable / up-to-date / fail-quiet (no chip)", {}],
+  ];
+
+  for (const [label, over] of STATES) {
+    it(`renders the 2-line-clamped description in the ${label} state`, () => {
+      const html = renderWithUpdate(over);
+      const paragraph = descriptionParagraph(html);
+      // Presence: the description text is actually in the DOM (not dropped by
+      // the chip wiring) …
+      expect(paragraph).toBeDefined();
+      expect(html).toContain(DESCRIPTION);
+      // … as the muted description paragraph, clamped to exactly 2 lines (§III).
+      expect(paragraph).toContain(DESCRIPTION);
+      expect(paragraph).toContain("text-muted-foreground");
+      expect(paragraph).toContain("line-clamp-2");
+      expect(paragraph).not.toContain("line-clamp-3");
+    });
+  }
 });
 
 // cinatra#1057 — post-install "needs configuration" treatment. An active AGENT

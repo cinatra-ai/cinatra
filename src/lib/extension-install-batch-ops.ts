@@ -1,5 +1,22 @@
 import "server-only";
 import { getPooledDb } from "@/lib/db/pooled";
+import type { RowOwnership } from "@/lib/extension-dependency-plan";
+
+/**
+ * The DURABLE capability-ownership DECLARATION CAPSULE for an
+ * `install-side-by-side` member (cinatra#1040 S6). Declaration-only (what the
+ * version declared, never a prior grant state — see
+ * `extension-side-by-side-install` for the survivor-check-revoke reconcile and
+ * why prior state is not restored). The TYPE lives HERE (the ledger that stores
+ * it, already in the install route graph); the capsule helpers are inlined into
+ * `extension-side-by-side-install` (no separate module) so nothing new enters a
+ * locked route's reachable graph via the dynamic-import chain (route-graph-ratchet). */
+export type SideBySideGrantCapsule = {
+  /** Schema version of the capsule payload. */
+  readonly v: 1;
+  /** The widget-auth token ownership keys the version DECLARED (sorted/de-duped). */
+  readonly declaredTokenKeys: string[];
+};
 
 // Install-BATCH ledger store (#180 PR-2).
 //
@@ -91,6 +108,17 @@ export type InstallBatchMember = {
    */
   action?: "install" | "update" | "install-side-by-side";
   /**
+   * cinatra#1039: the resolved ROW-OWNERSHIP tuple this member was
+   * installed/updated at — the ROOT install's tuple, forced onto every member
+   * (decision 4). STAMPED by the executor so the ledger records WHO OWNS each
+   * row for compensation/recovery. Rides the existing JSONB `members` column —
+   * NO schema change. OPTIONAL: absent on legacy rows (pre-#1039) and on the
+   * root-only fast path; a reader that needs it derives the canonical default
+   * (`ownerLevel: orgId ? "organization" : "platform"`). Behavior-neutral for
+   * the extension path (equals the batch's org scope).
+   */
+  rowOwnership?: RowOwnership;
+  /**
    * For an `"install-side-by-side"` member: the RESOLVED conflict scope the
    * side-by-side row installs at (cinatra#1040 S3 / codex round-1) — may be
    * NULL (platform) when the org request fell back to the platform default.
@@ -103,6 +131,16 @@ export type InstallBatchMember = {
   installOpId?: string;
   /** Failure/compensation detail for operators. */
   detail?: string;
+  /**
+   * cinatra#1040 S6: the DURABLE capability-ownership DECLARATION CAPSULE for an
+   * `install-side-by-side` member — persisted BEFORE the member mutates the
+   * shared ownership grant, so a later batch-compensation / boot-recovery
+   * teardown reconciles the grant (survivor-check + revoke) even when this
+   * version's store is gone. `null`/absent = no ownership was declared/mutated,
+   * or the capsule has been RELEASED (spent: the member committed). Rides the
+   * existing JSONB `members` column — NO schema change.
+   */
+  grantCapsule?: SideBySideGrantCapsule | null;
 };
 
 export type InstallBatch = {
@@ -232,7 +270,7 @@ export async function setInstallBatchPhase(
 export async function updateInstallBatchMember(
   batchId: string,
   packageName: string,
-  patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
+  patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail" | "grantCapsule">>,
   deps?: InstallBatchOpsDeps,
 ): Promise<InstallBatch> {
   const { query, schema } = await resolveDeps(deps);
@@ -328,6 +366,38 @@ export async function listStaleInstallBatches(
         AND updated_at < (now() - ($2 || ' milliseconds')::interval)
       ORDER BY updated_at ASC`,
     [[...ACTIVE_BATCH_PHASES], String(Math.max(0, olderThanMs))],
+  );
+  return rows.map(rowToBatch);
+}
+
+/** Terminal (non-active) batch phases — a completed batch, one way or another. */
+export const TERMINAL_BATCH_PHASES: readonly InstallBatchPhase[] = [
+  "finalized",
+  "failed",
+  "compensated",
+];
+
+/**
+ * TERMINAL batches still carrying a non-null side-by-side `grantCapsule` on any
+ * member — the orphan-GC read (cinatra#1040 S6). A capsule is SPENT once its
+ * batch is terminal: a finalized member's version committed (no teardown will
+ * consume it); a compensated member was already reconciled. The happy path
+ * RELEASES capsules at the finalize/compensate boundary; this read catches
+ * capsules a crash left behind between the boundary and the release, so a boot
+ * pass can clear them (with evidence). The `members::text LIKE` prefilter is a
+ * cheap index-free narrowing (the JSONB is small); it matches only a NON-null
+ * capsule OBJECT (`"grantCapsule":{`), never a released `"grantCapsule":null`.
+ */
+export async function listTerminalInstallBatchesWithCapsules(
+  deps?: InstallBatchOpsDeps,
+): Promise<InstallBatch[]> {
+  const { query, schema } = await resolveDeps(deps);
+  const rows = await query<BatchRow>(
+    `SELECT ${SELECT_COLUMNS} FROM ${qualifiedTable(schema)}
+      WHERE phase = ANY($1::text[])
+        AND members::text LIKE '%"grantCapsule":{%'
+      ORDER BY updated_at ASC`,
+    [[...TERMINAL_BATCH_PHASES]],
   );
   return rows.map(rowToBatch);
 }

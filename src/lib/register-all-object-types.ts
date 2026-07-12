@@ -59,10 +59,13 @@ export function registerAllObjectTypes(): void {
   registerAgentBuilderObjectTypes();
   registerWorkflowObjectTypes();
   // Bridge built-in + any added kind:"artifact" extensions into the object
-  // registry as generic artifact-bearing types.
-  registerArtifactExtensions(
-    path.join(process.cwd(), "extensions", "cinatra-ai"),
-  );
+  // registry as generic artifact-bearing types. Pass the extensions ROOT (not
+  // a single vendor dir): the bridge scans `<root>/*-artifact` AND
+  // `<root>/<vendor>/*-artifact`, so a THIRD-VENDOR `kind:"artifact"` package
+  // registers exactly like a first-party one (cinatra#1425 multi-vendor fix —
+  // passing `extensions/cinatra-ai` here silently skipped every other vendor
+  // root). Ids keep their vendor scope (`@<vendor>/<pkg>:artifact`).
+  registerArtifactExtensions(path.join(process.cwd(), "extensions"));
   // Artifact rows carry `objects.type = "@cinatra-ai/artifact:object"`.
   // Artifact-service.ts filters directly on the constant, bypassing the
   // registry, so functional reads work — but generic object tooling (e.g.,

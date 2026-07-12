@@ -22,9 +22,12 @@ import {
 import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
 import {
   getCustomSkillForCurrentUserAndAgent,
+  isRuntimeDeliverableLifecycleState,
+  readSkillsCatalog,
   registerExtensionSkill,
 } from "@cinatra-ai/skills";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
+import { readSkillLifecycleStates } from "@/lib/database";
 import {
   readAgentRunByContextId,
   readAgentRunById,
@@ -57,7 +60,10 @@ import {
   clearDurableRunContextBindings,
 } from "@/lib/agent-run-context-durable";
 import { issueAgentRunMcpActorToken } from "@/lib/agent-run-mcp-actor-token";
-import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
+import {
+  resolveAgentRunMcpActor,
+  resolveAssignedSkillsActorForRun,
+} from "@/lib/agent-run-actor-resolve";
 import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
 import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
@@ -348,6 +354,69 @@ function isInsideBridgeSkillRoots(resolvedPath: string): boolean {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Lifecycle runtime-delivery gates (A3, cinatra#1363)
+// ---------------------------------------------------------------------------
+
+/**
+ * FAIL-CLOSED lifecycle gate for a single already-resolved skill id (the
+ * personal-delta path). True only when the lifecycle read succeeds AND the
+ * state is runtime-deliverable (active/deprecated, or a derived NULL). A read
+ * error, a missing row, or a draft/archived/unknown state → false (withheld).
+ */
+function isBridgeSkillRuntimeDeliverable(skillId: string): boolean {
+  const r = readSkillLifecycleStates([skillId]);
+  return (
+    r.ok &&
+    isRuntimeDeliverableLifecycleState(r.states.has(skillId) ? r.states.get(skillId) : undefined)
+  );
+}
+
+/**
+ * FAIL-CLOSED lifecycle gate for a bridge skill delivered by FILESYSTEM PATH.
+ * Only an EXPLICIT `skill_source_path` can resolve to a custom/personal skill's
+ * on-disk SKILL.md (auto-discovery probes only the extension/agent mount, whose
+ * skills are derived); callers apply this ONLY for the explicit-path case. When
+ * `resolvedPath` is the sourcePath of a custom/personal skill, its
+ * lifecycle_state governs delivery — an archived/draft skill's bytes are never
+ * delivered as direct content or a shell-injected skill. A path that is not a
+ * catalog custom skill (extension mount / dev tree) is derived → deliverable.
+ * A catalog-read failure fails closed (the path could be a custom skill).
+ */
+async function isBridgeSkillPathRuntimeDeliverable(resolvedPath: string): Promise<boolean> {
+  let skillId: string | undefined;
+  try {
+    const catalog = await readSkillsCatalog();
+    // Match the path to ANY catalog skill (personal OR team/org/project custom —
+    // whose `isCustomSkill` flag is often unset while their state is non-null —
+    // AND extension/derived skills). The lifecycle_state of whatever skill owns
+    // the path is the authority: a non-null draft/archived state (custom of any
+    // tier) is withheld; a NULL state (derived/extension) delivers. Classifying
+    // "is it custom?" is unnecessary — the state column already encodes it.
+    for (const s of catalog.skills as Array<{ id: string; sourcePath?: string }>) {
+      if (typeof s.sourcePath !== "string" || s.sourcePath.length === 0) continue;
+      let sp: string;
+      try {
+        sp = realpathSync(path.resolve(s.sourcePath));
+      } catch {
+        sp = path.resolve(s.sourcePath);
+      }
+      if (sp === resolvedPath) {
+        skillId = s.id;
+        break;
+      }
+    }
+  } catch {
+    // Catalog unreadable ⇒ cannot rule out a non-deliverable skill ⇒ fail closed.
+    return false;
+  }
+  // The path is not a catalog skill at all (raw dev-tree file) ⇒ deliverable.
+  if (!skillId) return true;
+  // Otherwise gate on the owning skill's lifecycle_state (NULL/derived and
+  // active/deprecated deliver; draft/archived/unknown are withheld, fail-closed).
+  return isBridgeSkillRuntimeDeliverable(skillId);
+}
+
 async function resolveBridgeSkillContent(body: {
   agent_id?: string;
   skill_source_path?: string;
@@ -379,6 +448,14 @@ async function resolveBridgeSkillContent(body: {
     !isInsideBridgeSkillRoots(resolvedPath) ||
     !existsSync(resolvedPath)
   ) {
+    return "";
+  }
+
+  // A3 (cinatra#1363): an EXPLICIT skill_source_path can resolve to a custom/
+  // personal skill's SKILL.md — withhold it when its lifecycle_state is not
+  // runtime-deliverable (archived/draft/unknown). Auto-discovered paths resolve
+  // only the extension/agent mount (derived) and skip the catalog lookup.
+  if (body.skill_source_path && !(await isBridgeSkillPathRuntimeDeliverable(resolvedPath))) {
     return "";
   }
 
@@ -765,7 +842,14 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       resolvedPath = path.resolve(candidateSkillPath);
     }
+    // A3 (cinatra#1363): gate an EXPLICIT skill_source_path pointing at a
+    // custom/personal skill's SKILL.md — an archived/draft skill's bytes are
+    // never shell-injected. Auto-discovered mount paths are derived; the `||`
+    // short-circuits so the common path adds no catalog read.
+    const bridgeShellPathAllowed =
+      !body.skill_source_path || (await isBridgeSkillPathRuntimeDeliverable(resolvedPath));
     if (
+      bridgeShellPathAllowed &&
       candidateSkillPath.endsWith("SKILL.md") &&
       isInsideBridgeSkillRoots(resolvedPath) &&
       existsSync(resolvedPath)
@@ -1116,13 +1200,60 @@ export async function POST(req: Request): Promise<Response> {
     // Resolve custom skill delta + assigned base skill IDs for this agent.
     // Both lookups are INSIDE the try block so clearRunContext always runs
     // in finally even if a DB lookup throws.
-    // Bridge callers (WayFlow ApiNodes, Python containers) have no user session,
-    // so getCustomSkillForCurrentUserAndAgent throws when ownerUserId is
-    // absent. Catch gracefully — no personal skill applies to sessionless callers.
+    // #1360 — the personal delta skill is USER-SCOPED content, so its owner is
+    // derived SOLELY from the TRUSTED resolved run context, never from a
+    // caller-supplied identifier. `runForPorts` is the exact run this route
+    // already vetted to mint the user's MCP OBO actor token (run-token-first →
+    // context-id → dispatcher-signed binding, minus the confused-deputy
+    // disqualifications); its `runBy` is the verified run owner. Gating personal
+    // delivery on that same handle keeps it FAIL CLOSED:
+    //   - a verified run bound to a user ⇒ that user's delta is delivered;
+    //   - an unattributable call (no verified run, or a run with no runBy), or a
+    //     forged / mismatched / divergent run token (runForPorts is null) ⇒
+    //     `personalSkillOwnerUserId` stays undefined, so
+    //     getCustomSkillForCurrentUserAndAgent resolves to none — it throws for
+    //     an absent owner outside dev-bypass and the .catch swallows that to
+    //     null (no personal delta, no error noise), never a guess.
+    // #1401 — org/shared assigned-skill delivery (getAssignedSkillIdsForAgent)
+    // now resolves with a TRUSTWORTHY actor derived from the SAME vetted run
+    // handle (`runForPorts`) so ownership-scoped (team/project/org/workspace)
+    // custom-skill assignments reach the run. `resolveAssignedSkillsActorForRun`
+    // is fail-closed: an unverifiable identity (no run, no human runBy, or a
+    // membership-build failure) yields `undefined` and the resolver falls back
+    // to EXACTLY today's actor-less delivery — never more. No caller-supplied
+    // identity is ever consulted for scope (the run is server-vetted, never a
+    // body id).
+    const personalSkillOwnerUserId =
+      typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
+        ? runForPorts.runBy
+        : undefined;
     const [personalSkill, assignedSkillIds] = body.agent_id
       ? await Promise.all([
-          getCustomSkillForCurrentUserAndAgent(body.agent_id).catch(() => null),
-          getAssignedSkillIdsForAgent(body.agent_id),
+          getCustomSkillForCurrentUserAndAgent(
+            body.agent_id,
+            personalSkillOwnerUserId,
+          )
+            // A3 (cinatra#1363): a personal delta whose lifecycle_state is not
+            // runtime-deliverable (archived/draft/unknown) — or unresolvable —
+            // is withheld (fail-closed), so it never reaches provider delivery.
+            .then((skill) =>
+              skill && typeof (skill as { id?: unknown }).id === "string" &&
+              isBridgeSkillRuntimeDeliverable((skill as { id: string }).id)
+                ? skill
+                : null,
+            )
+            .catch(() => null),
+          // Derived lazily inside this Promise.all member so the membership
+          // expansion runs CONCURRENTLY with the personal-delta lookup above.
+          // Actor present ⇒ scope-aware resolution; absent (fail-closed) ⇒ the
+          // exact actor-less call delivered today (arity preserved).
+          (async () => {
+            const assignedSkillsActor =
+              await resolveAssignedSkillsActorForRun(runForPorts);
+            return assignedSkillsActor
+              ? getAssignedSkillIdsForAgent(body.agent_id!, assignedSkillsActor)
+              : getAssignedSkillIdsForAgent(body.agent_id!);
+          })(),
         ])
       : [null, [] as string[]];
 

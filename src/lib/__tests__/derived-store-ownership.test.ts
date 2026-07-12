@@ -1,15 +1,16 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   buildOwnershipFilter,
-  lazyBackfillOwnershipOnRead,
-  type DerivedStoreOwnership,
+  normalizeOwnershipVocabulary,
+  isCanonicalVisibility,
+  isCanonicalOwnerLevel,
 } from "@/lib/derived-store-ownership";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
-// derived-store-ownership tests
-// Covers buildOwnershipFilter parameterization and lazyBackfillOwnershipOnRead
-// fire-and-forget persist semantics.
+// derived-store-ownership tests — CANONICAL COLUMN VOCABULARY (cinatra#1428).
+// Covers buildOwnershipFilter clause construction/parameterization and the
+// normalizeOwnershipVocabulary runtime mirror of migration core__0033.
 // ---------------------------------------------------------------------------
 
 function actor(overrides: Partial<ActorContext> = {}): ActorContext {
@@ -27,115 +28,314 @@ function actor(overrides: Partial<ActorContext> = {}): ActorContext {
 }
 
 describe("buildOwnershipFilter", () => {
-  it("emits owner clause matching principalId", () => {
+  it("emits the user owner-axis clause matching principalId", () => {
     const { sql, params } = buildOwnershipFilter(actor());
-    expect(sql).toContain("owner_id = ");
+    expect(sql).toMatch(/owner_level = 'user' AND owner_id = \$\d+/);
     expect(params).toContain("user-1");
   });
 
-  it("emits org clause matching organizationId", () => {
+  it("emits the team owner-axis clause over actor.teamIds", () => {
     const { sql, params } = buildOwnershipFilter(actor());
-    expect(sql).toMatch(/visibility\s*=\s*'org'/);
-    // org_id appears as parameter for the org filter
+    expect(sql).toMatch(/owner_level = 'team' AND owner_id = ANY\(\$\d+::text\[\]\)/);
+    const flat = params.flat();
+    expect(flat).toContain("team-a");
+    expect(flat).toContain("team-b");
+  });
+
+  it("emits the organization visibility clause scoped to org_id", () => {
+    const { sql, params } = buildOwnershipFilter(actor());
+    expect(sql).toMatch(/visibility = 'organization' AND org_id = \$\d+/);
     expect(params).toContain("org-1");
   });
 
-  it("emits team:* and project:* visibility clauses", () => {
+  it("emits the project membership clause over actor.projectIds", () => {
     const { sql, params } = buildOwnershipFilter(actor());
-    expect(sql).toMatch(/visibility LIKE 'team:%'/);
-    expect(sql).toMatch(/visibility LIKE 'project:%'/);
-    // team and project ids passed as ANY() params (arrays)
-    const flat = params.flat();
-    expect(flat).toContain("team-a");
-    expect(flat).toContain("proj-x");
+    expect(sql).toMatch(
+      /project_id IS NOT NULL AND project_id = ANY\(\$\d+::text\[\]\)/,
+    );
+    expect(params.flat()).toContain("proj-x");
   });
 
-  it("emits workspace clause unconditionally", () => {
-    const { sql } = buildOwnershipFilter(actor());
-    expect(sql).toMatch(/visibility\s*=\s*'workspace'/);
+  it("NEVER emits the retired composite-string vocabulary", () => {
+    const { sql } = buildOwnershipFilter(
+      actor({ platformRole: "platform_admin" }),
+    );
+    expect(sql).not.toMatch(/'org'/);
+    expect(sql).not.toMatch(/'workspace'/);
+    expect(sql).not.toMatch(/'admin'/);
+    expect(sql).not.toMatch(/LIKE 'team:%'/);
+    expect(sql).not.toMatch(/LIKE 'project:%'/);
   });
 
-  it("includes admin clause only for platform_admin", () => {
-    const adminFilter = buildOwnershipFilter(actor({ platformRole: "platform_admin" }));
-    expect(adminFilter.sql).toMatch(/visibility\s*=\s*'admin'/);
+  it("scopes 'public' to the owning org for non-admins", () => {
+    const { sql } = buildOwnershipFilter(actor({ platformRole: "member" }));
+    expect(sql).toMatch(/visibility = 'public' AND org_id = \$\d+/);
+  });
+
+  it("widens 'public' across orgs ONLY for platform_admin", () => {
+    const adminFilter = buildOwnershipFilter(
+      actor({ platformRole: "platform_admin" }),
+    );
+    expect(adminFilter.sql).toMatch(/visibility = 'public'(?! AND org_id)/);
     const memberFilter = buildOwnershipFilter(actor({ platformRole: "member" }));
-    expect(memberFilter.sql).not.toMatch(/visibility\s*=\s*'admin'/);
+    expect(memberFilter.sql).not.toMatch(/visibility = 'public'(?! AND org_id)/);
   });
 
   it("uses positional pg placeholders ($1, $2, ...)", () => {
     const { sql, params } = buildOwnershipFilter(actor());
-    // Every param has a corresponding $n
     for (let i = 1; i <= params.length; i += 1) {
       expect(sql).toContain(`$${i}`);
     }
   });
 
-  it("handles missing teamIds/projectIds gracefully", () => {
+  it("handles missing teamIds/projectIds gracefully (empty ANY arrays)", () => {
     const minimal = actor({ teamIds: undefined, projectIds: undefined });
     const { sql, params } = buildOwnershipFilter(minimal);
-    // With empty arrays, ANY($n) still emitted but matches nothing
     expect(sql).toContain("$1");
     expect(params.length).toBeGreaterThan(0);
+    // Empty arrays still parameterized — ANY([]) matches nothing.
+    expect(params).toContainEqual([]);
   });
 
-  // load-bearing fail-closed invariant. Non-admin actor with no org
-  // claim must see zero workspace rows and zero org rows. Guards against a
+  // Load-bearing fail-closed invariant. Non-admin actor with no org
+  // claim must see zero public rows and zero org rows. Guards against a
   // future "convenience" swap of `=` for `IS NOT DISTINCT FROM` that would
-  // let null-org actors read every workspace-visible row.
-  it("non-admin actor with organizationId=undefined produces null param for workspace + org clauses", () => {
+  // let null-org actors read every public-visible row.
+  it("non-admin actor with organizationId=undefined binds null for org + public clauses", () => {
     const noOrg = actor({ organizationId: undefined, platformRole: "member" });
     const { sql, params } = buildOwnershipFilter(noOrg);
-    expect(sql).toContain("visibility = 'workspace' AND org_id =");
-    // Both the org clause and the workspace clause bind null — `org_id = NULL`
+    expect(sql).toContain("visibility = 'public' AND org_id =");
+    // Both the org clause and the public clause bind null — `org_id = NULL`
     // never matches a populated row in Postgres, so this is fail-closed.
     const nullCount = params.filter((p) => p === null).length;
     expect(nullCount).toBeGreaterThanOrEqual(2);
   });
 });
 
-describe("lazyBackfillOwnershipOnRead", () => {
-  it("populates row + invokes persist when ownership is null", async () => {
-    const row = { id: "x", ownerType: null, ownerId: null, visibility: null, organizationId: null };
-    const fetched: DerivedStoreOwnership = {
-      organizationId: "org-1",
-      ownerType: "user",
-      ownerId: "user-1",
-      visibility: "owner",
-    };
-    const persist = vi.fn();
-    const enriched = await lazyBackfillOwnershipOnRead(
-      row,
-      async () => fetched,
-      persist,
-    );
-    expect(enriched.ownerType).toBe("user");
-    expect(enriched.ownerId).toBe("user-1");
-    expect(enriched.visibility).toBe("owner");
-    expect(enriched.organizationId).toBe("org-1");
-    expect(persist).toHaveBeenCalledWith(fetched);
+// ---------------------------------------------------------------------------
+// normalizeOwnershipVocabulary — runtime mirror of core__0033's fixed mapping
+// ---------------------------------------------------------------------------
+
+describe("normalizeOwnershipVocabulary", () => {
+  it("passes canonical tuples through untouched", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "user",
+      ownerId: "u1",
+      visibility: "private",
+      projectId: "p1",
+      orgId: "org-1",
+    });
+    expect(t).toEqual({
+      ownerLevel: "user",
+      ownerId: "u1",
+      visibility: "private",
+      projectId: "p1",
+    });
   });
 
-  it("skips persist when ownership is already populated", async () => {
-    const row = {
-      id: "x",
-      ownerType: "user",
-      ownerId: "user-1",
-      visibility: "owner",
-      organizationId: "org-1",
-    };
-    const lookup = vi.fn();
-    const persist = vi.fn();
-    const enriched = await lazyBackfillOwnershipOnRead(row, lookup as never, persist);
-    expect(lookup).not.toHaveBeenCalled();
-    expect(persist).not.toHaveBeenCalled();
-    expect(enriched.ownerType).toBe("user");
+  it("passes null visibility through (caller defaults apply)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: null,
+      ownerId: null,
+      visibility: null,
+      projectId: null,
+    });
+    expect(t.visibility).toBeNull();
+    expect(t.ownerLevel).toBeNull();
   });
 
-  it("skips persist + leaves row when sourceLookup returns null", async () => {
-    const row = { id: "x", ownerType: null, ownerId: null, visibility: null, organizationId: null };
-    const persist = vi.fn();
-    const enriched = await lazyBackfillOwnershipOnRead(row, async () => null, persist);
-    expect(persist).not.toHaveBeenCalled();
-    expect(enriched.ownerType).toBeNull();
+  it("'org' → organization-owned by org_id, org-visible", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "stale",
+      visibility: "org",
+      projectId: null,
+      orgId: "org-9",
+    });
+    expect(t).toEqual({
+      ownerLevel: "organization",
+      ownerId: "org-9",
+      visibility: "organization",
+      projectId: null,
+    });
+  });
+
+  it("'workspace' → workspace-owned, public", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "keep-me",
+      visibility: "workspace",
+      projectId: null,
+    });
+    expect(t.ownerLevel).toBe("workspace");
+    expect(t.visibility).toBe("public");
+    expect(t.ownerId).toBe("keep-me");
+  });
+
+  it("'team:<id>' → team-owned by <id>, team-visible", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "user",
+      ownerId: "u1",
+      visibility: "team:team-7",
+      projectId: null,
+    });
+    expect(t).toEqual({
+      ownerLevel: "team",
+      ownerId: "team-7",
+      visibility: "team",
+      projectId: null,
+    });
+  });
+
+  it("'user:<id>' → user-owned by <id>, private", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "user:u-42",
+      projectId: null,
+    });
+    expect(t).toEqual({
+      ownerLevel: "user",
+      ownerId: "u-42",
+      visibility: "private",
+      projectId: null,
+    });
+  });
+
+  it("'project:<id>' → project_id refinement + private; owner axis untouched", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "project:proj-9",
+      projectId: null,
+    });
+    expect(t).toEqual({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "private",
+      projectId: "proj-9",
+    });
+  });
+
+  it("'project:<id>' never clobbers an already-set projectId", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "user",
+      ownerId: "u1",
+      visibility: "project:proj-other",
+      projectId: "proj-keep",
+    });
+    expect(t.projectId).toBe("proj-keep");
+    expect(t.visibility).toBe("private");
+  });
+
+  it.each([["owner"], ["admin"], ["junk-value"], ["team:"], ["user:"]])(
+    "fail-closed: %s collapses to 'private' with the owner axis untouched",
+    (v) => {
+      const t = normalizeOwnershipVocabulary({
+        ownerLevel: "team",
+        ownerId: "team-1",
+        visibility: v,
+        projectId: null,
+      });
+      expect(t.visibility).toBe("private");
+      expect(t.ownerLevel).toBe("team");
+      expect(t.ownerId).toBe("team-1");
+    },
+  );
+
+  // ---- pass-0 mirror (legacy lazy-backfill owner_type tuples) ----
+
+  it("pass 0: bare-default owner_level adopts a recorded canonical owner_type", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "u-9",
+      visibility: "owner",
+      projectId: null,
+      ownerType: "user",
+    });
+    expect(t.ownerLevel).toBe("user");
+    expect(t.ownerId).toBe("u-9");
+    expect(t.visibility).toBe("private");
+  });
+
+  it("pass 0: null owner_level (create-path bare default) also adopts owner_type", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: null,
+      ownerId: "team-3",
+      visibility: "private",
+      projectId: null,
+      ownerType: "team",
+    });
+    expect(t.ownerLevel).toBe("team");
+  });
+
+  it("pass 0 NEVER overrides the fixed composite mapping (mapping wins)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "project:p1",
+      projectId: null,
+      ownerType: "user",
+    });
+    // The 'project:' mapping claims the row: owner axis untouched.
+    expect(t.ownerLevel).toBe("organization");
+    expect(t.projectId).toBe("p1");
+    expect(t.visibility).toBe("private");
+  });
+
+  it("pass 0 never overrides an explicitly-leveled row (owner_level != bare default)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "team",
+      ownerId: "team-1",
+      visibility: "team",
+      projectId: null,
+      ownerType: "user",
+    });
+    expect(t.ownerLevel).toBe("team");
+  });
+
+  it("pass 0: a MALFORMED bare composite prefix does not claim the row — owner_type wins (migration parity)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "u-9",
+      visibility: "team:",
+      projectId: null,
+      ownerType: "user",
+    });
+    // 'team:' has no suffix → junk, not a composite claim; pass 0 adopts
+    // owner_type, then the catch-all collapses visibility to 'private' —
+    // exactly what core__0033 produces (LIKE 'team:_%' exclusions).
+    expect(t.ownerLevel).toBe("user");
+    expect(t.visibility).toBe("private");
+  });
+
+  it("pass 0 ignores non-canonical owner_type values", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "organization",
+      projectId: null,
+      ownerType: "project",
+    });
+    expect(t.ownerLevel).toBe("organization");
+  });
+});
+
+describe("canonical vocabulary guards", () => {
+  it("isCanonicalVisibility accepts exactly the four canonical values", () => {
+    for (const v of ["private", "team", "organization", "public"]) {
+      expect(isCanonicalVisibility(v)).toBe(true);
+    }
+    for (const v of ["org", "workspace", "team:t1", "user:u1", "project:p1", "owner", "admin", "", null, undefined, 7]) {
+      expect(isCanonicalVisibility(v)).toBe(false);
+    }
+  });
+
+  it("isCanonicalOwnerLevel accepts exactly the four tiers (project is NOT a tier)", () => {
+    for (const v of ["user", "team", "organization", "workspace"]) {
+      expect(isCanonicalOwnerLevel(v)).toBe(true);
+    }
+    expect(isCanonicalOwnerLevel("project")).toBe(false);
+    expect(isCanonicalOwnerLevel(null)).toBe(false);
   });
 });

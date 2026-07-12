@@ -1,5 +1,15 @@
 // Absorbed from @cinatra/object-types — verbatim surface
 export { OBJECT_TYPE_NAMESPACE_RE, isNamespacedObjectTypeId } from "./namespace";
+// Reserved `@dynamic` scope for LLM-minted dynamic-type ids (cinatra#1425);
+// legacy `@cinatra-ai/dynamic:` ids stay valid on READ via the catalog.
+export {
+  DYNAMIC_TYPE_ID_PREFIX,
+  LEGACY_DYNAMIC_TYPE_ID_PREFIX,
+  DYNAMIC_TYPE_ID_RE,
+  LEGACY_DYNAMIC_TYPE_ID_RE,
+  isDynamicObjectTypeId,
+  mintDynamicObjectTypeId,
+} from "./namespace";
 
 // Single code-owned taxonomy.
 // (ObjectCategory + the namespace helpers are exported elsewhere in this barrel.)
@@ -66,6 +76,14 @@ export {
 
 export { objectTypeRegistry } from "./registry";
 export { canCompose, findCompositionMatches } from "./compose";
+
+// Artifact-type claims — pure policy leaf (cinatra#1425, epic #1424): the
+// status/kind vocabulary, the dispositions union validator, and kind-over-
+// scope arbitration. DB state lives in the host claim store
+// (src/lib/objects/artifact-claim-store.ts). DELIBERATELY NOT re-exported
+// from this barrel: consumers import the `@cinatra-ai/objects/claims`
+// subpath (the classifier-signals leaf pattern) so the leaf never joins the
+// barrel's route-reachable module graph (route-graph ratchet).
 
 // Graphiti-backed object intelligence exports.
 export * as graphitiClient from "./graphiti-client";

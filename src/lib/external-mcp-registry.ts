@@ -216,6 +216,24 @@ async function gateExternalMcpConnectionUse(row: ExternalMcpServerRecord): Promi
   const { POLICY_VERSION } = await import("@/lib/authz/actor-context");
   const identity = await readNangoConnectionByNaturalKey("externalMcp", row.nangoConnectionId);
   if (!identity) return false;
+  // A user-scoped (personal) row mints ONLY for its owner (cinatra#1407): resolve
+  // the current human subject from the trusted context and let the gate's OWN
+  // short-circuit (subjectUserId === identity.ownerUserId) authorize the mint for
+  // the InternalWorker acting on the owner's behalf. A non-owner subject — or no
+  // trusted subject (e.g. a server-side path with no human actor) — leaves
+  // subjectUserId undefined and falls through to the owner-only grant, which
+  // DENIES (defense-in-depth: an owner's personal key never mints for another
+  // actor). Global/shared rows keep subjectUserId undefined and mint via their
+  // org/workspace grant exactly as before (unchanged).
+  let subjectUserId: string | undefined;
+  if (row.scope === "user") {
+    try {
+      const { resolveExtensionActorSummary } = await import("@/lib/extension-host-actor");
+      subjectUserId = (await resolveExtensionActorSummary())?.userId ?? undefined;
+    } catch {
+      subjectUserId = undefined;
+    }
+  }
   try {
     await enforceConnectionUse({
       identity,
@@ -229,7 +247,7 @@ async function gateExternalMcpConnectionUse(row: ExternalMcpServerRecord): Promi
         authSource: "worker",
         policyVersion: POLICY_VERSION,
       },
-      subjectUserId: undefined,
+      subjectUserId,
       source: "external-mcp-registry",
     });
     return true;
@@ -279,6 +297,129 @@ export async function resolveExternalMcpServerBearer(
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Persist an API key for a setup-page-created external MCP server into the
+ * connection service (Nango), readback-verified, under the SHARED external-MCP
+ * provider key — the SANCTIONED credential path (cinatra#1407 defect 1). The
+ * setup-page create/upsert handler stores the returned connection id on the row
+ * so the connector's `apiKeyConfigured` (nangoConnectionId != null) becomes true
+ * and `resolveExternalMcpServerBearer` can later mint the bearer. Mirrors the
+ * Twenty connect flow's import+readback step (`saveTwentyConnection`), minus the
+ * Twenty-specific live probe (a generic MCP server has no standard probe URL).
+ *
+ * SECURITY: never logs, echoes, or returns the key; every failure throws a
+ * GENERIC message (no key / no readback value in it) so a caller-side log of the
+ * error cannot leak secret content. Fail-closed: throws when Nango is
+ * unconfigured — the key MUST NOT be silently dropped (the connector advisory
+ * promises "API keys are stored securely via the connection service").
+ *
+ * @param connectionId the Nango connection id to store under — the caller mints a
+ *   UNIQUE id per write (so a rejected write never overwrites/cross-wires a
+ *   credential another row still references) and rolls it back on failure.
+ * @param apiKey the raw key, already trimmed + validated non-empty by the caller.
+ * @param identity owner/org + grant seed for the `externalMcp` connection-identity
+ *   row. REQUIRED because `gateExternalMcpConnectionUse` fails closed without a
+ *   live identity — the stored key would never mint a bearer (apiKeyConfigured
+ *   would be a lie). `seed:"owner"` for a per-user row (never auto-shares);
+ *   `seed:"workspace"` for a shared (global) row minted by an org-bound
+ *   InternalWorker an owner-only grant would deny. Mirrors saveTwentyConnection.
+ */
+export async function importExternalMcpApiKeyConnection(
+  connectionId: string,
+  apiKey: string,
+  identity: { ownerUserId: string; organizationId: string | null; seed: "owner" | "workspace" },
+): Promise<void> {
+  if (!isNangoConfigured()) {
+    throw new Error(
+      "The connection service (Nango) is not configured — an administrator must configure it before an API key can be stored.",
+    );
+  }
+  let readbackKey: unknown = null;
+  try {
+    // `private-api-bearer` is the generic Bearer-token template the shared
+    // external-MCP provider uses (matches the Twenty import + the dev-auto-setup
+    // mint under EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, which `resolveBearer` reads).
+    await ensureNangoIntegration({
+      provider: "private-api-bearer",
+      providerConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+      displayName: "Cinatra External MCP",
+    });
+    await importNangoConnection({
+      providerConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+      connectionId,
+      credentials: { type: "API_KEY", apiKey },
+    });
+    // Readback-verify the write actually landed, so a silent connection-service
+    // failure fails CLOSED instead of leaving a row that claims a key it can't mint.
+    const readback = await getNangoCredentials(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, connectionId, {
+      forceRefresh: true,
+    });
+    readbackKey =
+      readback && typeof readback === "object" && "apiKey" in readback
+        ? (readback as { apiKey?: unknown }).apiKey
+        : null;
+  } catch {
+    // Map ANY connection-service failure to a GENERIC message — a vault error can
+    // carry request payload, and this error propagates to the caller/log sink.
+    throw new Error("The connection service could not store the API key. Please try again.");
+  }
+  if (readbackKey !== apiKey) {
+    throw new Error(
+      "The connection service did not store the API key correctly (readback mismatch). Please try again.",
+    );
+  }
+  // Seed the `externalMcp` connection identity + one-time grant so the use-gate
+  // can mint the bearer (a unique connectionId per write never collides with a
+  // foreign identity row). A throw here leaves the credential written — the caller
+  // rolls it back via `revokeExternalMcpApiKeyConnection`.
+  const { registerSavedConnectionIdentity } = await import("@/lib/connection-identity-seam");
+  await registerSavedConnectionIdentity({
+    connectorKey: "externalMcp",
+    connectionId,
+    ownerUserId: identity.ownerUserId,
+    organizationId: identity.organizationId,
+    seed: identity.seed,
+  });
+}
+
+/**
+ * Revoke a setup-page-created external MCP server's stored API key + identity
+ * when its row is deleted or a write is rolled back (cinatra#1407 defect 1).
+ * Ordered like `disconnectTwentyConnection`/`revokeConnection`: soft-delete the
+ * `externalMcp` IDENTITY row FIRST (revocation-next-use — the use-gate fails
+ * closed immediately), then best-effort delete the upstream Nango token. NEVER
+ * throws — the row (the only pointer to the credential) is already gone or was
+ * never committed, so a residual credential is unreachable; each step is logged
+ * NON-SECRETLY (the key value is never in scope for a delete) and swallowed.
+ * No-op on an empty id. `deleteNangoConnection` already no-ops when Nango is
+ * unconfigured, so no separate `isNangoConfigured` guard is needed.
+ */
+export async function revokeExternalMcpApiKeyConnection(
+  connectionId: string | null | undefined,
+): Promise<void> {
+  if (!connectionId) return;
+  try {
+    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+      "@cinatra-ai/extensions/connection-identity-store"
+    );
+    const identity = await readNangoConnectionByNaturalKey("externalMcp", connectionId);
+    if (identity) await softDeleteNangoConnection(identity.id);
+  } catch (err) {
+    console.warn(
+      "[external-mcp-registry] best-effort api-key identity revoke failed",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  try {
+    await deleteNangoConnection(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, connectionId);
+  } catch (err) {
+    console.warn(
+      "[external-mcp-registry] best-effort api-key connection delete failed",
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }
 
@@ -391,6 +532,18 @@ export class ExternalMcpServerWriteConflictError extends Error {
 export type ExternalMcpServerGuard = {
   scope: ExternalMcpServerScope;
   userId: string | null;
+  /**
+   * Optional compare-and-write witness of the row's CURRENT `nango_connection_id`
+   * (cinatra#1407). When provided (a `string` or `null`), the guarded write/delete
+   * ALSO requires the row's stored connection to still match the witnessed value —
+   * so a concurrent re-key or keyless edit that changed the connection between the
+   * fresh authz read and this write FAILS CLOSED (conflict) instead of resurrecting
+   * a revoked pointer, orphaning a credential, or landing a row that advertises a
+   * key it cannot mint. Omitted (`undefined`) keeps the legacy scope+owner-only
+   * guard — the campaigns server actions, which do not manage the key column, omit
+   * it (backward compatible).
+   */
+  nangoConnectionId?: string | null;
 };
 
 /**
@@ -445,7 +598,10 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
  * witnessed `scope='user'`+owner, and the SET applies the new scope.
  *
  * `user_id IS NOT DISTINCT FROM $expectedUserId` is the NULL-safe equality the
- * global/shared rows (NULL owner) require. Throws
+ * global/shared rows (NULL owner) require. When `expected.nangoConnectionId` is
+ * provided, the row's CURRENT connection must ALSO still match (NULL-safe) — a
+ * concurrent re-key/keyless-edit that moved the connection fails closed instead
+ * of resurrecting a revoked pointer (cinatra#1407). Throws
  * `ExternalMcpServerWriteConflictError` on a zero-row match.
  */
 export function updateExternalMcpServerGuarded(
@@ -453,6 +609,22 @@ export function updateExternalMcpServerGuarded(
   expected: ExternalMcpServerGuard,
 ): void {
   ensurePostgresSchema();
+  const witnessNango = expected.nangoConnectionId !== undefined;
+  const values: unknown[] = [
+    input.id,
+    input.label,
+    input.serverUrl,
+    input.nangoConnectionId,
+    input.scope,
+    input.orgId,
+    input.userId,
+    input.enabled,
+    input.allowedTools ?? null,
+    input.allowedCatalogTools ?? null,
+    expected.scope,
+    expected.userId,
+  ];
+  if (witnessNango) values.push(expected.nangoConnectionId ?? null);
   const [result] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
@@ -470,22 +642,11 @@ export function updateExternalMcpServerGuarded(
                  updated_at = now()
                WHERE id = $1
                  AND scope = $11
-                 AND user_id IS NOT DISTINCT FROM $12
+                 AND user_id IS NOT DISTINCT FROM $12${
+                   witnessNango ? "\n                 AND nango_connection_id IS NOT DISTINCT FROM $13" : ""
+                 }
                RETURNING id`,
-        values: [
-          input.id,
-          input.label,
-          input.serverUrl,
-          input.nangoConnectionId,
-          input.scope,
-          input.orgId,
-          input.userId,
-          input.enabled,
-          input.allowedTools ?? null,
-          input.allowedCatalogTools ?? null,
-          expected.scope,
-          expected.userId,
-        ],
+        values,
       },
     ],
   });
@@ -500,13 +661,20 @@ export function updateExternalMcpServerGuarded(
  * the witnessed `expected` scope+owner. A row that changed scope/owner or
  * vanished since the authz read fails closed (a delete that no longer matches
  * the authorized precondition is refused, not silently treated as success).
- * Throws `ExternalMcpServerWriteConflictError` on a zero-row match.
+ * When `expected.nangoConnectionId` is provided, the row's CURRENT connection
+ * must ALSO still match (NULL-safe) — so a concurrent re-key that moved the
+ * connection fails the delete closed rather than removing a row (and orphaning
+ * the new credential) under a stale view (cinatra#1407). Throws
+ * `ExternalMcpServerWriteConflictError` on a zero-row match.
  */
 export function deleteExternalMcpServerGuarded(
   id: string,
   expected: ExternalMcpServerGuard,
 ): void {
   ensurePostgresSchema();
+  const witnessNango = expected.nangoConnectionId !== undefined;
+  const values: unknown[] = [id, expected.scope, expected.userId];
+  if (witnessNango) values.push(expected.nangoConnectionId ?? null);
   const [result] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
@@ -514,9 +682,11 @@ export function deleteExternalMcpServerGuarded(
         text: `DELETE FROM "${q(postgresSchema)}"."external_mcp_servers"
                WHERE id = $1
                  AND scope = $2
-                 AND user_id IS NOT DISTINCT FROM $3
+                 AND user_id IS NOT DISTINCT FROM $3${
+                   witnessNango ? "\n                 AND nango_connection_id IS NOT DISTINCT FROM $4" : ""
+                 }
                RETURNING id`,
-        values: [id, expected.scope, expected.userId],
+        values,
       },
     ],
   });

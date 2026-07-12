@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   installExtensionWithDependencies,
   sweepStaleInstallBatches,
+  gcOrphanedSideBySideCapsules,
+  resolveRowScopedCompensationTarget,
   BatchMemberInstallError,
   type InstallBatchSagaDeps,
 } from "@/lib/extension-install-batch";
@@ -37,6 +39,9 @@ function member(packageName: string, over: Partial<PlannedMember> = {}): Planned
     typeId: "connector",
     edges: [],
     alreadyInstalled: false,
+    // cinatra#1039: the resolved rowOwnership tuple (decision 4). Default to the
+    // platform tuple for the batch harness; overridable per test via `over`.
+    rowOwnership: { ownerLevel: "platform", ownerId: null, organizationId: null },
     action: "install",
     ...over,
   };
@@ -75,6 +80,10 @@ function makeHarness(opts: {
   ledgerFailOn?: string; // event name prefix that makes the ledger throw
 }) {
   const events: string[] = [];
+  const sbsTeardownCapsules: Array<{ packageName: string; capsule: unknown }> = [];
+  // #1042 slice-1/2 captures.
+  const updateExpectedVersions: Array<{ packageName: string; expected: string | undefined }> = [];
+  const rowScopedUninstalls: string[] = [];
   const ledgerRows = new Map<string, InstallBatch>();
   const authorizeSpy = vi.fn(
     opts.authorize ?? (async () => resolution()),
@@ -146,7 +155,9 @@ function makeHarness(opts: {
       }
       events.push(`install:${m.packageName}`);
     }),
-    updateMemberPackage: vi.fn(async (m) => {
+    updateMemberPackage: vi.fn(async (m, _actor, expectedInstalledVersion) => {
+      // #1042 slice-1: record the CAS precondition the batch forwarded.
+      updateExpectedVersions.push({ packageName: m.packageName, expected: expectedInstalledVersion });
       const fail =
         typeof opts.installFail === "function"
           ? opts.installFail(m.packageName)
@@ -160,6 +171,11 @@ function makeHarness(opts: {
     uninstallMember: vi.fn(async (m) => {
       events.push(`uninstall:${m.packageName}`);
     }),
+    // #1042 slice-2: row-scoped compensation inverse.
+    uninstallMemberRowScoped: vi.fn(async (m) => {
+      rowScopedUninstalls.push(m.packageName);
+      events.push(`uninstall-row-scoped:${m.packageName}`);
+    }),
     // cinatra#1040 S3: version-scoped side-by-side install + teardown seams.
     installMemberSideBySide: vi.fn(async (m) => {
       const fail =
@@ -170,9 +186,14 @@ function makeHarness(opts: {
         events.push(`side-by-side-FAIL:${m.packageName}`);
         throw new Error(`side-by-side installer refused ${m.packageName}`);
       }
+      // cinatra#1040 S6: the real installer captures the ownership DECLARATION
+      // CAPSULE via the injected sink BEFORE it mutates the grant. Simulate it.
+      await m.persistCapsule?.({ v: 1, declaredTokenKeys: [`${m.packageName}__k`] });
       events.push(`side-by-side:${m.packageName}@${m.version}@scope=${m.scopeOrgId ?? "(platform)"}`);
     }),
     uninstallSideBySideMember: vi.fn(async (m) => {
+      // cinatra#1040 S6: record the capsule the teardown received (for reconcile).
+      sbsTeardownCapsules.push({ packageName: m.packageName, capsule: m.capsule ?? null });
       events.push(
         `uninstall-side-by-side:${m.packageName}@${m.version}@scope=${m.scopeOrgId ?? "(platform)"}`,
       );
@@ -218,7 +239,15 @@ function makeHarness(opts: {
     },
     now: opts.now ?? (() => Date.now()),
   };
-  return { deps, events, ledgerRows, authorizeSpy };
+  return {
+    deps,
+    events,
+    ledgerRows,
+    authorizeSpy,
+    sbsTeardownCapsules,
+    updateExpectedVersions,
+    rowScopedUninstalls,
+  };
 }
 
 describe("installExtensionWithDependencies — happy path", () => {
@@ -620,6 +649,166 @@ describe("installExtensionWithDependencies — member failure ⇒ abort + invers
     expect(batch.members.find((m) => m.packageName === "@cinatra-ai/dep-a")!.status).toBe(
       "compensation-failed",
     );
+  });
+});
+
+describe("installExtensionWithDependencies — #1042 slice-2 row-scoped compensation", () => {
+  it("with rowScopedCompensation:true, freshly-installed members compensate via the ROW-SCOPED inverse (never the package-global uninstall), inverse order", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Row-scoped, inverse order — and NEVER the package-global uninstall.
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b", "@cinatra-ai/dep-a"]);
+    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([]);
+    expect(h.deps.uninstallMember).not.toHaveBeenCalled();
+    expect(h.deps.uninstallMemberRowScoped).toHaveBeenCalledTimes(2);
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.members.find((m) => m.packageName === "@cinatra-ai/dep-a")!.status).toBe(
+      "compensated",
+    );
+  });
+
+  it("WITHOUT the flag (default), compensation stays package-scoped (uninstallMember) — byte-unchanged", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    expect(h.events).toContain("uninstall:@cinatra-ai/dep-a");
+    expect(h.rowScopedUninstalls).toEqual([]);
+    expect(h.deps.uninstallMemberRowScoped).not.toHaveBeenCalled();
+  });
+
+  it("a PRE-EXISTING member is never row-scoped-compensated either (pre-state discriminator still holds)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+      preInstalled: ["@cinatra-ai/dep-a"],
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Only the freshly-installed dep-b is torn down; the pre-existing dep-a is left.
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+  });
+});
+
+describe("installExtensionWithDependencies — #1042 slice-1 expected-version CAS forwarding", () => {
+  it("forwards expectedRootInstalledVersion to the ROOT update member ONLY (never a dedupe-upward member)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/shared", { action: "update" }), member(ROOT, { action: "update" })],
+      preInstalled: ["@cinatra-ai/shared", ROOT],
+    });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, rootAction: "update", expectedRootInstalledVersion: "0.9.0", actor },
+      h.deps,
+    );
+    expect(h.updateExpectedVersions).toContainEqual({ packageName: ROOT, expected: "0.9.0" });
+    expect(h.updateExpectedVersions).toContainEqual({
+      packageName: "@cinatra-ai/shared",
+      expected: undefined,
+    });
+  });
+
+  it("the depless root update (fast path) forwards the CAS precondition", async () => {
+    const h = makeHarness({ plan: [member(ROOT, { action: "update" })], preInstalled: [ROOT] });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, rootAction: "update", expectedRootInstalledVersion: "0.9.0", actor },
+      h.deps,
+    );
+    expect(h.updateExpectedVersions).toEqual([{ packageName: ROOT, expected: "0.9.0" }]);
+  });
+
+  it("a manual update (no expectedRootInstalledVersion) forwards undefined — byte-unchanged", async () => {
+    const h = makeHarness({ plan: [member(ROOT, { action: "update" })], preInstalled: [ROOT] });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, rootAction: "update", actor },
+      h.deps,
+    );
+    expect(h.updateExpectedVersions).toEqual([{ packageName: ROOT, expected: undefined }]);
+  });
+});
+
+describe("resolveRowScopedCompensationTarget (#1042 slice-2 — precise + fail-closed)", () => {
+  const row = (over: Partial<{
+    id: string;
+    organizationId: string | null;
+    status: string;
+    source: { version?: string } | null;
+  }> = {}) => ({
+    id: "r1",
+    organizationId: null as string | null,
+    status: "active",
+    source: { version: "1.1.0" },
+    ...over,
+  });
+
+  it("resolves the single (scope, version) live row exactly", () => {
+    expect(resolveRowScopedCompensationTarget([row()], null, "1.1.0")).toEqual({
+      rowId: "r1",
+      ambiguous: false,
+      count: 1,
+    });
+  });
+
+  it("returns null (idempotent) when no live row carries the version at the scope", () => {
+    expect(resolveRowScopedCompensationTarget([], null, "1.1.0")).toEqual({
+      rowId: null,
+      ambiguous: false,
+      count: 0,
+    });
+    // a live row of a DIFFERENT version is not the freshly-installed one.
+    expect(
+      resolveRowScopedCompensationTarget([row({ source: { version: "9.9.9" } })], null, "1.1.0"),
+    ).toEqual({ rowId: null, ambiguous: false, count: 0 });
+  });
+
+  it("FAILS CLOSED (ambiguous) on >1 live rows carrying the version at the scope — never picks arbitrarily", () => {
+    const res = resolveRowScopedCompensationTarget(
+      [row({ id: "r1" }), row({ id: "r2" })],
+      null,
+      "1.1.0",
+    );
+    expect(res.ambiguous).toBe(true);
+    expect(res.rowId).toBeNull();
+    expect(res.count).toBe(2);
+  });
+
+  it("ignores other-scope rows and non-live rows", () => {
+    // An org-scoped row of the same package+version is NOT a NULL-org target.
+    expect(
+      resolveRowScopedCompensationTarget(
+        [row({ id: "r1" }), row({ id: "r-org", organizationId: "org-1" })],
+        null,
+        "1.1.0",
+      ),
+    ).toEqual({ rowId: "r1", ambiguous: false, count: 1 });
+    // An archived row carrying the version is not live → not a target.
+    expect(
+      resolveRowScopedCompensationTarget([row({ status: "archived" })], null, "1.1.0"),
+    ).toEqual({ rowId: null, ambiguous: false, count: 0 });
+  });
+
+  it("resolves an org-scope target when the actor scope is an org", () => {
+    expect(
+      resolveRowScopedCompensationTarget(
+        [row({ id: "r-null" }), row({ id: "r-org", organizationId: "org-1" })],
+        "org-1",
+        "1.1.0",
+      ),
+    ).toEqual({ rowId: "r-org", ambiguous: false, count: 1 });
   });
 });
 
@@ -1339,5 +1528,133 @@ describe("sweepStaleInstallBatches — #1040 S3 side-by-side members", () => {
     );
     expect(packageUninstalls).toEqual([]);
     expect(sbs).toEqual([]);
+  });
+});
+
+describe("installExtensionWithDependencies — #1040 S6 ownership capsule choreography", () => {
+  const SHARED = "@cinatra-ai/shared";
+
+  it("PERSISTS the declaration capsule to the ledger member during install, then RELEASES it on batch finalize", async () => {
+    const h = makeHarness({
+      preInstalled: [SHARED],
+      plan: [
+        member(SHARED, { version: "2.0.0", action: "install-side-by-side" }),
+        member(ROOT),
+      ],
+    });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    // The batch finalized; the spent capsule was released (cleared to null).
+    const batch = [...h.ledgerRows.values()][0]!;
+    const sbsMember = batch.members.find((m) => m.packageName === SHARED)!;
+    expect(sbsMember.grantCapsule).toBeNull();
+  });
+
+  it("passes the member's DURABLE capsule to the compensation teardown (reconcile on a later failure)", async () => {
+    const h = makeHarness({
+      preInstalled: [SHARED],
+      installFail: ROOT, // a LATER member fails → the side-by-side member compensates
+      plan: [
+        member(SHARED, { version: "2.0.0", action: "install-side-by-side" }),
+        member(ROOT),
+      ],
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow(BatchMemberInstallError);
+    // The teardown received the capsule captured at install time (the ownership
+    // grant reconcile depends on it).
+    const passed = h.sbsTeardownCapsules.find((c) => c.packageName === SHARED);
+    expect(passed?.capsule).toEqual({ v: 1, declaredTokenKeys: [`${SHARED}__k`] });
+  });
+});
+
+describe("sweepStaleInstallBatches — #1040 S6 passes the durable capsule to boot teardown", () => {
+  it("forwards the swept member's grantCapsule to the version-scoped teardown", async () => {
+    const received: Array<{ pkg: string; capsule: unknown }> = [];
+    const batch: InstallBatch = {
+      batchId: "stale-sbs-s6",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "installing",
+      members: [
+        {
+          packageName: "@cinatra-ai/shared",
+          version: "2.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install-side-by-side",
+          scopeOrgId: null,
+          preState: { present: true, version: "0.9.0" },
+          grantCapsule: { v: 1, declaredTokenKeys: ["wp_widget_auth"] },
+        },
+        { packageName: ROOT, version: "1.0.0", typeId: "connector", status: "planned", preState: { present: false } },
+      ],
+      createdAt: "then",
+      updatedAt: "then",
+    };
+    const res = await sweepStaleInstallBatches(
+      { olderThanMs: 1000 },
+      {
+        listStale: async () => [batch],
+        setPhase: async (_id, _p) => batch,
+        updateMember: async () => batch,
+        uninstallMember: async () => {},
+        uninstallSideBySideMember: async (m) => {
+          received.push({ pkg: m.packageName, capsule: m.capsule ?? null });
+        },
+      },
+    );
+    expect(res.swept).toBe(1);
+    expect(received).toEqual([
+      { pkg: "@cinatra-ai/shared", capsule: { v: 1, declaredTokenKeys: ["wp_widget_auth"] } },
+    ]);
+  });
+});
+
+describe("gcOrphanedSideBySideCapsules — orphan GC of spent capsules on terminal batches", () => {
+  it("clears a non-null capsule left on a terminal side-by-side member (with evidence)", async () => {
+    const cleared: Array<{ batchId: string; pkg: string; patch: unknown }> = [];
+    const terminal: InstallBatch = {
+      batchId: "terminal-1",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "finalized",
+      members: [
+        {
+          packageName: "@cinatra-ai/shared",
+          version: "2.0.0",
+          typeId: "connector",
+          status: "installed",
+          action: "install-side-by-side",
+          preState: { present: true },
+          grantCapsule: { v: 1, declaredTokenKeys: ["wp_widget_auth"] },
+        },
+        // A non-side-by-side member with no capsule — untouched.
+        { packageName: ROOT, version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false } },
+      ],
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const res = await gcOrphanedSideBySideCapsules({
+      listTerminalWithCapsules: async () => [terminal],
+      updateMember: async (batchId, pkg, patch) => {
+        cleared.push({ batchId, pkg, patch });
+        return terminal;
+      },
+    });
+    expect(res.cleared).toBe(1);
+    expect(cleared).toEqual([
+      { batchId: "terminal-1", pkg: "@cinatra-ai/shared", patch: { grantCapsule: null } },
+    ]);
+  });
+
+  it("no-op when no terminal batch carries a capsule", async () => {
+    const res = await gcOrphanedSideBySideCapsules({
+      listTerminalWithCapsules: async () => [],
+      updateMember: async () => {
+        throw new Error("should not be called");
+      },
+    });
+    expect(res.cleared).toBe(0);
   });
 });

@@ -1,0 +1,10 @@
+{
+  "seq": "0031",
+  "file": "core/core__0031_skill-content-authority.mjs",
+  "summary": "Skill content authority + rollback (cinatra#1362, epic #1358 A2). Adds skill_revision_contents: content-addressable immutable blobs keyed by the sha256 digest (two DB CHECKs — content_digest = sha256(content) and byte_length = octet_length(content) — make a wrong blob impossible, so a revision's content_digest resolves to provably-correct authoritative content; a BEFORE UPDATE OR DELETE trigger raises). Extends skill_revisions with restores_revision_id (a rollback's restored-revision provenance, self-FK'd to the same skill's revisions and biconditional with source='rollback' via skill_revisions_rollback_provenance_check) and widens the skill_revisions_source_check to add 'rollback'. Destructive because it changes a CHECK and adds a CHECK/FK over the populated skill_revisions table. Backfills a content blob from every custom/personal skill's current content so every truthful active head (recorded digest matches its content) resolves to durable content; a fail-closed postcondition proves the seed populated every truthful head. Mirrors the idempotent bootstrap DDL (buildCreateStoreSchemaQueries + skillLifecycleSchemaQueries) so fresh-bootstrap and operator-upgrade converge. down() is guarded: it fails loudly if any rollback revision exists (immutable history invalid under the narrowed A1 CHECK), otherwise drops the A2 constraints/column, narrows the source CHECK back to the A1 five-value set, and drops the content table + trigger/function.",
+  "destructive": true,
+  "tables": [
+    "skill_revisions",
+    "skill_revision_contents"
+  ]
+}

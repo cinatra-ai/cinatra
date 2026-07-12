@@ -31,8 +31,14 @@ import {
   canPublishToMarketplace,
   isRegisteredMarketplaceVendor,
   resolveSettingsAffordances,
-  resolveUpdateAvailable,
+  resolveUpdateRow,
 } from "./extension-settings-model";
+// §V Maintenance · Update — the SAME state derivation the §III card chip uses
+// (cached update read model → chip state), so the settings row and the card
+// can never disagree on an extension's update status.
+import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
+import { readInstalledUpdateReadouts } from "@/lib/extension-update-read-model-store";
+import { deriveInstalledUpdateChipState } from "./installed-update-chip";
 import {
   archiveExtensionPackageFormAction,
   forceDeleteExtensionPackageFormAction,
@@ -55,7 +61,7 @@ export async function ExtensionSettingsScreen({
   if (!VALID_SETTINGS_KINDS.includes(kind as ExtensionKind)) notFound();
   const extKind = kind as ExtensionKind;
 
-  const { active, archived, availableByName } = await loadInstalledCardRows(session);
+  const { active, archived } = await loadInstalledCardRows(session);
   const row = [...active, ...archived].find(
     (r) => r.kind === extKind && r.packageName === packageName,
   );
@@ -65,8 +71,34 @@ export async function ExtensionSettingsScreen({
   const rawVersion = row.rawVersion;
   const versionKnown = Boolean(rawVersion);
   const packageVersion = rawVersion ?? "";
-  const newestVersion = availableByName.get(packageName)?.packageVersion ?? null;
-  const updateAvailable = resolveUpdateAvailable(rawVersion, newestVersion);
+
+  // §V Maintenance · Update row: derive the update state EXACTLY as the §III
+  // card chip does (cached read model + the newer version's ABI compat), then
+  // spell it out as the row's description (resolveUpdateRow). This page is
+  // where the explanatory wording lives — the card carries at most the chip
+  // (owner direction 2026-07-12). Best-effort: a read failure degrades to the
+  // fail-quiet stale readout (button greyed), never blanking the page.
+  const updateReadout =
+    (
+      await readInstalledUpdateReadouts([packageName]).catch((err: unknown) => {
+        console.warn(
+          "[extension-settings] could not read the update model (row degrades):",
+          err instanceof Error ? err.message : err,
+        );
+        return [];
+      })
+    ).find((r) => r.packageName === packageName) ?? null;
+  const latestVersion = updateReadout?.entry?.latestVersion ?? null;
+  const updateRow = resolveUpdateRow({
+    state: deriveInstalledUpdateChipState({
+      installedVersion: rawVersion,
+      latestVersion,
+      latestCompat: deriveExtensionCompatState(updateReadout?.entry?.latestSdkAbiRange),
+      stale: updateReadout?.stale ?? true,
+    }),
+    installedVersion: rawVersion,
+    latestVersion,
+  });
 
   const isArchived = row.status === "archived";
   const isPublic = row.visibility === "public";
@@ -208,10 +240,7 @@ export async function ExtensionSettingsScreen({
       packageName={packageName}
       displayName={row.displayName}
       vendor={row.vendor}
-      rawVersion={rawVersion}
-      versionLabel={row.versionLabel}
-      newestVersion={newestVersion}
-      updateAvailable={updateAvailable}
+      updateRow={updateRow}
       archiveDisabled={archiveDisabled}
       activateDisabled={activateDisabled}
       reinstallDisabled={reinstallDisabled}
