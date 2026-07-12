@@ -547,6 +547,60 @@ export async function defaultExecuteUpdate(
 }
 
 /**
+ * A selected update candidate: an eligible NULL-org verdaccio-live row carrying
+ * a strictly-newer `toVersion`, past EVERY selection gate (scope, exactly-one-
+ * row-per-package, non-required, deny list, read-model wiring/staleness,
+ * comparability, ABI, and the fleet signature-readiness gate). The pre-dispatch
+ * recheck + expected-version CAS may still SHRINK this set at execution.
+ *
+ * Exported so the on-demand reconcile surface (#1042 lever) can select the SAME
+ * set the daily loop does, digest it, and execute EXACTLY it — never a second,
+ * divergent selection.
+ */
+export type SelectedUpdateCandidate = {
+  row: AutoUpdateInstalledRow;
+  currentVersion: string;
+  toVersion: string;
+};
+
+/** A fresh, zeroed run summary. Shared so the loop and the on-demand reconcile
+ *  surface start from the identical shape. */
+export function newExtensionAutoUpdateRunSummary(): ExtensionAutoUpdateRunSummary {
+  return {
+    enabled: true,
+    readModelWired: false,
+    maintenanceWindowOpen: null,
+    signatureReady: null,
+    scanned: 0,
+    applied: [],
+    failed: [],
+    skipped: [],
+    auditWriteFailures: 0,
+  };
+}
+
+/** Wrap `deps.writeAuditEvent` so a durable-audit-write failure is COUNTED on
+ *  `summary.auditWriteFailures` and swallowed — an audit-write failure never
+ *  flips an update outcome (matching the loop). Shared by the loop and the
+ *  reconcile surface so audit semantics never diverge. */
+export function makeExtensionAutoUpdateAuditWriter(
+  deps: ExtensionAutoUpdateDeps,
+  summary: ExtensionAutoUpdateRunSummary,
+): (event: AutoUpdateAuditEvent) => Promise<void> {
+  return async (event) => {
+    try {
+      await deps.writeAuditEvent(event);
+    } catch (err) {
+      summary.auditWriteFailures++;
+      console.warn(
+        "[extension-auto-update] durable audit write failed (outcome unaffected):",
+        err,
+      );
+    }
+  };
+}
+
+/**
  * One auto-update cycle. Never throws for per-candidate failures (each is
  * isolated + recorded; the batch's own compensation already leaves the prior
  * version anchored on failure). A THROW out of this function (e.g. the
@@ -558,17 +612,7 @@ export async function runExtensionAutoUpdateCycle(
 ): Promise<ExtensionAutoUpdateRunSummary> {
   const deps = depsOverride ?? buildDefaultExtensionAutoUpdateDeps();
 
-  const summary: ExtensionAutoUpdateRunSummary = {
-    enabled: true,
-    readModelWired: false,
-    maintenanceWindowOpen: null,
-    signatureReady: null,
-    scanned: 0,
-    applied: [],
-    failed: [],
-    skipped: [],
-    auditWriteFailures: 0,
-  };
+  const summary = newExtensionAutoUpdateRunSummary();
 
   if (!deps.isEnabled()) {
     // Defense in depth: the boot seed never schedules the loop while the flag
@@ -579,17 +623,7 @@ export async function runExtensionAutoUpdateCycle(
     return summary;
   }
 
-  const writeAudit = async (event: AutoUpdateAuditEvent): Promise<void> => {
-    try {
-      await deps.writeAuditEvent(event);
-    } catch (err) {
-      summary.auditWriteFailures++;
-      console.warn(
-        "[extension-auto-update] durable audit write failed (outcome unaffected):",
-        err,
-      );
-    }
-  };
+  const writeAudit = makeExtensionAutoUpdateAuditWriter(deps, summary);
 
   // #1042 slice-3: MAINTENANCE WINDOW gate. Evaluated ONLY after the master
   // flag is on (the knob can never turn the loop on). Closed → the cycle does
@@ -621,6 +655,32 @@ async function runEnabledCycle(
   summary: ExtensionAutoUpdateRunSummary,
   writeAudit: (event: AutoUpdateAuditEvent) => Promise<void>,
 ): Promise<void> {
+  // The loop = the SAME selection + execution the on-demand reconcile surface
+  // (#1042 lever) uses, composed. Selection is pure (no writes); execution
+  // isolates per candidate. Splitting them lets reconcile select ONCE, digest
+  // that exact set for its plan-digest CAS, then execute exactly it — never a
+  // second, divergent selection.
+  const candidates = await selectAutoUpdateCandidates(deps, summary);
+  await executeAutoUpdateCandidates(deps, summary, candidates, writeAudit);
+}
+
+/**
+ * PURE SELECTION — no execution, no writes. Read the install rows + cached
+ * update read model and return the eligible candidate set, applying EVERY
+ * selection gate (NULL-org scope, exactly-one-row-per-package, verdaccio-live,
+ * non-required, deny list, read-model wiring + staleness, comparability, ABI,
+ * and the fleet signature-readiness gate). Mutates `summary` (scanned, skipped,
+ * readModelWired, signatureReady). Returns [] when the read model is unwired,
+ * the fleet signature-readiness gate fences the cycle, or nothing is eligible.
+ *
+ * Shared by `runEnabledCycle` (the daily loop) and the reconcile surface so
+ * both select IDENTICALLY. Safe to run as a dry-run plan — it never mutates and
+ * never writes an audit row.
+ */
+export async function selectAutoUpdateCandidates(
+  deps: ExtensionAutoUpdateDeps,
+  summary: ExtensionAutoUpdateRunSummary,
+): Promise<SelectedUpdateCandidate[]> {
   const allRows = await deps.listInstalledRows();
 
   // ---- candidate-scope selection (slice-1 bounds; see module header) ------
@@ -698,7 +758,7 @@ async function runEnabledCycle(
       "[extension-auto-update] enabled but no persistent update read-model store is wired on this deployment — zero candidates (see extension-auto-update.ts header)",
     );
     for (const s of scoped) skip(s.row.packageName, "read-model-unwired");
-    return;
+    return [];
   }
   summary.readModelWired = true;
 
@@ -709,8 +769,7 @@ async function runEnabledCycle(
   );
   const readoutByPackage = new Map(readouts.map((r) => [r.packageName, r]));
 
-  type Candidate = Scoped & { toVersion: string };
-  const candidates: Candidate[] = [];
+  const candidates: SelectedUpdateCandidate[] = [];
   for (const s of scoped) {
     const readout = readoutByPackage.get(s.row.packageName);
     if (!readout || readout.stale || readout.entry === null) {
@@ -743,11 +802,36 @@ async function runEnabledCycle(
         "[extension-auto-update] fleet signature-readiness predicate is NOT-READY — zero candidates executed this cycle (fail-closed)",
       );
       for (const c of candidates) skip(c.row.packageName, "signature-readiness");
-      return;
+      return [];
     }
   }
 
-  // ---- execution (per-candidate isolation) ---------------------------------
+  return candidates;
+}
+
+/**
+ * EXECUTE a pre-selected candidate set with per-candidate ISOLATION. The
+ * pre-dispatch TOCTOU recheck + expected-version CAS may only SHRINK the set
+ * (drift → `state-drift`; a concurrent update winning the CAS →
+ * `cas-version-lost`); a per-candidate failure is recorded and never aborts the
+ * rest. Mutates `summary` (applied, failed, skipped) and writes durable audit
+ * events via `writeAudit`.
+ *
+ * Shared by `runEnabledCycle` (the daily loop) and the on-demand reconcile
+ * surface so the execution semantics — recheck, CAS, isolation, audit — never
+ * diverge. The candidate LIST is fixed by the caller's single selection; the
+ * recheck can only DROP items, never add, so an operator-pinned plan-digest
+ * executes exactly its approved set (shrunk by any fresh drift).
+ */
+export async function executeAutoUpdateCandidates(
+  deps: ExtensionAutoUpdateDeps,
+  summary: ExtensionAutoUpdateRunSummary,
+  candidates: readonly SelectedUpdateCandidate[],
+  writeAudit: (event: AutoUpdateAuditEvent) => Promise<void>,
+): Promise<void> {
+  const skip = (packageName: string, reason: AutoUpdateSkipReason): void => {
+    summary.skipped.push({ packageName, reason });
+  };
   const actor = buildExtensionAutoUpdateActor();
   for (const c of candidates) {
     try {

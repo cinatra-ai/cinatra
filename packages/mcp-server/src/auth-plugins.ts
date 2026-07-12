@@ -77,6 +77,10 @@ export const CLI_SCOPES = [
   "cli:status",
   "cli:agent:read",
   "cli:agent:write",
+  // The reconcile control plane (#1042 lever): `--plan` (read) and `--apply`
+  // (operator write). Paired exactly like the agent read/write scopes above.
+  "cli:extensions:read",
+  "cli:extensions:write",
 ] as const;
 
 export type McpAuthPluginsOptions = {
