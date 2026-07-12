@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 136,
-    "/api/mcp": 1401,
-    "/chat": 1439,
-    "/api/a2a": 1406,
-    "/api/llm-bridge": 1412
+    "/sign-in": 138,
+    "/api/mcp": 1402,
+    "/chat": 1440,
+    "/api/a2a": 1407,
+    "/api/llm-bridge": 1413
   },
   "absorbs": {
     "/sign-in": {
-      "from": 135,
-      "to": 136,
-      "reason": "cinatra#1037 P2a (PR #1304): /sign-in reaches drizzle-store (auth -> DB) but NOT the chat runner, so it gains EXACTLY 1 first-party leaf: src/lib/assistant-thread-schema.ts (the new pure-strings bootstrap-DDL leaf for the assistant_threads/assistant_turns tables, imported by drizzle-store.ts). The four assistant-runtime leaves stay off /sign-in's graph. Delta measured B-A on the identical tree. Re-anchored onto main's current post-#1234 ceilings by REMEASUREMENT (never arithmetic): after merging current main (whose ceilings now include cinatra#1057 PR #1234's +2 dispatch-surface modules and cinatra#1317's +1 co-owner-constraint leaf) into the PR branch, scripts/audit/route-graph-ratchet.mjs was run on the merged tree with the companion extension repos cloned pinned (missingCount 0), measuring 136 against main's committed ceiling 135 — the exact +1 reproduced. Absorbed raise 135->136.",
-      "pr": 1304
+      "from": 136,
+      "to": 138,
+      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. Two net-new first-party leaf modules under src/lib were EXTRACTED from the hand-mirrored store DDL / write layer to stay under the file-size ratchet (the #1317 / #1304 extract-leaf -> route-graph-absorb pattern): src/lib/skill-lifecycle-schema.ts (the bootstrap-DDL leaf for skill_revisions + skill_lifecycle_audit, imported by drizzle-store.ts) and src/lib/skill-lifecycle-store.ts (the lifecycle DB write primitives, imported by database.ts). /sign-in reaches the store via auth -> DB (drizzle-store + database) but NOT the skills surface, so it gains EXACTLY these 2 leaves and none of the packages/skills lifecycle policy modules. Delta measured B-A on the identical tree with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 136->138.",
+      "pr": 1405
     },
     "/api/mcp": {
-      "from": 1399,
-      "to": 1401,
-      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
-      "pr": 1348
+      "from": 1401,
+      "to": 1402,
+      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. The change adds net-new first-party leaf modules extracted for the file-size ratchet (src/lib/skill-lifecycle-schema.ts, src/lib/skill-lifecycle-store.ts) plus the packages/skills lifecycle policy leaves (lifecycle.ts / lifecycle-store.ts, imported by the skills store). This route measures EXACTLY +1 net-new reachable first-party leaf vs main (B-A on the identical tree, companion extension repos cloned pinned, missingCount 0). Both no-new-rot ratchets are in direct tension for a hub-touching schema+store change; the file-size extraction is absorbed here. Absorbed raise 1401->1402.",
+      "pr": 1405
     },
     "/chat": {
-      "from": 1437,
-      "to": 1439,
-      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
-      "pr": 1348
+      "from": 1439,
+      "to": 1440,
+      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. The change adds net-new first-party leaf modules extracted for the file-size ratchet (src/lib/skill-lifecycle-schema.ts, src/lib/skill-lifecycle-store.ts) plus the packages/skills lifecycle policy leaves (lifecycle.ts / lifecycle-store.ts, imported by the skills store). This route measures EXACTLY +1 net-new reachable first-party leaf vs main (B-A on the identical tree, companion extension repos cloned pinned, missingCount 0). Both no-new-rot ratchets are in direct tension for a hub-touching schema+store change; the file-size extraction is absorbed here. Absorbed raise 1439->1440.",
+      "pr": 1405
     },
     "/api/a2a": {
-      "from": 1404,
-      "to": 1406,
-      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
-      "pr": 1348
+      "from": 1406,
+      "to": 1407,
+      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. The change adds net-new first-party leaf modules extracted for the file-size ratchet (src/lib/skill-lifecycle-schema.ts, src/lib/skill-lifecycle-store.ts) plus the packages/skills lifecycle policy leaves (lifecycle.ts / lifecycle-store.ts, imported by the skills store). This route measures EXACTLY +1 net-new reachable first-party leaf vs main (B-A on the identical tree, companion extension repos cloned pinned, missingCount 0). Both no-new-rot ratchets are in direct tension for a hub-touching schema+store change; the file-size extraction is absorbed here. Absorbed raise 1406->1407.",
+      "pr": 1405
     },
     "/api/llm-bridge": {
-      "from": 1410,
-      "to": 1412,
-      "reason": "cinatra#1032 deliverable 3 (PR #1348): the install/kind-gate enforcement wiring adds exactly TWO net-new reachable first-party modules to every locked route that reaches the agent install/publish surfaces — packages/agents/src/project-template-install-gate.ts (the project-template install gate, imported at install-from-package.ts's inert-window call site) and packages/sdk-extensions/src/consumes.ts (the authoritative cinatra.consumes parser the publisher carry in verdaccio/client.ts routes through — one truth source, fail-loud). The PR originally measured THREE net-new modules against its pre-#1352 base (also packages/sdk-extensions/src/project-template-contract.ts), but current main already reaches the contract module independently (src/lib/project-dispatch.ts imports @cinatra-ai/sdk-extensions/project-template-contract on main), so the merged tree's delta vs main's committed ceilings is exactly +2 on all four install/dispatch-reaching routes; /sign-in does not reach the install surface and is untouched. The gate is the AUTHORITATIVE enforcer of record on the install pipeline, so its reachability from the install path is by design; both modules are pure/leaf contract modules with no further first-party fan-out. Ceilings re-anchored onto main@bc9527ee by REMEASUREMENT (never arithmetic): scripts/audit/route-graph-ratchet.mjs --write-baseline run on the conflict-resolved merge of origin/main into the PR head with the companion extension repos cloned pinned (missingCount 0).",
-      "pr": 1348
+      "from": 1412,
+      "to": 1413,
+      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. The change adds net-new first-party leaf modules extracted for the file-size ratchet (src/lib/skill-lifecycle-schema.ts, src/lib/skill-lifecycle-store.ts) plus the packages/skills lifecycle policy leaves (lifecycle.ts / lifecycle-store.ts, imported by the skills store). This route measures EXACTLY +1 net-new reachable first-party leaf vs main (B-A on the identical tree, companion extension repos cloned pinned, missingCount 0). Both no-new-rot ratchets are in direct tension for a hub-touching schema+store change; the file-size extraction is absorbed here. Absorbed raise 1412->1413.",
+      "pr": 1405
     }
   }
 }
