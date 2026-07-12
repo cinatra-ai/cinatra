@@ -39,6 +39,62 @@ export class ActiveDependentError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// ExpectedInstalledVersionMismatchError: an update carrying an
+// `expectedInstalledVersion` compare-and-set precondition found the live
+// installed version had already moved off that value at the mutation boundary
+// (inside the per-package install lock). Thrown BEFORE any mutation, so the
+// refused update never double-applies over the concurrent winner. Its stable
+// `code` lets a caller (the auto-update loop) classify the benign lost-race as
+// a clean skip instead of a failure. See `runHostInstallLocked`'s CAS gate.
+// ---------------------------------------------------------------------------
+export class ExpectedInstalledVersionMismatchError extends Error {
+  readonly code = "EXPECTED_VERSION_MISMATCH" as const;
+  constructor(
+    public readonly packageName: string,
+    public readonly expectedVersion: string,
+    public readonly actualVersion: string | null,
+  ) {
+    super(
+      `expected-version CAS refused the update of ${packageName}: expected the installed ` +
+        `version to be ${expectedVersion} but it is ${actualVersion ?? "(no single live row)"} ` +
+        `at the mutation boundary — a concurrent update won; not applying the stale target.`,
+    );
+    this.name = "ExpectedInstalledVersionMismatchError";
+  }
+}
+
+/**
+ * FAIL-CLOSED resolver for the expected-version CAS: given ALL canonical rows
+ * for a package and the actor's scope, return the SINGLE live installed version
+ * at that scope, or `null` when the precondition cannot be proven (zero or more
+ * than one live row at the scope — a CAS against `null` always refuses). Pure +
+ * exported for direct testing. A `locked` row still counts as live/updatable
+ * (aligned with the LIVE set elsewhere). The version is read from the canonical
+ * `version` field, falling back to the source's own version.
+ */
+export function resolveLiveInstalledVersionForCas(
+  // `source` is `unknown` so a full `InstalledExtension` (whose `source` is the
+  // ExtensionSource union) is assignable directly; the version is read
+  // structurally below. `version` is the canonical derived field.
+  rows: {
+    organizationId: string | null;
+    status: string;
+    version?: string;
+    source?: unknown;
+  }[],
+  scope: string | null,
+): string | null {
+  const live = rows.filter(
+    (r) =>
+      (r.organizationId ?? null) === scope &&
+      (r.status === "active" || r.status === "locked"),
+  );
+  if (live.length !== 1) return null; // 0 or >1 → cannot prove → fail closed
+  const r = live[0]!;
+  return r.version ?? (r.source as { version?: string } | null | undefined)?.version ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // extensionHasBeenUsed predicate
 // Returns true when the extension's agent template has one or more agent_runs.
 // Lives at the dispatcher layer (never inside handlers) per architecture spec.
@@ -774,8 +830,24 @@ class ExtensionRegistryImpl {
     await this.runHostInstall(typeId, ref, actor, "install", options);
   }
 
-  async update(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
-    await this.runHostInstall(typeId, ref, actor, "update");
+  /**
+   * `options.expectedInstalledVersion` is an optional compare-and-set
+   * precondition: the update applies ONLY if the live installed version at the
+   * actor's scope still equals it at the mutation boundary (checked under the
+   * per-package install lock). A drift throws
+   * `ExpectedInstalledVersionMismatchError` BEFORE any mutation — the caller's
+   * cached target is stale and never overwrites the concurrent winner. Omitted
+   * (every manual-update caller) → the update is byte-unchanged. The in-app
+   * auto-update loop sets it to close the pre-dispatch-recheck lock-window
+   * residue (see `src/lib/extension-auto-update.ts`).
+   */
+  async update(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { expectedInstalledVersion?: string },
+  ): Promise<void> {
+    await this.runHostInstall(typeId, ref, actor, "update", options);
   }
 
   // ---------------------------------------------------------------------------
@@ -817,7 +889,7 @@ class ExtensionRegistryImpl {
     ref: PackageRef,
     actor: Actor,
     op: "install" | "update",
-    options?: { destination?: "private" | "public" },
+    options?: { destination?: "private" | "public"; expectedInstalledVersion?: string },
   ): Promise<void> {
     // Serialize the WHOLE direct-install path (ensure-row → native handler →
     // real-integrity pipeline finalize → rollback) under the per-package install
@@ -839,7 +911,7 @@ class ExtensionRegistryImpl {
     ref: PackageRef,
     actor: Actor,
     op: "install" | "update",
-    options?: { destination?: "private" | "public" },
+    options?: { destination?: "private" | "public"; expectedInstalledVersion?: string },
   ): Promise<void> {
     const handler = this.resolve(typeId);
 
@@ -878,6 +950,34 @@ class ExtensionRegistryImpl {
       assertUpdateDoesNotBreakDependents(ref.packageName, ref.version, allRows, {
         organizationId: actor.orgId ?? null,
       });
+    }
+
+    // 0.7 EXPECTED-VERSION CAS (compare-and-set precondition). When the caller
+    //    supplies `options.expectedInstalledVersion`, the update applies ONLY if
+    //    the live installed version at the actor's scope still equals it RIGHT
+    //    HERE — inside the per-package install lock, before the first mutation.
+    //    This closes the auto-update loop's pre-dispatch-recheck lock-window
+    //    residue: the recheck runs BEFORE acquiring the lock, so a manual update
+    //    holding the lock can advance the package after the recheck; by reading
+    //    under the SAME lock (a concurrent manual update has already released it
+    //    by the time we run) the CAS observes that advance and refuses, so the
+    //    loop's cached (now-stale) target never overwrites the winner. Omitted
+    //    (every manual-update caller) → no CAS, byte-unchanged. FAIL-CLOSED:
+    //    zero or more-than-one live rows at the scope also refuse — the
+    //    precondition cannot be proven, so the update does not proceed.
+    if (op === "update" && options?.expectedInstalledVersion !== undefined) {
+      const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+      const liveVersion = resolveLiveInstalledVersionForCas(
+        await readInstalledExtensionsByPackageName(ref.packageName),
+        actor.orgId ?? null,
+      );
+      if (liveVersion !== options.expectedInstalledVersion) {
+        throw new ExpectedInstalledVersionMismatchError(
+          ref.packageName,
+          options.expectedInstalledVersion,
+          liveVersion,
+        );
+      }
     }
 
     // 1. Ensure exactly one canonical row BEFORE the native handler (so the

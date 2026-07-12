@@ -42,6 +42,8 @@ import {
   buildExtensionAutoUpdateActor,
   evaluateCandidateRecheck,
   isExtensionAutoUpdateEnabled,
+  isWithinMaintenanceWindowSpec,
+  parseAutoUpdateDenyList,
   EXTENSION_AUTO_UPDATE_ACTOR_ID,
   EXTENSION_AUTO_UPDATE_READ_MODEL_TTL_MS,
   type AutoUpdateInstalledRow,
@@ -97,6 +99,10 @@ function makeDeps(
 } {
   const deps = {
     isEnabled: () => true,
+    // #1042 slice-3 policy deps default to permissive (window open, nothing
+    // denied) so the pre-existing coverage is unaffected.
+    isWithinMaintenanceWindow: () => true,
+    isDenied: () => false,
     listInstalledRows: async () => [makeRow()],
     isRequiredInProd: () => false,
     resolveUpdateReadModelStore: async () => makeStore([makeEntry()]),
@@ -163,7 +169,7 @@ describe("candidate selection", () => {
 
     expect(deps.executeUpdate).toHaveBeenCalledTimes(1);
     expect(deps.executeUpdate).toHaveBeenCalledWith(
-      { packageName: "@acme/foo", kind: "connector", toVersion: "1.1.0" },
+      { packageName: "@acme/foo", kind: "connector", toVersion: "1.1.0", fromVersion: "1.0.0" },
       expect.objectContaining({
         actorType: "system",
         source: "worker",
@@ -225,12 +231,15 @@ describe("candidate selection", () => {
     ]);
   });
 
-  it("ANY org-scoped row on the instance fences the whole cycle (compensation is not row-scoped)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  // #1042 slice-2: the org-rows fence is LIFTED (row-scoped compensation). An
+  // org-scoped row on the instance no longer halts the whole cycle — the
+  // NULL-org candidate proceeds, and the org-scoped package (never a NULL-org
+  // candidate) is untouched.
+  it("a LIVE org-scoped row no longer fences the cycle — the NULL-org candidate proceeds", async () => {
     const resolveUpdateReadModelStore = vi.fn(async () => makeStore([makeEntry()]));
     const deps = makeDeps({
       listInstalledRows: async () => [
-        makeRow(), // an otherwise perfectly eligible NULL-org candidate
+        makeRow(), // an eligible NULL-org candidate (@acme/foo 1.0.0 -> 1.1.0)
         makeRow({ id: "r-org", packageName: "@acme/other", organizationId: "org-1" }),
       ],
       resolveUpdateReadModelStore,
@@ -238,19 +247,21 @@ describe("candidate selection", () => {
 
     const summary = await runExtensionAutoUpdateCycle(deps);
 
-    expect(deps.executeUpdate).not.toHaveBeenCalled();
-    expect(resolveUpdateReadModelStore).not.toHaveBeenCalled(); // fenced before any read-model work
-    expect(summary.skipped).toEqual([
-      { packageName: "@acme/foo", reason: "org-rows-compensation-fence" },
-    ]);
+    expect(resolveUpdateReadModelStore).toHaveBeenCalled(); // no longer fenced before the read model
+    expect(deps.executeUpdate).toHaveBeenCalledTimes(1);
+    expect(deps.executeUpdate).toHaveBeenCalledWith(
+      { packageName: "@acme/foo", kind: "connector", toVersion: "1.1.0", fromVersion: "1.0.0" },
+      expect.anything(),
+    );
+    // The org-scoped package is never a candidate (structural NULL-org bound).
     expect(
-      warn.mock.calls.some((c) => String(c[0]).includes("org-scoped install rows present")),
-    ).toBe(true);
-    warn.mockRestore();
+      deps.executeUpdate.mock.calls.some((c) => (c[0] as { packageName: string }).packageName === "@acme/other"),
+    ).toBe(false);
+    expect(summary.applied.map((a) => a.packageName)).toEqual(["@acme/foo"]);
+    expect(summary.skipped).toEqual([]);
   });
 
-  it("an ARCHIVED org row still fences (hard-delete tears down org rows regardless of status)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("an ARCHIVED org row also no longer fences", async () => {
     const deps = makeDeps({
       listInstalledRows: async () => [
         makeRow(),
@@ -258,11 +269,9 @@ describe("candidate selection", () => {
       ],
     });
     const summary = await runExtensionAutoUpdateCycle(deps);
-    expect(deps.executeUpdate).not.toHaveBeenCalled();
-    expect(summary.skipped).toEqual([
-      { packageName: "@acme/foo", reason: "org-rows-compensation-fence" },
-    ]);
-    warn.mockRestore();
+    expect(deps.executeUpdate).toHaveBeenCalledTimes(1);
+    expect(summary.applied.map((a) => a.packageName)).toEqual(["@acme/foo"]);
+    expect(summary.skipped).toEqual([]);
   });
 
   it("side-by-side NULL-org rows of one package are ambiguous → skipped", async () => {
@@ -594,48 +603,276 @@ describe("pre-dispatch TOCTOU recheck (state-drift)", () => {
       [[makeRow({ source: { type: "verdaccio", version: "3.0.0" } })], "1.0.0 -> 3.0.0"],
       // Version moved BACKWARD.
       [[makeRow({ source: { type: "verdaccio", version: "0.9.0" } })], "1.0.0 -> 0.9.0"],
-      // Org-scoped rows appeared (compensation fence holds at dispatch time).
-      [[makeRow(), makeRow({ id: "r-org", packageName: "@acme/other", organizationId: "org-1" })], "org-scoped"],
     ];
     for (const [rows, needle] of refusals) {
       const verdict = evaluateCandidateRecheck(rows, selected);
       expect(verdict.ok).toBe(false);
       if (!verdict.ok) expect(verdict.detail).toContain(needle);
     }
+    // #1042 slice-2: an org-scoped row of a DIFFERENT package appearing since
+    // selection no longer refuses (the fence is lifted; the recheck is
+    // package-scoped to the candidate's own unchanged NULL-org row).
+    expect(
+      evaluateCandidateRecheck(
+        [makeRow(), makeRow({ id: "r-org", packageName: "@acme/other", organizationId: "org-1" })],
+        selected,
+      ),
+    ).toEqual({ ok: true });
   });
 });
 
 describe("defaultExecuteUpdate — the manual-update dispatch mirror", () => {
   const actor = buildExtensionAutoUpdateActor();
-  const candidate = { packageName: "@acme/foo", kind: "connector", toVersion: "1.1.0" };
+  const candidate = {
+    packageName: "@acme/foo",
+    kind: "connector",
+    toVersion: "1.1.0",
+    fromVersion: "1.0.0",
+  };
 
-  it("non-gatekept: routes through the planner/batch as a committed in-place update", async () => {
+  it("non-gatekept: routes through the planner/batch as a committed in-place update; threads the CAS + row-scoped compensation", async () => {
     isGatekeptInstallEnabledMock.mockReturnValue(false);
 
     await defaultExecuteUpdate(candidate, actor);
 
     // Host handler wiring is bootstrapped BEFORE dispatch (worker process).
     expect(extensionsWiringImported).toHaveBeenCalled();
+    // #1042 slice-1: the expected-version CAS rides `expectedRootInstalledVersion`.
+    // #1042 slice-2: row-scoped compensation is opted in.
     expect(installExtensionWithDependenciesMock).toHaveBeenCalledWith({
       packageName: "@acme/foo",
       version: "1.1.0",
       actor,
       rootAction: "update",
+      expectedRootInstalledVersion: "1.0.0",
+      rowScopedCompensation: true,
     });
     expect(registryUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("gatekept: keeps the direct in-place registry update (batch fenced, #1296)", async () => {
+  it("gatekept: keeps the direct in-place registry update (batch fenced, #1296); threads the CAS option", async () => {
     isGatekeptInstallEnabledMock.mockReturnValue(true);
 
     await defaultExecuteUpdate(candidate, actor);
 
     expect(extensionsWiringImported).toHaveBeenCalled();
+    // #1042 slice-1: the CAS precondition rides the update's fourth options arg.
     expect(registryUpdateMock).toHaveBeenCalledWith(
       "connector",
       { registryUrl: "", packageName: "@acme/foo", version: "1.1.0" },
       actor,
+      { expectedInstalledVersion: "1.0.0" },
     );
     expect(installExtensionWithDependenciesMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1042 slice-1 — expected-version CAS: a concurrent update that won the race
+// makes THIS cached target lose CLEANLY (a benign skip, never a failure or a
+// double-apply). The atomic CAS lives in the shared registry dispatch; the loop
+// only has to classify the refusal it throws.
+// ---------------------------------------------------------------------------
+describe("#1042 slice-1: expected-version CAS lost race", () => {
+  function casMismatch(): Error {
+    // Mirror ExpectedInstalledVersionMismatchError's discriminant without the
+    // cross-package class import (exactly how the loop duck-types it).
+    const err = new Error(
+      "expected-version CAS refused the update of @acme/foo: a concurrent update won",
+    );
+    (err as unknown as { code: string }).code = "EXPECTED_VERSION_MISMATCH";
+    return err;
+  }
+
+  it("a CAS mismatch is recorded as `cas-version-lost` (a skip), not `failed`", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const executeUpdate = vi.fn(async () => {
+      throw casMismatch();
+    });
+    const deps = makeDeps({ executeUpdate });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(executeUpdate).toHaveBeenCalledTimes(1);
+    expect(summary.failed).toEqual([]); // NOT a failure
+    expect(summary.applied).toEqual([]); // never double-applied
+    expect(summary.skipped).toContainEqual({
+      packageName: "@acme/foo",
+      reason: "cas-version-lost",
+    });
+    // No `extension_auto_update_failed` audit event for a benign lost race.
+    const ops = deps.writeAuditEvent.mock.calls.map(
+      (c) => (c[0] as AutoUpdateAuditEvent).operation,
+    );
+    expect(ops).not.toContain("extension_auto_update_failed");
+    warn.mockRestore();
+  });
+
+  it("one candidate losing the CAS never aborts the rest", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rows = [
+      makeRow({ id: "r1", packageName: "@acme/foo" }),
+      makeRow({ id: "r2", packageName: "@acme/bar", kind: "skill" }),
+    ];
+    const entries = [
+      makeEntry({ packageName: "@acme/foo" }),
+      makeEntry({ packageName: "@acme/bar", latestVersion: "1.5.0" }),
+    ];
+    const executeUpdate = vi
+      .fn(async () => {})
+      .mockRejectedValueOnce(casMismatch()); // @acme/foo loses the CAS
+    const deps = makeDeps({
+      listInstalledRows: async () => rows,
+      resolveUpdateReadModelStore: async () => makeStore(entries),
+      executeUpdate,
+    });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(executeUpdate).toHaveBeenCalledTimes(2);
+    expect(summary.skipped).toContainEqual({
+      packageName: "@acme/foo",
+      reason: "cas-version-lost",
+    });
+    expect(summary.applied.map((a) => a.packageName)).toEqual(["@acme/bar"]);
+    expect(summary.failed).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it("the CAS from-version is exactly the selected currentVersion", async () => {
+    const executeUpdate = vi.fn(async () => {});
+    const deps = makeDeps({
+      listInstalledRows: async () => [
+        makeRow({ source: { type: "verdaccio", version: "2.3.4" } }),
+      ],
+      resolveUpdateReadModelStore: async () =>
+        makeStore([makeEntry({ latestVersion: "2.4.0" })]),
+      executeUpdate,
+    });
+
+    await runExtensionAutoUpdateCycle(deps);
+
+    expect(executeUpdate).toHaveBeenCalledWith(
+      { packageName: "@acme/foo", kind: "connector", toVersion: "2.4.0", fromVersion: "2.3.4" },
+      expect.anything(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1042 slice-3 — policy knobs (maintenance window + deny list). Additive
+// suppressors UNDER the master flag: default OFF stays OFF.
+// ---------------------------------------------------------------------------
+describe("#1042 slice-3: maintenance-window + deny-list policy knobs", () => {
+  it("outside the maintenance window the whole cycle is suppressed (no reads, no dispatch)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const listInstalledRows = vi.fn(async () => [makeRow()]);
+    const deps = makeDeps({
+      isWithinMaintenanceWindow: () => false,
+      listInstalledRows,
+    });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(summary.maintenanceWindowOpen).toBe(false);
+    expect(listInstalledRows).not.toHaveBeenCalled(); // no reads at all
+    expect(deps.executeUpdate).not.toHaveBeenCalled();
+    expect(summary.applied).toEqual([]);
+    expect(summary.skipped).toEqual([]);
+    // A suppressed run is still observable — the per-run audit fires.
+    const runEvents = deps.writeAuditEvent.mock.calls
+      .map((c) => c[0] as AutoUpdateAuditEvent)
+      .filter((e) => e.operation === "extension_auto_update_run");
+    expect(runEvents).toHaveLength(1);
+    expect(runEvents[0]!.metadata).toMatchObject({ maintenanceWindowOpen: false });
+    warn.mockRestore();
+  });
+
+  it("inside the window the cycle runs normally (windowOpen:true)", async () => {
+    const deps = makeDeps({ isWithinMaintenanceWindow: () => true });
+    const summary = await runExtensionAutoUpdateCycle(deps);
+    expect(summary.maintenanceWindowOpen).toBe(true);
+    expect(deps.executeUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("a deny-listed package never auto-updates even when otherwise eligible", async () => {
+    const deps = makeDeps({
+      listInstalledRows: async () => [
+        makeRow({ id: "r1", packageName: "@acme/foo" }),
+        makeRow({ id: "r2", packageName: "@acme/bar", kind: "skill" }),
+      ],
+      resolveUpdateReadModelStore: async () =>
+        makeStore([
+          makeEntry({ packageName: "@acme/foo" }),
+          makeEntry({ packageName: "@acme/bar", latestVersion: "1.5.0" }),
+        ]),
+      isDenied: (p) => p === "@acme/foo",
+    });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(summary.skipped).toContainEqual({
+      packageName: "@acme/foo",
+      reason: "deny-listed",
+    });
+    expect(deps.executeUpdate).toHaveBeenCalledTimes(1);
+    expect(deps.executeUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: "@acme/bar" }),
+      expect.anything(),
+    );
+  });
+
+  it("DEFAULT OFF STAYS OFF: with the flag off, the policy knobs are never even consulted", async () => {
+    const isWithinMaintenanceWindow = vi.fn(() => true);
+    const isDenied = vi.fn(() => false);
+    const listInstalledRows = vi.fn(async () => [makeRow()]);
+    const deps = makeDeps({
+      isEnabled: () => false,
+      isWithinMaintenanceWindow,
+      isDenied,
+      listInstalledRows,
+    });
+
+    const summary = await runExtensionAutoUpdateCycle(deps);
+
+    expect(summary.enabled).toBe(false);
+    expect(summary.maintenanceWindowOpen).toBeNull(); // never evaluated
+    expect(isWithinMaintenanceWindow).not.toHaveBeenCalled();
+    expect(isDenied).not.toHaveBeenCalled();
+    expect(listInstalledRows).not.toHaveBeenCalled();
+    expect(deps.writeAuditEvent).not.toHaveBeenCalled(); // no run audit either
+  });
+
+  it("isWithinMaintenanceWindowSpec — unset opens, malformed/degenerate fail-closed, ranges + wrap", () => {
+    const at = (h: number) => new Date(Date.UTC(2026, 6, 11, h, 30, 0));
+    // Unset / empty → open (no restriction).
+    expect(isWithinMaintenanceWindowSpec(undefined, at(3))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("", at(3))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("   ", at(3))).toBe(true);
+    // Malformed → FAIL-CLOSED (closed).
+    for (const bad of ["abc", "1", "1-2-3", "1:00-5:00", "-1-5", "1-24", "24-1", "9-nine"]) {
+      expect(isWithinMaintenanceWindowSpec(bad, at(3))).toBe(false);
+    }
+    // Degenerate start==end → fail-closed.
+    expect(isWithinMaintenanceWindowSpec("3-3", at(3))).toBe(false);
+    // Non-wrap window "1-5" = hours 1,2,3,4 (end exclusive).
+    expect(isWithinMaintenanceWindowSpec("1-5", at(0))).toBe(false);
+    expect(isWithinMaintenanceWindowSpec("1-5", at(1))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("1-5", at(4))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("1-5", at(5))).toBe(false);
+    // Wrap window "22-6" = 22,23,0,1,2,3,4,5.
+    expect(isWithinMaintenanceWindowSpec("22-6", at(23))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("22-6", at(0))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("22-6", at(5))).toBe(true);
+    expect(isWithinMaintenanceWindowSpec("22-6", at(6))).toBe(false);
+    expect(isWithinMaintenanceWindowSpec("22-6", at(12))).toBe(false);
+  });
+
+  it("parseAutoUpdateDenyList — trims, drops empties, unset → empty", () => {
+    expect(parseAutoUpdateDenyList(undefined)).toEqual(new Set());
+    expect(parseAutoUpdateDenyList("")).toEqual(new Set());
+    expect(parseAutoUpdateDenyList(" @a/b , ,@c/d ,, ")).toEqual(
+      new Set(["@a/b", "@c/d"]),
+    );
   });
 });

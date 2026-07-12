@@ -23,21 +23,26 @@ import "server-only";
 // canonical job left over from a previously-enabled boot no-ops — it keeps
 // re-delaying, one inert job a day, and is never re-seeded while disabled).
 //
-// SLICE-1 SCOPE BOUNDS (each is re-checked per cycle, fail-closed):
+// SCOPE BOUNDS + SAFETY GATES (each is re-checked per cycle, fail-closed;
+// slice-1 landed the bounds, #1042 slices 2-3 lifted the org-rows fence, added
+// the expected-version CAS, and added the policy knobs — see below):
 //   - PLATFORM-SCOPED (NULL-org) rows only. The system actor is built with
 //     `orgId: null`, so the dispatcher's lifecycle-target resolver can only
 //     ever address NULL-org rows. This bound is structural, not just a
 //     filter: even a bug in candidate selection cannot make the dispatch
 //     touch an org row.
-//   - ORG-ROWS COMPENSATION FENCE: if the instance has ANY org-scoped
-//     install row (any package, any status), the cycle executes NOTHING.
-//     Rationale (codex round-1 blocker): a mid-batch failure compensates by
-//     `extensionRegistry.uninstall` of freshly-installed members, and the
-//     platform-admin hard-delete branch of that dispatcher is PACKAGE-GLOBAL
-//     (it tears down same-package org rows too). The candidate's dependency
-//     closure is not knowable pre-plan, so slice 1 fences the whole cycle on
-//     any org-scoped presence; multi-org instances are excluded until a
-//     row-scoped compensation primitive exists (follow-up on #1042).
+//   - ROW-SCOPED COMPENSATION (#1042 slice-2; the org-rows fence is now
+//     LIFTED). Slice-1 fenced the WHOLE cycle whenever the instance held ANY
+//     org-scoped install row, because the batch's mid-batch compensation of a
+//     freshly-installed dependency called `extensionRegistry.uninstall`, whose
+//     platform-admin hard-delete branch is PACKAGE-GLOBAL (it tears down
+//     same-package org rows too). The dispatch now opts into row-scoped
+//     compensation (`installExtensionWithDependencies({rowScopedCompensation})`
+//     → `uninstallMemberRowScoped` → `deleteScopedCanonicalRow`), which removes
+//     ONLY the freshly-installed actor-scope (NULL-org) row and never the
+//     package-global backing or another org's rows. With the structural
+//     NULL-org actor bound above, an org-multi-tenant instance is provably
+//     safe — so the cycle no longer fences on org-scoped presence.
 //   - NON-REQUIRED extensions only (`isSystemExtension` scope): the
 //     required/image-baked set keeps riding release images + the boot seed.
 //   - Verdaccio-sourced live (active|locked) rows only — other source types
@@ -60,16 +65,17 @@ import "server-only";
 //     org-scoped rows appeared, source switched, installed version moved in
 //     EITHER direction, kind changed) skips as `state-drift`, never executes.
 //     Version equality also preserves the selection verdict — the target
-//     stays strictly newer than the version the comparator approved. KNOWN
-//     LIMIT, on record (codex final-round divergence, reported not hidden):
-//     this recheck runs BEFORE the dispatch, not atomically at the mutation
-//     boundary — a manual update that already holds the lifecycle lock can
-//     advance the package after the recheck, and the queued auto-update then
-//     applies its cached (now older) target over it. Closing that residue
-//     needs an expected-version CAS threaded through the SHARED registry
-//     dispatch (`extensionRegistry.update` / the batch root), which is a
-//     cross-surface change deliberately out of this slice — tracked as a
-//     follow-up on #1042.
+//     stays strictly newer than the version the comparator approved. The
+//     recheck stays as a cheap early-out; its former lock-window residue (a
+//     manual update holding the install lock could advance the package AFTER
+//     the recheck, before the dispatch acquired the lock) is now closed by:
+//   - EXPECTED-VERSION CAS (#1042 slice-1): the dispatch forwards the selected
+//     `fromVersion` as `expectedInstalledVersion`, and the shared registry
+//     `update` re-reads the live installed version UNDER the per-package
+//     install lock, at the mutation boundary, refusing before any mutation if
+//     it has moved (a concurrent manual update, holding the SAME lock, has
+//     already committed by then). The stale target LOSES cleanly, recorded as
+//     `cas-version-lost` (a benign skip, never a double-apply / failure).
 //   - sdkAbiRange compatibility via `evaluateHostSdkCompat` — the loaders'
 //     own verdict; an incompatible/malformed declared range skips the
 //     candidate (the install pipeline re-checks this gate at execution).
@@ -85,12 +91,14 @@ import "server-only";
 // SYSTEM ACTOR + AUDIT TRAIL: the actor is
 //   { actorType:"system", source:"worker", userId:"system:extension-auto-update",
 //     platformRole:"platform_admin", orgId:null }.
-// `platformRole` is stamped here for one reason: on a mid-batch member
-// failure the batch compensates by `extensionRegistry.uninstall` of the
-// freshly-installed members with the SAME actor, and that destructive path
-// requires write standing over the (NULL-org) row
-// (`actorHasWriteStandingOverRow`). Combined with `orgId:null` the standing is
-// bounded to platform-scoped rows only. Every applied/failed candidate and
+// `platformRole` is stamped here so the dispatch has write standing over the
+// (NULL-org) platform row on the gatekept direct-`update` path
+// (`actorHasWriteStandingOverRow`); combined with `orgId:null` that standing is
+// bounded to platform-scoped rows only. (Slice-2 note: a mid-batch compensation
+// no longer routes through `extensionRegistry.uninstall`'s package-global
+// hard-delete — it uses the row-scoped `deleteScopedCanonicalRow` inverse — so
+// the standing requirement is now only about the forward update, not a
+// package-global teardown.) Every applied/failed candidate and
 // every run writes a durable audit event to the authz audit surface
 // (`@/lib/authz/audit`) carrying the system principal id; the batch/dispatch
 // path additionally threads the actor through its own provenance records
@@ -98,6 +106,17 @@ import "server-only";
 //
 // The loop NEVER publishes, tags, or mutates registry state — it consumes
 // already-published versions only.
+//
+// POLICY KNOBS (#1042 slice-3, env-delivered per-instance by ops tooling —
+// tracked outside this repo). These are ADDITIVE SUPPRESSORS layered UNDER the
+// master flag; they can only ever make an ENABLED loop do LESS and NEVER turn
+// it on (with the flag off the cycle returns before either is read):
+//   - MAINTENANCE WINDOW (`CINATRA_EXTENSION_AUTO_UPDATE_WINDOW`, a UTC hour
+//     range like "1-5" or wrap "22-6"): outside the window the whole cycle is
+//     suppressed (no reads, no dispatch). Unset → no restriction; malformed →
+//     FAIL-CLOSED (suppressed). See `isWithinMaintenanceWindowSpec`.
+//   - DENY LIST (`CINATRA_EXTENSION_AUTO_UPDATE_DENY`, comma-separated exact
+//     package names): a denied package skips selection as `deny-listed`.
 //
 // READ-MODEL WIRING STATUS: the persistent (DB-backed)
 // `ExtensionUpdateReadModelStore` adapter is #1041's own slice (open PR
@@ -119,6 +138,71 @@ import { evaluateHostSdkCompat } from "@/lib/extension-host-compat";
  *  CINATRA_EXTENSION_REQUIRE_SIGNATURES: only the literal "true" enables. */
 export function isExtensionAutoUpdateEnabled(): boolean {
   return process.env.CINATRA_EXTENSION_AUTO_UPDATE === "true";
+}
+
+// ---------------------------------------------------------------------------
+// #1042 slice-3 — POLICY KNOBS (maintenance window + deny list). These are
+// ADDITIVE SUPPRESSORS layered UNDER the master flag: they can only ever make
+// an ENABLED loop do LESS. They NEVER turn the loop on — with
+// `CINATRA_EXTENSION_AUTO_UPDATE` unset/off the cycle returns before either is
+// read, so "default OFF stays OFF" is structural. Delivered per-instance by ops
+// tooling (tracked outside this repo).
+// ---------------------------------------------------------------------------
+
+/** Env var: maintenance window as a UTC hour range (see the parser). */
+export const EXTENSION_AUTO_UPDATE_WINDOW_ENV = "CINATRA_EXTENSION_AUTO_UPDATE_WINDOW";
+/** Env var: per-package deny list (comma-separated exact package names). */
+export const EXTENSION_AUTO_UPDATE_DENY_ENV = "CINATRA_EXTENSION_AUTO_UPDATE_DENY";
+
+/**
+ * Is `now` inside the maintenance window described by `spec`? Pure + exported
+ * for direct testing.
+ *
+ * `spec` is a UTC hour range `"START-END"`, START inclusive and END EXCLUSIVE,
+ * each in 0-23 (e.g. `"1-5"` = 01:00–05:00 → hours 1,2,3,4). START > END wraps
+ * past midnight (e.g. `"22-6"` = 22:00–06:00 → hours 22,23,0,1,2,3,4,5).
+ *
+ * FAIL-CLOSED by design (an operator who SET a window intends to restrict; a
+ * bad spec must never open the floodgates):
+ *   - unset / empty        → TRUE  (no window configured: no restriction)
+ *   - malformed / out-of-range / degenerate START==END → FALSE (closed)
+ *   - otherwise            → membership test
+ */
+export function isWithinMaintenanceWindowSpec(
+  spec: string | undefined,
+  now: Date,
+): boolean {
+  const trimmed = (spec ?? "").trim();
+  if (trimmed === "") return true; // unset → no restriction
+  const m = /^(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+  if (!m) return false; // malformed → fail-closed
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    start > 23 ||
+    end < 0 ||
+    end > 23 ||
+    start === end // degenerate (empty or all-day is ambiguous) → fail-closed
+  ) {
+    return false;
+  }
+  const hour = now.getUTCHours();
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+/** Parse the comma-separated deny list into a set of exact package names
+ *  (trim + drop empties). Pure + exported for direct testing. */
+export function parseAutoUpdateDenyList(spec: string | undefined): Set<string> {
+  if (!spec) return new Set();
+  return new Set(
+    spec
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
 }
 
 /** The audit principal id every record this loop produces carries. */
@@ -164,22 +248,38 @@ export type AutoUpdateInstalledRow = {
 
 export type AutoUpdateSkipReason =
   | "non-verdaccio-source"
+  // Retained for back-compat of the union; no longer emitted since slice-2's
+  // row-scoped compensation lifted the org-rows fence (the loop now runs on
+  // org-multi-tenant instances).
   | "org-rows-compensation-fence"
   | "ambiguous-install-scope"
   | "required-in-prod-scope"
+  // #1042 slice-3: the package is on the operator deny list.
+  | "deny-listed"
   | "read-model-unwired"
   | "read-model-stale"
   | "no-comparable-latest"
   | "up-to-date"
   | "abi-incompatible"
   | "signature-readiness"
-  | "state-drift";
+  | "state-drift"
+  // #1042 slice-1: the expected-version CAS refused at the mutation boundary —
+  // a concurrent update won; the loop's stale target lost cleanly (not a
+  // failure).
+  | "cas-version-lost";
 
 export type ExtensionAutoUpdateRunSummary = {
   /** False = the master flag was off at cycle time; nothing was read. */
   enabled: boolean;
   /** Whether a persistent read-model store was resolvable this cycle. */
   readModelWired: boolean;
+  /**
+   * #1042 slice-3: maintenance-window verdict. `null` = not evaluated (flag
+   * off). `true` = no window configured OR now is inside it → the cycle ran.
+   * `false` = a window is configured and now is outside it (or the spec was
+   * malformed → fail-closed) → the cycle did no work.
+   */
+  maintenanceWindowOpen: boolean | null;
   /** Fleet signature-readiness verdict (null = not evaluated: no candidates). */
   signatureReady: boolean | null;
   /** Live verdaccio-scope rows considered (pre-filter candidates). */
@@ -240,11 +340,29 @@ export type ExtensionAutoUpdateDeps = {
    */
   isSignatureReady: () => Promise<boolean>;
   /**
+   * #1042 slice-3 policy: is NOW inside the operator maintenance window?
+   * Evaluated once per cycle, right after the master-flag check. Default reads
+   * `CINATRA_EXTENSION_AUTO_UPDATE_WINDOW` (unset → always true; malformed →
+   * fail-closed false). Never turns the loop ON — a closed window only
+   * SUPPRESSES an already-enabled cycle.
+   */
+  isWithinMaintenanceWindow: () => boolean;
+  /**
+   * #1042 slice-3 policy: is this package on the operator deny list? Applied
+   * per candidate during selection. Default reads
+   * `CINATRA_EXTENSION_AUTO_UPDATE_DENY` (comma-separated package names; unset →
+   * denies nothing).
+   */
+  isDenied: (packageName: string) => boolean;
+  /**
    * Execute ONE update through the manual-update dispatch (see
    * `defaultExecuteUpdate`). Throws on failure; the cycle isolates it.
+   * `fromVersion` is the expected currently-installed version — threaded as the
+   * #1042 slice-1 expected-version CAS precondition so a concurrent update that
+   * already advanced the package makes THIS stale update lose cleanly.
    */
   executeUpdate: (
-    candidate: { packageName: string; kind: string; toVersion: string },
+    candidate: { packageName: string; kind: string; toVersion: string; fromVersion: string },
     actor: Actor,
   ) => Promise<void>;
   /** Durable audit write (default: `logAuditEventStrict`). May throw; the
@@ -257,6 +375,15 @@ export type ExtensionAutoUpdateDeps = {
 export function buildDefaultExtensionAutoUpdateDeps(): ExtensionAutoUpdateDeps {
   return {
     isEnabled: isExtensionAutoUpdateEnabled,
+    isWithinMaintenanceWindow: () =>
+      isWithinMaintenanceWindowSpec(
+        process.env[EXTENSION_AUTO_UPDATE_WINDOW_ENV],
+        new Date(),
+      ),
+    isDenied: (packageName) =>
+      parseAutoUpdateDenyList(process.env[EXTENSION_AUTO_UPDATE_DENY_ENV]).has(
+        packageName,
+      ),
     listInstalledRows: async () => {
       const { listInstalledExtensions } = await import(
         "@cinatra-ai/extensions/canonical-store"
@@ -317,11 +444,12 @@ export function evaluateCandidateRecheck(
     expectedVersion: string;
   },
 ): { ok: true } | { ok: false; detail: string } {
-  // The org-rows compensation fence holds at DISPATCH time too — an org row
-  // created mid-cycle re-arms the package-global hard-delete hazard.
-  if (freshRows.some((r) => (r.organizationId ?? null) !== null)) {
-    return { ok: false, detail: "org-scoped install rows appeared since selection" };
-  }
+  // #1042 slice-2: the org-rows fence is LIFTED. Slice-1 refused here whenever
+  // ANY org-scoped row was present (the package-global-hard-delete-on-
+  // compensation hazard); the loop's dispatch now opts into row-scoped
+  // compensation, so a same-package OTHER-scope row is provably untouched and
+  // an org row appearing mid-cycle is no longer disqualifying. Every OTHER
+  // drift check below still holds (the recheck is package-scoped to NULL-org).
   const nullOrgRows = freshRows.filter(
     (r) =>
       r.packageName === selected.packageName && (r.organizationId ?? null) === null,
@@ -375,7 +503,7 @@ export function evaluateCandidateRecheck(
  * authorize metadata).
  */
 export async function defaultExecuteUpdate(
-  candidate: { packageName: string; kind: string; toVersion: string },
+  candidate: { packageName: string; kind: string; toVersion: string; fromVersion: string },
   actor: Actor,
 ): Promise<void> {
   // Host handler wiring (idempotent side-effect module) — never dispatch
@@ -392,6 +520,11 @@ export async function defaultExecuteUpdate(
         version: candidate.toVersion,
       },
       actor,
+      // #1042 slice-1: expected-version CAS. The direct in-place update refuses
+      // at the mutation boundary (under the per-package install lock) if the
+      // installed version already moved off `fromVersion` — the loop's cached
+      // target loses cleanly to a concurrent update, never double-applies.
+      { expectedInstalledVersion: candidate.fromVersion },
     );
     return;
   }
@@ -403,6 +536,13 @@ export async function defaultExecuteUpdate(
     version: candidate.toVersion,
     actor,
     rootAction: "update",
+    // #1042 slice-1: expected-version CAS on the root update member (see above).
+    expectedRootInstalledVersion: candidate.fromVersion,
+    // #1042 slice-2: row-scoped compensation — a mid-batch failure tears down
+    // ONLY the freshly-installed actor-scope rows, never the package-global
+    // hard-delete. This is what makes the loop safe on org-multi-tenant
+    // instances (the org-rows fence is lifted).
+    rowScopedCompensation: true,
   });
 }
 
@@ -421,6 +561,7 @@ export async function runExtensionAutoUpdateCycle(
   const summary: ExtensionAutoUpdateRunSummary = {
     enabled: true,
     readModelWired: false,
+    maintenanceWindowOpen: null,
     signatureReady: null,
     scanned: 0,
     applied: [],
@@ -432,7 +573,8 @@ export async function runExtensionAutoUpdateCycle(
   if (!deps.isEnabled()) {
     // Defense in depth: the boot seed never schedules the loop while the flag
     // is off, but a canonical job from a previously-enabled boot may still
-    // fire. Do nothing — no reads, no writes.
+    // fire. Do nothing — no reads, no writes. The policy knobs are NOT even
+    // consulted here: "default OFF stays OFF" is structural.
     summary.enabled = false;
     return summary;
   }
@@ -448,6 +590,20 @@ export async function runExtensionAutoUpdateCycle(
       );
     }
   };
+
+  // #1042 slice-3: MAINTENANCE WINDOW gate. Evaluated ONLY after the master
+  // flag is on (the knob can never turn the loop on). Closed → the cycle does
+  // NO work (no reads, no dispatch); the per-run audit still fires here so a
+  // suppressed run is observable. A malformed/unset spec is resolved
+  // fail-closed / open by the dep (see `isWithinMaintenanceWindowSpec`).
+  summary.maintenanceWindowOpen = deps.isWithinMaintenanceWindow();
+  if (!summary.maintenanceWindowOpen) {
+    console.warn(
+      "[extension-auto-update] outside the configured maintenance window — cycle suppressed (no candidates scanned or executed)",
+    );
+    await writeAudit(buildRunAuditEvent(summary));
+    return summary;
+  }
 
   // Everything after the flag check writes the per-run audit event on the way
   // out — INCLUDING a thrown enumeration/read failure (the throw still
@@ -504,6 +660,12 @@ async function runEnabledCycle(
       skip(packageName, "required-in-prod-scope");
       continue;
     }
+    // #1042 slice-3: operator deny list — an explicitly-denied package never
+    // auto-updates even when otherwise eligible.
+    if (deps.isDenied(packageName)) {
+      skip(packageName, "deny-listed");
+      continue;
+    }
     const currentVersion = row.source.version;
     if (!currentVersion) {
       // A verdaccio source always carries a version; treat a missing one as
@@ -515,18 +677,17 @@ async function runEnabledCycle(
   }
   summary.scanned = scoped.length;
 
-  // ---- org-rows compensation fence (see module header; codex round-1
-  // blocker): ANY org-scoped row on the instance halts execution — a
-  // mid-batch compensation uninstall of a freshly-installed dependency can
-  // take the platform-admin PACKAGE-GLOBAL hard-delete branch, and the
-  // dependency closure is unknowable before planning.
-  if (allRows.some((r) => (r.organizationId ?? null) !== null)) {
-    console.warn(
-      "[extension-auto-update] org-scoped install rows present on this instance — auto-update fenced off (compensation is not row-scoped yet; see extension-auto-update.ts header)",
-    );
-    for (const s of scoped) skip(s.row.packageName, "org-rows-compensation-fence");
-    return;
-  }
+  // ---- #1042 slice-2: the org-rows compensation fence is LIFTED. Slice-1
+  // halted the whole cycle whenever the instance held ANY org-scoped install
+  // row, because the batch's mid-batch compensation of a freshly-installed
+  // dependency could take the platform-admin PACKAGE-GLOBAL hard-delete branch
+  // and tear down same-package OTHER-org rows. The loop's dispatch now opts
+  // into ROW-SCOPED compensation (`rowScopedCompensation:true` →
+  // `uninstallMemberRowScoped` → `deleteScopedCanonicalRow`), which provably
+  // removes ONLY the freshly-installed actor-scope (NULL-org) row and never the
+  // package-global backing or another org's rows. Combined with the structural
+  // NULL-org actor bound (the dispatcher can only address NULL-org rows), an
+  // org-multi-tenant instance is safe — so the cycle no longer fences. ----
 
   // ---- update-availability via the cached read model ----------------------
   const store = await deps.resolveUpdateReadModelStore();
@@ -610,7 +771,15 @@ async function runEnabledCycle(
         continue;
       }
       await deps.executeUpdate(
-        { packageName: c.row.packageName, kind: c.row.kind, toVersion: c.toVersion },
+        {
+          packageName: c.row.packageName,
+          kind: c.row.kind,
+          toVersion: c.toVersion,
+          // #1042 slice-1: the expected-version CAS precondition — the update
+          // applies only if the installed version is still `currentVersion` at
+          // the mutation boundary.
+          fromVersion: c.currentVersion,
+        },
         actor,
       );
       summary.applied.push({
@@ -636,6 +805,25 @@ async function runEnabledCycle(
         },
       });
     } catch (err) {
+      // #1042 slice-1: the expected-version CAS refused at the mutation
+      // boundary — a concurrent update advanced the package after selection, so
+      // this cached target LOST cleanly. That is NOT a failure (nothing was
+      // mutated, the newer version is already serving); record it as a distinct
+      // benign SKIP, not in `failed`. Duck-typed on the stable error code so the
+      // loop needs no cross-package class import.
+      if (
+        (err as { code?: unknown } | null | undefined)?.code ===
+        "EXPECTED_VERSION_MISMATCH"
+      ) {
+        console.warn(
+          "[extension-auto-update] expected-version CAS lost for %s (%s -> %s): a concurrent update won; not double-applying",
+          c.row.packageName,
+          c.currentVersion,
+          c.toVersion,
+        );
+        skip(c.row.packageName, "cas-version-lost");
+        continue;
+      }
       // One candidate's failure never aborts the rest. The batch/dispatch
       // path has already compensated (newly-installed members removed, the
       // prior version still anchored + serving) before the throw reaches us.
@@ -690,6 +878,7 @@ function buildRunAuditEvent(
     operation: "extension_auto_update_run",
     metadata: {
       readModelWired: summary.readModelWired,
+      maintenanceWindowOpen: summary.maintenanceWindowOpen,
       signatureReady: summary.signatureReady,
       scanned: summary.scanned,
       applied: summary.applied.length,
