@@ -32,9 +32,11 @@ import "server-only";
 // object type, or capability provider — the version did not register). Only the
 // BULK ui-surface lookups return `serve: []` for a version that registered none
 // (an empty set is that version's genuine, complete surface list). The consuming
-// per-kind serve surfaces (a later, adjacent-lane slice — mirroring the deferred
-// live injection of `a2a-edge-bound-serving.ts`) MUST treat `refuse` as a hard
-// stop, exactly as the agent path does with an unreachable non-default pin.
+// per-kind serve surfaces MUST treat `refuse` as a hard stop, exactly as the
+// agent path does with an unreachable non-default pin. The MCP-tool kind is
+// CONSUMED live via `extension-edge-bound-serving.ts` (the cinatra#1392 S7
+// wiring slice — both `mcp-server.ts` chokepoints); the capability / object /
+// ui kinds' serve surfaces are still adjacent-lane follow-ups.
 //
 // LIFECYCLE + ATTEMPT OWNERSHIP. `beginVersionKeyedRegistration` (from the host
 // makeContext, per non-default record) creates a FRESH, NON-servable entry and
