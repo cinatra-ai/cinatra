@@ -41,7 +41,6 @@ import { saveDevExtensionsSettings } from "@/lib/dev-extensions";
 import { clearAllProviderLogEntries, saveAnthropicLoggingSettings } from "@/lib/logging";
 import { saveMcpLoggingSettings } from "@/lib/mcp-logging";
 import { createNotification } from "@/lib/notifications";
-import { orchestrateAnthropicSkillSync } from "@/lib/anthropic-skill-config-service";
 import {
   importNangoConnection,
   ensureNangoIntegration,
@@ -57,7 +56,6 @@ import {
   writeObjectsClassificationModelToDatabase,
   writeAgentCreationLlmProviderToDatabase,
   writeAgentCreationModelToDatabase,
-  writeAnthropicSkillSyncEnabledToDatabase,
   isAgentCreationPinActive,
 } from "@/lib/database";
 import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
@@ -216,9 +214,12 @@ const AGENT_CREATION_OPENAI_MODELS = [
 ] as const;
 
 export async function setDefaultProvidersAction(formData: FormData) {
-  // This action writes workspace-wide LLM provider/model config and the Anthropic
-  // skill-upload governance opt-in (a non-ZDR data residency decision). Require
-  // an admin session before any write.
+  // This action writes workspace-wide LLM provider/model config. Require an
+  // admin session before any write. The Anthropic skill-upload governance
+  // opt-in (a non-ZDR data-residency decision) moved OUT of core into the
+  // anthropic-connector Skills tab, which persists + orchestrates it through
+  // the `@cinatra-ai/host:anthropic-skill-config` host capability (cinatra#1104
+  // / S3b); core no longer reads, writes, or eager-syncs it from here.
   await requireAdminSession();
   // The DefaultProvidersCard posts `defaultProvider`, while other callers may
   // still post `llmProvider`. Accept both keys and prefer the card's
@@ -295,30 +296,12 @@ export async function setDefaultProvidersAction(formData: FormData) {
       writeAgentCreationModelToDatabase("");
     }
   }
-  // The governance Switch always submits an explicit "true"/"false" string,
-  // never checkbox absence. Parse exactly: never coerce a missing or garbage
-  // value into a silent OFF that would erase an existing opt-in from an
-  // unrelated partial post.
-  const skillSyncRaw = formData.get("anthropicSkillSyncEnabled");
-  if (skillSyncRaw === "true") {
-    writeAnthropicSkillSyncEnabledToDatabase(true);
-  } else if (skillSyncRaw === "false") {
-    writeAnthropicSkillSyncEnabledToDatabase(false);
-  } else if (skillSyncRaw === null) {
-    // Legacy / partial caller never sent the field — leave the stored value
-    // unchanged (do NOT default it OFF here).
-  } else {
-    throw new Error("Invalid Anthropic skill sync value.");
-  }
-
-  // Eager catalog-sync then stale-GC after the opt-in persist above. Extracted
-  // to `orchestrateAnthropicSkillSync` (a host capability the connector-owned
-  // Skills tab runs identically — cinatra#1104): admin-notify on failure, the
-  // save is never rolled back, both steps inert when OFF. Unchanged behavior,
-  // now single-sourced. Runs unconditionally (even for a legacy caller that
-  // omitted the field) exactly as before.
-  await orchestrateAnthropicSkillSync();
-
+  // The Anthropic skill-upload opt-in persist + eager catalog-sync/stale-GC
+  // orchestration is no longer written here. It is owned by the anthropic-
+  // connector Skills tab via the `@cinatra-ai/host:anthropic-skill-config`
+  // capability (`write` = persist the canonical key + run the identical eager
+  // sync/GC). The canonical reader stays in core so all ~7 consumers keep
+  // observing the same value.
   redirect("/configuration/llm");
 }
 
