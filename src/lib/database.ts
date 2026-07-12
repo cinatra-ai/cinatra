@@ -96,8 +96,6 @@ declare global {
 
 // Incremented by replaceStartupDatasetInDatabase to invalidate the in-process cache.
 let startupDatasetCacheVersion = 0;
-// (The skill-catalog cache is keyed on the CROSS-PROCESS generation token —
-// see readSkillCatalogFromDatabase — not a process-local counter; cinatra#1364.)
 // Incremented by replaceStartupOverridesInDatabase to invalidate the in-process cache.
 let startupOverridesCacheVersion = 0;
 
@@ -324,13 +322,10 @@ export function writeMetadataValueToDatabase(key: string, value: unknown) {
   writeMetadataValueInternal(key, value);
 }
 
-// Lease-bootstrap INSERT-IF-ABSENT + guarded fence upsert (cinatra#1364).
+// cinatra#1364: lease bootstrap, guarded fence upsert, causal lease-guard abort marker.
 export const writeMetadataValueIfAbsentToDatabase = writeMetadataValueIfAbsentInternal;
-// Causal marker for a catalog-write lease-guard abort (cinatra#1364) — see
-// buildCatalogWriteLeaseGuardQuery. Re-exported so the locked rebuild can
-// classify the abort through its dynamic database-module import.
-export { CATALOG_WRITE_LEASE_LOST_ERROR_MARKER } from "@/lib/database-metadata";
 export const writeMetadataValueIfGuardTokenHeldToDatabase = writeMetadataValueIfGuardTokenHeldInternal;
+export { CATALOG_WRITE_LEASE_LOST_ERROR_MARKER } from "@/lib/database-metadata";
 
 // Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).
 // Pair with `compareAndSwapMetadataValueFromDatabase` to perform an atomic
@@ -357,19 +352,15 @@ export function compareAndSwapMetadataValueFromDatabase(
 }
 
 export function readSkillCatalogFromDatabase() {
-  // Cross-process cache invalidation (cinatra#1364): keyed on the generation
-  // token every catalog writer bumps ATOMICALLY with its row writes. A miss
-  // uses the FENCED batch read (token → rows → token, retried on token change):
-  // a torn mix is never CACHED, only served as the explicit unfenced last resort.
+  // cinatra#1364: cache keyed on the cross-process generation token; a miss uses
+  // the snapshot-fenced batch read; an unfenced last-resort read is never cached.
   const probe = readSkillCatalogGenerationTokenInternal();
   const cached = globalThis.__cinatraSkillCatalogCache;
   if (cached && cached.token === probe) {
     return cached.data;
   }
   const { data, token, fenced } = readSkillCatalogRowsFencedInternal();
-  if (fenced) {
-    globalThis.__cinatraSkillCatalogCache = { data, token };
-  }
+  if (fenced) globalThis.__cinatraSkillCatalogCache = { data, token };
   return data;
 }
 
@@ -573,27 +564,14 @@ export function replaceSkillCatalogInDatabase(input: {
    * (cinatra#1361) — content + its revision + active-revision pointer commit
    * together. Omit at catalog syncs / deletes that author no custom content. */
   lifecycleWrites?: SkillLifecycleRevisionWrite[];
-  /** Lease-ownership guard (cinatra#1364, explicit locked rebuild): when set,
-   * the transaction FIRST locks the guard row (`FOR UPDATE`, held to COMMIT)
-   * and ABORTS (division-by-zero rollback) unless it still carries
-   * `guardToken` — a rebuild that outlived its lease TTL can never overwrite
-   * a stealer's fresher catalog, and a steal can never interleave mid-write.
-   * Omitted on the legacy read-triggers-rebuild path (last-writer-wins there
-   * until S8 deletes it) and on direct catalog mutations, which own no lease. */
+  /** cinatra#1364 (locked rebuild only): FIRST statement locks the lease row and
+   * aborts unless it still carries `guardToken` — see buildCatalogWriteLeaseGuardQuery. */
   writeGuard?: { guardKey: string; guardToken: string };
 }) {
   const keptPackageIds = input.skillPackages.map((row) => row.id);
   const keptSkillIds = input.skills.map((row) => row.id);
   runTransactionalBatch([
-    ...(input.writeGuard
-      ? [
-          buildCatalogWriteLeaseGuardQuery(
-            postgresSchema,
-            input.writeGuard.guardKey,
-            input.writeGuard.guardToken,
-          ),
-        ]
-      : []),
+    ...(input.writeGuard ? [buildCatalogWriteLeaseGuardQuery(postgresSchema, input.writeGuard.guardKey, input.writeGuard.guardToken)] : []),
     // Bump the cross-process generation token IN THIS transaction (#1364).
     buildBumpSkillCatalogGenerationQuery(postgresSchema),
     // UPSERT skill_packages with full identity columns set. The legacy

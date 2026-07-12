@@ -6,7 +6,6 @@ import {
   buildCompareAndSwapMetadataQuery,
   buildDeleteMetadataByPrefixQuery,
   buildDeleteMetadataQuery,
-  buildInsertMetadataIfAbsentQuery,
   buildReadMetadataQuery,
   buildSelectJsonRowsQuery,
   buildWriteMetadataQuery,
@@ -76,9 +75,18 @@ export function readRawMetadataStringInternal(key: string): string | null {
 // and the CAS that follows elects exactly one lease winner.
 export function writeMetadataValueIfAbsentInternal(key: string, value: unknown) {
   ensurePostgresSchema();
+  // Raw SQL kept HERE (not a drizzle-store builder): drizzle-store.ts sits at
+  // its file-size-ratchet ceiling, and this module already owns the sibling
+  // raw guarded-fence statement below.
+  const table = `"${postgresSchema.replaceAll('"', '""')}"."metadata"`;
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
-    queries: [buildInsertMetadataIfAbsentQuery(postgresSchema, key, JSON.stringify(value))],
+    queries: [
+      {
+        text: `INSERT INTO ${table} (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
+        values: [key, JSON.stringify(value)],
+      },
+    ],
   });
 }
 

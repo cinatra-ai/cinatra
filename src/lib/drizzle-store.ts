@@ -4324,11 +4324,6 @@ export function buildWriteMetadataQuery(schemaName: string, key: string, value: 
       }),
   );
 }
-/** INSERT-IF-ABSENT metadata row (lease bootstrap: never clobbers an existing value; cinatra#1364). */
-export function buildInsertMetadataIfAbsentQuery(schemaName: string, key: string, value: string): QueryInput {
-  const store = getStore(schemaName);
-  return toQueryInput(store.db.insert(store.tables.metadata).values({ key, value }).onConflictDoNothing());
-}
 
 // Physically REMOVE a metadata row. Distinct from `buildWriteMetadataQuery(key, "null")`
 // which UPSERTs the JSON string "null" and leaves the row in place — the

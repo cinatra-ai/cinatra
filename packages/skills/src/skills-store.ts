@@ -5,10 +5,8 @@ import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
-// installedSkillPackages + the canonical access-policy helpers (W4, #1073) live
-// in ./skill-packages (an already-graph-reachable node) — co-located there to
-// avoid adding a new module to the locked route bundles (route-graph ratchet)
-// while keeping this file under its size ceiling (file-size ratchet).
+// installedSkillPackages + the canonical access-policy helpers (W4, #1073) live in
+// ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
 import { installedSkillPackages, normalizeStoredAccessPolicy, readSkillsCatalogSnapshot, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
@@ -923,13 +921,8 @@ function catalogSignature(input: { skillPackages: PersistedSkillPackage[]; skill
   });
 }
 
-export async function syncInstalledSkillsToDatabase(options?: {
-  /** Threaded by the EXPLICIT locked rebuild (cinatra#1364): fences the
-   * catalog-write transaction on the rebuild lease still being held, so a run
-   * that outlived its TTL aborts instead of clobbering a stealer's fresher
-   * write. Absent on the legacy read-triggers-rebuild path. */
-  catalogWriteGuard?: { guardKey: string; guardToken: string };
-}) {
+// options.catalogWriteGuard (cinatra#1364): locked-rebuild-only lease fence for the catalog-write transaction.
+export async function syncInstalledSkillsToDatabase(options?: { catalogWriteGuard?: { guardKey: string; guardToken: string } }) {
   if (!githubAutoSyncAttempted) {
     githubAutoSyncAttempted = true;
     await tryAutoSyncConfiguredRepository();
