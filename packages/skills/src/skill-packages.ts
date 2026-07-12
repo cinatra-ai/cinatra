@@ -130,8 +130,9 @@ export function visibilityToLevelScope(
 // transaction (+ generation-token bump) and the fenced reader retries torn
 // reads. A rebuild that outlives the lease TTL can overlap a stealer's run
 // (both writes are atomic; last writer wins, as on the legacy path); the
-// completeness fence is only written while the lease is STILL HELD, so a
-// stolen run never stamps a fence over the stealer's.
+// completeness fence is written through a SINGLE statement guarded on the
+// lease row still carrying our token, so a stolen run never stamps a fence
+// over the stealer's (no check-then-write window).
 //
 // All host-store access is via dynamic import so this module stays a
 // statically-pure leaf (existing tests import it without mocking the DB), and
@@ -273,17 +274,19 @@ async function runLockedRebuild(options: RebuildSkillsCatalogOptions): Promise<R
   try {
     const store = await loadSkillsStore();
     const catalog = await engineContext.run(true, () => store.syncInstalledSkillsToDatabase());
-    // Completeness fence AFTER the engine's transactional write committed —
-    // and ONLY while the lease is still ours. A run that outlived the TTL
-    // (lease stolen) must not stamp its fence over the stealer's.
-    if (isCatalogRebuildLeaseStillHeld(db, leaseToken)) {
-      db.writeMetadataValueToDatabase(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY, {
-        completedAt: new Date().toISOString(),
-        reason: options.reason ?? "unspecified",
-      });
-    } else {
+    // Completeness fence AFTER the engine's transactional write committed.
+    // The write is a SINGLE guarded statement that validates the lease row
+    // still carries OUR token — atomic, so a run that outlived its TTL can
+    // never stamp its fence over a stealer's (no check-then-write window).
+    const fenceWritten = db.writeMetadataValueIfGuardTokenHeldToDatabase(
+      SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY,
+      { completedAt: new Date().toISOString(), reason: options.reason ?? "unspecified" },
+      SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+      leaseToken,
+    );
+    if (!fenceWritten) {
       console.warn(
-        "[skills-catalog] rebuild outlived its lease (stolen by another process) — skipping the completeness-fence write.",
+        "[skills-catalog] rebuild outlived its lease (stolen by another process) — skipped the completeness-fence write.",
       );
     }
     return catalog;
@@ -352,16 +355,6 @@ async function acquireCatalogRebuildLease(
       );
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
-  }
-}
-
-/** True while the lease row still carries OUR token (not expired-and-stolen). */
-function isCatalogRebuildLeaseStillHeld(db: DatabaseModule, leaseToken: string): boolean {
-  try {
-    const raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
-    return raw !== null && parseLeaseRaw(raw).token === leaseToken;
-  } catch {
-    return false; // fail closed: don't stamp the fence on an unverifiable lease
   }
 }
 

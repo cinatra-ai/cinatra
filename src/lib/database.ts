@@ -45,6 +45,7 @@ import {
   readSkillCatalogRowsFencedInternal,
   safeParseJson,
   writeMetadataValueIfAbsentInternal,
+  writeMetadataValueIfGuardTokenHeldInternal,
   writeMetadataValueInternal,
 } from "@/lib/database-metadata";
 
@@ -322,10 +323,9 @@ export function writeMetadataValueToDatabase(key: string, value: unknown) {
   writeMetadataValueInternal(key, value);
 }
 
-// INSERT-IF-ABSENT (never clobbers a row) — the lease bootstrap (cinatra#1364).
-export function writeMetadataValueIfAbsentToDatabase(key: string, value: unknown) {
-  writeMetadataValueIfAbsentInternal(key, value);
-}
+// Lease-bootstrap INSERT-IF-ABSENT + guarded fence upsert (cinatra#1364).
+export const writeMetadataValueIfAbsentToDatabase = writeMetadataValueIfAbsentInternal;
+export const writeMetadataValueIfGuardTokenHeldToDatabase = writeMetadataValueIfGuardTokenHeldInternal;
 
 // Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).
 // Pair with `compareAndSwapMetadataValueFromDatabase` to perform an atomic
@@ -354,8 +354,8 @@ export function compareAndSwapMetadataValueFromDatabase(
 export function readSkillCatalogFromDatabase() {
   // Cross-process cache invalidation (cinatra#1364): keyed on the generation
   // token every catalog writer bumps ATOMICALLY with its row writes. A miss
-  // uses the FENCED batch read (token → rows → token, retried on token change)
-  // so a torn mix is never returned; an unfenced last resort is NOT cached.
+  // uses the FENCED batch read (token → rows → token, retried on token change):
+  // a torn mix is never CACHED, only served as the explicit unfenced last resort.
   const probe = readSkillCatalogGenerationTokenInternal();
   const cached = globalThis.__cinatraSkillCatalogCache;
   if (cached && cached.token === probe) {

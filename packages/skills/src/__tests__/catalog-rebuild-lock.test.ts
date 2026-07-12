@@ -51,6 +51,21 @@ vi.mock("@/lib/database", () => ({
   writeMetadataValueIfAbsentToDatabase: vi.fn((key: string, value: unknown) => {
     if (!state.meta.has(key)) state.meta.set(key, JSON.stringify(value));
   }),
+  // Faithful in-memory model of the statement-atomic guarded fence upsert:
+  // write ONLY when the guard row's JSON `token` equals guardToken.
+  writeMetadataValueIfGuardTokenHeldToDatabase: vi.fn(
+    (writeKey: string, value: unknown, guardKey: string, guardToken: string) => {
+      const raw = state.meta.get(guardKey);
+      if (raw === undefined) return false;
+      try {
+        if ((JSON.parse(raw) as { token?: unknown })?.token !== guardToken) return false;
+      } catch {
+        return false;
+      }
+      state.meta.set(writeKey, JSON.stringify(value));
+      return true;
+    },
+  ),
   readRawMetadataStringFromDatabase: vi.fn((key: string) => state.meta.get(key) ?? null),
   compareAndSwapMetadataValueFromDatabase: vi.fn(
     (key: string, value: unknown, expectedRaw: string) => {

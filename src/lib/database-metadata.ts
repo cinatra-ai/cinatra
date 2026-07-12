@@ -132,6 +132,40 @@ export function buildBumpSkillCatalogGenerationQuery(schema: string) {
   );
 }
 
+/**
+ * GUARDED metadata upsert (cinatra#1364 completeness fence): writes `writeKey`
+ * in the SAME single statement that validates `guardKey` still carries
+ * `guardToken` (`value::jsonb->>'token'`). Statement-atomic in Postgres, so it
+ * closes the check-then-write TOCTOU where a lease holder validates ownership,
+ * stalls past its TTL, and then stamps its fence over a stealer's: a stealer
+ * whose CAS committed before this statement's snapshot makes the guard fail
+ * (no write); one committing after simply overwrites LATER with newer truth.
+ * Returns true iff the write landed.
+ */
+export function writeMetadataValueIfGuardTokenHeldInternal(
+  writeKey: string,
+  value: unknown,
+  guardKey: string,
+  guardToken: string,
+): boolean {
+  ensurePostgresSchema();
+  const table = `"${postgresSchema.replaceAll('"', '""')}"."metadata"`;
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text:
+          `INSERT INTO ${table} (key, value) ` +
+          `SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM ${table} WHERE key = $3 AND (value::jsonb ->> 'token') = $4) ` +
+          `ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value ` +
+          `RETURNING key`,
+        values: [writeKey, JSON.stringify(value), guardKey, guardToken],
+      },
+    ],
+  });
+  return (result?.rows?.length ?? 0) > 0;
+}
+
 export type SkillCatalogRowsFencedRead = {
   data: { skillPackages: Array<Record<string, unknown>>; skills: Array<Record<string, unknown>> };
   token: string | null;
