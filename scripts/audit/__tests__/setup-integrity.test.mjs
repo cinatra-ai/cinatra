@@ -37,9 +37,10 @@ describe("setup-integrity — the REAL scripts/setup.sh PASSES", () => {
   });
   it("reports zero bare missing in-tree path references", () => {
     // origin/main guards the OpenAI-shell build by globbing
-    // `extensions/*/*/runtime/Dockerfile` and only building when one is found
-    // (`if [ -n "$shell_runtime_context" ]`), so the `docker build` context is a
-    // VARIABLE expansion, not a bare literal in-tree path → no violation.
+    // `extensions/*/*/runtime/Dockerfile` into an array and only building when
+    // exactly one match is found (context `"${shell_runtime_contexts[0]}"`), so
+    // the `docker build` context is a VARIABLE expansion, not a bare literal
+    // in-tree path → no violation.
     const result = checkSetupIntegrity({ repoRoot: REPO_ROOT, scripts: [REAL_SETUP] });
     expect(result.violations, JSON.stringify(result.violations, null, 2)).toEqual([]);
     expect(result.ok).toBe(true);
@@ -96,10 +97,13 @@ describe("setup-integrity — the bad fixture FAILS", () => {
     expect(result.violations.length).toBeGreaterThanOrEqual(1);
     const docker = result.violations.find((v) => v.kind === "docker-build");
     expect(docker).toBeDefined();
-    expect(docker.path).toBe("packages/connector-openai/runtime");
+    expect(docker.path).toBe("extensions/openai-connector/runtime");
   });
   it("the referenced in-tree path genuinely does not exist (the missing-context-path regression this guards)", () => {
-    expect(existsSync(join(REPO_ROOT, "packages/connector-openai/runtime"))).toBe(false);
+    // The fixture names the live extensions/…/runtime namespace but drops the
+    // org-scope segment clone-back always inserts (extensions/<scope>/<name>),
+    // so it is stably missing even in a cloned-back tree.
+    expect(existsSync(join(REPO_ROOT, "extensions/openai-connector/runtime"))).toBe(false);
   });
 });
 
@@ -116,7 +120,7 @@ describe("setup-integrity — an UNRELATED, already-closed guard does NOT mask a
     expect(result.ok).toBe(false);
     const docker = result.violations.find((v) => v.kind === "docker-build");
     expect(docker, JSON.stringify(result.violations, null, 2)).toBeDefined();
-    expect(docker.path).toBe("packages/connector-openai/runtime");
+    expect(docker.path).toBe("extensions/openai-connector/runtime");
   });
   it("a same-path enclosing guard still protects the build (no over-flagging)", () => {
     // The matching-guard form must remain unflagged: the
@@ -135,13 +139,13 @@ describe("setup-integrity — an UNRELATED, already-closed guard does NOT mask a
     const text = [
       "set -euo pipefail",
       "if [ -f README.md ]; then",
-      "  docker build -t x packages/connector-openai/runtime",
+      "  docker build -t x extensions/openai-connector/runtime",
       "fi",
     ].join("\n");
     const v = scanScriptForMissingPaths(text, { scriptPath: "t.sh", repoRoot: REPO_ROOT });
     expect(v.length).toBe(1);
     expect(v[0].kind).toBe("docker-build");
-    expect(v[0].path).toBe("packages/connector-openai/runtime");
+    expect(v[0].path).toBe("extensions/openai-connector/runtime");
   });
 });
 
