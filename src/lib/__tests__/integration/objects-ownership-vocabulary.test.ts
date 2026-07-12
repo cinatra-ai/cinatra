@@ -136,6 +136,11 @@ describe.skipIf(!hasDb)(
     let cProject = "";
     let cOwnerLegacy = "";
     let cJunk = "";
+    // Adversarial mixed row: composite visibility AND a conflicting legacy
+    // owner_type. The fixed mapping must win on run 1 AND the owner axis
+    // must stay settled on a re-run (sequence idempotency — owner_type is
+    // retired by the final pass, so pass 0 can never re-fire).
+    let cMixed = "";
     // Canonical object-save rows (must be untouched + round-trip).
     let kUser = "";
     let kTeam = "";
@@ -194,6 +199,13 @@ describe.skipIf(!hasDb)(
         ownerLevel: "organization",
         ownerId: orgA,
         visibility: "definitely-not-a-visibility",
+      });
+      cMixed = await insertObject(client, schema, {
+        orgId: orgA,
+        ownerLevel: "organization",
+        ownerId: orgA,
+        visibility: `project:${P1}`,
+        legacyOwnerType: "user",
       });
 
       // ---- canonical column vocabulary (object-save writes)
@@ -302,11 +314,27 @@ describe.skipIf(!hasDb)(
       expect(r.owner_level).toBe("organization");
     });
 
+    it("mixed composite+owner_type row: the fixed mapping wins over pass 0", async () => {
+      expect(await readOwnership(client, schema, cMixed)).toEqual({
+        owner_level: "organization",
+        owner_id: orgA,
+        visibility: "private",
+        project_id: P1,
+      });
+    });
+
+    it("retires the legacy owner_type data (sequence-idempotency guarantee)", async () => {
+      const res = await client.query(
+        `SELECT count(*)::int AS n FROM "${schema}"."objects" WHERE owner_type IS NOT NULL`,
+      );
+      expect(res.rows[0].n).toBe(0);
+    });
+
     // ---- B + C. canonical rows untouched, re-run is a no-op ---------------
 
     it("canonical rows are untouched, and a re-run changes nothing (idempotency)", async () => {
       const before = await Promise.all(
-        [kUser, kTeam, kOrg, kPublic, kProject, cOrg, cWorkspace, cTeam, cUser, cProject].map(
+        [kUser, kTeam, kOrg, kPublic, kProject, cOrg, cWorkspace, cTeam, cUser, cProject, cMixed, cOwnerLegacy].map(
           (id) => readOwnership(client, schema, id),
         ),
       );
@@ -319,7 +347,7 @@ describe.skipIf(!hasDb)(
       expect(before[3].visibility).toBe("public");
       await runVocabularyMigration(client, schema); // second run
       const after = await Promise.all(
-        [kUser, kTeam, kOrg, kPublic, kProject, cOrg, cWorkspace, cTeam, cUser, cProject].map(
+        [kUser, kTeam, kOrg, kPublic, kProject, cOrg, cWorkspace, cTeam, cUser, cProject, cMixed, cOwnerLegacy].map(
           (id) => readOwnership(client, schema, id),
         ),
       );

@@ -214,6 +214,13 @@ export type NormalizeOwnershipInput = {
   projectId?: string | null;
   /** The row's org id — the owner_id target for the 'org' composite mapping. */
   orgId?: string | null;
+  /**
+   * The retired legacy `owner_type` value from a PRE-cutover snapshot, when
+   * the caller has one. Mirrors core__0033's pass 0: a bare-default
+   * owner_level adopts a recorded canonical owner_type unless the composite
+   * visibility mapping claims the row (the fixed mapping always wins).
+   */
+  ownerType?: string | null;
 };
 
 /**
@@ -231,6 +238,9 @@ export type NormalizeOwnershipInput = {
  *                      visibility='private' (owner axis untouched)
  *   - any other non-canonical value ('owner', 'admin', junk) → 'private'
  *     (fail-closed, mirrors the objects-side normalizeObjectVisibility)
+ *   - pass 0 (when the caller supplies the snapshot's legacy `ownerType`):
+ *     a bare-default owner_level adopts a recorded canonical owner_type
+ *     unless a composite visibility form claims the row.
  *
  * Canonical visibility values and `null` (which callers COALESCE to their own
  * defaults) pass through untouched. A non-canonical ownerLevel passes through
@@ -244,10 +254,26 @@ export type NormalizeOwnershipInput = {
 export function normalizeOwnershipVocabulary(
   input: NormalizeOwnershipInput,
 ): OwnershipVocabularyTuple {
-  const ownerLevel = input.ownerLevel ?? null;
+  let ownerLevel = input.ownerLevel ?? null;
   const ownerId = input.ownerId ?? null;
   const visibility = input.visibility ?? null;
   const projectId = input.projectId ?? null;
+
+  // Pass 0 mirror (legacy lazy-backfill owner_type tuples): a bare-default
+  // owner_level ('organization', or null which the write path COALESCEs to
+  // 'organization') adopts a recorded canonical owner_type — unless one of
+  // the five composite visibility forms below claims the row (the fixed
+  // mapping wins, exactly like the migration's statement order).
+  const ownerType = input.ownerType ?? null;
+  if (
+    ownerType !== null &&
+    OWNER_LEVEL_SET.has(ownerType) &&
+    ownerType !== ownerLevel &&
+    (ownerLevel === null || ownerLevel === "organization") &&
+    !isCompositeVisibilityForm(visibility)
+  ) {
+    ownerLevel = ownerType;
+  }
 
   if (visibility === null || VISIBILITY_SET.has(visibility)) {
     return { ownerLevel, ownerId, visibility, projectId };
@@ -294,6 +320,17 @@ export function normalizeOwnershipVocabulary(
 
   // 'owner', 'admin', or junk → fail-closed private; owner axis untouched.
   return { ownerLevel, ownerId, visibility: "private", projectId };
+}
+
+/** One of the five retired composite visibility forms the fixed mapping claims. */
+function isCompositeVisibilityForm(visibility: string | null): boolean {
+  if (visibility === null) return false;
+  if (visibility === "org" || visibility === "workspace") return true;
+  return (
+    (visibility.startsWith("team:") && visibility.length > "team:".length) ||
+    (visibility.startsWith("user:") && visibility.length > "user:".length) ||
+    (visibility.startsWith("project:") && visibility.length > "project:".length)
+  );
 }
 
 /** True iff the value is a canonical visibility ('private'|'team'|'organization'|'public'). */

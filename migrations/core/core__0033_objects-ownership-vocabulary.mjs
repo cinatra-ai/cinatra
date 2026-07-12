@@ -138,6 +138,21 @@ export async function up(pgm) {
      WHERE visibility IS NULL
         OR visibility NOT IN ('private','team','organization','public');
   `);
+
+  // ---- Retire the consumed legacy tuple. owner_type's information is now
+  // fully absorbed into owner_level; clearing it makes the ORDERED SEQUENCE
+  // idempotent, not just each statement: without this, a mixed row like
+  // (owner_level='organization', owner_type='user', visibility='project:p1')
+  // — correctly left organization-owned on the first run (pass 0 skips
+  // composite rows; the fixed mapping wins) — would become eligible for
+  // pass 0 on a RE-RUN once its visibility reads 'private', flipping a
+  // settled owner axis. Nothing reads objects.owner_type anymore (the
+  // lazy-backfill reader is deleted in the same change).
+  await pgm.db.query(`
+    UPDATE objects
+       SET owner_type = NULL
+     WHERE owner_type IS NOT NULL;
+  `);
 }
 
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */

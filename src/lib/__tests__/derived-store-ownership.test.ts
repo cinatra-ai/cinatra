@@ -242,6 +242,68 @@ describe("normalizeOwnershipVocabulary", () => {
       expect(t.ownerId).toBe("team-1");
     },
   );
+
+  // ---- pass-0 mirror (legacy lazy-backfill owner_type tuples) ----
+
+  it("pass 0: bare-default owner_level adopts a recorded canonical owner_type", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "u-9",
+      visibility: "owner",
+      projectId: null,
+      ownerType: "user",
+    });
+    expect(t.ownerLevel).toBe("user");
+    expect(t.ownerId).toBe("u-9");
+    expect(t.visibility).toBe("private");
+  });
+
+  it("pass 0: null owner_level (create-path bare default) also adopts owner_type", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: null,
+      ownerId: "team-3",
+      visibility: "private",
+      projectId: null,
+      ownerType: "team",
+    });
+    expect(t.ownerLevel).toBe("team");
+  });
+
+  it("pass 0 NEVER overrides the fixed composite mapping (mapping wins)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "project:p1",
+      projectId: null,
+      ownerType: "user",
+    });
+    // The 'project:' mapping claims the row: owner axis untouched.
+    expect(t.ownerLevel).toBe("organization");
+    expect(t.projectId).toBe("p1");
+    expect(t.visibility).toBe("private");
+  });
+
+  it("pass 0 never overrides an explicitly-leveled row (owner_level != bare default)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "team",
+      ownerId: "team-1",
+      visibility: "team",
+      projectId: null,
+      ownerType: "user",
+    });
+    expect(t.ownerLevel).toBe("team");
+  });
+
+  it("pass 0 ignores non-canonical owner_type values", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      visibility: "organization",
+      projectId: null,
+      ownerType: "project",
+    });
+    expect(t.ownerLevel).toBe("organization");
+  });
 });
 
 describe("canonical vocabulary guards", () => {

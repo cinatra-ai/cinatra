@@ -70,6 +70,13 @@ export type HistoryAwareUpsertInput = {
   ownerLevel?: string | null;
   ownerId?: string | null;
   visibility?: string | null;
+  /**
+   * Legacy `owner_type` from a PRE-cutover snapshot (replay/restore callers
+   * only — cinatra#1428). Never written to the row; consumed solely by
+   * normalizeOwnershipVocabulary's pass-0 mirror so a replayed lazy-backfill
+   * tuple lands on the same owner axis core__0033 gave the live row.
+   */
+  ownerType?: string | null;
   payloadHash?: string | null;
 };
 
@@ -251,6 +258,8 @@ export type CreateStmtArgs = {
   ownerLevel: string | null;
   ownerId: string | null;
   visibility: string | null;
+  /** Legacy snapshot owner_type — normalization input only, never bound to SQL. */
+  ownerType?: string | null;
   projectId: string | null;
   changeSetId: string;
   eventId: string;
@@ -815,6 +824,7 @@ export function historyAwareUpsert(
     ownerLevel: input.ownerLevel ?? null,
     ownerId: input.ownerId ?? null,
     visibility: input.visibility ?? null,
+    ownerType: input.ownerType ?? null,
     projectId,
     changeSetId: handle.changeSetId,
     eventId,
