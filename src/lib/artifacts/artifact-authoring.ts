@@ -33,7 +33,12 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { createSemanticArtifact, type CreateSemanticArtifactResult } from "./artifact-creation";
 import { assertSemanticType } from "./semantic-assertion-store";
-import { tombstoneArtifact } from "./artifact-service";
+// Rollback tombstone goes to the RETENTION layer directly: it is an internal
+// compensating action on a row this same request just created (the actor was
+// already authorized to create it), not an actor-initiated delete — routing
+// it through the service's canonical `object.delete` gate (cinatra#1428)
+// would let a member's failed authoring emit strand an org-owned orphan row.
+import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import {
   recordAuthoringInvocation,
   markAuthoringInvocationCommitted,
@@ -368,11 +373,10 @@ export async function authorArtifact(
     // Best-effort tombstone; don't let a tombstone failure swallow the
     // original assertion error.
     try {
-      tombstoneArtifact({
+      retentionTombstone({
         artifactId: result.artifactId,
         orgId: input.orgId,
-        actor: input.actor,
-        auditActor: input.actor.principalId ?? null,
+        actor: input.actor.principalId ?? null,
       });
     } catch (tombErr) {
       // Log but propagate the original assertion error — the orphan

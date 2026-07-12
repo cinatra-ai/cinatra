@@ -1,6 +1,19 @@
 import "server-only";
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { listObjectsByFilter, getObjectById } from "@/lib/objects-store";
+// Canonical `object.*` row authorization (cinatra#1428 RBAC matrix): the
+// artifact surface enforces the SAME object authorization the objects
+// surface routes through `enforceResourceAccess` — this sync core IS that
+// decision (single implementation, no drift) — plus its own surface gating.
+import {
+  decideResourceAccessForActorContext,
+  type ResourceForAccessCheck,
+} from "@/lib/authz/enforce-resource-access";
+import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
+import {
+  listObjectsByFilter,
+  getObjectById,
+  type ObjectRecord,
+} from "@/lib/objects-store";
 import type { ArtifactObjectData } from "@cinatra-ai/artifacts";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
 import {
@@ -101,6 +114,52 @@ function artifactObjectTypeIds(): Set<string> {
   return new Set([SEMANTIC_ARTIFACT_OBJECT_TYPE]);
 }
 
+// ---------------------------------------------------------------------------
+// Canonical object authorization (cinatra#1428 RBAC matrix).
+//
+// A faceted (artifact-eligible) row is governed by canonical `object.*`
+// authorization: the artifact surface layers the SAME kernel decision the
+// objects surface enforces (`enforceResourceAccess` → shared sync core) on
+// top of the SQL ownership filter it already splices. Cross-surface
+// invariant: neither surface returns a row the other would deny.
+// ---------------------------------------------------------------------------
+
+/** Lift an objects row into the generic authz envelope (objects have no
+ *  co-owner table, so coOwnerUserIds is omitted — mirrors the objects MCP
+ *  surface's `buildObjectResourceCheck`). */
+function artifactRowResourceCheck(rec: ObjectRecord): ResourceForAccessCheck {
+  return {
+    resourceType: "object",
+    resourceId: rec.id,
+    organizationId: rec.orgId ?? null,
+    ownerLevel: normalizeOwnerLevel(rec.ownerLevel),
+    ownerId: rec.ownerId,
+    // Artifact rows may still carry composite visibility strings (the
+    // pre-#1428-vocabulary values); the kernel `can()` does not consult
+    // visibility, so pass null rather than coerce.
+    visibility: null,
+    projectId: rec.projectId,
+  };
+}
+
+/** Sync canonical `object.*` gate for an artifact row. `true` = allowed.
+ *  No actor (internal server-side callers) keeps today's trusted-path
+ *  semantics — the SQL ownership filter is also skipped for those. */
+function actorPassesObjectAuthz(
+  rec: ObjectRecord,
+  actor: ActorContext | undefined,
+  op: "object.read" | "object.delete",
+): boolean {
+  if (!actor) return true;
+  return (
+    decideResourceAccessForActorContext(
+      artifactRowResourceCheck(rec),
+      actor,
+      op,
+    ) === null
+  );
+}
+
 function toSummary(
   rec: {
     id: string;
@@ -182,13 +241,7 @@ export function listArtifacts(input: {
     input.extensionPackageName && input.orgId !== null
       ? listArtifactIdsForExtension(input.orgId, input.extensionPackageName)
       : null;
-  let rawRecs: {
-    id: string;
-    type: string;
-    data: unknown;
-    createdAt?: string;
-    updatedAt?: string;
-  }[] = [];
+  let rawRecs: ObjectRecord[] = [];
   for (const typeId of typeIds) {
     const recs = listObjectsByFilter(
       {
@@ -202,6 +255,15 @@ export function listArtifacts(input: {
       input.actor,
     );
     rawRecs.push(...recs);
+  }
+  // Canonical object authorization post-filter (cinatra#1428): drop rows the
+  // kernel `object.read` decision denies — the same per-row gate the objects
+  // surface applies — so the two surfaces cannot diverge on role-permission
+  // denials (the SQL ownership filter above already covers the data axis).
+  if (input.actor) {
+    rawRecs = rawRecs.filter((r) =>
+      actorPassesObjectAuthz(r, input.actor, "object.read"),
+    );
   }
   if (extFilter) rawRecs = rawRecs.filter((r) => extFilter.has(r.id));
   // Batched assertion lookup (avoids N+1 across the page).
@@ -244,6 +306,11 @@ export function getArtifact(input: {
   if (!rec) return null;
   ensureArtifactRegistry();
   if (!artifactObjectTypeIds().has(rec.type)) return null;
+  // Canonical object authorization (cinatra#1428): the kernel `object.read`
+  // decision gates this surface exactly like the objects surface — including
+  // the `allowDeleted` pin-override branch, which is a tombstone-visibility
+  // carve-out, never an authorization backdoor.
+  if (!actorPassesObjectAuthz(rec, input.actor, "object.read")) return null;
   // Enrich with semantic identity from the assertion store (read assertions,
   // not objects.type).
   const eligible =
@@ -258,26 +325,40 @@ export function getArtifact(input: {
 
 /**
  * Canonical delete = tombstone (never hard-delete a referenced artifact).
- * Authorize through the same actor-scoped read as everything else before
- * mutating: an org-scoped caller must not tombstone an artifact the
- * ownership/visibility filter would deny it. `auditActor` is the audit-trail
- * string; `actor` is the authz context.
+ * Authorization (cinatra#1428 RBAC matrix), both layers required:
+ *   1. actor-scoped visibility — the same SQL ownership filter every read
+ *      uses (an org-scoped caller must not tombstone an artifact the
+ *      ownership/visibility filter would deny it; denied reads 404-hide);
+ *   2. canonical `object.delete` — the same kernel decision the objects
+ *      surface enforces for `objects_delete` (owner short-circuit for
+ *      user-owned rows; role grant otherwise).
+ * `auditActor` is the audit-trail string; `actor` is the authz context.
+ *
+ * The delete rides the canonical object soft-delete path (change event +
+ * outbox delete projection + undoable change_set); `changeSetId` is surfaced
+ * for Undo parity with `objects_delete`.
  */
 export function tombstoneArtifact(input: {
   orgId: string;
   artifactId: string;
   actor?: ActorContext;
   auditActor?: string | null;
-}): { referenced: boolean; pinCount: number } {
+}): { referenced: boolean; pinCount: number; changeSetId: string | null } {
   if (input.actor) {
-    const visible = getArtifact({
-      artifactId: input.artifactId,
-      orgId: input.orgId,
-      actor: input.actor,
-    });
-    if (!visible) {
+    const rec = getObjectById(
+      input.artifactId,
+      { orgId: input.orgId },
+      input.actor,
+    );
+    ensureArtifactRegistry();
+    if (!rec || !artifactObjectTypeIds().has(rec.type)) {
       throw new Error(
         `artifact ${input.artifactId} not found or not permitted`,
+      );
+    }
+    if (!actorPassesObjectAuthz(rec, input.actor, "object.delete")) {
+      throw new Error(
+        `artifact ${input.artifactId}: object.delete denied for actor`,
       );
     }
   }
@@ -285,5 +366,6 @@ export function tombstoneArtifact(input: {
     orgId: input.orgId,
     artifactId: input.artifactId,
     actor: input.auditActor ?? null,
+    actorKind: input.auditActor ? "user" : "system",
   });
 }

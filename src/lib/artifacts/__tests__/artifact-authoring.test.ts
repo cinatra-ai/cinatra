@@ -48,6 +48,14 @@ vi.mock("../authoring-recursion-ledger", () => ({
   getAuthoringChain: vi.fn(),
 }));
 vi.mock("../artifact-service", () => ({
+  tombstoneArtifact: vi.fn(),
+}));
+// cinatra#1428: the assertion-failure rollback is an internal COMPENSATING
+// action — it tombstones through the retention layer directly (the actor was
+// already authorized to create the row), never through the service's
+// canonical `object.delete` gate, which would strand org-owned orphans for
+// plain members.
+vi.mock("../artifact-retention", () => ({
   tombstoneArtifact: tombstoneArtifactMock,
 }));
 // The uniform extension-access gate reads installed_extension (DB). These
@@ -454,8 +462,9 @@ describe("authorArtifact — abort on infra failure", () => {
     expect(tombstoneArtifactMock).toHaveBeenCalledWith({
       artifactId: "art-x",
       orgId: "org-a",
-      actor: ACTOR,
-      auditActor: "user-1",
+      // Retention-layer signature: `actor` is the audit-trail principal
+      // string (the service-layer {actor, auditActor} pair does not apply).
+      actor: "user-1",
     });
   });
 
