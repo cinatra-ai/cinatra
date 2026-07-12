@@ -461,8 +461,8 @@ export async function ensureBackgroundJobRuntime() {
     if (!runtime.skillMatchDriftSamplerRegistered) {
       runtime.skillMatchDriftSamplerRegistered = true;
       try {
-        const { registerSkillMatchDriftSamplerAtBoot } = await import("@cinatra-ai/skills");
-        await registerSkillMatchDriftSamplerAtBoot();
+        const { registerSkillMatchSchedulersAtBoot } = await import("@cinatra-ai/skills");
+        await registerSkillMatchSchedulersAtBoot();
       } catch (err) {
         console.warn(
           "[background-jobs] skill-match drift sampler registration failed:",

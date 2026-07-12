@@ -56,6 +56,11 @@ export const BACKGROUND_JOB_NAMES = {
   // SKILL_MATCH_DRIFT_SCORE_DELTA_THRESHOLD. Disabled by default at the
   // schedule-row level; the boot hook is a no-op until an admin enables it.
   SKILL_MATCH_DRIFT_SAMPLE: "skill-match-drift-sample",
+  // Matching-maintenance tick (cinatra #1365): tombstoned orphan GC followed by
+  // the hash staleness sweep. Opt-in via the SKILL_MATCH_MAINTENANCE_CRON env
+  // var (no schedule-row column, so no migration); the boot hook is a no-op
+  // until the operator sets it.
+  SKILL_MATCH_MAINTENANCE_TICK: "skill-match-maintenance-tick",
   // Production scheduler for the provider-file ref-cache eviction sweep.
   // Iterates (orgId, provider) pairs and drives `evictExpiredProviderFiles`
   // so the cache (`artifact_provider_cache`) does not accumulate expired rows

@@ -85,6 +85,44 @@ export const SKILL_MATCH_DRIFT_DEFAULT_CRON = "0 3 * * *" as const;
 export const SKILL_MATCH_DRIFT_SAMPLER_SCHEDULER_ID = "skill-match-drift-sampler" as const;
 
 // ---------------------------------------------------------------------------
+// Matching maintenance (staleness sweep + tombstoned orphan GC + drift flags).
+//
+// A single opt-in "maintenance tick" runs the deterministic staleness sweep
+// (recompute the evaluator fingerprint for every persisted row and re-evaluate
+// the ones whose inputs changed) followed by the tombstoned orphan GC (delete
+// rows whose (agent, skill) pair has been durably absent from the live catalog
+// for at least the grace window). It is registered only when the operator sets
+// the SKILL_MATCH_MAINTENANCE_CRON env var (no DB column, so no migration); the
+// boot hook is a no-op otherwise. See maintenance-boot.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Grace window for the tombstoned orphan GC. A (agent, skill) row is deleted
+ * only after its pair has been observed ABSENT from the live catalog for at
+ * least this long — never on a single transient catalog snapshot. Chosen at
+ * 24h so a pair must survive absence across at least two daily maintenance
+ * ticks (or ~24 hourly ticks) before deletion. The conditional
+ * compare-and-delete additionally refuses to delete any row rewritten within
+ * the window, so a reinstall inside the grace period is never GC'd.
+ */
+export const SKILL_MATCH_ORPHAN_GC_GRACE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Cumulative drift-observation count at or above which a (agent, skill) pair is
+ * auto-flagged as "repeatedly drifting". The counter is keyed to the pair's
+ * fingerprint (agent/skill input hashes + evaluator version); when those change
+ * the count RESETS, because a fingerprint change is a legitimate re-evaluation,
+ * not model drift on stable inputs.
+ */
+export const SKILL_MATCH_DRIFT_FLAG_THRESHOLD = 3;
+
+/** BullMQ scheduler ID for the optional matching-maintenance tick cron. */
+export const SKILL_MATCH_MAINTENANCE_SCHEDULER_ID = "skill-match-maintenance-tick" as const;
+
+/** Env var carrying the optional maintenance-tick cron pattern (unset = disabled). */
+export const SKILL_MATCH_MAINTENANCE_CRON_ENV = "SKILL_MATCH_MAINTENANCE_CRON" as const;
+
+// ---------------------------------------------------------------------------
 // OpenAI Batch API status enum, single source of truth.
 //
 // The OpenAI Batch API surfaces the following statuses (per OpenAI's docs):
