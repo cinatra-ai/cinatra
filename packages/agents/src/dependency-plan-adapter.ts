@@ -29,7 +29,10 @@ import type {
   ResolvedScopeLevel,
   RowOwnership,
 } from "@/lib/extension-dependency-plan";
-import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import {
+  PLATFORM_OWNER_SENTINEL,
+  type InstalledExtension,
+} from "@cinatra-ai/extensions/canonical-types";
 // Leaf subpaths (manifest-dependencies imports only canonical-types;
 // dependency-closure imports only @cinatra-ai/registries + canonical-types) —
 // NOT the @cinatra-ai/extensions main entry, so the static agents→extensions
@@ -226,18 +229,26 @@ export function buildAgentRowMutationAuthorizer(opts: {
   const assertGrid = opts.seams?.assertCanInstallAtTarget ?? assertCanInstallAtTarget;
   return async (row: InstalledExtension): Promise<void> => {
     const rowLevel = row.ownerLevel as string;
-    const rowOwnerId = row.ownerId ?? null;
+    // The canonical store persists PLATFORM_OWNER_SENTINEL ("__platform__")
+    // where a null ownerId was written and returns it VERBATIM on reads —
+    // normalize it back to null so scope comparisons never mistake the
+    // sentinel for a real owner id.
+    const rowOwnerId =
+      row.ownerId === PLATFORM_OWNER_SENTINEL ? null : (row.ownerId ?? null);
     const rowOrgId = row.organizationId ?? null;
     const root = opts.rootRowOwnership;
 
-    // Same-scope fast path (see contract above).
-    if (
+    // Same-scope fast path (see contract above). Scope IDENTITY is per-level:
+    // a platform scope is identified by the level alone, an organization scope
+    // by its organizationId (the ownerId column is redundant there and often
+    // carries the sentinel), and the narrower levels by their real ownerId.
+    const sameScope =
       rowLevel === root.ownerLevel &&
-      rowOwnerId === (root.ownerId ?? null) &&
-      rowOrgId === (root.organizationId ?? null)
-    ) {
-      return;
-    }
+      rowOrgId === (root.organizationId ?? null) &&
+      (rowLevel === "platform" ||
+        rowLevel === "organization" ||
+        rowOwnerId === (root.ownerId ?? null));
+    if (sameScope) return;
 
     const deny = (why: string): never => {
       throw new Error(

@@ -323,6 +323,42 @@ describe("cinatra#1039 decision 3 — cross-scope dedupe re-authorization (fail-
     ).resolves.toBeUndefined();
   });
 
+  it("SAME-SCOPE identity is per-level: the persisted __platform__ ownerId sentinel never breaks it", async () => {
+    // The canonical store persists "__platform__" where a null ownerId was
+    // written (platform rows always; org rows written without ownerId) and
+    // returns it verbatim — the fast path must compare scope identity, not
+    // the raw column.
+    const platformTuple: RowOwnership = {
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+    };
+    await expect(
+      buildAgentRowMutationAuthorizer({ rootRowOwnership: platformTuple, actor: null })(
+        row(DEP, "0.2.1", {
+          organizationId: null,
+          ownerLevel: "platform",
+          ownerId: "__platform__",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const orgTuple: RowOwnership = {
+      ownerLevel: "organization",
+      ownerId: ORG,
+      organizationId: ORG,
+    };
+    await expect(
+      buildAgentRowMutationAuthorizer({ rootRowOwnership: orgTuple, actor: null })(
+        row(DEP, "0.2.1", {
+          organizationId: ORG,
+          ownerLevel: "organization",
+          ownerId: "__platform__",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("CROSS-SCOPE row without an actor role bag → deny (fail-closed)", async () => {
     const authorize = buildAgentRowMutationAuthorizer({ rootRowOwnership: teamTuple, actor: null });
     await expect(
