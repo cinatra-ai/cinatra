@@ -76,6 +76,19 @@ export type LoaderDeps = {
   abiCompatible: (record: LoaderRecord) => boolean;
   /** Installed package set for `config.resolve`; defaults to all record names. */
   installedPackages?: ReadonlySet<string>;
+  /**
+   * Fired ONCE per record that reached `makeContext`, immediately after its
+   * register attempt settled (cinatra#1392 Gap 1). `registered` is true iff the
+   * register PASS succeeded (`status === "registered"`) — false for any
+   * skip/failure (config-disabled, config-resolve-false/threw, no-server-entry,
+   * register-threw). The host uses it to COMMIT a NON-DEFAULT side-by-side
+   * version's version-keyed serving registrations (making them servable) on
+   * success, or DISCARD partial registrations on failure. Fail-closed: a version
+   * that did not fully register is never committed, so it is never servable.
+   * Optional — a loader with no side-by-side serving (e.g. the static bundle)
+   * omits it and the register loop is byte-for-byte unchanged.
+   */
+  onRegisterSettled?: (record: LoaderRecord, registered: boolean) => void;
 };
 
 /**
@@ -124,8 +137,24 @@ export async function runStaticBundleActivation(
     }
     const ctx = deps.makeContext(rec.packageName, rec.requestedHostPorts ?? [], rec);
     // ABI already gated above (before import); pass `true` as defense-in-depth.
-    const r = await activateExtensionModule(mod, ctx, { abiCompatible: true, installedPackages });
+    let r: ActivationResult;
+    try {
+      r = await activateExtensionModule(mod, ctx, { abiCompatible: true, installedPackages });
+    } catch (error) {
+      // `activateExtensionModule` is contracted never to throw (it returns a
+      // structured result), but settle defensively so EVERY record that reached
+      // makeContext is settled — a non-default sibling's version-keyed serving
+      // retention (cinatra#1392 Gap 1) is never left dangling pre-commit.
+      deps.onRegisterSettled?.(rec, false);
+      results.push({ packageName: rec.packageName, status: "failed", reason: "register-threw", error });
+      continue;
+    }
     results.push(r);
+    // Settle the record's version-keyed serving retention (cinatra#1392 Gap 1):
+    // fires for EVERY record that reached makeContext (register success AND every
+    // post-makeContext skip/failure), so a non-default sibling that did not fully
+    // register is DISCARDED (fail-closed), never left half-retained.
+    deps.onRegisterSettled?.(rec, r.status === "registered");
     if (r.status === "registered") registered.push({ mod, ctx, isDefault: rec.isDefault !== false });
   }
 

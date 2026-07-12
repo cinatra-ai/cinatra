@@ -69,6 +69,12 @@ import {
   registerExtensionSettingsSurface,
   registerExtensionUiAction,
 } from "@/lib/extension-ui-registry";
+// Version-keyed serving retention for NON-DEFAULT side-by-side versions
+// (cinatra#1392 Gap 1). A non-default sibling's register-channel registrations
+// are retained into a version-keyed SINK (owned by the host loader, which threads
+// its commit/abort settle) — for edge-bound serving by a resolved dependent —
+// instead of being discarded into an inert probe recorder.
+import type { VersionKeyedRegistrationSink } from "@/lib/extension-version-keyed-serving";
 import {
   resolveExtensionActorContext,
   resolveExtensionActorSummary,
@@ -935,14 +941,30 @@ export function createExtensionProbeHostContext(
  * `set`/`delete`, `objects.write`, and `nango.ensureConnectSession`. Every READ
  * (settings/secrets `get`, nango status/connection getters, objects read/history,
  * authSession, logger, runtime) stays the REAL grant-gated impl, and an ungranted
- * privileged port still fails loud exactly as in real activation. Edge-bound
- * SERVING of a non-default version (routing a resolved dependent to (name,
- * version)) is threaded in a later slice (S5).
+ * privileged port still fails loud exactly as in real activation.
+ *
+ * VERSION-KEYED SERVING (cinatra#1392 Gap 1). When a version-keyed `sink` is
+ * supplied (the host loader `begin`s one per non-default record and threads its
+ * commit/abort settle), the four register-channel ports (mcp.registerTool /
+ * capabilities.registerProvider / objects.registerType / ui.register*) no longer
+ * discard into the probe's throwaway recorder — they RETAIN into that sink (keyed
+ * by `(packageName, version)`), so a resolved dependent that is edge-bound to this
+ * non-default version can be SERVED its handlers (without leaking the default's
+ * global names — the retention is a separate store, never the global registries).
+ * The SAME identity/authorization guards the live/probe capability port applies
+ * are applied here BEFORE retaining (a non-default sibling must not impersonate
+ * another package's provider identity, nor register a reserved host-system
+ * capability). Grant-gating is preserved: an UNGRANTED register-channel port keeps
+ * the probe's fail-loud `unavailablePort` proxy. Retention starts NON-servable;
+ * the host's per-record settle hook commits the sink only on a fully-successful
+ * register (see `extension-version-keyed-serving`). Without a `sink` (legacy /
+ * single-version), the behavior is byte-for-byte the pre-Gap-1 inert probe.
  */
 export function createNonDefaultVersionHostContext(
   packageName: string,
   grantedPorts: readonly HostPortName[] = [],
   envInput: ExtensionEnvOverrideInput = {},
+  sink?: VersionKeyedRegistrationSink,
 ): ExtensionHostContext {
   const { ctx: base } = createExtensionProbeHostContext(packageName, grantedPorts, envInput);
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
@@ -965,5 +987,56 @@ export function createNonDefaultVersionHostContext(
     ? { ...base.nango, ensureConnectSession: async () => ({}) }
     : base.nango;
 
-  return { ...base, settings, secrets, objects, nango };
+  // No version-keyed sink → the pre-Gap-1 inert-recorder behavior (legacy /
+  // single-version). Retention (and therefore edge-bound serving) is only for a
+  // PINNED non-default sibling, for which the host provides a sink.
+  if (!sink) {
+    return { ...base, settings, secrets, objects, nango };
+  }
+
+  // Retain this non-default version's register-channel registrations into the
+  // host-provided sink (a fresh, NON-servable entry keyed by (packageName,
+  // version); the host commits/aborts it once register settles). The ports below
+  // write into it, applying the same guards the live/probe ports apply.
+  // Grant-gating preserved: an ungranted port keeps the probe's fail-loud proxy.
+  const mcp: ExtensionHostContext["mcp"] = granted.has("mcp")
+    ? { ...base.mcp, registerTool: (tool) => sink.retainMcpTool({ ...tool, packageName }) }
+    : base.mcp;
+
+  const capabilities: ExtensionHostContext["capabilities"] = granted.has("capabilities")
+    ? {
+        ...base.capabilities,
+        registerProvider: (capability, provider) => {
+          // Same anti-poisoning + anti-impersonation guards as the live port: a
+          // non-default sibling must not register a reserved host-system
+          // capability, and its provider identity is FORCED to the host-injected
+          // packageName (caller-supplied provider.packageName is untrusted).
+          if (isReservedSystemCapabilityDeniedFor(packageName, capability)) {
+            denyReservedSystemCapabilityRegister(packageName, capability);
+          }
+          sink.retainCapabilityProvider(
+            capability,
+            bindProviderIdentity(packageName, provider),
+          );
+        },
+      }
+    : base.capabilities;
+
+  // `objects` already inerts `write` above; override registerType to retain
+  // (read/history stay the real grant-gated impl). When objects is ungranted,
+  // `objects` is the fail-loud proxy — keep it.
+  const objectsVersionKeyed: ExtensionHostContext["objects"] = granted.has("objects")
+    ? { ...objects, registerType: (descriptor) => sink.retainObjectType(descriptor) }
+    : objects;
+
+  const ui: ExtensionHostContext["ui"] = granted.has("ui")
+    ? {
+        registerSetupSurface: (surface) => sink.retainUiSetupSurface(surface),
+        registerSettingsSurface: (surface) => sink.retainUiSettingsSurface(surface),
+        registerAction: (action) =>
+          sink.retainUiAction({ id: action.id, handler: action.handler }),
+      }
+    : base.ui;
+
+  return { ...base, settings, secrets, objects: objectsVersionKeyed, nango, mcp, capabilities, ui };
 }
