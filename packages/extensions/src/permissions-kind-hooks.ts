@@ -281,14 +281,15 @@ async function agentTemplateHooks(): Promise<ExtensionKindHooks> {
 
 async function skillPackageHooks(): Promise<ExtensionKindHooks> {
   const {
-    readSkillsCatalog,
     writeSkillPackageAccessPolicy,
     setSkillPackageInstalledBy,
   } = await import("@cinatra-ai/skills/store");
+  // Pure existence lookup — snapshot read (cinatra#1364).
+  const { readSkillsCatalogSnapshot } = await import("@cinatra-ai/skills/skill-packages");
   const { syncLegacyCoOwnersFromCanonical } = await import("./permissions-store");
   return {
     resourceExists: async (id) => {
-      const catalog = await readSkillsCatalog();
+      const catalog = await readSkillsCatalogSnapshot();
       return catalog.skillPackages.some((p) => p.packageId === id || p.id === id);
     },
     // Dual-write so skill-package loaders that still read
@@ -323,18 +324,20 @@ async function skillPackageHooks(): Promise<ExtensionKindHooks> {
 }
 
 async function skillHooks(): Promise<ExtensionKindHooks> {
-  const { readSkillsCatalog, writeSkillAccessPolicy } = await import("@cinatra-ai/skills/store");
+  const { writeSkillAccessPolicy } = await import("@cinatra-ai/skills/store");
+  // Pure existence/parent lookups — snapshot read (cinatra#1364).
+  const { readSkillsCatalogSnapshot } = await import("@cinatra-ai/skills/skill-packages");
   const { syncLegacyCoOwnersFromCanonical } = await import("./permissions-store");
   return {
     resourceExists: async (id) => {
-      const catalog = await readSkillsCatalog();
+      const catalog = await readSkillsCatalogSnapshot();
       return catalog.skills.some((s) => s.id === id);
     },
     extraEditors: async (id) => {
       // Skills inherit edit rights from their parent skill_package's
       // installer + co-owners. The parent lookup goes through the
       // polymorphic table.
-      const catalog = await readSkillsCatalog();
+      const catalog = await readSkillsCatalogSnapshot();
       const skill = catalog.skills.find((s) => s.id === id);
       if (!skill?.packageId) return [];
 

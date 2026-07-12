@@ -9,7 +9,7 @@ import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 // in ./skill-packages (an already-graph-reachable node) — co-located there to
 // avoid adding a new module to the locked route bundles (route-graph ratchet)
 // while keeping this file under its size ceiling (file-size ratchet).
-import { installedSkillPackages, normalizeStoredAccessPolicy, visibilityToLevelScope } from "./skill-packages";
+import { installedSkillPackages, normalizeStoredAccessPolicy, readSkillsCatalogSnapshot, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
@@ -1711,7 +1711,7 @@ export async function readSkillContent(skill: {
 }
 
 export async function listCustomSkills(ownerUserId?: string) {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   return catalog.skills.filter((skill) => skill.isCustomSkill === true && (!ownerUserId || skill.ownerUserId === ownerUserId));
 }
 
@@ -1719,7 +1719,7 @@ export async function listCustomSkills(ownerUserId?: string) {
 export const listPersonalSkills = listCustomSkills;
 
 export async function getCustomSkillById(input: { ownerUserId: string; skillId: string }) {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   return (
     catalog.skills.find(
       (skill) => skill.isCustomSkill === true && skill.ownerUserId === input.ownerUserId && skill.id === input.skillId,
@@ -1731,7 +1731,7 @@ export async function getCustomSkillById(input: { ownerUserId: string; skillId: 
 export const getPersonalSkillById = getCustomSkillById;
 
 export async function getCustomSkillForAgent(input: { ownerUserId: string; agentId: string }) {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   return (
     catalog.skills.find(
       (skill) => skill.isCustomSkill === true && skill.ownerUserId === input.ownerUserId && skill.agentId === input.agentId,
@@ -1743,7 +1743,7 @@ export async function getCustomSkillForAgent(input: { ownerUserId: string; agent
 export const getPersonalSkillForAgent = getCustomSkillForAgent;
 
 export async function listCustomSkillsForAgent(input: { ownerUserId: string; agentId: string }) {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   return catalog.skills.filter(
     (skill) => skill.isCustomSkill === true && skill.ownerUserId === input.ownerUserId && skill.agentId === input.agentId,
   );
@@ -2467,7 +2467,7 @@ export type SkillPackageCoOwnerRow = {
 export async function readSkillPackageAccessPolicy(
   packageId: string,
 ): Promise<SkillPackageAuthPolicy | null> {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   const pkg = catalog.skillPackages.find((p) => p.packageId === packageId || p.id === packageId);
   return pkg?.accessPolicy ?? null;
 }
@@ -2497,7 +2497,7 @@ export async function writeSkillPackageAccessPolicy(
 export async function readSkillPackageInstalledBy(
   packageId: string,
 ): Promise<string | null> {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   const pkg = catalog.skillPackages.find((p) => p.packageId === packageId || p.id === packageId);
   return pkg?.installedByUserId ?? null;
 }
@@ -2714,7 +2714,7 @@ export type SkillCoOwnerRow = {
 export async function readSkillAccessPolicy(
   skillId: string,
 ): Promise<SkillAuthPolicy | null> {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   const skill = catalog.skills.find((s) => s.id === skillId);
   return skill?.accessPolicy ?? null;
 }
@@ -2827,7 +2827,7 @@ export async function removeSkillCoOwner(
  * package).
  */
 export async function readSkillPackageIdFor(skillId: string): Promise<string | null> {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   const skill = catalog.skills.find((s) => s.id === skillId);
   return skill?.packageId ?? null;
 }

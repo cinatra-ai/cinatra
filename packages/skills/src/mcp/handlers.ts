@@ -4,7 +4,6 @@ import type { PrimitiveInvocationRequest } from "@cinatra-ai/mcp-client";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 import {
-  readSkillsCatalog,
   readSkillContent,
   uninstallSkillPackage,
   listCustomSkills,
@@ -15,6 +14,9 @@ import {
   listCustomSkillsForAgent,
   resolveEffectiveSkillAccessPolicy,
 } from "../skills-store";
+// Catalog read/rebuild split (cinatra#1364): list/lookup handlers use the PURE
+// snapshot read; the install/uninstall handlers trigger the EXPLICIT rebuild.
+import { readSkillsCatalogSnapshot, rebuildSkillsCatalog } from "../skill-packages";
 // LOCAL_USER_ID stays out of production paths; dev-bypass fallback resolves
 // dynamically inside guarded blocks below.
 import {
@@ -287,7 +289,7 @@ export function createSkillsPrimitiveHandlers() {
   return {
     "skills_catalog_list": async (request: PrimitiveInvocationRequest<unknown>) => {
       try {
-        const catalog = await readSkillsCatalog();
+        const catalog = await readSkillsCatalogSnapshot();
         const orgId = await resolveOrgIdFromSession(
           request.actor as { orgId?: string | null } | undefined,
         );
@@ -432,6 +434,10 @@ export function createSkillsPrimitiveHandlers() {
       const { installSkillPackageFromGitHub } = await import("../github");
       const result = await installSkillPackageFromGitHub(repoRef, connectionId);
 
+      // Explicit lifecycle rebuild (cinatra#1364): merge the newly-installed
+      // package into the catalog NOW instead of on some later implicit read.
+      await rebuildSkillsCatalog({ reason: "mcp-skill-package-install" });
+
       // Fan out one inline re-evaluation job per newly-installed skill.
       // Failures here MUST NOT abort the install; log and continue. BullMQ
       // deduplicates by jobId so a re-install storm collapses into a single
@@ -473,7 +479,7 @@ export function createSkillsPrimitiveHandlers() {
       // Enumerate the skill IDs BEFORE calling uninstallSkillPackage, which
       // removes them from the catalog. Failures in cleanup MUST NOT abort the
       // uninstall; log and continue.
-      const catalogBefore = await readSkillsCatalog();
+      const catalogBefore = await readSkillsCatalogSnapshot();
       const skillIdsForCleanup = catalogBefore.skills
         .filter((s) => s.packageId === packageId)
         .map((s) => s.id);
@@ -481,6 +487,16 @@ export function createSkillsPrimitiveHandlers() {
       const removed = await uninstallSkillPackage(packageId);
 
       if (removed) {
+        // Explicit lifecycle rebuild (cinatra#1364) — reconcile the catalog
+        // after the uninstall's disk + row removal; never abort the uninstall.
+        try {
+          await rebuildSkillsCatalog({ reason: "mcp-skill-package-uninstall" });
+        } catch (err) {
+          console.warn(
+            "[skills/mcp] catalog rebuild after uninstall failed:",
+            err instanceof Error ? err.message : err,
+          );
+        }
         for (const skillId of skillIdsForCleanup) {
           try {
             await cleanupForSkill(skillId);
@@ -497,7 +513,7 @@ export function createSkillsPrimitiveHandlers() {
 
     "skills_library_list": async (request: PrimitiveInvocationRequest<unknown>) => {
       const input = libraryListSchema.parse(request.input);
-      const catalog = await readSkillsCatalog();
+      const catalog = await readSkillsCatalogSnapshot();
       let skills = catalog.skills;
 
       // Apply the same per-row visibility filter as skills_installed_list.
@@ -556,7 +572,7 @@ export function createSkillsPrimitiveHandlers() {
         // Effective policy (W4): skill override else parent package's.
         const effectivePolicy = resolveEffectiveSkillAccessPolicy(
           skill,
-          (await readSkillsCatalog()).skillPackages ?? [],
+          (await readSkillsCatalogSnapshot()).skillPackages ?? [],
         );
         // Use the auth-policy resource-ref builder for consistent scope.
         const skillRef = buildSkillResourceRef({
@@ -637,7 +653,7 @@ export function createSkillsPrimitiveHandlers() {
 
       const allSkills = await listInstalledSkills();
       // Resolve package inheritance once for the whole page (W4).
-      const installedSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
+      const installedSkillPackages = (await readSkillsCatalogSnapshot()).skillPackages ?? [];
       // A3 (cinatra#1363): batch-read lifecycle once so the default listing
       // excludes non-deliverable (archived/draft/unknown-state) skills from read
       // actors (fail-closed on a read error — see the per-row gate below).
@@ -732,7 +748,7 @@ export function createSkillsPrimitiveHandlers() {
         (await listInstalledSkills()).map((entry) => [entry.id, entry] as const),
       );
       // Resolve package inheritance once for the id-surface filter (W4).
-      const resolveSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
+      const resolveSkillPackages = (await readSkillsCatalogSnapshot()).skillPackages ?? [];
       const skillIds = rawSkillIds.filter((id) => {
         const entry = skillById.get(id);
         // Ids that point to skills no longer in the catalog are dropped
@@ -863,7 +879,7 @@ export function createSkillsPrimitiveHandlers() {
             // Effective policy (W4): skill override else parent package's.
             accessPolicy: resolveEffectiveSkillAccessPolicy(
               existing,
-              (await readSkillsCatalog()).skillPackages ?? [],
+              (await readSkillsCatalogSnapshot()).skillPackages ?? [],
             ),
           }),
           "manage",

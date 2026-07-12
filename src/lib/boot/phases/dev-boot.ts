@@ -169,6 +169,11 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
     } = await import("@/lib/extensions-dev-watcher");
     const extRoot = resolveDevExtensionSourceRoot();
     await loadAllSkillPackagesAtBoot(extRoot);
+    // Explicit lifecycle rebuild (cinatra#1364): the always-on boot rebuild
+    // phase ran BEFORE this detached dev scan, so re-run it after the dev
+    // skill-package load registered the extension skills.
+    const { rebuildSkillsCatalog } = await import("@cinatra-ai/skills/skill-packages");
+    await rebuildSkillsCatalog({ reason: "boot-dev-extensions-scan" });
     startDevExtensionsWatcher(extRoot);
   } catch (err) {
     console.warn(

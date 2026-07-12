@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
@@ -81,6 +82,39 @@ export function compareAndSwapMetadataValueInternal(
     queries: [buildCompareAndSwapMetadataQuery(postgresSchema, key, newValue, expectedRaw)],
   });
   return (result?.rows?.length ?? 0) > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Skills-catalog generation token (cinatra#1364, lifecycle A4).
+//
+// CROSS-PROCESS cache invalidation for the skills catalog: every catalog
+// writer bumps this metadata row to a fresh opaque token IN THE SAME
+// TRANSACTION as its row writes, and `readSkillCatalogFromDatabase` keys its
+// in-process cache on the token instead of a process-local counter. A write
+// from ANY process (web, BullMQ worker) therefore invalidates every other
+// process's cache on its next read. A fresh-random token (instead of an
+// increment) keeps the bump a single blind UPSERT — no read-modify-write.
+// ---------------------------------------------------------------------------
+
+export const SKILL_CATALOG_GENERATION_METADATA_KEY = "skills_catalog_generation";
+
+/** Raw stored token string (byte-opaque), or null when never bumped. */
+export function readSkillCatalogGenerationTokenInternal(): string | null {
+  return readRawMetadataStringInternal(SKILL_CATALOG_GENERATION_METADATA_KEY);
+}
+
+/**
+ * Query fragment that bumps the generation token to a fresh random value.
+ * Appended by every skills-catalog writer to ITS OWN query batch so the bump
+ * commits atomically with the row writes (fencing: a reader can never observe
+ * new rows under an old token committed separately, or vice versa).
+ */
+export function buildBumpSkillCatalogGenerationQuery(schema: string) {
+  return buildWriteMetadataQuery(
+    schema,
+    SKILL_CATALOG_GENERATION_METADATA_KEY,
+    JSON.stringify(randomUUID()),
+  );
 }
 
 export function deleteMetadataValueInternal(key: string) {

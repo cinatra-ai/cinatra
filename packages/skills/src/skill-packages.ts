@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { SkillPackageDefinition } from "@cinatra-ai/sdk-extensions";
 import { AgentAuthPolicySchema } from "@cinatra-ai/agents/auth-policy";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 // Type-only (erased at runtime, so no import cycle with skills-store).
-import type { SkillLevel } from "./skills-store";
+import type { PersistedSkill, PersistedSkillPackage, SkillLevel } from "./skills-store";
 
 // No third-party skill packages ship bundled in the monorepo anymore.
 // Operators install skill packages at runtime via the GitHub upload flow at
@@ -90,4 +91,252 @@ export function visibilityToLevelScope(
   if (visibility === "admin") return { level: "system", scope: undefined };
   // Fallback — keep personal
   return { level: "personal", scope: ownerUserId };
+}
+
+// ---------------------------------------------------------------------------
+// Catalog read/rebuild split (cinatra#1364, lifecycle A4).
+//
+// The legacy `readSkillsCatalog()` delegates to the rebuild ENGINE
+// (`syncInstalledSkillsToDatabase`): every catalog read may GitHub-sync,
+// disk-scan, rewrite the DB, and enqueue prefill jobs. This section is the
+// PARALLEL split surface, co-located in this already-graph-reachable module
+// (route-graph ratchet) because skills-store.ts sits at its file-size ceiling:
+//
+//   - `readSkillsCatalogSnapshot()` — PURE read of the persisted catalog. No
+//     GitHub sync, no disk scan, no DB write, no job enqueue. Freshness across
+//     processes is carried by the generation token every catalog writer bumps
+//     transactionally (see readSkillCatalogFromDatabase, src/lib/database.ts).
+//   - `rebuildSkillsCatalog()` — the EXPLICIT lifecycle operation: runs the
+//     engine under an in-process single-flight (with one queued rerun, so a
+//     trigger during a running rebuild is never absorbed into a scan that
+//     predates it) plus a cross-process metadata lease, then records the
+//     completeness fence (`readSkillsCatalogRebuildState`).
+//
+// Wiring (this slice): boot after extension activation/materialization, the
+// dev extensions watcher, install/uninstall paths, and the MCP package
+// handlers. Call-site migration is tracked per site in
+// docs/architecture/skills-catalog-read-inventory.json; deleting the legacy
+// read-triggers-rebuild path is the LAST step (S8, cinatra#1358).
+//
+// RE-ENTRANCY RULE: never call `rebuildSkillsCatalog()` from code reachable
+// from the engine itself (github auto-sync, scanner, prefill enqueue) — the
+// single-flight would hand the inner caller its OWN in-flight promise and
+// deadlock. Trigger rebuilds from lifecycle CALLERS only.
+//
+// All host-store access is via dynamic import so this module stays a
+// statically-pure leaf (existing tests import it without mocking the DB), and
+// so there is no static cycle with ./skills-store.
+// ---------------------------------------------------------------------------
+
+type SkillsStoreModule = typeof import("./skills-store");
+type DatabaseModule = typeof import("@/lib/database");
+
+// Memoized dynamic imports: exactly ONE `import()` invocation per module,
+// shared by every caller. Concurrent first-time dynamic imports of the same
+// module race in vitest's mocked-module registry (one caller can receive the
+// UNMOCKED module), and memoizing is also marginally cheaper at runtime.
+let dbModulePromise: Promise<DatabaseModule> | null = null;
+function loadDb(): Promise<DatabaseModule> {
+  if (!dbModulePromise) dbModulePromise = import("@/lib/database") as Promise<DatabaseModule>;
+  return dbModulePromise;
+}
+let skillsStoreModulePromise: Promise<SkillsStoreModule> | null = null;
+function loadSkillsStore(): Promise<SkillsStoreModule> {
+  if (!skillsStoreModulePromise) skillsStoreModulePromise = import("./skills-store") as Promise<SkillsStoreModule>;
+  return skillsStoreModulePromise;
+}
+
+export type SkillsCatalogSnapshot = {
+  skillPackages: PersistedSkillPackage[];
+  skills: PersistedSkill[];
+};
+
+/** Merged catalog shape the rebuild engine returns (scanner + custom rows). */
+export type RebuiltSkillsCatalog = Awaited<
+  ReturnType<SkillsStoreModule["syncInstalledSkillsToDatabase"]>
+>;
+
+export const SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY = "skills_catalog_rebuild_state";
+export const SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY = "skills_catalog_rebuild_lease";
+
+/**
+ * PURE catalog read (cinatra#1364): the persisted skills catalog, normalized
+ * through the same canonical normalizers the legacy read path applies to
+ * stored rows. NO write/scan/network/enqueue side effects — the DB state is
+ * kept current by explicit `rebuildSkillsCatalog()` calls at lifecycle points
+ * and by the catalog writers themselves.
+ */
+export async function readSkillsCatalogSnapshot(): Promise<SkillsCatalogSnapshot> {
+  const db = await loadDb();
+  const store = await loadSkillsStore();
+  const current = db.readSkillCatalogFromDatabase();
+  return {
+    skillPackages: current.skillPackages
+      .map((row) => store.normalizeStoredSkillPackage(row))
+      .filter((row): row is PersistedSkillPackage => row !== null),
+    skills: current.skills
+      .map((row) => store.normalizeStoredSkill(row))
+      .filter((row): row is PersistedSkill => row !== null),
+  };
+}
+
+export type SkillsCatalogRebuildState = { completedAt: string; reason: string } | null;
+
+/**
+ * Completeness fence: the marker written after the last SUCCESSFUL explicit
+ * rebuild. `null` means no explicit rebuild has completed yet (fresh install /
+ * pre-cutover process) — boot wiring runs one after extension materialization.
+ */
+export async function readSkillsCatalogRebuildState(): Promise<SkillsCatalogRebuildState> {
+  const db = await loadDb();
+  const stored = db.readMetadataValueFromDatabase<{ completedAt?: unknown; reason?: unknown } | null>(
+    SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY,
+    null,
+  );
+  if (!stored || typeof stored.completedAt !== "string") return null;
+  return {
+    completedAt: stored.completedAt,
+    reason: typeof stored.reason === "string" ? stored.reason : "unspecified",
+  };
+}
+
+export interface RebuildSkillsCatalogOptions {
+  /** Recorded on the completeness fence — name the lifecycle trigger. */
+  reason?: string;
+  /** Test seams. Defaults: ttl 120s, wait 150s (> ttl, so a crashed holder always expires within the wait), poll 500ms. */
+  leaseTtlMs?: number;
+  leaseWaitMs?: number;
+  leasePollIntervalMs?: number;
+}
+
+let inFlightRebuild: Promise<RebuiltSkillsCatalog> | null = null;
+let queuedRebuild: Promise<RebuiltSkillsCatalog> | null = null;
+
+/**
+ * EXPLICIT catalog rebuild (cinatra#1364): GitHub auto-sync (first call),
+ * disk scan, merge, conditional DB rewrite, prefill enqueue — the exact legacy
+ * engine — made an explicit, locked lifecycle operation.
+ *
+ * Locking: in-process single-flight coalesces concurrent callers onto the
+ * running rebuild, EXCEPT that a call arriving while one is in flight queues
+ * exactly ONE follow-up run (shared by all such callers) — the running
+ * rebuild's scan may predate the new trigger's disk/DB change, so coalescing
+ * onto it could lose the change. Cross-process, a metadata lease (CAS +
+ * expiry) serializes rebuilds between web and worker processes.
+ *
+ * Readers never observe a partial rebuild: the engine's catalog write is one
+ * DB transaction that also bumps the cross-process generation token.
+ */
+export async function rebuildSkillsCatalog(
+  options: RebuildSkillsCatalogOptions = {},
+): Promise<RebuiltSkillsCatalog> {
+  if (inFlightRebuild) {
+    if (!queuedRebuild) {
+      queuedRebuild = inFlightRebuild
+        .catch(() => undefined)
+        .then(() => {
+          queuedRebuild = null;
+          return rebuildSkillsCatalog(options);
+        });
+    }
+    return queuedRebuild;
+  }
+  inFlightRebuild = runLockedRebuild(options).finally(() => {
+    inFlightRebuild = null;
+  });
+  return inFlightRebuild;
+}
+
+async function runLockedRebuild(options: RebuildSkillsCatalogOptions): Promise<RebuiltSkillsCatalog> {
+  const db = await loadDb();
+  const leaseToken = await acquireCatalogRebuildLease(db, options);
+  try {
+    const store = await loadSkillsStore();
+    const catalog = await store.syncInstalledSkillsToDatabase();
+    // Completeness fence AFTER the engine's transactional write committed.
+    db.writeMetadataValueToDatabase(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY, {
+      completedAt: new Date().toISOString(),
+      reason: options.reason ?? "unspecified",
+    });
+    return catalog;
+  } finally {
+    releaseCatalogRebuildLease(db, leaseToken);
+  }
+}
+
+// Constant released-lease sentinel: the absent-row bootstrap write is
+// IDEMPOTENT under a race (both racers write identical bytes), so the CAS
+// below still elects exactly one winner.
+const RELEASED_LEASE = { token: null, expiresAt: null };
+
+function parseLeaseRaw(raw: string): { token: unknown; expiresAt: unknown } {
+  try {
+    const parsed = JSON.parse(raw) as { token?: unknown; expiresAt?: unknown } | null;
+    return { token: parsed?.token ?? null, expiresAt: parsed?.expiresAt ?? null };
+  } catch {
+    // Unparsable row → treat as released (fail open to TTL-steal semantics —
+    // the CAS still guarantees a single winner).
+    return { token: null, expiresAt: null };
+  }
+}
+
+/** One CAS attempt. Returns the winning lease token, or null (held / lost race). */
+function tryAcquireCatalogRebuildLease(db: DatabaseModule, ttlMs: number): string | null {
+  let raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+  if (raw === null) {
+    db.writeMetadataValueToDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY, RELEASED_LEASE);
+    raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+    if (raw === null) return null;
+  }
+  const parsed = parseLeaseRaw(raw);
+  const now = Date.now();
+  const held =
+    typeof parsed.token === "string" &&
+    typeof parsed.expiresAt === "string" &&
+    Date.parse(parsed.expiresAt) > now;
+  if (held) return null;
+  const token = randomUUID();
+  const swapped = db.compareAndSwapMetadataValueFromDatabase(
+    SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+    { token, expiresAt: new Date(now + ttlMs).toISOString() },
+    raw,
+  );
+  return swapped ? token : null;
+}
+
+async function acquireCatalogRebuildLease(
+  db: DatabaseModule,
+  options: RebuildSkillsCatalogOptions,
+): Promise<string> {
+  const ttlMs = options.leaseTtlMs ?? 120_000;
+  const waitMs = options.leaseWaitMs ?? 150_000;
+  const pollMs = options.leasePollIntervalMs ?? 500;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const token = tryAcquireCatalogRebuildLease(db, ttlMs);
+    if (token) return token;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        "[skills-catalog] rebuild lease wait timed out — another process holds the rebuild lease " +
+          "(or a crashed holder's lease has not yet expired).",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+/** Best-effort release; an expired-and-stolen lease is left alone (CAS-guarded). */
+function releaseCatalogRebuildLease(db: DatabaseModule, leaseToken: string): void {
+  try {
+    const raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+    if (raw === null) return;
+    if (parseLeaseRaw(raw).token !== leaseToken) return; // expired + re-acquired elsewhere
+    db.compareAndSwapMetadataValueFromDatabase(
+      SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+      RELEASED_LEASE,
+      raw,
+    );
+  } catch {
+    // Never mask the rebuild result — an unreleased lease self-expires by TTL.
+  }
 }

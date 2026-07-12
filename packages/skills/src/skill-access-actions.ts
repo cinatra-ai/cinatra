@@ -60,7 +60,9 @@ export async function saveSkillVisibility(
   // probe skill existence by ID.
   const { requireActorContext } = await import("@/lib/auth-session");
   const { requireResourceAccess, buildSkillResourceRef } = await import("@cinatra-ai/agents/auth-policy");
-  const { readSkillsCatalog, resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
+  const { resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
+  // Pure policy lookup — snapshot read (cinatra#1364).
+  const { readSkillsCatalogSnapshot } = await import("./skill-packages");
   const actor = await requireActorContext();
   try {
     requireResourceAccess(
@@ -72,7 +74,7 @@ export async function saveSkillVisibility(
         // Canonical effective policy (W4): skill override else parent package's.
         accessPolicy: resolveEffectiveSkillAccessPolicy(
           skill,
-          (await readSkillsCatalog()).skillPackages ?? [],
+          (await readSkillsCatalogSnapshot()).skillPackages ?? [],
         ),
       }),
       "manage",
