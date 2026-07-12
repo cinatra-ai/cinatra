@@ -70,7 +70,20 @@ import { readdir, readFile } from "node:fs/promises";
 
 const mockActor = { userId: "user-1", organizationId: "org-1", source: "ui" as const, actorType: "human" as const };
 const mockRef = { registryUrl: "https://registry.example.com", packageName: "@cinatra/test-agent", version: "1.0.0" };
-const installedResult = { rootTemplateId: "tpl-123", installedTemplateIds: ["tpl-123"], tree: {} as never };
+const installedResult = {
+  rootTemplateId: "tpl-123",
+  installedTemplateIds: ["tpl-123"],
+  // cinatra#1039 Phase 2: the full-tree installer surfaces the unified
+  // dependency plan instead of the deleted resolver's tree.
+  plannedMembers: [
+    {
+      packageName: "@cinatra/test-agent",
+      version: "1.0.0",
+      action: "install" as const,
+      alreadyInstalled: false,
+    },
+  ],
+};
 
 // Real ExtractedAgentPackage shape (no oasJson field)
 const extractedPackage = {

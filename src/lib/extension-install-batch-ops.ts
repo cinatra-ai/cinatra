@@ -1,5 +1,6 @@
 import "server-only";
 import { getPooledDb } from "@/lib/db/pooled";
+import type { RowOwnership } from "@/lib/extension-dependency-plan";
 
 /**
  * The DURABLE capability-ownership DECLARATION CAPSULE for an
@@ -106,6 +107,17 @@ export type InstallBatchMember = {
    * tear down the default install).
    */
   action?: "install" | "update" | "install-side-by-side";
+  /**
+   * cinatra#1039: the resolved ROW-OWNERSHIP tuple this member was
+   * installed/updated at — the ROOT install's tuple, forced onto every member
+   * (decision 4). STAMPED by the executor so the ledger records WHO OWNS each
+   * row for compensation/recovery. Rides the existing JSONB `members` column —
+   * NO schema change. OPTIONAL: absent on legacy rows (pre-#1039) and on the
+   * root-only fast path; a reader that needs it derives the canonical default
+   * (`ownerLevel: orgId ? "organization" : "platform"`). Behavior-neutral for
+   * the extension path (equals the batch's org scope).
+   */
+  rowOwnership?: RowOwnership;
   /**
    * For an `"install-side-by-side"` member: the RESOLVED conflict scope the
    * side-by-side row installs at (cinatra#1040 S3 / codex round-1) — may be

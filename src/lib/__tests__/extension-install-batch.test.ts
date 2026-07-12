@@ -39,6 +39,9 @@ function member(packageName: string, over: Partial<PlannedMember> = {}): Planned
     typeId: "connector",
     edges: [],
     alreadyInstalled: false,
+    // cinatra#1039: the resolved rowOwnership tuple (decision 4). Default to the
+    // platform tuple for the batch harness; overridable per test via `over`.
+    rowOwnership: { ownerLevel: "platform", ownerId: null, organizationId: null },
     action: "install",
     ...over,
   };

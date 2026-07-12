@@ -2,8 +2,8 @@
  * Integration test fixture for LLM-scope tests.
  *
  * Each test file creates a unique per-test Postgres schema (no mocks, no
- * shared state) and seeds rows with explicit (organization_id, owner_type,
- * owner_id, visibility) tuples. The tests then build an `ActorContext`,
+ * shared state) and seeds rows with explicit canonical (org_id, owner_level,
+ * owner_id, visibility, project_id) tuples (cinatra#1428). The tests then build an `ActorContext`,
  * splice `buildOwnershipFilter(actor)` into a SELECT against the real
  * schema, and assert the returned IDs match the actor's visibility.
  *
@@ -68,7 +68,7 @@ export async function createTestSchema(client: Client): Promise<string> {
     } catch (err) {
       // A handful of statements reference seed dependencies that don't exist
       // in a fresh empty schema — log and continue. The columns that matter
-      // for ownership filtering (objects.{owner_type,owner_id,visibility,org_id})
+      // for ownership filtering (objects.{owner_level,owner_id,visibility,project_id,org_id})
       // are added by simple ALTER TABLE ADD COLUMN IF NOT EXISTS which never
       // fails for an empty table.
       const msg = err instanceof Error ? err.message : String(err);
@@ -86,7 +86,12 @@ export async function dropSchema(client: Client, schema: string): Promise<void> 
 }
 
 /**
- * Insert a row into <schema>.objects with explicit ownership tuple.
+ * Insert a row into <schema>.objects with an explicit CANONICAL ownership
+ * tuple (cinatra#1428 column vocabulary): owner_level + owner_id +
+ * visibility ('private'|'team'|'organization'|'public') + optional
+ * project_id refinement. `legacyOwnerType`/`legacyVisibility` let migration
+ * tests seed PRE-cutover rows (retired composite vocabulary / lazy-backfill
+ * owner_type tuples) verbatim.
  * Returns the inserted id.
  */
 export async function insertObject(
@@ -96,25 +101,30 @@ export async function insertObject(
     id?: string;
     type?: string;
     orgId: string | null;
-    ownerType: string;
+    ownerLevel: string;
     ownerId: string;
     visibility: string;
+    projectId?: string | null;
+    /** Legacy nullable owner_type column (pre-cutover lazy-backfill tuple). */
+    legacyOwnerType?: string | null;
     data?: unknown;
   },
 ): Promise<string> {
   const id = row.id ?? randomUUID();
   await client.query(
     `INSERT INTO "${schema}"."objects"
-       (id, type, data, org_id, owner_type, owner_id, visibility)
-     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)`,
+       (id, type, data, org_id, owner_level, owner_id, visibility, project_id, owner_type)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)`,
     [
       id,
       row.type ?? "test",
       JSON.stringify(row.data ?? {}),
       row.orgId,
-      row.ownerType,
+      row.ownerLevel,
       row.ownerId,
       row.visibility,
+      row.projectId ?? null,
+      row.legacyOwnerType ?? null,
     ],
   );
   return id;

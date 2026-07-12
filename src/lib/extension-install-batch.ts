@@ -49,6 +49,7 @@ import type {
 import type {
   DependencyInstallPlan,
   DependencyPlanDeps,
+  RowOwnership,
 } from "@/lib/extension-dependency-plan";
 import type {
   InstallBatch,
@@ -140,6 +141,9 @@ export type InstallBatchSagaDeps = {
   plan: (input: {
     root: { packageName: string; version: string };
     orgId: string | null;
+    /** cinatra#1039 decision 1+4: the root's derived-default rowOwnership tuple,
+     *  forced onto every member. */
+    rowOwnership?: RowOwnership;
     closure: GatekeptInstallResolution["authorize"]["closure"] | null;
     /** #1039 Option B (update-time): the root is a committed in-place update
      *  (dev/non-gatekept path) rather than a fresh install. */
@@ -304,7 +308,9 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
   const { withInstallGrantContext, getActiveInstallGrantContext } = await import(
     "@/lib/extension-install-grant-context"
   );
-  const { planDependencyInstall } = await import("@/lib/extension-dependency-plan");
+  const { planDependencyInstall, defaultOrgPlatformChain } = await import(
+    "@/lib/extension-dependency-plan"
+  );
   const { readInstallOp } = await import("@/lib/extension-install-ops");
   const batchOps = await import("@/lib/extension-install-batch-ops");
   const { parseManifestDependencyEdges } = await import(
@@ -380,6 +386,21 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
     readInstalledRows: async () => {
       const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
       return listInstalledExtensions({});
+    },
+    // cinatra#1039 decision 2: the extension-saga scope-ancestry is the
+    // [organization, platform] binary — an org install resolves the org's own
+    // rows first, else platform (the EXACT pre-#1039 findLiveRowsInScope
+    // behavior). The agent path (Phase 2) injects the real
+    // project→owning-team→org→platform ladder here.
+    resolveScopeAncestry: (rowOwnership) => defaultOrgPlatformChain(rowOwnership.organizationId),
+    // cinatra#1039 decision 3: the extension-saga rows are ORG-owned and the
+    // root install already authorized the org, so a dedupe-upward of a
+    // same-org (or platform-fallback) row stays within the caller's established
+    // authority — PERMIT (behavior-neutral). The AGENT path (Phase 2) wires the
+    // real per-row assertCanInstallAtTarget against the EXISTING row's scope, so
+    // a cross-scope mutation refuses.
+    authorizeExistingRowMutation: () => {
+      /* permit: extension-path row ownership is org-uniform (see #1039 decision 3) */
     },
   };
 
@@ -666,6 +687,16 @@ export async function installExtensionWithDependencies(
       const plan = await deps.plan({
         root: { packageName: input.packageName, version: rootVersion },
         orgId,
+        // cinatra#1039 decision 1+4: the extension-saga DERIVED-DEFAULT
+        // rowOwnership — an org install is organization-owned, a null-org
+        // install platform-owned (canonical-store's existing default). Forced
+        // immutably onto every member; behavior-neutral (the scope the path
+        // already installs at). The agent path (Phase 2) threads its real tuple.
+        rowOwnership: {
+          ownerLevel: orgId ? "organization" : "platform",
+          ownerId: orgId ?? null,
+          organizationId: orgId ?? null,
+        },
         closure: resolution ? resolution.authorize.closure : null,
         // #1039 Option B (update-time): route the root through the durable
         // update pipeline as a committed member. `resolution == null` on the
@@ -719,6 +750,11 @@ export async function installExtensionWithDependencies(
           typeId: m.typeId,
           status: m.alreadyInstalled ? "already-installed" : "planned",
           action: m.action,
+          // cinatra#1039: STAMP the resolved rowOwnership onto the ledger member
+          // (rides the existing JSONB `members` column — NO schema change). The
+          // executor thus records WHO OWNS each installed/updated row; for the
+          // extension default this equals the batch's org scope (behavior-neutral).
+          rowOwnership: m.rowOwnership,
           // The RESOLVED side-by-side scope rides the ledger so compensation
           // and the boot sweeper address the same scope (codex round-1).
           ...(m.action === "install-side-by-side"
