@@ -34,7 +34,10 @@ export {
 
 export { installResolvedTree } from "./install/install-tree";
 
-export { installPackageWithDependencies } from "./install/install-with-deps";
+// installPackageWithDependencies (the prefer-newer full-tree convenience
+// wrapper) was DELETED with the cinatra#1039 Phase-2 reroute: install-time
+// dependency resolution lives in the unified dependency planner
+// (src/lib/extension-dependency-plan.ts) on every path.
 
 export {
   readLockfile,

@@ -19,7 +19,10 @@ describe("legacy soft-delete changeSetId enabler (conditional)", () => {
     expect(store).toMatch(/softDeleteObject\([\s\S]*?\): \{ changeSetId: string \| null \}/);
     // surfaced from the CTE, not the precomputed UUID (NULL on a no-op delete)
     expect(store).toMatch(/SELECT \(SELECT id FROM new_changeset\) AS change_set_id/);
-    expect(store).toMatch(/return \{ changeSetId \}/);
+    // cinatra#1428: the read goes through the shared helper so the artifact
+    // tombstone path (which composes the same statement into its own
+    // transaction) surfaces the identical conditional semantics.
+    expect(store).toMatch(/return \{ changeSetId: readSoftDeleteChangeSetId\(result\) \}/);
   });
   it("objects_delete surfaces it; the objects client types it optional", () => {
     expect(read("packages/objects/src/mcp/handlers.ts")).toMatch(

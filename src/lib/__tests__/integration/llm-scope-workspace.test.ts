@@ -1,10 +1,12 @@
 /**
- * Workspace-scope integration test (real Postgres).
+ * Public-visibility integration test (real Postgres) — canonical vocabulary
+ * (cinatra#1428; the retired 'workspace'/'admin' composites map to 'public'
+ * and 'private').
  *
- * `visibility="workspace"` rows are scoped to their owning organization —
+ * `visibility="public"` rows are scoped to their owning organization —
  * visible to any non-admin actor whose `organizationId` matches the row's
- * `org_id`, NOT cross-org. `visibility="admin"` rows are visible only to
- * actors with `platformRole="platform_admin"`.
+ * `org_id`, NOT cross-org. Platform admins (`platformRole="platform_admin"`)
+ * read public rows across orgs.
  */
 
 // Per-test fixture creates a fresh Postgres schema via `CREATE SCHEMA` and
@@ -37,31 +39,33 @@ beforeAll(async () => {
   client = await connect();
   schema = await createTestSchema(client);
 
-  // Workspace-visibility rows must carry the owning org_id.
-  // A workspace row with org_id=NULL is not visible to any non-admin actor.
+  // Public-visibility rows must carry the owning org_id.
+  // A public row with org_id=NULL is not visible to any non-admin actor.
   workspaceId = await insertObject(client, schema, {
     orgId: orgA,
-    ownerType: "workspace",
+    ownerLevel: "workspace",
     ownerId: "workspace",
-    visibility: "workspace",
+    visibility: "public",
   });
 
   for (let i = 0; i < 2; i++) {
     orgARowIds.push(
       await insertObject(client, schema, {
         orgId: orgA,
-        ownerType: "organization",
+        ownerLevel: "organization",
         ownerId: orgA,
-        visibility: "org",
+        visibility: "organization",
       }),
     );
   }
 
+  // Cross-org public row (owned by orgB): platform admins see it, orgA
+  // members do NOT (public is owning-org scoped for non-admins).
   adminRowId = await insertObject(client, schema, {
-    orgId: null,
-    ownerType: "workspace",
+    orgId: orgB,
+    ownerLevel: "workspace",
     ownerId: "workspace",
-    visibility: "admin",
+    visibility: "public",
   });
   orgARowIds.sort();
 }, 30_000);
@@ -97,29 +101,30 @@ async function runUnderActor(actor: ActorContext): Promise<string[]> {
 }
 
 describe("llm-scope-workspace (real Postgres)", () => {
-  it("actor in orgA sees 3 rows (workspace + 2 org)", async () => {
+  it("actor in orgA sees 3 rows (public + 2 org)", async () => {
     const actor = makeActor({ organizationId: orgA });
     const ids = (await runUnderActor(actor)).sort();
     const expected = [...orgARowIds, workspaceId].sort();
     // Filter to the rows we seeded — assert exact membership.
     const seeded = ids.filter((id) => expected.includes(id));
     expect(seeded).toEqual(expected);
-    // Admin row excluded for non-admin.
+    // orgB's public row excluded for a non-admin orgA actor.
     expect(ids.includes(adminRowId)).toBe(false);
   });
 
-  it("actor in orgB sees 0 rows (workspace is owning-org scoped, not cross-org)", async () => {
+  it("actor in orgA does not see orgB rows (public is owning-org scoped, not cross-org)", async () => {
     const actor = makeActor({ organizationId: orgB });
     const ids = await runUnderActor(actor);
     const seenOrgA = ids.filter((id) => orgARowIds.includes(id));
     expect(seenOrgA).toEqual([]);
-    // orgA's workspace row is NOT visible to orgB actor — workspace
+    // orgA's public row is NOT visible to an orgB actor — public
     // visibility means "visible within the owning org" (multi-tenant safe).
     expect(ids.includes(workspaceId)).toBe(false);
-    expect(ids.includes(adminRowId)).toBe(false);
+    // orgB's own public row IS visible to the orgB actor.
+    expect(ids.includes(adminRowId)).toBe(true);
   });
 
-  it("actor with platformRole='platform_admin' sees admin-visibility rows", async () => {
+  it("actor with platformRole='platform_admin' sees public rows across orgs", async () => {
     const actor = makeActor({ organizationId: orgA, platformRole: "platform_admin" });
     const ids = await runUnderActor(actor);
     expect(ids.includes(adminRowId)).toBe(true);
@@ -129,7 +134,7 @@ describe("llm-scope-workspace (real Postgres)", () => {
     expect(seenOrgA.sort()).toEqual(orgARowIds);
   });
 
-  it("non-admin actor cannot see admin-visibility rows", async () => {
+  it("non-admin actor cannot see another org's public rows", async () => {
     const actor = makeActor({ organizationId: orgA, platformRole: "member" });
     // Direct withActorContext call — explicit ALS frame check.
     const ids = await withActorContext(actor, async () => {

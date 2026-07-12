@@ -1,0 +1,9 @@
+{
+  "seq": "0033",
+  "file": "core/core__0033_objects-ownership-vocabulary.mjs",
+  "summary": "Objects ownership-vocabulary normalization (cinatra#1428, epic #1424) — one-shot cutover, no compat window. Object saves and artifact reads used different ownership/visibility value semantics on the same objects columns: objects_save wrote the canonical column model (owner_level user|team|organization|workspace + owner_id + visibility private|team|organization|public + project_id) while the artifact write path encoded ownership into composite visibility strings ('org', 'workspace', 'team:<id>', 'user:<id>', 'project:<id>') matched literally by the shared SQL read filter — each surface was blind to the other's rows. Normalizes every stored row onto the column model with the fixed ratified mapping: 'org' → (organization, org_id, 'organization'); 'workspace' → (workspace, 'public'); 'team:<id>' → (team, <id>, 'team'); 'user:<id>' → (user, <id>, 'private'); 'project:<id>' → project_id=<id> (kept when already set) + 'private'. Residual passes: legacy lazy-backfill owner_type tuples adopt owner_type where owner_level still carries the bare 'organization' default; NULL and non-canonical leftovers ('owner', 'admin', junk) collapse fail-closed to 'private'. The same change cuts all writers and both read paths over to canonical values (buildOwnershipFilter, context-resolver project_id refinement, artifact creation defaults, object-history replay normalization). Destructive because it rewrites ownership/visibility values on user-land objects rows. Pure DML, idempotent statement-by-statement; nothing to mirror into the bootstrap (fresh schemas have no rows to normalize). down() throws: the composite originals are not retained and pre-existing canonical rows are indistinguishable from normalized ones — restore from backup.",
+  "destructive": true,
+  "tables": [
+    "objects"
+  ]
+}

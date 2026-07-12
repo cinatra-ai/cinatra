@@ -118,6 +118,9 @@ describe("artifact-service semantic artifact object filtering", () => {
       orgId: "o",
       artifactId: "a",
       actor: null,
+      // Internal (actor-less) callers attribute the canonical soft-delete
+      // change event to the system principal (cinatra#1428).
+      actorKind: "system",
     });
   });
 });
