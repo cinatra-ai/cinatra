@@ -17,6 +17,7 @@ import {
   buildSkillRollbackQuery,
   readSkillRevisionContentForRollback,
   readSkillActiveRevisionFromDatabase,
+  readSkillLifecycleStates,
   recordSkillRevisionInDatabase,
 } from "@/lib/skill-lifecycle-store";
 
@@ -172,5 +173,57 @@ describe("readSkillActiveRevisionFromDatabase — authoritative head resolver (#
   it("returns null when the skill row is absent", () => {
     runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
     expect(readSkillActiveRevisionFromDatabase("s1")).toBeNull();
+  });
+});
+
+describe("readSkillLifecycleStates — fail-closed batch reader (A3, cinatra#1363)", () => {
+  it("returns ok:true with a state per FOUND id (string and NULL both preserved)", () => {
+    runPostgresQueriesSync.mockReturnValue([
+      { rows: [
+        { id: "a", lifecycle_state: "active" },
+        { id: "b", lifecycle_state: "archived" },
+        { id: "c", lifecycle_state: null }, // derived/extension row
+      ] },
+    ]);
+    const r = readSkillLifecycleStates(["a", "b", "c"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.states.get("a")).toBe("active");
+    expect(r.states.get("b")).toBe("archived");
+    expect(r.states.has("c")).toBe(true);
+    expect(r.states.get("c")).toBeNull();
+  });
+
+  it("selects lifecycle_state by id with an IN (...) placeholder list bound to the ids", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    readSkillLifecycleStates(["x", "y"]);
+    const call = runPostgresQueriesSync.mock.calls[0][0];
+    expect(call.queries[0].text).toMatch(/SELECT id, lifecycle_state FROM "cinatra"\."skills" WHERE id IN \(\$1, \$2\)/);
+    expect(call.queries[0].values).toEqual(["x", "y"]);
+  });
+
+  it("leaves an id ABSENT from the map when its row is not returned (caller withholds it)", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ id: "a", lifecycle_state: "active" }] }]);
+    const r = readSkillLifecycleStates(["a", "missing"]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.states.has("a")).toBe(true);
+    expect(r.states.has("missing")).toBe(false);
+  });
+
+  it("short-circuits an empty/whitespace id list to ok:true empty WITHOUT a DB call", () => {
+    const r = readSkillLifecycleStates(["", "  " as unknown as string].filter(Boolean).length ? [] : []);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("unreachable");
+    expect(r.states.size).toBe(0);
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  });
+
+  it("FAILS CLOSED (ok:false) when the postgres read fails / returns a malformed result", () => {
+    // A failed or malformed read (here: no results array to index) must be
+    // caught and fail closed — the reader's try/catch turns ANY read failure
+    // into ok:false so delivery consumers withhold and the sync aborts.
+    runPostgresQueriesSync.mockReturnValue(undefined as never);
+    expect(readSkillLifecycleStates(["a"])).toEqual({ ok: false });
   });
 });

@@ -275,6 +275,75 @@ export function readSkillActiveRevisionFromDatabase(skillId: string): {
   };
 }
 
+/** The outcome of a fail-closed lifecycle-state batch read (cinatra#1363). */
+export type SkillLifecycleStatesResult =
+  | { ok: true; states: Map<string, string | null> }
+  | { ok: false };
+
+/**
+ * FAIL-CLOSED batch read of `lifecycle_state` for a set of skill ids (A3,
+ * cinatra#1363 — consumer-complete state enforcement). Reads the COLUMN
+ * directly: `lifecycle_state` is deliberately kept out of the JSON payload (so a
+ * transition never stales the payload cache), so the in-process catalog cannot
+ * answer this. A fresh column read also means an archived skill is gated
+ * immediately, never after a cache TTL.
+ *
+ * On success returns `{ ok: true, states }` mapping each FOUND id → its
+ * `lifecycle_state` (a string, or `null` for a derived/extension row). An id
+ * ABSENT from `states` is a row that does not exist — a runtime-delivery caller
+ * withholds it (fail-closed). On any DB/read error returns `{ ok: false }` so
+ * each caller applies its own posture: delivery consumers fail-closed (withhold
+ * all), while the Anthropic mirror sync fails-safe (aborts — it must never
+ * over-reclaim a mirror on an ambiguous read).
+ *
+ * Pairs with `isRuntimeDeliverableLifecycleState` from `@cinatra-ai/skills`:
+ * a caller passes `states.has(id) ? states.get(id) : undefined` so a missing id
+ * (undefined) fails closed while a resolved NULL (derived) delivers.
+ */
+export function readSkillLifecycleStates(skillIds: string[]): SkillLifecycleStatesResult {
+  const ids = Array.from(
+    new Set(skillIds.filter((id): id is string => typeof id === "string" && id.length > 0)),
+  );
+  if (ids.length === 0) return { ok: true, states: new Map() };
+  try {
+    ensurePostgresSchema();
+    const s = postgresSchema.replaceAll('"', '""');
+    const states = new Map<string, string | null>();
+    // Chunk so the parameter count stays well under the pg bind limit even for
+    // a full-catalog read (the Anthropic sync passes every catalog skill id).
+    const CHUNK = 500;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map((_, j) => `$${j + 1}`).join(", ");
+      const results = runPostgresQueriesSync({
+        connectionString: getPostgresConnectionString(),
+        queries: [
+          {
+            text: `SELECT id, lifecycle_state FROM "${s}"."skills" WHERE id IN (${placeholders})`,
+            values: chunk,
+          },
+        ],
+      });
+      const rows = (results[0]?.rows ?? []) as Array<{ id?: unknown; lifecycle_state?: unknown }>;
+      for (const row of rows) {
+        if (typeof row.id !== "string") continue;
+        const st = row.lifecycle_state;
+        // Strict: a string state is stored verbatim; a SQL NULL becomes `null`
+        // (DERIVED). Any other shape (a malformed/absent value) is deliberately
+        // NOT recorded, so the id stays absent from the map and a delivery
+        // consumer fails closed on it (undefined ≠ null — never mistaken for
+        // derived).
+        if (typeof st === "string") states.set(row.id, st);
+        else if (st === null) states.set(row.id, null);
+      }
+    }
+    return { ok: true, states };
+  } catch {
+    // Fail-closed at the READER: the caller decides withhold-all vs abort.
+    return { ok: false };
+  }
+}
+
 export interface SkillLifecycleTransitionWrite {
   skillId: string;
   /** Compare-and-swap guard — the state the caller validated the transition FROM. */

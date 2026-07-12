@@ -93,6 +93,10 @@ vi.mock("@/lib/a2a-auth", () => ({
 vi.mock("@cinatra-ai/skills", () => ({
   getCustomSkillForCurrentUserAndAgent: vi.fn(async () => null),
   registerExtensionSkill: registerExtensionSkillMock,
+  // A3 (cinatra#1363): the explicit-path lifecycle gate reads the catalog. Empty
+  // ⇒ these vendor SKILL.md temp paths are not custom skills ⇒ derived ⇒
+  // deliverable, so multi-vendor package derivation is exercised unchanged.
+  readSkillsCatalog: vi.fn(async () => ({ skills: [] })),
 }));
 
 vi.mock("@/lib/agents-store", () => ({

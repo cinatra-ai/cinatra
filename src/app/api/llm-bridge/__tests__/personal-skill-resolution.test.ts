@@ -131,6 +131,26 @@ vi.mock("@cinatra-ai/llm", () => ({
 
 vi.mock("@cinatra-ai/skills", () => ({
   getCustomSkillForCurrentUserAndAgent: getCustomSkillForCurrentUserAndAgentMock,
+  // A3 (cinatra#1363): faithful copy of the real runtime-delivery predicate
+  // (the real one is drift-guarded by the skills-package matrix test).
+  isRuntimeDeliverableLifecycleState: (s: string | null | undefined) =>
+    s === null ? true : s === undefined ? false : s === "active" || s === "deprecated",
+}));
+
+// A3 (cinatra#1363): the personal-delta lifecycle gate reads lifecycle_state via
+// @/lib/database — the route's ONLY direct import from it. Default: every id is
+// 'active' (deliverable), so the verified-run delta is delivered as before; the
+// archived-block test reassigns this to prove the fail-closed withhold.
+type PersonalLifecycleResult =
+  | { ok: true; states: Map<string, string | null> }
+  | { ok: false };
+const defaultPersonalLifecycleReader = (ids: string[]): PersonalLifecycleResult => ({
+  ok: true,
+  states: new Map(ids.map((id) => [id, "active" as string | null])),
+});
+let personalLifecycleReader: (ids: string[]) => PersonalLifecycleResult = defaultPersonalLifecycleReader;
+vi.mock("@/lib/database", () => ({
+  readSkillLifecycleStates: (ids: string[]) => personalLifecycleReader(ids),
 }));
 
 vi.mock("@/lib/agents-store", () => ({
@@ -369,6 +389,33 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
       VERIFIED_RUN.runBy,
     );
     expect(firstCallArg().customSkillContent).toBe(PERSONAL_DELTA);
+  });
+
+  it("A3 (cinatra#1363): an ARCHIVED personal delta is WITHHELD from delivery (fail-closed), even for the verified owner", async () => {
+    // The resolver still returns the owner's personal skill, but lifecycle_state
+    // = archived ⇒ the bridge gate drops it before provider delivery.
+    personalLifecycleReader = (ids) => ({
+      ok: true,
+      states: new Map(ids.map((id) => [id, id === "p1" ? "archived" : "active"])),
+    });
+    try {
+      readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+      readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+      const req = makeRequestH(
+        { user: "hi", agent_id: "agent-x" },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      );
+      await POST(req);
+      // Owner identity WAS resolved (resolver invoked with the verified runBy),
+      // but the archived delta is NOT delivered to the provider.
+      expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
+        "agent-x",
+        VERIFIED_RUN.runBy,
+      );
+      expect(firstCallArg().customSkillContent).toBeUndefined();
+    } finally {
+      personalLifecycleReader = defaultPersonalLifecycleReader;
+    }
   });
 
   it("ABSENT run: no verified identity ⇒ NO personal delta (owner undefined, resolver fails closed)", async () => {
