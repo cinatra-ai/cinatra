@@ -11,8 +11,10 @@ import {
   authorizeTransition,
   wouldCreateSupersedeCycle,
   buildRevisionRecord,
+  buildUpsertRevisionWrite,
   newRevisionId,
   isCustomOrPersonalSkillPayload,
+  computeSkillSourceRevision,
   type LifecycleState,
 } from "./skill-source";
 
@@ -31,9 +33,9 @@ const LEGAL = new Set<string>([
 ]);
 
 describe("lifecycle states + sources", () => {
-  it("exposes exactly the four states and five sources", () => {
+  it("exposes exactly the four states and six sources", () => {
     expect([...LIFECYCLE_STATES]).toEqual(["draft", "active", "deprecated", "archived"]);
-    expect([...REVISION_SOURCES]).toEqual(["manual", "autosave", "hitl", "chat-capture", "migration"]);
+    expect([...REVISION_SOURCES]).toEqual(["manual", "autosave", "hitl", "chat-capture", "migration", "rollback"]);
     expect(INITIAL_LIFECYCLE_STATE).toBe("active");
   });
 
@@ -42,7 +44,62 @@ describe("lifecycle states + sources", () => {
     expect(isLifecycleState("live")).toBe(false);
     expect(isLifecycleState(null)).toBe(false);
     expect(isRevisionSource("migration")).toBe(true);
+    expect(isRevisionSource("rollback")).toBe(true);
     expect(isRevisionSource("import")).toBe(false);
+  });
+});
+
+describe("buildRevisionRecord — rollback provenance biconditional (cinatra#1362)", () => {
+  it("a rollback revision carries its restored-revision id", () => {
+    const r = buildRevisionRecord({
+      skillId: "s1",
+      contentDigest: "sha-prior",
+      source: "rollback",
+      restoresRevisionId: "rev-prior",
+    });
+    expect(r.source).toBe("rollback");
+    expect(r.restoresRevisionId).toBe("rev-prior");
+    expect(r.contentDigest).toBe("sha-prior");
+  });
+
+  it("a NON-rollback revision has a null restoresRevisionId", () => {
+    for (const source of ["manual", "autosave", "hitl", "chat-capture", "migration"] as const) {
+      expect(buildRevisionRecord({ skillId: "s1", contentDigest: "d", source }).restoresRevisionId).toBeNull();
+    }
+  });
+
+  it("FAILS CLOSED when rollback omits restoresRevisionId", () => {
+    expect(() => buildRevisionRecord({ skillId: "s1", contentDigest: "d", source: "rollback" })).toThrow(/rollback provenance/);
+  });
+
+  it("FAILS CLOSED when a non-rollback source carries a restoresRevisionId", () => {
+    expect(() =>
+      buildRevisionRecord({ skillId: "s1", contentDigest: "d", source: "manual", restoresRevisionId: "rev-x" }),
+    ).toThrow(/rollback provenance/);
+  });
+});
+
+describe("buildUpsertRevisionWrite — content blob passthrough (cinatra#1362)", () => {
+  const content = "# My skill\nDo the thing.";
+  const digest = computeSkillSourceRevision(content);
+
+  it("carries the content blob when content + digest are present", () => {
+    const w = buildUpsertRevisionWrite(
+      { id: "s1", content, source: { revision: { value: digest } } },
+      true,
+      "u1",
+    );
+    expect(w.content).toBe(content);
+    expect(w.contentDigest).toBe(digest);
+    expect(w.source).toBe("manual");
+    expect(w.restoresRevisionId).toBeNull();
+    expect(w.authorUserId).toBe("u1");
+  });
+
+  it("omits the blob when there is no digest (never a mismatched pair)", () => {
+    const w = buildUpsertRevisionWrite({ id: "s1", content, source: null }, false);
+    expect(w.contentDigest).toBeNull();
+    expect(w.content).toBeNull();
   });
 });
 

@@ -61,3 +61,34 @@ describe("skillLifecycleSchemaQueries — skill_lifecycle_audit", () => {
     expect(sql).toContain("skill_lifecycle_audit_skill_created_idx");
   });
 });
+
+describe("skillLifecycleSchemaQueries — content authority + rollback (cinatra#1362)", () => {
+  it("the source CHECK enumerates EXACTLY REVISION_SOURCES incl. 'rollback' (drift guard)", () => {
+    const sql = ddl();
+    const m = sql.match(/source IN \(([^)]*)\)/);
+    const inSql = (m![1].match(/'([^']+)'/g) ?? []).map((x) => x.replaceAll("'", ""));
+    expect(inSql.sort()).toEqual([...REVISION_SOURCES].sort());
+    expect(inSql).toContain("rollback");
+  });
+
+  it("skill_revisions carries restores_revision_id, its same-skill self-FK, and the rollback biconditional", () => {
+    const sql = ddl();
+    expect(sql).toMatch(/restores_revision_id text/);
+    // biconditional: restores_revision_id set IFF source='rollback'
+    expect(sql).toContain("CONSTRAINT skill_revisions_rollback_provenance_check CHECK ((source = 'rollback') = (restores_revision_id IS NOT NULL))");
+    // self-FK binds a rollback's restored revision to the SAME skill's revisions
+    expect(sql).toMatch(/CONSTRAINT skill_revisions_restores_fk FOREIGN KEY \(restores_revision_id, skill_id\) REFERENCES "[^"]+"\."skill_revisions" \(id, skill_id\)/);
+  });
+
+  it("skill_revision_contents is content-addressable with DB-enforced blob integrity + append-only", () => {
+    const sql = ddl();
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS "[^"]+"\."skill_revision_contents"/);
+    expect(sql).toMatch(/content_digest text PRIMARY KEY/);
+    // a wrong blob is IMPOSSIBLE: the digest must equal sha256(content) and the length must match
+    expect(sql).toContain("CHECK (content_digest = encode(sha256(convert_to(content, 'UTF8')), 'hex'))");
+    expect(sql).toContain("CHECK (byte_length = octet_length(content))");
+    // immutable: BEFORE UPDATE OR DELETE raises
+    expect(sql).toMatch(/CREATE TRIGGER trg_skill_revision_contents_append_only BEFORE UPDATE OR DELETE ON/);
+    expect(sql).toMatch(/RAISE EXCEPTION 'skill_revision_contents is append-only/);
+  });
+});
