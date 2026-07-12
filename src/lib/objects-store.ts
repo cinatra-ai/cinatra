@@ -473,7 +473,7 @@ export function getObjectById(
         text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                  created_by, org_id, source, run_id, agent_id, package_version,
                  agent_spec_version, version, deleted_at,
-                 owner_level, owner_id, visibility
+                 owner_level, owner_id, visibility, project_id
                FROM "${schema}"."objects"
                WHERE id = $1
                  AND (org_id = $2 OR $2 IS NULL)
@@ -586,7 +586,7 @@ export function listObjectsByFilter(
         text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                  created_by, org_id, source, run_id, agent_id, package_version,
                  agent_spec_version, version, deleted_at,
-                 owner_level, owner_id, visibility
+                 owner_level, owner_id, visibility, project_id
                FROM "${schema}"."objects"
                WHERE ${where.join(" AND ")}
                ${orderBy}
@@ -612,7 +612,50 @@ export function softDeleteObject(
   id: string,
   scope: { orgId: string | null },
 ): { changeSetId: string | null } {
-  assertWriteScopeAllowed("softDeleteObject", scope.orgId);
+  const { query } = buildSoftDeleteObjectQuery({ id, orgId: scope.orgId });
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [query],
+  });
+  return { changeSetId: readSoftDeleteChangeSetId(result) };
+}
+
+/**
+ * Read the change_set id surfaced by a `buildSoftDeleteObjectQuery`
+ * statement result. NULL when the delete was a no-op (wrong org /
+ * already-deleted) — never an Undo deep-link to a change_set that was not
+ * created.
+ */
+export function readSoftDeleteChangeSetId(
+  result: { rows: Array<Record<string, unknown>> } | undefined,
+): string | null {
+  return (result?.rows?.[0]?.change_set_id as string | null | undefined) ?? null;
+}
+
+/**
+ * Build the CANONICAL soft-delete statement: one atomic CTE that flips
+ * `deleted_at`, bumps `version`, enqueues the Graphiti 'delete' outbox row,
+ * and appends the object_change_event + auto-closed restorable change_set
+ * (undo eligibility). This is the ONE soft-delete shape — `softDeleteObject`
+ * executes it standalone, and the artifact tombstone path (cinatra#1428
+ * deletion unification) composes it into the SAME transaction as its
+ * retention + provider-cache companions so an artifact delete can never
+ * bypass object history or the outbox again.
+ *
+ * The statement's final SELECT returns `change_set_id` (NULL on a no-op);
+ * read it with `readSoftDeleteChangeSetId`.
+ *
+ * `actorId`/`actorKind` attribute the change event + change_set; they
+ * default to the legacy system attribution when omitted.
+ */
+export function buildSoftDeleteObjectQuery(input: {
+  id: string;
+  orgId: string | null;
+  actorId?: string | null;
+  actorKind?: "user" | "agent" | "system";
+}): { query: { text: string; values: unknown[] }; changeSetId: string } {
+  assertWriteScopeAllowed("softDeleteObject", input.orgId);
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
 
@@ -622,15 +665,11 @@ export function softDeleteObject(
   const legacyEventId = randomUUID();
   const legacyIdempotencyKey = `che_legacy_${randomUUID()}`;
   const legacyChecksum = createHash("sha256")
-    .update(`legacy-writer:softDeleteObject:${id}:${legacyIdempotencyKey}`)
+    .update(`legacy-writer:softDeleteObject:${input.id}:${legacyIdempotencyKey}`)
     .digest("hex");
 
-  const [result] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    transaction: true,
-    queries: [
-      {
-        text: `WITH base_row AS (
+  const query = {
+    text: `WITH base_row AS (
                  SELECT version, row_to_json(o.*)::jsonb AS payload, type, org_id,
                         project_id, owner_level, owner_id, visibility
                  FROM "${schema}"."objects" o WHERE id = $1
@@ -661,7 +700,7 @@ export function softDeleteObject(
                    (id, org_id, opened_at, actor_id, actor_kind, run_id,
                     effect_rollup, restorable, closed_at, closure_reason,
                     created_by, created_at, updated_at)
-                 SELECT $3, deleted.org_id, now(), NULL, 'system', NULL,
+                 SELECT $3, deleted.org_id, now(), $7, $8, NULL,
                         'reversible-internal', true, now(), 'legacy-writer-auto-close',
                         NULL, now(), now()
                  FROM deleted
@@ -683,7 +722,7 @@ export function softDeleteObject(
                         (SELECT version FROM base_row),
                         deleted.object_version, 'v1',
                         true, NULL, NULL, NULL,
-                        NULL, 'system', NULL, NULL,
+                        $7, $8, NULL, NULL,
                         deleted.org_id, deleted.project_id, deleted.owner_level,
                         deleted.owner_id, deleted.visibility,
                         $5, $6, now()
@@ -694,20 +733,18 @@ export function softDeleteObject(
                -- org / already-deleted — yields NULL, never an Undo deep-link to a
                -- change_set that was not created).
                SELECT (SELECT id FROM new_changeset) AS change_set_id`,
-        values: [
-          id,
-          scope.orgId,
-          legacyChangeSetId,
-          legacyEventId,
-          legacyIdempotencyKey,
-          legacyChecksum,
-        ],
-      },
+    values: [
+      input.id,
+      input.orgId,
+      legacyChangeSetId,
+      legacyEventId,
+      legacyIdempotencyKey,
+      legacyChecksum,
+      input.actorId ?? null,
+      input.actorKind ?? "system",
     ],
-  });
-  const changeSetId =
-    (result?.rows?.[0]?.change_set_id as string | null | undefined) ?? null;
-  return { changeSetId };
+  };
+  return { query, changeSetId: legacyChangeSetId };
 }
 
 /**

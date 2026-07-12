@@ -22,6 +22,7 @@
 // enforceRunAccess intercept the kernel decision.
 import * as authz from "@/lib/authz";
 import { AuthzError } from "./errors";
+import type { ActorContext } from "./actor-context";
 import { buildActorContextFromPrimitive } from "./build-actor-context";
 import type { Permission } from "./permissions";
 import type { ResourceRef, OwnerLevel, OwnerType, Visibility } from "./resource-ref";
@@ -235,42 +236,64 @@ function deriveRoleHints(actor: PrimitiveActorContext): ActorRoleHints {
 }
 
 /**
- * Generic resource-access gate.
+ * Structured deny returned by the sync decision core. `null` means allowed.
+ * The async `enforceResourceAccess` wrapper throws it; sync surfaces (the
+ * artifact service's canonical `object.*` row gates — cinatra#1428) branch on
+ * it directly because the whole artifact read path is synchronous.
+ */
+export type ResourceAccessDenial = AuthzError;
+
+/**
+ * Actor facets consumed by the sync decision core. The split exists because
+ * two producer shapes reach the gate:
+ *   - MCP primitives carry a `PrimitiveActorContext` (userId / teamRoles /
+ *     oboCeiling live on the envelope; the kernel actor is built from it);
+ *   - the artifact service carries an already-built kernel `ActorContext`
+ *     (principalId / teamRoles / oboCeiling live on the context itself).
+ * Both adapt into this one shape so the DECISION (ceiling → owner → co-owner
+ * → team-admin → kernel) has exactly one implementation and the two surfaces
+ * cannot drift (the cinatra#1428 cross-surface invariant).
+ */
+export type ResourceDecisionActor = {
+  /** Kernel actor consumed by `can()` (cross-org guard + role-grant union). */
+  kernelActor: ActorContext;
+  /** User identity for the owner / co-owner short-circuits. */
+  userId?: string;
+  /** Raw team-role bag for the team-admin short-circuit. */
+  teamRoles?: unknown;
+  /** Agent-run OBO scope-ceiling chain (W2/#1051), when delegated. */
+  oboCeiling?: PrimitiveActorContext["oboCeiling"];
+};
+
+/**
+ * SYNC decision core shared by `enforceResourceAccess` (async wrapper for
+ * primitive-actor call sites) and the artifact surfaces' canonical object
+ * authorization gates (sync, ActorContext-shaped — cinatra#1428).
  *
- * Status-code policy (mirrors enforceRunAccess):
- *   - resource is null/undefined          → 404 hidden     (don't leak existence)
- *   - actor is null/undefined             → 403 forbidden  (no anonymous access)
- *   - actor present + can() === false     → 403 forbidden  (decision denial)
+ * Returns `null` when access is allowed, or the `AuthzError` the caller
+ * should throw / treat as hidden. Never throws.
  *
- * Algorithm:
+ * Algorithm (order is load-bearing):
+ *   0. OBO scope-ceiling gate — HARD upper bound, before every short-circuit.
  *   1. Owner short-circuit (user-owned resources only).
  *   2. Co-owner short-circuit (read/update/manageMembers only).
- *   3. Kernel `can()` — applies cross-org guard + role-grant union.
+ *   2b. Team-admin short-circuit (team-owned resources).
+ *   3. Kernel `can()` — cross-org guard + role-grant union.
  */
-export async function enforceResourceAccess(
+export function decideResourceAccess(
   resource: ResourceForAccessCheck | null | undefined,
-  actor: PrimitiveActorContext | null | undefined,
+  actor: ResourceDecisionActor | null | undefined,
   op: Permission,
-  /**
-   * Optional pre-resolved role hints. When supplied, these win over any
-   * roles inferred from `actor.roles` / `actor.teamRoles` so call sites
-   * that have already resolved Better Auth admin / org / team roles
-   * (e.g. `enforceRunAccess` forwarding ActorRoleHints) reach the kernel
-   * with their canonical role bag intact. Without this channel,
-   * platform_admin actors silently lose admin
-   * status crossing the bridge.
-   */
-  roleHintsOverride?: ActorRoleHints,
-): Promise<void> {
+): ResourceAccessDenial | null {
   if (!resource) {
-    throw new AuthzError({
+    return new AuthzError({
       statusCode: 404,
       reason: "hidden",
       message: "Not found.",
     });
   }
   if (!actor) {
-    throw new AuthzError({
+    return new AuthzError({
       statusCode: 403,
       reason: "forbidden",
       message: "Access denied.",
@@ -306,7 +329,7 @@ export async function enforceResourceAccess(
     // Mirror the kernel-deny status policy below: hide existence on reads so a
     // confined agent cannot enumerate ids; 403 on mutating ops.
     const hideExistence = op.endsWith(".read");
-    throw new AuthzError({
+    return new AuthzError({
       statusCode: hideExistence ? 404 : 403,
       reason: hideExistence ? "hidden" : "forbidden",
       message: hideExistence ? "Not found." : "Access denied.",
@@ -319,7 +342,7 @@ export async function enforceResourceAccess(
     actor.userId !== undefined &&
     actor.userId === resource.ownerId
   ) {
-    return;
+    return null;
   }
 
   // 2. Co-owner short-circuit — read/update/manageMembers only.
@@ -329,7 +352,7 @@ export async function enforceResourceAccess(
     resource.coOwnerUserIds.includes(actor.userId) &&
     RESOURCE_COOWNER_OPS.has(op)
   ) {
-    return;
+    return null;
   }
 
   // 2b. Team-owner short-circuit — team admins of the owning team get
@@ -339,14 +362,175 @@ export async function enforceResourceAccess(
   //     (plus inherited member reads), so legitimate team admins would
   //     be denied UPDATE / DELETE on their own team's projects/objects.
   if (resource.ownerLevel === "team") {
-    const rawTeamRoles = (actor as unknown as { teamRoles?: unknown }).teamRoles;
+    const rawTeamRoles = actor.teamRoles;
     if (rawTeamRoles && typeof rawTeamRoles === "object") {
       const role = (rawTeamRoles as Record<string, unknown>)[resource.ownerId];
-      if (role === "admin" || role === "team_admin") return;
+      if (role === "admin" || role === "team_admin") return null;
     }
   }
 
   // 3. Kernel decision.
+  // Always pass organizationId even for user-owned resources
+  // so the kernel cross-org guard can fire.
+  const ref: ResourceRef = {
+    resourceType: resource.resourceType,
+    resourceId: resource.resourceId,
+    organizationId: resource.organizationId ?? undefined,
+    ownerType: ownerLevelToType(resource.ownerLevel),
+    ownerId: resource.ownerId,
+    visibility: resource.visibility ?? undefined,
+    level: resource.ownerLevel,
+  };
+
+  if (!authz.can(actor.kernelActor, op, ref)) {
+    // For `*.read` permissions, downgrade the deny to a 404-hidden
+    // response so a probing caller cannot enumerate which resource ids
+    // exist by distinguishing 403 (exists, denied) from 404 (does not
+    // exist). Mutating ops keep 403 because the caller already had to
+    // discover the id via a successful read path.
+    const hideExistence = op.endsWith(".read");
+    return new AuthzError({
+      statusCode: hideExistence ? 404 : 403,
+      reason: hideExistence ? "hidden" : "forbidden",
+      message: hideExistence ? "Not found." : "Access denied.",
+    });
+  }
+  return null;
+}
+
+/**
+ * ActorContext adapter for the sync decision core (cinatra#1428).
+ *
+ * Used by surfaces that hold an already-built kernel `ActorContext` (the
+ * artifact service). Facet mapping:
+ *   - `userId` ← `principalId` (the primitive bridge sets
+ *     `principalId = userId` whenever a user identity exists; system/job
+ *     principals never collide with `owner_id` user ids);
+ *   - `teamRoles` / `oboCeiling` ← carried directly on the context.
+ * This is the SAME identity the SQL ownership filter keys on
+ * (`owner_id = actor.principalId` in `buildOwnershipFilter`), so the sync
+ * gate and the data-layer filter agree on who "the owner" is.
+ */
+export function decideResourceAccessForActorContext(
+  resource: ResourceForAccessCheck | null | undefined,
+  actorContext: ActorContext | null | undefined,
+  op: Permission,
+): ResourceAccessDenial | null {
+  if (!actorContext) {
+    return decideResourceAccess(resource, null, op);
+  }
+  return decideResourceAccess(
+    resource,
+    {
+      kernelActor: actorContext,
+      userId: actorContext.principalId,
+      teamRoles: actorContext.teamRoles,
+      oboCeiling: actorContext.oboCeiling,
+    },
+    op,
+  );
+}
+
+/**
+ * Build the kernel `ActorContext` used for actor-scoped canonical READS
+ * (the SQL ownership filter in `getObjectById` / `listObjectsByFilter`)
+ * from an MCP primitive actor. Mirrors the construction inside
+ * `enforceResourceAccess` (safe-actor narrowing + derived role hints) and
+ * additionally carries the primitive's `oboCeiling` so the data-layer
+ * ceiling clause (`buildOwnershipFilter`) stays load-bearing for delegated
+ * agent-run actors.
+ *
+ * Introduced for cinatra#1428: the objects read surface splices the SAME
+ * ownership filter the artifact read surface uses, so neither surface can
+ * return a row the other's data layer would exclude.
+ */
+export function kernelActorForRead(
+  actor: PrimitiveActorContext,
+  orgId: string | null,
+): ActorContext {
+  const roleHints = deriveRoleHints(actor);
+  const safeActor: PrimitiveActorContext = {
+    actorType: actor.actorType ?? "system",
+    source: actor.source ?? "ui",
+    userId: actor.userId,
+    sessionId: actor.sessionId,
+    requestId: actor.requestId,
+    campaignId: actor.campaignId,
+    provider: actor.provider,
+    model: actor.model,
+    jobId: actor.jobId,
+    operationId: actor.operationId,
+    approvedByUserId: actor.approvedByUserId,
+    tokenScopes: actor.tokenScopes,
+  };
+  // Preserve raw ownership facets the safe-actor narrowing / role-hint
+  // derivation would drop: teamIds feed the SQL team clause; projectIds /
+  // projectGrants feed the SQL project clause (dropping them would
+  // false-deny rows the actor holds explicit project grants for);
+  // teamRoles feed the team-admin short-circuit when this context is
+  // reused for a kernel decision.
+  const ext = actor as unknown as {
+    teamIds?: string[];
+    projectIds?: string[];
+    projectGrants?: ActorRoleHints["projectGrants"];
+  };
+  const built = buildActorContextFromPrimitive(safeActor, orgId, {
+    ...roleHints,
+    actorOrganizationId: roleHints.actorOrganizationId ?? orgId,
+    ...(ext.teamIds ? { teamIds: ext.teamIds } : {}),
+    ...(ext.projectIds ? { projectIds: ext.projectIds } : {}),
+    ...(ext.projectGrants ? { projectGrants: ext.projectGrants } : {}),
+  });
+  const teamRoles = roleHints.teamRoles;
+  return {
+    ...built,
+    ...(teamRoles ? { teamRoles } : {}),
+    ...(actor.oboCeiling ? { oboCeiling: actor.oboCeiling } : {}),
+  };
+}
+
+/**
+ * Generic resource-access gate.
+ *
+ * Status-code policy (mirrors enforceRunAccess):
+ *   - resource is null/undefined          → 404 hidden     (don't leak existence)
+ *   - actor is null/undefined             → 403 forbidden  (no anonymous access)
+ *   - actor present + can() === false     → 403 forbidden  (decision denial)
+ *
+ * Thin async wrapper over the sync `decideResourceAccess` core: builds the
+ * kernel actor from the primitive envelope (+ optional role-hint override),
+ * adapts the primitive facets, and throws the returned denial.
+ */
+export async function enforceResourceAccess(
+  resource: ResourceForAccessCheck | null | undefined,
+  actor: PrimitiveActorContext | null | undefined,
+  op: Permission,
+  /**
+   * Optional pre-resolved role hints. When supplied, these win over any
+   * roles inferred from `actor.roles` / `actor.teamRoles` so call sites
+   * that have already resolved Better Auth admin / org / team roles
+   * (e.g. `enforceRunAccess` forwarding ActorRoleHints) reach the kernel
+   * with their canonical role bag intact. Without this channel,
+   * platform_admin actors silently lose admin
+   * status crossing the bridge.
+   */
+  roleHintsOverride?: ActorRoleHints,
+): Promise<void> {
+  if (!resource) {
+    throw new AuthzError({
+      statusCode: 404,
+      reason: "hidden",
+      message: "Not found.",
+    });
+  }
+  if (!actor) {
+    throw new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message: "Access denied.",
+    });
+  }
+
   const derivedHints = deriveRoleHints(actor);
   // The override merge must preserve
   // `projectGrants` (the canonical axis). When grants are present, derive
@@ -404,29 +588,15 @@ export async function enforceResourceAccess(
     roleHints,
   );
 
-  // Always pass organizationId even for user-owned resources
-  // so the kernel cross-org guard can fire.
-  const ref: ResourceRef = {
-    resourceType: resource.resourceType,
-    resourceId: resource.resourceId,
-    organizationId: resource.organizationId ?? undefined,
-    ownerType: ownerLevelToType(resource.ownerLevel),
-    ownerId: resource.ownerId,
-    visibility: resource.visibility ?? undefined,
-    level: resource.ownerLevel,
-  };
-
-  if (!authz.can(actorContext, op, ref)) {
-    // For `*.read` permissions, downgrade the deny to a 404-hidden
-    // response so a probing caller cannot enumerate which resource ids
-    // exist by distinguishing 403 (exists, denied) from 404 (does not
-    // exist). Mutating ops keep 403 because the caller already had to
-    // discover the id via a successful read path.
-    const hideExistence = op.endsWith(".read");
-    throw new AuthzError({
-      statusCode: hideExistence ? 404 : 403,
-      reason: hideExistence ? "hidden" : "forbidden",
-      message: hideExistence ? "Not found." : "Access denied.",
-    });
-  }
+  const denial = decideResourceAccess(
+    resource,
+    {
+      kernelActor: actorContext,
+      userId: actor.userId,
+      teamRoles: (actor as unknown as { teamRoles?: unknown }).teamRoles,
+      oboCeiling: actor.oboCeiling,
+    },
+    op,
+  );
+  if (denial) throw denial;
 }
