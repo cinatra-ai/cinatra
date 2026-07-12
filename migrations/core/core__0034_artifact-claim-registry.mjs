@@ -1,4 +1,4 @@
-// core__0032 — durable artifact-claim registry (cinatra#1425, epic #1424
+// core__0034 — durable artifact-claim registry (cinatra#1425, epic #1424
 // foundation).
 //
 // Artifact-type CLAIMS become DB state: an installed `kind:"artifact"`

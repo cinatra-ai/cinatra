@@ -1,5 +1,5 @@
 // Contract test for the artifact-claim-registry migration
-// (migrations/core/core__0032_artifact-claim-registry.mjs, cinatra#1425,
+// (migrations/core/core__0034_artifact-claim-registry.mjs, cinatra#1425,
 // epic #1424 foundation).
 //
 // The migration module is imported by RELATIVE PATH so the real SQL is
@@ -27,7 +27,7 @@ import {
   ARTIFACT_CLAIM_STATUSES,
 } from "@cinatra-ai/objects/claims";
 
-import { up, down } from "../../../migrations/core/core__0032_artifact-claim-registry.mjs";
+import { up, down } from "../../../migrations/core/core__0034_artifact-claim-registry.mjs";
 import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 
 function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
@@ -44,7 +44,7 @@ const bootstrapSql = artifactClaimSchemaQueries("cinatra")
 
 const TABLES = ["artifact_type_claims", "artifact_claim_events", "artifact_binding_reconcile_queue"];
 
-describe("core__0032 up()", () => {
+describe("core__0034 up()", () => {
   it("creates the three claim tables, idempotently", () => {
     for (const table of TABLES) {
       expect(upSql).toMatch(new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
@@ -150,7 +150,7 @@ describe("bootstrap-DDL parity (fresh install == operator upgrade)", () => {
   });
 });
 
-describe("core__0032 down()", () => {
+describe("core__0034 down()", () => {
   it("cleanly reverses: drops the three tables + trigger/function, nothing else", () => {
     for (const table of TABLES) {
       expect(downSql).toContain(`DROP TABLE IF EXISTS ${table}`);

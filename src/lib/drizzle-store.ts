@@ -2791,14 +2791,8 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
          AND owner_id <> '__platform__')
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
-    // Durable artifact-claim registry + append-only claim-event log + the
-    // winner-change reconcile queue (cinatra#1425, epic #1424 foundation) —
-    // brand-new tables with NO foreign keys, in a sync leaf. On an existing
-    // deployment they arrive via core__0032; fresh bootstrap ships them here
-    // (idempotent DDL, the two paths converge). Spread after the
-    // installed_extension section purely for reading order — the claim tables
-    // deliberately carry no FK to installed_extension (claims + events survive
-    // uninstall's row delete).
+    // Artifact-claim registry tables (cinatra#1425): sync leaf, no FKs
+    // (claims/events survive uninstall); existing deployments via core__0034.
     ...artifactClaimSchemaQueries(schemaName),
     // ---------------------------------------------------------------------------
     // origin JSONB column on agent_templates + skill_packages,

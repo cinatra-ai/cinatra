@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //     nothing (AC-2 atomicity, at the statement level);
 //   - the DEDICATED-claimant conflict surfaces as the typed
 //     ArtifactClaimConflictError off the DB constraint (AC-1, service half —
-//     the DDL half is pinned in migration-artifact-claim-registry-core0032);
+//     the DDL half is pinned in migration-artifact-claim-registry-core0034);
 //   - dormancy / reactivation SQL mirrors the policy leaf's domination rule,
 //     and reactivation bumps the generation (AC-2).
 const runPostgresQueriesSync = vi.fn();

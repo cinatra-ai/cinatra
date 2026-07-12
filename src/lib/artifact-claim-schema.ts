@@ -43,7 +43,7 @@
 // A pure string builder with ZERO imports — a synchronous leaf, safe for
 // drizzle-store.ts's synchronous require() composition (same contract as
 // skill-lifecycle-schema.ts / co-owner-constraint-schema.ts). On an EXISTING
-// deployment these tables arrive via migration core__0032; on a fresh
+// deployment these tables arrive via migration core__0034; on a fresh
 // bootstrap they ship directly here — the two paths converge (idempotent DDL).
 // The enum value sets below are a schema contract mirrored by the
 // @cinatra-ai/objects `claims` policy leaf; artifact-claim-schema.test.ts
