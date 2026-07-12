@@ -69,10 +69,7 @@ import type { CompiledStep, AgentRunStatus } from "./store";
 import { compileWorkflow } from "./compiler";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { publishAgentPackage } from "./verdaccio/client";
-import {
-  installAgentFromPackage,
-  installAgentPackageWithDependencies,
-} from "./install-from-package";
+import { installAgentPackageWithDependencies } from "./install-package-with-dependencies";
 // Agent package-name validation is scope-agnostic.
 import { derivePublishMetadataFromSnapshot } from "./verdaccio/publish-metadata";
 // Explicit DI shape for publish/install paths.
@@ -752,6 +749,11 @@ export async function installRegistryPackageAtScope(input: {
       ownerLevel: parsed.target.level,
       ownerId: parsed.target.id,
       status: "published",
+      // cinatra#1039 decision 3: the actor role bag rides along so a planned
+      // dedupe-upward of a shared dependency row OWNED AT A DIFFERENT SCOPE is
+      // re-authorized against THAT row's exact scope (same rule grid as steps
+      // 4a/4b). Without it, cross-scope mutation is fail-closed.
+      actor,
     },
     installConfig,
   );

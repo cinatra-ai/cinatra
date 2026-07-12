@@ -78,11 +78,26 @@ const installFromPackageMock = vi.hoisted(() => ({
   installAgentPackageWithDependencies: vi.fn(async () => ({
     rootTemplateId: "tmpl-1",
     installedTemplateIds: ["tmpl-1"],
-    tree: { root: { packageName: "@cinatra/foo" }, all: new Map() },
+    plannedMembers: [
+      {
+        packageName: "@cinatra/foo",
+        version: "1.0.0",
+        action: "install" as const,
+        alreadyInstalled: false,
+      },
+    ],
   })),
   installAgentFromPackage: vi.fn(),
 }));
-vi.mock("../install-from-package", () => installFromPackageMock);
+// cinatra#1039 Phase 2: the full-tree installer moved to its own module
+// (unified-planner route); installAgentFromPackage stays where it was.
+vi.mock("../install-package-with-dependencies", () => ({
+  installAgentPackageWithDependencies:
+    installFromPackageMock.installAgentPackageWithDependencies,
+}));
+vi.mock("../install-from-package", () => ({
+  installAgentFromPackage: installFromPackageMock.installAgentFromPackage,
+}));
 
 // Cut the transitive openai/llm chain. These modules are
 // imported by actions.ts but not exercised by installRegistryPackageAtScope.
@@ -384,7 +399,14 @@ describe("installRegistryPackageAtScope — authorization matrix", () => {
     installFromPackageMock.installAgentPackageWithDependencies.mockResolvedValue({
       rootTemplateId: "tmpl-1",
       installedTemplateIds: ["tmpl-1"],
-      tree: { root: { packageName: "@cinatra/foo" }, all: new Map() },
+      plannedMembers: [
+        {
+          packageName: "@cinatra/foo",
+          version: "1.0.0",
+          action: "install" as const,
+          alreadyInstalled: false,
+        },
+      ],
     });
     destinationResolverMock.resolveInstallEnvironment.mockResolvedValue({
       registryUrl: "https://r.example/",

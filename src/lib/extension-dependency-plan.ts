@@ -63,10 +63,19 @@ export type DependencyClosurePin = { name: string; version: string };
  * immutable, onto every transitive `PlannedMember`.
  */
 export type RowOwnership = {
-  ownerLevel: ExtensionOwnerLevel;
+  ownerLevel: RowOwnershipLevel;
   ownerId: string | null;
   organizationId: string | null;
 };
+
+/**
+ * The levels a REQUESTING install scope can name (cinatra#1039 decision 2).
+ * `ExtensionOwnerLevel` (the canonical ROW enum) plus `"project"`: a project is
+ * a valid install TARGET on the agent path (`InstallScopeTarget`), and the
+ * ancestry resolver must be able to derive project→owning-team→org→platform —
+ * even though canonical rows themselves carry only the five-level enum.
+ */
+export type RowOwnershipLevel = ExtensionOwnerLevel | "project";
 
 /**
  * One level of a RESOLVED scope-ancestry chain (cinatra#1039 decision 2). The
@@ -632,7 +641,8 @@ export async function planDependencyInstall(
 
   // DEPENDENCY-CONFUSION GATE (#157 / #103): confine the resolved tree to the
   // ROOT package's own vendor scope + the first-party base scope. The agent
-  // resolver this planner SUPERSEDES inside the saga (installPackageWithDependencies)
+  // resolver this planner SUPERSEDED (the registries "prefer-newer" walker,
+  // deleted in the #1039 Phase-2 reroute — the agent path now plans HERE too)
   // applied this exact allowlist to every resolved node; without it here, a
   // saga-driven install (notably the dev/non-gatekept path, which has no
   // marketplace-closure membership gate) could auto-install an arbitrary,

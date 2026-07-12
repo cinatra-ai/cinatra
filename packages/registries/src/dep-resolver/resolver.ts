@@ -10,9 +10,13 @@
 // first-party base scope — see ../scope.ts).
 //
 // The resolver is package-type agnostic: typeConfig supplies both the allowed
-// scope prefixes and the cinatra packument dependency key. `conflictPolicy`
-// controls whether version disagreements are rejected or upgraded when every
-// live consumer range remains satisfied.
+// scope prefixes and the cinatra packument dependency key. Version
+// disagreements between consumers are always REJECTED
+// (PluginDependencyConflictError): the "prefer-newer" upgrade policy this
+// resolver used to carry was a duplicate of the unified dependency planner's
+// dedupe-upward semantics (src/lib/extension-dependency-plan.ts) and was
+// deleted with the cinatra#1039 Phase-2 reroute of the agent install path —
+// install-time conflict handling lives in the planner, on every path.
 
 import * as semver from "semver";
 import type {
@@ -36,14 +40,7 @@ type QueueEntry = {
   range: string;
   path: string[];
   depth: number;
-  fromParent?: string;
-  fromParentVersion?: string;
 };
-
-// Per-edge consumer range record: tracks which (parent, parentVersion) pair
-// declared a requirement on a given child. Used by prefer-newer to prune stale
-// ranges left by superseded parent versions.
-type ConsumerEdge = { parent: string; parentVersion: string; range: string };
 
 function isPrereleaseRange(range: string): boolean {
   // Any hyphen followed by a letter signals a pre-release identifier inside a range.
@@ -66,17 +63,9 @@ export async function resolveDependencyTree(input: {
   typeConfig: PluginTypeConfig;
   maxNodes?: number;
   maxDepth?: number;
-  /**
-   * Default "strict-reject" preserves the resolver's conservative conflict
-   * behavior: throw PluginDependencyConflictError when two consumers disagree
-   * on a concrete version. "prefer-newer" upgrades IFF the newer pick satisfies
-   * EVERY prior consumer range seen so far.
-   */
-  conflictPolicy?: "strict-reject" | "prefer-newer";
 }): Promise<DependencyTree> {
   const maxNodes = input.maxNodes ?? 500;
   const maxDepth = input.maxDepth ?? 20;
-  const conflictPolicy = input.conflictPolicy ?? "strict-reject";
   const { scopePrefixes, packumentDepKey, readPackumentDeps } = input.typeConfig;
 
   // Single read seam for a node's transitive dependency map. Default reads the
@@ -110,21 +99,6 @@ export async function resolveDependencyTree(input: {
   // Keep the requested ranges per-node so a second pass can populate the
   // dependencies map from each packument snapshot without refetching.
   const pickedManifests = new Map<string, PackumentVersionEntry>();
-  // Per-edge consumer ranges keyed by (parent, parentVersion) so superseded-parent
-  // ranges are pruned before the prefer-newer conflict check.
-  const consumerEdges = new Map<string, ConsumerEdge[]>();
-
-  // Returns only the ranges from parents whose currently-resolved version
-  // matches the version that declared the edge — stale edges (from superseded
-  // parent versions) are silently dropped.
-  function rebuildRanges(childName: string): string[] {
-    return (consumerEdges.get(childName) ?? [])
-      .filter(({ parent, parentVersion }) => {
-        const node = resolved.get(parent);
-        return node?.resolvedVersion === parentVersion;
-      })
-      .map((e) => e.range);
-  }
 
   const queue: QueueEntry[] = [
     { name: input.rootPackageName, range: input.rootRange, path: [], depth: 0 },
@@ -150,13 +124,6 @@ export async function resolveDependencyTree(input: {
       throw new PluginDependencyLimitError("depth", maxDepth);
     }
 
-    // Record which (parent, parentVersion) declared this requirement.
-    if (entry.fromParent !== undefined && entry.fromParentVersion !== undefined) {
-      const edges = consumerEdges.get(name) ?? [];
-      edges.push({ parent: entry.fromParent, parentVersion: entry.fromParentVersion, range });
-      consumerEdges.set(name, edges);
-    }
-
     // Packument fetch
     let packument: Packument;
     try {
@@ -179,62 +146,14 @@ export async function resolveDependencyTree(input: {
     const existing = resolved.get(name);
     if (existing) {
       if (existing.resolvedVersion === pick) continue;
-
-      if (conflictPolicy === "strict-reject") {
-        throw new PluginDependencyConflictError(
-          name,
-          existing.resolvedVersion,
-          pick,
-        );
-      }
-
-      // prefer-newer: upgrade IFF newer pick satisfies every live consumer range
-      // (stale ranges from superseded parent versions are filtered out by rebuildRanges).
-      const newerPick = semver.gt(pick, existing.resolvedVersion)
-        ? pick
-        : existing.resolvedVersion;
-      for (const consumerRange of rebuildRanges(name)) {
-        if (!semver.satisfies(newerPick, consumerRange)) {
-          throw new PluginDependencyConflictError(
-            name,
-            existing.resolvedVersion,
-            pick,
-          );
-        }
-      }
-
-      if (semver.gt(pick, existing.resolvedVersion)) {
-        const pickedManifest = packument.versions[pick];
-        if (!pickedManifest) {
-          throw new PluginDependencyResolutionError(
-            name,
-            range,
-            availableVersions,
-          );
-        }
-        resolved.set(name, {
-          ...existing,
-          resolvedVersion: pick,
-          tarballUrl: pickedManifest.dist.tarball,
-          integrity: pickedManifest.dist.integrity,
-          requestedRange: range,
-        });
-        pickedManifests.set(name, pickedManifest);
-        // Re-enqueue children of the newer manifest.
-        const childDeps = readDeps(pickedManifest);
-        const nextPath = [...path, name];
-        for (const [depName, depRange] of Object.entries(childDeps)) {
-          queue.push({
-            name: depName,
-            range: depRange,
-            path: nextPath,
-            depth: depth + 1,
-            fromParent: name,
-            fromParentVersion: pick,
-          });
-        }
-      }
-      continue;
+      // Two consumers disagree on a concrete version — always reject. The
+      // upgrade path for a version disagreement is the unified dependency
+      // planner's dedupe-upward (cinatra#1039), not this walker.
+      throw new PluginDependencyConflictError(
+        name,
+        existing.resolvedVersion,
+        pick,
+      );
     }
 
     if (resolved.size >= maxNodes) {
@@ -265,8 +184,6 @@ export async function resolveDependencyTree(input: {
         range: depRange,
         path: nextPath,
         depth: depth + 1,
-        fromParent: name,
-        fromParentVersion: pick,
       });
     }
   }

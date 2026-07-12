@@ -10,7 +10,10 @@ describe("no server-only chain", () => {
     const keys = Object.keys(mod);
     expect(keys).toContain("resolveDependencyTree");
     expect(keys).toContain("installResolvedTree");
-    expect(keys).toContain("installPackageWithDependencies");
+    // installPackageWithDependencies (the prefer-newer full-tree convenience
+    // wrapper) was DELETED with the cinatra#1039 Phase-2 reroute: the agent
+    // path now plans through the unified dependency planner.
+    expect(keys).not.toContain("installPackageWithDependencies");
     expect(keys).toContain("comparePluginVersions");
     expect(keys).toContain("listAgentPackages");
     expect(keys).toContain("extractAgentPackage");

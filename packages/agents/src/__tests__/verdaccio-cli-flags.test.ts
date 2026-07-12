@@ -101,16 +101,17 @@ describe("verdaccio cli flags", () => {
   describe("install path", () => {
     it("installAgentPackageWithDependencies references buildRegistryAuthArgs", async () => {
       // The install path itself fetches via pacote (HTTP), so there is no
-      // direct execFile spawn inside install-from-package.ts. The helper is
+      // direct execFile spawn inside the full-tree installer. The helper is
       // imported there as a readiness marker so future spawn sites can splice
-      // the flags directly.
+      // the flags directly. (cinatra#1039 Phase 2: the full-tree installer
+      // lives in install-package-with-dependencies.ts.)
       const fs = await import("node:fs/promises");
       const path = await import("node:path");
       const repoRoot = path.resolve(__dirname, "../../../..");
       const src = await fs.readFile(
         path.join(
           repoRoot,
-          "packages/agents/src/install-from-package.ts",
+          "packages/agents/src/install-package-with-dependencies.ts",
         ),
         "utf8",
       );
