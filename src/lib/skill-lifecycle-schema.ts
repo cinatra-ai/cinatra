@@ -57,10 +57,13 @@ $body$` },
     { text: `DROP TRIGGER IF EXISTS trg_skill_revisions_append_only ON "${q}"."skill_revisions"` },
     { text: `CREATE TRIGGER trg_skill_revisions_append_only BEFORE UPDATE OR DELETE ON "${q}"."skill_revisions" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_skill_revisions_append_only"()` },
 
-    // ---- skill_lifecycle_audit: one row per lifecycle transition ----
+    // ---- skill_lifecycle_audit: one row per state->state transition ----
     // `skill_id` carries NO FK (durable across skill deletion — the
-    // audit_events / extension_lifecycle_audit precedent). `from_state` is NULL
-    // for an initialization (the activation of a newly-tracked custom skill).
+    // audit_events / extension_lifecycle_audit precedent). Audit rows record
+    // TRANSITIONS between states, so `from_state` is the (real) prior state; a
+    // skill's INITIAL activation (NULL -> active) is provenance carried by its
+    // first `skill_revisions` row, NOT an audit row. `from_state` stays nullable
+    // for forward-compatibility only.
     { text: `CREATE TABLE IF NOT EXISTS "${q}"."skill_lifecycle_audit" (
       id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
       skill_id text NOT NULL,

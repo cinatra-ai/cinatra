@@ -51,11 +51,14 @@ Rows are FROM states, columns are TO states. `✔` = legal; blank = rejected
 | **archived** | | | | (terminal) |
 
 `superseded_by` is a self-edge (`skills.superseded_by → skills.id`, `ON DELETE
-SET NULL`). Setting it must not create a cycle — the acyclicity guard
-(`wouldCreateSupersedeCycle`) walks the successor chain and fails closed on a
-self-edge, a chain that loops back, or a pre-existing cycle in the data.
-PostgreSQL cannot express acyclicity, so this is an application-layer WRITE
-guard checked before every supersede write.
+SET NULL`). Setting it must not create a cycle. PostgreSQL cannot express
+acyclicity as a constraint, so it is enforced two ways: a fast application-layer
+pre-check (`wouldCreateSupersedeCycle` walks the successor chain and fails closed
+on a self-edge, a loop back, or a pre-existing cycle), and — authoritatively and
+race-free — the transition write itself, which takes a transaction-scoped
+advisory lock over the supersede graph and re-walks the chain (a `WITH RECURSIVE`
+guard) inside that transaction, so two concurrent supersede writes can never
+commit a cycle between them.
 
 ## Transition authorization
 
@@ -70,11 +73,13 @@ is entitled.
 | **Non-owner user** | ✗ denied |
 | **unknown actor type / illegal transition** | ✗ denied |
 
-Every applied transition writes one `skill_lifecycle_audit` row
+Every applied state→state transition writes one `skill_lifecycle_audit` row
 (`from_state → to_state`, actor, reason, timestamp). The DB write is a
 compare-and-swap on the current state and records the audit atomically iff the
 swap matched, so a concurrent transition is a fail-closed no-op, never a
-mis-audited history.
+mis-audited history. A skill's INITIAL activation (`NULL → active`, at creation
+or backfill) is provenance carried by its FIRST `skill_revisions` row, not an
+audit row — so an audited transition's `from_state` is always a real prior state.
 
 ## Revisions (`skill_revisions`) — immutable history
 

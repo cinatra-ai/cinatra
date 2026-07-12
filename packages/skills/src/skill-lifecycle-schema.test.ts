@@ -50,7 +50,7 @@ describe("skillLifecycleSchemaQueries — skill_lifecycle_audit", () => {
     const sql = ddl();
     expect(sql).toContain(`"${SCHEMA}"."skill_lifecycle_audit"`);
     expect(sql).toMatch(/to_state text NOT NULL/);
-    expect(sql).toMatch(/from_state text,/); // nullable (NULL = an initialization)
+    expect(sql).toMatch(/from_state text,/); // nullable (forward-compat); audited transitions carry a real prior state
     expect(sql).toMatch(/skill_id text NOT NULL,/);
     expect(sql).not.toMatch(/skill_lifecycle_audit[\s\S]*REFERENCES/);
   });

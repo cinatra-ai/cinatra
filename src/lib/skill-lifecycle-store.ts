@@ -44,11 +44,15 @@ export function buildSkillLifecycleRevisionQueries(
   const s = schemaName.replaceAll('"', '""');
   const queries: Array<{ text: string; values?: unknown[] }> = [];
   for (const w of writes) {
+    // PLAIN insert (no ON CONFLICT): a live revision id is a fresh distinct UUID
+    // so it never collides — and if one ever did, the collision must ABORT the
+    // whole transaction (fail-closed) rather than silently retain a stale
+    // immutable row while the pointer moves. The deterministic idempotent seed
+    // lives only in the core__0029 backfill, not here.
     queries.push({
       text: `INSERT INTO "${s}"."skill_revisions"
         (id, skill_id, content_digest, source, based_on_skill_ids, base_digests, author_user_id)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
-        ON CONFLICT (id) DO NOTHING`,
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)`,
       values: [
         w.revisionId,
         w.skillId,
@@ -97,27 +101,51 @@ export interface SkillLifecycleTransitionWrite {
 }
 
 /**
- * Atomic compare-and-swap lifecycle transition + audit (cinatra#1361 AC3). In a
- * SINGLE statement: swap lifecycle_state ONLY when it still equals
- * `expectedFrom`, and write the audit row ONLY when the swap matched (the audit
- * SELECTs from the update CTE). Returns `{ changed }` — false means the state
- * moved underneath (a fail-closed no-op, no audit written). TOCTOU-safe on the
- * state dimension; the caller's pure policy gate (authorization + no-cycle)
- * runs first.
+ * Atomic, race-free compare-and-swap lifecycle transition + audit (cinatra#1361
+ * AC3). Two statements in ONE transaction:
+ *
+ *  1. a transaction-scoped advisory lock that SERIALIZES all supersede-graph
+ *     mutations, so the acyclicity check below reads a stable graph;
+ *  2. a single statement that (a) swaps lifecycle_state ONLY when it still
+ *     equals `expectedFrom` (TOCTOU-safe on state), (b) sets `superseded_by`
+ *     ONLY when doing so would NOT create a cycle — a WITH RECURSIVE walk of the
+ *     successor chain from the proposed target rejects a self-edge, a loop back
+ *     to this skill, or a walk into a pre-existing cycle (UNION dedups →
+ *     terminates), and (c) writes the audit row ONLY when the swap matched (the
+ *     audit SELECTs from the update CTE).
+ *
+ * Returns `{ changed }` — false means the state moved underneath OR the
+ * supersede edge would create a cycle (a fail-closed no-op, no audit written).
+ * The caller's pure policy gate (authorization + a fast app-side no-cycle
+ * pre-check) runs first; the DB guard here is the authoritative, race-free
+ * backstop (service enforcement alone is insufficient — the semantic_assertion
+ * precedent).
+ *
+ * Audit rows record state→state TRANSITIONS; a skill's INITIAL activation
+ * (NULL → active) is provenance carried by its first revision, not an audit row
+ * (so `expectedFrom` is always a real prior state).
  */
 export function applySkillLifecycleTransitionInDatabase(input: SkillLifecycleTransitionWrite): { changed: boolean } {
   ensurePostgresSchema();
   const s = postgresSchema.replaceAll('"', '""');
-  const [result] = runPostgresQueriesSync({
+  const results = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
     queries: [
+      { text: `SELECT pg_advisory_xact_lock(hashtext('cinatra-skill-supersede-graph'))` },
       {
-        text: `WITH upd AS (
+        text: `WITH RECURSIVE walk(id) AS (
+          SELECT $4::text
+          UNION
+          SELECT sk.superseded_by FROM "${s}"."skills" sk JOIN walk w ON sk.id = w.id
+           WHERE sk.superseded_by IS NOT NULL
+        ),
+        upd AS (
           UPDATE "${s}"."skills"
              SET lifecycle_state = $3,
                  superseded_by = CASE WHEN $4::text IS NOT NULL THEN $4 ELSE superseded_by END
            WHERE id = $1 AND lifecycle_state = $2
+             AND ($4::text IS NULL OR ($4 <> $1 AND NOT EXISTS (SELECT 1 FROM walk WHERE id = $1)))
           RETURNING id
         )
         INSERT INTO "${s}"."skill_lifecycle_audit"
@@ -137,5 +165,6 @@ export function applySkillLifecycleTransitionInDatabase(input: SkillLifecycleTra
       },
     ],
   });
-  return { changed: (result?.rows?.length ?? 0) > 0 };
+  const audit = results[1];
+  return { changed: (audit?.rows?.length ?? 0) > 0 };
 }
