@@ -359,6 +359,33 @@ describe("cinatra#1039 decision 3 — cross-scope dedupe re-authorization (fail-
     ).resolves.toBeUndefined();
   });
 
+  it("with an ACTOR present the grid re-runs even for a SAME-SCOPE row (never assume the caller's gate)", async () => {
+    // updateRegistryPackage gates on the generic registry.update canDo, not
+    // the scope grid — so an actor WITHOUT team_admin of team-1 must not
+    // mutate a team-1 row even when the ROOT tuple is team-1.
+    const seams = { assertTargetBelongsToActiveOrg: vi.fn(async () => ({})) };
+    const teamRow = row(DEP, "0.2.1", {
+      organizationId: ORG,
+      ownerLevel: "team",
+      ownerId: "team-1",
+    });
+    await expect(
+      buildAgentRowMutationAuthorizer({
+        rootRowOwnership: teamTuple,
+        actor: orgActor({ orgRole: "member" }), // no teamRoles at all
+        seams,
+      })(teamRow),
+    ).rejects.toThrow(/team admin/);
+    // And WITH team_admin of team-1 it permits.
+    await expect(
+      buildAgentRowMutationAuthorizer({
+        rootRowOwnership: teamTuple,
+        actor: orgActor({ orgRole: "member", teamRoles: { "team-1": "team_admin" as const } }),
+        seams,
+      })(teamRow),
+    ).resolves.toBeUndefined();
+  });
+
   it("CROSS-SCOPE row without an actor role bag → deny (fail-closed)", async () => {
     const authorize = buildAgentRowMutationAuthorizer({ rootRowOwnership: teamTuple, actor: null });
     await expect(

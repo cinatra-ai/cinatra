@@ -207,7 +207,11 @@ async function _installAgentPackageWithDependenciesImpl(
     // member installs anyway (idempotent upsert).
     if (member.alreadyInstalled && !isRootNode) {
       const template = await readAgentTemplateByPackageName(member.packageName);
-      if (template) continue;
+      // Skip only when the template row exists AT THE PLANNED PIN — a
+      // version-drifted template (e.g. updated through this direct path while
+      // the canonical row stayed behind) reinstalls, exactly as the old blind
+      // path would have.
+      if (template && template.packageVersion === member.version) continue;
     }
     const res = await installAgentFromPackage(
       {

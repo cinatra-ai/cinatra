@@ -206,18 +206,22 @@ export type RowMutationAuthzSeams = {
  * INSTALLED_VERSION_CONFLICT refusal (fail-closed).
  *
  * Rules (deny = throw):
- *   - SAME-SCOPE fast path: the row's tuple equals the ROOT's requested tuple
- *     → permit. The caller's root authorization (`assertCanInstallAtTarget`
- *     at the action boundary) already ran against exactly this scope, so the
- *     re-authorization is definitionally satisfied.
- *   - Cross-scope WITHOUT an actor role bag → deny (fail-closed; the callers
- *     that cannot thread a role bag never get silent cross-scope mutation).
- *   - platform_admin → permit (the grid's short-circuit).
- *   - Row owned at platform/workspace scope → platform_admin only.
- *   - Row owned by a USER → only that user (their own row).
- *   - Row owned at organization/team/project scope → the shared
- *     `assertTargetBelongsToActiveOrg` (tenant boundary; loads project
- *     ownership) + `assertCanInstallAtTarget` grid against the ROW's scope.
+ *   - ACTOR PRESENT → the ratified rule VERBATIM: the grid re-runs against
+ *     the EXISTING row's `{level, id}` for EVERY mutation — including a
+ *     same-scope one. (Never assume the caller's own gate covered the row's
+ *     scope: e.g. `updateRegistryPackage` gates on the generic
+ *     `registry.update` canDo, not the scope grid.)
+ *       - Row owned at platform/workspace scope → platform_admin only.
+ *       - Row owned by a USER → only that user (or platform_admin).
+ *       - Row owned at organization/team/project scope → tenant boundary,
+ *         then the shared `assertTargetBelongsToActiveOrg` (existence +
+ *         project-ownership load) + `assertCanInstallAtTarget` grid against
+ *         the ROW's scope (the grid short-circuits platform_admin AFTER the
+ *         tenant gate).
+ *   - NO actor role bag (paths that cannot thread one, e.g. the
+ *     extension-handler flows): SAME-SCOPE rows permit — the mutation stays
+ *     within the exact scope the flow already operates in (the saga-parity
+ *     posture); anything cross-scope denies (fail-closed).
  */
 export function buildAgentRowMutationAuthorizer(opts: {
   rootRowOwnership: RowOwnership;
@@ -238,18 +242,6 @@ export function buildAgentRowMutationAuthorizer(opts: {
     const rowOrgId = row.organizationId ?? null;
     const root = opts.rootRowOwnership;
 
-    // Same-scope fast path (see contract above). Scope IDENTITY is per-level:
-    // a platform scope is identified by the level alone, an organization scope
-    // by its organizationId (the ownerId column is redundant there and often
-    // carries the sentinel), and the narrower levels by their real ownerId.
-    const sameScope =
-      rowLevel === root.ownerLevel &&
-      rowOrgId === (root.organizationId ?? null) &&
-      (rowLevel === "platform" ||
-        rowLevel === "organization" ||
-        rowOwnerId === (root.ownerId ?? null));
-    if (sameScope) return;
-
     const deny = (why: string): never => {
       throw new Error(
         `[agent-dependency-plan] not authorized to modify the ${rowLevel}-owned install of ` +
@@ -259,6 +251,18 @@ export function buildAgentRowMutationAuthorizer(opts: {
 
     const actor = opts.actor;
     if (!actor) {
+      // Actor-less path: same-scope permits, anything else is fail-closed
+      // (see the contract above). Scope IDENTITY is per-level: a platform
+      // scope is identified by the level alone, an organization scope by its
+      // organizationId (the ownerId column is redundant there and often
+      // carries the sentinel), and the narrower levels by their real ownerId.
+      const sameScope =
+        rowLevel === root.ownerLevel &&
+        rowOrgId === (root.organizationId ?? null) &&
+        (rowLevel === "platform" ||
+          rowLevel === "organization" ||
+          rowOwnerId === (root.ownerId ?? null));
+      if (sameScope) return;
       deny("no actor role bag on this install path (cross-scope mutation is fail-closed)");
       return;
     }

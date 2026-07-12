@@ -931,20 +931,27 @@ export async function updateRegistryPackage(input: {
   }
 
   // cinatra#1039: plan the update at the ROW's REAL ownership tuple — the
-  // template row carries the install-time owner tier; without it a
-  // team/project-owned root would plan (and dedupe-classify) as
-  // organization-owned. Re-supplying the SAME owner tier is an explicit no-op
-  // in updateAgentTemplate (only a CHANGE trips the reassignment gate). The
-  // actor role bag rides along for the decision-3 cross-scope
-  // re-authorization; without it, cross-scope dedupe stays fail-closed.
+  // template row carries the install-time owner tier AND owning org; without
+  // them a team/project-owned (or foreign-org) root would plan and
+  // dedupe-classify as owned by the actor's active org. Re-supplying the SAME
+  // owner tier/org is an explicit no-op in updateAgentTemplate (only a CHANGE
+  // trips the reassignment gate); a row with no org keeps the pre-existing
+  // active-org stamping. agent_templates.owner_level never carries "platform"
+  // (it is stamped only from InstallScopeTarget / import paths), so the
+  // five-level union below is exhaustive for this table. The actor role bag
+  // rides along for the decision-3 re-authorization of any dependency-row
+  // mutation (with an actor present the authorizer ALWAYS re-runs the grid
+  // against the existing row's exact scope — this action's own gate is the
+  // generic registry.update canDo, not the scope grid).
   const existingOwnerLevel = (
     ["user", "team", "organization", "workspace", "project"] as const
   ).find((l) => l === existing.ownerLevel);
+  const planOrgId = existing.orgId ?? orgId;
   await installAgentPackageWithDependencies(
     {
       packageName: parsed.packageName,
       packageVersion: parsed.packageVersion,
-      orgId,
+      orgId: planOrgId,
       creatorId: session.user.id,
       status: existing.status === "published" ? "published" : "draft",
       ...(existingOwnerLevel

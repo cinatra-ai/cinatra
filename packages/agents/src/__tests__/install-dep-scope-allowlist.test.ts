@@ -92,8 +92,11 @@ beforeEach(() => {
   installAgentFromPackageMock.mockImplementation(async (input: { packageName: string }) => ({
     templateId: `tpl-${input.packageName}`,
   }));
-  // Default: a skipped (already-at-pin) member HAS its template row.
-  readAgentTemplateByPackageNameMock.mockResolvedValue({ id: "tpl-existing" });
+  // Default: a skipped (already-at-pin) member HAS its template row AT the pin.
+  readAgentTemplateByPackageNameMock.mockResolvedValue({
+    id: "tpl-existing",
+    packageVersion: "1.0.0",
+  });
 });
 
 describe("installAgentPackageWithDependencies — unified-planner routing", () => {
@@ -173,6 +176,22 @@ describe("installAgentPackageWithDependencies — unified-planner routing", () =
     mockPlan(ROOT, [member(DEP, { alreadyInstalled: true }), member(ROOT)]);
     // The canonical row says installed-at-pin, but agent_templates lost the row.
     readAgentTemplateByPackageNameMock.mockResolvedValue(null);
+    await installAgentPackageWithDependencies({ packageName: ROOT }, INSTANCE_SCOPED_CONFIG);
+    expect(installAgentFromPackageMock.mock.calls.map((c) => c[0].packageName)).toEqual([
+      DEP,
+      ROOT,
+    ]);
+  });
+
+  it("SPLIT-STORE HEAL: a VERSION-DRIFTED template row (template != canonical pin) reinstalls too", async () => {
+    const ROOT = "@cinatra-ai/root-agent";
+    const DEP = "@cinatra-ai/dep-agent";
+    mockPlan(ROOT, [member(DEP, { alreadyInstalled: true }), member(ROOT)]);
+    // Template exists but at a DIFFERENT version than the canonical pin.
+    readAgentTemplateByPackageNameMock.mockResolvedValue({
+      id: "tpl-existing",
+      packageVersion: "0.9.0",
+    });
     await installAgentPackageWithDependencies({ packageName: ROOT }, INSTANCE_SCOPED_CONFIG);
     expect(installAgentFromPackageMock.mock.calls.map((c) => c[0].packageName)).toEqual([
       DEP,
