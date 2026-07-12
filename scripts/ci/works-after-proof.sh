@@ -46,7 +46,10 @@ source "${ARMS_DIR}/lib.sh"
 GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 
 # All arms, in run order. postgres is last-ish (slowest with the negative test).
-ALL_ARMS="redis verdaccio nango wayflow graphiti postgres"
+# nango-db-upgrade is the cinatra#1417 Case B upgrade-from fixture (nango pg
+# 15->17, case-scoped) -- cinatra#1422, paired with cinatra-cli#129's
+# `cinatra instance db upgrade-major`.
+ALL_ARMS="redis verdaccio nango wayflow graphiti nango-db-upgrade postgres"
 
 # Resolve the selected set from WORKS_AFTER_ONLY (comma/space separated).
 if [ -n "${WORKS_AFTER_ONLY:-}" ]; then
@@ -101,6 +104,7 @@ for arm in $SELECTED; do
     nango)     run_arm nango     "${ARMS_DIR}/nango.sh" ;;
     wayflow)   run_arm wayflow   "${ARMS_DIR}/wayflow.sh" ;;
     graphiti)  run_arm graphiti  "${ARMS_DIR}/graphiti.sh" ;;
+    nango-db-upgrade) run_arm nango-db-upgrade "${ARMS_DIR}/nango-db-upgrade.sh" ;;
     postgres)
       run_arm postgres "${ARMS_DIR}/postgres.sh"
       # Complementary prev-release proof: the previously-unwired upgrade-proof.sh

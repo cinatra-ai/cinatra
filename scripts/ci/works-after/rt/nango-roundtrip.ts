@@ -29,20 +29,33 @@
 //
 // Run: node --import tsx scripts/ci/works-after/rt/nango-roundtrip.ts
 // Env: NANGO_SERVER_URL (required), NANGO_SECRET_KEY (required),
-//      WORKS_AFTER_NONCE (required — the metadata value to round-trip).
+//      WORKS_AFTER_NONCE (required — the metadata value to round-trip),
+//      WORKS_AFTER_CONNECTION_ID (optional — a STABLE connection id, so the
+//        nango-db upgrade-from fixture can write BEFORE its dump/restore and
+//        read back AFTER; default = a per-run id),
+//      WORKS_AFTER_VERIFY_ONLY=1 (optional — SKIP create/import/setMetadata and
+//        only getConnection + assert the previously-written metadata survived;
+//        the content read-back half of the cinatra#1417 Case B nango 15→17
+//        fixture, paired with cinatra-cli#129's `cinatra instance db
+//        upgrade-major`).
 
 import { Nango } from "@nangohq/node";
 
 const HOST = process.env.NANGO_SERVER_URL;
 const SECRET = process.env.NANGO_SECRET_KEY;
 const NONCE = process.env.WORKS_AFTER_NONCE;
+const VERIFY_ONLY = process.env.WORKS_AFTER_VERIFY_ONLY === "1";
 if (!HOST || !SECRET || !NONCE) {
   console.error("nango-roundtrip: NANGO_SERVER_URL, NANGO_SECRET_KEY and WORKS_AFTER_NONCE are required");
   process.exit(2);
 }
+if (VERIFY_ONLY && !process.env.WORKS_AFTER_CONNECTION_ID) {
+  console.error("nango-roundtrip: WORKS_AFTER_VERIFY_ONLY=1 requires WORKS_AFTER_CONNECTION_ID (the id written before the migration)");
+  process.exit(2);
+}
 
 const PROVIDER_CONFIG_KEY = "works-after-proof";
-const CONNECTION_ID = `works-after-${Date.now()}`;
+const CONNECTION_ID = process.env.WORKS_AFTER_CONNECTION_ID || `works-after-${Date.now()}`;
 // A synthetic metadata payload — the value we round-trip through the store.
 const METADATA = { worksAfterNonce: NONCE, projectedAt: new Date().toISOString() };
 
@@ -64,6 +77,27 @@ async function ensureIntegration(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (VERIFY_ONLY) {
+    // POST-MIGRATION READ-BACK: the connection + metadata were written by a
+    // previous WRITE run against the SOURCE-major database; after the guarded
+    // dump→fresh-volume→restore they must read back byte-equal THROUGH the
+    // rebooted nango-server (which has run its own boot migrations first).
+    const sdkV = nango as unknown as {
+      getConnection: (providerConfigKey: string, connectionId: string, forceRefresh?: boolean) => Promise<unknown>;
+    };
+    const conn = (await sdkV.getConnection(PROVIDER_CONFIG_KEY, CONNECTION_ID)) as { metadata?: Record<string, unknown> };
+    const got = conn?.metadata ?? {};
+    if (got.worksAfterNonce !== NONCE) {
+      throw new Error(
+        `metadata did NOT survive the migration: expected worksAfterNonce='${NONCE}', read back '${JSON.stringify(got)}'`,
+      );
+    }
+    console.log(
+      `nango-roundtrip VERIFY OK — connection '${CONNECTION_ID}' survived: metadata read back byte-equal through get-connection (worksAfterNonce=${NONCE})`,
+    );
+    return;
+  }
+
   await ensureIntegration();
 
   // Import a synthetic connection for the unauthenticated provider via the

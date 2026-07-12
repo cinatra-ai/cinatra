@@ -54,7 +54,7 @@ ORCH="${SCRIPT_DIR}/works-after-proof.sh"
 
 # Keep this list in lockstep with ALL_ARMS in works-after-proof.sh (asserted by
 # the works-after:test static invariants).
-ALL_ARMS="redis verdaccio nango wayflow graphiti postgres"
+ALL_ARMS="redis verdaccio nango wayflow graphiti nango-db-upgrade postgres"
 
 ARMS="${WORKS_AFTER_GATE_ARMS:-}"
 while [ $# -gt 0 ]; do

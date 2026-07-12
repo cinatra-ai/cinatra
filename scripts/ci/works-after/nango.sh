@@ -23,10 +23,13 @@ set -euo pipefail
 # MAJOR bump. That data-migration mechanism (dump/restore into a NEW volume +
 # the same-volume bare-tag-bump refusal — docs/upgrade-track.md §3, which names
 # the `nango-postgres` volume explicitly) is DATABASE-INSTANCE-AGNOSTIC and is
-# proven generically by the postgres arm (scripts/ci/works-after/postgres.sh) —
-# a nango-db postgres 15→16 bump is the same mechanism the postgres arm gates,
-# so it is not duplicated here. NANGO_DB_TAG lets the lane pin the nango-db
-# major when proving nango-server↔db compatibility.
+# proven generically by the postgres arm (scripts/ci/works-after/postgres.sh);
+# the concrete cinatra#1417 Case B transition (the pre-baseline nango pg15
+# field volume → 17, WITH real nango data + the nango-server functional proof
+# on the restored cluster) has its own dedicated upgrade-from fixture:
+# scripts/ci/works-after/nango-db-upgrade.sh (cinatra#1422, paired with
+# cinatra-cli#129's `cinatra instance db upgrade-major`). NANGO_DB_TAG lets the
+# lane pin the nango-db major when proving nango-server↔db compatibility.
 #
 # Env: NANGO_SERVER_IMAGE (default = the origin/main digest pin),
 #      NANGO_DB_TAG (default 17-alpine — the compose nango-db validated hold;

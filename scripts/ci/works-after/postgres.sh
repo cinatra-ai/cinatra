@@ -28,9 +28,27 @@ set -euo pipefail
 # run by the orchestrator's `postgres` arm too when PREV_IMAGE is supplied) +
 # this on-disk-volume major-bump proof — complementary failure modes.
 #
-# Env: PG_FROM_TAG (default 17-alpine), PG_TO_TAG (default 18-alpine),
-#      SUPABASE_SCHEMA (default cinatra). Uses the candidate-checkout cinatra CLI
-#      from node_modules (@cinatra-ai/cinatra), same as upgrade-proof.sh.
+# FORMALIZED + GATED (cinatra#1422, coordinated pair with cinatra-cli#129):
+# this arm is the upgrade-from FIXTURE for the matrix's supported Postgres
+# transitions (cinatra#1417 Case A platform 17→18 is the committed default) and
+# resolves its modeled (service, FROM→TO) hop through the repo's canonical
+# machine-readable matrix (docs/architecture/upgrade-matrix.json, revision-
+# checked via scripts/lib/upgrade-matrix.mjs — the SAME contract cinatra-cli's
+# `cinatra instance db upgrade-major` pins on its side of the pair). An
+# unlisted hop FAILS this arm: a stateful pg major bump cannot land without
+# its matrix entry and this proof moving together. The dump→fresh-volume→
+# restore mechanism proven here is exactly the sanctioned command's transaction
+# core; the committed default SOURCE image is digest-pinned (fixture
+# provenance — synthetic seed scripts, never raw volume snapshots).
+#
+# Env: PG_FROM_TAG (default 17-alpine), PG_TO_TAG (default 18-alpine) — CI
+#      derives these from the repo pins (candidate = head, source = PR base);
+#      PG_FROM_IMAGE / PG_TO_IMAGE (full refs; default = the DIGEST-PINNED
+#      canonical images for the default tags, else `postgres:<tag>`);
+#      WA_MATRIX_SERVICE (matrix service id; default platform-postgres, or
+#      nango-postgres when SUPABASE_SCHEMA=nango — the workflow's nango-db
+#      data-survival rerun);
+#      SUPABASE_SCHEMA (default cinatra).
 
 WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
@@ -39,6 +57,27 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 PG_FROM_TAG="${PG_FROM_TAG:-17-alpine}"
 PG_TO_TAG="${PG_TO_TAG:-18-alpine}"
 SCHEMA="${SUPABASE_SCHEMA:-cinatra}"
+
+# Fixture provenance: the committed DEFAULT source/target images are digest-
+# pinned (matrix revision 1 canonical pins — 17-alpine is the matrix's held
+# nango/17 digest, 18-alpine the platform baseline pin). A CI-derived or
+# operator-supplied tag overrides to `postgres:<tag>` (CI derives candidates
+# from the repo's own digest-pinned compose, so the candidate side stays
+# digest-bound at the source).
+PG_FROM_IMAGE="${PG_FROM_IMAGE:-}"
+PG_TO_IMAGE="${PG_TO_IMAGE:-}"
+if [ -z "$PG_FROM_IMAGE" ]; then
+  case "$PG_FROM_TAG" in
+    17-alpine) PG_FROM_IMAGE="postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca" ;;
+    *)         PG_FROM_IMAGE="postgres:${PG_FROM_TAG}" ;;
+  esac
+fi
+if [ -z "$PG_TO_IMAGE" ]; then
+  case "$PG_TO_TAG" in
+    18-alpine) PG_TO_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15" ;;
+    *)         PG_TO_IMAGE="postgres:${PG_TO_TAG}" ;;
+  esac
+fi
 
 # Majors, needed up front: the volume MOUNT LAYOUT is major-dependent.
 # postgres <=17 declares a child volume at /var/lib/postgresql/data, so a
@@ -53,6 +92,26 @@ TO_MAJOR="${PG_TO_TAG%%[.-]*}"
 pg_mount_target() { # $1 = major → the correct volume mount target for it
   if [ "$1" -le 17 ]; then echo "/var/lib/postgresql/data"; else echo "/var/lib/postgresql"; fi
 }
+
+# ── MATRIX GATE (the formalization — cinatra#1422 / cinatra-cli#129 pair) ────
+# Resolve the modeled (service, FROM→TO) hop through the canonical machine-
+# readable matrix, revision-checked. FAIL CLOSED on an unlisted hop: the matrix
+# entry, this fixture's proof, and the sanctioned `cinatra instance db
+# upgrade-major` command move together or not at all. The matrix service id
+# defaults by schema: the workflow's nango-db data-survival rerun (which sets
+# SUPABASE_SCHEMA=nango) gates against nango-postgres, everything else against
+# platform-postgres.
+if [ -z "${WA_MATRIX_SERVICE:-}" ]; then
+  if [ "$SCHEMA" = "nango" ]; then WA_MATRIX_SERVICE="nango-postgres"; else WA_MATRIX_SERVICE="platform-postgres"; fi
+fi
+MATRIX_VERDICT="$(wa_node "${WORKS_AFTER_LIB_DIR}/resolve-transition.mjs" "$WA_MATRIX_SERVICE" "$FROM_MAJOR" "$TO_MAJOR")" || {
+  echo "${_WA_RED}ERROR: matrix gate REFUSED (${WA_MATRIX_SERVICE}: ${FROM_MAJOR} -> ${TO_MAJOR}).${_WA_RST}" >&2
+  echo "  ${MATRIX_VERDICT:-<no verdict>}" >&2
+  echo "  A Postgres major hop is provable here only when docs/architecture/upgrade-matrix.json supports it" >&2
+  echo "  (transition or case-scoped exception). Add/adjust the matrix entry in the same change." >&2
+  exit 1
+}
+wa_info "matrix gate OK: ${MATRIX_VERDICT}"
 SRC_TARGET="$(pg_mount_target "$FROM_MAJOR")"
 DST_TARGET="$(pg_mount_target "$TO_MAJOR")"
 RUN_ID="wa-pg-$$"
@@ -87,7 +146,9 @@ fail() { echo "${_WA_RED}ERROR: $*${_WA_RST}" >&2; dump_diag; exit 1; }
 # psql helper against a given container.
 pgq() { docker exec "$1" psql -U postgres -d postgres -tA -F '|' -c "$2"; }
 
-wa_log "works-after postgres: data-survival ${PG_FROM_TAG} → ${PG_TO_TAG} (schema ${SCHEMA})"
+wa_log "works-after postgres: data-survival ${PG_FROM_TAG} → ${PG_TO_TAG} (schema ${SCHEMA}; matrix service ${WA_MATRIX_SERVICE})"
+wa_info "source image: ${PG_FROM_IMAGE}"
+wa_info "target image: ${PG_TO_IMAGE}"
 docker network create "$NET" >/dev/null
 docker volume create "$VOL_FROM" >/dev/null
 docker volume create "$VOL_TO" >/dev/null
@@ -104,7 +165,7 @@ docker volume create "$VOL_NEG" >/dev/null
 docker run -d --name "$SRC" --network "$NET" \
   -v "${VOL_FROM}:${SRC_TARGET}" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
-  "postgres:${PG_FROM_TAG}" >/dev/null
+  "$PG_FROM_IMAGE" >/dev/null
 wa_wait_pg "$SRC" postgres 30 || fail "source postgres did not become ready within 60s."
 
 # Provision a representative data-bearing table in the app schema and seed it.
@@ -149,7 +210,7 @@ docker rm -f "$SRC" >/dev/null 2>&1 || true
 docker run -d --name "$SRC" --network "$NET" \
   -v "${VOL_FROM}:${SRC_TARGET}" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
-  "postgres:${PG_FROM_TAG}" >/dev/null
+  "$PG_FROM_IMAGE" >/dev/null
 wa_wait_pg "$SRC" postgres 30 || fail "source did not come back up from its named volume — the volume does not carry the cluster."
 PERSIST_COUNT="$(pgq "$SRC" "SELECT count(*) FROM \"${SCHEMA}\".works_after_data WHERE id LIKE 'works-after-pg-%';")"
 [ "${PERSIST_COUNT:-0}" -eq 3 ] || fail "seeded rows did NOT persist across a recreate from the named volume (got '${PERSIST_COUNT}'/3) — the source mount layout is not carrying the cluster."
@@ -174,7 +235,7 @@ docker rm -f "$SRC" >/dev/null 2>&1 || true
 docker run -d --name "$DST" --network "$NET" \
   -v "${VOL_TO}:${DST_TARGET}" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
-  "postgres:${PG_TO_TAG}" >/dev/null
+  "$PG_TO_IMAGE" >/dev/null
 wa_wait_pg "$DST" postgres 45 || fail "destination postgres:${PG_TO_TAG} did not become ready within 90s."
 
 wa_info "restoring dump into postgres:${PG_TO_TAG} (fresh volume)"
@@ -228,7 +289,7 @@ else
     -v "${VOL_NEG}:/var/lib/postgresql/data" \
     -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
     -e PGDATA=/var/lib/postgresql/data \
-    "postgres:${PG_FROM_TAG}" >/dev/null
+    "$PG_FROM_IMAGE" >/dev/null
   wa_wait_pg "$NEG_SEED" postgres 30 || fail "negative-test ${PG_FROM_TAG} seed cluster did not become ready."
   docker rm -f "$NEG_SEED" >/dev/null 2>&1 || true
 
@@ -237,7 +298,7 @@ else
     -v "${VOL_NEG}:/var/lib/postgresql/data" \
     -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
     -e PGDATA=/var/lib/postgresql/data \
-    "postgres:${PG_TO_TAG}" >/dev/null
+    "$PG_TO_IMAGE" >/dev/null
   REFUSED=0
   for _ in $(seq 1 15); do
     RUNNING="$(docker inspect -f '{{.State.Running}}' "$NEG" 2>/dev/null || echo unknown)"

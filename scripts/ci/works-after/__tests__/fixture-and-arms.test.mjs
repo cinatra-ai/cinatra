@@ -17,7 +17,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -72,17 +72,19 @@ test("committed published marker's oasSha256 matches the OAS bytes", () => {
   assert.equal(marker.packageName, "@cinatra-works-after/echo-proof");
 });
 
-test("orchestrator declares exactly the six designed arms", () => {
+test("orchestrator declares exactly the seven designed arms", () => {
   const orch = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after-proof.sh"), "utf8");
   const m = orch.match(/ALL_ARMS="([^"]+)"/);
   assert.ok(m, "could not find ALL_ARMS in the orchestrator");
   const arms = m[1].split(/\s+/).sort();
-  assert.deepEqual(arms, ["graphiti", "nango", "postgres", "redis", "verdaccio", "wayflow"].sort());
+  // nango-db-upgrade = the cinatra#1417 Case B upgrade-from fixture
+  // (cinatra#1422, paired with cinatra-cli#129's `db upgrade-major`).
+  assert.deepEqual(arms, ["graphiti", "nango", "nango-db-upgrade", "postgres", "redis", "verdaccio", "wayflow"].sort());
 });
 
 test("each arm script exists and is referenced by the orchestrator", () => {
   const armsDir = resolve(REPO_ROOT, "scripts/ci/works-after");
-  for (const arm of ["redis", "verdaccio", "nango", "wayflow", "graphiti", "postgres"]) {
+  for (const arm of ["redis", "verdaccio", "nango", "wayflow", "graphiti", "nango-db-upgrade", "postgres"]) {
     assert.ok(existsSync(resolve(armsDir, `${arm}.sh`)), `missing arm script ${arm}.sh`);
   }
 });
@@ -141,4 +143,94 @@ test("gate is fail-closed: malformed/empty arm selections exit 2 (never a false 
   assert.equal(gateExit(["--arms", "bogus"]), 2, "unknown arm");
   assert.equal(gateExit(["--nope"]), 2, "unknown flag");
   assert.equal(gateExit([], { WORKS_AFTER_GATE_ARMS: "," }), 2, "comma-only via env");
+});
+
+// ── upgrade-from arm: matrix gate + Case B fixture (cinatra#1422 / cli#129) ──
+//
+// The coordinated-pair invariants: the fixtures resolve their modeled
+// transitions through the canonical revision-checked matrix contract (the same
+// revision cinatra-cli's `cinatra instance db upgrade-major` pins), the Case B
+// source image is digest-pinned (fixture provenance), and both fixture scripts
+// name the sanctioned command so the pair cannot silently decouple.
+
+const RESOLVE = resolve(REPO_ROOT, "scripts/ci/works-after/resolve-transition.mjs");
+
+function resolveTransitionCli(args, extraEnv = {}) {
+  const r = spawnSync("node", [RESOLVE, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, ...extraEnv },
+  });
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+test("resolve-transition: the platform 17→18 baseline transition is supported (exit 0)", () => {
+  const r = resolveTransitionCli(["platform-postgres", "17", "18"]);
+  assert.equal(r.status, 0, r.stderr);
+  const v = JSON.parse(r.stdout);
+  assert.equal(v.supported, true);
+  assert.equal(v.source, "transition");
+  assert.equal(v.mechanism, "logical-dump-restore");
+  assert.equal(v.revision, 1);
+});
+
+test("resolve-transition: nango 15→17 resolves ONLY via the case-scoped exception", () => {
+  const r = resolveTransitionCli(["nango-postgres", "15", "17"]);
+  assert.equal(r.status, 0, r.stderr);
+  const v = JSON.parse(r.stdout);
+  assert.equal(v.supported, true);
+  assert.equal(v.source, "case-exception", "the pg15 hop must ride the case exception, never a widened baseline");
+});
+
+test("resolve-transition: unlisted hops FAIL CLOSED (exit 3) — the upgrade-from gate", () => {
+  assert.equal(resolveTransitionCli(["platform-postgres", "18", "19"]).status, 3);
+  assert.equal(resolveTransitionCli(["nango-postgres", "17", "18"]).status, 3);
+  assert.equal(resolveTransitionCli(["nango-postgres", "16", "17"]).status, 3);
+});
+
+test("resolve-transition: consumer/matrix revision skew FAILS CLOSED (exit 2)", () => {
+  const skewed = JSON.parse(readFileSync(resolve(REPO_ROOT, "docs/architecture/upgrade-matrix.json"), "utf8"));
+  skewed.revision = 999;
+  const tmp = resolve(REPO_ROOT, "scripts/ci/works-after/__tests__/.tmp-skewed-matrix.json");
+  try {
+    writeFileSync(tmp, JSON.stringify(skewed));
+    const r = resolveTransitionCli(["platform-postgres", "17", "18"], { WA_MATRIX_PATH: tmp });
+    assert.equal(r.status, 2, "a matrix the consumer was not validated against must be refused");
+    assert.match(r.stderr, /revision/);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+});
+
+test("postgres.sh is FORMALIZED: matrix-gated and digest-pinned for the committed default transition", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/postgres.sh"), "utf8");
+  assert.match(src, /resolve-transition\.mjs/, "postgres.sh must resolve its hop through the matrix gate");
+  assert.match(src, /WA_MATRIX_SERVICE/, "postgres.sh must name the matrix service it gates against");
+  assert.match(src, /nango-postgres/, "the SUPABASE_SCHEMA=nango rerun must gate against nango-postgres");
+  // Committed default images are digest-pinned (fixture provenance).
+  assert.match(src, /postgres:17-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(src, /postgres:18-alpine@sha256:[0-9a-f]{64}/);
+  // The pair reference: this fixture proves the sanctioned command's mechanism.
+  assert.match(src, /cinatra instance db upgrade-major|cinatra-cli#129/, "postgres.sh must reference its CLI pair");
+});
+
+test("nango-db-upgrade.sh is the Case B fixture: gated, digest-pinned, legacy-mounted, pair-referenced", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/nango-db-upgrade.sh"), "utf8");
+  assert.match(src, /resolve-transition\.mjs.*nango-postgres 15 17/s, "must gate the exact case-scoped transition");
+  assert.match(src, /postgres:15-alpine@sha256:[0-9a-f]{64}/, "the Case B SOURCE image must be digest-pinned");
+  assert.match(src, /postgres:17-alpine@sha256:[0-9a-f]{64}/, "the Case B TARGET image must be digest-pinned");
+  // Case B stays LEGACY on both sides (no pg18 parent-mount move).
+  assert.match(src, /LEGACY_MOUNT=\/var\/lib\/postgresql\/data/);
+  assert.ok(!/var\/lib\/postgresql":/.test(src), "no parent-mount binding may sneak into the Case B fixture");
+  // Pair references: the sanctioned command + both tracking issues.
+  assert.match(src, /cinatra instance db upgrade-major/);
+  assert.match(src, /cinatra#1417/);
+  assert.match(src, /cinatra-cli#129/);
+  // The functional arm re-uses the committed round-trip in verify mode.
+  assert.match(src, /WORKS_AFTER_VERIFY_ONLY=1/);
+});
+
+test("nango-roundtrip.ts supports the stable-id + verify-only contract the Case B fixture needs", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/rt/nango-roundtrip.ts"), "utf8");
+  assert.match(src, /WORKS_AFTER_CONNECTION_ID/);
+  assert.match(src, /WORKS_AFTER_VERIFY_ONLY/);
 });
