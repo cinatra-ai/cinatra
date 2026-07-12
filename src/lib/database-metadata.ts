@@ -134,12 +134,13 @@ export function buildBumpSkillCatalogGenerationQuery(schema: string) {
 
 /**
  * GUARDED metadata upsert (cinatra#1364 completeness fence): writes `writeKey`
- * in the SAME single statement that validates `guardKey` still carries
- * `guardToken` (`value::jsonb->>'token'`). Statement-atomic in Postgres, so it
- * closes the check-then-write TOCTOU where a lease holder validates ownership,
- * stalls past its TTL, and then stamps its fence over a stealer's: a stealer
- * whose CAS committed before this statement's snapshot makes the guard fail
- * (no write); one committing after simply overwrites LATER with newer truth.
+ * in one single-statement transaction that LOCKS the `guardKey` row
+ * (`FOR UPDATE`) and validates it still carries `guardToken`
+ * (`value::jsonb->>'token'`). The row lock is what makes the guard
+ * ownership-atomic: a stealer's CAS that committed first is seen by the
+ * locking re-check (guard fails, no write); a stealer arriving later BLOCKS
+ * on the lock until this statement commits and then overwrites with newer
+ * truth — a stale holder can never stamp its fence over a stealer's.
  * Returns true iff the write landed.
  */
 export function writeMetadataValueIfGuardTokenHeldInternal(
@@ -155,8 +156,10 @@ export function writeMetadataValueIfGuardTokenHeldInternal(
     queries: [
       {
         text:
-          `INSERT INTO ${table} (key, value) ` +
-          `SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM ${table} WHERE key = $3 AND (value::jsonb ->> 'token') = $4) ` +
+          `WITH held AS (` +
+          `SELECT key FROM ${table} WHERE key = $3 AND (value::jsonb ->> 'token') = $4 FOR UPDATE` +
+          `) ` +
+          `INSERT INTO ${table} (key, value) SELECT $1, $2 FROM held ` +
           `ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value ` +
           `RETURNING key`,
         values: [writeKey, JSON.stringify(value), guardKey, guardToken],
