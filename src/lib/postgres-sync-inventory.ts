@@ -92,7 +92,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/database-metadata.ts": {
     class: "migratable-background-setup",
     justification:
-      "Low-level key/value metadata primitives (extracted from database.ts). Backs boot/settings reads (startup dataset, connector/agent config, LLM provider pins) — cold-path, not per-request hot.",
+      "Low-level key/value metadata primitives (extracted from database.ts). Backs boot/settings reads (startup dataset, connector/agent config, LLM provider pins) — cold-path, not per-request hot. cinatra#1364 adds the skills-catalog split primitives: the fenced catalog batch read (cache-miss only — the generation-token-keyed cache absorbs steady-state reads), the lease INSERT-IF-ABSENT bootstrap, and the guarded completeness-fence upsert (both rebuild-lifecycle-only).",
   },
   "src/lib/drizzle-store.ts": {
     class: "migratable-background-setup",
