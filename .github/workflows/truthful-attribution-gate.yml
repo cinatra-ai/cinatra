@@ -63,7 +63,7 @@ jobs:
     # cinatra-ai/ci commit, so the gate code is never pulled from mutable main.
     # gate-suite.json requiredContexts[].pinned tracks this uses:@ SHA (the gate
     # verifies referenced_workflows[] exactly) — bump them together.
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # v0.1.2-next.0d42bca
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # v0.1.2-next.72d0b1c
     with:
       mode: enforce
-      ref: 0d42bca62a57daf2067c19f6fb500583ac3b6acd # same SHA as the workflow @ref
+      ref: 72d0b1caa9b11e33a9ba3e65e55aae46ad844bf1 # same SHA as the workflow @ref
