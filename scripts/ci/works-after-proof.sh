@@ -10,7 +10,7 @@ set -euo pipefail
 # missing "no env-app/stack major lands without this green" gate (the
 # major-version upgrade track).
 #
-# The six arms (each a standalone script under scripts/ci/works-after/):
+# The eight arms (each a standalone script under scripts/ci/works-after/):
 #   redis      enqueue → worker runs → completion (bullmq + ioredis, the repo deps)
 #   postgres   data survives a documented dump/restore into a NEW PGDATA volume;
 #              same-mount bare tag bump REFUSES (negative). Optionally also runs
@@ -21,6 +21,16 @@ set -euo pipefail
 #              NOT secret-free — runs only with a real OPENAI_API_KEY (lane).
 #   wayflow    agent execution over A2A (no-LLM echo flow) → completed task
 #   verdaccio  publish → install round-trip (real immutability config mounted)
+#   upgrade-redis    UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded
+#              redis 7→8 path (scripts/upgrade/redis-upgrade-major.sh) against
+#              a data-bearing prior-version AOF volume — positive + failure
+#              injection (rollback lands on the intact source volume with the
+#              source ledger entry) + fail-closed downgrade/valkey negatives.
+#   upgrade-mariadb  UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded
+#              MariaDB in-place path (scripts/upgrade/mariadb-upgrade-major.sh,
+#              explicit mariadb-upgrade on a CANDIDATE volume) — positive +
+#              failure injection + dump/restore fallback + quiesce/sequential
+#              fail-closed negatives.
 #
 # CANDIDATE versions come from per-arm env (REDIS_TAG, PG_TO_TAG, NEO4J_TAG,
 # NANGO_SERVER_IMAGE, VERDACCIO_TAG, PYTHON_TAG, …), defaulting to the CURRENT
@@ -45,8 +55,10 @@ source "${ARMS_DIR}/lib.sh"
 
 GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 
-# All arms, in run order. postgres is last-ish (slowest with the negative test).
-ALL_ARMS="redis verdaccio nango wayflow graphiti postgres"
+# All arms, in run order. postgres is last-ish (slowest with the negative test);
+# the upgrade-from arms (cinatra#1421/#1422) sit before it — upgrade-redis is
+# cheap, upgrade-mariadb boots several MariaDB servers.
+ALL_ARMS="redis verdaccio nango wayflow graphiti upgrade-redis upgrade-mariadb postgres"
 
 # Resolve the selected set from WORKS_AFTER_ONLY (comma/space separated).
 if [ -n "${WORKS_AFTER_ONLY:-}" ]; then
@@ -66,7 +78,7 @@ done
 echo "== works-after proof harness (cinatra#352) =="
 echo "repo: ${REPO_ROOT}"
 echo "arms: ${SELECTED}$([ "$GATE_MODE" = "1" ] && echo '  [GATE MODE: a SKIP is a FAIL]')"
-echo "candidates: REDIS_TAG=${REDIS_TAG:-8-alpine} PG_FROM_TAG=${PG_FROM_TAG:-17-alpine} PG_TO_TAG=${PG_TO_TAG:-18-alpine} NEO4J_TAG=${NEO4J_TAG:-2026.05-community} VERDACCIO_TAG=${VERDACCIO_TAG:-6} PYTHON_TAG=${PYTHON_TAG:-3.14-slim}"
+echo "candidates: REDIS_TAG=${REDIS_TAG:-8-alpine} PG_FROM_TAG=${PG_FROM_TAG:-17-alpine} PG_TO_TAG=${PG_TO_TAG:-18-alpine} NEO4J_TAG=${NEO4J_TAG:-2026.05-community} VERDACCIO_TAG=${VERDACCIO_TAG:-6} PYTHON_TAG=${PYTHON_TAG:-3.14-slim} REDIS_FROM_TAG=${REDIS_FROM_TAG:-7-alpine} REDIS_TO_TAG=${REDIS_TO_TAG:-8-alpine} MARIADB_FROM_TAG=${MARIADB_FROM_TAG:-11.4} MARIADB_TO_TAG=${MARIADB_TO_TAG:-11.8}"
 echo ""
 
 # Results accumulators (parallel arrays, bash-3.2 compatible).
@@ -101,6 +113,8 @@ for arm in $SELECTED; do
     nango)     run_arm nango     "${ARMS_DIR}/nango.sh" ;;
     wayflow)   run_arm wayflow   "${ARMS_DIR}/wayflow.sh" ;;
     graphiti)  run_arm graphiti  "${ARMS_DIR}/graphiti.sh" ;;
+    upgrade-redis)   run_arm upgrade-redis   "${ARMS_DIR}/upgrade-redis.sh" ;;
+    upgrade-mariadb) run_arm upgrade-mariadb "${ARMS_DIR}/upgrade-mariadb.sh" ;;
     postgres)
       run_arm postgres "${ARMS_DIR}/postgres.sh"
       # Complementary prev-release proof: the previously-unwired upgrade-proof.sh
