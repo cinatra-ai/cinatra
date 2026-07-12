@@ -72,6 +72,10 @@ RUN pip install --no-cache-dir \
 
 COPY cinatra_executors/ ./cinatra_executors/
 COPY agent_loader.py .
+# cinatra#1194 — loader-owned context-subflow injection (module + the
+# canonical template it renders; versions together with agent_loader.py).
+COPY context_subflow_injection.py .
+COPY context_subflow_template.json .
 COPY tests/ ./tests/
 
 ENV PYTHONUNBUFFERED=1

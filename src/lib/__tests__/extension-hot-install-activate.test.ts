@@ -574,7 +574,11 @@ describe("hot-activate idempotent re-activation + UPDATE (end-to-end, no registr
     });
     const dupRow = dupResults.find((r) => r.packageName === PKG);
     expect(dupRow?.status, "ambiguous duplicate name fails closed").toBe("failed");
-    expect(String(dupRow?.error)).toMatch(/ambiguous package/);
+    // cinatra#1040 S4: the raw driver's fence is keyed by (name, version); two
+    // discovered digests of one package with NO version identity fence the whole
+    // package (un-versioned records cannot be disambiguated) — the same
+    // fail-closed outcome the pre-S4 duplicate-name fence produced.
+    expect(String(dupRow?.error)).toMatch(/no version identity/);
 
     // Now re-activate keeping the NEW digest through the fresh-install /
     // re-activate path. Under retention (cinatra#796) it must:

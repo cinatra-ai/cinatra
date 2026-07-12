@@ -68,9 +68,14 @@ vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: vi.fn(),
 }));
 
-vi.mock("./skill-packages", () => ({
-  installedSkillPackages: [],
-}));
+vi.mock("./skill-packages", async (importOriginal) => {
+  // Keep the REAL canonical access-policy helpers (normalizeStoredAccessPolicy
+  // et al., #1306) so normalizeStoredSkillPackage exercises true normalization;
+  // override only installedSkillPackages so real disk scans don't crowd the
+  // crafted "agent" catalog rows.
+  const actual = await importOriginal<typeof import("./skill-packages")>();
+  return { ...actual, installedSkillPackages: [] };
+});
 
 vi.mock("./storage/git-commit", () => ({
   commitSkillChange: vi.fn(async () => undefined),

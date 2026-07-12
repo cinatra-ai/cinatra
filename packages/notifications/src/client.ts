@@ -14,9 +14,19 @@ export {
   getInProgressItems,
   getUnreadItems,
   isRunningProgressNotification,
+  isConfigurationNeedsNotification,
+  getConfigurationNeedsMetadata,
+  AGENT_CONFIGURATION_NEEDS_CATEGORY,
+} from "./flyout-state";
+export type {
+  ConfigurationNeedsConnector,
+  ConfigurationNeedsMetadata,
 } from "./flyout-state";
 
 export {
   NotificationsProvider,
   NotificationsBellTrigger,
+  // Exported for the design-fixtures render surface (the bell config-needs row
+  // in isolation); the app itself renders it via the flyout tree.
+  ConfigurationNeedsRow,
 } from "./notifications-flyout";

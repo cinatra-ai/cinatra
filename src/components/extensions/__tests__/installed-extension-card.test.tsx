@@ -383,3 +383,142 @@ describe("InstalledExtensionCard — §III description survives every update-chi
     });
   }
 });
+
+// cinatra#1057 — post-install "needs configuration" treatment. An active AGENT
+// with unconfigured required connectors wears the greyed archived treatment and
+// a needs-review status strip listing each connector's displayName, deep-linked
+// to its setup page. The strip disappears + the card returns to active colours
+// the moment all required connectors are configured (the caller stops passing
+// `configurationNeeds`).
+describe("InstalledExtensionCard — post-install needs-review strip", () => {
+  const NEEDS = [
+    {
+      packageName: "@cinatra-ai/linkedin-oauth-connector",
+      displayName: "LinkedIn",
+      slug: "linkedin-oauth-connector",
+      settingsHref: "/connectors/cinatra-ai/linkedin-oauth-connector/setup",
+    },
+    {
+      packageName: "@cinatra-ai/apollo-connector",
+      displayName: "Apollo",
+      slug: "apollo-connector",
+      settingsHref: "/connectors/cinatra-ai/apollo-connector/setup",
+    },
+  ];
+
+  function renderNeedsReview(
+    configurationNeeds: typeof NEEDS | undefined,
+    accentColor: "green" = "green",
+  ): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="List Curator Agent"
+        accentColor={accentColor}
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Builds and enriches lead lists."
+        actions={<Button type="button">Run</Button>}
+        configurationNeeds={configurationNeeds}
+      />,
+    );
+  }
+
+  it("renders the strip listing each unconfigured connector's displayName + deep-link", () => {
+    const html = renderNeedsReview(NEEDS);
+    // The strip's conformance id + copy.
+    expect(html).toContain('data-conformance="install-config-needs-callout"');
+    expect(html).toContain("Set up connections first:");
+    // Each connector's HUMAN-READABLE displayName is the label…
+    expect(html).toContain(">LinkedIn<");
+    expect(html).toContain(">Apollo<");
+    // …deep-linked to its own setup page, tagged as the manifest.displayName field.
+    expect(html).toContain('href="/connectors/cinatra-ai/linkedin-oauth-connector/setup"');
+    expect(html).toContain('href="/connectors/cinatra-ai/apollo-connector/setup"');
+    expect(html).toContain('data-field="manifest.displayName"');
+  });
+
+  it("flips the card into the greyed archived treatment (marks needs-review, mutes zones)", () => {
+    const html = renderNeedsReview(NEEDS);
+    // Distinct cannot-run marker — NOT the archived lifecycle marker.
+    expect(html).toContain("data-needs-review");
+    expect(html).not.toContain("data-archived");
+    // Greyed treatment reused: muted mark + muted zones (opacity-70), and the
+    // accent hex must not paint the greyed banner/tile.
+    expect(html).toContain("data-muted");
+    expect(html).toContain("opacity-70");
+    expect(html).not.toContain(ACCENT_PALETTE.green.bg);
+  });
+
+  it("omits the strip and keeps the active treatment when nothing is unconfigured", () => {
+    const html = renderNeedsReview(undefined);
+    expect(html).not.toContain("install-config-needs-callout");
+    expect(html).not.toContain("Set up connections first:");
+    expect(html).not.toContain("data-needs-review");
+    // Active card keeps its category colour and unmuted zones.
+    expect(html).toContain(ACCENT_PALETTE.green.bg);
+    expect(html).not.toContain("opacity-70");
+  });
+
+  it("treats an empty configurationNeeds array as nothing-to-configure (active card)", () => {
+    const html = renderNeedsReview([]);
+    expect(html).not.toContain("install-config-needs-callout");
+    expect(html).not.toContain("data-needs-review");
+    expect(html).toContain(ACCENT_PALETTE.green.bg);
+  });
+
+  it("leaves a non-affected extension's active card byte-identical (no strip, no greying)", () => {
+    const withProp = renderNeedsReview(undefined);
+    const withoutProp = renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="List Curator Agent"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Builds and enriches lead lists."
+        actions={<Button type="button">Run</Button>}
+      />,
+    );
+    // Passing an absent/omitted `configurationNeeds` is byte-identical to never
+    // passing it — a non-affected card is untouched.
+    expect(withProp).toBe(withoutProp);
+  });
+
+  // ── main-parity guard (owner review 2026-07-10, cinatra#1234) ─────────────
+  // The §III ACTIVE and ARCHIVED cards are already fixed per the design spec
+  // (#1273). cinatra#1057 must ADD ONLY the needs-review state — it may NOT
+  // restructure the active/archived card. These pins fail loudly if the layout
+  // row is ever moved off the card element (a wrapper regression) for those
+  // two states.
+  const ROW_ON_CARD =
+    "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch";
+  const CARD_AS_COLUMN =
+    "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm\"";
+  const INNER_ROW_WRAPPER = "flex flex-col md:flex-row md:items-stretch";
+
+  it("active card carries the flex row on the card element itself — no layout wrapper (main-parity)", () => {
+    const html = render(false);
+    expect(html).toContain(ROW_ON_CARD);
+    expect(html).not.toContain(INNER_ROW_WRAPPER);
+    expect(html).not.toContain("data-needs-review");
+  });
+
+  it("archived card is likewise a single flex row on the card element (main-parity)", () => {
+    const html = render(true);
+    expect(html).toContain(ROW_ON_CARD);
+    expect(html).not.toContain(INNER_ROW_WRAPPER);
+  });
+
+  it("needs-review card (and ONLY it) moves the row into an inner wrapper, card element becomes a column", () => {
+    const html = renderNeedsReview(NEEDS);
+    // The card element is a column (no row utilities on it)…
+    expect(html).toContain(CARD_AS_COLUMN);
+    expect(html).not.toContain(ROW_ON_CARD);
+    // …with the three panels kept in their own inner row so the strip can span
+    // the full width beneath them.
+    expect(html).toContain(INNER_ROW_WRAPPER);
+  });
+});

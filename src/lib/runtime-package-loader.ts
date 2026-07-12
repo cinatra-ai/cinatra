@@ -31,10 +31,11 @@ import {
   recordDeclaresHostMigrations,
   type PackageStoreRecord,
   type ActivationResult,
+  type HostPortName,
 } from "@cinatra-ai/sdk-extensions";
 import { discoverStoreRecordsV2, realStoreFs, type PackageStoreRecordV2 } from "@/lib/extension-store-io";
 import { isExtensionStoreKind } from "@/lib/extension-package-store-core";
-import { createExtensionHostContext } from "@/lib/extension-host-context";
+import { createExtensionHostContext, createNonDefaultVersionHostContext } from "@/lib/extension-host-context";
 import {
   verifyMaterializedPackageIntegrity,
   type InstallTrustAnchor,
@@ -60,6 +61,17 @@ const denyAllResolver: InstallAnchorResolver = async () => null;
 export type RuntimeLoaderHostDeps = {
   /** the installer flow injects the DB-backed resolver; default denies all (fail closed). */
   resolveInstallAnchor?: InstallAnchorResolver;
+  /**
+   * MULTI-VERSION resolver (cinatra#1040 S4): returns EVERY live version anchor
+   * for a package (the default + non-default siblings). When present it takes
+   * precedence over `resolveInstallAnchor` — boot + default re-election wire it so
+   * side-by-side versions activate together, keyed by (packageName, version), with
+   * the DEFAULT version owning global names. When absent the loader falls back to
+   * the singular `resolveInstallAnchor` (each package resolves to at most its one
+   * default anchor) — the exact pre-S4 single-version behavior, preserved for the
+   * exact-org hot-activate/pre-verify callers.
+   */
+  resolveInstallAnchors?: (packageName: string) => Promise<InstallTrustAnchor[]>;
   /**
    * Restrict the scan to a SINGLE package (targeted activation, e.g. immediately
    * after a hot-install). When undefined, the full store is scanned (boot
@@ -152,113 +164,160 @@ export async function loadRuntimePackageExtensions(
     else byName.set(rec.packageName, [rec]);
   }
 
+  // MULTI-VERSION anchor resolution (cinatra#1040 S4): the plural resolver
+  // returns EVERY live version anchor for a package (default + non-default
+  // siblings); the singular resolver (legacy/exact-org pre-verify callers) is
+  // adapted to at most its one default anchor. Each anchor runs the UNCHANGED
+  // per-record kind/digest/integrity/signature/trust gates below, keyed by
+  // (packageName, version) — its own `anchor.digest` selects its own store record.
+  const resolveAnchors: (packageName: string) => Promise<InstallTrustAnchor[]> =
+    hostDeps.resolveInstallAnchors ??
+    (async (packageName: string) => {
+      const one = await resolveInstallAnchor(packageName);
+      return one ? [one] : [];
+    });
+
   // Trust filter BEFORE activation: a trusted DB anchor must resolve,
   // integrity must verify against THAT anchor (not the sidecar), and the
   // classifier must pass. Anything else is refused.
   const trusted: PackageStoreRecord[] = [];
   const narrowed: PackageStoreRecordV2[] = [];
-  const anchorByName = new Map<string, InstallTrustAnchor>();
+  // Keyed by (packageName, version) so verifyIntegrity re-selects the exact
+  // side-by-side anchor for the record it is re-verifying (name is no longer
+  // unique across versions).
+  const anchorByIdentity = new Map<string, InstallTrustAnchor>();
+  const identityKey = (packageName: string, version: string | null | undefined): string =>
+    `${packageName}\u0000${version ?? ""}`;
   // Track which trusted records reached the `trusted-signed` tier — only those are
   // eligible for boot-time host DDL (the capability split): a
   // `trusted-bootstrap` package may import in-process, but its declared migrations
   // must NOT run (running host DDL is a privileged capability gated on a verified
-  // signature). Computed ONCE (boot-safe; no auth, no DB) outside the loop.
-  const signedTrustedNames = new Set<string>();
+  // signature). cinatra#1040 S4: this is keyed per (name, version) IDENTITY, NOT
+  // per name — otherwise a SIGNED non-default sibling would authorize the UNSIGNED
+  // DEFAULT version's privileged migrations (a signature-scope escalation). The
+  // package-level signed-activated MARKER (widget-auth owner resolver) is a
+  // separate name-keyed set gated on the DEFAULT version's own signed tier.
+  const signedIdentities = new Set<string>();
+  const signedDefaultNames = new Set<string>();
   const activationHosts = trustedActivationHosts();
   const bootstrapTrust = allowMarketplaceBootstrapTrust();
   const refused: string[] = [];
   for (const [packageName, recs] of byName) {
-    const anchor = await resolveInstallAnchor(packageName);
-    if (!anchor) {
+    const anchors = await resolveAnchors(packageName);
+    if (anchors.length === 0) {
       refused.push(`${packageName}: no trusted install record`);
       continue;
     }
-    // cinatra#792 — ANCHOR KIND BINDING. The V2 store is kind-segregated, so
-    // the canonical row's kind must agree with the record's path-derived kind;
-    // a contradiction (or an anchor kind outside the store enum) is refused.
-    const kindBound = recs.filter((r) => {
-      if (anchor.kind == null) return true; // unbound (legacy resolvers/tests)
-      if (!isExtensionStoreKind(anchor.kind) || anchor.kind !== r.kind) {
-        refused.push(
-          `${packageName}: install-anchor kind binding failed (canonical row kind ` +
-            `${JSON.stringify(anchor.kind)} != store path kind "${r.kind}") — refusing`,
-        );
-        return false;
+    for (const anchor of anchors) {
+      const label = `${packageName}@${anchor.version ?? "(unversioned)"}`;
+      // cinatra#792 — ANCHOR KIND BINDING. The V2 store is kind-segregated, so
+      // the canonical row's kind must agree with the record's path-derived kind;
+      // a contradiction (or an anchor kind outside the store enum) is refused.
+      const kindBound = recs.filter((r) => {
+        if (anchor.kind == null) return true; // unbound (legacy resolvers/tests)
+        if (!isExtensionStoreKind(anchor.kind) || anchor.kind !== r.kind) {
+          refused.push(
+            `${label}: install-anchor kind binding failed (canonical row kind ` +
+              `${JSON.stringify(anchor.kind)} != store path kind "${r.kind}") — refusing`,
+          );
+          return false;
+        }
+        return true;
+      });
+      if (kindBound.length === 0) continue;
+      // cinatra#158 — ANCHOR DIGEST BINDING. With the append-only journal, a NEW
+      // canonical source could (after a crash mid durable-restore) coexist with the
+      // OLD `finalized` journal op. NEW bytes would verify against NEW source, so the
+      // integrity/contentHash re-verify alone is NOT sufficient to refuse them. The
+      // anchor digest (journal-gated `source.activeDigest` selection, cinatra#792)
+      // names the install the DB pins; a real-pipeline install is ALWAYS
+      // digest-pinned on disk (`<kind>/<slug>/<digest>/` → rec.declaredDigest). So a
+      // BOUND anchor selects exactly the matching record and FAILS CLOSED when none
+      // exists (a flat-layout record that claims a digest-bound anchor is suspect —
+      // never trust it). An UNBOUND anchor digest (legacy/test rows) proceeds only
+      // when the on-disk digest is unambiguous. With SIDE-BY-SIDE versions this
+      // per-version digest binding is what pairs each version anchor to ITS OWN
+      // store record.
+      let rec: PackageStoreRecordV2;
+      if (anchor.digest) {
+        const match = kindBound.find((r) => r.declaredDigest === anchor.digest);
+        if (!match) {
+          refused.push(
+            `${label}: install-anchor digest binding failed (anchor ${anchor.digest} != on-disk ` +
+              `${kindBound.map((r) => r.declaredDigest ?? "(flat/none)").join(", ")}) — refusing`,
+          );
+          continue;
+        }
+        rec = match;
+      } else {
+        if (kindBound.length > 1) {
+          refused.push(
+            `${label}: ${kindBound.length} store digests on disk but the install anchor is ` +
+              `digest-unbound — refusing (ambiguous)`,
+          );
+          continue;
+        }
+        rec = kindBound[0];
       }
-      return true;
-    });
-    if (kindBound.length === 0) continue;
-    // cinatra#158 — ANCHOR DIGEST BINDING. With the append-only journal, a NEW
-    // canonical source could (after a crash mid durable-restore) coexist with the
-    // OLD `finalized` journal op. NEW bytes would verify against NEW source, so the
-    // integrity/contentHash re-verify alone is NOT sufficient to refuse them. The
-    // anchor digest (journal-gated `source.activeDigest` selection, cinatra#792)
-    // names the install the DB pins; a real-pipeline install is ALWAYS
-    // digest-pinned on disk (`<kind>/<slug>/<digest>/` → rec.declaredDigest). So a
-    // BOUND anchor selects exactly the matching record and FAILS CLOSED when none
-    // exists (a flat-layout record that claims a digest-bound anchor is suspect —
-    // never trust it). An UNBOUND anchor digest (legacy/test rows) proceeds only
-    // when the on-disk digest is unambiguous.
-    let rec: PackageStoreRecordV2;
-    if (anchor.digest) {
-      const match = kindBound.find((r) => r.declaredDigest === anchor.digest);
-      if (!match) {
-        refused.push(
-          `${packageName}: install-anchor digest binding failed (anchor ${anchor.digest} != on-disk ` +
-            `${kindBound.map((r) => r.declaredDigest ?? "(flat/none)").join(", ")}) — refusing`,
+      narrowed.push(rec);
+      const integrityOk = await verifyMaterializedPackageIntegrity(rec, {
+        trustedIntegrity: anchor.integrity,
+        trustedContentHash: anchor.contentHash,
+      });
+      // The additive signature factor. resolveSignatureVerdict returns
+      // true (verified against a trusted key), false (present-but-invalid, OR
+      // required-but-missing → REFUSE), or undefined (no signing configured →
+      // no-op, today's behavior). The signed payload binds packageName+version+
+      // the recorded tarball integrity.
+      const signatureVerified = resolveSignatureVerdict({
+        packageName: rec.packageName,
+        version: anchor.version ?? "",
+        integrity: anchor.integrity,
+        signature: anchor.signature,
+        // cinatra#181: a closure package (recorded closureHash) re-verifies ONLY
+        // against a v2 signature binding that hash — never a v1/absent one.
+        closureHash: anchor.closureHash ?? null,
+      });
+      const verdict = classifyExtensionTrust({
+        packageName: rec.packageName,
+        registryUrl: anchor.registryUrl,
+        integrityVerified: integrityOk,
+        persistedTrustDecision: anchor.trustDecision,
+        signatureVerified,
+        trustedActivationHosts: activationHosts,
+        allowMarketplaceBootstrapTrust: bootstrapTrust,
+      });
+      if (verdict.trusted) {
+        // Grant ONLY the admin-approved port subset — NOT the raw manifest's
+        // requestedHostPorts. cinatra#1040 S4: the host-port grant is per
+        // (package, org) and SHARED across a package's side-by-side versions, so
+        // each version's activation receives approved_union ∩ that version's OWN
+        // manifest-declared ports (rec.requestedHostPorts is still the manifest set
+        // here, before the rewrite) — no version gains a port it never declared,
+        // and no cross-version port leakage. The DEFAULT version owns global names;
+        // a non-default sibling activates against a side-effect-free host context
+        // (elected downstream at makeContext via `record.isDefault`).
+        const ownDeclared = new Set<HostPortName>((rec.requestedHostPorts ?? []) as HostPortName[]);
+        const intersectedPorts = ((anchor.approvedPorts ?? []) as HostPortName[]).filter((p) =>
+          ownDeclared.has(p),
         );
-        continue;
+        trusted.push({
+          ...rec,
+          version: anchor.version ?? undefined,
+          isDefault: anchor.isDefault !== false,
+          requestedHostPorts: intersectedPorts as typeof rec.requestedHostPorts,
+        });
+        anchorByIdentity.set(identityKey(rec.packageName, anchor.version), anchor);
+        if (verdict.tier === "trusted-signed") {
+          // Per-identity: THIS version's own signed tier authorizes ITS OWN
+          // migrations (never a sibling's).
+          signedIdentities.add(identityKey(rec.packageName, anchor.version));
+          // Package-level marker gated on the DEFAULT version's signed tier.
+          if (anchor.isDefault !== false) signedDefaultNames.add(rec.packageName);
+        }
+      } else {
+        refused.push(`${label}: ${verdict.reason}`);
       }
-      rec = match;
-    } else {
-      if (kindBound.length > 1) {
-        refused.push(
-          `${packageName}: ${kindBound.length} store digests on disk but the install anchor is ` +
-            `digest-unbound — refusing (ambiguous)`,
-        );
-        continue;
-      }
-      rec = kindBound[0];
-    }
-    narrowed.push(rec);
-    const integrityOk = await verifyMaterializedPackageIntegrity(rec, {
-      trustedIntegrity: anchor.integrity,
-      trustedContentHash: anchor.contentHash,
-    });
-    // The additive signature factor. resolveSignatureVerdict returns
-    // true (verified against a trusted key), false (present-but-invalid, OR
-    // required-but-missing → REFUSE), or undefined (no signing configured →
-    // no-op, today's behavior). The signed payload binds packageName+version+
-    // the recorded tarball integrity.
-    const signatureVerified = resolveSignatureVerdict({
-      packageName: rec.packageName,
-      version: anchor.version ?? "",
-      integrity: anchor.integrity,
-      signature: anchor.signature,
-      // cinatra#181: a closure package (recorded closureHash) re-verifies ONLY
-      // against a v2 signature binding that hash — never a v1/absent one.
-      closureHash: anchor.closureHash ?? null,
-    });
-    const verdict = classifyExtensionTrust({
-      packageName: rec.packageName,
-      registryUrl: anchor.registryUrl,
-      integrityVerified: integrityOk,
-      persistedTrustDecision: anchor.trustDecision,
-      signatureVerified,
-      trustedActivationHosts: activationHosts,
-      allowMarketplaceBootstrapTrust: bootstrapTrust,
-    });
-    if (verdict.trusted) {
-      // Grant ONLY the admin-approved port subset — NOT the raw manifest's
-      // requestedHostPorts. The pure driver passes rec.requestedHostPorts into
-      // makeContext, so we rewrite the record to the approved set here. (Privileged
-      // ports for a bootstrap package are only ever non-empty if an admin already
-      // approved them — the install pipeline's auto-approve is signed-only.)
-      trusted.push({ ...rec, requestedHostPorts: [...(anchor.approvedPorts ?? [])] as typeof rec.requestedHostPorts });
-      anchorByName.set(rec.packageName, anchor);
-      if (verdict.tier === "trusted-signed") signedTrustedNames.add(rec.packageName);
-    } else {
-      refused.push(`${rec.packageName}: ${verdict.reason}`);
     }
   }
 
@@ -292,24 +351,44 @@ export async function loadRuntimePackageExtensions(
   // package name survives narrowing, so this is a defensive fence that should
   // never fire) — computing it over the raw discovered candidates would refuse
   // the legitimate multi-digest-retention case the narrowing just resolved.
-  const candidateCountByName = new Map<string, number>();
+  // cinatra#1040 S4: side-by-side versions mean ONE package name legitimately has
+  // several narrowed records — so ambiguity is keyed by (name, version) now.
+  // Anchor-narrowing binds each version anchor to its own unique digest, so a
+  // duplicated (name, version) here is a genuine identity collision that must
+  // fail closed (defensive — it should never fire).
+  const candidateCountByIdentity = new Map<string, number>();
   for (const rec of narrowed) {
-    candidateCountByName.set(rec.packageName, (candidateCountByName.get(rec.packageName) ?? 0) + 1);
+    const k = identityKey(rec.packageName, rec.version);
+    candidateCountByIdentity.set(k, (candidateCountByIdentity.get(k) ?? 0) + 1);
   }
-  const ambiguousNames = new Set(
-    [...candidateCountByName].filter(([, n]) => n > 1).map(([name]) => name),
+  const ambiguousIdentities = new Set(
+    [...candidateCountByIdentity].filter(([, n]) => n > 1).map(([k]) => k),
   );
-  if (ambiguousNames.size > 0) {
+  if (ambiguousIdentities.size > 0) {
     console.warn(
-      `[runtime-package-loader] refusing ${ambiguousNames.size} ambiguous package name(s) before the ` +
-        `migration pass (multiple store records; fail-closed): ${[...ambiguousNames].join(", ")}`,
+      `[runtime-package-loader] refusing ${ambiguousIdentities.size} ambiguous (name, version) identity(ies) ` +
+        `before the migration pass (multiple store records; fail-closed): ${[...ambiguousIdentities].join(", ")}`,
     );
   }
+  // CROSS-VERSION migration UNION (cinatra#1040 S5): migrations are a PER-PACKAGE
+  // append-only namespace, not per-version — so EVERY signed live version of a
+  // package contributes its declared `cinatra.migrationsDir` to the one shared
+  // ledger, applied as an ordered union (semver asc, filename tiebreak) with a
+  // package-wide preflight BEFORE any DDL and a whole-package refusal on the first
+  // failure (`applyMigrationUnionForTrustedRecords`). This lifts S4's default-only
+  // restriction: a non-default sibling that ships migrations beyond the default no
+  // longer silently activates against a schema missing its tables. The per-IDENTITY
+  // signed gate is preserved — only per-(name, version) `trusted-signed`,
+  // non-ambiguous records are eligible; an unsigned sibling that DECLARES migrations
+  // is still a WHOLE-PACKAGE refusal (its DDL would be unverified privileged code and
+  // its absence leaves the shared schema incomplete for every version).
   const signedTrusted = trusted.filter(
-    (rec) => signedTrustedNames.has(rec.packageName) && !ambiguousNames.has(rec.packageName),
+    (rec) =>
+      signedIdentities.has(identityKey(rec.packageName, rec.version)) &&
+      !ambiguousIdentities.has(identityKey(rec.packageName, rec.version)),
   );
   const bootstrapWithDeclaredMigrations = trusted.filter(
-    (rec) => !signedTrustedNames.has(rec.packageName) && recordDeclaresHostMigrations(rec),
+    (rec) => !signedIdentities.has(identityKey(rec.packageName, rec.version)) && recordDeclaresHostMigrations(rec),
   );
   if (bootstrapWithDeclaredMigrations.length > 0) {
     console.warn(
@@ -318,23 +397,26 @@ export async function loadRuntimePackageExtensions(
         bootstrapWithDeclaredMigrations.map((r) => r.packageName).join(", "),
     );
   }
-  const { applyMigrationsForTrustedRecords } = await import("@/lib/extension-migration-host");
-  const migration = await applyMigrationsForTrustedRecords(signedTrusted);
+  const { applyMigrationUnionForTrustedRecords } = await import("@/lib/extension-migration-host");
+  const migration = await applyMigrationUnionForTrustedRecords(signedTrusted);
   if (migration.refused.length > 0) {
     console.warn(
       `[runtime-package-loader] refusing ${migration.refused.length} package(s) whose migrations failed: ` +
         migration.refused.map((r) => `${r.packageName}: ${r.error}`).join("; "),
     );
   }
+  // A migration failure / unrunnable-declared-migration is a PACKAGE-level refusal
+  // (name-keyed): the shared schema namespace is broken, so NO version of that
+  // package may activate.
   const migrationRefused = new Set<string>([
     ...migration.refused.map((r) => r.packageName),
     ...bootstrapWithDeclaredMigrations.map((r) => r.packageName),
-    // Ambiguous names skipped the migration pass above, so they must not
-    // activate either — and the activation driver's own duplicate fence only
-    // fires when BOTH records reach it, which trust refusals can prevent.
-    ...ambiguousNames,
   ]);
-  const activatable = trusted.filter((rec) => !migrationRefused.has(rec.packageName));
+  const activatable = trusted.filter(
+    (rec) =>
+      !migrationRefused.has(rec.packageName) &&
+      !ambiguousIdentities.has(identityKey(rec.packageName, rec.version)),
+  );
   if (activatable.length === 0) return [];
 
   // DEPENDENCY-ORDERED ACTIVATION (#180 item 8): topo-sort the activatable
@@ -407,14 +489,30 @@ export async function loadRuntimePackageExtensions(
     // package-store record (a marketplace install is never the host-locked
     // `"required"` systemExtensions set — see `PackageStoreRecord` in
     // `@cinatra-ai/sdk-extensions`), so only NAMESPACED env keys validate here.
+    // DEFAULT-OWNS-GLOBAL-NAMES ELECTION (cinatra#1040 S4): the DEFAULT version
+    // gets the normal grant-aware host context (it registers the package's
+    // unversioned global names — MCP tools, capability providers, object types,
+    // UI surfaces). A NON-DEFAULT side-by-side version (`record.isDefault ===
+    // false`) gets the register-only, SIDE-EFFECT-FREE context so it activates
+    // without claiming global names or mutating package-keyed shared state
+    // (settings/secrets/objects/nango). The driver additionally skips a
+    // non-default version's bootstrap pass. Edge-bound serving of a non-default
+    // version is threaded in a later slice (S5).
     makeContext: (packageName, grantedPorts, record) =>
-      createExtensionHostContext(packageName, grantedPorts, { envOverrides: record.envOverrides }),
+      record.isDefault === false
+        ? createNonDefaultVersionHostContext(packageName, grantedPorts, { envOverrides: record.envOverrides })
+        : createExtensionHostContext(packageName, grantedPorts, { envOverrides: record.envOverrides }),
     verifyIntegrity: (rec) => {
-      const anchor = anchorByName.get(rec.packageName);
-      return verifyMaterializedPackageIntegrity(
-        rec,
-        anchor ? { trustedIntegrity: anchor.integrity, trustedContentHash: anchor.contentHash } : {},
-      );
+      const anchor = anchorByIdentity.get(identityKey(rec.packageName, rec.version));
+      // FAIL CLOSED on a miss (cinatra#1040 S4): every record reaching activation
+      // carries a resolved per-(name, version) anchor, so a missing lookup means an
+      // identity-keying bug — NEVER fall back to verifying against the self-attested
+      // in-store sidecar (that would re-verify NEW-source residue against itself).
+      if (!anchor) return Promise.resolve(false);
+      return verifyMaterializedPackageIntegrity(rec, {
+        trustedIntegrity: anchor.integrity,
+        trustedContentHash: anchor.contentHash,
+      });
     },
   });
 
@@ -428,9 +526,13 @@ export async function loadRuntimePackageExtensions(
   // `summarizeActivation`, replicated inline to avoid a static edge onto that
   // heavy module, which dynamically imports THIS loader). Only a package that
   // truly registered may satisfy a credential-store ownership boundary.
-  // `signedTrustedNames` is the trust tier; `ambiguousNames` were already fenced
-  // out of activation, re-excluded here as defense in depth. The capability
-  // teardown chokepoint clears these markers.
+  // `signedTrustedNames` is the trust tier. The marker is PACKAGE-level (the
+  // widget-auth owner resolver keys on the name): a package is signed-activated
+  // when a signed version of it registered — with side-by-side versions
+  // (cinatra#1040 S4) the DEFAULT version is the one that registers global names,
+  // and ambiguous identities were already fenced out of `activatable` so they
+  // never reach `registered` here. The capability teardown chokepoint clears
+  // these markers.
   const failedNames = new Set(
     activationResults.filter((r) => r.status === "failed").map((r) => r.packageName),
   );
@@ -438,8 +540,7 @@ export async function loadRuntimePackageExtensions(
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
       !failedNames.has(result.packageName) &&
-      signedTrustedNames.has(result.packageName) &&
-      !ambiguousNames.has(result.packageName)
+      signedDefaultNames.has(result.packageName)
     ) {
       markPackageSignedActivated(result.packageName);
     }

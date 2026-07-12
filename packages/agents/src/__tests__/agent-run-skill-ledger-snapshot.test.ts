@@ -62,6 +62,7 @@ const storeMock = vi.hoisted(() => ({
   readAgentTemplateById: vi.fn(),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
+  readAgentTemplateVersionById: vi.fn(async () => null),
   transitionRunStatus: vi.fn(async () => undefined),
   RunTransitionError: class RunTransitionError extends Error {
     code: string;
@@ -120,6 +121,7 @@ function makeRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     workflowId: null,
     workflowTaskId: null,
     oboCeiling: null,
+    dependentInstallId: null,
     ...overrides,
   };
 }

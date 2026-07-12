@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Check, RefreshCw, X } from "lucide-react";
+import Link from "next/link";
+import { Check, RefreshCw, TriangleAlert, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -8,6 +9,7 @@ import {
   ExtensionCardListingBanner,
   type ExtensionAccent,
 } from "@/components/extension-card";
+import type { ConfigurationNeed } from "@/lib/extension-dependency-ux";
 
 /**
  * InstalledExtensionCard — the design system's "Installed extensions" card
@@ -96,6 +98,19 @@ export type InstalledExtensionCardProps = {
    * category colour.
    */
   archived?: boolean;
+  /**
+   * Post-install "needs configuration" affordance (cinatra#1057). When a
+   * just-installed AGENT still has one or more UNCONFIGURED required connector
+   * dependencies, the caller passes them here. A non-empty list flips the card
+   * into the same greyed archived TREATMENT (a cannot-run agent) and attaches a
+   * needs-review status strip to the bottom of the card listing each
+   * connector's displayName, deep-linked to its setup page. The card returns to
+   * its active colours and the strip disappears the moment all are configured
+   * (the caller stops passing them). Install itself never blocks — the strip is
+   * a follow-up reminder, not a gate. Distinct from `archived` (lifecycle):
+   * a needs-review card is active-but-unrunnable, not archived.
+   */
+  configurationNeeds?: readonly ConfigurationNeed[];
   /**
    * cinatra#1121 — /agents All-Agents accent affordance. `accentDetailHref` makes
    * the LEFT accent panel a pointer-cursor click target (an `<a>` whose href is
@@ -204,6 +219,53 @@ export function InstalledUpdateNote({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * §"post-install configuration needs" strip (Extensions application-design
+ * spec, needs-review section; cinatra#1057). A thin status strip attached to
+ * the bottom of an affected agent's card, in the design system's Needs-review
+ * status colours — the `.pill.hold` mustard tint (`bg-warning/10`) over the
+ * mustard ink (`text-warning`, i.e. the brand mustard #c79545 = rgb(199,149,69))
+ * with a mustard hairline on top (`border-warning/42`). Content is CENTRED: a
+ * warning glyph, "Set up connections first:", then each REQUIRED connector's
+ * human-readable displayName as a link to that connector's setup page. The
+ * strip appears only while at least one required connector is unconfigured; the
+ * caller drops `configurationNeeds` (and the strip) the moment all are set up.
+ */
+function NeedsReviewStrip({ connectors }: { connectors: readonly ConfigurationNeed[] }) {
+  return (
+    <div
+      data-slot="install-config-needs-callout"
+      data-conformance="install-config-needs-callout"
+      className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 border-t border-warning/42 bg-warning/10 px-4 py-2.5 text-xs text-warning"
+    >
+      <TriangleAlert aria-hidden className="size-3.5 shrink-0" strokeWidth={2.25} />
+      <span className="font-medium">Set up connections first:</span>
+      {connectors.map((connector, index) => (
+        <span key={connector.packageName} className="inline-flex items-center">
+          {connector.settingsHref ? (
+            <Link
+              href={connector.settingsHref}
+              data-field="manifest.displayName"
+              className="font-semibold underline decoration-warning/50 underline-offset-2 hover:decoration-warning"
+            >
+              {connector.displayName}
+            </Link>
+          ) : (
+            <span data-field="manifest.displayName" className="font-semibold">
+              {connector.displayName}
+            </span>
+          )}
+          {index < connectors.length - 1 && (
+            <span aria-hidden className="ml-2 text-warning/60">
+              &middot;
+            </span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function InstalledExtensionCard({
   name,
   accentColor,
@@ -220,6 +282,7 @@ export function InstalledExtensionCard({
   specLineMuted = false,
   actions,
   archived = false,
+  configurationNeeds,
   className,
   descriptionLineClamp = 2,
   accentDetailHref,
@@ -227,27 +290,33 @@ export function InstalledExtensionCard({
   accentLabel,
   accentInert = false,
 }: InstalledExtensionCardProps) {
-  return (
-    <div
-      data-slot="installed-extension-card"
-      data-accent={accentColor}
-      data-archived={archived ? "" : undefined}
-      className={cn(
-        "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch",
-        className,
-      )}
-    >
+  // An affected agent (unconfigured required connectors) cannot run yet, so it
+  // wears the SAME greyed treatment as an archived card — desaturated ground,
+  // muted emblem, muted text/actions — plus the needs-review strip below. The
+  // greying is driven by `greyed`; `data-archived` still reflects true archived
+  // lifecycle only (`data-needs-review` marks the distinct cannot-run state).
+  const needsReview = (configurationNeeds?.length ?? 0) > 0;
+  const greyed = archived || needsReview;
+
+  // The three §VI panels — LEFT mark, MIDDLE body, RIGHT actions — identical
+  // for every state. Only their muted flag is driven by `greyed` (archived OR
+  // needs-review); for an active/archived card `greyed === archived`, so these
+  // render exactly as merged in the §III layout (#1273).
+  const panels = (
+    <>
       {/* LEFT — the ListingCard mark at listing-card width, carrying the
           "{Kind} by {Vendor}" byline beneath the name (design spec 0.5.0 §III:
           byline moved into the coloured panel). The byline inherits the banner
           ground colour via `text-current` — white on an active card, grey on
-          the muted (archived) variant — so it recolours to match the name. */}
+          the muted variant — so it recolours to match the name. A greyed card
+          (archived OR needs-review, cinatra#1057) renders the muted mark, which
+          also greys the byline for free. */}
       <ExtensionCardListingBanner
         name={name}
         accentColor={accentColor}
         emblem={emblem}
         iconUrl={iconUrl}
-        muted={archived}
+        muted={greyed}
         byline={
           <div
             data-slot="installed-extension-byline"
@@ -299,7 +368,7 @@ export function InstalledExtensionCard({
             className={cn(
               // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
               "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
-              archived && "opacity-70",
+              greyed && "opacity-70",
               // §III ABI-incompatible greying — the §I ABI-compat treatment
               // dims the version/status row (design spec: opacity ≈ 0.55) while
               // the explanatory note below stays legible.
@@ -321,7 +390,7 @@ export function InstalledExtensionCard({
       {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly
           Settings + More details, naturally sized and CENTERED (not
           stretched full-width) — `align-items: center` on the panel, no
-          per-button width utility. Archived cards mute the whole panel
+          per-button width utility. A greyed card mutes the whole panel
           (cinatra#957) while both actions stay operable. */}
       {actions && (
         <div
@@ -329,12 +398,56 @@ export function InstalledExtensionCard({
             // gap-[9px]: the drawing's exact 9px actions-panel gap (a layout
             // arbitrary, not a color/type one — cinatra#803 convention).
             "flex flex-col items-center justify-center gap-[9px] border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
-            archived && "opacity-70",
+            greyed && "opacity-70",
           )}
         >
           {actions}
         </div>
       )}
+    </>
+  );
+
+  // ACTIVE / ARCHIVED (no needs-review): byte-identical to origin/main — the
+  // three panels ARE the card, in a single flex row. cinatra#1057 must NOT
+  // touch this layout (owner review 2026-07-10): the §III active/archived card
+  // is already fixed per the design spec (#1273), so it renders exactly as
+  // before and adds ONLY the needs-review branch below.
+  if (!needsReview) {
+    return (
+      <div
+        data-slot="installed-extension-card"
+        data-accent={accentColor}
+        data-archived={archived ? "" : undefined}
+        className={cn(
+          "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch",
+          className,
+        )}
+      >
+        {panels}
+      </div>
+    );
+  }
+
+  // NEEDS-REVIEW (cinatra#1057): the SAME §III card in the greyed archived
+  // treatment, but the outer card becomes a COLUMN so a full-width needs-review
+  // strip can attach seamlessly to the bottom (design spec §VI). The three
+  // panels keep their own row via an inner wrapper — identical layout to the
+  // active/archived card above. `data-needs-review` marks the distinct
+  // cannot-run state; `data-archived` still reflects true archived lifecycle.
+  return (
+    <div
+      data-slot="installed-extension-card"
+      data-accent={accentColor}
+      data-archived={archived ? "" : undefined}
+      data-needs-review=""
+      className={cn(
+        "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm",
+        className,
+      )}
+    >
+      <div className="flex flex-col md:flex-row md:items-stretch">{panels}</div>
+      {/* BOTTOM — post-install needs-review strip (cinatra#1057). */}
+      <NeedsReviewStrip connectors={configurationNeeds!} />
     </div>
   );
 }

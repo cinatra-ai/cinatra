@@ -80,7 +80,7 @@ jobs:
 
       - id: filter
         if: ${{ github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         with:
           filters: |
             dashboards:
@@ -136,7 +136,7 @@ jobs:
       # service is NOT started. On non-dashboard PRs (the common case) the
       # stub path needs no Postgres/Redis, so they don't spin up.
       postgres:
-        image: ${{ needs.detect.outputs.run_real == 'true' && 'postgres:16' || '' }}
+        image: ${{ needs.detect.outputs.run_real == 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -149,7 +149,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: ${{ needs.detect.outputs.run_real == 'true' && 'redis:7' || '' }}
+        image: ${{ needs.detect.outputs.run_real == 'true' && 'redis:8' || '' }}
         ports:
           - 6379:6379
         options: >-

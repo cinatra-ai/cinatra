@@ -96,9 +96,23 @@ describe("resolveTemplateInputSchema", () => {
     expect(result.required).toEqual(["url"]);
   });
 
-  it("does NOT fall back for non-cinatra packages (third-party scope)", async () => {
+  it("falls back to disk OAS for an operator/third-party vendor (multi-vendor, cinatra#1196)", async () => {
+    // Pre-#1196 this scope was rejected before any disk read; now the shared
+    // multi-vendor resolver derives `<mount>/somevendor/some-agent/cinatra/
+    // oas.json` from the package's OWN vendor and derives the schema.
     const result = await resolveTemplateInputSchema({
       packageName: "@somevendor/some-agent",
+      packageVersion: "1.0.0",
+      inputSchema: {},
+    });
+    expect(result.required).toEqual(["url"]);
+    expect(result.properties.url).toEqual({ type: "string", format: "uri" });
+    expect(fsMock.readFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("still returns empty for an UNSCOPED package name (no vendor to resolve)", async () => {
+    const result = await resolveTemplateInputSchema({
+      packageName: "bare-name",
       packageVersion: "1.0.0",
       inputSchema: {},
     });
@@ -162,19 +176,6 @@ describe("resolveTemplateInputSchema", () => {
     });
     expect(result.required).toEqual([]);
     expect(fsMock.readFile).not.toHaveBeenCalled();
-  });
-});
-
-describe("__testOnly.isCinatraInRepoSlug", () => {
-  it("matches @cinatra/<slug> shape strictly", () => {
-    expect(__testOnly.isCinatraInRepoSlug("@cinatra-ai/email-test-delivery-agent")).toBe(
-      "email-test-delivery-agent",
-    );
-    expect(__testOnly.isCinatraInRepoSlug("@cinatra/")).toBeNull();
-    expect(__testOnly.isCinatraInRepoSlug("@somevendor/foo")).toBeNull();
-    expect(__testOnly.isCinatraInRepoSlug("plain-name")).toBeNull();
-    expect(__testOnly.isCinatraInRepoSlug(null)).toBeNull();
-    expect(__testOnly.isCinatraInRepoSlug(undefined)).toBeNull();
   });
 });
 

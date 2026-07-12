@@ -1,0 +1,11 @@
+{
+  "seq": "0029",
+  "file": "core/core__0029_skill-lifecycle.mjs",
+  "summary": "Skill lifecycle foundation (cinatra#1361): typed lifecycle_state (nullable + CHECK), superseded_by (self-FK), and active_revision_id (composite FK) columns on the existing skills table; immutable append-only skill_revisions history (distinct event id, source enum, base-digest provenance) with a BEFORE UPDATE OR DELETE trigger; skill_lifecycle_audit transition log. Backfills existing custom/personal skills to active and seeds a migration revision + active-revision pointer. Destructive because it adds CHECK/FK constraints over the populated skills table.",
+  "destructive": true,
+  "tables": [
+    "skills",
+    "skill_revisions",
+    "skill_lifecycle_audit"
+  ]
+}

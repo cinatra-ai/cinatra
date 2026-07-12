@@ -175,9 +175,12 @@ designed so S4 registers a view **without forking the contract**:
     nodeId?: string;
     postId?: string;
     rich: boolean;
-    // Correlation ids for the later no-reload APPLY intent (S4 + #1214): they
-    // tie an accept back to this proposal/change-set without re-deriving it.
-    // Carried in the schema; the apply SEMANTICS are out of this stage's scope.
+    // Correlation ids (S4, Option A — owner decision 2026-07-10 on #1220):
+    // the producing agent already saved the change as a draft DURING the run
+    // through the CMS MCP integration (#1214); accept performs NO server
+    // write — it refreshes the editor in place to that saved draft. These ids
+    // tie the card (and the S5 refresh intent) to the already-written draft
+    // without re-deriving it. Opaque correlation strings, never authorization.
     proposalId?: string;
     changeSetId?: string;
   };
@@ -196,11 +199,35 @@ designed so S4 registers a view **without forking the contract**:
   type — so the renderer shows its safe fallback and never crashes. This is the
   "unknown `DATA_PART` payloads" case in the render-parity checklist.
 
+**The registered inventory (S4 survey result).** The epic's full
+assistant-specific-view inventory splits into two classes — per its own "no
+bespoke frames" criterion:
+
+- **Registered `DATA_PART` renderable views** (versioned schemas in
+  `renderable-views/`, one renderer component each):
+  `content_change_proposal` (the change-diff), `artifact_preview`,
+  `citation_group`, `change_history`.
+- **Mapped onto existing top-level events — NOT re-registered as views**:
+  tool-call progress/result cards, inline agent-run cards, HITL interrupt
+  forms, thinking groups, and streaming/partial states fold from
+  `TEXT_MESSAGE_*` / `TOOL_CALL_*` / `INTERRUPT`/`RESUME` / structural
+  `DATA_PART`s in the renderer's event-to-UI reducer; error states are
+  `RUN_ERROR`; capabilities and recoverable-auth / capability-denied states
+  ride the capability handshake (§3).
+
+Adding a view later stays a registry augmentation (schema + component); the
+mapped class never grows a bespoke frame.
+
 The change-diff is the primary S4 porting target: it moves from the bespoke
 `changes` SSE frame (`{ fields, nodeId, postId }`, applied by a full page
-reload) to a `content_change_proposal` renderable view applied in place. The
-**renderer component** keyed by `viewType`, and the no-reload apply capability,
-are S4's concern — this contract owns only the payload-type seam.
+reload) to a `content_change_proposal` renderable view **refreshed in place**
+(Option A, owner decision 2026-07-10: the agent already saved the draft during
+the run through the CMS MCP integration under OBO; accepting performs no
+server write — the editor refreshes to the saved draft, correlated by
+`proposalId` / `changeSetId`). The **renderer component** keyed by `viewType`
+and the display-only applied/refresh affordance are S4's concern; the
+editor-patch consumer (the refresh executor in the CMS widgets) is S5's
+(#1221) — this contract owns only the payload-type seam.
 
 ## 6. Conformance
 

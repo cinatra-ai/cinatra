@@ -21,6 +21,7 @@ import {
   _internalUpdateInstalledExtensionSource,
   _internalUpdateInstalledExtensionStatus,
   readInstalledExtensionById,
+  readInstalledExtensionsByPackageName,
 } from "./canonical-store";
 import { deleteExtensionPermissions } from "./permissions-store";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
@@ -141,8 +142,14 @@ function transitionMatrix(
  * inline note below).
  */
 export async function installExtensionManifest(
-  row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "status"> & {
+  // version / isDefault are OPTIONAL (cinatra#1040 S1): the canonical store
+  // derives version from the source and defaults isDefault to true, so existing
+  // install-row writers need no change (the version-aware write path is a later
+  // slice).
+  row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "status" | "version" | "isDefault"> & {
     status?: ExtensionLifecycleStatus;
+    version?: string;
+    isDefault?: boolean;
   },
   opts: TransitionOpts,
 ): Promise<InstalledExtension> {
@@ -365,6 +372,142 @@ export async function transitionExtensionLifecycle(
  * the drift-gate invariant (only this file + canonical-store touch the direct
  * writers).
  */
+/**
+ * Hard-delete a SIDE-BY-SIDE (non-default) version row (cinatra#1040 S3) — the
+ * version-scoped teardown the dependency-batch compensation and the boot
+ * sweeper use. NOT a general uninstall:
+ *
+ *  - refuses a DEFAULT row (`isDefault !== false`) — the package-scoped
+ *    uninstall path owns those;
+ *  - refuses a `locked` row (removal protection, as everywhere);
+ *  - refuses when any OTHER row's persisted dependency edge still RESOLVES to
+ *    this row (`resolvedInstallId`), REGARDLESS of that dependent's status —
+ *    compensation runs in inverse install order, so dependents are gone
+ *    first; a still-bound dependent (even an archived one, which a concurrent
+ *    restore could re-activate) means this is NOT a safe teardown;
+ *  - refuses when NO sibling live row of the same (package, scope) remains —
+ *    a sole surviving row is not "side by side" (fail closed rather than
+ *    orphaning the package's last install).
+ *
+ * The row's own edge rows cascade with the delete (FK); inbound resolved edges
+ * are SET NULL by the FK (dependents, if any survived a partial compensation,
+ * heal through the scoped name-lookup fallback). The content-store digest dir
+ * is deliberately NOT touched — the store legitimately holds multiple digests
+ * and the retention GC (#796) owns reaping. Callers MUST hold the per-package
+ * install lock. Keeping the `_internal*` writer call inside the canonical
+ * primitive preserves the single-writer rule the static reach checks enforce.
+ */
+export async function deleteSideBySideVersionRow(rowId: string): Promise<void> {
+  const ext = await readInstalledExtensionById(rowId);
+  if (!ext) return; // idempotent — already gone
+  if (ext.isDefault !== false) {
+    throw new LifecycleTransitionError(
+      "ILLEGAL_TRANSITION",
+      `deleteSideBySideVersionRow refused — extension '${rowId}' is the DEFAULT row for ` +
+        `${ext.packageName}; route a default-row removal through transitionExtensionLifecycle`,
+      { id: rowId, status: ext.status },
+    );
+  }
+  if (ext.status === "locked") {
+    throw new LifecycleTransitionError(
+      "LOCKED_REJECTS_OP",
+      `deleteSideBySideVersionRow refused — extension '${rowId}' is locked`,
+      { id: rowId, status: ext.status },
+    );
+  }
+  const siblings = await readInstalledExtensionsByPackageName(ext.packageName);
+  const scopeOrg = ext.organizationId ?? null;
+  const liveSiblings = siblings.filter(
+    (r) =>
+      r.id !== rowId &&
+      (r.status === "active" || r.status === "locked") &&
+      (r.organizationId ?? null) === scopeOrg,
+  );
+  if (liveSiblings.length === 0) {
+    throw new LifecycleTransitionError(
+      "ILLEGAL_TRANSITION",
+      `deleteSideBySideVersionRow refused — '${rowId}' is the only live row for ` +
+        `${ext.packageName} in its scope (not side-by-side); route through ` +
+        `transitionExtensionLifecycle`,
+      { id: rowId, status: ext.status },
+    );
+  }
+  // Still-bound dependents: any row whose persisted edge resolves to this row
+  // — REGARDLESS of its status (an archived dependent could be concurrently
+  // restored; codex round-2) — refuses the teardown (fail closed —
+  // inverse-order compensation should have removed them first). Check + delete
+  // run ATOMICALLY in the guarded writer: the target row is locked FOR UPDATE
+  // (conflicting with concurrent edge inserts' FK KEY SHARE locks), so a
+  // dependent bound between check and delete is impossible (codex round-1).
+  const { _internalDeleteSideBySideRowIfUnbound } = await import("./canonical-store");
+  const result = await _internalDeleteSideBySideRowIfUnbound(rowId);
+  if (!result.deleted && result.boundDependents.length > 0) {
+    throw new LifecycleTransitionError(
+      "ILLEGAL_TRANSITION",
+      `deleteSideBySideVersionRow refused — live dependent(s) still resolve to '${rowId}': ` +
+        result.boundDependents.join(", "),
+      { id: rowId, status: ext.status },
+    );
+  }
+}
+
+/**
+ * ROW-SCOPED canonical delete for batch compensation (cinatra#1042 slice-2).
+ * Removes EXACTLY the given row — the freshly-installed (package, scope) row a
+ * failed install batch must roll back — WITHOUT the package-global hard-delete
+ * branch of `extensionRegistry.uninstall` (`handler.uninstall` by name +
+ * `syncCanonicalPackageGlobalTransition` + package-global data teardown), which
+ * would tear down same-package rows in OTHER scopes. UNLIKE
+ * `deleteSideBySideVersionRow`, it accepts the DEFAULT / only-in-scope row —
+ * compensation must remove the fresh default row. It uses the SAME atomic
+ * unbound-checked writer (`_internalDeleteSideBySideRowIfUnbound`: locks the
+ * target FOR UPDATE; a dependent bound between check and delete is impossible),
+ * failing closed if a live dependent still resolves to the row (inverse-order
+ * compensation removes dependents first, so this should not happen). The
+ * polymorphic access rows keyed by THIS row id are cleaned (row-scoped, for the
+ * installed-extension-anchored kinds); the package's by-name handler backing +
+ * OTHER-scope rows are deliberately untouched — the whole point of the
+ * row-scoped inverse. This is why an org-multi-tenant instance's rows are
+ * provably safe and the auto-update loop can lift its org-rows fence.
+ */
+export async function deleteScopedCanonicalRow(rowId: string): Promise<void> {
+  const ext = await readInstalledExtensionById(rowId);
+  if (!ext) return; // idempotent — already gone
+  if (ext.status === "locked") {
+    throw new LifecycleTransitionError(
+      "LOCKED_REJECTS_OP",
+      `deleteScopedCanonicalRow refused — extension '${rowId}' is locked`,
+      { id: rowId, status: ext.status },
+    );
+  }
+  const { _internalDeleteSideBySideRowIfUnbound } = await import("./canonical-store");
+  const result = await _internalDeleteSideBySideRowIfUnbound(rowId);
+  if (!result.deleted && result.boundDependents.length > 0) {
+    throw new LifecycleTransitionError(
+      "ILLEGAL_TRANSITION",
+      `deleteScopedCanonicalRow refused — live dependent(s) still resolve to '${rowId}': ` +
+        result.boundDependents.join(", "),
+      { id: rowId, status: ext.status },
+    );
+  }
+  // Row-scoped access-row cleanup for the installed-extension-anchored kinds
+  // (connector / artifact / workflow), whose `resource_id` IS this row id.
+  // agent / skill permission resources are keyed by agent_template /
+  // skill_package ids (package-global backing) and are NOT cleaned here — that
+  // by-name teardown is exactly what the row-scoped inverse must avoid.
+  // Best-effort: the row is already gone, so a cleanup failure is logged.
+  if (ext.kind === "connector" || ext.kind === "artifact" || ext.kind === "workflow") {
+    try {
+      await deleteExtensionPermissions(ext.kind, rowId);
+    } catch (err) {
+      console.warn(
+        `[lifecycle] deleteScopedCanonicalRow access-row cleanup failed for ${ext.kind}:${rowId} (row already removed):`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
 export async function deleteNonFinalizedCanonicalRow(rowId: string): Promise<void> {
   const ext = await readInstalledExtensionById(rowId);
   // Missing row → nothing to roll back. Idempotent: a concurrent finalize/delete

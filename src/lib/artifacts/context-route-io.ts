@@ -1,15 +1,15 @@
 import "server-only";
 
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
+import { resolveInstalledOasPathForRead } from "@cinatra-ai/agents/installed-oas-path";
 import {
   readAgentRunById,
   readAgentRunByContextId,
+  readAgentRunByTokenHash,
   readAgentTemplateById,
   type AgentRunRecord,
 } from "@cinatra-ai/agents";
+import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 import {
   readAgentContextSlotsFromOas,
   type AgentContextSlot,
@@ -38,6 +38,10 @@ import {
   evaluateContextAttestation,
   type ContextNodeKind,
 } from "./context-attestation";
+import {
+  recordContextRouteResolutionPath,
+  type ContextRouteServedBy,
+} from "./context-route-observability";
 
 // ---------------------------------------------------------------------------
 // Heavy IO for the context routes: auth + run + actor derivation (reuses the
@@ -46,20 +50,18 @@ import {
 // stays unit-testable without the agents / MCP import chain.
 // ---------------------------------------------------------------------------
 
-function inRepoSlug(packageName: string | null | undefined): string | null {
-  if (typeof packageName !== "string") return null;
-  const m = /^@cinatra-ai\/([a-z0-9][a-z0-9-]*)$/.exec(packageName);
-  return m ? m[1] : null;
-}
-
 async function readInstalledOas(
   packageName: string,
 ): Promise<Record<string, unknown> | null> {
-  const slug = inRepoSlug(packageName);
-  if (!slug) return null;
-  const root = resolveAgentRuntimeMountDir();
-  const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
-  if (!existsSync(oasPath)) return null;
+  // cinatra#1196 — multi-vendor trust root: resolve the installed OAS via the
+  // SHARED runtime-mount resolver (scope-derived
+  // `<mount>/<vendor>/<slug>/cinatra/oas.json`), not the historical
+  // first-party-only regex + literal "cinatra-ai" path segment. An operator/
+  // third-party-vendor agent resolves identically to a first-party one; an
+  // unscoped/malformed name or an uninstalled package still yields null
+  // (→ oas_missing at the front door, unchanged #1197 rejection surface).
+  const oasPath = resolveInstalledOasPathForRead(packageName);
+  if (!oasPath) return null;
   try {
     return JSON.parse(await readFile(oasPath, "utf8")) as Record<string, unknown>;
   } catch {
@@ -105,6 +107,9 @@ export type DerivedContext = {
   actor: ActorContext;
   run: AgentRunRecord;
   projectId: string | undefined;
+  /** Which binding resolved the run (#1193 W2 token-first vs legacy split) —
+   *  carried so the route-level success trace (#1197) can name the path. */
+  servedBy: ContextRouteServedBy;
   /** The run's TEMPLATE package (server-derived, NOT the body). The trust root
    *  for actor + audit-store scoping. */
   trustedPackageName: string;
@@ -133,6 +138,10 @@ function enforceContextAttestation(input: {
   runOas: Record<string, unknown> | null;
   slotId: string;
   expectedKind: ContextNodeKind;
+  /** cinatra#1194 — true only when the run was resolved via the run token
+   *  (servedBy === "run_token"). Gates the declaration re-anchor for slim
+   *  (declaration-only) specs; the legacy marker anchor is unaffected. */
+  runTokenServed: boolean;
 }): void {
   const { req, a2aContextId, runOas, slotId, expectedKind } = input;
   // The full fail-closed decision (context-id binding required, dedicated key
@@ -153,10 +162,18 @@ function enforceContextAttestation(input: {
     // Set CINATRA_CONTEXT_ATTEST_ACCEPT_V1=0 to enforce v2-only once the wayflow
     // image has rolled.
     acceptLegacyV1: process.env.CINATRA_CONTEXT_ATTEST_ACCEPT_V1 !== "0",
+    // cinatra#1194 — the declaration re-anchor (injection grammar + installed
+    // contextSlots declaration) is admitted ONLY on the run-token path.
+    allowDeclarationAnchor: input.runTokenServed,
   });
   if (!result.ok) {
     throw new ContextRouteError(403, result.code, result.message);
   }
+  // cinatra#1194 — which-anchor metric for the slim-format rollout (ids only).
+  console.info(
+    `[context-attestation] node anchored via=${result.anchor} ` +
+      `slot=${result.slotId} kind=${result.kind}`,
+  );
   if (result.legacyV1) {
     // Transitional visibility: a legacy v1 (no-expiry) attestation was accepted.
     // Post-rollout this should stop appearing; then enforce v2-only via
@@ -195,16 +212,76 @@ export async function deriveContextRouteContext(
       throw new ContextRouteError(403, "forbidden", "bridge auth failed");
     }
   }
-  // 2. Resolve the parent run. The auth-injected x-cinatra-a2a-context-id is
-  //    the TRUSTED run binding (the context FlowNode runs inside the parent
-  //    run's WayFlow conversation). Cross-check the body's parentRunId against
-  //    it and reject any mismatch (defense against a forged body selecting
-  //    another run). Fall back to the body id only when no context-id is
-  //    present (mirrors /api/llm-bridge).
+  // 2. Resolve the parent run. Precedence (fail-closed; a body id can never
+  //    SELECT the run, only be cross-checked):
+  //      (a) #1193 run-token spine (W2): the dispatch-minted per-run token in
+  //          the x-cinatra-run-token header is the STRONGEST binding — a single
+  //          unique-index probe (verifyRunToken, no body fallback, no
+  //          newest-wins). Present-but-unresolvable ⇒ 403 with NO fallback to
+  //          the context-id header or the body.
+  //      (b) legacy: the auth-injected x-cinatra-a2a-context-id header (the
+  //          TRUSTED binding pre-token).
+  //      (c) legacy dev-loopback: the body parentRunId (only when neither
+  //          header is present).
+  //    (b)/(c) remain until the WayFlow image that attaches the token has rolled
+  //    everywhere; the which-path log below feeds the W3 legacy-removal gate.
   const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
+  const runTokenHeader = req.headers.get(RUN_TOKEN_HEADER);
   let run: AgentRunRecord | null = null;
-  if (a2aContextId) {
-    // Header present ⇒ it is the TRUSTED binding. Fail CLOSED on an
+  let servedBy: ContextRouteServedBy;
+  if (runTokenHeader !== null) {
+    // (a) Token present ⇒ it is the trust root. verifyRunToken hashes it and
+    // resolves the run by the unique index. Absent/empty or unresolvable both
+    // fail CLOSED here — NEVER fall back to the context-id header or the body.
+    const verified = await verifyRunToken(runTokenHeader, readAgentRunByTokenHash);
+    if (!verified.ok) {
+      throw new ContextRouteError(
+        403,
+        "run_token_unresolvable",
+        "x-cinatra-run-token did not resolve to a run",
+      );
+    }
+    // Re-read the FULL record by the SERVER-derived id (never a body id) for the
+    // downstream template/OBO/project fields. Defense-in-depth: the re-read must
+    // not diverge from the verified {orgId, runBy} projection (a torn/rewritten
+    // row) — deny on divergence.
+    run = await readAgentRunById(verified.run.id);
+    if (
+      !run ||
+      run.orgId !== verified.run.orgId ||
+      run.runBy !== verified.run.runBy
+    ) {
+      throw new ContextRouteError(
+        403,
+        "run_token_divergent",
+        "run-token row diverged from the verified projection",
+      );
+    }
+    // If a context-id header is ALSO present it must name the SAME run — the two
+    // dispatch-owned bindings cannot disagree. (A composed-child call still
+    // REQUIRES the context-id for the #907 attestation in step 3; the run token
+    // never substitutes for the attestation context.)
+    if (a2aContextId) {
+      const byCtx = await readAgentRunByContextId(a2aContextId);
+      if (!byCtx || byCtx.id !== run.id) {
+        throw new ContextRouteError(
+          403,
+          "run_mismatch",
+          "x-cinatra-a2a-context-id does not match the run-token run",
+        );
+      }
+    }
+    // A supplied body parentRunId is cross-checked, never used to select.
+    if (body.parentRunId && body.parentRunId !== run.id) {
+      throw new ContextRouteError(
+        403,
+        "run_mismatch",
+        `body parentRunId '${body.parentRunId}' does not match the run-token run`,
+      );
+    }
+    servedBy = "run_token";
+  } else if (a2aContextId) {
+    // (b) Header present ⇒ it is the TRUSTED binding. Fail CLOSED on an
     // unresolvable context-id (never fall back to the body id) and reject a
     // body parentRunId that disagrees.
     run = await readAgentRunByContextId(a2aContextId);
@@ -222,10 +299,12 @@ export async function deriveContextRouteContext(
         `body parentRunId '${body.parentRunId}' does not match the authenticated run`,
       );
     }
+    servedBy = "context_id";
   } else {
-    // No context-id header ⇒ body fallback (dev loopback / first-call case,
-    // matching /api/llm-bridge's own fallback behavior).
+    // (c) No token and no context-id header ⇒ body fallback (dev loopback /
+    // first-call case, matching /api/llm-bridge's own fallback behavior).
     run = await readAgentRunById(body.parentRunId);
+    servedBy = "body";
   }
   if (!run) {
     throw new ContextRouteError(
@@ -234,6 +313,15 @@ export async function deriveContextRouteContext(
       `parent run '${body.parentRunId}' not found`,
     );
   }
+  // #1193 run-token spine (W2): which-path-served metric for the W3 legacy-
+  // removal gate — per-(kind, via) counter + info line (#1197). Ids only — the
+  // raw token and its hash are NEVER logged.
+  recordContextRouteResolutionPath({
+    kind: expectedKind,
+    via: servedBy,
+    runId: run.id,
+    contextId: a2aContextId,
+  });
   if (!run.orgId || !run.runBy) {
     throw new ContextRouteError(
       403,
@@ -290,9 +378,14 @@ export async function deriveContextRouteContext(
       runOas,
       slotId: body.slotId,
       expectedKind,
+      // cinatra#1194 — the declaration re-anchor for slim specs is admitted
+      // only when the run token selected the run (strongest binding).
+      runTokenServed: servedBy === "run_token",
     });
     const boundChildPackage = runOas
-      ? findBoundChildPackageForSlot(runOas, body.slotId)
+      ? findBoundChildPackageForSlot(runOas, body.slotId, {
+          allowDeclarationBinding: servedBy === "run_token",
+        })
       : null;
     if (!boundChildPackage || boundChildPackage !== body.parentPackageName) {
       throw new ContextRouteError(
@@ -366,7 +459,7 @@ export async function deriveContextRouteContext(
   const projectId =
     normalizeProjectId(run.projectId) ?? normalizeProjectId(body.projectId);
 
-  return { actor, run, projectId, trustedPackageName, trustedSlotPackageName };
+  return { actor, run, projectId, servedBy, trustedPackageName, trustedSlotPackageName };
 }
 
 /** Resolve candidates for a slot via the existing resolver + server-side

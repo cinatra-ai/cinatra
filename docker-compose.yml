@@ -15,13 +15,22 @@
 
 services:
   postgres:
-    image: postgres:17-alpine
-    # Upgrade track: cinatra-owned Postgres target is postgres 17-alpine for
-    # this platform DB AND nango-db (reconciles the 17/15 spread). Do NOT
-    # tag-bump in an inventory pass: an existing PGDATA volume needs a
-    # pg_upgrade/restore (a bare tag bump makes Postgres refuse to start), so
-    # the data-migration-bearing image bump is staged separately. See
-    # docs/upgrade-track.md.
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    # MAJOR: Postgres 17 -> 18 (upgrade track; see docs/upgrade-track.md §3).
+    # Pinned to the CONFIRMED multi-arch (amd64/arm64/...) OCI index digest of
+    # postgres:18-alpine (18.4, resolved 2026-07-11 via imagetools) — the tag is
+    # human-readable, the @sha256 is the binding pin.
+    #
+    # LAYOUT CHANGE with 18 (docker-library/postgres#1259): PGDATA moved to
+    # /var/lib/postgresql/18/docker and the volume MUST be mounted at the
+    # PARENT /var/lib/postgresql — an 18 container refuses a volume mounted at
+    # the legacy .../data target. MIGRATING AN EXISTING DEV VOLUME: a 17-era
+    # cinatra-postgres volume (cluster at the volume root) makes 18 refuse to
+    # start (fail-closed, data untouched). Either dump/restore it — the exact
+    # mechanism scripts/ci/works-after/postgres.sh proves (pg_dump from a 17
+    # container on the old volume -> restore into a fresh 18 one) — or, for
+    # disposable dev data, `docker volume rm <project>_cinatra-postgres` and let
+    # 18 initdb fresh.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5434 on 0.0.0.0.
     # Local dev + self-host install add `-f docker-compose.dev.yml` (loopback).
@@ -30,7 +39,7 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
-      - cinatra-postgres:/var/lib/postgresql/data
+      - cinatra-postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -38,7 +47,20 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    # MAJOR: Redis 7 -> 8 (upgrade track; see docs/upgrade-track.md §9). Pinned
+    # to the CONFIRMED multi-arch OCI index digest of redis:8-alpine (8.8.0,
+    # resolved 2026-07-11 via the registry API; index digest unchanged since
+    # 2026-06-23) — the tag is human-readable, the @sha256 is the binding pin.
+    # Redis here is a cache/queue backend (BullMQ): Redis 8 reads a Redis 7
+    # RDB/AOF forward-compatibly, and the works-after redis arm proves a real
+    # BullMQ enqueue -> worker-run -> complete on 8-alpine with this repo's
+    # pinned bullmq + ioredis. ROLLBACK: repoint to
+    # redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    # AND clear any persisted dump first (rm /data/dump.rdb /data/appendonly*
+    # in the cinatra-redis volume): Redis 8.8 writes RDB format v14, Redis 7.4
+    # reads only <=v12 and refuses a newer dump (crash-loop class). Re-resolve
+    # at bump time: `docker buildx imagetools inspect redis:8-alpine`.
+    image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 6379 on 0.0.0.0.
     volumes:
@@ -75,13 +97,19 @@ services:
 
   nango-db:
     image: postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca
-    # Upgrade track: consolidated onto postgres 17-alpine (matches the platform
-    # DB). Digest-pinned to a CONFIRMED multi-arch (amd64/arm64) manifest so ARM
-    # dev hosts are safe AND the pg-major-cutover tool's digest read-back is
-    # satisfied. The prod PGDATA volume is migrated by the logical-dump ->
-    # fresh-volume restore in ops scripts/pg-major-cutover.sh (hub-nango profile),
-    # which rebinds nango-db to the external restored volume via the ops prod
-    # override. See docs/upgrade-track.md and cinatra-ai/ops#376.
+    # Upgrade track: HELD at postgres 17-alpine as a CURRENT VALIDATED HOLD
+    # while the platform DB moved to 18 (see docs/upgrade-track.md §3): this
+    # store is app-coupled to Nango, whose upstream reference compose still
+    # pins postgres 16 — 17 is already a deliberate, validated divergence, and
+    # 18 is unvalidated by upstream (the works-after nango arm proves
+    # fresh-init, not a restored 17 cluster under 18). Revisit when Nango
+    # upstream moves; it keeps the LEGACY .../data mount for as long as it is
+    # a <=17 image. Digest-pinned to a CONFIRMED multi-arch (amd64/arm64)
+    # manifest so ARM dev hosts are safe AND the pg-major-cutover tool's digest
+    # read-back is satisfied. The prod PGDATA volume is migrated by the
+    # logical-dump -> fresh-volume restore in the ops pg-major-cutover tooling
+    # (hub-nango profile), which rebinds nango-db to the external restored
+    # volume via the ops prod override. See docs/upgrade-track.md.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
     # (this is a Postgres with default nango/nango creds). Only the host-side CLI
@@ -395,12 +423,18 @@ services:
     # digest). Digest-pinned (immutable): the tag is human-readable, the @sha256
     # is the binding pin. Re-resolve at bump time with
     # `docker buildx imagetools inspect neo4j:2026.05-community`.
+    # DIGEST RE-RESOLVED 2026-07-11: upstream REPUBLISHED the 2026.05-community
+    # tag on 2026-07-02 (same kernel 2026.05.0 — still the latest stable
+    # calendar release — new build/bytes), so the pin follows the current
+    # multi-arch index digest; the prior index digest was sha256:b91a6fa7b1d8…
+    # The digest-bound graphiti works-after dispatch gates this (NEO4J_IMAGE
+    # carries the full tag@sha256 ref).
     # See docs/upgrade-track.md §7 for the major's two behavior changes:
     #  (1) the default Cypher language is now CYPHER_25 (was 5) — pinned back to
     #      CYPHER_5 below so graphiti's Cypher-5-shaped MCP queries keep parsing;
     #  (2) a NEO4J_AUTH password now has an 8-char minimum (the default
     #      `cinatra-local` is 13 chars; a prod override must be >=8).
-    image: neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604
+    image: neo4j:2026.05-community@sha256:6c162e2432f861f2c4e3da77a6ba478e7f10e2160b870541f85294532bc6ff5f
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cinatra-local}
       # The healthcheck below expands its password var INSIDE the container, so the

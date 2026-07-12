@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgent } from "@/lib/widget-stream-agents.server";
+import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
 import {
   createAuthTransaction,
   resolveVerifiedSiteFromCredential,
@@ -96,8 +96,11 @@ export async function POST(request: Request): Promise<Response> {
 
   // 2. Resolve the agent entry (404 if unknown) and verify the requested client
   // matches the agent's instancesConfigKey (a WordPress agent slug must carry
-  // client "wordpress", etc.).
-  const entry = resolveWidgetStreamAgent(agentSlug);
+  // client "wordpress", etc.). Union resolution (widget-stream runtime trust,
+  // slice 2): build-time map ∪ admin-approved, serve-time-re-verified runtime
+  // entries — fail closed.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
+  const entry = resolved?.entry ?? null;
   if (!entry) {
     emitWidgetAuthAudit("init_failure", { ip, ua, client, agentSlug, reason: "unknown_agent" });
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });

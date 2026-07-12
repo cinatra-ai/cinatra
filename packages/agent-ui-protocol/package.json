@@ -17,6 +17,6 @@
   "devDependencies": {
     "@a2ui/web_core": "0.10.0",
     "@ag-ui/core": "0.0.53",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   }
 }

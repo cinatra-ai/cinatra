@@ -11,8 +11,9 @@ import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./types";
 // IMPORT-LIGHT nav contract for the agent-creation-requests source (cinatra#1283).
 //
 // Holds ONLY the fields the sidebar badge needs — availability / appliesTo /
-// counts — plus the two eligibility helpers that both `counts()` (here) and the
-// heavy source's `fetchInbox` share. It imports the agent-creation-request STORE
+// counts — plus the two eligibility helpers the heavy source's `fetchMine`
+// reuses to gate the "Your requests" self-decide affordance. It imports the
+// agent-creation-request STORE
 // and the platform-admin count, but NEVER `../decision-helpers`
 // (→ `@cinatra-ai/agents/mcp-handlers`) nor `../agent-decision-actions`, so the
 // root layout that consumes it via `nav-registry` stays off the agents runtime.
@@ -23,8 +24,9 @@ import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./types";
 // ---------------------------------------------------------------------------
 
 /** Mirror of the decide primitive's `connector_config.agent_creation.allowSelfApproval`
- *  read (canonical owner: the agent-creation-request MCP handler) so the Inbox
- *  self-inclusion matches when a self-approval would actually be permitted. */
+ *  read (canonical owner: the agent-creation-request MCP handler) so the "Your
+ *  requests" self-decide affordance matches when a self-approval would actually
+ *  be permitted. */
 export function isSelfApprovalAllowed(): boolean {
   try {
     const cfg = readConnectorConfigFromDatabase<{ allowSelfApproval?: boolean }>("agent_creation", {});
@@ -61,10 +63,10 @@ export const agentCreationRequestsContract = {
     // Ignores any history filter — always the actionable/in-flight count.
     let inbox = 0;
     if (viewer.isAdmin) {
+      // Own proposals are Your-requests-only — they never surface as Inbox work,
+      // so the Inbox count excludes them regardless of self-approval eligibility.
       const proposed = listAgentCreationRequests({ orgId: viewer.orgId, status: "proposed" });
-      const includeOwn =
-        proposed.some((r) => r.authorId === viewer.userId) && (await viewerMayApproveOwn(viewer));
-      inbox = proposed.filter((r) => r.authorId !== viewer.userId || includeOwn).length;
+      inbox = proposed.filter((r) => r.authorId !== viewer.userId).length;
     }
     const mine = listAgentCreationRequests({
       orgId: viewer.orgId,

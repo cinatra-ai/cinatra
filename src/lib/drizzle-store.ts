@@ -7,7 +7,16 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
-import { capabilityOwnershipGrantSchemaQueries } from "@/lib/extension-grant-schema";
+import {
+  capabilityOwnershipGrantSchemaQueries,
+  dependencyEdgeSchemaQueries,
+  versionIdentitySchemaQueries,
+  projectDispatchSchemaQueries,
+  projectInstancesSchemaQueries,
+  widgetStreamMetadataGrantSchemaQueries,
+} from "@/lib/extension-grant-schema";
+import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
+import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
@@ -295,6 +304,64 @@ END $$` },
     ...skillCoOwnerConstraintQueries(schemaName),
 
     // -----------------------------------------------------------------------
+    // Skill lifecycle (cinatra#1361, epic #1358). Custom/personal skills gain
+    // typed lifecycle columns on the EXISTING `skills` table; extension skills
+    // stay DERIVED (NULL lifecycle_state — precedence matrix in
+    // docs/skills-lifecycle.md; no second authority). The ADD CONSTRAINT
+    // statements are written as literal guarded SQL (not via the helper) so the
+    // schema-migration gate SEES the destructive constraint change and demands
+    // the core__0029 artifact. Idempotent + additive-safe on a populated table:
+    // every existing row carries NULLs, which satisfy the CHECK and both FKs.
+    // -----------------------------------------------------------------------
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS lifecycle_state text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS superseded_by text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS active_revision_id text` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_lifecycle_state_check'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_lifecycle_state_check
+            CHECK (lifecycle_state IS NULL OR lifecycle_state IN ('draft','active','deprecated','archived'));
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_superseded_by_fkey'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_superseded_by_fkey
+            FOREIGN KEY (superseded_by) REFERENCES "${schemaName.replaceAll('"', '""')}"."skills"(id) ON DELETE SET NULL;
+        END IF;
+      END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS skills_superseded_by_idx ON "${schemaName.replaceAll('"', '""')}"."skills" (superseded_by) WHERE superseded_by IS NOT NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS skills_lifecycle_state_idx ON "${schemaName.replaceAll('"', '""')}"."skills" (lifecycle_state) WHERE lifecycle_state IS NOT NULL` },
+    // skill_revisions (append-only immutable history) + skill_lifecycle_audit +
+    // the immutability trigger — the ADDITIVE half, in a sync leaf.
+    ...skillLifecycleSchemaQueries(schemaName),
+    // active_revision_id → skill_revisions composite FK: the active-revision
+    // pointer must reference a revision that BELONGS to this skill
+    // (active_revision_id = skill_revisions.id AND skills.id = skill_revisions.skill_id).
+    // Added AFTER skillLifecycleSchemaQueries so the referenced table exists on
+    // a fresh schema. Gate-visible (an added FK on the existing skills table).
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_active_revision_fkey'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_active_revision_fkey
+            FOREIGN KEY (active_revision_id, id)
+            REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_revisions"(id, skill_id);
+        END IF;
+      END $$;` },
+
+    // -----------------------------------------------------------------------
     // Generic extension permissions consolidation.
 
     // Replaces the parallel tables (run_co_owners,
@@ -499,6 +566,7 @@ END $$` },
         END IF;
       END $$;` },
     ...capabilityOwnershipGrantSchemaQueries(schemaName), // capability-ownership grant (S0), additive
+    ...widgetStreamMetadataGrantSchemaQueries(schemaName), // widget-stream metadata grant (runtime trust slice 1), additive
 
     // Runtime installer — snapshot leases. An in-flight run that imports
     // a digest-pinned package dir holds a lease so the GC reaper never deletes
@@ -539,13 +607,11 @@ END $$` },
     { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_org_uniq` },
     { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_global_uniq` },
     // The TRUST INVARIANT moves to the DB: AT MOST ONE `finalized` op per
-    // (package, org) — that single finalized op IS the install anchor. The
-    // partial unique index makes it provable + serializes concurrent finalizes
-    // (finalizeInstallOp's supersession demotes the prior finalized op first). A
-    // GLOBAL (org_id IS NULL) twin is needed because Postgres treats NULLs as
-    // distinct under a plain unique.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id) WHERE phase = 'finalized'` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_global ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE phase = 'finalized' AND org_id IS NULL` },
+    // (package, org) — that single finalized op IS the install anchor. cinatra#1040
+    // S1 re-keys that uniqueness to include version (one anchor per package/org/
+    // version): the version-keyed partial-unique indexes (+ their GLOBAL org-NULL
+    // twins) are created by `versionIdentitySchemaQueries` (spread below), which
+    // also drops the pre-#1040 org-only names on an upgraded DB.
     // Anchor / non-finalized-window / sweeper reads scan by (package, org, phase).
     { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_scope_phase_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id, phase)` },
     { text: `DO $$
@@ -755,6 +821,7 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS chat_threads_project_created_idx ON "${schemaName.replaceAll('"', '""')}"."chat_threads" (project_id, created_at DESC, id) WHERE project_id IS NOT NULL` },
+    ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
     // usage_events table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."usage_events" (
       id text PRIMARY KEY,
@@ -1230,6 +1297,17 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_pm_links_provider_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (provider)` },
+    // project_dispatch_attempts + project_leases: the dynamic-dispatch
+    // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
+    // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
+    // (src/lib/extension-grant-schema.ts); companion migration core__0024.
+    ...projectDispatchSchemaQueries(schemaName),
+    // project_instances: the sticky instantiation-time binding record —
+    // template provenance, PM seat, and the once-selected PM work-store
+    // provider (cinatra#1032 deliverable 3). DDL lives in the
+    // projectInstancesSchemaQueries leaf (src/lib/extension-grant-schema.ts);
+    // companion migration core__0026.
+    ...projectInstancesSchemaQueries(schemaName),
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
     // gate). PK is (run_id, node_id) to support multiple TriggerWaitNodes per
@@ -1457,6 +1535,13 @@ END $$` },
     // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
+    // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
+    // run executes AS, carried onto the run's signed lineage (ActorContext) so
+    // the A2A dispatch seam resolves edge-bound serving against a TRUSTED
+    // dependent id (never client-supplied). Additive nullable; mirrors schema.ts
+    // + migration core__0030. No index (read as part of the run row, never
+    // queried by it).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
@@ -2639,7 +2724,6 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   status text NOT NULL DEFAULT 'active',
   source jsonb NOT NULL,
   required_in_prod boolean NOT NULL DEFAULT false,
-  dependencies jsonb NOT NULL DEFAULT '[]'::jsonb,
   manifest_hash text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -2647,18 +2731,24 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     // The RESOLVED connector access declaration cache (cinatra#951); NULL for
     // non-connector kinds / pre-reader rows. Additive → bootstrap ADD COLUMN.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS access_declaration jsonb` },
-    // Identity is (organization_id, owner_level, owner_id, package_name).
+    // Identity is (organization_id, owner_level, owner_id, package_name, VERSION).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'
     // in owner_id). Postgres treats NULLs as distinct in unique constraints by
-    // default — partial indexes handle both cases.
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_org_idx
-  ON "${schemaName.replaceAll('"', '""')}"."installed_extension"
-    (organization_id, owner_level, owner_id, package_name)
-  WHERE organization_id IS NOT NULL` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS installed_extension_identity_platform_idx
-  ON "${schemaName.replaceAll('"', '""')}"."installed_extension"
-    (owner_level, owner_id, package_name)
-  WHERE organization_id IS NULL` },
+    // default — partial indexes handle both cases. cinatra#1040 S1 adds version to
+    // the identity (multiple versions installable side by side) plus is_default +
+    // a one-default-per-identity index: the version column, backfill, the
+    // version-keyed identity indexes and the one-default indexes (and the
+    // extension_install_ops re-key above) all live in the pure-strings leaf
+    // `versionIdentitySchemaQueries`, spread here AFTER both tables' CREATE
+    // statements. The leaf drops the pre-#1040 org-only identity index names.
+    ...versionIdentitySchemaQueries(schemaName),
+    // Dependency edges are FIRST-CLASS ROWS since cinatra#1040 S2: the
+    // extension_dependency_edge table + the guarded jsonb->edge-rows migration
+    // mirror (the legacy `dependencies` jsonb column is GONE from the CREATE
+    // above — a fresh DB is born at the post-core__0025 shape; an upgraded DB
+    // converges through the leaf's guarded DO block). Lives in the same
+    // pure-strings leaf module (`dependencyEdgeSchemaQueries`).
+    ...dependencyEdgeSchemaQueries(schemaName),
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_kind_status_idx
   ON "${schemaName.replaceAll('"', '""')}"."installed_extension" (kind, status)` },
     { text: `CREATE INDEX IF NOT EXISTS installed_extension_package_name_idx

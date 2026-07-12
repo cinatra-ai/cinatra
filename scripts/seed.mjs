@@ -1765,8 +1765,8 @@ async function seedV64CanonicalDemo(orgMap) {
     await q(
       `INSERT INTO cinatra.installed_extension
          (id, package_name, owner_level, owner_id, organization_id, kind, status,
-          source, required_in_prod, dependencies, manifest_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11)
+          source, required_in_prod, manifest_hash, version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
        ON CONFLICT DO NOTHING`,
       [
         r.id,
@@ -1778,11 +1778,55 @@ async function seedV64CanonicalDemo(orgMap) {
         r.status,
         JSON.stringify(r.source),
         r.requiredInProd,
-        JSON.stringify(r.deps),
         `seed-v64-${r.id.split("-").pop()}`,
+        // version is NOT NULL since cinatra#1040 S1 (version identity) and has
+        // no DB default. Mirror the backfill floor: a source's own version
+        // (verdaccio rows carry one) else '0.0.0' (github/local sources).
+        r.source?.version ?? "0.0.0",
       ],
     );
     inserted++;
+  }
+  // Dependency edges are FIRST-CLASS ROWS since cinatra#1040 S2
+  // (extension_dependency_edge; the row jsonb column is gone). Seed each
+  // declared edge with the same write-time resolution rule the store uses:
+  // the declaring row's own-org live row first, then platform. The dependent
+  // rows above all resolve within this seed set, so a name-scan is enough.
+  for (const r of rows) {
+    for (const [index, dep] of r.deps.entries()) {
+      const target =
+        rows.find(
+          (t) =>
+            t.pkg === dep.packageName &&
+            ["active", "locked"].includes(t.status) &&
+            t.orgId === r.orgId,
+        ) ??
+        rows.find(
+          (t) =>
+            t.pkg === dep.packageName &&
+            ["active", "locked"].includes(t.status) &&
+            t.orgId === null,
+        );
+      await q(
+        `INSERT INTO cinatra.extension_dependency_edge
+           (id, dependent_install_id, declared_package_name, declared_kind, edge_type,
+            requirement, version_constraint, declared_index, resolved_install_id, resolution_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+         ON CONFLICT DO NOTHING`,
+        [
+          `iede_${r.id.replace(/^iext_/, "")}-${index}`,
+          r.id,
+          dep.packageName,
+          dep.kind ?? null,
+          dep.edgeType,
+          dep.requirement,
+          JSON.stringify(dep.versionConstraint),
+          index,
+          target?.id ?? null,
+          target ? (target.orgId != null ? "seed:org" : "seed:platform") : null,
+        ],
+      );
+    }
   }
   console.log(`  installed_extension demo rows: ${inserted} (3 statuses × 3 source types × 5 kinds + 1 dep edge)`);
 }

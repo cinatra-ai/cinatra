@@ -61,6 +61,9 @@ describe("/api/context-resolve response shape", () => {
     resolveCandidates.mockReset();
     deriveContextRouteContext.mockResolvedValue({
       actor: { sub: "user-1", organizationId: "org-1" },
+      // run + servedBy: consumed by the #1197 success lifecycle trace.
+      run: { id: "run-1", orgId: "org-1", runBy: "user-1" },
+      servedBy: "context_id",
       projectId: undefined,
       trustedPackageName: "@cinatra-ai/blog-draft-writer-agent",
       trustedSlotPackageName: "@cinatra-ai/blog-draft-writer-agent",

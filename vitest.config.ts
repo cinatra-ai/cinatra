@@ -192,16 +192,24 @@ export default defineConfig({
       // semver install transitive chains that aren't needed for the wizard
       // action unit tests. Map the entry to a narrow stub that re-exports
       // only the user-provisioning slice.
-      // The cached update read model (#1041) is a dependency-free leaf (pure
-      // builders + an in-memory store — no pacote/semver chain), so it maps to
-      // the REAL module. Listed BEFORE the barrel stub (first match wins) so
-      // the deep-path consumers (extension-update-read-model-store,
-      // marketplace-sync-deps) get the genuine buildUpdateEntry / port / types.
+      // Dependency-free leaves of @cinatra-ai/registries (pure read-model
+      // builders / semver compare — no pacote chain), mapped to the REAL
+      // modules and listed BEFORE the barrel stub (first match wins) so the
+      // deep-path consumers (extension-auto-update,
+      // extension-update-read-model-store, marketplace-sync-deps) get the
+      // genuine implementations.
       {
         find: "@cinatra-ai/registries/src/update-read-model",
         replacement: path.join(
           __dirname,
           "packages/registries/src/update-read-model.ts",
+        ),
+      },
+      {
+        find: "@cinatra-ai/registries/src/version-compare",
+        replacement: path.join(
+          __dirname,
+          "packages/registries/src/version-compare.ts",
         ),
       },
       {

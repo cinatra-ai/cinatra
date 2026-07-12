@@ -8,10 +8,17 @@
 // Drizzle table definitions in `createStoreTables` (src/lib/drizzle-store.ts)
 // — without shipping the migration artifact the convention in
 // migrations/README.md requires: a node-pg-migrate runner module at
-// `migrations/core/core__NNNN_short-description.mjs` PLUS its appended
-// `migrations/manifest.json` entry, in the same PR. (The legacy psql artifact
-// form `migrations/NNNN_*.sql` is retired for NEW migrations — the runner
-// never executes it; shipped legacy artifacts remain append-only history.)
+// `migrations/core/core__NNNN_short-description.mjs` PLUS its per-migration
+// manifest FRAGMENT `migrations/manifest.d/core__NNNN_short-description.json`,
+// in the same PR (#1335 — fragments replace appends to the legacy
+// `migrations/manifest.json` array, which is FROZEN shipped history; the gate
+// rejects new entries added to it). The ledger every consumer sees is the
+// deterministic UNION of the frozen legacy array + the fragments, computed by
+// the shared reader `migrations/manifest-reader.mjs`; append-only semantics
+// are kept over the union via seq uniqueness + strict monotonicity past the
+// max shipped seq. (The legacy psql artifact form `migrations/NNNN_*.sql` is
+// retired for NEW migrations — the runner never executes it; shipped legacy
+// artifacts remain append-only history.)
 //
 // What it does, per PR diff:
 //   1. DETECT  — does the diff touch the in-scope schema regions of
@@ -31,9 +38,12 @@
 //   3. GATE   — exit non-zero when the change is destructive AND the same
 //      diff ships no complete migration artifact, OR when the diff tampers
 //      with SHIPPED migration state regardless of schema changes (deleting /
-//      renaming / editing a shipped artifact, rewriting a manifest entry, or
+//      renaming / editing a shipped artifact or manifest fragment, rewriting
+//      a legacy manifest entry, appending to the frozen legacy array, or
 //      adding a migrations/core/ file that would brick the runner's boot
-//      preflight). Additive changes and destructive changes accompanied by
+//      preflight), OR on any ledger-union inconsistency (duplicate seq
+//      across forms, non-monotonic fragment seq, fragment without module or
+//      vice versa). Additive changes and destructive changes accompanied by
 //      their artifact pass.
 //
 // Classification bias: the destructive rules encode the convention's
@@ -58,9 +68,11 @@
 // argv; the only user-controlled input is the diff text being classified.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
+
+import { FRAGMENT_FILE_RE, buildManifestUnion, parseFragment } from "../../migrations/manifest-reader.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..", "..");
@@ -85,6 +97,8 @@ export const OUT_OF_SCOPE_FILES = new Set([
 ]);
 
 export const MIGRATION_MANIFEST_PATH = "migrations/manifest.json";
+/** Per-migration manifest fragments (#1335) — the authoring form for NEW entries. */
+export const MIGRATION_FRAGMENT_DIR = "migrations/manifest.d";
 /** Legacy hand-apply artifacts (psql). Shipped history only — retired for NEW migrations. */
 export const MIGRATION_SQL_RE = /^migrations\/(\d{4})_([a-z0-9][a-z0-9-]*)\.sql$/;
 /**
@@ -123,33 +137,99 @@ export function parseUnifiedDiff(diffText) {
   const rawLines = diffText.split("\n");
   if (rawLines.at(-1) === "") rawLines.pop();
 
+  // Exact header-path parse for the `diff --git a/P b/P` form: every
+  // add/delete/modify names the SAME path twice, so try each " b/" split and
+  // keep the one where both sides are equal — correct even when the path
+  // itself contains " b/". Renames (P != Q) fall back to the greedy split and
+  // are corrected by their rename from/to headers. C-quoted headers (unusual
+  // bytes in the name) are left unparsed — and therefore unconfirmed.
+  const parseHeaderPaths = (rest) => {
+    if (!rest.startsWith("a/")) return { oldPath: null, newPath: null, confirmed: false };
+    const s = rest.slice(2);
+    for (let idx = s.indexOf(" b/"); idx !== -1; idx = s.indexOf(" b/", idx + 1)) {
+      const left = s.slice(0, idx);
+      const right = s.slice(idx + 3);
+      if (left === right) return { oldPath: left, newPath: right, confirmed: true };
+    }
+    const m = rest.match(/^a\/(.+) b\/(.+)$/);
+    return m ? { oldPath: m[1], newPath: m[2], confirmed: false } : { oldPath: null, newPath: null, confirmed: false };
+  };
+
   for (const raw of rawLines) {
     if (raw.startsWith("diff --git ")) {
-      // Paths are re-read from ---/+++ below; the header just opens a file.
-      file = { oldPath: null, newPath: null, status: "modified", hunks: [] };
+      // Paths are refined by the mode/rename/---/+++ headers below, but the
+      // header itself must seed them: EMPTY additions, binary changes, and
+      // mode-only changes carry NO ---/+++ lines at all, and a file the
+      // parser cannot name is a file the gate cannot protect. Files whose
+      // paths are never CONFIRMED (exact header match or a later header)
+      // carry pathsConfirmed=false so consumers can fail closed.
+      const seeded = parseHeaderPaths(raw.slice("diff --git ".length));
+      file = {
+        oldPath: seeded.oldPath,
+        newPath: seeded.newPath,
+        status: "modified",
+        newMode: null,
+        headerLine: raw,
+        // Confirmation is tracked PER SIDE: a C-quoted rename/add can have
+        // one parseable side (e.g. `--- /dev/null`) while the other stays
+        // unparsed — one confirmed side must never vouch for both.
+        oldConfirmed: seeded.confirmed,
+        newConfirmed: seeded.confirmed,
+        hunks: [],
+      };
       files.push(file);
       hunk = null;
       continue;
     }
     if (!file) continue;
+    // new/deleted file headers: authoritative for header-only diffs (empty
+    // or binary adds/deletes emit no ---/+++). The new-side file MODE is
+    // captured too — a symlink (120000) added where a regular file is
+    // expected must be rejectable downstream.
+    const newMode = raw.match(/^new (?:file )?mode (\d{6})$/);
+    if (newMode) {
+      if (raw.startsWith("new file mode ")) {
+        file.status = "added";
+        file.oldPath = null;
+      }
+      file.newMode = newMode[1];
+      continue;
+    }
+    if (raw.startsWith("deleted file mode ")) {
+      file.status = "deleted";
+      file.newPath = null;
+      continue;
+    }
     // Pure renames carry NO ---/+++ lines, so read the paths off the rename
     // headers (they come without the a/ b/ prefixes).
     if (raw.startsWith("rename from ")) {
       file.status = "renamed";
-      file.oldPath = raw.slice("rename from ".length).trim();
+      const v = raw.slice("rename from ".length).trim();
+      if (v.startsWith('"')) continue; // C-quoted name — this side stays unconfirmed
+      file.oldPath = v;
+      file.oldConfirmed = true;
       continue;
     }
     if (raw.startsWith("rename to ")) {
       file.status = "renamed";
-      file.newPath = raw.slice("rename to ".length).trim();
+      const v = raw.slice("rename to ".length).trim();
+      if (v.startsWith('"')) continue; // C-quoted name — this side stays unconfirmed
+      file.newPath = v;
+      file.newConfirmed = true;
       continue;
     }
     if (raw.startsWith("--- ")) {
-      file.oldPath = stripPrefix(raw.slice(4).trim());
+      const v = raw.slice(4).trim();
+      if (v.startsWith('"')) continue; // C-quoted name — this side stays unconfirmed
+      file.oldPath = stripPrefix(v);
+      file.oldConfirmed = true;
       continue;
     }
     if (raw.startsWith("+++ ")) {
-      file.newPath = stripPrefix(raw.slice(4).trim());
+      const v = raw.slice(4).trim();
+      if (v.startsWith('"')) continue; // C-quoted name — this side stays unconfirmed
+      file.newPath = stripPrefix(v);
+      file.newConfirmed = true;
       if (file.oldPath === null && file.newPath !== null) file.status = "added";
       else if (file.newPath === null && file.oldPath !== null) file.status = "deleted";
       else if (file.status !== "renamed" && file.oldPath !== file.newPath) file.status = "renamed";
@@ -476,31 +556,41 @@ export function classifyDrizzleStoreDiff(fileDiff, baseContent) {
 // ---------------------------------------------------------------------------
 // Migration-artifact detection (mirrors migrations/README.md "What counts as
 // a migration artifact": a node-pg-migrate runner module in migrations/core/
-// + its manifest entry, in the same PR). Legacy migrations/NNNN_*.sql
-// artifacts are shipped history: protected against deletion, but REJECTED as
-// the artifact form for new migrations — the core runner never executes them.
+// + its per-migration manifest fragment in migrations/manifest.d/, in the
+// same PR). Legacy migrations/NNNN_*.sql artifacts are shipped history:
+// protected against deletion, but REJECTED as the artifact form for new
+// migrations — the core runner never executes them. The legacy manifest.json
+// array is likewise frozen: rewrites AND appends are rejected.
 // ---------------------------------------------------------------------------
 
 /**
  * Two problem classes come back separately:
  *   - `integrity` — tampering with SHIPPED migration state (delete / rename /
- *     edit of a shipped artifact, a rewritten manifest entry) or a
+ *     edit of a shipped artifact or manifest fragment, a rewritten legacy
+ *     manifest entry, an unrecognized file under migrations/manifest.d/) or a
  *     migrations/core/ addition that would brick the runner's boot preflight
  *     (malformed filename, duplicate seq). These FAIL the gate on their own,
  *     destructive schema change or not.
- *   - `problems` — an incomplete/wrong-form artifact for THIS PR's change.
- *     These fail the gate only when the PR's schema change is destructive
- *     and therefore demands a complete artifact.
+ *   - `problems` — an incomplete/wrong-form artifact for THIS PR's change,
+ *     or a ledger-union inconsistency introduced by it (duplicate seq across
+ *     forms, non-monotonic fragment seq, a legacy-array append). These also
+ *     fail the gate on their own (see runGate).
  *
  * @param {Array} files parsed diff files
  * @param {(path: string) => string|null} readBaseFile
+ * @param {(dir: string) => string[]|null} listBaseDir base-side directory
+ *   listing (basenames), null when the directory does not exist on base —
+ *   needed so base-vs-final manifest.d/ directory diffs are checked, not just
+ *   known paths.
  * @returns {{complete: boolean, artifactFiles: string[], problems: string[], integrity: string[], newEntries: Array}}
  */
-export function detectMigrationArtifact(files, readBaseFile) {
+export function detectMigrationArtifact(files, readBaseFile, listBaseDir = () => null) {
   const problems = [];
   const integrity = [];
   /** Added runner modules (full paths) — the only artifact form new migrations may ship. */
   const moduleFiles = [];
+  /** Added manifest fragments: {path, name, raw}. */
+  const addedFragments = [];
 
   const baseManifestRaw = readBaseFile(MIGRATION_MANIFEST_PATH);
   let baseEntries = [];
@@ -512,13 +602,52 @@ export function detectMigrationArtifact(files, readBaseFile) {
     }
   }
 
+  // The BASE ledger union: frozen legacy entries + already-shipped fragments.
+  // Enumerated from the base side (not the diff) so a new fragment colliding
+  // with a shipped fragment that this diff never touches is still caught.
+  // NOTE (inherited anchoring): "base" is the same merge-base the whole gate
+  // diffs against, so like the legacy tail check this is PR-time state — the
+  // push-triggered run on the target branch re-checks what actually landed.
+  const baseFragmentReads = (listBaseDir(MIGRATION_FRAGMENT_DIR) ?? []).map((name) => ({
+    name,
+    raw: readBaseFile(`${MIGRATION_FRAGMENT_DIR}/${name}`),
+  }));
+  // A listed-but-unreadable base fragment must not silently vanish from the
+  // union — its seq would stop guarding uniqueness/monotonicity.
+  for (const f of baseFragmentReads) {
+    if (typeof f.raw !== "string") {
+      problems.push(`ledger union (base): ${MIGRATION_FRAGMENT_DIR}/${f.name}: listed on the base revision but unreadable — cannot trust the base ledger union`);
+    }
+  }
+  const baseFragments = baseFragmentReads.filter((f) => typeof f.raw === "string");
+  const baseUnion = buildManifestUnion({ legacyEntries: baseEntries, fragments: baseFragments });
+  const baseUnionErrors = new Set(baseUnion.errors);
+  const baseUnionSeqs = new Set(baseUnion.entries.map((e) => String(e?.seq).padStart(4, "0")));
+  const maxShippedSeq = baseUnion.entries.reduce((m, e) => Math.max(m, Number(e?.seq) || 0), 0);
+
   for (const f of files) {
+    // Fail CLOSED on a file whose paths could never be reliably parsed on
+    // BOTH sides (C-quoted unusual bytes, or an ambiguous ` b/` segment in a
+    // header-only diff) when its header references migrations/ — an
+    // unparseable path must not become an unprotected one, and one confirmed
+    // side never vouches for the other.
+    if ((f.oldConfirmed === false || f.newConfirmed === false) && typeof f.headerLine === "string" && f.headerLine.includes("migrations/")) {
+      integrity.push(
+        `${f.headerLine}: cannot reliably parse this diff header (unusual path); files under migrations/ must use plain ASCII paths so the gate can verify them`,
+      );
+      continue;
+    }
     // Renames are checked on BOTH sides first: `newPath ?? oldPath` alone
     // would let a shipped artifact be renamed OUT of migrations/ (new path
     // elsewhere) without ever entering the branches below.
     if (f.status === "renamed") {
       const touchesShippedState = [f.oldPath, f.newPath].some(
-        (side) => side && (MIGRATION_MODULE_RE.test(side) || MIGRATION_SQL_RE.test(side) || side === MIGRATION_MANIFEST_PATH),
+        (side) =>
+          side &&
+          (MIGRATION_MODULE_RE.test(side) ||
+            MIGRATION_SQL_RE.test(side) ||
+            side === MIGRATION_MANIFEST_PATH ||
+            side.startsWith(`${MIGRATION_FRAGMENT_DIR}/`)),
       );
       if (touchesShippedState) {
         integrity.push(`${f.oldPath} -> ${f.newPath}: shipped migration state must never be renamed or moved (append-only — supersede it with a new sequence number)`);
@@ -527,6 +656,38 @@ export function detectMigrationArtifact(files, readBaseFile) {
     }
     const p = f.newPath ?? f.oldPath;
     if (!p || !p.startsWith("migrations/")) continue;
+
+    if (p.startsWith(`${MIGRATION_FRAGMENT_DIR}/`)) {
+      const name = p.slice(`${MIGRATION_FRAGMENT_DIR}/`.length);
+      if (f.status !== "added") {
+        // A shipped fragment is immutable ledger history backing rows on every
+        // deployed database: edits AND deletions are tampering (renames were
+        // handled above).
+        integrity.push(`${p}: a shipped manifest fragment must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it with a new sequence number)`);
+        continue;
+      }
+      if (name.includes("/") || !FRAGMENT_FILE_RE.test(name)) {
+        // Malformed/unrecognized files under manifest.d/ are errors, not
+        // skips — the union reader refuses them at every consumer.
+        integrity.push(`${p}: unrecognized file under ${MIGRATION_FRAGMENT_DIR}/ — every file there must be a per-migration fragment named core__NNNN_<slug>.json (see migrations/README.md)`);
+        continue;
+      }
+      // A fragment must be a REGULAR file: a symlink (120000) or gitlink
+      // (160000) whose target text happens to parse as JSON would pass a
+      // content check here yet be refused by the union reader's regular-file
+      // rule at every consumer — reject it at the PR instead.
+      if (f.newMode && f.newMode !== "100644" && f.newMode !== "100755") {
+        integrity.push(`${p}: must be a regular file (git mode 100644), not mode ${f.newMode} — the union reader refuses non-regular files under ${MIGRATION_FRAGMENT_DIR}/`);
+        continue;
+      }
+      const raw = applyFileDiff("", f);
+      if (raw === null) {
+        problems.push(`${p}: could not reconstruct the added fragment from the diff`);
+        continue;
+      }
+      addedFragments.push({ path: p, name, raw });
+      continue;
+    }
 
     if (p.startsWith("migrations/core/")) {
       const basename = p.slice("migrations/core/".length);
@@ -580,13 +741,12 @@ export function detectMigrationArtifact(files, readBaseFile) {
       .filter((e) => typeof e?.file === "string" && /^\d{4}_[a-z0-9][a-z0-9-]*\.sql$/.test(e.file))
       .map((e) => `migrations/core/core__${e.file.replace(/\.sql$/, ".mjs")}`),
   );
-  const baseSeqs = new Set(baseEntries.map((e) => String(e?.seq).padStart(4, "0")));
   const artifactFiles = [];
   const seenSeqs = new Set();
   for (const p of moduleFiles) {
     if (legacyBackfillPaths.has(p)) continue;
     const seq = p.match(MIGRATION_MODULE_RE)[1];
-    if (baseSeqs.has(seq)) {
+    if (baseUnionSeqs.has(seq)) {
       integrity.push(`${p}: sequence number ${seq} is already shipped — a non-wrapper module re-using it would fail the runner's duplicate-seq preflight at boot (use the next free sequence number)`);
       continue;
     }
@@ -598,9 +758,10 @@ export function detectMigrationArtifact(files, readBaseFile) {
     artifactFiles.push(p);
   }
 
-  // The manifest's append-only contract is checked WHENEVER the manifest
-  // changed — a manifest-only rewrite (no module in the diff) is tampering
-  // with shipped state and must not slide past on an early return.
+  // The legacy manifest's contract is checked WHENEVER it changed — a
+  // manifest-only rewrite (no module in the diff) is tampering with shipped
+  // state, and the array is FROZEN (#1335): gaining entries is rejected too,
+  // forcing fragment authoring.
   const manifestDiff = files.find((f) => (f.newPath ?? f.oldPath) === MIGRATION_MANIFEST_PATH);
   let finalEntries = null;
   if (manifestDiff) {
@@ -619,66 +780,76 @@ export function detectMigrationArtifact(files, readBaseFile) {
         problems.push(`${MIGRATION_MANIFEST_PATH}: could not parse the post-change manifest (migrations must stay a JSON array)`);
         finalEntries = null;
       } else {
-        // Append-only: the base entries must be an untouched prefix.
+        // Append-only: the base entries must be an untouched prefix …
         for (let i = 0; i < baseEntries.length; i++) {
           if (JSON.stringify(finalEntries[i]) !== JSON.stringify(baseEntries[i])) {
             integrity.push(`${MIGRATION_MANIFEST_PATH}: existing entry ${i + 1} was rewritten — the ledger is append-only (supersede with a new sequence number)`);
           }
         }
+        // … and FROZEN: new entries are authored as fragments, never appended
+        // to the shared positional tail (the merge hotspot #1335 removes).
+        if (finalEntries.length > baseEntries.length) {
+          problems.push(
+            `${MIGRATION_MANIFEST_PATH}: the legacy array is frozen — author the new entry as a per-migration fragment ${MIGRATION_FRAGMENT_DIR}/core__NNNN_<slug>.json instead (one file per migration; see migrations/README.md)`,
+          );
+        }
       }
     }
   }
 
-  if (artifactFiles.length === 0) {
-    // A manifest edit that leaves the migrations array untouched (e.g. _doc
-    // wording) is legitimate without a module. Appending entries is not:
-    // every new entry must bind to a module shipped in the same diff.
-    // (Rewriting or removing existing entries is already an integrity
-    // failure via the append-only prefix check above.)
-    if (
-      manifestDiff &&
-      problems.length === 0 &&
-      integrity.length === 0 &&
-      Array.isArray(finalEntries) &&
-      finalEntries.length > baseEntries.length
-    ) {
-      problems.push(`${MIGRATION_MANIFEST_PATH} gained entries without a new migrations/core/core__NNNN_*.mjs module`);
+  // The FINAL ledger union: the post-change legacy array + shipped fragments
+  // + fragments added in this diff. Union errors the base did not already
+  // carry (duplicate seq across forms or within the diff, malformed
+  // fragments) were introduced by this PR.
+  const finalUnion = buildManifestUnion({
+    legacyEntries: finalEntries ?? baseEntries,
+    fragments: [...baseFragments, ...addedFragments.map(({ name, raw }) => ({ name, raw }))],
+  });
+  for (const err of finalUnion.errors) {
+    if (!baseUnionErrors.has(err)) problems.push(`ledger union: ${err}`);
+  }
+  // A broken BASE union is not this PR's doing but the gate's arithmetic
+  // cannot be trusted over it — fail loudly rather than guessing.
+  for (const err of baseUnion.errors) problems.push(`ledger union (base): ${err}`);
+
+  // New ledger entries = the entries of fragments added in this diff (the
+  // union above already rejected malformed ones; parse errors are not
+  // re-reported here).
+  const newEntries = addedFragments
+    .map(({ path, name, raw }) => ({ path, entry: parseFragment(name, raw).entry }))
+    .filter((f) => f.entry !== null)
+    .sort((a, b) => Number(a.entry.seq) - Number(b.entry.seq));
+
+  // Monotonicity over the union: a new fragment's seq must be strictly
+  // greater than the max SHIPPED seq on base — the same rule that today
+  // guarantees a seq below an already-deployed ledger head can never land.
+  // (Uniqueness over the union is enforced by the union errors above.)
+  for (const { path, entry } of newEntries) {
+    if (Number(entry.seq) <= maxShippedSeq) {
+      problems.push(
+        `${path}: new fragment seq '${entry.seq}' must be strictly greater than the max shipped seq (${String(maxShippedSeq).padStart(4, "0")})`,
+      );
     }
-    return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
-  }
-  if (!manifestDiff) {
-    problems.push(`new core migration module shipped without the matching ${MIGRATION_MANIFEST_PATH} entry (both pieces are required, in the same PR)`);
-    return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
-  }
-  if (finalEntries === null) {
-    return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
 
-  const newEntries = finalEntries.slice(baseEntries.length);
-  const maxBaseSeq = baseEntries.reduce((m, e) => Math.max(m, Number(e?.seq) || 0), 0);
+  // Every new ledger entry must bind to a runner module added in THIS diff —
+  // a fragment-only entry cannot stand in for the migration it claims — and
+  // vice versa. (entry.file == core/<fragment stem>.mjs and entry.seq ==
+  // filename seq are already enforced by the fragment contract.)
   // entry.file is relative to migrations/ (e.g. "core/core__0003_x.mjs").
   const moduleRelPaths = new Set(artifactFiles.map((p) => p.slice("migrations/".length)));
-  let prevSeq = maxBaseSeq;
-  for (const e of newEntries) {
-    const seq = Number(e?.seq);
-    if (!Number.isInteger(seq) || seq <= prevSeq) {
-      problems.push(`${MIGRATION_MANIFEST_PATH}: new entry seq '${e?.seq}' must be strictly increasing (last shipped: ${String(prevSeq).padStart(4, "0")})`);
-    } else {
-      prevSeq = seq;
-    }
-    // Every new ledger entry must bind to a runner module added in THIS diff
-    // with a matching sequence prefix — a manifest-only entry (or a
-    // mismatched seq) cannot stand in for the migration it claims.
-    if (typeof e?.file !== "string" || !moduleRelPaths.has(e.file)) {
-      problems.push(`${MIGRATION_MANIFEST_PATH}: entry '${e?.file ?? e?.seq}' has no matching migrations/core/ module added in this diff`);
-    } else if (!e.file.startsWith(`core/core__${e?.seq}_`)) {
-      problems.push(`${MIGRATION_MANIFEST_PATH}: entry seq '${e?.seq}' does not match its filename '${e.file}'`);
+  for (const { path, entry } of newEntries) {
+    if (!moduleRelPaths.has(entry.file)) {
+      problems.push(`${path}: entry '${entry.file}' has no matching migrations/core/ module added in this diff`);
     }
   }
+  const newEntryFiles = new Set(newEntries.map(({ entry }) => entry.file));
   for (const p of artifactFiles) {
     const rel = p.slice("migrations/".length);
-    if (!newEntries.some((e) => e?.file === rel)) {
-      problems.push(`${p}: no matching ${MIGRATION_MANIFEST_PATH} entry (entry.file must be '${rel}')`);
+    if (!newEntryFiles.has(rel)) {
+      problems.push(
+        `${p}: no matching manifest fragment (add ${MIGRATION_FRAGMENT_DIR}/${p.slice("migrations/core/".length).replace(/\.mjs$/, ".json")} with "file": '${rel}' — both pieces are required, in the same PR)`,
+      );
     }
   }
 
@@ -687,7 +858,7 @@ export function detectMigrationArtifact(files, readBaseFile) {
     artifactFiles,
     problems,
     integrity,
-    newEntries,
+    newEntries: newEntries.map(({ entry }) => entry),
   };
 }
 
@@ -697,11 +868,12 @@ export function detectMigrationArtifact(files, readBaseFile) {
 
 /**
  * Run the gate over a unified diff.
- * @param {{diffText: string, readBaseFile: (path: string) => string|null}} input
+ * @param {{diffText: string, readBaseFile: (path: string) => string|null,
+ *   listBaseDir?: (dir: string) => string[]|null}} input
  * @returns {{verdict: "pass"|"fail", destructive: Array, artifact: ReturnType<typeof detectMigrationArtifact>,
  *   notices: string[], ignored: string[], inScopeChanges: number}}
  */
-export function runGate({ diffText, readBaseFile }) {
+export function runGate({ diffText, readBaseFile, listBaseDir = () => null }) {
   const files = parseUnifiedDiff(diffText);
   const notices = [];
   const ignored = [];
@@ -743,7 +915,7 @@ export function runGate({ diffText, readBaseFile }) {
     // every other file: not schema-bearing for this gate
   }
 
-  const artifact = detectMigrationArtifact(files, readBaseFile);
+  const artifact = detectMigrationArtifact(files, readBaseFile, listBaseDir);
   let verdict = "pass";
   // Tampering with shipped migration state (or a core/ addition that would
   // brick the runner's boot preflight) fails on its own — no destructive
@@ -759,7 +931,7 @@ export function runGate({ diffText, readBaseFile }) {
     if (!artifact.complete) verdict = "fail";
     else if (!artifact.newEntries.some((e) => e?.destructive === true)) {
       verdict = "fail";
-      artifact.problems.push(`${MIGRATION_MANIFEST_PATH}: a user-land-affecting change needs a new entry with "destructive": true`);
+      artifact.problems.push(`${MIGRATION_FRAGMENT_DIR}: a user-land-affecting change needs a new fragment with "destructive": true`);
     }
   }
   return { verdict, destructive, artifact, notices, ignored, inScopeChanges };
@@ -796,6 +968,7 @@ function main() {
   const diffFileIdx = argv.indexOf("--diff-file");
   let diffText;
   let readBaseFile;
+  let listBaseDir;
 
   if (diffFileIdx !== -1) {
     const diffPath = argv[diffFileIdx + 1];
@@ -824,6 +997,18 @@ function main() {
       const abs = join(REPO_ROOT, p);
       return existsSync(abs) ? readFileSync(abs, "utf8") : null;
     };
+    // Directory listings follow the same overlay, EXCLUSIVELY: when the pinned
+    // base carries the directory, its listing wins outright (the fixture
+    // corpus pins migrations/manifest.d/ so live fragments landing later
+    // cannot rot the fixtures).
+    listBaseDir = (dir) => {
+      if (baseDirAbs) {
+        const pinned = join(baseDirAbs, dir);
+        if (existsSync(pinned)) return readdirSync(pinned);
+      }
+      const abs = join(REPO_ROOT, dir);
+      return existsSync(abs) ? readdirSync(abs) : null;
+    };
   } else {
     const base = resolveBase();
     let mergeBase;
@@ -841,10 +1026,22 @@ function main() {
         return null;
       }
     };
+    listBaseDir = (dir) => {
+      try {
+        // -z: NUL-delimited raw names — the newline form C-quotes unusual
+        // names, which would then fail the follow-up blob read and drop the
+        // fragment from the base union silently.
+        return git(["ls-tree", "--name-only", "-z", `${mergeBase}:${dir}`], { stdio: ["ignore", "pipe", "ignore"] })
+          .split("\0")
+          .filter(Boolean);
+      } catch {
+        return null; // directory absent on base
+      }
+    };
     console.log(`[schema-migration-gate] diffing ${mergeBase.slice(0, 12)} (merge base of ${base}) .. HEAD`);
   }
 
-  const { verdict, destructive, artifact, notices, ignored, inScopeChanges } = runGate({ diffText, readBaseFile });
+  const { verdict, destructive, artifact, notices, ignored, inScopeChanges } = runGate({ diffText, readBaseFile, listBaseDir });
 
   for (const i of ignored) console.log(`[schema-migration-gate] ignored: ${i}`);
   for (const n of notices) console.log(`[schema-migration-gate] note: ${n}`);
@@ -868,7 +1065,9 @@ function main() {
       `\nShip the migration artifact (and leave shipped history untouched) in this PR:\n` +
         `  1. migrations/core/core__NNNN_short-description.mjs (next sequence number; a node-pg-migrate\n` +
         `     module exporting up/down — see migrations/README.md "Authoring a migration")\n` +
-        `  2. the matching entry appended to migrations/manifest.json\n` +
+        `  2. the matching per-migration fragment migrations/manifest.d/core__NNNN_short-description.json\n` +
+        `     (same filename stem as the module; the legacy migrations/manifest.json array is frozen —\n` +
+        `     never append to it)\n` +
         `See migrations/README.md for the convention; if the change is genuinely additive and misclassified,\n` +
         `add a labelled fixture to scripts/audit/__fixtures__/schema-migration/ and adjust the classifier in the same PR.`,
     );

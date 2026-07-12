@@ -17,6 +17,7 @@ import {
   transitionRunStatus,
   RunTransitionError,
   readAgentRunById,
+  readAgentTemplateById,
   createAgentRunPendingInput,
 } from "./store";
 
@@ -91,13 +92,40 @@ export async function runAgentRunTriggerReleaseJob(
   }
   // pmAction === "fire" → fall through to the normal release logic below.
 
+  // Read the run ONCE, reused by BOTH the fire gate below AND the recurring
+  // clone (avoids a second readAgentRunById round-trip). Null for a scheduled/
+  // immediate run whose row is absent is tolerated by the armed→queued CAS.
+  const runForFire = await readAgentRunById(data.runId);
+
+  // ---------- Configuration-needs FIRE gate (cinatra #1057 ruling (b)) ----------
+  // A scheduled/recurring trigger must NOT fire an agent whose REQUIRED
+  // connectors are not configured for its owner. Re-checked HERE, at FIRE time,
+  // so a trigger armed earlier (or a recurring tick) does not fire once a
+  // connection is later removed. FAIL-CLOSED on a determinate unconfigured
+  // result: do NOT release the gate, do NOT enqueue/clone; leave the run armed
+  // for a later tick (recurring) / a re-arm, and AUDIT why. FAIL-OPEN on a thrown
+  // infra error only — a glitch must never strand the run (matches this job's
+  // local-side-effect philosophy). Covers BOTH branches below (recurring source
+  // run + scheduled/immediate).
+  if (runForFire) {
+    const fireBlock = await agentRunConfigBlockForTrigger(runForFire);
+    if (fireBlock) {
+      console.warn(
+        `[trigger-release] run ${data.runId} NOT fired — required connections unconfigured: ${fireBlock.unconfiguredConnectors
+          .map((c) => c.displayName)
+          .join(", ")} (leaving armed; audited)`,
+      );
+      return;
+    }
+  }
+
   // ---------- Recurring branch ----------
   // Each cron tick creates a fresh pending run + arms it as immediate. The
   // schedule-defining run stays in whatever status it was in (typically still
   // `queued` if it has yet to start, or terminal). Recurring ticks DO NOT
   // re-release the schedule-defining run — gates are monotonic per-run.
   if (trigger.triggerType === "recurring") {
-    const sourceRun = await readAgentRunById(data.runId);
+    const sourceRun = runForFire;
     if (!sourceRun) {
       console.warn(
         `[trigger-release] recurring source run ${data.runId} disappeared — skipping tick`,
@@ -193,6 +221,76 @@ export async function runAgentRunTriggerReleaseJob(
     { jobId: `agent-builder-${data.runId}` },
   );
   console.log(`[trigger-release] enqueued execution for run ${data.runId}`);
+}
+
+// ---------------------------------------------------------------------------
+// agentRunConfigBlockForTrigger — the cinatra #1057 (b) fire-time run gate
+// ---------------------------------------------------------------------------
+// Resolves the run's agent package (from the ALREADY-read run row) and
+// re-evaluates the shared configuration-needs run gate (src/lib/agent-run-
+// readiness) scoped to the run's OWNER (`runBy`). Returns the structured refusal
+// (naming each unconfigured connector) when the agent must NOT fire, else null.
+// On a determinate block it also emits a `denied` audit event (decision-record
+// of the skipped fire — "do not fire and audit why"). FAIL-OPEN on any thrown
+// infra error (returns null → fire) so a canonical-store / import glitch never
+// strands the run; the primitive-level gates are the backstop. Dynamic imports
+// mirror the established @/lib boundary break used across this package.
+async function agentRunConfigBlockForTrigger(run: {
+  id: string;
+  templateId: string;
+  runBy: string | null;
+  orgId?: string | null;
+}): Promise<{
+  unconfiguredConnectors: { displayName: string; packageName: string }[];
+} | null> {
+  try {
+    const template = await readAgentTemplateById(run.templateId);
+    if (!template?.packageName) return null;
+
+    const { assertAgentRunReadyByPackage } = await import("@/lib/agent-run-readiness");
+    const block = await assertAgentRunReadyByPackage(
+      template.packageName,
+      template.packageName,
+      { userId: run.runBy ?? null },
+    );
+    if (!block) return null;
+
+    // Decision record: the fire was refused because required connections are
+    // unconfigured. Best-effort — never let an audit-write failure change the
+    // fire decision.
+    try {
+      const { logAuditEvent, POLICY_VERSION } = await import("@/lib/authz");
+      void logAuditEvent({
+        actorPrincipalId: run.runBy ?? undefined,
+        actorPrincipalType: "system",
+        authSource: "scheduler",
+        resourceType: "agent_run",
+        resourceId: run.id,
+        operation: "create",
+        decision: "denied",
+        policyVersion: POLICY_VERSION,
+        runId: run.id,
+        organizationId: run.orgId ?? undefined,
+        metadata: {
+          via: "trigger-fire",
+          reason: block.code,
+          connectors: block.unconfiguredConnectors.map((c) => c.packageName),
+        },
+      });
+    } catch (auditErr) {
+      console.warn(
+        `[trigger-release] config-needs fire-gate audit write failed for run ${run.id} (continuing):`,
+        auditErr instanceof Error ? auditErr.message : auditErr,
+      );
+    }
+    return { unconfiguredConnectors: block.unconfiguredConnectors };
+  } catch (err) {
+    console.warn(
+      `[trigger-release] config-needs fire gate errored for run ${run.id} — firing anyway (fail-open):`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

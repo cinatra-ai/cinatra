@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent-runtime-mount": "./src/agent-runtime-mount.ts",
+    "./installed-oas-path": "./src/installed-oas-path.ts",
     "./read-llm-requirement-from-mount": "./src/read-llm-requirement-from-mount.ts",
     "./runtime-install-gate": "./src/runtime-install-gate.ts",
     "./extension-handler": "./src/extension-handler.ts",
@@ -31,6 +32,10 @@
     "./auditor-apply": "./src/auditor-apply.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",
+    "./project-dispatch-ledger-store": "./src/project-dispatch-ledger-store.ts",
+    "./project-lease-store": "./src/project-lease-store.ts",
+    "./project-instance-store": "./src/project-instance-store.ts",
+    "./project-template-install-gate": "./src/project-template-install-gate.ts",
     "./trigger-store": "./src/trigger-store.ts",
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",

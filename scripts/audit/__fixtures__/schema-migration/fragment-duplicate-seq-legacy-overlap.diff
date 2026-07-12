@@ -1,0 +1,28 @@
+diff --git a/migrations/core/core__0012_shadow-claim.mjs b/migrations/core/core__0012_shadow-claim.mjs
+new file mode 100644
+--- /dev/null
++++ b/migrations/core/core__0012_shadow-claim.mjs
+@@ -0,0 +1,11 @@
++// core__0012 — legacy-overlap fixture: re-claims the shipped legacy seq 0012.
++
++/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
++export function up(pgm) {
++  pgm.sql(`SELECT 1;`);
++}
++
++/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
++export function down(pgm) {
++  pgm.sql(`SELECT 1;`);
++}
+diff --git a/migrations/manifest.d/core__0012_shadow-claim.json b/migrations/manifest.d/core__0012_shadow-claim.json
+new file mode 100644
+--- /dev/null
++++ b/migrations/manifest.d/core__0012_shadow-claim.json
+@@ -0,0 +1,7 @@
++{
++  "seq": "0012",
++  "file": "core/core__0012_shadow-claim.mjs",
++  "summary": "Legacy-overlap fixture: seq 0012 is already shipped in the legacy array.",
++  "destructive": false,
++  "tables": ["metadata"]
++}

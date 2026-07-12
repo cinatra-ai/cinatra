@@ -50,6 +50,16 @@ const archivedRowRead = async (): Promise<InstallRowForPick[]> => [
 const crossOrgRowRead = async (): Promise<InstallRowForPick[]> => [
   { id: "iext_other", status: "active", organizationId: "org-OTHER", ownerId: null, ownerLevel: "organization" },
 ];
+// cinatra#1040 S1 — DEFAULT-OWNS-GLOBAL-NAMES at this projection seam.
+// A default row (isDefault:true, or an unset legacy read) is addressable exactly
+// as before; an EXPLICITLY non-default version row (isDefault:false) is dropped
+// before the addressability check, so it never confers global-name install-ness.
+const defaultRowRead = async (): Promise<InstallRowForPick[]> => [
+  { id: "iext_default", status: "active", organizationId: "org-1", ownerId: null, ownerLevel: "organization", isDefault: true },
+];
+const nonDefaultRowRead = async (): Promise<InstallRowForPick[]> => [
+  { id: "iext_nondefault", status: "active", organizationId: "org-1", ownerId: null, ownerLevel: "organization", isDefault: false },
+];
 const noRowsRead = async (): Promise<InstallRowForPick[]> => [];
 const outageRead = async (): Promise<InstallRowForPick[]> => {
   throw new Error("canonical store unavailable");
@@ -139,6 +149,35 @@ describe("isConnectorInstalledForActor (runtime row || bundled fallback, archive
         readRows: outageRead,
       }),
     ).toBe(false);
+  });
+
+  // --- cinatra#1040 S1: version-identity default-owns-global-names ---------
+  it("DEFAULT version row (isDefault:true) + NOT bundled → installed (identical to legacy single-version)", async () => {
+    expect(
+      await isConnectorInstalledForActor("@cinatra-ai/some-runtime-connector", actor, {
+        readRows: defaultRowRead,
+      }),
+    ).toBe(true);
+  });
+
+  it("EXPLICITLY non-default row (isDefault:false) + NOT bundled → NOT installed (non-default dropped, no fallback)", async () => {
+    // The live addressable row exists but is a NON-default version — it must not
+    // confer global-name install-ness. Without the seam filter this would be true.
+    expect(
+      await isConnectorInstalledForActor("@cinatra-ai/some-runtime-connector", actor, {
+        readRows: nonDefaultRowRead,
+      }),
+    ).toBe(false);
+  });
+
+  it("EXPLICITLY non-default row (isDefault:false) + bundled → installed via bundled fallback (non-default row does not count as addressable)", async () => {
+    // The only addressable row is non-default, so it is dropped → treated as "no
+    // addressable row" → the bundled fallback legitimately applies.
+    expect(
+      await isConnectorInstalledForActor("@cinatra-ai/openai-connector", actor, {
+        readRows: nonDefaultRowRead,
+      }),
+    ).toBe(true);
   });
 
   it("null actor → bundled fallback only (no scoped row addressable)", async () => {

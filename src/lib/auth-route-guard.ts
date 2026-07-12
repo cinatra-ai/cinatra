@@ -6,6 +6,7 @@ import {
   GENERATED_WIDGET_STREAM_TOKEN_PATHS,
   GENERATED_WIDGET_STREAM_CAPABILITY_PATHS,
 } from "@/lib/generated/widget-stream-public-paths";
+import { isRuntimeApprovedWidgetStreamPublicPath } from "@/lib/widget-stream-runtime-slug-snapshot";
 
 const PUBLIC_PATH_PREFIXES = [
   "/permissions",
@@ -166,6 +167,24 @@ function isPublicPath(pathname: string) {
     PUBLIC_AGENT_TOKEN_PATHS.includes(pathname) ||
     PUBLIC_AGENT_CAPABILITY_PATHS.includes(pathname)
   ) {
+    return true;
+  }
+
+  // RUNTIME-approved widget-stream slugs (widget-stream runtime trust, slice 4).
+  // A widget-stream connector approved at RUNTIME (its metadata grant admin-
+  // approved after build) is not in the generated build-time arrays above, so
+  // its three exact /api/agents/<slug>/{stream,token,capabilities} paths would
+  // 307 to /sign-in before their in-handler auth runs. A per-replica in-memory
+  // snapshot (kept warm out-of-band by a background refresher over the approved
+  // grants) unions those exact paths in. Checked AFTER the build-time arrays so
+  // build-time wins absolutely (the runtime snapshot drops any build-time-slug
+  // collision). This is PURE LIVENESS — an EXACT-match, DB-free, synchronous
+  // redirect-skip; each route still self-authenticates in its handler and the
+  // fail-closed in-handler runtime resolver is the real wall. A cold/stale
+  // snapshot can only ever 307 a legit widget route (self-healing), never open
+  // a protected one, and never an /api/agents wildcard. Valid because in Next 16
+  // the proxy always runs on the Node.js runtime (see src/proxy.ts).
+  if (isRuntimeApprovedWidgetStreamPublicPath(pathname)) {
     return true;
   }
 

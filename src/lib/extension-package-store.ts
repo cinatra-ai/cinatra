@@ -148,6 +148,15 @@ export type InstallTrustAnchor = {
   approvedPorts?: readonly string[];
   /** The package version (recorded at install) — part of the signature payload. */
   version?: string | null;
+  /**
+   * Whether this version is the DEFAULT for its package (cinatra#1040 S4 — the
+   * canonical row's `is_default`). The DEFAULT version alone owns the package's
+   * unversioned GLOBAL names; a non-default sibling (`isDefault === false`)
+   * activates side-by-side against a side-effect-free host context. Absent/true
+   * = default (single-version installs and legacy rows count as default; the DB
+   * enforces at most one default per (org, owner, package)).
+   */
+  isDefault?: boolean;
   /** The base64 Ed25519 signature over the tarball (recorded at install), if signed. */
   signature?: string | null;
   /**

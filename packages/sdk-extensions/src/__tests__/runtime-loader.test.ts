@@ -463,7 +463,7 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
     expect(registered).toEqual(["@x/dropped"]);
   });
 
-  it("FAIL-CLOSED: refuses every record for a duplicated package name (ambiguous identity)", async () => {
+  it("FAIL-CLOSED: refuses every record for a duplicated UN-VERSIONED package name (cinatra#1040 S4: multiple records + no version identity fences the whole package)", async () => {
     const importModule = vi.fn(async () => serverModule(() => {}));
     const records: PackageStoreRecord[] = [
       { packageName: "@x/dup", serverEntry: "./register.mjs", sdkAbiRange: "^2", storeDir: "/store/dup/sha-a" },
@@ -473,7 +473,10 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
     const res = await runRuntimePackageActivation("/store", { fs: makeFs({}, []), importModule, makeContext, records });
     const dup = res.find((r) => r.packageName === "@x/dup");
     expect(dup?.status).toBe("failed");
-    expect(String(dup?.error)).toMatch(/ambiguous package/);
+    // Two records for one name, neither carrying a version → the whole package is
+    // fenced (un-versioned records cannot be disambiguated) — the same fail-closed
+    // outcome the pre-S4 duplicate-name fence produced.
+    expect(String(dup?.error)).toMatch(/no version identity/);
     // The ambiguous package is never imported (only the unique @x/ok is).
     expect(importModule).toHaveBeenCalledTimes(1);
     expect(res.some((r) => r.packageName === "@x/ok" && r.status === "registered")).toBe(true);

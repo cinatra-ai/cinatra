@@ -34,11 +34,35 @@ export type LoaderRecord = {
    * from the generated manifest) ever sets it to `"required"`.
    */
   resolution?: "required" | "guardedOptional";
+  /**
+   * The package VERSION this record activates (cinatra#1040 S4). Set by the host
+   * wrapper from the TRUSTED install anchor (the DB row's `source.version`), NOT
+   * the on-disk manifest — so it is part of the (packageName, version) activation
+   * identity the duplicate fence keys on. Absent for legacy/un-versioned records
+   * (the fence then falls back to whole-package fail-closed).
+   */
+  version?: string;
+  /**
+   * Whether this version is the DEFAULT for its package (cinatra#1040 S4). Set
+   * from the anchor's `isDefault`. The DEFAULT version alone owns the package's
+   * unversioned GLOBAL names (MCP tool names, capability providers, connector
+   * routes, agent mounts); a NON-DEFAULT sibling version (`isDefault === false`)
+   * activates side-by-side against a side-effect-free host context and its
+   * bootstrap pass is skipped. Absent counts as default (single-version/legacy).
+   */
+  isDefault?: boolean;
 };
 
 export type LoaderDeps = {
-  /** Import a package's server entry module, or undefined if there is no importer. */
-  importServerEntry: (packageName: string) => Promise<unknown> | undefined;
+  /**
+   * Import a package's server entry module, or undefined if there is no importer.
+   * The full `record` is passed alongside the name (cinatra#1040 S4) so the
+   * importer can resolve the exact SIDE-BY-SIDE version record — two records may
+   * share a `packageName` (different versions/digests), so the name alone no
+   * longer uniquely identifies the entry to import. The dev loader (one manifest
+   * per name) may ignore `record` and key on `packageName`.
+   */
+  importServerEntry: (packageName: string, record: LoaderRecord) => Promise<unknown> | undefined;
   /** Build the (least-privilege) host ctx for a package, given the ports it
    * declared in `requestedHostPorts` (passed straight through so the host factory
    * is grant-aware without the loader maintaining a side-map) and the full
@@ -52,6 +76,19 @@ export type LoaderDeps = {
   abiCompatible: (record: LoaderRecord) => boolean;
   /** Installed package set for `config.resolve`; defaults to all record names. */
   installedPackages?: ReadonlySet<string>;
+  /**
+   * Fired ONCE per record that reached `makeContext`, immediately after its
+   * register attempt settled (cinatra#1392 Gap 1). `registered` is true iff the
+   * register PASS succeeded (`status === "registered"`) — false for any
+   * skip/failure (config-disabled, config-resolve-false/threw, no-server-entry,
+   * register-threw). The host uses it to COMMIT a NON-DEFAULT side-by-side
+   * version's version-keyed serving registrations (making them servable) on
+   * success, or DISCARD partial registrations on failure. Fail-closed: a version
+   * that did not fully register is never committed, so it is never servable.
+   * Optional — a loader with no side-by-side serving (e.g. the static bundle)
+   * omits it and the register loop is byte-for-byte unchanged.
+   */
+  onRegisterSettled?: (record: LoaderRecord, registered: boolean) => void;
 };
 
 /**
@@ -67,7 +104,7 @@ export async function runStaticBundleActivation(
   const toLoad = records.filter((r) => typeof r.serverEntry === "string" && r.serverEntry.length > 0);
   const installedPackages = deps.installedPackages ?? new Set(records.map((r) => r.packageName));
   const results: ActivationResult[] = [];
-  const registered: { mod: ExtensionModule; ctx: ExtensionHostContext }[] = [];
+  const registered: { mod: ExtensionModule; ctx: ExtensionHostContext; isDefault: boolean }[] = [];
 
   // Register pass — ABI gate → import → register (failure-isolated).
   for (const rec of toLoad) {
@@ -78,7 +115,7 @@ export async function runStaticBundleActivation(
       results.push({ packageName: rec.packageName, status: "skipped", reason: "abi-incompatible" });
       continue;
     }
-    const importPromise = deps.importServerEntry(rec.packageName);
+    const importPromise = deps.importServerEntry(rec.packageName, rec);
     if (importPromise === undefined) {
       results.push({ packageName: rec.packageName, status: "skipped", reason: "no-server-entry" });
       continue;
@@ -100,13 +137,36 @@ export async function runStaticBundleActivation(
     }
     const ctx = deps.makeContext(rec.packageName, rec.requestedHostPorts ?? [], rec);
     // ABI already gated above (before import); pass `true` as defense-in-depth.
-    const r = await activateExtensionModule(mod, ctx, { abiCompatible: true, installedPackages });
+    let r: ActivationResult;
+    try {
+      r = await activateExtensionModule(mod, ctx, { abiCompatible: true, installedPackages });
+    } catch (error) {
+      // `activateExtensionModule` is contracted never to throw (it returns a
+      // structured result), but settle defensively so EVERY record that reached
+      // makeContext is settled — a non-default sibling's version-keyed serving
+      // retention (cinatra#1392 Gap 1) is never left dangling pre-commit.
+      deps.onRegisterSettled?.(rec, false);
+      results.push({ packageName: rec.packageName, status: "failed", reason: "register-threw", error });
+      continue;
+    }
     results.push(r);
-    if (r.status === "registered") registered.push({ mod, ctx });
+    // Settle the record's version-keyed serving retention (cinatra#1392 Gap 1):
+    // fires for EVERY record that reached makeContext (register success AND every
+    // post-makeContext skip/failure), so a non-default sibling that did not fully
+    // register is DISCARDED (fail-closed), never left half-retained.
+    deps.onRegisterSettled?.(rec, r.status === "registered");
+    if (r.status === "registered") registered.push({ mod, ctx, isDefault: rec.isDefault !== false });
   }
 
-  // Bootstrap pass — bootstrap every registered module (after all registers).
-  for (const { mod, ctx } of registered) {
+  // Bootstrap pass — bootstrap every registered module (after all registers),
+  // EXCEPT non-default side-by-side versions (cinatra#1040 S4). A non-default
+  // version registers only (against a side-effect-free host context) to prove it
+  // activates without claiming the default's global names; running its bootstrap
+  // could duplicate package-keyed side effects (settings/secrets writes, job/
+  // notification emission) that belong to the DEFAULT version. Edge-bound serving
+  // of a non-default version is threaded in a later slice (S5).
+  for (const { mod, ctx, isDefault } of registered) {
+    if (!isDefault) continue;
     results.push(await bootstrapExtensionModule(mod, ctx));
   }
   return results;

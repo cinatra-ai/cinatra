@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -29,7 +29,9 @@ import {
   runGate,
   IN_SCOPE_FILE,
   MIGRATION_MANIFEST_PATH,
+  MIGRATION_FRAGMENT_DIR,
 } from "../schema-migration-gate.mjs";
+import { buildManifestUnion, readManifestUnion } from "../../../migrations/manifest-reader.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
@@ -61,12 +63,18 @@ test("fixture corpus covers the convention's required cases", () => {
 // while a genuine change to the in-scope DDL still invalidates a stale fixture
 // through the live-tree files copied below.
 const PINNED_BASE_MANIFEST = join(FIXTURES_DIR, "base-manifest.json");
+// The pinned SHIPPED-fragment snapshot (base-manifest.d/): the base side of
+// migrations/manifest.d/, so fragment fixtures can exercise seq collisions
+// with — and tampering against — already-shipped fragments without rotting as
+// real fragments land.
+const PINNED_BASE_FRAGMENTS = join(FIXTURES_DIR, "base-manifest.d");
 
 /**
- * Build a throwaway git work tree for one fixture: migrations/manifest.json is
- * the pinned snapshot; every other file the fixture patches is copied live from
- * the repo. `git apply --check` and the gate (via --base-dir) both run against
- * it, so neither rots when unrelated migrations append to the live ledger.
+ * Build a throwaway git work tree for one fixture: migrations/manifest.json
+ * and migrations/manifest.d/ are the pinned snapshots; every other file the
+ * fixture patches is copied live from the repo. `git apply --check` and the
+ * gate (via --base-dir) both run against it, so neither rots when unrelated
+ * migrations append to the live ledger.
  */
 function makePinnedBase(fixtureText) {
   const dir = mkdtempSync(join(tmpdir(), "schema-migration-base-"));
@@ -75,11 +83,18 @@ function makePinnedBase(fixtureText) {
   // deterministic even for fixtures that don't patch the manifest.
   mkdirSync(join(dir, "migrations", "core"), { recursive: true });
   copyFileSync(PINNED_BASE_MANIFEST, join(dir, MIGRATION_MANIFEST_PATH));
+  // The pinned shipped fragments — the directory always exists (possibly
+  // empty) so the gate's --base-dir listing is EXCLUSIVELY the snapshot and
+  // live fragments cannot leak into fixture replays.
+  mkdirSync(join(dir, MIGRATION_FRAGMENT_DIR), { recursive: true });
+  for (const name of readdirSync(PINNED_BASE_FRAGMENTS)) {
+    copyFileSync(join(PINNED_BASE_FRAGMENTS, name), join(dir, MIGRATION_FRAGMENT_DIR, name));
+  }
   // Live copies of every other base file the fixture patches.
   for (const f of parseUnifiedDiff(fixtureText)) {
     if (f.status === "added") continue; // /dev/null base — nothing to seed
     const p = f.oldPath ?? f.newPath;
-    if (!p || p === MIGRATION_MANIFEST_PATH) continue;
+    if (!p || p === MIGRATION_MANIFEST_PATH || p.startsWith(`${MIGRATION_FRAGMENT_DIR}/`)) continue;
     const src = join(REPO_ROOT, p);
     if (!existsSync(src)) continue;
     const dest = join(dir, p);
@@ -466,7 +481,36 @@ const readBase = (p) => (p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : null);
 const MODULE_0002 = "migrations/core/core__0002_drop-widgets-label.mjs";
 const MODULE_0002_SRC = "export function up(pgm) { pgm.sql(`ALTER TABLE widgets DROP COLUMN IF EXISTS label;`); }\nexport function down(pgm) {}";
 
-test("artifact: runner module + appended manifest entry is complete", () => {
+/** Fragment file for a seq/slug — the manifest.d authoring form (#1335). */
+const fragmentPath = (seq, slug) => `${MIGRATION_FRAGMENT_DIR}/core__${seq}_${slug}.json`;
+const fragmentSrc = (seq, slug, extra = {}) =>
+  JSON.stringify(
+    { seq, file: `core/core__${seq}_${slug}.mjs`, summary: "drop", destructive: true, tables: ["widgets"], ...extra },
+    null,
+    2,
+  );
+
+test("artifact: runner module + its manifest fragment is complete", () => {
+  const text =
+    fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
+    fullReplaceDiff(fragmentPath("0002", "drop-widgets-label"), null, fragmentSrc("0002", "drop-widgets-label"));
+  const a = detectMigrationArtifact(parseUnifiedDiff(text), readBase);
+  assert.deepEqual(a.problems, []);
+  assert.equal(a.complete, true);
+  assert.equal(a.newEntries.length, 1);
+  assert.equal(a.newEntries[0].destructive, true);
+});
+
+test("artifact: a runner module without a manifest fragment is incomplete (both pieces, same PR)", () => {
+  const a = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC)),
+    readBase,
+  );
+  assert.equal(a.complete, false);
+  assert.ok(a.problems.some((p) => p.includes("manifest fragment")), a.problems.join("; "));
+});
+
+test("artifact: appending a new entry to the frozen legacy array is rejected (fragment authoring is forced)", () => {
   const text =
     fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
     fullReplaceDiff(
@@ -475,18 +519,8 @@ test("artifact: runner module + appended manifest entry is complete", () => {
       manifestWith([ENTRY_0001, { seq: "0002", file: "core/core__0002_drop-widgets-label.mjs", summary: "drop", destructive: true, tables: ["widgets"] }]),
     );
   const a = detectMigrationArtifact(parseUnifiedDiff(text), readBase);
-  assert.deepEqual(a.problems, []);
-  assert.equal(a.complete, true);
-  assert.equal(a.newEntries.length, 1);
-});
-
-test("artifact: a runner module without a manifest entry is incomplete (both pieces, same PR)", () => {
-  const a = detectMigrationArtifact(
-    parseUnifiedDiff(fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC)),
-    readBase,
-  );
   assert.equal(a.complete, false);
-  assert.ok(a.problems.some((p) => p.includes("manifest")), a.problems.join("; "));
+  assert.ok(a.problems.some((p) => p.includes("frozen") && p.includes(MIGRATION_FRAGMENT_DIR)), a.problems.join("; "));
 });
 
 test("artifact: the legacy psql artifact form is retired for new migrations", () => {
@@ -627,51 +661,45 @@ test("artifact: rewriting a shipped ledger entry or regressing the sequence is r
   );
   assert.ok(rewritten.integrity.some((p) => p.includes("append-only")), rewritten.integrity.join("; "));
 
+  // A fragment whose seq sits at/below the max shipped seq (duplicate of a
+  // shipped legacy entry here) regresses the ledger head — rejected on both
+  // the union-uniqueness and the monotonicity rule.
   const regressed = detectMigrationArtifact(
     parseUnifiedDiff(
-      fullReplaceDiff("migrations/core/core__0002_dupe.mjs", null, MODULE_0002_SRC) +
-        fullReplaceDiff(
-          MIGRATION_MANIFEST_PATH,
-          BASE_MANIFEST,
-          manifestWith([ENTRY_0001, { seq: "0001", file: "core/core__0002_dupe.mjs", summary: "dupe", destructive: true, tables: [] }]),
-        ),
+      fullReplaceDiff("migrations/core/core__0001_dupe.mjs", null, MODULE_0002_SRC) +
+        fullReplaceDiff(fragmentPath("0001", "dupe"), null, fragmentSrc("0001", "dupe")),
     ),
     readBase,
   );
-  assert.ok(regressed.problems.some((p) => p.includes("strictly increasing")), regressed.problems.join("; "));
+  assert.ok(regressed.problems.some((p) => p.includes("duplicate seq")), regressed.problems.join("; "));
+  assert.ok(regressed.problems.some((p) => p.includes("strictly greater than the max shipped seq")), regressed.problems.join("; "));
 });
 
-test("artifact: a manifest-only entry (no module in the diff) and a seq/filename mismatch are rejected", () => {
-  const manifestOnly = detectMigrationArtifact(
+test("artifact: a fragment-only entry (no module in the diff) and a seq/filename mismatch are rejected", () => {
+  const fragmentOnly = detectMigrationArtifact(
     parseUnifiedDiff(
       fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
-        fullReplaceDiff(
-          MIGRATION_MANIFEST_PATH,
-          BASE_MANIFEST,
-          manifestWith([
-            ENTRY_0001,
-            { seq: "0002", file: "core/core__0002_drop-widgets-label.mjs", summary: "x", destructive: false, tables: [] },
-            { seq: "0003", file: "core/core__0003_phantom.mjs", summary: "phantom", destructive: true, tables: [] },
-          ]),
-        ),
+        fullReplaceDiff(fragmentPath("0002", "drop-widgets-label"), null, fragmentSrc("0002", "drop-widgets-label")) +
+        fullReplaceDiff(fragmentPath("0003", "phantom"), null, fragmentSrc("0003", "phantom")),
     ),
     readBase,
   );
-  assert.equal(manifestOnly.complete, false);
-  assert.ok(manifestOnly.problems.some((p) => p.includes("no matching migrations/core/ module")), manifestOnly.problems.join("; "));
+  assert.equal(fragmentOnly.complete, false);
+  assert.ok(fragmentOnly.problems.some((p) => p.includes("no matching migrations/core/ module")), fragmentOnly.problems.join("; "));
 
+  // seq/filename mismatch: the fragment file claims seq 0003 in its name but
+  // carries seq 0002 in the entry — the fragment contract binds them.
   const mismatched = detectMigrationArtifact(
     parseUnifiedDiff(
       fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
-        fullReplaceDiff(
-          MIGRATION_MANIFEST_PATH,
-          BASE_MANIFEST,
-          manifestWith([ENTRY_0001, { seq: "0003", file: "core/core__0002_drop-widgets-label.mjs", summary: "x", destructive: true, tables: [] }]),
-        ),
+        fullReplaceDiff(fragmentPath("0003", "drop-widgets-label"), null, fragmentSrc("0002", "drop-widgets-label")),
     ),
     readBase,
   );
-  assert.ok(mismatched.problems.some((p) => p.includes("does not match its filename")), mismatched.problems.join("; "));
+  assert.ok(
+    mismatched.problems.some((p) => p.includes("does not match the filename's sequence number")),
+    mismatched.problems.join("; "),
+  );
 });
 
 test("artifact: malformed migration filenames are rejected (legacy dir and core dir)", () => {
@@ -694,18 +722,14 @@ test("artifact: malformed migration filenames are rejected (legacy dir and core 
 // 6. Unit tests — gate verdicts end to end (runGate)
 // ---------------------------------------------------------------------------
 
-test("runGate fails a destructive change whose artifact entry is not labelled destructive", () => {
+test("runGate fails a destructive change whose artifact fragment is not labelled destructive", () => {
   const text =
     hunkDiff(IN_SCOPE_FILE, BASE, 21, 21, [
       `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
       `    { text: \`DROP TABLE IF EXISTS ${S}."widgets"\` },`,
     ]) +
     fullReplaceDiff("migrations/core/core__0002_drop-widgets.mjs", null, "export function up(pgm) { pgm.sql(`DROP TABLE IF EXISTS widgets;`); }\nexport function down(pgm) {}") +
-    fullReplaceDiff(
-      MIGRATION_MANIFEST_PATH,
-      BASE_MANIFEST,
-      manifestWith([ENTRY_0001, { seq: "0002", file: "core/core__0002_drop-widgets.mjs", summary: "drop", destructive: false, tables: ["widgets"] }]),
-    );
+    fullReplaceDiff(fragmentPath("0002", "drop-widgets"), null, fragmentSrc("0002", "drop-widgets", { destructive: false }));
   const readBaseFile = (p) => (p === IN_SCOPE_FILE ? BASE : p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : null);
 
   const mislabelled = runGate({ diffText: text, readBaseFile });
@@ -748,4 +772,371 @@ test("runGate ignores out-of-scope auth/extension files entirely", () => {
   assert.equal(r.verdict, "pass");
   assert.equal(r.inScopeChanges, 0);
   assert.equal(r.ignored.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 7. Fragment form (#1335) — shipped-fragment protection, base-directory
+//    enumeration, and manifest.d hygiene
+// ---------------------------------------------------------------------------
+
+const SHIPPED_FRAGMENT_NAME = "core__0002_shipped.json";
+const SHIPPED_FRAGMENT_SRC = fragmentSrc("0002", "shipped");
+/** Base with ONE shipped fragment (seq 0002) alongside legacy entry 0001. */
+const readBaseWithFragment = (p) => {
+  if (p === MIGRATION_MANIFEST_PATH) return BASE_MANIFEST;
+  if (p === `${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME}`) return SHIPPED_FRAGMENT_SRC;
+  return null;
+};
+const listBaseWithFragment = (dir) => (dir === MIGRATION_FRAGMENT_DIR ? [SHIPPED_FRAGMENT_NAME] : null);
+
+test("fragment: a new seq colliding with a SHIPPED fragment the diff never touches is caught (base manifest.d/ is enumerated)", () => {
+  const a = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff("migrations/core/core__0002_other-claim.mjs", null, MODULE_0002_SRC) +
+        fullReplaceDiff(fragmentPath("0002", "other-claim"), null, fragmentSrc("0002", "other-claim")),
+    ),
+    readBaseWithFragment,
+    listBaseWithFragment,
+  );
+  assert.equal(a.complete, false);
+  assert.ok(a.problems.some((p) => p.includes("duplicate seq 0002")), a.problems.join("; "));
+});
+
+test("fragment: max shipped seq comes from the UNION — a fragment above the legacy head but at/below a shipped fragment's seq is rejected", () => {
+  // Legacy head is 0001; shipped fragment is 0002; a new 0002-gap does not
+  // exist, so use a base where the shipped fragment is 0003 and claim 0002.
+  const shipped = "core__0003_shipped.json";
+  const a = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
+        fullReplaceDiff(fragmentPath("0002", "drop-widgets-label"), null, fragmentSrc("0002", "drop-widgets-label")),
+    ),
+    (p) => (p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : p === `${MIGRATION_FRAGMENT_DIR}/${shipped}` ? fragmentSrc("0003", "shipped") : null),
+    (dir) => (dir === MIGRATION_FRAGMENT_DIR ? [shipped] : null),
+  );
+  assert.equal(a.complete, false);
+  assert.ok(a.problems.some((p) => p.includes("strictly greater than the max shipped seq (0003)")), a.problems.join("; "));
+});
+
+test("fragment: editing or deleting a shipped fragment is an integrity failure; renaming it is too", () => {
+  const edited = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff(`${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME}`, SHIPPED_FRAGMENT_SRC, fragmentSrc("0002", "shipped", { summary: "REWRITTEN" })),
+    ),
+    readBaseWithFragment,
+    listBaseWithFragment,
+  );
+  assert.ok(edited.integrity.some((p) => p.includes("never be edited")), edited.integrity.join("; "));
+
+  const deleted = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(`${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME}`, SHIPPED_FRAGMENT_SRC, null)),
+    readBaseWithFragment,
+    listBaseWithFragment,
+  );
+  assert.ok(deleted.integrity.some((p) => p.includes("never be deleted")), deleted.integrity.join("; "));
+
+  const renamed = detectMigrationArtifact(
+    parseUnifiedDiff(
+      `diff --git a/${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME} b/${MIGRATION_FRAGMENT_DIR}/core__0002_renamed.json\n` +
+        "similarity index 100%\n" +
+        `rename from ${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME}\n` +
+        `rename to ${MIGRATION_FRAGMENT_DIR}/core__0002_renamed.json\n`,
+    ),
+    readBaseWithFragment,
+    listBaseWithFragment,
+  );
+  assert.ok(renamed.integrity.some((p) => p.includes("renamed or moved")), renamed.integrity.join("; "));
+});
+
+test("fragment: header-only diffs cannot slip past the parser (empty add, binary edit of a shipped fragment, symlink fragment)", () => {
+  // An EMPTY added fragment emits ONLY headers — no ---/+++, no hunks. It
+  // must still red (the union reader would refuse it post-merge).
+  const emptyAdd = runGate({
+    diffText:
+      `diff --git a/${MIGRATION_FRAGMENT_DIR}/core__0002_empty.json b/${MIGRATION_FRAGMENT_DIR}/core__0002_empty.json\n` +
+      "new file mode 100644\n" +
+      "index 0000000..e69de29\n",
+    readBaseFile: readBase,
+  });
+  assert.equal(emptyAdd.verdict, "fail", "empty added fragment must fail");
+
+  // A BINARY rewrite of a shipped fragment also emits no ---/+++ — tampering.
+  const binaryEdit = runGate({
+    diffText:
+      `diff --git a/${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME} b/${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME}\n` +
+      "index 1111111..2222222 100644\n" +
+      `Binary files a/${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME} and b/${MIGRATION_FRAGMENT_DIR}/${SHIPPED_FRAGMENT_NAME} differ\n`,
+    readBaseFile: readBaseWithFragment,
+    listBaseDir: listBaseWithFragment,
+  });
+  assert.equal(binaryEdit.verdict, "fail", "binary edit of a shipped fragment must fail");
+  assert.ok(binaryEdit.artifact.integrity.some((p) => p.includes("never be edited")), binaryEdit.artifact.integrity.join("; "));
+
+  // A SYMLINK whose target text parses as valid fragment JSON: the reader
+  // refuses non-regular files at every consumer, so the gate must too.
+  const symlink = runGate({
+    diffText:
+      fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
+      `diff --git a/${fragmentPath("0002", "drop-widgets-label")} b/${fragmentPath("0002", "drop-widgets-label")}\n` +
+      "new file mode 120000\n" +
+      `--- /dev/null\n+++ b/${fragmentPath("0002", "drop-widgets-label")}\n@@ -0,0 +1,1 @@\n` +
+      `+${fragmentSrc("0002", "drop-widgets-label").replaceAll("\n", " ")}\n`,
+    readBaseFile: readBase,
+  });
+  assert.equal(symlink.verdict, "fail", "symlink fragment must fail");
+  assert.ok(symlink.artifact.integrity.some((p) => p.includes("regular file")), symlink.artifact.integrity.join("; "));
+});
+
+test("fragment: adversarial paths cannot dodge the parser — ' b/' segments parse exactly; C-quoted names under migrations/ fail closed", () => {
+  // A nested dir literally named "bad b" — the equal-split header parse
+  // recovers the exact path, and the nested fragment name reds as
+  // unrecognized (instead of the greedy misparse skipping the file).
+  const evilPath = "migrations/manifest.d/bad b/core__0002_x.json";
+  const nested = runGate({
+    diffText: `diff --git a/${evilPath} b/${evilPath}\nnew file mode 100644\nindex 0000000..e69de29\n`,
+    readBaseFile: readBase,
+  });
+  assert.equal(nested.verdict, "fail");
+  assert.ok(nested.artifact.integrity.some((p) => p.includes("unrecognized file")), nested.artifact.integrity.join("; "));
+
+  // A C-quoted (unusual-bytes) name under migrations/: unparseable paths
+  // must fail closed, not become unprotected.
+  const quoted = runGate({
+    diffText: 'diff --git "a/migrations/manifest.d/core__0002_\\ty.json" "b/migrations/manifest.d/core__0002_\\ty.json"\nnew file mode 100644\nindex 0000000..e69de29\n',
+    readBaseFile: readBase,
+  });
+  assert.equal(quoted.verdict, "fail");
+  assert.ok(quoted.artifact.integrity.some((p) => p.includes("cannot reliably parse")), quoted.artifact.integrity.join("; "));
+
+  // One parseable side must not vouch for both: `--- /dev/null` is plain
+  // while the `+++` side is C-quoted — still fail closed.
+  const halfQuoted = runGate({
+    diffText:
+      'diff --git "a/migrations/manifest.d/core__0002_\\ty.json" "b/migrations/manifest.d/core__0002_\\ty.json"\n' +
+      "new file mode 100644\n" +
+      "--- /dev/null\n" +
+      '+++ "b/migrations/manifest.d/core__0002_\\ty.json"\n' +
+      "@@ -0,0 +1,1 @@\n" +
+      "+{}\n",
+    readBaseFile: readBase,
+  });
+  assert.equal(halfQuoted.verdict, "fail");
+  assert.ok(halfQuoted.artifact.integrity.some((p) => p.includes("cannot reliably parse")), halfQuoted.artifact.integrity.join("; "));
+});
+
+test("fragment: a base fragment that is listed but unreadable is a loud failure, not a silent drop", () => {
+  const a = detectMigrationArtifact(
+    [],
+    (p) => (p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : null), // fragment read fails
+    (dir) => (dir === MIGRATION_FRAGMENT_DIR ? ["core__0002_shipped.json"] : null),
+  );
+  assert.ok(a.problems.some((p) => p.includes("unreadable")), a.problems.join("; "));
+});
+
+test("fragment: malformed and unrecognized files under manifest.d/ are errors, not skips", () => {
+  const badName = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(`${MIGRATION_FRAGMENT_DIR}/NOTES.txt`, null, "notes")),
+    readBase,
+  );
+  assert.ok(badName.integrity.some((p) => p.includes("unrecognized file")), badName.integrity.join("; "));
+
+  const badJson = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff(fragmentPath("0002", "broken"), null, "{ not json")),
+    readBase,
+  );
+  assert.ok(badJson.problems.some((p) => p.includes("not parseable JSON")), badJson.problems.join("; "));
+
+  // Fragment stem must equal the module stem referenced by entry.file.
+  const stemMismatch = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
+        fullReplaceDiff(fragmentPath("0002", "drop-widgets-label"), null, fragmentSrc("0002", "drop-widgets-label", { file: "core/core__0002_other-stem.mjs" })),
+    ),
+    readBase,
+  );
+  assert.ok(stemMismatch.problems.some((p) => p.includes("filename stem")), stemMismatch.problems.join("; "));
+});
+
+// ---------------------------------------------------------------------------
+// 8. The #1335 collision ledger, replayed structurally: concurrent fragment
+//    PRs produce NO textual conflict and need NO renumber; double-claims red
+//    deterministically on the union instead of misreading shipped history.
+// ---------------------------------------------------------------------------
+
+test("collision ledger: two concurrent migration PRs (distinct seqs) apply to the same base with no conflict, and the later needs no renumber after the first lands", () => {
+  const dir = mkdtempSync(join(tmpdir(), "schema-migration-concurrent-"));
+  try {
+    execFileSync("git", ["init", "-q", dir]);
+    mkdirSync(join(dir, "migrations", "core"), { recursive: true });
+    mkdirSync(join(dir, MIGRATION_FRAGMENT_DIR), { recursive: true });
+    writeFileSync(join(dir, MIGRATION_MANIFEST_PATH), BASE_MANIFEST);
+
+    // PR A ships seq 0002, PR B ships seq 0003 — cut concurrently.
+    // (git apply needs the `new file mode` header that fullReplaceDiff's
+    // parser-oriented output omits.)
+    const gitNewFileDiff = (path, content) => {
+      const lines = content.split("\n");
+      return (
+        `diff --git a/${path} b/${path}\n` +
+        `new file mode 100644\n` +
+        `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` +
+        lines.map((l) => `+${l}`).join("\n") +
+        "\n"
+      );
+    };
+    const prA =
+      gitNewFileDiff("migrations/core/core__0002_pr-a.mjs", MODULE_0002_SRC) +
+      gitNewFileDiff(fragmentPath("0002", "pr-a"), fragmentSrc("0002", "pr-a"));
+    const prB =
+      gitNewFileDiff("migrations/core/core__0003_pr-b.mjs", MODULE_0002_SRC) +
+      gitNewFileDiff(fragmentPath("0003", "pr-b"), fragmentSrc("0003", "pr-b"));
+    writeFileSync(join(dir, "pr-a.patch"), prA);
+    writeFileSync(join(dir, "pr-b.patch"), prB);
+
+    // Both apply cleanly to the shared base…
+    execFileSync("git", ["apply", "--check", "pr-a.patch"], { cwd: dir });
+    execFileSync("git", ["apply", "--check", "pr-b.patch"], { cwd: dir });
+    // …PR A lands…
+    execFileSync("git", ["apply", "pr-a.patch"], { cwd: dir });
+    // …and PR B STILL applies unchanged: no shared tail, no conflict, no
+    // renumber (the exact churn class from the ledger in #1335).
+    execFileSync("git", ["apply", "--check", "pr-b.patch"], { cwd: dir });
+    execFileSync("git", ["apply", "pr-b.patch"], { cwd: dir });
+
+    // The landed tree's union is valid and deterministic.
+    const union = readManifestUnion(join(dir, "migrations"));
+    assert.deepEqual(union.errors, []);
+    assert.deepEqual(union.entries.map((e) => e.seq), ["0001", "0002", "0003"]);
+
+    // Gate view of PR B AFTER A landed: A's fragment is shipped base state
+    // (base manifest.d/ carries exactly it), and B passes UNCHANGED — no
+    // renumber round, no dismissed approval.
+    const afterA = runGate({
+      diffText: prB,
+      readBaseFile: (p) => (existsSync(join(dir, p)) ? readFileSync(join(dir, p), "utf8") : null),
+      listBaseDir: (d) => (d === MIGRATION_FRAGMENT_DIR ? ["core__0002_pr-a.json"] : null),
+    });
+    assert.equal(afterA.verdict, "pass");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("collision ledger: a seq double-claim is a deterministic union red (different paths, so not a git add/add conflict)", () => {
+  // Two PRs both cut at seq 0003 under different slugs: their diffs touch
+  // DIFFERENT files, so git merges them silently — the union gate is what
+  // reds, with a message naming both claimants.
+  const claimA = fullReplaceDiff(fragmentPath("0003", "claim-a"), null, fragmentSrc("0003", "claim-a")) +
+    fullReplaceDiff("migrations/core/core__0003_claim-a.mjs", null, MODULE_0002_SRC);
+  const claimB = fullReplaceDiff(fragmentPath("0003", "claim-b"), null, fragmentSrc("0003", "claim-b")) +
+    fullReplaceDiff("migrations/core/core__0003_claim-b.mjs", null, MODULE_0002_SRC);
+  const merged = runGate({ diffText: claimA + claimB, readBaseFile: readBase });
+  assert.equal(merged.verdict, "fail");
+  assert.ok(
+    merged.artifact.problems.some((p) => p.includes("duplicate seq 0003") && p.includes("claim-a") && p.includes("claim-b")),
+    merged.artifact.problems.join("; "),
+  );
+
+  // The same double-claim where the FIRST claimant already shipped as a base
+  // fragment: the late PR reds without any shipped-history misread.
+  const late = runGate({
+    diffText: claimB,
+    readBaseFile: (p) =>
+      p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : p === `${MIGRATION_FRAGMENT_DIR}/core__0003_claim-a.json` ? fragmentSrc("0003", "claim-a") : null,
+    listBaseDir: (dir) => (dir === MIGRATION_FRAGMENT_DIR ? ["core__0003_claim-a.json"] : null),
+  });
+  assert.equal(late.verdict, "fail");
+  assert.ok(late.artifact.problems.some((p) => p.includes("duplicate seq 0003")), late.artifact.problems.join("; "));
+  // The failure names the seq re-use precisely — never the 0021-style
+  // positional misread ("existing entry N was rewritten") that hit #1304.
+  assert.ok(
+    late.artifact.integrity.every((p) => !p.includes("rewritten") && !p.includes("edited")),
+    late.artifact.integrity.join("; "),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 9. The shared union reader — the contract every consumer computes through
+// ---------------------------------------------------------------------------
+
+const legacyPsql = (seq) => ({ seq, file: `${seq}_legacy.sql`, summary: "legacy", destructive: true, tables: ["t"] });
+const runnerEntry = (seq, slug) => ({ seq, file: `core/core__${seq}_${slug}.mjs`, summary: "s", destructive: false, tables: ["t"] });
+
+test("union reader: dual-form and split trees produce the identical sorted ledger", () => {
+  const dual = buildManifestUnion({
+    legacyEntries: [legacyPsql("0001"), legacyPsql("0002"), runnerEntry("0003", "c")],
+    fragments: [{ name: "core__0004_d.json", raw: JSON.stringify(runnerEntry("0004", "d")) }],
+  });
+  const split = buildManifestUnion({
+    legacyEntries: [legacyPsql("0001"), legacyPsql("0002")],
+    fragments: [
+      // Reverse order on purpose: the reader sorts deterministically.
+      { name: "core__0004_d.json", raw: JSON.stringify(runnerEntry("0004", "d")) },
+      { name: "core__0003_c.json", raw: JSON.stringify(runnerEntry("0003", "c")) },
+    ],
+  });
+  assert.deepEqual(dual.errors, []);
+  assert.deepEqual(split.errors, []);
+  assert.deepEqual(dual.entries, split.entries);
+  assert.deepEqual(dual.entries.map((e) => e.seq), ["0001", "0002", "0003", "0004"]);
+});
+
+test("union reader: never dedupes — a seq in both forms (or twice in fragments) is a hard error", () => {
+  const acrossForms = buildManifestUnion({
+    legacyEntries: [runnerEntry("0003", "c")],
+    fragments: [{ name: "core__0003_x.json", raw: JSON.stringify(runnerEntry("0003", "x")) }],
+  });
+  assert.ok(acrossForms.errors.some((e) => e.includes("duplicate seq 0003")), acrossForms.errors.join("; "));
+
+  const withinFragments = buildManifestUnion({
+    legacyEntries: [],
+    fragments: [
+      { name: "core__0003_x.json", raw: JSON.stringify(runnerEntry("0003", "x")) },
+      { name: "core__0003_y.json", raw: JSON.stringify(runnerEntry("0003", "y")) },
+    ],
+  });
+  assert.ok(withinFragments.errors.some((e) => e.includes("duplicate seq 0003")), withinFragments.errors.join("; "));
+});
+
+test("union reader: fragment contract violations are errors, not skips", () => {
+  const cases = [
+    { name: "NOTES.txt", raw: "notes", needle: "unrecognized file" },
+    { name: "core__0003_x.json", raw: "{ nope", needle: "not parseable JSON" },
+    { name: "core__0003_x.json", raw: "[]", needle: "single JSON object" },
+    { name: "core__0003_x.json", raw: JSON.stringify(runnerEntry("0004", "x")), needle: "does not match the filename's sequence number" },
+    { name: "core__0003_x.json", raw: JSON.stringify(runnerEntry("0003", "OTHER")), needle: "filename stem" },
+    { name: "core__0003_x.json", raw: JSON.stringify({ ...runnerEntry("0003", "x"), tables: "t" }), needle: "array of strings" },
+    { name: "core__0003_x.json", raw: JSON.stringify({ ...runnerEntry("0003", "x"), extra: 1 }), needle: "unknown key" },
+  ];
+  for (const { name, raw, needle } of cases) {
+    const { errors } = buildManifestUnion({ legacyEntries: [], fragments: [{ name, raw }] });
+    assert.ok(errors.some((e) => e.includes(needle)), `${name}: expected "${needle}" in: ${errors.join("; ")}`);
+  }
+});
+
+test("union reader (fs): reads a real tree; a missing manifest.d/ means no fragments; a subdirectory there is an error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "manifest-union-"));
+  try {
+    mkdirSync(join(dir, "migrations"), { recursive: true });
+    writeFileSync(join(dir, MIGRATION_MANIFEST_PATH), JSON.stringify({ migrations: [runnerEntry("0003", "c")] }));
+    const noDir = readManifestUnion(join(dir, "migrations"));
+    assert.deepEqual(noDir.errors, []);
+    assert.deepEqual(noDir.entries.map((e) => e.seq), ["0003"]);
+
+    mkdirSync(join(dir, MIGRATION_FRAGMENT_DIR, "nested"), { recursive: true });
+    writeFileSync(join(dir, MIGRATION_FRAGMENT_DIR, "core__0004_d.json"), JSON.stringify(runnerEntry("0004", "d")));
+    const withDir = readManifestUnion(join(dir, "migrations"));
+    assert.ok(withDir.errors.some((e) => e.includes("not a regular file")), withDir.errors.join("; "));
+    assert.deepEqual(withDir.entries.map((e) => e.seq), ["0003", "0004"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("union reader: the LIVE repo ledger is a valid union", () => {
+  const { entries, errors } = readManifestUnion(join(REPO_ROOT, "migrations"));
+  assert.deepEqual(errors, []);
+  assert.ok(entries.length >= 24, `expected the shipped ledger, got ${entries.length} entries`);
+  const seqs = entries.map((e) => Number(e.seq));
+  assert.deepEqual([...seqs].sort((a, b) => a - b), seqs, "entries must come back sorted by numeric seq");
 });

@@ -16,11 +16,16 @@ import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
  * WayFlow rejects with `Cannot start conversation because of missing
  * inputs "url"`.
  *
- * Fix shape: when the DB row's inputSchema is empty AND the agent is
- * in-repo (`@cinatra-ai/<slug>`), derive the full inputSchema from the
- * StartNode component in `extensions/cinatra-ai/<slug>/cinatra/oas.json`
- * at runtime. Cache by packageName@packageVersion so each worker process
- * pays I/O at most once per stale row.
+ * Fix shape: when the DB row's inputSchema is empty AND the package has a
+ * mounted source OAS, derive the full inputSchema from the StartNode
+ * component in its `cinatra/oas.json` at runtime. Multi-vendor (cinatra#1196):
+ * the on-disk path is derived SCOPE-DERIVED from the package's OWN vendor via
+ * `resolveInstalledOasMountPath` below, so a first-party `@cinatra-ai/<slug>`
+ * and an operator/third-party `@vendor/<slug>` agent both derive from their
+ * own `<mount>/<vendor>/<slug>/cinatra/oas.json` identically (no literal
+ * `cinatra-ai` segment, no `@cinatra-ai`-only regex). Cache by
+ * packageName@packageVersion so each worker process pays I/O at most once
+ * per stale row.
  *
  * The resolver derives the full schema (properties + required + hidden
  * flag + renderer hints), not just required[]. The setup loop downstream
@@ -42,30 +47,46 @@ export type ResolvedInputSchema = {
 type CacheKey = string; // `${packageName}@${packageVersion}`
 const cache = new Map<CacheKey, ResolvedInputSchema>();
 
-function isCinatraInRepoSlug(packageName: string | null | undefined): string | null {
-  if (typeof packageName !== "string") return null;
-  const match = /^@cinatra-ai\/([a-z0-9][a-z0-9-]*)$/.exec(packageName);
-  return match ? match[1] : null;
+// Scope-derived multi-vendor mount path (cinatra#1196). Split `@vendor/slug`
+// on its single `/` and validate BOTH parts as single filesystem-safe segments
+// (rejects `.`/`..`/separators/backslash) BEFORE the join, so a traversal
+// payload can never escape the mount; a malformed/unscoped name resolves to
+// `null`. Kept INLINE rather than the registries-backed shared
+// `resolveInstalledOasPathForRead`: this module is transitively reachable from
+// run-start routes (the setup loop), and importing the `@cinatra-ai/registries`
+// barrel here would inflate the route-graph first-party module count (the
+// no-new-rot dev-perf ratchet). The security trust root (the context routes,
+// slice 1) uses the full shared resolver; this is a best-effort derivation
+// over an already-install-validated package name.
+function resolveInstalledOasMountPath(packageName: string): string | null {
+  const m = /^@([^/]+)\/([^/]+)$/.exec(packageName);
+  if (!m) return null;
+  const vendor = m[1];
+  const slug = m[2];
+  if (!isSafeMountSegment(vendor) || !isSafeMountSegment(slug)) return null;
+  const oasPath = join(
+    resolveAgentRuntimeMountDir(),
+    vendor,
+    slug,
+    "cinatra",
+    "oas.json",
+  );
+  return existsSync(oasPath) ? oasPath : null;
 }
 
-function readDiskOas(slug: string): Record<string, unknown> | null {
-  const root = resolveAgentRuntimeMountDir();
-  const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
-  if (!existsSync(oasPath)) return null;
-  try {
-    // Sync read kept simple — `readFileSync` would also work; we use the
-    // async readFile inside a wrapping `.then` consumer pattern. Caller
-    // awaits the result via the async resolver below.
-    throw new Error("dispatch via resolveInputSchemaFromTemplate (async)");
-  } catch {
-    return null;
-  }
+function isSafeMountSegment(s: string): boolean {
+  return (
+    s !== "." &&
+    s !== ".." &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s)
+  );
 }
 
-async function readDiskOasAsync(slug: string): Promise<Record<string, unknown> | null> {
-  const root = resolveAgentRuntimeMountDir();
-  const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
-  if (!existsSync(oasPath)) return null;
+async function readInstalledOasAsync(
+  packageName: string,
+): Promise<Record<string, unknown> | null> {
+  const oasPath = resolveInstalledOasMountPath(packageName);
+  if (!oasPath) return null;
   try {
     const raw = (await readFile(oasPath, "utf8")) as string;
     return JSON.parse(raw) as Record<string, unknown>;
@@ -144,7 +165,8 @@ function inputSchemaIsEmpty(schema: unknown): boolean {
  *
  * Always returns a usable schema (never null). When the DB row carries
  * a non-empty inputSchema, it's returned verbatim. When empty AND the
- * agent is `@cinatra-ai/<slug>`, derives from the on-disk OAS StartNode.
+ * package has a mounted source OAS (any vendor — resolved scope-derived via
+ * the shared multi-vendor resolver), derives from the on-disk OAS StartNode.
  * Memoized per `${packageName}@${packageVersion}`.
  *
  * Callers: `execution.ts` setup-loop, `instance-screens.tsx` initial-
@@ -171,9 +193,8 @@ export async function resolveTemplateInputSchema(
     };
   }
 
-  const slug = isCinatraInRepoSlug(template.packageName);
-  if (!slug) {
-    // Not an in-repo @cinatra/ agent — empty schema stays empty.
+  if (typeof template.packageName !== "string") {
+    // No package identity — empty schema stays empty.
     return { type: "object", required: [], properties: {} };
   }
 
@@ -181,7 +202,7 @@ export async function resolveTemplateInputSchema(
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  const oas = await readDiskOasAsync(slug);
+  const oas = await readInstalledOasAsync(template.packageName);
   if (!oas) {
     return { type: "object", required: [], properties: {} };
   }
@@ -204,12 +225,6 @@ export function __resetInputSchemaResolverCache(): void {
 
 /** Test-only export of the synchronous derivation helper. */
 export const __testOnly = {
-  isCinatraInRepoSlug,
   deriveFullSchemaFromOas,
   inputSchemaIsEmpty,
 };
-
-// Silence unused-import warning — readDiskOas is the rejected sync stub
-// kept for clarity in the doc-comment. A sync variant may be useful if
-// this resolver later persists derived schemas.
-void readDiskOas;
