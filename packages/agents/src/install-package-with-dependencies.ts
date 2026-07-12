@@ -11,7 +11,7 @@ import "server-only";
 // "prefer-newer"). ONE resolver, ONE dependency vocabulary, ONE conflict
 // semantics; the agent path threads its REAL ownership tuple (rowOwnership)
 // so the conflict/dedupe basis resolves along the ownership ladder instead of
-// the org-binary (see ./dependency-plan-adapter.ts for the ratified seams).
+// the org-binary (the ratified seams live below in this module).
 //
 // Execution stays agent-native: each planned member installs via
 // `installAgentFromPackage` (upsert semantics), dependencies first, the root
@@ -23,6 +23,13 @@ import "server-only";
 // native in-place update. An `action:"install-side-by-side"` member fails
 // loud at execute-selection time: agent templates are keyed one-row-per
 // package, so side-by-side rows can only be realized by the batch saga.
+//
+// The agent-path planner SEAMS (the ratified decisions 1-4: rowOwnership
+// derivation, the real scope-ancestry ladder, and the decision-3 row-mutation
+// re-authorization) live in THIS module too — deliberately ONE module, not a
+// sibling file: the locked routes' dev-perf route-graph ratchet budgets one
+// module for this surface (the deleted registries install-with-deps module
+// freed exactly one slot).
 // ---------------------------------------------------------------------------
 
 import {
@@ -37,11 +44,384 @@ import {
 } from "./wayflow-reload-client";
 import { installAgentFromPackage } from "./install-from-package";
 import { readAgentTemplateByPackageName } from "./store";
+import type {
+  DependencyPlanDeps,
+  ResolvedScopeLevel,
+  RowOwnership,
+} from "@/lib/extension-dependency-plan";
 import {
-  agentRowOwnershipFromInstallInput,
-  buildAgentDependencyPlanDeps,
-} from "./dependency-plan-adapter";
-import type { InstallActorRoleBag } from "./install-target-authz";
+  PLATFORM_OWNER_SENTINEL,
+  type InstalledExtension,
+} from "@cinatra-ai/extensions/canonical-types";
+// Leaf subpaths (manifest-dependencies imports only canonical-types;
+// dependency-closure imports only @cinatra-ai/registries + canonical-types) —
+// NOT the @cinatra-ai/extensions main entry, so the static agents→extensions
+// index cycle does not apply (same posture as install-from-package.ts).
+import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
+import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
+import {
+  getPublishedExtensionSummary,
+  resolveExtensionDistIntegrity,
+  resolveMaxSatisfyingVersion,
+  isExactVersion,
+  isValidVersionRange,
+} from "@cinatra-ai/registries";
+import {
+  assertCanInstallAtTarget,
+  assertTargetBelongsToActiveOrg,
+  type InstallActorRoleBag,
+  type InstallScopeTarget,
+} from "./install-target-authz";
+import { readProjectById } from "@/lib/projects-store-dao";
+
+/**
+ * Derive the ROOT install's `rowOwnership` tuple from the agent installer's
+ * input. An explicit owner tier (the InstallScopeDialog target threaded by
+ * `installRegistryPackageAtScope`) is the tuple verbatim; absent, the
+ * canonical default applies (an org install is organization-owned, a null-org
+ * install platform-owned) — the same derivation the extension saga passes and
+ * the planner falls back to, so an untargeted agent install plans at the
+ * exact pre-#1039 scope.
+ */
+export function agentRowOwnershipFromInstallInput(input: {
+  orgId?: string;
+  ownerLevel?: "user" | "team" | "organization" | "workspace" | "project";
+  ownerId?: string;
+}): RowOwnership {
+  if (input.ownerLevel !== undefined) {
+    return {
+      ownerLevel: input.ownerLevel,
+      ownerId: input.ownerId ?? null,
+      organizationId: input.orgId ?? null,
+    };
+  }
+  return {
+    ownerLevel: input.orgId ? "organization" : "platform",
+    ownerId: input.orgId ?? null,
+    organizationId: input.orgId ?? null,
+  };
+}
+
+/** Injectable lookups for {@link resolveAgentScopeAncestry} (tests). */
+export type ScopeAncestrySeams = {
+  /** Default: `readProjectById` (src/lib/projects-store-dao). */
+  readProject?: (projectId: string) => Promise<{
+    organizationId: string;
+    ownerLevel: string;
+    ownerId: string | null;
+  } | null>;
+};
+
+function levelOf(
+  label: string,
+  organizationId: string | null,
+  matches: (row: InstalledExtension) => boolean,
+): ResolvedScopeLevel {
+  return { label, organizationId, matches };
+}
+
+/**
+ * Decision 2 — the REAL agent-path scope-ancestry resolver. Returns the
+ * ordered fallback chain the planner walks for the conflict/dedupe basis:
+ *
+ *   - platform      → [platform]
+ *   - organization  → [organization, platform]
+ *   - team          → [team, organization, platform]
+ *   - project       → [project, owning-team (when the project is team-owned),
+ *                      organization, platform]
+ *   - user          → [user, organization, platform]
+ *   - workspace     → [workspace, organization, platform]
+ *
+ * Each level matches rows OWNED at that scope (`row.ownerLevel` + `ownerId` +
+ * `organizationId`) — a team-owned row and an org-owned row inside the same
+ * org NEVER collapse into one basis (the exact split the #1039 fence named).
+ * The PLATFORM level keeps the canonical null-org match (`organizationId ===
+ * null`) so legacy platform rows resolve exactly as the extension binary does.
+ *
+ * Project→owning-team ancestry is a DB lookup (`project.ownerId` when
+ * `project.ownerLevel === "team"`), which is why this is an injected resolver
+ * seam and never a naive tuple walk. A project tuple naming an unreadable
+ * project FAILS LOUD — planning against a half-resolved ladder could bind the
+ * conflict basis to the wrong scope.
+ */
+export async function resolveAgentScopeAncestry(
+  rowOwnership: RowOwnership,
+  seams: ScopeAncestrySeams = {},
+): Promise<ResolvedScopeLevel[]> {
+  const { ownerLevel, ownerId, organizationId } = rowOwnership;
+  const orgId = organizationId ?? null;
+
+  const platform = levelOf("platform", null, (r) => (r.organizationId ?? null) === null);
+  const organization =
+    orgId === null
+      ? null
+      : levelOf(
+          `organization:${orgId}`,
+          orgId,
+          (r) => r.ownerLevel === "organization" && (r.organizationId ?? null) === orgId,
+        );
+  const withTrunk = (own: ResolvedScopeLevel | null, mid?: ResolvedScopeLevel | null) =>
+    [own, mid ?? null, organization, platform].filter(
+      (l): l is ResolvedScopeLevel => l !== null,
+    );
+
+  const ownedAt =
+    (level: string, id: string) =>
+    (r: InstalledExtension): boolean =>
+      (r.ownerLevel as string) === level &&
+      (r.ownerId ?? null) === id &&
+      (r.organizationId ?? null) === orgId;
+
+  switch (ownerLevel) {
+    case "platform":
+      return [platform];
+    case "organization":
+      return withTrunk(null);
+    case "team": {
+      if (!ownerId) throw new Error("[resolveAgentScopeAncestry] team tuple without ownerId");
+      return withTrunk(levelOf(`team:${ownerId}`, orgId, ownedAt("team", ownerId)));
+    }
+    case "user": {
+      if (!ownerId) throw new Error("[resolveAgentScopeAncestry] user tuple without ownerId");
+      return withTrunk(levelOf(`user:${ownerId}`, orgId, ownedAt("user", ownerId)));
+    }
+    case "workspace": {
+      if (!ownerId) throw new Error("[resolveAgentScopeAncestry] workspace tuple without ownerId");
+      return withTrunk(levelOf(`workspace:${ownerId}`, orgId, ownedAt("workspace", ownerId)));
+    }
+    case "project": {
+      if (!ownerId) throw new Error("[resolveAgentScopeAncestry] project tuple without ownerId");
+      const readProject = seams.readProject ?? readProjectById;
+      const project = await readProject(ownerId);
+      if (!project) {
+        throw new Error(
+          `[resolveAgentScopeAncestry] project ${ownerId} not found — cannot resolve the ` +
+            `ownership ancestry chain for a project-scoped install (refusing to plan against ` +
+            `a half-resolved ladder).`,
+        );
+      }
+      const owningTeamId = project.ownerLevel === "team" ? project.ownerId : null;
+      return withTrunk(
+        levelOf(`project:${ownerId}`, orgId, ownedAt("project", ownerId)),
+        owningTeamId
+          ? levelOf(`team:${owningTeamId}`, orgId, ownedAt("team", owningTeamId))
+          : null,
+      );
+    }
+  }
+}
+
+/** Injectable authz seams for {@link buildAgentRowMutationAuthorizer} (tests). */
+export type RowMutationAuthzSeams = {
+  assertTargetBelongsToActiveOrg?: typeof assertTargetBelongsToActiveOrg;
+  assertCanInstallAtTarget?: typeof assertCanInstallAtTarget;
+};
+
+/**
+ * Decision 3 — the agent-path `authorizeExistingRowMutation` seam. A clean
+ * dedupe-upward MUTATES an existing shared dependency row, so the requesting
+ * principal must be INDEPENDENTLY authorized for THAT row's exact scope.
+ * A throw here is converted by the planner into the evidence-carrying
+ * INSTALLED_VERSION_CONFLICT refusal (fail-closed).
+ *
+ * Rules (deny = throw):
+ *   - ACTOR PRESENT → the ratified rule VERBATIM: the grid re-runs against
+ *     the EXISTING row's `{level, id}` for EVERY mutation — including a
+ *     same-scope one. (Never assume the caller's own gate covered the row's
+ *     scope: e.g. `updateRegistryPackage` gates on the generic
+ *     `registry.update` canDo, not the scope grid.)
+ *       - Row owned at platform/workspace scope → platform_admin only.
+ *       - Row owned by a USER → only that user (or platform_admin).
+ *       - Row owned at organization/team/project scope → tenant boundary,
+ *         then the shared `assertTargetBelongsToActiveOrg` (existence +
+ *         project-ownership load) + `assertCanInstallAtTarget` grid against
+ *         the ROW's scope (the grid short-circuits platform_admin AFTER the
+ *         tenant gate).
+ *   - NO actor role bag (paths that cannot thread one, e.g. the
+ *     extension-handler flows): SAME-SCOPE rows permit — the mutation stays
+ *     within the exact scope the flow already operates in (the saga-parity
+ *     posture); anything cross-scope denies (fail-closed).
+ */
+export function buildAgentRowMutationAuthorizer(opts: {
+  rootRowOwnership: RowOwnership;
+  actor: InstallActorRoleBag | null;
+  seams?: RowMutationAuthzSeams;
+}): (row: InstalledExtension) => Promise<void> {
+  const assertTenant =
+    opts.seams?.assertTargetBelongsToActiveOrg ?? assertTargetBelongsToActiveOrg;
+  const assertGrid = opts.seams?.assertCanInstallAtTarget ?? assertCanInstallAtTarget;
+  return async (row: InstalledExtension): Promise<void> => {
+    const rowLevel = row.ownerLevel as string;
+    // The canonical store persists PLATFORM_OWNER_SENTINEL ("__platform__")
+    // where a null ownerId was written and returns it VERBATIM on reads —
+    // normalize it back to null so scope comparisons never mistake the
+    // sentinel for a real owner id.
+    const rowOwnerId =
+      row.ownerId === PLATFORM_OWNER_SENTINEL ? null : (row.ownerId ?? null);
+    const rowOrgId = row.organizationId ?? null;
+    const root = opts.rootRowOwnership;
+
+    const deny = (why: string): never => {
+      throw new Error(
+        `[agent-dependency-plan] not authorized to modify the ${rowLevel}-owned install of ` +
+          `${row.packageName}: ${why}`,
+      );
+    };
+
+    const actor = opts.actor;
+    if (!actor) {
+      // Actor-less path: same-scope permits, anything else is fail-closed
+      // (see the contract above). Scope IDENTITY is per-level: a platform
+      // scope is identified by the level alone, an organization scope by its
+      // organizationId (the ownerId column is redundant there and often
+      // carries the sentinel), and the narrower levels by their real ownerId.
+      const sameScope =
+        rowLevel === root.ownerLevel &&
+        rowOrgId === (root.organizationId ?? null) &&
+        (rowLevel === "platform" ||
+          rowLevel === "organization" ||
+          rowOwnerId === (root.ownerId ?? null));
+      if (sameScope) return;
+      deny("no actor role bag on this install path (cross-scope mutation is fail-closed)");
+      return;
+    }
+
+    // Platform-authority scopes (no tenant relation to validate): platform-
+    // and workspace-owned rows may only be mutated by a platform admin.
+    if (rowLevel === "platform" || rowLevel === "workspace") {
+      if (actor.platformRole === "platform_admin") return;
+      deny(`${rowLevel}-owned rows require platform admin`);
+    }
+    // USER-owned rows: their owner (or a platform admin).
+    if (rowLevel === "user") {
+      if (actor.platformRole === "platform_admin") return;
+      if (rowOwnerId === actor.principalId) return;
+      deny("user-owned rows may only be modified by their owner");
+    }
+    if (rowLevel !== "organization" && rowLevel !== "team" && rowLevel !== "project") {
+      deny(`unrecognized owner level`);
+    }
+    // TENANT BOUNDARY before the grid — mirrors the locked action ordering
+    // (assertTargetBelongsToActiveOrg runs before assertCanInstallAtTarget and
+    // platform_admin does NOT skip it): the grid's organization branch checks
+    // the actor's role, not the target org id, so the org/existence validation
+    // must run first for EVERY principal.
+    if (rowOrgId !== actor.organizationId) {
+      deny("the row belongs to a different organization");
+    }
+    const target: InstallScopeTarget =
+      rowLevel === "organization"
+        ? { level: "organization", id: rowOrgId! }
+        : rowOwnerId
+          ? { level: rowLevel as "team" | "project", id: rowOwnerId }
+          : (deny("the row carries no owner id") as never);
+    const { projectOwnership } = await assertTenant(actor, target, actor.organizationId);
+    // The grid itself short-circuits platform_admin — AFTER the tenant gate.
+    await assertGrid(actor, target, projectOwnership);
+  };
+}
+
+/**
+ * Build the full `DependencyPlanDeps` the agent full-tree installer injects
+ * into `planDependencyInstall` — ONE resolver for both install paths.
+ *
+ * `fetchSummary` mirrors the batch saga's registry resolution EXACTLY (the
+ * parity contract): exact version → packument read at that version; semver
+ * RANGE → `resolveMaxSatisfyingVersion` (pacote resolves exact versions and
+ * dist-tags but NOT ranges against Verdaccio — live-verify finding); dist-tag
+ * → `resolveExtensionDistIntegrity`; "latest"/absent → the packument default.
+ *
+ * `parseEdges` keeps the direct agent path's vocabulary guard: a REQUIRED
+ * cross-kind edge fails loud at plan time (this path installs each member via
+ * `installAgentFromPackage`, an AGENT-only installer; cross-kind closures
+ * route through the kind-aware batch saga).
+ */
+export function buildAgentDependencyPlanDeps(opts: {
+  config: VerdaccioConfig;
+  rowOwnership: RowOwnership;
+  actor: InstallActorRoleBag | null;
+  /** Test seams. */
+  fetchSummary?: DependencyPlanDeps["fetchSummary"];
+  readInstalledRows?: DependencyPlanDeps["readInstalledRows"];
+  ancestrySeams?: ScopeAncestrySeams;
+  authzSeams?: RowMutationAuthzSeams;
+}): DependencyPlanDeps {
+  return {
+    fetchSummary:
+      opts.fetchSummary ??
+      (async (packageName, versionOrRange) => {
+        const isExact = isExactVersion(versionOrRange);
+        let exact = isExact ? versionOrRange : undefined;
+        if (!isExact && versionOrRange !== "latest" && versionOrRange !== "") {
+          if (isValidVersionRange(versionOrRange)) {
+            const resolved = await resolveMaxSatisfyingVersion(
+              { packageName, range: versionOrRange },
+              opts.config,
+            );
+            if (!resolved) {
+              throw new Error(
+                `[agent-dependency-plan] no published version of ${packageName} satisfies "${versionOrRange}"`,
+              );
+            }
+            exact = resolved;
+          } else {
+            const resolved = await resolveExtensionDistIntegrity(
+              { packageName, packageVersion: versionOrRange },
+              opts.config,
+            );
+            exact = resolved.resolvedVersion ?? undefined;
+          }
+        }
+        const summary = await getPublishedExtensionSummary(
+          { packageName, ...(exact ? { packageVersion: exact } : {}) },
+          opts.config,
+        );
+        if (!summary.resolvedVersion) {
+          throw new Error(
+            `[agent-dependency-plan] no resolvable version for ${packageName}@${versionOrRange}`,
+          );
+        }
+        return {
+          resolvedVersion: summary.resolvedVersion,
+          kind: summary.kind,
+          manifest: summary.manifest,
+        };
+      }),
+    parseEdges: (manifest, packageName) => {
+      const { edges } = parseManifestDependencyEdges(manifest, { packageName });
+      for (const edge of edges) {
+        if (!isAutoInstallableEdge(edge)) continue;
+        if (edge.kind !== undefined && edge.kind !== "agent") {
+          throw new Error(
+            `[installAgentPackageWithDependencies] ${packageName} declares a required ${edge.kind} ` +
+              `dependency on ${edge.packageName}; the direct agent full-tree installer can only ` +
+              `install agent dependencies. Install cross-kind closures through the batch install saga.`,
+          );
+        }
+      }
+      return edges;
+    },
+    isAutoInstallableEdge,
+    readInstalledRows:
+      opts.readInstalledRows ??
+      (async () => {
+        // Dynamic import: @cinatra-ai/agents → @cinatra-ai/extensions
+        // canonical-store is the heavy DB-backed subpath (same posture as
+        // install-from-package.ts's canonical-store reads).
+        const { listInstalledExtensions } = await import(
+          "@cinatra-ai/extensions/canonical-store"
+        );
+        return listInstalledExtensions({});
+      }),
+    resolveScopeAncestry: (rowOwnership) =>
+      resolveAgentScopeAncestry(rowOwnership, opts.ancestrySeams ?? {}),
+    authorizeExistingRowMutation: buildAgentRowMutationAuthorizer({
+      rootRowOwnership: opts.rowOwnership,
+      actor: opts.actor,
+      ...(opts.authzSeams ? { seams: opts.authzSeams } : {}),
+    }),
+  };
+}
 
 export type InstallAgentPackageWithDependenciesInput = {
   packageName: string;

@@ -35,12 +35,22 @@ import type {
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 
+// The module under test pulls the executor's heavy siblings at module load
+// (install-from-package -> store/objects/materialize chains) — none of them
+// are exercised by these seam tests, so they are stubbed at the boundary.
+vi.mock("../install-from-package", () => ({ installAgentFromPackage: vi.fn() }));
+vi.mock("../store", () => ({ readAgentTemplateByPackageName: vi.fn() }));
+vi.mock("../materialize-agent-package", () => ({
+  withGlobalExtensionLifecycleLock: (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock("../wayflow-reload-client", () => ({ triggerWayflowReload: vi.fn() }));
+
 import {
   agentRowOwnershipFromInstallInput,
   buildAgentDependencyPlanDeps,
   buildAgentRowMutationAuthorizer,
   resolveAgentScopeAncestry,
-} from "../dependency-plan-adapter";
+} from "../install-package-with-dependencies";
 import type { InstallActorRoleBag } from "../install-target-authz";
 
 const ROOT = "@cinatra-ai/root-agent";
