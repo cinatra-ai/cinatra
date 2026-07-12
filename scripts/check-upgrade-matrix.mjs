@@ -123,9 +123,10 @@ function validate(node, schema, path, root, errs) {
 }
 
 // ---------------------------------------------------------------------------
-// Pure core: given the raw compose text + parsed matrix + schema, return every
-// problem as a string. Importable so the vitest suite can assert both the clean
-// tree AND injected regressions (proving the gate is not a no-op).
+// Pure core: given the raw compose text + parsed matrix + schema, RETURN every
+// problem as a string (no exit, no console). Importable so the vitest suite can
+// assert both the clean tree AND injected regressions (proving the gate is not
+// a no-op).
 export function collectProblems({ composeText, matrix, schema }) {
   const errors = [];
   const fail = (m) => errors.push(m);
@@ -179,14 +180,41 @@ export function collectProblems({ composeText, matrix, schema }) {
   // 7. fail-closed default
   if (matrix.failClosed?.default !== "unsupported") fail(`fail-closed: failClosed.default must be "unsupported", got ${JSON.stringify(matrix.failClosed?.default)}`);
 
+  // 8. case-exception referential integrity — every exception names a real
+  //    matrix service and does NOT duplicate an already-supported general
+  //    transition (an exception that shadows the baseline is a smell: either
+  //    it belongs in transitions, or the transition wrongly widens the
+  //    baseline).
+  const byId = new Map(matrix.services.map((s) => [s.id, s]));
+  for (const ex of matrix.caseExceptions ?? []) {
+    const svc = byId.get(ex.service);
+    if (!svc) {
+      fail(`case-exception: '${ex.case}' references unknown service '${ex.service}'`);
+      continue;
+    }
+    const dup = (svc.transitions ?? []).find((t) => t.from === ex.from && t.to === ex.to && t.supported);
+    if (dup) fail(`case-exception: '${ex.case}' duplicates supported general transition ${ex.service} ${ex.from}->${ex.to} (baseline-widening ambiguity)`);
+  }
+
+  return { errors, stats: { services: matrix.services?.length ?? 0, volumes: topVolumes.size, caseExceptions: matrix.caseExceptions?.length ?? 0, revision: matrix.revision } };
+}
+
+function main() {
+  const composeText = readFileSync(COMPOSE, "utf8");
+  const matrix = JSON.parse(readFileSync(MATRIX, "utf8"));
+  const schema = JSON.parse(readFileSync(SCHEMA, "utf8"));
+  const { errors, stats } = collectProblems({ composeText, matrix, schema });
   if (errors.length) {
     console.error(`[upgrade-matrix] ${errors.length} problem(s):`);
     for (const e of errors) console.error("  - " + e);
     process.exit(1);
   }
   console.log(
-    `[upgrade-matrix] OK — rev ${matrix.revision}, ${matrix.services.length} services, ${topVolumes.size} volumes, ${matrix.caseExceptions.length} case exception(s); schema + completeness + pin-drift + fail-closed clean.`,
+    `[upgrade-matrix] OK — rev ${stats.revision}, ${stats.services} services, ${stats.volumes} volumes, ${stats.caseExceptions} case exception(s); schema + completeness + pin-drift + fail-closed clean.`,
   );
 }
 
-main();
+// Run as a CLI only when executed directly (vitest imports the pure core).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main();
+}
