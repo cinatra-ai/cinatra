@@ -57,7 +57,10 @@ import {
   clearDurableRunContextBindings,
 } from "@/lib/agent-run-context-durable";
 import { issueAgentRunMcpActorToken } from "@/lib/agent-run-mcp-actor-token";
-import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
+import {
+  resolveAgentRunMcpActor,
+  resolveAssignedSkillsActorForRun,
+} from "@/lib/agent-run-actor-resolve";
 import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
 import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
@@ -1130,8 +1133,15 @@ export async function POST(req: Request): Promise<Response> {
     //     getCustomSkillForCurrentUserAndAgent resolves to none — it throws for
     //     an absent owner outside dev-bypass and the .catch swallows that to
     //     null (no personal delta, no error noise), never a guess.
-    // Org/shared skill delivery (getAssignedSkillIdsForAgent) is unchanged: it
-    // is agent-scoped, not user-scoped, and never consulted the run owner.
+    // #1401 — org/shared assigned-skill delivery (getAssignedSkillIdsForAgent)
+    // now resolves with a TRUSTWORTHY actor derived from the SAME vetted run
+    // handle (`runForPorts`) so ownership-scoped (team/project/org/workspace)
+    // custom-skill assignments reach the run. `resolveAssignedSkillsActorForRun`
+    // is fail-closed: an unverifiable identity (no run, no human runBy, or a
+    // membership-build failure) yields `undefined` and the resolver falls back
+    // to EXACTLY today's actor-less delivery — never more. No caller-supplied
+    // identity is ever consulted for scope (the run is server-vetted, never a
+    // body id).
     const personalSkillOwnerUserId =
       typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
         ? runForPorts.runBy
@@ -1142,7 +1152,17 @@ export async function POST(req: Request): Promise<Response> {
             body.agent_id,
             personalSkillOwnerUserId,
           ).catch(() => null),
-          getAssignedSkillIdsForAgent(body.agent_id),
+          // Derived lazily inside this Promise.all member so the membership
+          // expansion runs CONCURRENTLY with the personal-delta lookup above.
+          // Actor present ⇒ scope-aware resolution; absent (fail-closed) ⇒ the
+          // exact actor-less call delivered today (arity preserved).
+          (async () => {
+            const assignedSkillsActor =
+              await resolveAssignedSkillsActorForRun(runForPorts);
+            return assignedSkillsActor
+              ? getAssignedSkillIdsForAgent(body.agent_id!, assignedSkillsActor)
+              : getAssignedSkillIdsForAgent(body.agent_id!);
+          })(),
         ])
       : [null, [] as string[]];
 
