@@ -2,10 +2,10 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 140,
-    "/api/mcp": 1411,
-    "/chat": 1449,
-    "/api/a2a": 1416,
-    "/api/llm-bridge": 1422
+    "/api/mcp": 1415,
+    "/chat": 1453,
+    "/api/a2a": 1420,
+    "/api/llm-bridge": 1426
   },
   "absorbs": {
     "/sign-in": {
@@ -15,28 +15,28 @@
       "pr": 1310
     },
     "/api/mcp": {
-      "from": 1408,
-      "to": 1411,
-      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1408->1411.",
-      "pr": 1310
+      "from": 1411,
+      "to": 1415,
+      "reason": "cinatra#1426 (PR #1466): the effective-identity service adds +4 reachable first-party modules on every locked route that reaches the artifacts MCP module (src/lib/artifacts/artifact-service.ts): src/lib/objects/effective-identity.ts (the host resolver the artifact list/get enrichment now routes through), packages/objects/src/effective-identity.ts (the pure truth-table leaf), and the two claim modules the resolver newly pulls onto these routes for typed-row winner arbitration — src/lib/objects/artifact-claim-store.ts and packages/objects/src/claims.ts (previously reachable only from the effective-type-catalog surface). DISJOINT from the #1310 update-read-model modules already baked into this base ceiling. Measured by the CI gate on this PR's tree with the companion extension repos cloned pinned (missingCount 0, delta exact +4 vs the base ceiling on every affected route; /sign-in does not reach the artifacts MCP module and is unchanged).",
+      "pr": 1466
     },
     "/chat": {
-      "from": 1446,
-      "to": 1449,
-      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1446->1449.",
-      "pr": 1310
+      "from": 1449,
+      "to": 1453,
+      "reason": "cinatra#1426 (PR #1466): the effective-identity service adds +4 reachable first-party modules on every locked route that reaches the artifacts MCP module (src/lib/artifacts/artifact-service.ts): src/lib/objects/effective-identity.ts (the host resolver the artifact list/get enrichment now routes through), packages/objects/src/effective-identity.ts (the pure truth-table leaf), and the two claim modules the resolver newly pulls onto these routes for typed-row winner arbitration — src/lib/objects/artifact-claim-store.ts and packages/objects/src/claims.ts (previously reachable only from the effective-type-catalog surface). DISJOINT from the #1310 update-read-model modules already baked into this base ceiling. Measured by the CI gate on this PR's tree with the companion extension repos cloned pinned (missingCount 0, delta exact +4 vs the base ceiling on every affected route; /sign-in does not reach the artifacts MCP module and is unchanged).",
+      "pr": 1466
     },
     "/api/a2a": {
-      "from": 1413,
-      "to": 1416,
-      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1413->1416.",
-      "pr": 1310
+      "from": 1416,
+      "to": 1420,
+      "reason": "cinatra#1426 (PR #1466): the effective-identity service adds +4 reachable first-party modules on every locked route that reaches the artifacts MCP module (src/lib/artifacts/artifact-service.ts): src/lib/objects/effective-identity.ts (the host resolver the artifact list/get enrichment now routes through), packages/objects/src/effective-identity.ts (the pure truth-table leaf), and the two claim modules the resolver newly pulls onto these routes for typed-row winner arbitration — src/lib/objects/artifact-claim-store.ts and packages/objects/src/claims.ts (previously reachable only from the effective-type-catalog surface). DISJOINT from the #1310 update-read-model modules already baked into this base ceiling. Measured by the CI gate on this PR's tree with the companion extension repos cloned pinned (missingCount 0, delta exact +4 vs the base ceiling on every affected route; /sign-in does not reach the artifacts MCP module and is unchanged).",
+      "pr": 1466
     },
     "/api/llm-bridge": {
-      "from": 1419,
-      "to": 1422,
-      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1419->1422.",
-      "pr": 1310
+      "from": 1422,
+      "to": 1426,
+      "reason": "cinatra#1426 (PR #1466): the effective-identity service adds +4 reachable first-party modules on every locked route that reaches the artifacts MCP module (src/lib/artifacts/artifact-service.ts): src/lib/objects/effective-identity.ts (the host resolver the artifact list/get enrichment now routes through), packages/objects/src/effective-identity.ts (the pure truth-table leaf), and the two claim modules the resolver newly pulls onto these routes for typed-row winner arbitration — src/lib/objects/artifact-claim-store.ts and packages/objects/src/claims.ts (previously reachable only from the effective-type-catalog surface). DISJOINT from the #1310 update-read-model modules already baked into this base ceiling. Measured by the CI gate on this PR's tree with the companion extension repos cloned pinned (missingCount 0, delta exact +4 vs the base ceiling on every affected route; /sign-in does not reach the artifacts MCP module and is unchanged).",
+      "pr": 1466
     }
   }
 }
