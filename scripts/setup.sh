@@ -332,19 +332,24 @@ fi
 
 # The OpenAI shell sandbox image builds from whichever extension ships a
 # runtime/Dockerfile (today the OpenAI connector, cloned back under extensions/).
-# Core does not hardcode a specific extension. Build only when one is present --
-# never abort `make setup` (set -euo pipefail) when the clone-back has not
-# delivered it yet (the OpenAI shell tool just stays unavailable until then).
-shell_runtime_context=""
+# Core does not hardcode a specific extension, but exactly ONE extension may own
+# the `cinatra/skill-shell:latest` tag: collect ALL matches so an AMBIGUOUS tree
+# (>1 extension shipping a runtime/Dockerfile) fails loud instead of silently
+# re-tagging the shell image from whichever the glob happened to enumerate first.
+# Build only when exactly one is present -- never abort `make setup`
+# (set -euo pipefail) when the clone-back has not delivered it yet (the OpenAI
+# shell tool just stays unavailable until then).
+shell_runtime_contexts=()
 for dockerfile in extensions/*/*/runtime/Dockerfile; do
   if [ -f "$dockerfile" ]; then
-    shell_runtime_context="$(dirname "$dockerfile")"
-    break
+    shell_runtime_contexts+=("$(dirname "$dockerfile")")
   fi
 done
-if [ -n "$shell_runtime_context" ]; then
+if [ "${#shell_runtime_contexts[@]}" -gt 1 ]; then
+  error "Ambiguous OpenAI shell runtime: ${#shell_runtime_contexts[@]} extensions ship a runtime/Dockerfile (${shell_runtime_contexts[*]}). Exactly one (the OpenAI connector) may provide cinatra/skill-shell:latest; resolve the ambiguity before setup can build the shell image."
+elif [ "${#shell_runtime_contexts[@]}" -eq 1 ]; then
   info "Building OpenAI shell Docker image..."
-  docker build -t cinatra/skill-shell:latest "$shell_runtime_context"
+  docker build -t cinatra/skill-shell:latest "${shell_runtime_contexts[0]}"
 else
   warn "Skipping OpenAI shell Docker image: no extension ships a runtime/Dockerfile. The OpenAI shell tool stays unavailable until the runtime Dockerfile is restored to the OpenAI connector."
 fi

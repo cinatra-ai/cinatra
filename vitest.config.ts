@@ -192,6 +192,26 @@ export default defineConfig({
       // semver install transitive chains that aren't needed for the wizard
       // action unit tests. Map the entry to a narrow stub that re-exports
       // only the user-provisioning slice.
+      // Dependency-free leaves of @cinatra-ai/registries (pure read-model
+      // builders / semver compare — no pacote chain), mapped to the REAL
+      // modules and listed BEFORE the barrel stub (first match wins) so the
+      // deep-path consumers (extension-auto-update,
+      // extension-update-read-model-store, marketplace-sync-deps) get the
+      // genuine implementations.
+      {
+        find: "@cinatra-ai/registries/src/update-read-model",
+        replacement: path.join(
+          __dirname,
+          "packages/registries/src/update-read-model.ts",
+        ),
+      },
+      {
+        find: "@cinatra-ai/registries/src/version-compare",
+        replacement: path.join(
+          __dirname,
+          "packages/registries/src/version-compare.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/registries",
         replacement: path.join(

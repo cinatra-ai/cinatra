@@ -975,7 +975,16 @@ export const SCHEMA_CONFIG_FIELD_KEYS = {
   ]),
   "free-list": new Set(["kind", "key", "label", "itemLabel", "placeholder", "description"]),
 };
-const SCHEMA_CONFIG_ROOT_KEYS = new Set(["title", "description", "fields", "tabs"]);
+const SCHEMA_CONFIG_ROOT_KEYS = new Set([
+  "title",
+  "description",
+  "fields",
+  "tabs",
+  // The opt-in hydration read-action declaration (the SDK contract key
+  // CONFIG_HYDRATION_SCHEMA_KEY; parity-pinned against the host parser +
+  // SDK constant by schema-config-root-vocabulary-parity.test.ts).
+  "hydrateAction",
+]);
 const SCHEMA_CONFIG_BADGE_VARIANTS = new Set([
   "outline", "secondary", "destructive", "success", "warning", "info", "ghost", "muted",
 ]);
@@ -1235,6 +1244,16 @@ export function validateConfigSchema(raw) {
   if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
     errors.push("configSchema.fields must be a non-empty array");
     return errors;
+  }
+  // The opt-in hydration read-action declaration. Fail-closed like the host
+  // parser (parseSchemaConfig): present-but-malformed is a validation error,
+  // never a silent degrade. Same actionId grammar as every other declared
+  // action id; identical error string to the host parser.
+  if (
+    raw.hydrateAction !== undefined &&
+    (!nonEmptyStr(raw.hydrateAction) || !SCHEMA_CONFIG_KEY_RE.test(raw.hydrateAction))
+  ) {
+    errors.push(`configSchema: "hydrateAction" must be a valid actionId string`);
   }
   const seenKeys = new Set();
   validateConfigSchemaFieldList(raw.fields, "fields", errors, seenKeys);

@@ -1223,3 +1223,142 @@ async function importStoreModule(rec: PackageStoreRecord): Promise<ExtensionModu
     return null;
   }
 }
+
+/**
+ * ATOMIC DEFAULT RE-ELECTION (cinatra#1040 S4 — the #1040 acceptance scenario 4).
+ *
+ * When a package's DEFAULT version changes (an update flips `is_default` in the
+ * canonical store), the in-process GLOBAL registrations — MCP tool names,
+ * capability providers, object types, UI surfaces, runtime cubes/portlets — must
+ * move from the OLD default to the NEW default, and the NEW default must
+ * re-register the package's unversioned global names. This drives that transition
+ * REUSING the established hot-update invariants:
+ *
+ *  1. PRE-VERIFY the new default activates (register succeeds against an inert
+ *     probe ctx) and ABORT before any teardown if it does not — a bad new default
+ *     never strands the package with its old registrations gone (no-strand).
+ *  2. TEARDOWN via `teardownExtensionCapabilities` — the single canonical
+ *     chokepoint that removes EVERY global registry for the package (MCP tools,
+ *     capability providers, UI, object types, runtime cubes, portlet kinds, the
+ *     signed-activated marker).
+ *  3. RE-ACTIVATE with the MULTI-VERSION resolver so the current default registers
+ *     the global names and non-default siblings activate side-by-side against the
+ *     side-effect-free context.
+ *  4. On a post-teardown activation FAILURE, invoke `reactivatePriorDefault`
+ *     (rollback) so the package is not left globally unregistered — matching the
+ *     hot-update durable-rollback contract; the install saga's durable restore is
+ *     the outer backstop.
+ *
+ * Dependency-injected so the transition is unit-testable at the REGISTRY level
+ * without a real store/DB/boot: the caller may inject `preVerify` / `teardown` /
+ * `activate` / `reactivatePriorDefault`. Production defaults wire the real probe,
+ * the real teardown chokepoint, and the real plural boot activation.
+ */
+export async function reelectDefaultVersion(
+  packageName: string,
+  opts: {
+    orgId?: string | null;
+    storeRoot?: string;
+    /** Prove the new default activates BEFORE teardown (no-strand). */
+    preVerify?: (packageName: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Remove every global registry for the package (default: the teardown chokepoint). */
+    teardown?: (packageName: string) => void | Promise<void>;
+    /** Re-activate the package multi-version (default: plural boot activation, onlyPackage). */
+    activate?: (packageName: string) => Promise<ActivationResult[]>;
+    /** Rollback hook if the post-teardown activation fails (default: no-op; the saga is the backstop). */
+    reactivatePriorDefault?: () => void | Promise<void>;
+  } = {},
+): Promise<{ ok: boolean; results: ActivationResult[]; reason?: string }> {
+  const orgId = opts.orgId ?? null;
+
+  // (1) PRE-VERIFY the new default is activatable BEFORE anything is torn down.
+  const preVerify =
+    opts.preVerify ??
+    (async (pkg: string) => {
+      // Default probe: resolve the current DEFAULT anchor, then prove its digest
+      // imports + registers against an inert probe ctx (no live registry mutation).
+      const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
+      const resolveDefault = await makeDefaultInstallAnchorResolver(orgId);
+      const anchor = await resolveDefault(pkg);
+      if (!anchor) return { ok: false as const, reason: "no-trusted-default-anchor" };
+      if (!anchor.trustDecision) return { ok: false as const, reason: "default-anchor-not-trusted" };
+      const storeRoot =
+        opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
+      // Bind to the default's exact digest dir when the anchor is digest-bound;
+      // otherwise fall back to the sole-record probe (metadata-only packages pass
+      // the integrity re-verify without an import).
+      let currentStoreDir: string | undefined;
+      if (anchor.digest && anchor.kind) {
+        const { storeSlugSegments } = await import("@/lib/extension-package-store-core");
+        const { join } = await import("node:path");
+        try {
+          currentStoreDir = join(storeRoot, anchor.kind, ...storeSlugSegments(pkg), anchor.digest);
+        } catch {
+          currentStoreDir = undefined;
+        }
+      }
+      return verifyDigestImportsAndRegisters(
+        pkg,
+        storeRoot,
+        currentStoreDir,
+        {
+          integrity: anchor.integrity,
+          contentHash: anchor.contentHash,
+          approvedPorts: anchor.approvedPorts ?? [],
+        },
+        { metadataOnlyOk: true },
+      );
+    });
+
+  const pv = await preVerify(packageName);
+  if (!pv.ok) {
+    console.warn(
+      `[extension-runtime-activate] default re-election for "${packageName}" ABORTED before teardown — ` +
+        `the new default is not activatable (${pv.reason}); the previous registrations are left intact.`,
+    );
+    return { ok: false, results: [{ packageName, status: "failed", reason: "register-threw" }], reason: pv.reason };
+  }
+
+  // (2) TEARDOWN every global registry for the package (the canonical chokepoint).
+  const teardown =
+    opts.teardown ??
+    (async (pkg: string) => {
+      const { teardownExtensionCapabilities } = await import("@/lib/extension-capability-teardown");
+      teardownExtensionCapabilities(pkg);
+    });
+  await teardown(packageName);
+
+  // (3) RE-ACTIVATE multi-version: the current default owns global names again;
+  // non-default siblings activate against the side-effect-free context.
+  const activate =
+    opts.activate ??
+    (async (pkg: string) => {
+      const storeRoot =
+        opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
+      const { makeDefaultInstallAnchorsResolver } = await import("@/lib/extension-install-anchor");
+      const resolveInstallAnchors = await makeDefaultInstallAnchorsResolver(orgId);
+      const { loadRuntimePackageExtensions } = await import("@/lib/runtime-package-loader");
+      return loadRuntimePackageExtensions(storeRoot, { onlyPackage: pkg, resolveInstallAnchors });
+    });
+  const results = await activate(packageName);
+
+  // (4) A post-teardown activation failure of the DEFAULT would leave the package
+  // globally unregistered — roll back to the prior default (best-effort; the saga
+  // durable restore is the outer backstop), matching the hot-update contract.
+  const defaultFailed =
+    results.some((r) => r.packageName === packageName && r.status === "failed") ||
+    !results.some(
+      (r) => r.packageName === packageName && (r.status === "registered" || r.status === "bootstrapped"),
+    );
+  if (defaultFailed) {
+    console.warn(
+      `[extension-runtime-activate] default re-election for "${packageName}" FAILED after teardown — ` +
+        `rolling back to the prior default (durable saga restore is the backstop).`,
+    );
+    if (opts.reactivatePriorDefault) await opts.reactivatePriorDefault();
+    return { ok: false, results, reason: "new-default-activation-failed" };
+  }
+
+  bumpActivationGeneration("reelect-default", packageName);
+  return { ok: true, results };
+}

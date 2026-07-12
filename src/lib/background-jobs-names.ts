@@ -56,6 +56,16 @@ export const BACKGROUND_JOB_NAMES = {
   // SKILL_MATCH_DRIFT_SCORE_DELTA_THRESHOLD. Disabled by default at the
   // schedule-row level; the boot hook is a no-op until an admin enables it.
   SKILL_MATCH_DRIFT_SAMPLE: "skill-match-drift-sample",
+  // Matching-maintenance tick (cinatra #1365): tombstoned orphan GC followed by
+  // the hash staleness sweep. Opt-in via the SKILL_MATCH_MAINTENANCE_CRON env
+  // var (no schedule-row column, so no migration); the boot hook is a no-op
+  // until the operator sets it.
+  SKILL_MATCH_MAINTENANCE_TICK: "skill-match-maintenance-tick",
+  // Agent/skill-match parity observation (cinatra #1366): compares the canonical
+  // skill_matches projection against the legacy agent_skill_matches snapshot and
+  // records an operator-visible parity report + divergence telemetry.
+  // Observation only — no retirement. Opt-in via SKILL_MATCH_PARITY_CRON.
+  SKILL_MATCH_PARITY_OBSERVE: "skill-match-parity-observe",
   // Production scheduler for the provider-file ref-cache eviction sweep.
   // Iterates (orgId, provider) pairs and drives `evictExpiredProviderFiles`
   // so the cache (`artifact_provider_cache`) does not accumulate expired rows
@@ -126,6 +136,14 @@ export const BACKGROUND_JOB_NAMES = {
   // itself keeps the cheap integrity re-verify only). Also runnable on demand
   // through POST /api/admin/extensions/store-gc.
   EXTENSION_STORE_GC_REAP: "extension-store-gc-reap",
+  // In-app extension auto-update loop (cinatra#1042). Daily self-rescheduling
+  // sweep that reads the cached update read model for installed extensions,
+  // filters candidates through the scope/ABI/signature-readiness gates, and
+  // executes eligible updates through the SAME dispatch as a manual update
+  // (planner/batch on the non-gatekept path) under a defined system Actor.
+  // Master-flag gated: the boot phase seeds this loop ONLY when
+  // CINATRA_EXTENSION_AUTO_UPDATE=true (default OFF — never scheduled).
+  EXTENSION_AUTO_UPDATE: "extension-auto-update",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -189,3 +207,13 @@ export const PM_SCHEDULE_RECONCILE_LOOP_JOB_ID = "pm-schedule-reconcile-loop";
  * by the perpetual-system-loops CI gate.
  */
 export const EXTENSION_STORE_GC_REAP_LOOP_JOB_ID = "extension-store-gc-reap-loop";
+/**
+ * Canonical loop-job id for the extension auto-update sweep (cinatra#1042).
+ * Same contract as the other loop ids above: the boot seed creates the job
+ * under this id (ONLY when CINATRA_EXTENSION_AUTO_UPDATE=true — the loop is
+ * default-OFF and never seeded otherwise) and the handler re-delays THIS job
+ * via moveToDelayed each cycle; any other id is a legacy anonymous duplicate
+ * that runs once WITHOUT rescheduling. Drift here re-introduces the
+ * per-restart queue storm guarded by the perpetual-system-loops CI gate.
+ */
+export const EXTENSION_AUTO_UPDATE_LOOP_JOB_ID = "extension-auto-update-loop";

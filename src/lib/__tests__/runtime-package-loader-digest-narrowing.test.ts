@@ -53,6 +53,8 @@ const applyMigrationsForTrustedRecords = vi.fn(async () => ({ applied: [], refus
 vi.mock("@/lib/extension-migration-host", () => ({
   applyMigrationsForTrustedRecords: (...a: unknown[]) =>
     applyMigrationsForTrustedRecords(...(a as [])),
+  applyMigrationUnionForTrustedRecords: (...a: unknown[]) =>
+    applyMigrationsForTrustedRecords(...(a as [])),
 }));
 
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";

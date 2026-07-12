@@ -16,6 +16,10 @@ import {
   type OwnerLevel,
   normalizeOwnerLevel,
 } from "@/lib/authz/resource-ref";
+import {
+  type CanonicalVisibility,
+  isCanonicalVisibility,
+} from "@/lib/derived-store-ownership";
 // Artifact rows are objects rows. Artifact creation writes the objects row directly (not via
 // upsertObjectAndEnqueue) so this writer must read the same project frame
 // and apply the same substrate-exclusion rule. SEMANTIC_ARTIFACT_OBJECT_TYPE
@@ -85,7 +89,14 @@ export type CreateSemanticArtifactInput = {
   // for the upload route's public path.
   ownerLevel: OwnerLevel;
   ownerId: string;
-  visibility?: string;
+  /**
+   * Canonical visibility ONLY ('private' | 'team' | 'organization' |
+   * 'public'). The composite-string vocabulary ('org', 'workspace',
+   * 'team:<id>', ...) is retired (cinatra#1428, one-shot cutover via
+   * core__0033); a non-canonical value throws at the entry boundary.
+   * Omitted ⇒ the owner level's canonical default.
+   */
+  visibility?: CanonicalVisibility;
   title?: string;
   declaredMime?: string;
   originKind?: ArtifactOriginKind;
@@ -187,8 +198,19 @@ export async function createSemanticArtifact(
   const preallocatedResourceId = randomUUID();
 
   const ownerLevelNorm = normalizeOwnerLevel(input.ownerLevel);
+  // Fail-closed vocabulary boundary (cinatra#1428): only canonical visibility
+  // values may reach the objects row. TS enforces this for typed callers; the
+  // runtime check catches untyped JS/boundary callers that would otherwise
+  // re-introduce the retired composite-string vocabulary.
+  if (input.visibility !== undefined && !isCanonicalVisibility(input.visibility)) {
+    throw new Error(
+      `[artifact-creation] non-canonical visibility ${JSON.stringify(
+        input.visibility,
+      )} — expected 'private' | 'team' | 'organization' | 'public' (cinatra#1428 one-shot cutover)`,
+    );
+  }
   const visibility =
-    input.visibility ?? defaultVisibilityFor(ownerLevelNorm, input.ownerId);
+    input.visibility ?? defaultVisibilityFor(ownerLevelNorm);
   const originKind: ArtifactOriginKind = input.originKind ?? "upload";
   const maxBytes = input.maxBytes ?? ARTIFACT_BLOB_MAX_DEFAULT_BYTES;
 
@@ -863,19 +885,23 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
   };
 }
 
-// `buildOwnershipFilter()` matches team-owned rows on visibility =
-// `team:<teamId>` (NOT bare `"team"`). Same goes for user-owned rows
-// (`user:<userId>`). The bare-string defaults silently hid team/user-owned
-// artifacts from their owners.
-function defaultVisibilityFor(ownerLevel: OwnerLevel, ownerId: string): string {
+// Canonical default visibility per owner level (cinatra#1428). The owner axis
+// lives in owner_level + owner_id; visibility is the SHARE axis:
+//   user-owned      → 'private'      (only the owning user)
+//   team-owned      → 'team'         (the owning team's members)
+//   org-owned       → 'organization' (all org members)
+//   workspace-owned → 'public'       (anyone in the owning org; the
+//                                     multi-tenant scoping lives in
+//                                     buildOwnershipFilter)
+function defaultVisibilityFor(ownerLevel: OwnerLevel): CanonicalVisibility {
   switch (ownerLevel) {
     case "user":
-      return `user:${ownerId}`;
+      return "private";
     case "team":
-      return `team:${ownerId}`;
+      return "team";
     case "organization":
-      return "org";
+      return "organization";
     case "workspace":
-      return "workspace";
+      return "public";
   }
 }

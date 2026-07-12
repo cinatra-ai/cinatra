@@ -6,6 +6,7 @@ import {
   readAgentTemplateById,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
+  readAgentTemplateVersionById,
   transitionRunStatus,
   RunTransitionError,
   findSavedConnectionForAgentUrl,
@@ -41,6 +42,186 @@ import {
   mcpRequestContextStorage,
   type McpRequestContext,
 } from "@cinatra-ai/mcp-server";
+
+// ---------------------------------------------------------------------------
+// FAIL-CLOSED pinned-run snapshot resolution (cinatra#1040 S7).
+//
+// Deliberately INLINED in the worker module rather than a dedicated file: a new
+// module would add first-party graph pressure to every hot route that reaches
+// this worker (the route-graph ratchet counts it on /api/a2a, /api/llm-bridge,
+// /api/mcp, /chat), and store.ts (the other already-in-graph home) is at its
+// file-size ceiling. execution.ts is already in every one of those route graphs
+// and is not file-size-tracked, so this adds NO graph or file-size pressure. The
+// function is PURE + dependency-injected (readers are passed in) so it is still
+// unit-testable without a DB.
+//
+// Closes the request-time refuse-with-evidence contract END-TO-END. S5 made the
+// A2A REQUEST-TIME pinning seam (`resolveVersionBeforeRun`) refuse an explicit
+// `requestedVersion` with no immutable `agent_template_versions` snapshot. But
+// this EXECUTION worker still best-effort fell back to the LIVE template if a
+// REQUESTED-and-present snapshot was PURGED between enqueue and execution,
+// because the run row recorded only the resolved semver (`packageVersion`), not
+// whether the pin was REQUIRED. A pinned run could therefore silently serve an
+// UNPINNED (live) version.
+//
+// THE REQUIRED-PIN MARKER (formal encoding, migration-free). A run is a REQUIRED
+// pin iff it carries BOTH `versionId` (the EXACT agent_template_versions snapshot
+// id) AND `packageVersion` (the resolved semver). `resolveVersionBeforeRun` sets
+// BOTH only for an explicit `requestedVersion` (a default resolution returns the
+// semver but NO snapshot id). EVERY OTHER run producer sets AT MOST ONE —
+// createAgentRunPendingInput, runFromRegistry, and the workflow / project /
+// host-content-editor dispatch paths all set `versionId`-ONLY (an inert
+// latest-snapshot pin the worker has never honored); a default A2A resolution
+// sets `packageVersion`-ONLY. The A2A InProcessAgentExecutor is the SOLE
+// createAgentRun caller that sets `packageVersion`, and (S7) it now also threads
+// the resolved snapshot id into `versionId`. So the pair is UNAMBIGUOUS: it
+// identifies exactly the A2A request-time required pin — leaving every
+// `versionId`-only pin on its existing best-effort behavior (no regression).
+// ---------------------------------------------------------------------------
+
+/** The subset of `agent_template_versions` resolvePinnedRunSnapshot reads. */
+export type PinnedVersionRow = {
+  templateId: string;
+  semver: string;
+  snapshot: unknown;
+};
+
+/** The execution fields a resolved snapshot overlays onto the live template. */
+export type PinnedRunSnapshotFields = {
+  compiledPlan?: unknown;
+  taskSpec?: string | null;
+};
+
+export type ResolvePinnedRunSnapshotDeps = {
+  readAgentTemplateVersionById: (id: string) => Promise<PinnedVersionRow | null>;
+  readAgentTemplateVersionBySemver: (
+    templateId: string,
+    semver: string,
+  ) => Promise<PinnedVersionRow | null>;
+};
+
+/**
+ * Thrown when a run carrying a REQUIRED version pin cannot be served that exact
+ * immutable snapshot. Carries the full evidence set so the worker can fail the
+ * run with an actionable refusal instead of silently serving the live template.
+ */
+export class PinnedRunSnapshotUnreachableError extends Error {
+  readonly code = "PINNED_RUN_SNAPSHOT_UNREACHABLE";
+  readonly templateId: string;
+  readonly packageVersion: string;
+  readonly versionId: string;
+  readonly reason: string;
+  constructor(input: {
+    templateId: string;
+    packageVersion: string;
+    versionId: string;
+    reason: string;
+  }) {
+    super(
+      `pinned run refused — the REQUIRED version pin ${input.templateId}@${input.packageVersion} ` +
+        `(snapshot ${input.versionId}) could not be served: ${input.reason}. Refusing rather than ` +
+        `silently serving the live template (cinatra#1040 S7 fail-closed). Re-publish that ` +
+        `agent_template_versions snapshot, or dispatch without an explicit version pin.`,
+    );
+    this.name = "PinnedRunSnapshotUnreachableError";
+    this.templateId = input.templateId;
+    this.packageVersion = input.packageVersion;
+    this.versionId = input.versionId;
+    this.reason = input.reason;
+  }
+}
+
+/**
+ * Resolve the immutable snapshot a queued run must be executed against.
+ *
+ *   - REQUIRED pin (`versionId` AND `packageVersion` both set): load the exact
+ *     snapshot by id, VERIFY it binds to the run's template + version, VERIFY it
+ *     is structurally usable, and return its execution fields for a FULL overlay.
+ *     Any failure throws `PinnedRunSnapshotUnreachableError` — never the default.
+ *   - Non-required with a `packageVersion` (default A2A resolution / legacy):
+ *     best-effort load by semver; a missing/unstructured row returns `null` so
+ *     the caller keeps the EXISTING live-template behavior.
+ *   - `versionId`-only (inert pending-input / registry pin) or neither: `null`.
+ */
+export async function resolvePinnedRunSnapshot(
+  run: { templateId: string; packageVersion: string | null; versionId: string | null },
+  deps: ResolvePinnedRunSnapshotDeps,
+): Promise<PinnedRunSnapshotFields | null> {
+  const isRequiredPin = run.versionId != null && run.packageVersion != null;
+
+  if (isRequiredPin) {
+    const versionId = run.versionId as string;
+    const packageVersion = run.packageVersion as string;
+    const fail = (reason: string): never => {
+      throw new PinnedRunSnapshotUnreachableError({
+        templateId: run.templateId,
+        packageVersion,
+        versionId,
+        reason,
+      });
+    };
+
+    // (1) LOAD by the exact snapshot id. deserialization (JSON.parse of the
+    //     stored snapshot) happens inside the reader and can THROW on a corrupt
+    //     row — catch it and fail closed rather than let it bubble as a raw 500.
+    let row: PinnedVersionRow | null;
+    try {
+      row = await deps.readAgentTemplateVersionById(versionId);
+    } catch (err) {
+      return fail(
+        `snapshot load/deserialize failed (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    // (2) PRESENCE — a purged snapshot is unreachable.
+    if (!row) {
+      return fail("no agent_template_versions row for the pinned snapshot id (purged mid-flight)");
+    }
+    // (3) BINDING — the loaded snapshot MUST be the one the run claims. A
+    //     mismatched `versionId` (wrong template or wrong version) would serve a
+    //     DIFFERENT plan while claiming the requested version — a silent swap.
+    if (row.templateId !== run.templateId || row.semver !== packageVersion) {
+      return fail(
+        `pinned snapshot binds to ${row.templateId}@${row.semver}, not the requested ` +
+          `${run.templateId}@${packageVersion}`,
+      );
+    }
+    // (4) STRUCTURE — a well-formed snapshot is a plain object (not a scalar /
+    //     array / null). buildSnapshotFromTemplate always emits compiledPlan +
+    //     taskSpec for every kind.
+    const snap = row.snapshot;
+    if (typeof snap !== "object" || snap === null || Array.isArray(snap)) {
+      return fail("pinned snapshot payload is structurally unusable (not a structured object)");
+    }
+    const s = snap as { compiledPlan?: unknown; taskSpec?: string | null };
+    // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
+    //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
+    //     the run: the worker overlays a field only when it is `!== undefined`,
+    //     so a snapshot with no compiledPlan would leave the LIVE plan in place —
+    //     a fail-open. Refuse it. (A well-formed snapshot always carries a
+    //     defined compiledPlan — possibly `[]` — so this is not over-strict.)
+    if (s.compiledPlan === undefined) {
+      return fail("pinned snapshot is missing compiledPlan (cannot replace the live execution plan)");
+    }
+    // Both execution fields are now DEFINED (compiledPlan verified above;
+    // taskSpec normalized to null), so the worker's `!== undefined` overlay is a
+    // FULL replacement for a required pin — never a partial overlay onto live.
+    return { compiledPlan: s.compiledPlan, taskSpec: s.taskSpec ?? null };
+  }
+
+  // NON-REQUIRED with a resolved semver — best-effort load, live-template
+  // fallback preserved exactly as the pre-S7 worker behaved.
+  if (run.packageVersion != null) {
+    const row = await deps.readAgentTemplateVersionBySemver(run.templateId, run.packageVersion);
+    if (!row) return null; // live-template fallback (unchanged)
+    const snap = row.snapshot;
+    if (typeof snap !== "object" || snap === null) return null;
+    const s = snap as { compiledPlan?: unknown; taskSpec?: string | null };
+    return { compiledPlan: s.compiledPlan, taskSpec: s.taskSpec };
+  }
+
+  // `versionId`-only (inert pin) or neither → live template.
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Side-effects gate at the WayFlow dispatch boundary.
@@ -1055,41 +1236,40 @@ async function runAgentBuilderExecutionJobInner(
   }
 
   // ---------------------------------------------------------------------------
-  // Version pinning. When the A2A request-time surface sets
-  // run.packageVersion, the worker loads the immutable snapshot for
-  // (templateId, semver) and applies it on top of the live template before
-  // any dispatch. Later `agent_registry_publish` calls cannot retarget
-  // an in-flight task (invariant: "published version cannot change in-flight").
-  // No-op when run.packageVersion === null (existing live-template behavior).
+  // Version pinning (cinatra#1040 S5 request-time, S7 fail-closed execution).
+  // resolvePinnedRunSnapshot maps the run's (versionId, packageVersion) to the
+  // immutable snapshot it must be executed against and applies it on top of the
+  // live template before any dispatch, so a later `agent_registry_publish`
+  // cannot retarget an in-flight task ("published version cannot change
+  // in-flight").
+  //   - REQUIRED pin (versionId AND packageVersion set — an A2A explicit
+  //     requestedVersion): the snapshot is loaded by id, binding+structure
+  //     verified, and the run FAILS CLOSED (never serves the live template) if
+  //     it cannot be served — closing the request-time refuse-with-evidence
+  //     contract end-to-end.
+  //   - default resolution / legacy (packageVersion only): best-effort semver
+  //     load with the pre-existing live-template fallback.
+  //   - versionId-only (inert pin) or neither: live template (unchanged).
   // ---------------------------------------------------------------------------
-  let pinnedSnapshot: {
-    compiledPlan?: unknown;
-    taskSpec?: string | null;
-  } | null = null;
-  if (run.packageVersion) {
-    const versionRow = await readAgentTemplateVersionBySemver(run.templateId, run.packageVersion);
-    if (versionRow) {
-      // Snapshot is JSON already parsed by deserializeVersionRow.
-      // If the row exists but the shape is unexpected, fall back to live template
-      // rather than running with half-applied data.
-      try {
-        const snap = versionRow.snapshot as {
-          compiledPlan?: unknown;
-          taskSpec?: string | null;
-        };
-        pinnedSnapshot = {
-          compiledPlan: snap.compiledPlan,
-          taskSpec: snap.taskSpec,
-        };
-      } catch (err) {
-        await transitionRunStatus(runId, "queued", "failed", {
-          error: `version snapshot corrupt for ${run.templateId}@${run.packageVersion}: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        return;
-      }
-    } else {
-      console.log(`[agent-builder] run ${runId} requested packageVersion ${run.packageVersion} but no snapshot found — falling back to live template`);
+  let pinnedSnapshot: PinnedRunSnapshotFields | null = null;
+  try {
+    pinnedSnapshot = await resolvePinnedRunSnapshot(
+      {
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        versionId: run.versionId,
+      },
+      { readAgentTemplateVersionById, readAgentTemplateVersionBySemver },
+    );
+  } catch (err) {
+    if (err instanceof PinnedRunSnapshotUnreachableError) {
+      // FAIL CLOSED (cinatra#1040 S7): a REQUIRED explicit version pin whose
+      // immutable snapshot cannot be served must NEVER silently fall back to the
+      // live template. Refuse the run with the full evidence set.
+      await transitionRunStatus(runId, "queued", "failed", { error: err.message });
+      return;
     }
+    throw err;
   }
 
   if (pinnedSnapshot) {

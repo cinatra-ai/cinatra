@@ -350,43 +350,28 @@ describe("scope-prefix allowlist (multi-prefix)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Regression coverage — prefer-newer prunes stale consumer edges
+// Version disagreements always reject (cinatra#1039 Phase 2)
 // ---------------------------------------------------------------------------
 
-describe("stale consumer-range pruning in prefer-newer", () => {
-  // Diamond-dep scenario that requires stale-range pruning to resolve correctly.
-  //
-  // Packages:
-  //   root@1.0.0:  { A: "^1.0.0", B: "^1.0.0" }
-  //   A@1.0.0:     { C: "^1.0.0" }
-  //   A@1.5.0:     { C: "^2.0.0" }   ← bumped C dep on major upgrade
-  //   B@1.0.0:     { A: "^1.5.0" }   ← forces A to supersede
-  //   C@1.0.0, C@2.0.0 (no deps)
-  //
-  // BFS order that exercises the bug:
-  //   1. A@^1.0.0 first → fetchPackument returns only [1.0.0] → A resolves to 1.0.0
-  //      → enqueue C@^1.0.0 (fromParent=A, fromParentVersion=1.0.0)
-  //   2. C@^1.0.0 processed → resolves to 1.0.0; edge (A@1.0.0,"^1.0.0") recorded
-  //   3. B@^1.5.0 enqueues A@^1.5.0; second fetchPackument now returns [1.0.0, 1.5.0]
-  //      → prefer-newer supersedes A from 1.0.0 → 1.5.0 (1.5.0 satisfies root's ^1.0.0 ✓)
-  //      → re-enqueue C@^2.0.0 (fromParent=A, fromParentVersion=1.5.0)
-  //   4. C@^2.0.0 → prefer-newer tries to upgrade C from 1.0.0 → 2.0.0
-  //      WITHOUT the fix: stale edge (A@1.0.0,"^1.0.0") still present →
-  //        2.0.0 does NOT satisfy "^1.0.0" → PluginDependencyConflictError (wrong!)
-  //      WITH the fix: stale edge pruned (A is now 1.5.0, not 1.0.0) →
-  //        only "^2.0.0" remains → 2.0.0 satisfies "^2.0.0" → resolves correctly ✓
-  it("upgrades leaf through a superseded parent without false conflict", async () => {
+describe("version disagreements always reject", () => {
+  it("rejects the superseded-parent diamond the deleted prefer-newer policy used to upgrade", async () => {
+    // The exact scenario the deleted "prefer-newer" policy resolved by
+    // upgrading A 1.0.0 -> 1.5.0 (stale consumer-edge pruning): root wants
+    // A@^1.0.0 and B@^1.0.0; B wants A@^1.5.0; A's packument gains 1.5.0
+    // between fetches. The walker now always REJECTS the concrete-version
+    // disagreement — install-time dedupe-upward is the unified dependency
+    // planner's job (src/lib/extension-dependency-plan.ts), on every path.
     const baseA: Packument = {
       name: "@cinatra/A",
       versions: {
-        "1.0.0": makeVersionEntry({ name: "@cinatra/A", version: "1.0.0", dependencies: { "@cinatra/C": "^1.0.0" } }),
+        "1.0.0": makeVersionEntry({ name: "@cinatra/A", version: "1.0.0" }),
       },
     };
     const extendedA: Packument = {
       name: "@cinatra/A",
       versions: {
-        "1.0.0": makeVersionEntry({ name: "@cinatra/A", version: "1.0.0", dependencies: { "@cinatra/C": "^1.0.0" } }),
-        "1.5.0": makeVersionEntry({ name: "@cinatra/A", version: "1.5.0", dependencies: { "@cinatra/C": "^2.0.0" } }),
+        "1.0.0": makeVersionEntry({ name: "@cinatra/A", version: "1.0.0" }),
+        "1.5.0": makeVersionEntry({ name: "@cinatra/A", version: "1.5.0" }),
       },
     };
     const otherPacks = makePackuments([
@@ -396,15 +381,11 @@ describe("stale consumer-range pruning in prefer-newer", () => {
         dependencies: { "@cinatra/A": "^1.0.0", "@cinatra/B": "^1.0.0" },
       },
       { name: "@cinatra/B", version: "1.0.0", dependencies: { "@cinatra/A": "^1.5.0" } },
-      { name: "@cinatra/C", version: "1.0.0" },
-      { name: "@cinatra/C", version: "2.0.0" },
     ]);
 
     let aFetchCount = 0;
     const fetchPackument: FetchPackument = async (name) => {
       if (name === "@cinatra/A") {
-        // First call: A only has 1.0.0 → resolver picks 1.0.0, enqueues C@^1.0.0
-        // Second call: A also has 1.5.0 → prefer-newer supersedes A to 1.5.0
         return aFetchCount++ === 0 ? baseA : extendedA;
       }
       const p = otherPacks.get(name);
@@ -416,98 +397,12 @@ describe("stale consumer-range pruning in prefer-newer", () => {
       return p;
     };
 
-    const tree = await resolveDependencyTree({
-      rootPackageName: "@cinatra/root",
-      rootRange: "^1.0.0",
-      fetchPackument,
-      typeConfig: TYPE_CONFIG_AGENTS,
-      conflictPolicy: "prefer-newer",
-    });
-
-    expect(tree.all.get("@cinatra/A")?.resolvedVersion).toBe("1.5.0");
-    expect(tree.all.get("@cinatra/C")?.resolvedVersion).toBe("2.0.0");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// conflictPolicy: "prefer-newer"
-// ---------------------------------------------------------------------------
-
-describe("conflict resolution keep newer", () => {
-  it("picks newer version when both consumer ranges overlap", async () => {
-    // root depends on a@^1.0.0 and b@^1.0.0
-    // a depends on leaf@^1.0.0 (enqueues first), b depends on leaf@^1.2.0
-    // Two leaf versions are published: 1.0.0 and 1.3.0. With prefer-newer,
-    // the resolver must upgrade leaf to 1.3.0 (satisfies both ^1.0.0 and ^1.2.0).
-    const packs = makePackuments([
-      {
-        name: "@cinatra/root",
-        version: "1.0.0",
-        dependencies: {
-          "@cinatra/a": "^1.0.0",
-          "@cinatra/b": "^1.0.0",
-        },
-      },
-      {
-        name: "@cinatra/a",
-        version: "1.0.0",
-        dependencies: { "@cinatra/leaf": "^1.0.0" },
-      },
-      {
-        name: "@cinatra/b",
-        version: "1.0.0",
-        dependencies: { "@cinatra/leaf": "^1.2.0" },
-      },
-      { name: "@cinatra/leaf", version: "1.0.0" },
-      { name: "@cinatra/leaf", version: "1.3.0" },
-    ]);
-
-    const tree = await resolveDependencyTree({
-      rootPackageName: "@cinatra/root",
-      rootRange: "^1.0.0",
-      fetchPackument: makeFetch(packs),
-      typeConfig: TYPE_CONFIG_AGENTS,
-      conflictPolicy: "prefer-newer",
-    });
-
-    expect(tree.all.get("@cinatra/leaf")?.resolvedVersion).toBe("1.3.0");
-  });
-
-  it("throws PluginDependencyConflictError when newer pick does not satisfy a prior consumer range", async () => {
-    // root depends on a@^1.0.0 and b@^1.0.0
-    // a depends on leaf@~1.0.0 (pins patch, accepts only 1.0.x)
-    // b depends on leaf@^2.0.0
-    // No version of leaf simultaneously satisfies both ranges — must throw.
-    const packs = makePackuments([
-      {
-        name: "@cinatra/root",
-        version: "1.0.0",
-        dependencies: {
-          "@cinatra/a": "^1.0.0",
-          "@cinatra/b": "^1.0.0",
-        },
-      },
-      {
-        name: "@cinatra/a",
-        version: "1.0.0",
-        dependencies: { "@cinatra/leaf": "~1.0.0" },
-      },
-      {
-        name: "@cinatra/b",
-        version: "1.0.0",
-        dependencies: { "@cinatra/leaf": "^2.0.0" },
-      },
-      { name: "@cinatra/leaf", version: "1.0.5" },
-      { name: "@cinatra/leaf", version: "2.0.0" },
-    ]);
-
     await expect(
       resolveDependencyTree({
         rootPackageName: "@cinatra/root",
         rootRange: "^1.0.0",
-        fetchPackument: makeFetch(packs),
+        fetchPackument,
         typeConfig: TYPE_CONFIG_AGENTS,
-        conflictPolicy: "prefer-newer",
       }),
     ).rejects.toBeInstanceOf(PluginDependencyConflictError);
   });

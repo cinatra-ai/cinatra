@@ -133,6 +133,11 @@ function InstallBatchCard({ batch }: { batch: InstallBatch }) {
  * when there are no batches (a single-package install never wrote a ledger
  * row, so an instance that only ever installed depless extensions shows
  * nothing — no empty pane).
+ *
+ * The post-install "needs configuration" affordance (cinatra #1057) is NOT
+ * rendered here — it lives on the affected agent's Extensions-page card (the
+ * archived treatment + needs-review strip), never in this install-activity
+ * panel.
  */
 export function InstallBatchPanel({ batches }: { batches: InstallBatch[] }) {
   if (batches.length === 0) return null;

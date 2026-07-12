@@ -276,6 +276,15 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0020
   //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
   runTokenHash: text("run_token_hash"),
+  // dependent_install_id: the installed_extension row id a run executes AS
+  // (cinatra#1392 Gap 2). Threaded onto the signed run lineage (ActorContext)
+  // so the A2A dispatch seam resolves edge-bound serving against a TRUSTED
+  // dependent identity. SERVER-ONLY: written only from the trusted dispatch
+  // identity via an explicit column whitelist (never client input). Unlike
+  // runTokenHash it IS surfaced by deserializeRun — buildActorContextFromRun
+  // reads run.dependentInstallId to carry it onto the ActorContext.
+  // Migration: src/lib/drizzle-store.ts dependent_install_id entry + core__0030.
+  dependentInstallId: text("dependent_install_id"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -542,4 +551,101 @@ export const runCoOwners = cinatraSchema.table("run_co_owners", {
 }, (t) => ({
   pk:        primaryKey({ columns: [t.runId, t.userId] }),
   userIdIdx: index("run_co_owners_user_id_idx").on(t.userId),
+}));
+
+// ---------------------------------------------------------------------------
+// project_dispatch_attempts — the dynamic-dispatch primitive's dispatch-attempt
+// LEDGER (cinatra#1032 deliverable 2). One row per deliberate dispatch attempt,
+// UNIQUE (org_id, item_natural_key, action_version) — the ledger key. The row
+// is written AHEAD of createAgentRun and carries the deterministically derived
+// idempotency_key passed VERBATIM to createAgentRun, so a tick that crashes
+// between dispatch and record re-converges onto the SAME child run (via
+// agent_runs_idempotency_key_uniq) instead of dispatching a duplicate.
+//
+// run_id is provenance only — deliberately NO foreign key: the ledger is
+// append-only history that outlives the operational run row (an FK SET NULL
+// would erase the historical run identity and re-open a redispatch ambiguity;
+// a dispatched row whose run cannot be read surfaces as DISPATCH_RUN_MISSING,
+// never as a fresh dispatch under the same action version).
+// version is the optimistic-CAS counter (agent_run_pm_links precedent).
+// ---------------------------------------------------------------------------
+
+export const projectDispatchAttempts = cinatraSchema.table("project_dispatch_attempts", {
+  id:             text("id").primaryKey(), // `pda_<uuid>`
+  orgId:          text("org_id").notNull(),
+  projectRef:     text("project_ref").notNull(),      // PM project scope (natural-key prefix)
+  itemNaturalKey: text("item_natural_key").notNull(), // `<projectRef>/<taskId>` (immutable)
+  actionVersion:  integer("action_version").notNull(),// deliberate-retry counter
+  workerRole:     text("worker_role").notNull(),      // allowlist binding provenance
+  workerPackage:  text("worker_package").notNull(),
+  workerVersionConstraint: text("worker_version_constraint").notNull(), // canonical `kind:value` fingerprint
+  idempotencyKey: text("idempotency_key").notNull(),  // passed VERBATIM to createAgentRun
+  runId:          text("run_id"),                     // provenance; null until settled (NO FK, see above)
+  status:         text("status").notNull().default("pending"), // 'pending' | 'dispatched' | 'failed' (CHECK in DDL)
+  error:          text("error"),                      // last dispatch error; null = healthy
+  version:        integer("version").notNull().default(0), // optimistic-CAS counter
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  itemActionUniq: uniqueIndex("project_dispatch_attempts_item_action_uniq").on(t.orgId, t.itemNaturalKey, t.actionVersion),
+  projectIdx:     index("project_dispatch_attempts_project_idx").on(t.orgId, t.projectRef),
+}));
+
+// ---------------------------------------------------------------------------
+// project_leases — the project-level lease (cinatra#1032 deliverable 2): at
+// most one active tick per PM project scope. Keyed (org_id, project_ref).
+// `version` is the FENCING token — bumped on every (re)acquisition, so a stale
+// holder (crashed/expired tick) presenting an old version is rejected by the
+// lease-fenced ledger claim even after the lease row was stolen. Stale-lease
+// recovery = an acquire whose conditional upsert only wins when
+// expires_at <= now() (or the caller is the live holder re-acquiring).
+// ---------------------------------------------------------------------------
+
+export const projectLeases = cinatraSchema.table("project_leases", {
+  orgId:       text("org_id").notNull(),
+  projectRef:  text("project_ref").notNull(),
+  holderId:    text("holder_id").notNull(),
+  acquiredAt:  timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt:   timestamp("expires_at", { withTimezone: true }).notNull(),
+  version:     integer("version").notNull().default(1), // fencing token
+}, (t) => ({
+  pk: primaryKey({ columns: [t.orgId, t.projectRef] }),
+}));
+
+// ---------------------------------------------------------------------------
+// project_instances — the project-instance registry (cinatra#1032
+// deliverable 3): the STICKY instantiation-time binding record, keyed
+// (org_id, project_ref).
+//
+//   template_package / template_id — which installed agent package's
+//   `cinatra/project-template.json` the project was instantiated from; the
+//   template's stable id is pinned so dispatch refuses a template swap under
+//   the same project ref.
+//   pm_agent_package — the PM SEAT: the project-management agent (the
+//   pm-work-store capability binding, proven at instantiation). Only this
+//   agent's tick runs may dispatch workers for the project.
+//   provider_id / provider_mode — the PM work-store provider chosen ONCE at
+//   instantiation ('configured' = an explicitly configured provider won;
+//   'auto' = exactly one connected provider existed; CHECK in DDL). Selection
+//   fails closed on none/several; no runtime path re-runs selection, so a
+//   project can never silently migrate between PM tools.
+//   project_id — nullable cinatra project refinement (mirrors
+//   agent_runs.project_id semantics).
+// ---------------------------------------------------------------------------
+
+export const projectInstances = cinatraSchema.table("project_instances", {
+  orgId:           text("org_id").notNull(),
+  projectRef:      text("project_ref").notNull(),
+  projectId:       text("project_id"),
+  templatePackage: text("template_package").notNull(),
+  templateId:      text("template_id").notNull(),
+  templateDigest:  text("template_digest").notNull(), // finalized-install digest at instantiation (provenance)
+  pmAgentPackage:  text("pm_agent_package").notNull(),
+  providerId:      text("provider_id").notNull(),
+  providerMode:    text("provider_mode").notNull(), // 'configured' | 'auto' (CHECK in DDL)
+  createdAt:       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.orgId, t.projectRef] }),
 }));

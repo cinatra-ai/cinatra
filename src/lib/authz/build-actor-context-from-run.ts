@@ -38,6 +38,10 @@ export type RunForActorContext = {
   id: string;
   runBy: string | null;
   orgId: string;
+  // Trusted dependent install id carried onto the actor for edge-bound serving
+  // (cinatra#1392 Gap 2). Optional so existing narrow fixtures stay valid; the
+  // production route projection provides it. NULL/absent => no dependent identity.
+  dependentInstallId?: string | null;
 };
 
 export async function buildActorContextFromRun(
@@ -67,6 +71,10 @@ export async function buildActorContextFromRun(
       // resolved").
       projectGrants: [],
       projectIds: [],
+      // Trusted dependent install id (cinatra#1392 Gap 2) — carried even on a
+      // worker-originated run so its outbound A2A dispatch resolves edge-bound
+      // serving. Undefined when the run row carries none.
+      dependentInstallId: run.dependentInstallId ?? undefined,
       authSource: "a2a",
       policyVersion: POLICY_VERSION,
     };
@@ -132,6 +140,9 @@ export async function buildActorContextFromRun(
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     platformRole,
     orgRole,
+    // Trusted dependent install id (cinatra#1392 Gap 2) — carried so a
+    // human-originated run's outbound A2A dispatch resolves edge-bound serving.
+    dependentInstallId: run.dependentInstallId ?? undefined,
     authSource: "a2a",
     policyVersion: POLICY_VERSION,
   };

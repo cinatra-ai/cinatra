@@ -32,6 +32,7 @@ import { InstallBatchLiveRefresh } from "@/components/extensions/install-batch-l
 import {
   InstalledExtensionCard,
   InstalledStatusIndicator,
+  UpdateAvailableChip,
 } from "@/components/extensions/installed-extension-card";
 import {
   extensionKindEmblem,
@@ -40,6 +41,20 @@ import {
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
+// §III per-extension update-available chip (cinatra#1041 outcome 3): the
+// cached read model + the pure chip-state derivation.
+import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
+import { readInstalledUpdateReadouts } from "@/lib/extension-update-read-model-store";
+import { deriveInstalledUpdateChipState } from "./installed-update-chip";
+import type { InstalledUpdateReadout } from "@cinatra-ai/registries/src/update-read-model";
+// Register the built-in per-connector readiness probes (side effect) — the
+// SAME import the /connectors grid + setup routes carry (connector-setup-badge
+// pins it). Without it a cold extensions-page load would probe unregistered
+// connectors as default "not connected", falsely flagging configured agents as
+// needing setup (cinatra #1057).
+import "@/lib/connector-readiness.server";
+import { resolveConfigurationNeedsForAgents } from "@/lib/configuration-needs.server";
+import { syncAgentConfigurationNeedsNotifications } from "@/lib/agent-configuration-needs-notifications";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -98,6 +113,90 @@ export async function RegistryCatalogScreen({
     );
     return [] as Awaited<ReturnType<typeof listRecentInstallBatches>>;
   });
+
+  // §III per-extension "Update available" chip source (cinatra#1041 outcome 3).
+  // The cached update read model is refreshed per-package by the hourly
+  // catalog-sync loop and read HERE in one batched query (no per-render
+  // packument storm; works on gatekept instances that cannot enumerate
+  // registry versions live). Best-effort: a read failure degrades to "no
+  // chips" (fail-quiet) — an update indicator must never blank the list.
+  const updateReadoutByName = new Map<string, InstalledUpdateReadout>();
+  {
+    const installedPackageNames = [...activeRows, ...archivedRows].map(
+      (row) => row.packageName,
+    );
+    const readouts = await readInstalledUpdateReadouts(installedPackageNames).catch(
+      (err: unknown) => {
+        console.warn(
+          "[registry-catalog] could not read the update model (chips omitted):",
+          err instanceof Error ? err.message : err,
+        );
+        return [] as InstalledUpdateReadout[];
+      },
+    );
+    for (const readout of readouts) updateReadoutByName.set(readout.packageName, readout);
+  }
+
+  // Post-install "needs configuration" affordance (cinatra #1057): for each
+  // installed AGENT whose REQUIRED connector dependencies are not yet
+  // configured, probe each connector's own readiness (same probe the
+  // /connectors card grid + setup badge read) and surface the unconfigured ones
+  // on the agent's card — the greyed archived treatment + a needs-review strip.
+  // Only agent-kind rows are considered (owner ruling #1057 (a)); a non-agent
+  // never gates on configuration. User-scoped to the current viewer, so the
+  // affordance reflects this operator's connection state. Best-effort: a
+  // resolution failure degrades to no affordance, never blanking the list.
+  const configurationNeedsByPackage = await resolveConfigurationNeedsForAgents(
+    activeRows.flatMap((row) =>
+      row.kind === "agent" && row.canonical
+        ? [
+            {
+              packageName: row.packageName,
+              kind: row.kind,
+              dependencies: row.canonical.dependencies,
+            },
+          ]
+        : [],
+    ),
+    { userId: session.user?.id ?? null },
+  ).catch((err: unknown) => {
+    console.warn(
+      "[registry-catalog] could not resolve post-install configuration needs (affordance omitted):",
+      err instanceof Error ? err.message : err,
+    );
+    return {} as Record<string, never>;
+  });
+
+  // Reconcile the bell flyout's `Set up connections for "<name>":` entries
+  // (cinatra #1057 ruling (c)) from the SAME per-connector derivation that
+  // drives the card strip above, so the bell and the card can never disagree:
+  // one entry per gated agent, created on install-completion / when an agent
+  // becomes gated, and DELETED the moment the agent becomes runnable. SKIPPED
+  // when a search filter is active — a filtered active list is a partial view,
+  // and reconciling it would wrongly clear entries for gated agents it hides.
+  // Best-effort (the sync swallows + logs its own failures) so a notification
+  // write never blanks the Extensions list.
+  if (!query) {
+    const gatedAgents = activeRows.flatMap((row) => {
+      const needs = configurationNeedsByPackage[row.packageName]?.needs;
+      if (!needs || needs.length === 0) return [];
+      return [
+        {
+          agentPackageName: row.packageName,
+          agentDisplayName: row.displayName,
+          connectors: needs.map((need) => ({
+            displayName: need.displayName,
+            packageName: need.packageName,
+            settingsHref: need.settingsHref,
+          })),
+        },
+      ];
+    });
+    await syncAgentConfigurationNeedsNotifications({
+      userId: session.user?.id ?? null,
+      gatedAgents,
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Card renderers
@@ -189,6 +288,38 @@ export async function RegistryCatalogScreen({
     </>
   );
 
+  // §III update affordance (cinatra#1041 outcome 3) → the card's spec-line
+  // props. Derives the chip state from the cached read model and the newer
+  // version's ABI compat, then maps it to the presentational bits:
+  //   • update-available → the blue chip
+  //   • incompatible     → greyed spec line (the §I ABI-compat treatment), no text
+  //   • non-comparable / up-to-date / none (stale/missing, fail-quiet) → nothing
+  // The chip is the ONLY update information the card carries (design §III;
+  // owner direction 2026-07-12): the explanatory per-state wordings surface on
+  // the §V settings page's Maintenance · Update row, never here.
+  // Only ACTIVE rows carry it — an archived (fully greyed) card shows no chip.
+  const updateAffordanceFor = (row: InstalledCardRow, isArchived: boolean) => {
+    if (isArchived) return {} as const;
+    const readout = updateReadoutByName.get(row.packageName) ?? null;
+    const state = deriveInstalledUpdateChipState({
+      installedVersion: row.rawVersion,
+      latestVersion: readout?.entry?.latestVersion ?? null,
+      latestCompat: deriveExtensionCompatState(readout?.entry?.latestSdkAbiRange),
+      stale: readout?.stale ?? true,
+    });
+    switch (state) {
+      case "update-available":
+        return { updateChip: <UpdateAvailableChip /> } as const;
+      case "incompatible":
+        return { specLineMuted: true } as const;
+      case "non-comparable":
+      case "up-to-date":
+      case "none":
+      default:
+        return {} as const;
+    }
+  };
+
   const renderCard = (row: InstalledCardRow, isArchived: boolean) => (
     <InstalledExtensionCard
       key={rowKey(row.kind, row.packageName)}
@@ -201,11 +332,19 @@ export async function RegistryCatalogScreen({
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}
+      {...updateAffordanceFor(row, isArchived)}
       actions={renderCardActions(row, isArchived)}
       // Archived extensions render the fully-greyed §VI card (cinatra#957):
       // category ground → light grey, muted logo tile, all text/status/actions
       // muted. Active cards keep their category colour.
       archived={isArchived}
+      // Post-install "needs configuration" (cinatra#1057): an active agent with
+      // unconfigured required connectors wears the same greyed treatment + a
+      // needs-review strip. Only active rows carry it — an archived card is
+      // already greyed and unrunnable.
+      configurationNeeds={
+        isArchived ? undefined : configurationNeedsByPackage[row.packageName]?.needs
+      }
     />
   );
 

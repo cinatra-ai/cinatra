@@ -23,7 +23,9 @@ import {
 } from "../personal-skills";
 import { getInstalledSkillById, listInstalledSkills, listInstalledSkillPackages, parseFrontmatter } from "../skills-registry";
 import { isWidgetChatSkillId } from "../extension-skill-resolver";
+import { isRuntimeDeliverableLifecycleState } from "../skill-source";
 import { getAssignedSkillIdsForAgent, matchAgentsToSkills } from "@/lib/agents-store";
+import { readSkillLifecycleStates } from "@/lib/database";
 // Fan out scoped re-evaluation jobs on install / personal-skill upsert events
 // and purge skill_matches rows on package uninstall.
 import {
@@ -67,6 +69,26 @@ import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 export const customSkillOwnerSchema = z.object({
   ownerUserId: z.string().optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Lifecycle runtime-delivery gate for MCP direct reads (A3, cinatra#1363).
+// ---------------------------------------------------------------------------
+
+/**
+ * FAIL-CLOSED lifecycle gate for a single skill id read through an MCP tool.
+ * True only when the lifecycle read succeeds AND the state is runtime-deliverable
+ * (active/deprecated, or a derived NULL). A read error, a missing row, or a
+ * draft/archived/unknown state → false. A `false` result means the skill is a
+ * runtime-delivery leak and may be returned ONLY to a `manage` actor
+ * (management-plane); a read (runtime) actor gets 404 semantics.
+ */
+function isMcpSkillRuntimeDeliverable(skillId: string): boolean {
+  const r = readSkillLifecycleStates([skillId]);
+  return (
+    r.ok &&
+    isRuntimeDeliverableLifecycleState(r.states.has(skillId) ? r.states.get(skillId) : undefined)
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Session helpers shared with the agent-builder MCP handler pattern.
@@ -537,13 +559,22 @@ export function createSkillsPrimitiveHandlers() {
           (await readSkillsCatalog()).skillPackages ?? [],
         );
         // Use the auth-policy resource-ref builder for consistent scope.
-        requireResourceAccess(actorCtx, buildSkillResourceRef({
+        const skillRef = buildSkillResourceRef({
           id: skill.id,
           level: skill.level,
           scope: skill.scope ?? null,
           isWidgetChatSkill,
           accessPolicy: effectivePolicy,
-        }));
+        });
+        requireResourceAccess(actorCtx, skillRef);
+        // A3 (cinatra#1363): a non-deliverable (draft/archived/unknown-state)
+        // skill is a runtime-delivery leak here — return its content ONLY to a
+        // `manage` actor (management-plane restore/rollback/history). A read
+        // (runtime) actor gets 404 semantics, identical to a visibility miss.
+        // Fail-closed: an unresolved lifecycle state also requires `manage`.
+        if (!isMcpSkillRuntimeDeliverable(skill.id)) {
+          requireResourceAccess(actorCtx, skillRef, "manage");
+        }
       } catch (err) {
         if (err instanceof AuthzError) return null; // 404 semantics — same wire shape as not-found
         throw err;
@@ -607,21 +638,43 @@ export function createSkillsPrimitiveHandlers() {
       const allSkills = await listInstalledSkills();
       // Resolve package inheritance once for the whole page (W4).
       const installedSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
+      // A3 (cinatra#1363): batch-read lifecycle once so the default listing
+      // excludes non-deliverable (archived/draft/unknown-state) skills from read
+      // actors (fail-closed on a read error — see the per-row gate below).
+      const listLifecycle = readSkillLifecycleStates(allSkills.map((s) => s.id));
 
       // Post-fetch row filter: requireResourceAccess throws on deny; catch silently to exclude.
       const visibleSkills = allSkills.filter((skill) => {
+        // Use the auth-policy resource-ref builder for consistent scope.
+        const skillRef = buildSkillResourceRef({
+          id: skill.id,
+          level: skill.level,
+          scope: skill.scope ?? null,
+          accessPolicy: resolveEffectiveSkillAccessPolicy(skill, installedSkillPackages),
+        });
         try {
-          // Use the auth-policy resource-ref builder for consistent scope.
-          requireResourceAccess(actorCtx, buildSkillResourceRef({
-            id: skill.id,
-            level: skill.level,
-            scope: skill.scope ?? null,
-            accessPolicy: resolveEffectiveSkillAccessPolicy(skill, installedSkillPackages),
-          }));
-          return true;
+          requireResourceAccess(actorCtx, skillRef);
         } catch {
           return false;
         }
+        // Exclude a non-deliverable (archived/draft/unknown-state) skill from
+        // the DEFAULT listing; a `manage` actor still sees it (management-plane).
+        // FAIL-CLOSED: a lifecycle-read error makes EVERY skill unresolved ⇒
+        // non-deliverable ⇒ manage-only, so a read (runtime) actor never sees an
+        // archived/draft row even during a lifecycle-table blip.
+        const listDeliverable =
+          listLifecycle.ok &&
+          isRuntimeDeliverableLifecycleState(
+            listLifecycle.states.has(skill.id) ? listLifecycle.states.get(skill.id) : undefined,
+          );
+        if (!listDeliverable) {
+          try {
+            requireResourceAccess(actorCtx, skillRef, "manage");
+          } catch {
+            return false;
+          }
+        }
+        return true;
       });
 
       const metadataItems = visibleSkills.map((skill) => ({
@@ -708,12 +761,20 @@ export function createSkillsPrimitiveHandlers() {
         if (skill) {
           try {
             // Use the auth-policy resource-ref builder for consistent scope.
-            requireResourceAccess(actorCtx, buildSkillResourceRef({
+            const resolveRef = buildSkillResourceRef({
               id: skill.id,
               level: skill.level,
               scope: skill.scope ?? null,
               accessPolicy: resolveEffectiveSkillAccessPolicy(skill, resolveSkillPackages),
-            }));
+            });
+            requireResourceAccess(actorCtx, resolveRef);
+            // A3 (cinatra#1363): withhold a non-deliverable (draft/archived/
+            // unknown-state) custom skill's content from runtime delivery here;
+            // only a `manage` actor may resolve it. Fail-closed on an unresolved
+            // state. `catch` below already coerces a deny to `undefined`.
+            if (!isMcpSkillRuntimeDeliverable(skill.id)) {
+              requireResourceAccess(actorCtx, resolveRef, "manage");
+            }
             customSkillContent = skill.content;
           } catch {
             customSkillContent = undefined;
@@ -737,8 +798,22 @@ export function createSkillsPrimitiveHandlers() {
         request.actor as PrimitiveActorContext,
         orgId,
       );
+      // #1360 — forward the OWNER user id. createOrUpdateCustomSkillForAgent
+      // REQUIRES input.userId (personal-skills.ts throws without it outside
+      // dev-bypass), so without this the MCP create/update path always failed
+      // in production. The owner is the authenticated caller — the same
+      // identity actorCtx is derived from (actorContextFromMcpRequest sets
+      // principalId := actor.userId) — never a caller-supplied input field. An
+      // unattributable caller (no userId) leaves it undefined and the resolver
+      // fails closed (dev-bypass fills LOCAL_USER_ID; production throws): a
+      // personal skill is never created under an anonymous owner.
+      const ownerUserId =
+        typeof request.actor?.userId === "string" && request.actor.userId.length > 0
+          ? request.actor.userId
+          : undefined;
       const result = await createOrUpdateCustomSkillForAgent({
         ...(input as Parameters<typeof createOrUpdateCustomSkillForAgent>[0]),
+        userId: ownerUserId,
         actor: actorCtx,
       });
 

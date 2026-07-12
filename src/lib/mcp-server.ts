@@ -2,6 +2,11 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import { createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
 import { getRunContext } from "./agent-run-context-registry";
+import {
+  resolveDurableRunContext,
+  recordMcpRunContextServedBy,
+} from "./agent-run-context-durable";
+import { readAgentRunByTokenHash } from "@cinatra-ai/agents";
 import { verifyChatMcpActorToken } from "./chat-mcp-actor-token";
 import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
@@ -38,6 +43,12 @@ import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from 
 import { resolveProviderAdapter } from "@cinatra-ai/llm";
 import { z } from "zod";
 import { listExtensionMcpTools, markEffectiveExtensionMcpTools } from "@/lib/extension-mcp-registry";
+// Edge-bound serving chokepoint (cinatra#1392 Gap 1 wiring): an extension tool
+// dispatch consults the TRUSTED dependent identity and — when its resolved edge
+// pins a NON-DEFAULT version of the tool's package — serves THAT version's
+// retained handler from the version-keyed registry, fail-closed (a refusal
+// never falls through to the global/default handler).
+import { dispatchExtensionMcpToolEdgeBound } from "@/lib/extension-edge-bound-serving";
 
 const MCP_SERVER_SETTINGS_KEY = "mcp_server";
 
@@ -174,7 +185,6 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
     }
     registeredNames.add(tool.name);
     effectiveExtensionTools.push({ name: tool.name, packageName: tool.packageName });
-    const handler = tool.handler;
     (server.registerTool as (...a: unknown[]) => unknown)(
       tool.name,
       {
@@ -184,7 +194,9 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
         inputSchema: (tool.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
       },
       async (input: unknown) => {
-        const raw = await handler(input);
+        // Edge-bound serve (cinatra#1392 Gap 1): the pinned version's retained
+        // handler for an edge-bound dependent; the global handler otherwise.
+        const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
         // Normalize the plain handler result into the MCP envelope (mirrors the
         // connector modules): arrays → { items }, objects → as-is,
         // scalars/undefined → { result }.
@@ -269,9 +281,10 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // so the captured handler shape is uniform with the module-registered ones.
   for (const tool of listExtensionMcpTools()) {
     if (handlers.has(tool.name)) continue;
-    const handler = tool.handler;
     handlers.set(tool.name, async (input: unknown) => {
-      const raw = await handler(input);
+      // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
+      // transport replay, so the in-process self-invoker serves identically.
+      const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
       const resolved = raw === undefined ? null : raw;
       return {
         content: [{ type: "text", text: JSON.stringify(resolved) }],
@@ -320,6 +333,17 @@ export const mcpServerMount = createMcpServerMount({
   serverExperimental: CINATRA_MCP_EXPERIMENTAL,
   writeSettings: writeMcpServerSettings,
   getRunContext,
+  // #1195 durable run-context binding: resolve the run-token-keyed redis
+  // binding through the ONE run-token seam (readAgentRunByTokenHash — the run
+  // row stays the source of truth). App-wired because packages/mcp-server
+  // cannot import the app layer. The resolver classifies its own failures
+  // (transport ⇒ absent, present-but-unresolvable ⇒ invalid) and never throws.
+  resolveDurableRunContext: (rawBearerToken: string) =>
+    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash),
+  // #1195 cutover metric — counts which channel attributed each MCP request
+  // (the registry-removal gate needs proof no production traffic still rides
+  // the in-process registry).
+  onRunContextServedBy: recordMcpRunContextServedBy,
   readConfiguredLlmProviders: async () => {
     const providers = ["openai", "anthropic", "gemini"] as const;
     const results = await Promise.all(

@@ -10,6 +10,7 @@
     "./renderer-types": "./src/renderer-types.ts",
     "./module": "./src/integration/module.ts",
     "./namespace": "./src/namespace.ts",
+    "./claims": "./src/claims.ts",
     "./auto-registrar": "./src/auto-registrar.ts",
     "./registry": "./src/registry.ts",
     "./sync-adapters/registry": "./src/sync-adapters/registry.ts",
@@ -36,6 +37,6 @@
   "devDependencies": {
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   }
 }

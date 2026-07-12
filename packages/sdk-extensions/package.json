@@ -19,6 +19,7 @@
     "./manifest": "./src/manifest.ts",
     "./access-config": "./src/access-config.ts",
     "./dependencies": "./src/dependencies.ts",
+    "./consumes": "./src/consumes.ts",
     "./flash-href": "./src/flash-href.ts",
     "./social-contract": "./src/social-media-connector-contract.ts",
     "./blog-contract": "./src/blog-connector-contract.ts",
@@ -26,7 +27,8 @@
     "./artifact-contract": "./src/artifact-contract.ts",
     "./objects-contract": "./src/objects-contract.ts",
     "./objects-provider": "./src/objects-provider-contract.ts",
-    "./project-template-contract": "./src/project-template-contract.ts"
+    "./project-template-contract": "./src/project-template-contract.ts",
+    "./config-hydration": "./src/config-hydration-contract.ts"
   },
   "files": [
     "src/**/*.ts",

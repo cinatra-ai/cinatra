@@ -9,14 +9,10 @@ import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 // in ./skill-packages (an already-graph-reachable node) — co-located there to
 // avoid adding a new module to the locked route bundles (route-graph ratchet)
 // while keeping this file under its size ceiling (file-size ratchet).
-import {
-  installedSkillPackages,
-  normalizeStoredAccessPolicy,
-  visibilityToLevelScope,
-} from "./skill-packages";
+import { installedSkillPackages, normalizeStoredAccessPolicy, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
-import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
+import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
 import { assertSafePathSegment } from "@cinatra-ai/registries";
 // Agent-bound skill identity / path derivation (cinatra#537) — extracted to a
 // sibling module to keep this file under the file-size ratchet (behavior
@@ -1342,6 +1338,7 @@ export async function upsertSkill(input: {
   replaceSkillCatalogInDatabase({
     skillPackages: nextCatalog.skillPackages,
     skills: nextCatalog.skills,
+    lifecycleWrites: [buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId)], // atomic revision (cinatra#1361)
   });
 
   // Write SKILL.md to disk so the local path is available to the LLM shell tool.

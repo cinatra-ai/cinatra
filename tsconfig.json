@@ -407,6 +407,7 @@
       "@cinatra-ai/objects/renderer-types": ["./packages/objects/src/renderer-types.ts"],
       "@cinatra-ai/objects/module": ["./packages/objects/src/integration/module.ts"],
       "@cinatra-ai/objects/namespace": ["./packages/objects/src/namespace.ts"],
+      "@cinatra-ai/objects/claims": ["./packages/objects/src/claims.ts"],
       "@cinatra-ai/objects/auto-registrar": ["./packages/objects/src/auto-registrar.ts"],
       "@cinatra-ai/objects/registry": ["./packages/objects/src/registry.ts"],
       "@cinatra-ai/objects/sync-adapters/registry": ["./packages/objects/src/sync-adapters/registry.ts"],
@@ -418,6 +419,7 @@
       "@cinatra-ai/objects/classifier-signals": ["./packages/objects/src/classifier-signals.ts"],
       "@cinatra-ai/registries": ["./packages/registries/src/index.ts"],
       "@cinatra-ai/registries/src/version-compare": ["./packages/registries/src/version-compare.ts"],
+      "@cinatra-ai/registries/src/update-read-model": ["./packages/registries/src/update-read-model.ts"],
       "@cinatra-ai/registries/types": ["./packages/registries/src/types.ts"],
       "@cinatra-ai/registries/install": ["./packages/registries/src/install/install-with-deps.ts"]
     }

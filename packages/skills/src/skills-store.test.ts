@@ -48,11 +48,14 @@ vi.mock("@/lib/database", () => ({
   replaceSkillCatalogInDatabase: vi.fn(),
 }));
 
-// Ensure scanInstalledPackageCatalog returns no skills so the custom
-// level:"agent" skill is not crowded out by real disk scans.
-vi.mock("./skill-packages", () => ({
-  installedSkillPackages: [],
-}));
+// Keep the REAL canonical access-policy helpers (normalizeStoredAccessPolicy
+// et al., #1306) so normalizeStoredSkillPackage runs true normalization;
+// override only installedSkillPackages so scanInstalledPackageCatalog returns no
+// skills and the custom level:"agent" skill isn't crowded out by real disk scans.
+vi.mock("./skill-packages", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./skill-packages")>();
+  return { ...actual, installedSkillPackages: [] };
+});
 
 // Import from skills-registry (already exported via barrel), not from
 // skills-store (where parseFrontmatter is private and must remain so).
@@ -243,7 +246,10 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
       rm: vi.fn(async () => undefined),
     }));
 
-    vi.doMock("./skill-packages", () => ({ installedSkillPackages: [] }));
+    vi.doMock("./skill-packages", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./skill-packages")>();
+      return { ...actual, installedSkillPackages: [] };
+    });
 
     const { upsertCustomSkill } = await import("./skills-store");
     const result = await upsertCustomSkill({
@@ -332,7 +338,10 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
       rm: vi.fn(async () => undefined),
     }));
 
-    vi.doMock("./skill-packages", () => ({ installedSkillPackages: [] }));
+    vi.doMock("./skill-packages", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./skill-packages")>();
+      return { ...actual, installedSkillPackages: [] };
+    });
 
     const { upsertCustomSkill } = await import("./skills-store");
     await expect(
@@ -415,7 +424,10 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
       rm: vi.fn(async () => undefined),
     }));
 
-    vi.doMock("./skill-packages", () => ({ installedSkillPackages: [] }));
+    vi.doMock("./skill-packages", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./skill-packages")>();
+      return { ...actual, installedSkillPackages: [] };
+    });
 
     const { upsertCustomSkill } = await import("./skills-store");
     await expect(
@@ -499,7 +511,10 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
       rm: vi.fn(async () => undefined),
     }));
 
-    vi.doMock("./skill-packages", () => ({ installedSkillPackages: [] }));
+    vi.doMock("./skill-packages", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./skill-packages")>();
+      return { ...actual, installedSkillPackages: [] };
+    });
 
     const { upsertCustomSkill } = await import("./skills-store");
     // Even if input.ownerUserId === "user-a" (matches ownerUserId), the scope
@@ -651,7 +666,10 @@ describe("upsertCustomSkill refuses non-personal rows on the personal-skill code
         rm: vi.fn(async () => undefined),
       }));
 
-      vi.doMock("./skill-packages", () => ({ installedSkillPackages: [] }));
+      vi.doMock("./skill-packages", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./skill-packages")>();
+        return { ...actual, installedSkillPackages: [] };
+      });
 
       const { upsertCustomSkill } = await import("./skills-store");
       await expect(

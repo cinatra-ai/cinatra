@@ -585,17 +585,23 @@ def _patch_api_call_step_bridge_token() -> None:
                 or "/auditor/apply" in _ctx_url
             ):
                 request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
-            # #1193 run-token spine (W2): attach the RAW per-run token on the
-            # host-anchored context callbacks (resolve/finalize) so the server
-            # resolves "which run is calling" from the ONE dispatch-minted
-            # credential (verifyRunToken → unique-index row) rather than a
-            # body-selected id. Scoped to the context routes this wave; the
-            # llm-bridge / MCP-tagging consumers move onto it in W3. Read from a
-            # per-task ContextVar the OAS author cannot write, and only ever sent
-            # to the internal host (the _is_internal gate above).
+            # #1193 run-token spine (W2 + W3): attach the RAW per-run token on
+            # the host-anchored first-party callbacks so the server resolves
+            # "which run is calling" from the ONE dispatch-minted credential
+            # (verifyRunToken → unique-index row) rather than a body-selected id.
+            # W2 landed the context callbacks (resolve/finalize); W3 adds the
+            # llm-bridge call so its run selection — previously the dispatcher-
+            # signed `cinatra_run_binding` plus the a2a context-id — resolves
+            # token-first off the one verifier, with those legacy channels kept
+            # as measured fallbacks server-side (the token being absent leaves
+            # them unchanged). Read from a per-task ContextVar the OAS author
+            # cannot write, and only ever sent to the internal host (the
+            # _is_internal gate above).
             _run_tok = _WAYFLOW_RUN_TOKEN.get()
             if _run_tok and (
-                "context-resolve" in _ctx_url or "context-finalize" in _ctx_url
+                "context-resolve" in _ctx_url
+                or "context-finalize" in _ctx_url
+                or "llm-bridge" in _ctx_url
             ):
                 request["headers"]["X-Cinatra-Run-Token"] = _run_tok
             # #907/#1192: mint the per-node context-callback attestation for the

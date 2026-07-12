@@ -147,6 +147,7 @@ describe("AgentRunRecord type surface", () => {
       workflowId: null,
       workflowTaskId: null,
       oboCeiling: null,
+      dependentInstallId: null,
     };
     expect(sample.authPolicy).toEqual(VALID_POLICY);
 

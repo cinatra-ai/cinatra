@@ -106,6 +106,9 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // persisted OBO scope-ceiling chain (JSON-as-text). Defensive parse — a
     // malformed / empty stored value becomes null (fails closed at mint).
     oboCeiling: parseOboCeilingChain(row.oboCeiling ?? null),
+    // dependent_install_id surfaced onto the record so buildActorContextFromRun
+    // carries it onto the ActorContext for edge-bound serving (cinatra#1392 Gap 2).
+    dependentInstallId: row.dependentInstallId ?? null,
   };
 }
 

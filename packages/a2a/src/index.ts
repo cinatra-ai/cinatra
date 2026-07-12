@@ -105,6 +105,7 @@ export { createA2ATaskStoreWithDbFallback } from "./task-store-db-fallback";
 export {
   MultiAgentExecutor,
   type MultiAgentExecutorOptions,
+  type EdgeBoundServingDecision,
 } from "./multi-agent-executor";
 
 // SSE response adapter for message/stream + tasks/resubscribe.

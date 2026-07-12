@@ -45,6 +45,7 @@ export {
   readAgentRunByTaskId,
   readAgentRunByContextId,
   readAgentRunByTokenHash,
+  readAgentRunTokenHashById,
   setAgentRunTokenHash,
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
@@ -185,10 +186,8 @@ export {
   updateRegistryPackage,
   uninstallRegistryPackage,
 } from "./actions";
-export {
-  installAgentFromPackage,
-  installAgentPackageWithDependencies,
-} from "./install-from-package";
+export { installAgentFromPackage } from "./install-from-package";
+export { installAgentPackageWithDependencies } from "./install-package-with-dependencies";
 // #157: saga-owned-fan-out context. The batch saga enters this around its
 // member-install sequence so the agent handler installs root-only (the saga
 // owns the dependency fan-out) instead of running the second registries
@@ -200,9 +199,11 @@ export {
 export type {
   InstallAgentFromPackageInput,
   InstallAgentFromPackageResult,
+} from "./install-from-package";
+export type {
   InstallAgentPackageWithDependenciesInput,
   InstallAgentPackageWithDependenciesResult,
-} from "./install-from-package";
+} from "./install-package-with-dependencies";
 // WayFlow hot-reload client.
 export { triggerWayflowReload } from "./wayflow-reload-client";
 export type { ReloadResult, ReloadReport } from "./wayflow-reload-client";

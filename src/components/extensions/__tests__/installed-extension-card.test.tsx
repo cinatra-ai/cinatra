@@ -23,7 +23,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InstalledExtensionCard } from "../installed-extension-card";
+import {
+  InstalledExtensionCard,
+  UpdateAvailableChip,
+} from "../installed-extension-card";
 import { Button } from "@/components/ui/button";
 import { ACCENT_PALETTE } from "@/lib/extension-accent";
 
@@ -247,5 +250,270 @@ describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)"
     expect(banner).not.toContain("cursor-pointer");
     expect(banner).not.toContain("cursor-default");
     expect(banner).not.toContain("data-accent-detail");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §III update affordance (cinatra#1041 outcome 3): the "Update available"
+// chip, the ABI-incompatible greyed spec line, and the fail-quiet /
+// up-to-date states that add nothing. The chip is the ONLY update information
+// the card carries (owner direction 2026-07-12): NO explanatory update text —
+// "Newer version needs a newer Cinatra" / "No registry version to compare"
+// live on the §V settings page's Maintenance · Update row, and their ABSENCE
+// from the card is pinned below.
+// ---------------------------------------------------------------------------
+
+function renderWithUpdate(over: Record<string, unknown>): string {
+  return renderToStaticMarkup(
+    <InstalledExtensionCard
+      name="Web Research Agent"
+      accentColor="green"
+      emblem={<svg data-testid="emblem" />}
+      kindLabel="Agent"
+      description="Stateless schema-driven web research enricher."
+      version="0.4.2"
+      status={<span data-testid="status-slot">status</span>}
+      actions={<Button type="button">More details</Button>}
+      {...over}
+    />,
+  );
+}
+
+describe("UpdateAvailableChip (§III blue action-accent chip)", () => {
+  it("renders the status-indicator badge treatment in the --info blue accent with a data-status hook", () => {
+    const html = renderToStaticMarkup(<UpdateAvailableChip />);
+    expect(html).toContain('data-slot="status-indicator"');
+    expect(html).toContain('data-status="update-available"');
+    expect(html).toContain("Update available");
+    // Blue action accent = --info token, NOT the green success used by Active.
+    expect(html).toContain("text-info");
+    expect(html).not.toContain("text-success");
+    // Reuses the canonical badge kicker (named tokens, no arbitrary utilities).
+    expect(html).toContain("text-badge-2xs");
+  });
+});
+
+describe("InstalledExtensionCard — §III spec-line update states", () => {
+  it("update-available: the chip renders on the spec line; the line is NOT greyed", () => {
+    const html = renderWithUpdate({ updateChip: <UpdateAvailableChip /> });
+    expect(html).toContain('data-slot="installed-extension-spec-line"');
+    expect(html).toContain('data-status="update-available"');
+    expect(html).not.toContain("opacity-55");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+  });
+
+  it("incompatible: the spec line greys (opacity-55) with NO chip and NO explanatory text", () => {
+    const html = renderWithUpdate({ specLineMuted: true });
+    expect(html).toContain("opacity-55");
+    expect(html).not.toContain('data-status="update-available"');
+    // The wording lives on the §V settings page, never in the card.
+    expect(html).not.toContain("Newer version needs a newer Cinatra");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+  });
+
+  it("non-comparable / up-to-date / fail-quiet: no update props → spec line is byte-unchanged (no chip, no text, no greying)", () => {
+    const html = renderWithUpdate({});
+    expect(html).toContain('data-slot="installed-extension-spec-line"');
+    expect(html).not.toContain('data-status="update-available"');
+    expect(html).not.toContain("No registry version to compare");
+    expect(html).not.toContain('data-slot="installed-update-note"');
+    expect(html).not.toContain("opacity-55");
+  });
+
+  it("the card carries at most the Update-available chip — no state renders explanatory update text (§III)", () => {
+    for (const over of [
+      { updateChip: <UpdateAvailableChip /> },
+      { specLineMuted: true },
+      {},
+    ]) {
+      const html = renderWithUpdate(over as Record<string, unknown>);
+      expect(html).not.toContain("Newer version needs a newer Cinatra");
+      expect(html).not.toContain("No registry version to compare");
+      expect(html).not.toContain('data-slot="installed-update-note"');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §III description-survives-every-update-state (owner review 2026-07-10,
+// PR #1310: "Description text missing — as per spec, max 2 lines").
+//
+// The owner's screenshots came from an ad-hoc gallery seed whose synthetic
+// connector rows carried a NULL native description (installed-rows hydrates the
+// description from per-kind native descriptors, not the DB seed), so the card's
+// `{description && …}` guard correctly rendered nothing. The card + screen code
+// was already correct. These invariants pin that contract so the update-chip
+// wiring can never DISPLACE or DROP the description element in any chip state:
+// the two-line-clamped description paragraph must render alongside the chip,
+// the greyed incompatible line, AND the empty state.
+// ---------------------------------------------------------------------------
+describe("InstalledExtensionCard — §III description survives every update-chip state", () => {
+  const DESCRIPTION = "Stateless schema-driven web research enricher.";
+
+  // The description <p> is the ONLY paragraph carrying the description copy —
+  // extract it specifically (the banner's italic NAME has its own title clamp).
+  function descriptionParagraph(html: string): string | undefined {
+    return html.match(/<p class="[^"]*">[^<]*<\/p>/)?.[0];
+  }
+
+  const STATES: Array<[string, Record<string, unknown>]> = [
+    ["update-available (blue chip)", { updateChip: <UpdateAvailableChip /> }],
+    ["incompatible (greyed spec line, no text)", { specLineMuted: true }],
+    ["non-comparable / up-to-date / fail-quiet (no chip)", {}],
+  ];
+
+  for (const [label, over] of STATES) {
+    it(`renders the 2-line-clamped description in the ${label} state`, () => {
+      const html = renderWithUpdate(over);
+      const paragraph = descriptionParagraph(html);
+      // Presence: the description text is actually in the DOM (not dropped by
+      // the chip wiring) …
+      expect(paragraph).toBeDefined();
+      expect(html).toContain(DESCRIPTION);
+      // … as the muted description paragraph, clamped to exactly 2 lines (§III).
+      expect(paragraph).toContain(DESCRIPTION);
+      expect(paragraph).toContain("text-muted-foreground");
+      expect(paragraph).toContain("line-clamp-2");
+      expect(paragraph).not.toContain("line-clamp-3");
+    });
+  }
+});
+
+// cinatra#1057 — post-install "needs configuration" treatment. An active AGENT
+// with unconfigured required connectors wears the greyed archived treatment and
+// a needs-review status strip listing each connector's displayName, deep-linked
+// to its setup page. The strip disappears + the card returns to active colours
+// the moment all required connectors are configured (the caller stops passing
+// `configurationNeeds`).
+describe("InstalledExtensionCard — post-install needs-review strip", () => {
+  const NEEDS = [
+    {
+      packageName: "@cinatra-ai/linkedin-oauth-connector",
+      displayName: "LinkedIn",
+      slug: "linkedin-oauth-connector",
+      settingsHref: "/connectors/cinatra-ai/linkedin-oauth-connector/setup",
+    },
+    {
+      packageName: "@cinatra-ai/apollo-connector",
+      displayName: "Apollo",
+      slug: "apollo-connector",
+      settingsHref: "/connectors/cinatra-ai/apollo-connector/setup",
+    },
+  ];
+
+  function renderNeedsReview(
+    configurationNeeds: typeof NEEDS | undefined,
+    accentColor: "green" = "green",
+  ): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="List Curator Agent"
+        accentColor={accentColor}
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Builds and enriches lead lists."
+        actions={<Button type="button">Run</Button>}
+        configurationNeeds={configurationNeeds}
+      />,
+    );
+  }
+
+  it("renders the strip listing each unconfigured connector's displayName + deep-link", () => {
+    const html = renderNeedsReview(NEEDS);
+    // The strip's conformance id + copy.
+    expect(html).toContain('data-conformance="install-config-needs-callout"');
+    expect(html).toContain("Set up connections first:");
+    // Each connector's HUMAN-READABLE displayName is the label…
+    expect(html).toContain(">LinkedIn<");
+    expect(html).toContain(">Apollo<");
+    // …deep-linked to its own setup page, tagged as the manifest.displayName field.
+    expect(html).toContain('href="/connectors/cinatra-ai/linkedin-oauth-connector/setup"');
+    expect(html).toContain('href="/connectors/cinatra-ai/apollo-connector/setup"');
+    expect(html).toContain('data-field="manifest.displayName"');
+  });
+
+  it("flips the card into the greyed archived treatment (marks needs-review, mutes zones)", () => {
+    const html = renderNeedsReview(NEEDS);
+    // Distinct cannot-run marker — NOT the archived lifecycle marker.
+    expect(html).toContain("data-needs-review");
+    expect(html).not.toContain("data-archived");
+    // Greyed treatment reused: muted mark + muted zones (opacity-70), and the
+    // accent hex must not paint the greyed banner/tile.
+    expect(html).toContain("data-muted");
+    expect(html).toContain("opacity-70");
+    expect(html).not.toContain(ACCENT_PALETTE.green.bg);
+  });
+
+  it("omits the strip and keeps the active treatment when nothing is unconfigured", () => {
+    const html = renderNeedsReview(undefined);
+    expect(html).not.toContain("install-config-needs-callout");
+    expect(html).not.toContain("Set up connections first:");
+    expect(html).not.toContain("data-needs-review");
+    // Active card keeps its category colour and unmuted zones.
+    expect(html).toContain(ACCENT_PALETTE.green.bg);
+    expect(html).not.toContain("opacity-70");
+  });
+
+  it("treats an empty configurationNeeds array as nothing-to-configure (active card)", () => {
+    const html = renderNeedsReview([]);
+    expect(html).not.toContain("install-config-needs-callout");
+    expect(html).not.toContain("data-needs-review");
+    expect(html).toContain(ACCENT_PALETTE.green.bg);
+  });
+
+  it("leaves a non-affected extension's active card byte-identical (no strip, no greying)", () => {
+    const withProp = renderNeedsReview(undefined);
+    const withoutProp = renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="List Curator Agent"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Builds and enriches lead lists."
+        actions={<Button type="button">Run</Button>}
+      />,
+    );
+    // Passing an absent/omitted `configurationNeeds` is byte-identical to never
+    // passing it — a non-affected card is untouched.
+    expect(withProp).toBe(withoutProp);
+  });
+
+  // ── main-parity guard (owner review 2026-07-10, cinatra#1234) ─────────────
+  // The §III ACTIVE and ARCHIVED cards are already fixed per the design spec
+  // (#1273). cinatra#1057 must ADD ONLY the needs-review state — it may NOT
+  // restructure the active/archived card. These pins fail loudly if the layout
+  // row is ever moved off the card element (a wrapper regression) for those
+  // two states.
+  const ROW_ON_CARD =
+    "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch";
+  const CARD_AS_COLUMN =
+    "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm\"";
+  const INNER_ROW_WRAPPER = "flex flex-col md:flex-row md:items-stretch";
+
+  it("active card carries the flex row on the card element itself — no layout wrapper (main-parity)", () => {
+    const html = render(false);
+    expect(html).toContain(ROW_ON_CARD);
+    expect(html).not.toContain(INNER_ROW_WRAPPER);
+    expect(html).not.toContain("data-needs-review");
+  });
+
+  it("archived card is likewise a single flex row on the card element (main-parity)", () => {
+    const html = render(true);
+    expect(html).toContain(ROW_ON_CARD);
+    expect(html).not.toContain(INNER_ROW_WRAPPER);
+  });
+
+  it("needs-review card (and ONLY it) moves the row into an inner wrapper, card element becomes a column", () => {
+    const html = renderNeedsReview(NEEDS);
+    // The card element is a column (no row utilities on it)…
+    expect(html).toContain(CARD_AS_COLUMN);
+    expect(html).not.toContain(ROW_ON_CARD);
+    // …with the three panels kept in their own inner row so the strip can span
+    // the full width beneath them.
+    expect(html).toContain(INNER_ROW_WRAPPER);
   });
 });

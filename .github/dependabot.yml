@@ -23,3 +23,13 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    # The cinatra-ai/ci reusable gate workflows (and ci composite actions) are
+    # DELIBERATELY excluded from auto-bumps: their pins are security-critical and
+    # must stay coupled to .github/gate-suite.json requiredContexts[].pinned. The
+    # truthful-attribution machine arm resolves each gate run's referenced_workflows
+    # and fails closed on any uses:@SHA vs pinned mismatch, so a grouped SHA bump
+    # that moved a caller's uses:@ WITHOUT the coupled gate-suite.json re-pin broke
+    # the machine arm once (#1188). These pins advance only via the deliberate,
+    # byte-identity-audited gate re-pin lane — never a Dependabot group bump.
+    ignore:
+      - dependency-name: "cinatra-ai/ci/*"

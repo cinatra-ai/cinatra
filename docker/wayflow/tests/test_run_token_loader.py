@@ -10,7 +10,8 @@ loader:
      persistence. The scrub preserves every other key (run id, binding, inputs).
   2. Hold the raw token in the per-task ``_WAYFLOW_RUN_TOKEN`` ContextVar.
   3. Attach it as ``X-Cinatra-Run-Token`` on host-anchored context-resolve /
-     context-finalize callbacks ONLY (the W2 consumer surface).
+     context-finalize callbacks and (W3) the llm-bridge call — the first-party
+     run-token consumer surfaces. External hosts never receive it.
 
 The header-attach test stubs ``wayflowcore.steps`` exactly like
 ``test_bridge_token.py`` so it runs without the real wayflowcore package.
@@ -136,9 +137,10 @@ def test_run_token_header_attached_on_context_callbacks(monkeypatch) -> None:
         for path in ("/api/context-resolve", "/api/context-finalize"):
             req = _drive(step, base + path)
             assert req["headers"]["X-Cinatra-Run-Token"] == "raw-bearer-xyz", path
-        # llm-bridge is host-anchored but NOT a W2 run-token consumer ⇒ absent.
+        # llm-bridge is a host-anchored run-token consumer as of W3 ⇒ attached
+        # (its run selection resolves token-first off the one verifier).
         req = _drive(step, base + "/api/llm-bridge")
-        assert "X-Cinatra-Run-Token" not in req["headers"]
+        assert req["headers"]["X-Cinatra-Run-Token"] == "raw-bearer-xyz"
         # External host ⇒ nothing internal injected (fail closed).
         ext = _drive(step, "https://api.openai.com/v1/context-resolve")
         assert "X-Cinatra-Run-Token" not in ext.get("headers", {})

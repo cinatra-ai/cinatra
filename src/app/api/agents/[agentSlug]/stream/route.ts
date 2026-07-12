@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
-  resolveWidgetStreamAgent,
+  resolveWidgetStreamAgentUnion,
   resolveContentEditorRelay,
+  reassertWidgetStreamGrantBeforeOboRun,
+  widgetStreamRequestSource,
 } from "@/lib/widget-stream-agents.server";
 import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
 import {
@@ -109,8 +111,15 @@ export async function OPTIONS(
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const entry = resolveWidgetStreamAgent(agentSlug);
-  if (!entry) return new NextResponse(null, { status: 404 });
+  // Union resolution (widget-stream runtime trust, slice 2): build-time map ∪
+  // admin-approved, serve-time-re-verified runtime entries. Null = 404. The
+  // per-source key (slice 5, §7b) rate-limits only the expensive runtime
+  // verification path on this unauthenticated route.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
+  if (!resolved) return new NextResponse(null, { status: 404 });
+  const entry = resolved.entry;
   const allowed = resolveWidgetStreamOrigin(request.headers.get("Origin"), entry.auth);
   if (!allowed) return new NextResponse(null, { status: 403 });
   return new NextResponse(null, { status: 200, headers: buildWidgetStreamCorsHeaders(allowed) });
@@ -121,10 +130,19 @@ export async function POST(
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const entry = resolveWidgetStreamAgent(agentSlug);
-  if (!entry) {
+  // Union resolution (widget-stream runtime trust, slice 2). A runtime entry
+  // resolves ONLY fully re-verified (approved grant at the exact on-disk canon
+  // hash, ownership conjunction, trusted-signed + integrity-vs-anchor) and pins
+  // an immutable grant descriptor for the point-of-use re-assert below. The
+  // per-source key (slice 5, §7b) rate-limits only the expensive runtime
+  // verification path on this unauthenticated route.
+  const resolved = await resolveWidgetStreamAgentUnion(agentSlug, undefined, {
+    requestSource: widgetStreamRequestSource(request),
+  });
+  if (!resolved) {
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }
+  const entry = resolved.entry;
 
   // CORS is RESPONSE-HEADER POLICY only — never the authorization mechanism.
   // We resolve the request Origin against the configured-instance allowlist to
@@ -366,15 +384,40 @@ export async function POST(
     });
   }
 
-  // Resolve the relay target (content-editor agent A2A URL + package name) for
-  // this slug. A widget-stream agent with no relay configured is a wiring error
+  // Resolve the relay target (content-editor agent A2A URL + package name) off
+  // the SAME pinned union resolution (never a second observation of mutable
+  // state). A widget-stream agent with no relay configured is a wiring error
   // the admin must see as a clean JSON 500, not a half-opened stream.
-  const relay = resolveContentEditorRelay(agentSlug);
+  const relay = resolveContentEditorRelay(resolved);
   if (!relay) {
     console.error(`[agent-stream:${agentSlug}] no content-editor relay configured for slug`);
     return NextResponse.json(
       { error: "This widget agent has no content-editor relay configured" },
       { status: 500, headers: corsHeaders },
+    );
+  }
+
+  // CONFIGURATION-NEEDS RUN GATE (cinatra #1057 ruling (b)): a relayed agent whose
+  // REQUIRED connectors are not yet configured must NOT be dispatched. Fail CLOSED
+  // with a structured 409 naming each unconfigured connector, BEFORE any run is
+  // opened. Scoped to the authenticated end user (the per-user OBO runBy when
+  // present). FAIL-OPEN on a thrown INFRA error only (never strand the public
+  // widget path on a canonical-store glitch — the primitive gates downstream are
+  // the backstop); a DETERMINATE unconfigured result still blocks.
+  try {
+    const { assertAgentRunReadyByPackage } = await import("@/lib/agent-run-readiness");
+    const notConfigured = await assertAgentRunReadyByPackage(
+      relay.agentPackageName,
+      relay.agentPackageName,
+      { userId: widgetActorOverride?.runBy ?? null },
+    );
+    if (notConfigured) {
+      return NextResponse.json(notConfigured, { status: 409, headers: corsHeaders });
+    }
+  } catch (err) {
+    console.warn(
+      `[agent-stream:${agentSlug}] config-needs run gate errored — dispatching anyway (fail-open):`,
+      err instanceof Error ? err.message : err,
     );
   }
 
@@ -406,6 +449,23 @@ export async function POST(
   // a forgeable body field, regardless of what the client sent.
   if (widgetActorOverride) {
     payload.instanceId = widgetActorOverride.instanceId;
+  }
+
+  // POINT-OF-USE RE-ASSERT (widget-stream runtime trust, slice 2, runtime
+  // entries only — a build-time entry passes unchanged): IMMEDIATELY before
+  // the OBO-carrier agent_run is pre-created by the dispatch below, re-assert
+  // the pinned grant descriptor live — still `approved` at the exact resolved
+  // hash + rowVersion, ownership conjunction still holds, the package AND the
+  // relay target still classify trusted-signed + activated. A revocation that
+  // landed after resolution linearizes HERE: refuse with an OPAQUE 404 (the
+  // real reason is server-side only) and create NO run.
+  if (!(await reassertWidgetStreamGrantBeforeOboRun(resolved))) {
+    console.warn(
+      "[agent-stream:%s] point-of-use grant re-assert failed before OBO run " +
+        "creation — refusing (fail closed)",
+      agentSlug,
+    );
+    return NextResponse.json({ error: "Unknown agent" }, { status: 404, headers: corsHeaders });
   }
 
   const encoder = new TextEncoder();
@@ -464,6 +524,14 @@ export async function POST(
               instanceId:
                 typeof context.instanceId === "string" ? context.instanceId : null,
               actorOverride: widgetActorOverride ?? undefined,
+              // Point-of-use re-assert AT the run-creation boundary itself
+              // (widget-stream runtime trust, slice 2): the dispatch helper
+              // invokes this immediately before the carrier agent_run insert,
+              // so a revocation landing after the route-level check above
+              // still refuses with NO run created. Build-time entries are a
+              // no-op (grant: null → true).
+              preCreateAuthorize: () =>
+                reassertWidgetStreamGrantBeforeOboRun(resolved),
             });
 
         // Parse the agent's reply. A structured `{ postId|nodeId, changes[] }`

@@ -38,6 +38,9 @@ import {
   up as demoteUp,
   down as demoteDown,
 } from "../../../../migrations/core/core__0004_demote-optional-extension-anchors.mjs";
+// The ledger every consumer sees is the manifest.json + manifest.d/ union,
+// computed by the shared reader (plain runtime ESM, same import form).
+import { readManifestUnion } from "../../../../migrations/manifest-reader.mjs";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
 const hasDb =
@@ -113,15 +116,6 @@ async function applyStoreDdl(client: Client, schema: string): Promise<void> {
 
 const ANCHOR_SOURCE = (pkg: string) =>
   JSON.stringify({ type: "local", path: `static-bundle:${pkg}`, resolvedCommitOrTreeHash: "bundled@0.1.0" });
-const TWENTY_DEPS = JSON.stringify([
-  {
-    packageName: "@cinatra-ai/crm-connector",
-    kind: "connector",
-    edgeType: "runtime",
-    versionConstraint: { kind: "semver-range", range: "*" },
-    requirement: "required",
-  },
-]);
 
 describe("core__0004 demotion artifact shape (no DB needed)", () => {
   it("freezes exactly the 17 packages the shrink removed — disjoint from the live declaration", () => {
@@ -145,13 +139,17 @@ describe("core__0004 demotion artifact shape (no DB needed)", () => {
     expect(downSql).toContain("WHEN status = 'active' THEN 'locked'"); // symmetric re-lock
   });
 
-  it("ships its append-only ledger entry (migrations/manifest.json seq 0004)", () => {
-    const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, "migrations/manifest.json"), "utf8"));
-    const entry = manifest.migrations.find((m: { seq: string }) => m.seq === "0004");
+  it("ships its append-only ledger entry (union ledger seq 0004 — manifest.json + manifest.d/ fragments)", () => {
+    const { entries, errors } = readManifestUnion(path.join(REPO_ROOT, "migrations")) as {
+      entries: Array<{ seq: string; file: string; destructive: boolean; tables: string[] }>;
+      errors: string[];
+    };
+    expect(errors).toEqual([]);
+    const entry = entries.find((m) => m.seq === "0004");
     expect(entry).toBeDefined();
-    expect(entry.file).toBe("core/core__0004_demote-optional-extension-anchors.mjs");
-    expect(entry.destructive).toBe(true);
-    expect(entry.tables).toEqual(["installed_extension"]);
+    expect(entry?.file).toBe("core/core__0004_demote-optional-extension-anchors.mjs");
+    expect(entry?.destructive).toBe(true);
+    expect(entry?.tables).toEqual(["installed_extension"]);
   });
 });
 
@@ -183,9 +181,11 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
     // floor to '0.0.0' — the same backfill floor versionIdentitySchemaQueries
     // applies to version-less sources. is_default defaults true (sole row per
     // identity), so it needs no explicit value here.
+    // The dependencies jsonb column is GONE since cinatra#1040 S2 — declared
+    // edges are first-class extension_dependency_edge rows (seeded below).
     const insert = `INSERT INTO "${schema}".installed_extension
-      (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash, version)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,'0.0.0')`;
+      (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, manifest_hash, version)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'0.0.0')`;
     // demoted, prod-locked platform anchor with rich metadata
     await client.query(insert, [
       "iext_demoted_twenty",
@@ -197,9 +197,18 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
       "locked",
       ANCHOR_SOURCE("@cinatra-ai/twenty-connector"),
       true,
-      TWENTY_DEPS,
       "mh_twenty_1",
     ]);
+    // twenty's declared dependency edge (the pre-S2 fixture carried this in
+    // the row jsonb) — unresolved (the crm-connector target is not seeded),
+    // which is a legal persisted state (gates fall back to the name lookup).
+    await client.query(
+      `INSERT INTO "${schema}".extension_dependency_edge
+        (id, dependent_install_id, declared_package_name, declared_kind, edge_type,
+         requirement, version_constraint, declared_index, resolved_install_id, resolution_reason)
+       VALUES ('iede_demoted_twenty-0','iext_demoted_twenty','@cinatra-ai/crm-connector','connector',
+               'runtime','required','{"kind":"semver-range","range":"*"}'::jsonb,0,null,null)`,
+    );
     // demoted, archived tombstone (operator uninstalled pre-upgrade)
     await client.query(insert, [
       "iext_demoted_media",
@@ -211,7 +220,6 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
       "archived",
       ANCHOR_SOURCE("@cinatra-ai/media-feeds-connector"),
       true,
-      "[]",
       null,
     ]);
     // demoted, org-scoped ACTIVE row (dev-installed) — flag flips, status stays
@@ -225,7 +233,6 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
       "active",
       ANCHOR_SOURCE("@cinatra-ai/github-connector"),
       true,
-      "[]",
       "mh_github_1",
     ]);
     // KEPT required package — must be completely untouched
@@ -239,7 +246,6 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
       "locked",
       ANCHOR_SOURCE("@cinatra-ai/nango-connector"),
       true,
-      "[]",
       "mh_nango_1",
     ]);
   });
@@ -277,7 +283,21 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
     }
     // the seeded activation metadata survived byte-for-byte
     expect(twenty.source).toEqual(JSON.parse(ANCHOR_SOURCE("@cinatra-ai/twenty-connector")));
-    expect(twenty.dependencies).toEqual(JSON.parse(TWENTY_DEPS));
+    // dependency edges live in extension_dependency_edge since cinatra#1040 S2
+    const twentyEdges = await client.query(
+      `SELECT declared_package_name, declared_kind, edge_type, requirement, version_constraint
+         FROM "${schema}".extension_dependency_edge
+        WHERE dependent_install_id = 'iext_demoted_twenty' ORDER BY declared_index`,
+    );
+    expect(twentyEdges.rows).toEqual([
+      {
+        declared_package_name: "@cinatra-ai/crm-connector",
+        declared_kind: "connector",
+        edge_type: "runtime",
+        requirement: "required",
+        version_constraint: { kind: "semver-range", range: "*" },
+      },
+    ]);
     expect(twenty.manifest_hash).toBe("mh_twenty_1");
 
     // archived tombstone: stays archived (an operator decision is never resurrected)
@@ -341,8 +361,8 @@ describe.skipIf(!hasDb)("fresh prod DB — seeding creates ONLY the shrunk requi
       // version NOT NULL since cinatra#1040 S1; version-less local source
       // floors to '0.0.0' (see the upgraded-DB fixture note above).
       `INSERT INTO "${schema}".installed_extension
-       (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, dependencies, manifest_hash, version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,'0.0.0')`,
+       (id, package_name, owner_level, owner_id, organization_id, kind, status, source, required_in_prod, manifest_hash, version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'0.0.0')`,
       [
         "iext_optional_blog",
         "@cinatra-ai/blog-connector",
@@ -353,7 +373,6 @@ describe.skipIf(!hasDb)("fresh prod DB — seeding creates ONLY the shrunk requi
         "active",
         ANCHOR_SOURCE("@cinatra-ai/blog-connector"),
         false,
-        "[]",
         "mh_blog_1",
       ],
     );

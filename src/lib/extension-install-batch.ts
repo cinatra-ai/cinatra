@@ -49,11 +49,13 @@ import type {
 import type {
   DependencyInstallPlan,
   DependencyPlanDeps,
+  RowOwnership,
 } from "@/lib/extension-dependency-plan";
 import type {
   InstallBatch,
   InstallBatchMember,
   InstallBatchOpsDeps,
+  SideBySideGrantCapsule,
 } from "@/lib/extension-install-batch-ops";
 
 export type BatchInstallResult = {
@@ -68,6 +70,18 @@ export type BatchInstallResult = {
    * (which keeps the hard refusal).
    */
   updated: { packageName: string; version: string }[];
+  /**
+   * Shared dependencies THIS call installed SIDE BY SIDE as non-default
+   * version rows (cinatra#1040 S3 `action:"install-side-by-side"` members —
+   * the disjoint-dependents class on the non-gatekept path). STORAGE-LEVEL
+   * installs: resolved edges bind the new dependents, but versioned RUNTIME
+   * activation is deferred to the S4 loader slice — until then the DEFAULT
+   * version keeps serving every runtime surface. `evidence` names the live
+   * dependents whose constraints forced the split. Rolled back (version-
+   * scoped teardown) if a later member fails. Always empty on the gatekept
+   * path (hard refusal preserved).
+   */
+  installedSideBySide: { packageName: string; version: string; evidence?: string }[];
   /** Closure members that were already present at the pin and were skipped. */
   alreadyInstalled: string[];
   batchId: string | null; // null = root-only fast path (no ledger row)
@@ -127,6 +141,9 @@ export type InstallBatchSagaDeps = {
   plan: (input: {
     root: { packageName: string; version: string };
     orgId: string | null;
+    /** cinatra#1039 decision 1+4: the root's derived-default rowOwnership tuple,
+     *  forced onto every member. */
+    rowOwnership?: RowOwnership;
     closure: GatekeptInstallResolution["authorize"]["closure"] | null;
     /** #1039 Option B (update-time): the root is a committed in-place update
      *  (dev/non-gatekept path) rather than a fresh install. */
@@ -153,9 +170,85 @@ export type InstallBatchSagaDeps = {
    * compensation loop and the boot sweeper both skip it), so no cross-batch
    * durable-restore is required (that is the deferred Option A subsystem).
    */
-  updateMemberPackage: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  updateMemberPackage: (
+    member: { typeId: string; packageName: string; version: string },
+    actor: Actor,
+    /**
+     * #1042 slice-1 CAS: forwarded to `extensionRegistry.update` as
+     * `expectedInstalledVersion` for the ROOT update member ONLY (the batch
+     * passes it only when `member.packageName === input.packageName`). A drift
+     * at the mutation boundary refuses the update before any mutation — the
+     * caller's stale target never overwrites a concurrent winner. Omitted for
+     * every non-root dedupe-upward member and every manual caller.
+     */
+    expectedInstalledVersion?: string,
+  ) => Promise<void>;
   /** Uninstall ONE package through the real dispatcher (compensation inverse). */
   uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  /**
+   * #1042 slice-2 ROW-SCOPED compensation inverse. Removes ONLY the freshly-
+   * installed (package, actor-scope) canonical row — never the package-global
+   * hard-delete branch of `extensionRegistry.uninstall` (which would tear down
+   * same-package OTHER-org rows). Used in place of `uninstallMember` for
+   * newly-installed non-side-by-side members when the caller opts in with
+   * `rowScopedCompensation:true` (the auto-update loop), so an org-multi-tenant
+   * instance's rows are provably untouched and the loop can lift its org-rows
+   * fence. Absent flag (all manual callers) → today's `uninstallMember`.
+   */
+  uninstallMemberRowScoped: (
+    member: { typeId: string; packageName: string; version: string },
+    actor: Actor,
+  ) => Promise<void>;
+  /**
+   * Install ONE shared dependency SIDE BY SIDE as a non-default version row
+   * (cinatra#1040 S3 `action:"install-side-by-side"` member) — the storage-
+   * level installer (real pipeline, row-bound, version-scoped journal, NO
+   * runtime activation until S4). Distinct from `installMember`: the package's
+   * DEFAULT row stays installed and untouched.
+   */
+  installMemberSideBySide: (
+    member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      scopeOrgId: string | null;
+      /** cinatra#1040 S6: persist the member's ownership DECLARATION CAPSULE
+       * durably (batch ledger member `grantCapsule`) BEFORE the side-by-side
+       * install mutates the shared ownership grant. Its presence ENABLES the
+       * ownership union; absent → the S3 DECLARES_OWNERSHIP_KEYS refusal. */
+      persistCapsule?: (capsule: SideBySideGrantCapsule) => Promise<void>;
+    },
+    actor: Actor,
+  ) => Promise<void>;
+  /**
+   * The VERSION-SCOPED compensation inverse for a side-by-side member: tears
+   * down ONLY the non-default (package, org, version) row + its version-scoped
+   * journal op. NEVER the package-scoped uninstall (which would remove the
+   * default install).
+   */
+  uninstallSideBySideMember: (
+    member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      scopeOrgId: string | null;
+      /** cinatra#1040 S6: the torn-down member's durable declaration capsule
+       * (from the ledger member) — reconciles the shared ownership grant
+       * (survivor-check + revoke). Null/absent → no ownership reconcile. */
+      capsule?: SideBySideGrantCapsule | null;
+    },
+    actor: Actor,
+  ) => Promise<void>;
+  /**
+   * Version-scoped journal read (cinatra#1040 S3) — the ledger linkage for a
+   * side-by-side member's op (the versionless `readInstallOp` would observe
+   * the DEFAULT install's anchor).
+   */
+  readInstallOpForVersion: (
+    packageName: string,
+    orgId: string | null,
+    version: string,
+  ) => Promise<{ installOpId: string; phase: string } | null>;
   /**
    * Fire the SINGLE WayFlow agent-runtime reload at the batch SUCCESS boundary
    * (#157). The agent handler no longer reloads per-member (it installs
@@ -173,11 +266,41 @@ export type InstallBatchSagaDeps = {
   ledger: {
     begin: (input: { batchId: string; rootPackage: string; orgId: string | null; members: InstallBatchMember[] }) => Promise<InstallBatch>;
     setPhase: (batchId: string, phase: InstallBatch["phase"]) => Promise<InstallBatch>;
-    updateMember: (batchId: string, packageName: string, patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>) => Promise<InstallBatch>;
+    updateMember: (batchId: string, packageName: string, patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail" | "grantCapsule">>) => Promise<InstallBatch>;
     listActive: () => Promise<InstallBatch[]>;
   };
   now: () => number;
 };
+
+/**
+ * #1042 slice-2: resolve the SINGLE freshly-installed (package, scope, version)
+ * canonical row the row-scoped compensation must tear down — precisely, never an
+ * arbitrary live row. The freshly-installed row is the one at the actor scope
+ * carrying the exact version this batch installed. FAIL-CLOSED: more than one
+ * live row carrying that version at the scope is ambiguous → `ambiguous:true`
+ * (the caller refuses rather than delete the wrong row); zero → `rowId:null`
+ * (idempotent — already gone / the install never took). Pure + exported for
+ * direct testing. `source.version` is the canonical verdaccio version.
+ */
+export function resolveRowScopedCompensationTarget(
+  rows: {
+    id: string;
+    organizationId: string | null;
+    status: string;
+    source?: { version?: string } | null;
+  }[],
+  scope: string | null,
+  version: string,
+): { rowId: string | null; ambiguous: boolean; count: number } {
+  const matching = rows.filter(
+    (r) =>
+      (r.organizationId ?? null) === scope &&
+      (r.status === "active" || r.status === "locked") &&
+      ((r.source?.version ?? null) === version),
+  );
+  if (matching.length === 1) return { rowId: matching[0]!.id, ambiguous: false, count: 1 };
+  return { rowId: null, ambiguous: matching.length > 1, count: matching.length };
+}
 
 export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSagaDeps> {
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig, refreshGatekeptInstallGrant } =
@@ -185,7 +308,9 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
   const { withInstallGrantContext, getActiveInstallGrantContext } = await import(
     "@/lib/extension-install-grant-context"
   );
-  const { planDependencyInstall } = await import("@/lib/extension-dependency-plan");
+  const { planDependencyInstall, defaultOrgPlatformChain } = await import(
+    "@/lib/extension-dependency-plan"
+  );
   const { readInstallOp } = await import("@/lib/extension-install-ops");
   const batchOps = await import("@/lib/extension-install-batch-ops");
   const { parseManifestDependencyEdges } = await import(
@@ -262,6 +387,21 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
       const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
       return listInstalledExtensions({});
     },
+    // cinatra#1039 decision 2: the extension-saga scope-ancestry is the
+    // [organization, platform] binary — an org install resolves the org's own
+    // rows first, else platform (the EXACT pre-#1039 findLiveRowsInScope
+    // behavior). The agent path (Phase 2) injects the real
+    // project→owning-team→org→platform ladder here.
+    resolveScopeAncestry: (rowOwnership) => defaultOrgPlatformChain(rowOwnership.organizationId),
+    // cinatra#1039 decision 3: the extension-saga rows are ORG-owned and the
+    // root install already authorized the org, so a dedupe-upward of a
+    // same-org (or platform-fallback) row stays within the caller's established
+    // authority — PERMIT (behavior-neutral). The AGENT path (Phase 2) wires the
+    // real per-row assertCanInstallAtTarget against the EXISTING row's scope, so
+    // a cross-scope mutation refuses.
+    authorizeExistingRowMutation: () => {
+      /* permit: extension-path row ownership is org-uniform (see #1039 decision 3) */
+    },
   };
 
   return {
@@ -296,12 +436,15 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         actor,
       );
     },
-    updateMemberPackage: async (member, actor) => {
+    updateMemberPackage: async (member, actor, expectedInstalledVersion) => {
       const { extensionRegistry } = await import("@cinatra-ai/extensions");
       await extensionRegistry.update(
         member.typeId,
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
+        // #1042 slice-1: forward the CAS precondition only when the batch
+        // supplied it (root update member). `undefined` = no CAS.
+        ...(expectedInstalledVersion !== undefined ? [{ expectedInstalledVersion }] : []),
       );
     },
     uninstallMember: async (member, actor) => {
@@ -311,6 +454,97 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
       );
+    },
+    uninstallMemberRowScoped: async (member, actor) => {
+      // #1042 slice-2: ROW-SCOPED compensation. PRECISELY resolve the single
+      // freshly-installed (package, actor-scope, version) canonical row this
+      // batch added and delete EXACTLY that row via the scoped lifecycle
+      // primitive — never the package-global hard-delete, and never an
+      // arbitrary live row. FAIL-CLOSED on ambiguity (>1 live rows carrying the
+      // version at the scope): we refuse rather than delete the wrong row (the
+      // throw marks the member compensation-failed / ROLLBACK INCOMPLETE, which
+      // is the safe direction). Other-scope rows for the same package are
+      // provably untouched. Best-effort terminalize the row's install-op journal
+      // so it can never be mistaken for a live anchor.
+      const scope = actor.orgId ?? null;
+      const { readInstalledExtensionsByPackageName } = await import(
+        "@cinatra-ai/extensions/canonical-store"
+      );
+      const rows = await readInstalledExtensionsByPackageName(member.packageName);
+      const target = resolveRowScopedCompensationTarget(
+        rows.map((r) => ({
+          id: r.id,
+          organizationId: r.organizationId,
+          status: r.status,
+          source: r.source as { version?: string } | null,
+        })),
+        scope,
+        member.version,
+      );
+      if (target.ambiguous) {
+        throw new Error(
+          `[extension-install-batch] row-scoped compensation of ${member.packageName}@${member.version} ` +
+            `is ambiguous (${target.count} live rows at the scope carry that version) — refusing to ` +
+            `delete an arbitrary row (compensation left incomplete for manual review).`,
+        );
+      }
+      if (target.rowId === null) return; // already gone / never took — idempotent
+      const { deleteScopedCanonicalRow } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      await deleteScopedCanonicalRow(target.rowId);
+      try {
+        const { readInstallOp, advanceInstallOpPhase } = await import(
+          "@/lib/extension-install-ops"
+        );
+        const op = await readInstallOp(member.packageName, scope);
+        if (op && op.phase !== "rolled_back") {
+          await advanceInstallOpPhase({ installOpId: op.installOpId, phase: "rolled_back" });
+        }
+      } catch (err) {
+        console.warn(
+          "[extension-install-batch] terminalizing the install-op journal for %s (row-scoped compensation) failed:",
+          member.packageName,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    },
+    installMemberSideBySide: async (member, actor) => {
+      const { installExtensionVersionSideBySide } = await import(
+        "@/lib/extension-side-by-side-install"
+      );
+      await installExtensionVersionSideBySide({
+        packageName: member.packageName,
+        version: member.version,
+        typeId: member.typeId,
+        // The RESOLVED conflict scope (codex round-1): an org request that
+        // fell back to the platform default installs the side-by-side row at
+        // the PLATFORM scope, next to that default.
+        orgId: member.scopeOrgId,
+        actorUserId: actor.userId ?? null,
+        // cinatra#1040 S6: inject the durable capsule sink → ENABLES the
+        // ownership grant union (absent → the S3 DECLARES_OWNERSHIP_KEYS
+        // refusal stands). The default survivor reader (fs+db) is used.
+        ...(member.persistCapsule
+          ? { grantUnion: { persistCapsule: member.persistCapsule } }
+          : {}),
+      });
+    },
+    uninstallSideBySideMember: async (member) => {
+      const { uninstallExtensionVersionSideBySide } = await import(
+        "@/lib/extension-side-by-side-install"
+      );
+      await uninstallExtensionVersionSideBySide({
+        packageName: member.packageName,
+        version: member.version,
+        orgId: member.scopeOrgId,
+        // cinatra#1040 S6: reconcile the shared ownership grant on teardown.
+        capsule: member.capsule ?? null,
+      });
+    },
+    readInstallOpForVersion: async (pkg, oid, version) => {
+      const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
+      return readInstallOpForVersion(pkg, oid, version);
     },
     readLiveRowVersion: async (packageName, orgId) => {
       const { readInstalledExtensionsByPackageName } = await import(
@@ -355,6 +589,26 @@ export async function installExtensionWithDependencies(
      * flow. The gatekept update path is deferred (#1296) and never sets this.
      */
     rootAction?: "install" | "update";
+    /**
+     * #1042 slice-1 (auto-update loop only): the expected currently-installed
+     * version of the ROOT, forwarded to `extensionRegistry.update` as the
+     * compare-and-set precondition (`expectedInstalledVersion`) ONLY for the
+     * root update member. A drift at the mutation boundary refuses the update
+     * before any mutation, so the loop's cached target never overwrites a
+     * concurrent winner. Only meaningful with `rootAction:"update"`; absent for
+     * every manual caller (byte-unchanged).
+     */
+    expectedRootInstalledVersion?: string;
+    /**
+     * #1042 slice-2 (auto-update loop only): when true, freshly-installed
+     * NON-side-by-side members compensate via the ROW-SCOPED inverse
+     * (`uninstallMemberRowScoped`) instead of the package-global
+     * `extensionRegistry.uninstall`. This makes the batch's mid-batch
+     * compensation provably touch only the actor-scope row, so the loop can run
+     * on org-multi-tenant instances (lifting its org-rows fence). Absent (every
+     * manual caller) = today's package-scoped compensation, byte-unchanged.
+     */
+    rowScopedCompensation?: boolean;
   },
   depsOverride?: InstallBatchSagaDeps,
 ): Promise<BatchInstallResult> {
@@ -433,6 +687,16 @@ export async function installExtensionWithDependencies(
       const plan = await deps.plan({
         root: { packageName: input.packageName, version: rootVersion },
         orgId,
+        // cinatra#1039 decision 1+4: the extension-saga DERIVED-DEFAULT
+        // rowOwnership — an org install is organization-owned, a null-org
+        // install platform-owned (canonical-store's existing default). Forced
+        // immutably onto every member; behavior-neutral (the scope the path
+        // already installs at). The agent path (Phase 2) threads its real tuple.
+        rowOwnership: {
+          ownerLevel: orgId ? "organization" : "platform",
+          ownerId: orgId ?? null,
+          organizationId: orgId ?? null,
+        },
         closure: resolution ? resolution.authorize.closure : null,
         // #1039 Option B (update-time): route the root through the durable
         // update pipeline as a committed member. `resolution == null` on the
@@ -486,6 +750,19 @@ export async function installExtensionWithDependencies(
           typeId: m.typeId,
           status: m.alreadyInstalled ? "already-installed" : "planned",
           action: m.action,
+          // cinatra#1039: STAMP the resolved rowOwnership onto the ledger member
+          // (rides the existing JSONB `members` column — NO schema change). The
+          // executor thus records WHO OWNS each installed/updated row; for the
+          // extension default this equals the batch's org scope (behavior-neutral).
+          rowOwnership: m.rowOwnership,
+          // The RESOLVED side-by-side scope rides the ledger so compensation
+          // and the boot sweeper address the same scope (codex round-1).
+          ...(m.action === "install-side-by-side"
+            ? // NULL is a meaningful (platform) scope — only an ABSENT value
+              // falls back to the request org (?? would swallow the platform
+              // fallback).
+              { scopeOrgId: m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId }
+            : {}),
           preState: {
             present: row.present,
             ...(row.version ? { version: row.version } : {}),
@@ -521,7 +798,9 @@ export async function installExtensionWithDependencies(
       const rootIsUpdate = root.action === "update";
       await deps.withSagaOwnedFanout(input.packageName, () =>
         rootIsUpdate
-          ? deps.updateMemberPackage(root, input.actor)
+          ? // #1042 slice-1: the depless root is always `input.packageName`, so
+            // forward the CAS precondition (undefined for manual callers).
+            deps.updateMemberPackage(root, input.actor, input.expectedRootInstalledVersion)
           : deps.installMember(root, input.actor),
       );
       await maybeReloadAgentRuntime([root]);
@@ -534,6 +813,9 @@ export async function installExtensionWithDependencies(
         // An in-place root update is surfaced under `updated`, mirroring the
         // committed dedupe-upward result partition on the batched path.
         updated: rootIsUpdate ? [rootEntry] : [],
+        // The ROOT is never a side-by-side member (root conflicts are the
+        // caller-chosen install/update flow).
+        installedSideBySide: [],
         alreadyInstalled,
         batchId: null,
       };
@@ -556,8 +838,11 @@ export async function installExtensionWithDependencies(
       packageName: string;
       version: string;
       typeId: string;
-      action: "install" | "update";
+      action: "install" | "update" | "install-side-by-side";
+      sideBySideScopeOrgId?: string | null;
     }[] = [];
+    const sideBySideScopeOf = (m: { sideBySideScopeOrgId?: string | null }): string | null =>
+      m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId;
     for (const member of toInstall) {
       try {
         // P2-5 GRANT TTL: refresh near expiry; refusal/unavailability aborts.
@@ -616,17 +901,63 @@ export async function installExtensionWithDependencies(
         // (`preState.present`), the newly-installed-only compensation loop below
         // and the boot sweeper both skip it, so a later member's failure leaves
         // it at the new (provably non-breaking) version.
+        // cinatra#1040 S3: an `install-side-by-side` member routes through the
+        // version-scoped storage installer — NEVER the package-scoped install
+        // (which would resolve/short-circuit against the DEFAULT row) and never
+        // an upgraded/derived action: only the PLANNER emits this action, on
+        // the non-gatekept path exclusively.
         await deps.withSagaOwnedFanout(input.packageName, () =>
           member.action === "update"
-            ? deps.updateMemberPackage(member, input.actor)
-            : deps.installMember(member, input.actor),
+            ? // #1042 slice-1: forward the CAS precondition ONLY for the ROOT
+              // update member — a non-root dedupe-upward member is an internal
+              // committed upgrade with no caller-supplied expectation.
+              deps.updateMemberPackage(
+                member,
+                input.actor,
+                member.packageName === input.packageName
+                  ? input.expectedRootInstalledVersion
+                  : undefined,
+              )
+            : member.action === "install-side-by-side"
+              ? deps.installMemberSideBySide(
+                  {
+                    ...member,
+                    scopeOrgId: sideBySideScopeOf(member),
+                    // cinatra#1040 S6: the durable capsule sink for THIS member.
+                    // Persist to the ledger (DB — for cross-process boot
+                    // recovery) AND mirror into the in-memory batch member (so
+                    // same-process compensation below reads it without a
+                    // re-fetch). Called UNDER the side-by-side install's
+                    // per-package lock, BEFORE any ownership-grant mutation.
+                    persistCapsule: async (capsule) => {
+                      await deps.ledger.updateMember(batch.batchId, member.packageName, {
+                        grantCapsule: capsule,
+                      });
+                      const lm = batch.members.find(
+                        (x) => x.packageName === member.packageName,
+                      );
+                      if (lm) lm.grantCapsule = capsule;
+                    },
+                  },
+                  input.actor,
+                )
+              : deps.installMember(member, input.actor),
         );
         // Track the durable install/update IMMEDIATELY — before the ledger write —
         // so a ledger failure right after a successful member op still routes it
         // correctly (an install compensates; a committed update is skipped by the
         // pre-existing-member guard in compensation).
         installedThisBatch.push(member);
-        const op = await deps.readInstallOp(member.packageName, orgId).catch(() => null);
+        const op =
+          member.action === "install-side-by-side"
+            ? await deps
+                .readInstallOpForVersion(
+                  member.packageName,
+                  sideBySideScopeOf(member),
+                  member.version,
+                )
+                .catch(() => null)
+            : await deps.readInstallOp(member.packageName, orgId).catch(() => null);
         await deps.ledger.updateMember(batch.batchId, member.packageName, {
           status: "installed",
           ...(op ? { installOpId: op.installOpId } : {}),
@@ -645,6 +976,30 @@ export async function installExtensionWithDependencies(
       // compensate NOW, deterministically, with the loud error.
       await abortAndCompensate(input.packageName, err);
       throw err; // unreachable — defensive.
+    }
+    // cinatra#1040 S6: RELEASE spent capsules (orphan-GC happy path). The
+    // side-by-side members are COMMITTED now — their durable declaration
+    // capsules will never be consumed by a teardown (an explicit uninstall
+    // reconciles fresh from the live store), so clear them with an evidence
+    // log. Best-effort: a crash before this leaves a capsule on a FINALIZED
+    // batch member, which the boot orphan-GC (`gcOrphanedSideBySideCapsules`)
+    // collects. After `finalized` so a clear failure never un-finalizes.
+    {
+      const released: string[] = [];
+      for (const m of installedThisBatch) {
+        if (m.action !== "install-side-by-side") continue;
+        const ok = await deps.ledger
+          .updateMember(batch.batchId, m.packageName, { grantCapsule: null })
+          .then(() => true)
+          .catch(() => false);
+        if (ok) released.push(`${m.packageName}@${m.version}`);
+      }
+      if (released.length > 0) {
+        console.warn(
+          `[side-by-side-capsule] released ${released.length} spent capsule(s) for ` +
+            `finalized batch ${batch.batchId}: ${released.join(", ")}`,
+        );
+      }
     }
     // #157: SINGLE agent-runtime reload at the batch success boundary. The
     // agent handler installed root-only per member (no per-member reload) and
@@ -666,6 +1021,14 @@ export async function installExtensionWithDependencies(
       updated: installedThisBatch
         .filter((m) => m.action === "update")
         .map(({ packageName, version }) => ({ packageName, version })),
+      installedSideBySide: installedThisBatch
+        .filter((m) => m.action === "install-side-by-side")
+        .map(({ packageName, version }) => {
+          const evidence = planned.plan.ordered.find(
+            (pm) => pm.packageName === packageName,
+          )?.sideBySideEvidence?.detail;
+          return { packageName, version, ...(evidence ? { evidence } : {}) };
+        }),
       alreadyInstalled,
       batchId: batch.batchId,
     };
@@ -683,11 +1046,35 @@ export async function installExtensionWithDependencies(
       const compensated: string[] = [];
       const failures: string[] = [];
       // NEWLY-INSTALLED members only (pre-state absent), INVERSE install order.
+      // A SIDE-BY-SIDE member (cinatra#1040 S3) is newly installed even though
+      // its package-scoped preState.present is TRUE (the default row exists) —
+      // it compensates through the VERSION-SCOPED teardown, which can never
+      // touch the default install.
       for (const m of [...installedThisBatch].reverse()) {
         const ledgerMember = batch!.members.find((x) => x.packageName === m.packageName);
-        if (ledgerMember?.preState.present) continue; // never remove a pre-existing install
+        if (m.action !== "install-side-by-side" && ledgerMember?.preState.present) continue; // never remove a pre-existing install
         try {
-          await deps.uninstallMember(m, input.actor);
+          if (m.action === "install-side-by-side") {
+            await deps.uninstallSideBySideMember(
+              {
+                ...m,
+                scopeOrgId: sideBySideScopeOf(m),
+                // cinatra#1040 S6: the member's durable capsule (mirrored into
+                // the in-memory ledger by the persist sink above) drives the
+                // ownership-grant reconcile on this compensation teardown.
+                capsule: ledgerMember?.grantCapsule ?? null,
+              },
+              input.actor,
+            );
+          } else if (input.rowScopedCompensation) {
+            // #1042 slice-2: ROW-SCOPED inverse — tear down ONLY the freshly-
+            // installed actor-scope row, never the package-global hard-delete
+            // that would clobber same-package OTHER-org rows. Opt-in (the
+            // auto-update loop); manual callers keep `uninstallMember` below.
+            await deps.uninstallMemberRowScoped(m, input.actor);
+          } else {
+            await deps.uninstallMember(m, input.actor);
+          }
           await deps.ledger.updateMember(batch!.batchId, m.packageName, { status: "compensated" });
           compensated.push(m.packageName);
         } catch (err) {
@@ -796,6 +1183,15 @@ export async function sweepStaleInstallBatches(
       patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
     ) => Promise<InstallBatch>;
     uninstallMember?: (member: { typeId: string; packageName: string; version: string }) => Promise<void>;
+    /** Version-scoped teardown for `install-side-by-side` members (cinatra#1040 S3). */
+    uninstallSideBySideMember?: (member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      orgId: string | null;
+      /** cinatra#1040 S6: the swept member's durable capsule → ownership reconcile. */
+      capsule?: SideBySideGrantCapsule | null;
+    }) => Promise<void>;
   },
   batchOpsDeps?: InstallBatchOpsDeps,
 ): Promise<{ swept: number }> {
@@ -824,21 +1220,61 @@ export async function sweepStaleInstallBatches(
         sweeperActor,
       );
     });
+  const uninstallSideBySideMember =
+    depsOverride?.uninstallSideBySideMember ??
+    (async (member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      orgId: string | null;
+      capsule?: SideBySideGrantCapsule | null;
+    }) => {
+      const { uninstallExtensionVersionSideBySide } = await import(
+        "@/lib/extension-side-by-side-install"
+      );
+      await uninstallExtensionVersionSideBySide({
+        packageName: member.packageName,
+        version: member.version,
+        orgId: member.orgId,
+        // cinatra#1040 S6: reconcile the shared ownership grant on boot teardown.
+        capsule: member.capsule ?? null,
+      });
+    });
 
   const stale = await listStale(olderThanMs);
   let swept = 0;
   for (const batch of stale) {
     // Inverse install order = reverse ledger order (the ledger is topo-ordered).
+    // A side-by-side member (cinatra#1040 S3) is a stale NEWLY-CREATED version
+    // row even though its package-scoped preState.present is TRUE — it sweeps
+    // through the VERSION-SCOPED teardown (never the package uninstall, which
+    // would remove the default install).
     const candidates = [...batch.members]
       .reverse()
       .filter(
         (m) =>
-          !m.preState.present && (m.status === "installed" || m.status === "installing"),
+          (m.status === "installed" || m.status === "installing") &&
+          (!m.preState.present || m.action === "install-side-by-side"),
       );
     let failures = 0;
     for (const m of candidates) {
       try {
-        await uninstallMember({ typeId: m.typeId, packageName: m.packageName, version: m.version });
+        if (m.action === "install-side-by-side") {
+          await uninstallSideBySideMember({
+            typeId: m.typeId,
+            packageName: m.packageName,
+            version: m.version,
+            // The RESOLVED scope from the ledger (codex round-1); legacy rows
+            // without it fall back to the batch's org.
+            orgId: m.scopeOrgId === undefined ? (batch.orgId ?? null) : m.scopeOrgId,
+            // cinatra#1040 S6: the DURABLE capsule persisted at install time
+            // (read from the ledger member) reconciles the shared ownership
+            // grant on this boot-recovery teardown.
+            capsule: m.grantCapsule ?? null,
+          });
+        } else {
+          await uninstallMember({ typeId: m.typeId, packageName: m.packageName, version: m.version });
+        }
         await updateMember(batch.batchId, m.packageName, { status: "compensated" });
       } catch (err) {
         failures += 1;
@@ -873,4 +1309,60 @@ export async function collectActiveBatchMemberKeys(
     for (const m of b.members) keys.add(`${m.packageName}::${b.orgId ?? "(global)"}`);
   }
   return keys;
+}
+
+/**
+ * ORPHAN-GC (cinatra#1040 S6): clear SPENT side-by-side declaration capsules
+ * left on TERMINAL batches. A capsule is spent once its batch is terminal — a
+ * finalized member's version committed (no teardown consumes it); a compensated
+ * member was already reconciled on teardown. The happy path RELEASES capsules at
+ * the finalize boundary; this collects the ones a crash left behind between the
+ * boundary and the release, so they don't accumulate. Each clear is logged with
+ * evidence (the terminal phase that proves the capsule is spent). Idempotent +
+ * best-effort per member. Runs at boot AFTER the stale-batch sweep (which OWNS
+ * the capsules of still-ACTIVE batches — those are reconciled on teardown, never
+ * GC'd here).
+ */
+export async function gcOrphanedSideBySideCapsules(depsOverride?: {
+  listTerminalWithCapsules?: () => Promise<InstallBatch[]>;
+  updateMember?: (
+    batchId: string,
+    packageName: string,
+    patch: Partial<Pick<InstallBatchMember, "grantCapsule">>,
+  ) => Promise<InstallBatch>;
+}): Promise<{ cleared: number }> {
+  const batchOps = await import("@/lib/extension-install-batch-ops");
+  const listTerminal =
+    depsOverride?.listTerminalWithCapsules ??
+    (() => batchOps.listTerminalInstallBatchesWithCapsules());
+  const updateMember =
+    depsOverride?.updateMember ??
+    ((id: string, pkg: string, patch: Partial<Pick<InstallBatchMember, "grantCapsule">>) =>
+      batchOps.updateInstallBatchMember(id, pkg, patch));
+
+  const batches = await listTerminal();
+  let cleared = 0;
+  for (const b of batches) {
+    for (const m of b.members) {
+      if (m.action !== "install-side-by-side" || !m.grantCapsule) continue;
+      const ok = await updateMember(b.batchId, m.packageName, { grantCapsule: null })
+        .then(() => true)
+        .catch((err) => {
+          console.error(
+            `[side-by-side-capsule] orphan-GC clear of ${m.packageName}@${m.version} ` +
+              `(batch ${b.batchId}) failed:`,
+            err instanceof Error ? err.message : err,
+          );
+          return false;
+        });
+      if (ok) {
+        cleared += 1;
+        console.warn(
+          `[side-by-side-capsule] orphan-GC cleared a spent capsule: ${m.packageName}@${m.version} ` +
+            `on terminal batch ${b.batchId} (evidence: phase=${b.phase})`,
+        );
+      }
+    }
+  }
+  return { cleared };
 }

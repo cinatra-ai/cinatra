@@ -83,6 +83,11 @@ export async function POST(request: Request) {
   if (ownerUserId) thread.ownerUserId = ownerUserId;
   if (teamId) thread.teamId = teamId;
 
-  upsertChatThreadInDatabase(thread, { orgId });
+  // `assistantMirrorOrgId` anchors the structured assistant_threads mirror row
+  // (cinatra#1037 P2b) to the caller's auth-derived org — deliberately a
+  // distinct option from the pin-sync `orgId` (see upsertChatThreadInDatabase).
+  // Team-owned threads mirror with a NULL org regardless (resolved centrally
+  // from the payload; team→org anchoring is decided at the #1216 S2 cutover).
+  upsertChatThreadInDatabase(thread, { orgId, assistantMirrorOrgId: orgId });
   return Response.json({ ok: true });
 }

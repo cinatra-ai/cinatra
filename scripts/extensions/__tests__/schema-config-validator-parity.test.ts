@@ -7,6 +7,10 @@ import { describe, it, expect } from "vitest";
 // dispatch route renders from.
 import { validateConfigSchema, SCHEMA_CONFIG_FIELD_KEYS } from "../generate-extension-manifest.mjs";
 import { parseSchemaConfig, FIELD_KEY_ALLOWLIST } from "@/lib/extension-schema-config";
+// The SDK-owned contract key for the opt-in hydration declaration — imported
+// by relative path (same stance as the host-port parity suite) so the lockstep
+// binds the authored constant, independent of alias config.
+import { CONFIG_HYDRATION_SCHEMA_KEY } from "../../../packages/sdk-extensions/src/config-hydration-contract";
 
 // Each case: the raw configSchema + a human label. The two validators must AGREE
 // on the ok/not-ok verdict for every one.
@@ -225,6 +229,36 @@ const CORPUS: Array<{ label: string; raw: unknown }> = [
       ],
     },
   },
+  // ---- opt-in hydration read-action declaration (the SDK contract key at the
+  // configSchema ROOT). The generator mirror previously did not know the key at
+  // all, so a connector ADOPTING the merged host contract would fail manifest
+  // generation — exactly the silent-divergence class this suite exists to stop.
+  // Valid + each invalid family, plus a root carrier-key canary (the corpus
+  // never exercised the root allowlist before) ----
+  {
+    label: "hydrateAction: valid declaration",
+    raw: {
+      title: "Hydrating",
+      fields: [{ kind: "text", key: "host", label: "Host" }],
+      hydrateAction: "currentConfig",
+    },
+  },
+  {
+    label: "hydrateAction: empty string",
+    raw: { fields: [{ kind: "text", key: "host", label: "Host" }], hydrateAction: "" },
+  },
+  {
+    label: "hydrateAction: invalid actionId (regex)",
+    raw: { fields: [{ kind: "text", key: "host", label: "Host" }], hydrateAction: "1bad" },
+  },
+  {
+    label: "hydrateAction: non-string",
+    raw: { fields: [{ kind: "text", key: "host", label: "Host" }], hydrateAction: 42 },
+  },
+  {
+    label: "root carrier-key smuggle (unknown root key)",
+    raw: { fields: [{ kind: "text", key: "host", label: "Host" }], html: "<script>" },
+  },
 ];
 
 // Direct structural lockstep on the per-kind key allowlists themselves. The
@@ -252,6 +286,55 @@ describe("SCHEMA_CONFIG_FIELD_KEYS (generator) ⇄ FIELD_KEY_ALLOWLIST (parser) 
       );
     });
   }
+});
+
+// ROOT-vocabulary lockstep (behavior-derived: the parser does not export its
+// root allowlist). Probes every KNOWN root key plus carrier-key canaries, so a
+// drift on any enumerated key fails loudly. LIMIT (deliberate, documented): a
+// future root key added to only ONE validator is caught the moment it is
+// enumerated here or exercised by an adopting manifest — true structural
+// lockstep would need both allowlists exported; keep this list in sync when
+// the root vocabulary grows.
+describe("configSchema ROOT vocabulary lockstep (generator ⇄ parser)", () => {
+  const BASE_FIELDS = [{ kind: "text", key: "host", label: "Host" }];
+  // A valid value per known root key; canaries get an arbitrary string.
+  const VALID_ROOT_VALUES: Record<string, unknown> = {
+    title: "T",
+    description: "D",
+    tabs: [],
+    hydrateAction: "currentConfig",
+  };
+  const KNOWN_ROOT_KEYS = ["title", "description", "tabs", CONFIG_HYDRATION_SCHEMA_KEY];
+  const CANARY_ROOT_KEYS = ["html", "script", "onClick", "component"];
+
+  for (const key of KNOWN_ROOT_KEYS) {
+    it(`both validators ACCEPT root key: ${key}`, () => {
+      const raw = { fields: BASE_FIELDS, [key]: VALID_ROOT_VALUES[key] ?? "x" };
+      expect(validateConfigSchema(raw)).toEqual([]);
+      expect(parseSchemaConfig(raw).ok).toBe(true);
+    });
+  }
+
+  for (const key of CANARY_ROOT_KEYS) {
+    it(`both validators REJECT unknown root key: ${key}`, () => {
+      const raw = { fields: BASE_FIELDS, [key]: "x" };
+      expect(validateConfigSchema(raw)).not.toEqual([]);
+      expect(parseSchemaConfig(raw).ok).toBe(false);
+    });
+  }
+
+  it("the generator key literal is the SDK contract key (no drift)", () => {
+    expect(CONFIG_HYDRATION_SCHEMA_KEY).toBe("hydrateAction");
+  });
+
+  it("a malformed hydrateAction yields the SAME error string in both validators", () => {
+    const raw = { fields: BASE_FIELDS, hydrateAction: "1bad" };
+    const expected = `configSchema: "hydrateAction" must be a valid actionId string`;
+    expect(validateConfigSchema(raw)).toContain(expected);
+    const parsed = parseSchemaConfig(raw);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.errors).toContain(expected);
+  });
 });
 
 describe("generator validateConfigSchema ⇄ parseSchemaConfig parity", () => {
