@@ -732,8 +732,22 @@ services:
   #     wires an external_mcp_servers row when a real Plane MCP bridge URL
   #     (PLANE_MCP_URL) answers `tools/list` — otherwise it logs a setup hint.
   #
-  # Image tag defaults to the mutable `stable` (the smoke ran CE 1.3.1 ≡
-  # stable@2026-06); set PLANE_TAG to a fixed release for reproducible pulls.
+  # Image pins (upgrade-paths slice 1, cinatra#1420). The Plane app images and
+  # MinIO previously rode the MUTABLE `stable` / `latest` tags — the two floating
+  # tags this stack carried. Plane runs implicit DB migrations at boot, so a
+  # floating `stable` can silently cross a schema-migrating major on a plain
+  # `docker pull`; that class is now closed:
+  #   - Plane images default to `${PLANE_TAG:-v1.3.1@sha256:…}` — the IMMUTABLE
+  #     v1.3.1 release (≡ the `stable` the #315/#320 smoke ran, resolved on the
+  #     Docker registry), digest-bound. The `${PLANE_TAG}` override knob is kept:
+  #     set PLANE_TAG=<tag> to pull a different Plane release (the whole
+  #     `tag@digest` default is replaced, so an override is not digest-locked).
+  #   - MinIO defaults to the immutable dated `RELEASE.2025-09-07T16-13-09Z`
+  #     (≡ the `latest` digest at pin time), digest-bound (see plane-minio).
+  # Existing `latest`/`stable` volumes have unknown last-writer versions — the
+  # supported source→target rules live in docs/architecture/upgrade-matrix.json
+  # (the machine-readable matrix) + docs/architecture/stateful-service-inventory.md.
+  # A major must now arrive as a reviewable pin-diff, never absorbed by a pull.
   plane-db:
     image: postgres:15.7-alpine
     container_name: cinatra-plane-db-1
@@ -784,7 +798,13 @@ services:
       retries: 12
 
   plane-minio:
-    image: minio/minio:latest
+    # Pinned from the floating `:latest` (upgrade-paths slice 1, cinatra#1420).
+    # `RELEASE.2025-09-07T16-13-09Z` is the immutable dated release the `:latest`
+    # tag resolved to at pin time; the `@sha256` is the binding pin (multi-arch
+    # manifest list, amd64+arm64, so no portability cost). Object store for Plane
+    # uploads — classified `object-store` in the state inventory. Re-resolve at
+    # bump time: `docker buildx imagetools inspect minio/minio:<RELEASE.tag>`.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: cinatra-plane-minio-1
     profiles: ["plane"]
     command: server /export --console-address ":9090"
@@ -796,7 +816,7 @@ services:
     networks: ["plane"]
 
   plane-migrator:
-    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
     container_name: cinatra-plane-migrator-1
     profiles: ["plane"]
     restart: "no"
@@ -849,7 +869,7 @@ services:
         condition: service_healthy
 
   plane-api:
-    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
     container_name: cinatra-plane-api-1
     profiles: ["plane"]
     command: ./bin/docker-entrypoint-api.sh
@@ -881,7 +901,7 @@ services:
         condition: service_completed_successfully
 
   plane-worker:
-    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
     container_name: cinatra-plane-worker-1
     profiles: ["plane"]
     command: ./bin/docker-entrypoint-worker.sh
@@ -892,7 +912,7 @@ services:
         condition: service_started
 
   plane-beat-worker:
-    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
     container_name: cinatra-plane-beat-1
     profiles: ["plane"]
     command: ./bin/docker-entrypoint-beat.sh
@@ -903,7 +923,7 @@ services:
         condition: service_started
 
   plane-live:
-    image: makeplane/plane-live:${PLANE_TAG:-stable}
+    image: makeplane/plane-live:${PLANE_TAG:-v1.3.1@sha256:2073b6950a394545ea1db6ed4157e951ad5a6e1881e74f4f9238ace6c35bbf3d}
     container_name: cinatra-plane-live-1
     profiles: ["plane"]
     environment:
@@ -922,7 +942,7 @@ services:
         condition: service_started
 
   plane-web:
-    image: makeplane/plane-frontend:${PLANE_TAG:-stable}
+    image: makeplane/plane-frontend:${PLANE_TAG:-v1.3.1@sha256:c178fd85c4588165262cfe748bd103fdeccebbbab827c53e71b9ce32fff84f86}
     container_name: cinatra-plane-web-1
     profiles: ["plane"]
     networks:
@@ -935,7 +955,7 @@ services:
         condition: service_started
 
   plane-space:
-    image: makeplane/plane-space:${PLANE_TAG:-stable}
+    image: makeplane/plane-space:${PLANE_TAG:-v1.3.1@sha256:e08c2c8741ae6f81a9326dc9201e7e09c0c411b87a20198f9ea9e5cf2fae3488}
     container_name: cinatra-plane-space-1
     profiles: ["plane"]
     networks:
@@ -948,7 +968,7 @@ services:
         condition: service_started
 
   plane-admin:
-    image: makeplane/plane-admin:${PLANE_TAG:-stable}
+    image: makeplane/plane-admin:${PLANE_TAG:-v1.3.1@sha256:ff9219127a2c2c4a4bb066d6a0e25a5fc6a11204cf8484b521dada53d696fe43}
     container_name: cinatra-plane-admin-1
     profiles: ["plane"]
     networks:
@@ -961,7 +981,7 @@ services:
         condition: service_started
 
   plane-proxy:
-    image: makeplane/plane-proxy:${PLANE_TAG:-stable}
+    image: makeplane/plane-proxy:${PLANE_TAG:-v1.3.1@sha256:b4f8bb6998052dcd1488171a90d473674cefbc6ec77114d5095b48c805f4ad27}
     container_name: cinatra-plane-proxy-1
     profiles: ["plane"]
     networks: ["plane"]
