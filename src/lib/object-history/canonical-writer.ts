@@ -26,6 +26,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { normalizeOwnershipVocabulary } from "@/lib/derived-store-ownership";
 import { mcpRequestContextStorage } from "@/lib/mcp-request-context";
 import { assertProjectWritableSync } from "@/lib/project-writable";
 import { resolveProjectInheritanceForType } from "@/lib/project-inheritance";
@@ -69,6 +70,13 @@ export type HistoryAwareUpsertInput = {
   ownerLevel?: string | null;
   ownerId?: string | null;
   visibility?: string | null;
+  /**
+   * Legacy `owner_type` from a PRE-cutover snapshot (replay/restore callers
+   * only — cinatra#1428). Never written to the row; consumed solely by
+   * normalizeOwnershipVocabulary's pass-0 mirror so a replayed lazy-backfill
+   * tuple lands on the same owner axis core__0033 gave the live row.
+   */
+  ownerType?: string | null;
   payloadHash?: string | null;
 };
 
@@ -250,6 +258,8 @@ export type CreateStmtArgs = {
   ownerLevel: string | null;
   ownerId: string | null;
   visibility: string | null;
+  /** Legacy snapshot owner_type — normalization input only, never bound to SQL. */
+  ownerType?: string | null;
   projectId: string | null;
   changeSetId: string;
   eventId: string;
@@ -273,6 +283,11 @@ function buildCreateStatement(args: CreateStmtArgs): {
   values: unknown[];
 } {
   const schema = args.schema;
+  // Vocabulary boundary (cinatra#1428): restore/replay callers feed HISTORICAL
+  // snapshots that may carry the retired composite-string visibility
+  // vocabulary (rows written before the core__0033 one-shot cutover).
+  // Normalize the tuple so composite values never re-enter the store.
+  args = { ...args, ...normalizeOwnershipVocabulary(args) };
   return {
     text: `WITH inserted AS (
              INSERT INTO "${schema}"."objects"
@@ -377,6 +392,9 @@ function buildUpdateStatement(args: UpdateStmtArgs): {
   values: unknown[];
 } {
   const schema = args.schema;
+  // Same vocabulary boundary as buildCreateStatement (cinatra#1428): restore
+  // paths replay pre-cutover snapshots; normalize before binding.
+  args = { ...args, ...normalizeOwnershipVocabulary(args) };
   return {
     text: `WITH updated AS (
              UPDATE "${schema}"."objects" SET
@@ -806,6 +824,7 @@ export function historyAwareUpsert(
     ownerLevel: input.ownerLevel ?? null,
     ownerId: input.ownerId ?? null,
     visibility: input.visibility ?? null,
+    ownerType: input.ownerType ?? null,
     projectId,
     changeSetId: handle.changeSetId,
     eventId,

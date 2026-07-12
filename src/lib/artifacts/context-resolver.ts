@@ -19,15 +19,16 @@ import type { AgentContextSlot } from "@cinatra-ai/extensions/agent-context-slot
 // accepted-extensions list via the single-hop satisfies-graph.
 //
 // Resolver invariants:
-//   - Project refinement uses `visibility = 'project:<id>'` (NOT
-//     `owner_level = 'project'` — project is a refinement, not a 5th tier).
-//   - Visibility-based ownership filter is spliced from
-//     `buildOwnershipFilter(actor)` rather than reinvented (parity with
-//     objects-store.ts).
+//   - Project refinement uses the canonical `project_id` COLUMN (cinatra#1428
+//     — the composite `visibility = 'project:<id>'` encoding is retired; and
+//     NOT `owner_level = 'project'` — project is a refinement, not a 5th tier).
+//   - Ownership filter is spliced from `buildOwnershipFilter(actor)` rather
+//     than reinvented (parity with objects-store.ts).
 //   - Per-ref reauth is SKIPPED: `buildOwnershipFilter` already enforces
 //     actor visibility at the SQL layer, so the returned set is
 //     guaranteed actor-visible.
-//   - `sourceScope` derived from `visibility`, not `owner_level`.
+//   - `sourceScope` derived from `project_id` + `owner_level` (canonical
+//     column vocabulary; visibility is the SHARE axis, not the tier).
 //   - Satisfies-graph expansion is SINGLE-HOP (interface compatibility,
 //     not transitive closure). Cycle protection is by construction (no
 //     recursion).
@@ -107,23 +108,23 @@ export function expandAcceptedViaSatisfies(
 }
 
 // ---------------------------------------------------------------------------
-// SourceScope derivation from visibility column
+// SourceScope derivation from the canonical columns (cinatra#1428)
 // ---------------------------------------------------------------------------
 
 function deriveSourceScope(
-  visibility: string,
   ownerLevel: string,
+  projectId: string | null,
 ): "user" | "team" | "organization" | "workspace" | "project" {
-  if (visibility.startsWith("project:")) return "project";
-  if (visibility === "workspace") return "workspace";
-  if (visibility === "org") return "organization";
-  if (visibility.startsWith("team:")) return "team";
-  // visibility = 'owner' (or anything else) → fall back to owner_level
+  // Project refinement is the narrowest tier: a project-tagged row resolved
+  // through a project-refined slot groups under 'project'. Truthiness check
+  // (not `!== null`) so an absent column (undefined) or '' is NOT a project.
+  if (projectId) return "project";
   if (ownerLevel === "user") return "user";
   if (ownerLevel === "team") return "team";
   if (ownerLevel === "organization") return "organization";
   if (ownerLevel === "workspace") return "workspace";
-  // Unrecognized → treat as user (defense — should never happen given DDL CHECK).
+  // Unrecognized → treat as user (defense — should never happen given the
+  // canonical owner_level domain).
   return "user";
 }
 
@@ -218,13 +219,13 @@ export function resolveContextSlot(
   const artifactTypePh = ph(SEMANTIC_ARTIFACT_OBJECT_TYPE);
 
   // The project-narrowing clause. When projectId is set, we ADDITIONALLY
-  // require the row to be project-visible to THIS project. Combined with
-  // the ownership filter (which already includes project-visibility rows
-  // the actor has access to), this narrows to the specific project the
-  // parent agent's context slot pointed at.
+  // require the row to be tagged for THIS project (canonical `project_id`
+  // column — cinatra#1428). Combined with the ownership filter (which already
+  // includes project-tagged rows the actor has access to), this narrows to
+  // the specific project the parent agent's context slot pointed at.
   const projectNarrow =
     input.projectId !== undefined
-      ? ` AND o.visibility = ${ph(`project:${input.projectId}`)}`
+      ? ` AND o.project_id = ${ph(input.projectId)}`
       : "";
 
   // Both `objects` and `semantic_assertion` carry `org_id`, and
@@ -235,20 +236,18 @@ export function resolveContextSlot(
   // against ONLY the `objects` row, then join `semantic_assertion` +
   // `representation` on the de-ambiguated artifact-id list.
   //
-  // When `projectId` is ABSENT, exclude project-visibility rows.
+  // When `projectId` is ABSENT, exclude project-tagged rows.
   // buildOwnershipFilter naturally admits any project
   // row the actor has via `actor.projectIds`; an UNREFINED slot should
-  // NOT receive those rows. The `NOT LIKE 'project:%'` clause inside the
+  // NOT receive those rows. The `project_id IS NULL` clause inside the
   // CTE applies only when no projectId is set (otherwise the projectNarrow
   // clause already pins to the specific project).
   const projectExcludeWhenUnset =
-    input.projectId === undefined
-      ? " AND o.visibility NOT LIKE 'project:%'"
-      : "";
+    input.projectId === undefined ? " AND o.project_id IS NULL" : "";
 
   const sql = `
     WITH visible_objects AS (
-      SELECT id, org_id, owner_level, owner_id, visibility
+      SELECT id, org_id, owner_level, owner_id, visibility, project_id
       FROM "${schema}"."objects" o
       WHERE o.org_id = ${orgIdPh}
         AND o.type = ${artifactTypePh}
@@ -260,6 +259,7 @@ export function resolveContextSlot(
       o.owner_level,
       o.owner_id,
       o.visibility,
+      o.project_id,
       sa.id AS semantic_assertion_id,
       sa.extension,
       r.id AS representation_revision_id,
@@ -287,6 +287,7 @@ export function resolveContextSlot(
     owner_level: string;
     owner_id: string;
     visibility: string;
+    project_id: string | null;
     semantic_assertion_id: string;
     extension: string;
     representation_revision_id: string;
@@ -294,13 +295,13 @@ export function resolveContextSlot(
   };
   const rows = (res?.rows ?? []) as Row[];
 
-  // Map to refs + derive sourceScope from visibility.
+  // Map to refs + derive sourceScope from the canonical columns.
   const refs: ResolvedContextRef[] = rows.map((r) => ({
     artifactId: r.artifact_id,
     representationRevisionId: r.representation_revision_id,
     semanticAssertionId: r.semantic_assertion_id,
     extension: r.extension,
-    sourceScope: deriveSourceScope(r.visibility, r.owner_level),
+    sourceScope: deriveSourceScope(r.owner_level, r.project_id),
     ownerId: r.owner_id,
   }));
 

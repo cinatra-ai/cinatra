@@ -1,8 +1,8 @@
 /**
  * Team-scope integration test (real Postgres).
  *
- * `visibility="team:<id>"` rows are visible to actors whose `teamIds`
- * include `<id>`. Also verifies that the team clause does not bleed into
+ * Team-owned rows (owner_level='team', canonical vocabulary — cinatra#1428)
+ * are visible to actors whose `teamIds` include the owning team id. Also verifies that the team clause does not bleed into
  * other teams.
  */
 
@@ -42,25 +42,25 @@ beforeAll(async () => {
     t1Ids.push(
       await insertObject(client, schema, {
         orgId: orgA,
-        ownerType: "team",
+        ownerLevel: "team",
         ownerId: T1,
-        visibility: `team:${T1}`,
+        visibility: "team",
       }),
     );
   }
   // 1 object visibility="team:T2"
   t2Id = await insertObject(client, schema, {
     orgId: orgA,
-    ownerType: "team",
+    ownerLevel: "team",
     ownerId: T2,
-    visibility: `team:${T2}`,
+    visibility: "team",
   });
   // 1 object visibility="org" in orgA
   orgRowId = await insertObject(client, schema, {
     orgId: orgA,
-    ownerType: "organization",
+    ownerLevel: "organization",
     ownerId: orgA,
-    visibility: "org",
+    visibility: "organization",
   });
   t1Ids.sort();
 }, 30_000);

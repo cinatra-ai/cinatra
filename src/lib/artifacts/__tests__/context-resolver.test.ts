@@ -54,6 +54,7 @@ function stageRows(
     owner_level: string;
     owner_id: string;
     visibility: string;
+    project_id?: string | null;
     semantic_assertion_id: string;
     extension: string;
     representation_revision_id: string;
@@ -178,7 +179,7 @@ describe("resolveContextSlot — accumulate mode (narrow→broad ordering)", () 
         artifact_id: "art-org",
         owner_level: "organization",
         owner_id: "org-a",
-        visibility: "org",
+        visibility: "organization",
         semantic_assertion_id: "sa-org",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-org-1",
@@ -188,7 +189,7 @@ describe("resolveContextSlot — accumulate mode (narrow→broad ordering)", () 
         artifact_id: "art-user",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-user",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-user-1",
@@ -198,7 +199,7 @@ describe("resolveContextSlot — accumulate mode (narrow→broad ordering)", () 
         artifact_id: "art-team",
         owner_level: "team",
         owner_id: "team-1",
-        visibility: "team:team-1",
+        visibility: "team",
         semantic_assertion_id: "sa-team",
         extension: "@cinatra-ai/marketing-strategy-artifact",
         representation_revision_id: "rep-team-1",
@@ -217,13 +218,14 @@ describe("resolveContextSlot — accumulate mode (narrow→broad ordering)", () 
     ]);
   });
 
-  it("project visibility resolves to sourceScope 'project' (narrowest tier)", () => {
+  it("project-tagged rows resolve to sourceScope 'project' (narrowest tier)", () => {
     stageRows([
       {
         artifact_id: "art-proj",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "project:proj-x",
+        visibility: "private",
+        project_id: "proj-x",
         semantic_assertion_id: "sa-proj",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-proj-1",
@@ -233,7 +235,7 @@ describe("resolveContextSlot — accumulate mode (narrow→broad ordering)", () 
         artifact_id: "art-user",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-user",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-user-1",
@@ -259,7 +261,7 @@ describe("resolveContextSlot — override mode", () => {
         artifact_id: "art-user-1",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-u1",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-u1",
@@ -269,7 +271,7 @@ describe("resolveContextSlot — override mode", () => {
         artifact_id: "art-user-2",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-u2",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-u2",
@@ -279,7 +281,7 @@ describe("resolveContextSlot — override mode", () => {
         artifact_id: "art-org",
         owner_level: "organization",
         owner_id: "org-a",
-        visibility: "org",
+        visibility: "organization",
         semantic_assertion_id: "sa-org",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-org",
@@ -318,7 +320,7 @@ describe("resolveContextSlot — maxItems truncation", () => {
         artifact_id: "art-1",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-1",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-1",
@@ -328,7 +330,7 @@ describe("resolveContextSlot — maxItems truncation", () => {
         artifact_id: "art-2",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-2",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-2",
@@ -338,7 +340,7 @@ describe("resolveContextSlot — maxItems truncation", () => {
         artifact_id: "art-3",
         owner_level: "user",
         owner_id: "user-1",
-        visibility: "owner",
+        visibility: "private",
         semantic_assertion_id: "sa-3",
         extension: "@cinatra-ai/marketing-icp-artifact",
         representation_revision_id: "rep-3",
@@ -440,7 +442,7 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
     const sqlNoProj = (runPgMock.mock.calls[0][0] as {
       queries: Array<{ text: string }>;
     }).queries[0].text;
-    expect(sqlNoProj).not.toMatch(/o\.visibility = /);
+    expect(sqlNoProj).not.toMatch(/o\.project_id = /);
 
     runPgMock.mockReset();
     stageRows([]);
@@ -454,19 +456,19 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
     const sqlProj = (runPgMock.mock.calls[0][0] as {
       queries: Array<{ text: string }>;
     }).queries[0].text;
-    expect(sqlProj).toMatch(/o\.visibility = /);
+    expect(sqlProj).toMatch(/o\.project_id = /);
     // The projectId literal is parameterized.
     const call = runPgMock.mock.calls[0][0] as {
       queries: Array<{ values: unknown[] }>;
     };
-    expect(call.queries[0].values).toContain("project:proj-x");
+    expect(call.queries[0].values).toContain("proj-x");
   });
 
   // When `projectId` is
-  // NOT supplied, project-visibility rows MUST be excluded even though the
+  // NOT supplied, project-tagged rows MUST be excluded even though the
   // actor's projectIds happen to grant access via buildOwnershipFilter.
   // An unrefined slot should never silently receive project-scoped rows.
-  it("excludes project-visibility rows when projectId is absent", () => {
+  it("excludes project-tagged rows when projectId is absent", () => {
     stageRows([]);
     resolveContextSlot({
       actor: ACTOR_BASE,
@@ -476,7 +478,7 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
     const sql = (runPgMock.mock.calls[0][0] as {
       queries: Array<{ text: string }>;
     }).queries[0].text;
-    expect(sql).toMatch(/o\.visibility NOT LIKE 'project:%'/);
+    expect(sql).toMatch(/o\.project_id IS NULL/);
   });
 
   it("does NOT add the project-exclusion clause when projectId IS supplied", () => {
@@ -490,6 +492,6 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
     const sql = (runPgMock.mock.calls[0][0] as {
       queries: Array<{ text: string }>;
     }).queries[0].text;
-    expect(sql).not.toMatch(/NOT LIKE 'project:%'/);
+    expect(sql).not.toMatch(/o\.project_id IS NULL/);
   });
 });

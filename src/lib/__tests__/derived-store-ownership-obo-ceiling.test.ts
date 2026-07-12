@@ -73,8 +73,8 @@ describe("buildOwnershipFilter — OBO ceiling narrowing", () => {
     expect(params).toContain("team-z");
   });
 
-  it("project ceiling element pins the visibility='project:<id>' refinement", () => {
-    const { params } = buildOwnershipFilter(
+  it("project ceiling element pins the canonical project_id refinement", () => {
+    const { sql, params } = buildOwnershipFilter(
       actor({
         oboCeiling: chain(
           { tier: "organization", id: "org-1" },
@@ -82,7 +82,8 @@ describe("buildOwnershipFilter — OBO ceiling narrowing", () => {
         ),
       }),
     );
-    expect(params).toContain("project:p1");
+    expect(sql).toMatch(/AND \(org_id = \$\d+ AND project_id = \$\d+\)/);
+    expect(params).toContain("p1");
   });
 
   it("platform-admin invoker's widened clauses stay ceiling-bounded (AND wraps them)", () => {
@@ -92,8 +93,9 @@ describe("buildOwnershipFilter — OBO ceiling narrowing", () => {
         oboCeiling: chain({ tier: "user", id: "u-anchor" }, { tier: "organization", id: "org-1" }),
       }),
     );
-    // The admin-only OR clause is still present...
-    expect(sql).toMatch(/visibility = 'admin'/);
+    // The admin-widened public OR clause is still present (unscoped for
+    // platform admins — canonical vocabulary, cinatra#1428)...
+    expect(sql).toMatch(/visibility = 'public'(?! AND org_id)/);
     // ...but the entire OR-set is AND-ed with the ceiling, so admin-visible rows
     // outside the anchor cannot be returned.
     expect(sql).toContain(") AND (");
