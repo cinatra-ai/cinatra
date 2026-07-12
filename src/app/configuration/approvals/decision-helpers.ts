@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createAgentBuilderPrimitiveHandlers } from "@cinatra-ai/agents/mcp-handlers";
+import { agentApprovalAccessPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
 import type { ApprovalViewer, DecideInput, DecideResult } from "./sources/types";
 
@@ -37,6 +38,12 @@ export function classifyAgentDecideError(message: string): Refusal {
   }
   if (m.includes("self-approval is disallowed")) {
     return { ok: false, kind: "refused", code: "self_approval_forbidden", message };
+  }
+  if (m.includes("access scope is required")) {
+    // cinatra#1327 — approve reached the primitive without an access scope.
+    // The UI requires the selection client-side, so this is a defense-in-depth
+    // refusal for any caller that bypassed the picker.
+    return { ok: false, kind: "refused", code: "access_scope_required", message };
   }
   if (m.includes("snapshot changed") || m.includes("no longer represents") || m.includes("refresh and try again")) {
     return { ok: false, kind: "refused", code: "stale_snapshot", message };
@@ -97,6 +104,53 @@ export async function decideAgentCreationRequest(
       message: "A snapshot version token is required to decide (refresh and try again).",
     };
   }
+  // cinatra#1327 — an approve is the install-equivalent moment: it REQUIRES an
+  // access scope (who can access the agent once published). Fail-closed: refuse
+  // before touching the primitive if it is absent. (The primitive re-checks
+  // server-side; the approvals UI requires the selection client-side too.)
+  if (action === "approve" && !input.accessTarget) {
+    return {
+      ok: false,
+      kind: "refused",
+      code: "access_scope_required",
+      message: "Choose who can access this agent (organization, team, or project) before approving.",
+    };
+  }
+  // cinatra#1327 — authorize the chosen access target with the SAME gates the
+  // install flow uses (install-target-authz), BEFORE publishing: tenant
+  // membership (rejects a cross-org / forged team/project id — a cross-tenant
+  // access grant) + install authorization for the actor. Fail-fast so a bad
+  // target never publishes; fail-closed so a denial refuses the whole approve.
+  // Runs for both the UI action and the MCP surface (both call this helper).
+  if (action === "approve" && input.accessTarget) {
+    const targetActor = {
+      principalId: viewer.userId,
+      organizationId: viewer.orgId,
+      platformRole: (viewer.isAdmin ? "platform_admin" : "member") as
+        | "platform_admin"
+        | "member",
+    };
+    try {
+      const { assertTargetBelongsToActiveOrg, assertCanInstallAtTarget } =
+        await import("@cinatra-ai/agents/install-target-authz");
+      const { projectOwnership } = await assertTargetBelongsToActiveOrg(
+        targetActor,
+        input.accessTarget,
+        viewer.orgId,
+      );
+      await assertCanInstallAtTarget(targetActor, input.accessTarget, projectOwnership);
+    } catch (err) {
+      return {
+        ok: false,
+        kind: "forbidden",
+        code: "target_forbidden",
+        message:
+          err instanceof Error
+            ? err.message
+            : "You cannot grant access at the selected scope.",
+      };
+    }
+  }
 
   const handlers = createAgentBuilderPrimitiveHandlers() as Record<string, PrimitiveHandler>;
   const decideHandler = handlers["agent_creation_request_decide"];
@@ -107,6 +161,9 @@ export async function decideAgentCreationRequest(
       decision: action,
       expectedSnapshotHash,
       ...(reason ? { reason } : {}),
+      // Threaded to the primitive so it records the scope in the audit AND
+      // re-enforces the required-ness server-side (cinatra#1327).
+      ...(input.accessTarget ? { accessTarget: input.accessTarget } : {}),
     },
     actor: {
       actorType: "human",
@@ -119,10 +176,60 @@ export async function decideAgentCreationRequest(
       platformRole: viewer.isAdmin ? "platform_admin" : "member",
     },
     mode: "deterministic",
-  })) as { error?: string } | null | undefined;
+  })) as
+    | { error?: string; structuredContent?: { agentTemplateId?: string | null } }
+    | null
+    | undefined;
 
   if (result?.error) {
     return classifyAgentDecideError(result.error);
   }
+
+  // cinatra#1327 — persist the chosen access scope through the SAME install path
+  // the marketplace uses: setExtensionInstallAccess(kind "agent_template")
+  // writes the canonical extension_access_policy AND (via the agent_template
+  // hook's afterPolicyWrite) mirrors to agent_templates.agent_auth_policy — the
+  // column run enforcement actually reads. This runs in the APP layer because
+  // @cinatra-ai/agents cannot import @cinatra-ai/extensions (a package cycle).
+  // Ordering is publish-then-scope (the template row must exist first); until
+  // this write lands the agent stays at its restrictive default — FAIL-CLOSED
+  // (never over-broad). A failure is surfaced as a retryable refusal so the
+  // admin re-applies the scope (retry, or the extension's Permissions surface);
+  // it never leaves the agent broadly accessible.
+  if (action === "approve" && input.accessTarget) {
+    const agentTemplateId = result?.structuredContent?.agentTemplateId ?? null;
+    if (!agentTemplateId) {
+      return {
+        ok: false,
+        kind: "transient",
+        code: "template_unresolved",
+        message:
+          "The agent was published, but its record could not be resolved to apply the access scope. Retry, or set access on the extension's Permissions.",
+      };
+    }
+    try {
+      // Lazy import — the server-only extensions access-contract graph loads
+      // only when an approve actually succeeds, keeping the approvals nav/source
+      // static import graph light.
+      const { setExtensionInstallAccess } = await import(
+        "@cinatra-ai/extensions/install-access-contract"
+      );
+      await setExtensionInstallAccess({
+        kind: "agent_template",
+        resourceId: agentTemplateId,
+        policy: agentApprovalAccessPolicy(input.accessTarget),
+        installedByUserId: viewer.userId,
+      });
+    } catch {
+      return {
+        ok: false,
+        kind: "transient",
+        code: "access_persist_failed",
+        message:
+          "The agent was published, but applying the access scope failed. It stays restricted — retry, or set access on the extension's Permissions.",
+      };
+    }
+  }
+
   return { ok: true };
 }

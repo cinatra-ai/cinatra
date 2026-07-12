@@ -117,6 +117,12 @@ export type DecideInput = {
   action: string;
   reason?: string;
   expectedVersion?: string;
+  /** Approval-time access scope — who can access the resource once approved
+   *  (cinatra#1327). Consumed by the agent-creation source, whose approve is the
+   *  install-equivalent moment and REQUIRES it (a publish is unreachable
+   *  without it); other sources (e.g. vendor catalog moderation) ignore it —
+   *  moderation admits a listing, it grants no access. */
+  accessTarget?: { level: "organization" | "team" | "project"; id: string };
 };
 
 export type DecideKind = "refused" | "transient" | "forbidden";
