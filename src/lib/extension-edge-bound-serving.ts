@@ -34,19 +34,26 @@ import "server-only";
 // For a verified run whose row carries no id, `deriveDependentInstallIdForRun`
 // derives the install the run executes AS, from trusted rows only:
 //   - the run's template → `packageName`;
-//   - the org-addressable LIVE (`active|locked`) canonical install rows for
-//     that package (org-anchored rows preferred over workspace-level ones —
-//     the same determinism rule as `pickActiveInstallId`);
+//   - the LIVE (`active|locked`) canonical install rows for that package in
+//     the RUN'S ORG (org-anchored or workspace-level; cross-org rows are never
+//     candidates). Owner level is NOT an exclusion axis here — a team/user-
+//     owned install in the run's org is a legitimate identity (codex round-1);
 //   - a REQUIRED-PIN run (`versionId` + `packageVersion` both set — the exact
 //     fail-closed marker pair from cinatra#1040 S7) selects the row at that
-//     exact version; an unpinned run selects the DEFAULT row (`isDefault !==
-//     false` — an unpinned run executes the live/default template, so the
-//     default install IS its identity, unambiguously).
-// No match ⇒ undefined (compatibility-preserving: no edge-bound constraint —
+//     exact version; an unpinned run selects the DEFAULT rows (`isDefault !==
+//     false` — an unpinned run executes the live/default template);
+//   - EXACTLY ONE candidate → that identity. MULTIPLE candidates are
+//     disambiguated by the template's LOCKED owner anchor
+//     (`ownerLevel`/`ownerId` — the same anchor the OBO-ceiling derivation
+//     trusts); anything still ambiguous REFUSES (fail-closed, codex round-1 —
+//     never an arbitrary first-row pick that could bind the wrong edges).
+// No candidate ⇒ `none` (compatibility-preserving: no edge-bound constraint —
 // e.g. a bare template that was never installed as an extension).
 //
-// FAIL-CLOSED MATRIX (codex round-0). With a trusted dependent id present:
+// FAIL-CLOSED MATRIX (codex rounds 0–1). With a trusted dependent id present:
 //   - dependent install row MISSING            → refuse (corrupt/torn-down lineage);
+//   - derivation AMBIGUOUS (multiple candidates
+//     the owner anchor cannot single out)      → refuse;
 //   - resolved edge → row MISSING (dangling)   → refuse;
 //   - resolved edge → row NOT LIVE             → refuse (archived mid-flight);
 //   - resolved edge → NON-DEFAULT, NO version  → refuse (a non-default install
@@ -74,11 +81,7 @@ import "server-only";
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
-import {
-  resolveVersionKeyedMcpTool,
-  type RetainedVersionKeyedMcpTool,
-} from "@/lib/extension-version-keyed-serving";
-import { isInstallRowAddressableByActor } from "@/lib/extension-install-resolution";
+import { resolveVersionKeyedMcpTool } from "@/lib/extension-version-keyed-serving";
 
 /** The LIVE canonical-row statuses (mirrors `pickActiveInstallId`'s filter). */
 const LIVE_STATUSES = new Set(["active", "locked"]);
@@ -108,6 +111,7 @@ export type EdgeBoundExtensionVersionDecision =
 export type EdgeBoundExtensionRefuseCode =
   | "EDGE_BOUND_RUN_MISSING"
   | "EDGE_BOUND_DEPENDENT_MISSING"
+  | "EDGE_BOUND_DEPENDENT_AMBIGUOUS"
   | "EDGE_BOUND_RESOLVED_MISSING"
   | "EDGE_BOUND_RESOLVED_NOT_LIVE"
   | "EDGE_BOUND_VERSION_UNPINNED";
@@ -119,7 +123,13 @@ export type ResolveEdgeBoundExtensionDeps = {
   /** Source 2: the VERIFIED (signed-OBO) delegated agent-run id on the MCP frame. */
   getVerifiedRunId?: () => string | undefined;
   readAgentRunById?: (id: string) => Promise<RunRowForEdgeBoundServing | null>;
-  readAgentTemplateById?: (id: string) => Promise<{ packageName?: string | null } | null>;
+  readAgentTemplateById?: (
+    id: string,
+  ) => Promise<{
+    packageName?: string | null;
+    ownerLevel?: string | null;
+    ownerId?: string | null;
+  } | null>;
   readInstalledExtensionById?: (id: string) => Promise<InstalledExtension | null>;
   readInstalledExtensionsByPackageName?: (packageName: string) => Promise<InstalledExtension[]>;
 };
@@ -153,47 +163,70 @@ function liveDeps(deps: ResolveEdgeBoundExtensionDeps): Required<ResolveEdgeBoun
   };
 }
 
+/** The derivation outcome — `ambiguous` maps to a fail-closed refusal. */
+export type DerivedDependentInstallId =
+  | { kind: "none" }
+  | { kind: "derived"; id: string }
+  | { kind: "ambiguous"; message: string };
+
 /**
  * Derive the install id a run executes AS, for a run row that carries no
  * `dependent_install_id` (a top-level run, or a pre-Gap-2 row). Trusted rows
- * only; `undefined` when no unambiguous org-addressable install exists
- * (compatibility-preserving — the dispatch serves the default).
+ * only. `none` when no candidate exists (compatibility-preserving — the
+ * dispatch serves the default); `ambiguous` when multiple candidates survive
+ * the template's LOCKED owner-anchor disambiguation (fail-closed — an
+ * arbitrary pick could bind the WRONG install's dependency edges).
  */
 export async function deriveDependentInstallIdForRun(
   run: RunRowForEdgeBoundServing,
   deps: ResolveEdgeBoundExtensionDeps = {},
-): Promise<string | undefined> {
+): Promise<DerivedDependentInstallId> {
   const d = liveDeps(deps);
   const template = await d.readAgentTemplateById(run.templateId);
   const packageName = template?.packageName;
-  if (!packageName) return undefined;
+  if (!packageName) return { kind: "none" };
 
   const rows = await d.readInstalledExtensionsByPackageName(packageName);
-  // The run's addressable scope: its org (org-anchored + workspace-level rows;
-  // user/team-owned rows are keyed on the dispatching principal). Reuses the
-  // SHARED scope predicate so cross-org rows can never leak in.
-  const scope = {
-    organizationId: run.orgId ?? null,
-    ownerId: run.runBy ?? null,
-    teamIds: [] as readonly string[],
-  };
-  const live = rows.filter(
-    (row) => LIVE_STATUSES.has(row.status) && isInstallRowAddressableByActor(row, scope),
+  // The run's org scope: org-anchored + workspace-level rows. Owner level is
+  // NOT an exclusion axis (a team/user-owned install in the run's org is a
+  // legitimate run identity — codex round-1); cross-org rows never qualify.
+  const scoped = rows.filter(
+    (row) =>
+      LIVE_STATUSES.has(row.status) &&
+      (row.organizationId === null || row.organizationId === (run.orgId ?? null)),
   );
 
   // REQUIRED pin (versionId + packageVersion — the S7 fail-closed marker pair):
   // the run executes AS the install at that exact version. Unpinned: the run
-  // executes the live/default template — the DEFAULT install is its identity.
+  // executes the live/default template — a DEFAULT install is its identity.
   const isRequiredPin = run.versionId != null && !!run.packageVersion;
   const candidates = isRequiredPin
-    ? live.filter((row) => row.version === run.packageVersion)
-    : live.filter((row) => row.isDefault !== false);
+    ? scoped.filter((row) => row.version === run.packageVersion)
+    : scoped.filter((row) => row.isDefault !== false);
 
-  if (candidates.length === 0) return undefined;
-  // Determinism (mirrors pickActiveInstallId): prefer an org-anchored row over a
-  // workspace-level (org-less) one; within the preferred set keep store order.
-  const preferred = candidates.filter((row) => row.organizationId !== null);
-  return (preferred[0] ?? candidates[0]).id;
+  if (candidates.length === 0) return { kind: "none" };
+  if (candidates.length === 1) return { kind: "derived", id: candidates[0].id };
+
+  // Multiple candidates: disambiguate by the template's LOCKED owner anchor
+  // (`ownerLevel`/`ownerId` — the same anchor the OBO-ceiling derivation
+  // trusts). Exactly one anchor match wins; anything else is ambiguous.
+  const anchorLevel = template?.ownerLevel ?? null;
+  const anchorId = template?.ownerId ?? null;
+  const anchored =
+    anchorLevel !== null
+      ? candidates.filter(
+          (row) => row.ownerLevel === anchorLevel && (row.ownerId ?? null) === anchorId,
+        )
+      : [];
+  if (anchored.length === 1) return { kind: "derived", id: anchored[0].id };
+
+  return {
+    kind: "ambiguous",
+    message:
+      `run ${run.id} (template ${run.templateId}, package ${packageName}) matches ` +
+      `${candidates.length} live install rows in its org and the template's owner anchor ` +
+      `(${anchorLevel ?? "none"}/${anchorId ?? "none"}) does not single one out`,
+  };
 }
 
 /**
@@ -222,8 +255,23 @@ export async function resolveEdgeBoundExtensionVersion(
           `cannot establish the dependent identity for a dispatch to ${input.targetPackageName}`,
       };
     }
-    dependentInstallId = run.dependentInstallId ?? (await deriveDependentInstallIdForRun(run, d));
-    if (!dependentInstallId) return { kind: "none" };
+    if (run.dependentInstallId) {
+      dependentInstallId = run.dependentInstallId;
+    } else {
+      const derived = await deriveDependentInstallIdForRun(run, d);
+      if (derived.kind === "none") return { kind: "none" };
+      if (derived.kind === "ambiguous") {
+        return {
+          kind: "refuse",
+          code: "EDGE_BOUND_DEPENDENT_AMBIGUOUS",
+          message:
+            `edge-bound serving refused — cannot derive an unambiguous dependent identity for a ` +
+            `dispatch to ${input.targetPackageName}: ${derived.message}; refusing rather than ` +
+            `binding an arbitrary install's dependency edges`,
+        };
+      }
+      dependentInstallId = derived.id;
+    }
   }
 
   const dependent = await d.readInstalledExtensionById(dependentInstallId);
@@ -312,6 +360,12 @@ export async function dispatchExtensionMcpToolEdgeBound(
   input: unknown,
   deps: ResolveEdgeBoundExtensionDeps = {},
 ): Promise<unknown> {
+  // Capture the global handler DETACHED before any await — the pre-slice
+  // chokepoints invoked `const handler = tool.handler; handler(input)` unbound,
+  // and the absent-identity path must stay byte-identical (codex round-1: the
+  // public handler type does not declare `this: void`, so a bound `tool.handler(
+  // input)` call would change `this` semantics).
+  const globalHandler = tool.handler;
   const decision = await resolveEdgeBoundExtensionVersion(
     { targetPackageName: tool.packageName },
     deps,
@@ -320,19 +374,16 @@ export async function dispatchExtensionMcpToolEdgeBound(
     throw new EdgeBoundMcpServeRefusal(decision.code, decision.message);
   }
   if (decision.kind === "versioned") {
-    const served: ReturnType<typeof resolveVersionKeyedMcpTool> = resolveVersionKeyedMcpTool(
-      tool.packageName,
-      decision.version,
-      tool.name,
-    );
+    const served = resolveVersionKeyedMcpTool(tool.packageName, decision.version, tool.name);
     if (served.kind === "refuse") {
       throw new EdgeBoundMcpServeRefusal(
         served.code,
         `edge-bound serving refused for MCP tool "${tool.name}" — ${served.message}`,
       );
     }
-    const retained: RetainedVersionKeyedMcpTool = served.value;
-    return retained.handler(input);
+    // Same detached-invocation semantics for the retained handler.
+    const versionedHandler = served.value.handler;
+    return versionedHandler(input);
   }
-  return tool.handler(input);
+  return globalHandler(input);
 }

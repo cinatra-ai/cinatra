@@ -56,7 +56,10 @@ function makeDeps(input: {
   verifiedRunId?: string;
   rows?: Record<string, InstalledExtension | null>;
   runs?: Record<string, RunRowForEdgeBoundServing | null>;
-  templates?: Record<string, { packageName?: string | null } | null>;
+  templates?: Record<
+    string,
+    { packageName?: string | null; ownerLevel?: string | null; ownerId?: string | null } | null
+  >;
   rowsByPackage?: Record<string, InstalledExtension[]>;
 }): ResolveEdgeBoundExtensionDeps {
   return {
@@ -259,8 +262,8 @@ describe("resolveEdgeBoundExtensionVersion — fail-closed matrix (trusted id pr
 describe("deriveDependentInstallIdForRun — top-level bootstrap", () => {
   const depsFor = (input: Parameters<typeof makeDeps>[0]) => makeDeps(input);
 
-  it("unpinned run → the DEFAULT org-addressable live row", async () => {
-    const id = await deriveDependentInstallIdForRun(
+  it("unpinned run, single DEFAULT live row → derived", async () => {
+    const d = await deriveDependentInstallIdForRun(
       { id: "r", templateId: "t1", orgId: "org-1" },
       depsFor({
         templates: { t1: { packageName: "@x/dependent" } },
@@ -272,11 +275,11 @@ describe("deriveDependentInstallIdForRun — top-level bootstrap", () => {
         },
       }),
     );
-    expect(id).toBe("def");
+    expect(d).toEqual({ kind: "derived", id: "def" });
   });
 
   it("REQUIRED-pin run (versionId + packageVersion) → the exact-version row", async () => {
-    const id = await deriveDependentInstallIdForRun(
+    const d = await deriveDependentInstallIdForRun(
       { id: "r", templateId: "t1", orgId: "org-1", versionId: "snap-1", packageVersion: V },
       depsFor({
         templates: { t1: { packageName: "@x/dependent" } },
@@ -288,11 +291,11 @@ describe("deriveDependentInstallIdForRun — top-level bootstrap", () => {
         },
       }),
     );
-    expect(id).toBe("pin");
+    expect(d).toEqual({ kind: "derived", id: "pin" });
   });
 
-  it("cross-org rows are never picked (shared scope predicate)", async () => {
-    const id = await deriveDependentInstallIdForRun(
+  it("cross-org rows are never candidates", async () => {
+    const d = await deriveDependentInstallIdForRun(
       { id: "r", templateId: "t1", orgId: "org-1" },
       depsFor({
         templates: { t1: { packageName: "@x/dependent" } },
@@ -303,36 +306,102 @@ describe("deriveDependentInstallIdForRun — top-level bootstrap", () => {
         },
       }),
     );
-    expect(id).toBeUndefined();
+    expect(d).toEqual({ kind: "none" });
   });
 
-  it("org-anchored row preferred over a workspace-level one", async () => {
-    const id = await deriveDependentInstallIdForRun(
+  it("a TEAM-owned install in the run's org is a legitimate single candidate", async () => {
+    const d = await deriveDependentInstallIdForRun(
       { id: "r", templateId: "t1", orgId: "org-1" },
       depsFor({
         templates: { t1: { packageName: "@x/dependent" } },
         rowsByPackage: {
           "@x/dependent": [
-            row({ id: "ws", packageName: "@x/dependent", organizationId: null }),
-            row({ id: "org", packageName: "@x/dependent", organizationId: "org-1" }),
+            row({
+              id: "team-row",
+              packageName: "@x/dependent",
+              ownerLevel: "team",
+              ownerId: "team-9",
+            }),
           ],
         },
       }),
     );
-    expect(id).toBe("org");
+    expect(d).toEqual({ kind: "derived", id: "team-row" });
   });
 
-  it("no template packageName / no candidates → undefined (compatibility-preserving)", async () => {
+  it("competing same-org candidates: the template's LOCKED owner anchor singles one out", async () => {
+    const d = await deriveDependentInstallIdForRun(
+      { id: "r", templateId: "t1", orgId: "org-1" },
+      depsFor({
+        templates: {
+          t1: { packageName: "@x/dependent", ownerLevel: "organization", ownerId: "org-1" },
+        },
+        rowsByPackage: {
+          "@x/dependent": [
+            row({
+              id: "user-row",
+              packageName: "@x/dependent",
+              ownerLevel: "user",
+              ownerId: "user-7",
+            }),
+            row({
+              id: "org-row",
+              packageName: "@x/dependent",
+              ownerLevel: "organization",
+              ownerId: "org-1",
+            }),
+          ],
+        },
+      }),
+    );
+    expect(d).toEqual({ kind: "derived", id: "org-row" });
+  });
+
+  it("competing candidates with NO discriminating anchor → ambiguous (fail-closed)", async () => {
+    const d = await deriveDependentInstallIdForRun(
+      { id: "r", templateId: "t1", orgId: "org-1" },
+      depsFor({
+        templates: { t1: { packageName: "@x/dependent" } }, // no anchor
+        rowsByPackage: {
+          "@x/dependent": [
+            row({ id: "a", packageName: "@x/dependent" }),
+            row({ id: "b", packageName: "@x/dependent" }),
+          ],
+        },
+      }),
+    );
+    expect(d).toMatchObject({ kind: "ambiguous" });
+  });
+
+  it("no template packageName / no candidates → none (compatibility-preserving)", async () => {
     const noTemplate = await deriveDependentInstallIdForRun(
       { id: "r", templateId: "t1", orgId: "org-1" },
       depsFor({ templates: { t1: { packageName: null } } }),
     );
-    expect(noTemplate).toBeUndefined();
+    expect(noTemplate).toEqual({ kind: "none" });
     const noRows = await deriveDependentInstallIdForRun(
       { id: "r", templateId: "t1", orgId: "org-1" },
       depsFor({ templates: { t1: { packageName: "@x/dependent" } } }),
     );
-    expect(noRows).toBeUndefined();
+    expect(noRows).toEqual({ kind: "none" });
+  });
+
+  it("resolver maps an ambiguous derivation to a refuse (dispatch hard-stops)", async () => {
+    const d = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      makeDeps({
+        verifiedRunId: "run-amb",
+        runs: { "run-amb": { id: "run-amb", templateId: "t1", orgId: "org-1" } },
+        templates: { t1: { packageName: "@x/dependent" } },
+        rowsByPackage: {
+          "@x/dependent": [
+            row({ id: "a", packageName: "@x/dependent" }),
+            row({ id: "b", packageName: "@x/dependent" }),
+          ],
+        },
+      }),
+    );
+    expect(d).toMatchObject({ kind: "refuse", code: "EDGE_BOUND_DEPENDENT_AMBIGUOUS" });
   });
 });
 
