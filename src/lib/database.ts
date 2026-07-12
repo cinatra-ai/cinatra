@@ -326,6 +326,10 @@ export function writeMetadataValueToDatabase(key: string, value: unknown) {
 
 // Lease-bootstrap INSERT-IF-ABSENT + guarded fence upsert (cinatra#1364).
 export const writeMetadataValueIfAbsentToDatabase = writeMetadataValueIfAbsentInternal;
+// Causal marker for a catalog-write lease-guard abort (cinatra#1364) — see
+// buildCatalogWriteLeaseGuardQuery. Re-exported so the locked rebuild can
+// classify the abort through its dynamic database-module import.
+export { CATALOG_WRITE_LEASE_LOST_ERROR_MARKER } from "@/lib/database-metadata";
 export const writeMetadataValueIfGuardTokenHeldToDatabase = writeMetadataValueIfGuardTokenHeldInternal;
 
 // Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).

@@ -149,10 +149,12 @@ describe("replaceSkillCatalogInDatabase — transactional generation bump (write
     expect(call.transaction).toBe(true);
     const guard = call.queries[0]!;
     // FIRST statement: locks the lease row (FOR UPDATE, held to COMMIT) and
-    // aborts the whole transaction (1/count(*) → division by zero) unless the
-    // row still carries our token.
+    // aborts the whole transaction unless the row still carries our token —
+    // the failure arm raises via the deliberately-unset marker GUC, so the
+    // abort is CAUSALLY attributable to this guard (never confused with a
+    // generic engine error).
     expect(guard.text).toMatch(/FOR UPDATE/);
-    expect(guard.text).toMatch(/1 \/ count\(\*\)/);
+    expect(guard.text).toMatch(/current_setting\('cinatra\.skills_catalog_rebuild_lease_lost'\)/);
     expect(guard.text).toMatch(/catalog_write_lease_guard/);
     expect(guard.values).toEqual(["skills_catalog_rebuild_lease", "lease-token-1"]);
     // The generation bump still commits in the SAME guarded transaction.

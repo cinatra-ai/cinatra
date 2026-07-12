@@ -225,10 +225,23 @@ export function readSkillCatalogRowsFencedInternal(): SkillCatalogRowsFencedRead
 }
 
 /**
+ * CAUSAL abort marker for the catalog-write lease guard (cinatra#1364): the
+ * guard raises by reading this deliberately-unset namespaced GUC, so
+ * Postgres's error message (`unrecognized configuration parameter
+ * "cinatra.skills_catalog_rebuild_lease_lost"`) can ONLY originate from the
+ * guard statement — callers classify a lease-lost abort by this marker, never
+ * by a generic error class a real engine bug could also produce.
+ */
+export const CATALOG_WRITE_LEASE_LOST_ERROR_MARKER =
+  "cinatra.skills_catalog_rebuild_lease_lost";
+
+/**
  * Lease-ownership guard statement for the catalog-write transaction
  * (cinatra#1364): locks the lease row (`FOR UPDATE`) and verifies it still
- * carries `guardToken`; on mismatch the deliberate `1/count(*)` raises
- * `division by zero`, ABORTING the surrounding transaction so a rebuild that
+ * carries `guardToken`; on mismatch the CASE arm reads the unset
+ * `CATALOG_WRITE_LEASE_LOST_ERROR_MARKER` GUC (`current_setting` is STABLE,
+ * so it is evaluated lazily at runtime, never constant-folded), raising a
+ * distinctive error that ABORTS the surrounding transaction — a rebuild that
  * outlived its TTL can never overwrite a stealer's fresher catalog. On match
  * the row lock is held until COMMIT, so a stealer's CAS blocks and can never
  * interleave mid-write. Prepend as the FIRST statement of the write batch.
@@ -244,7 +257,9 @@ export function buildCatalogWriteLeaseGuardQuery(
       `WITH held AS (` +
       `SELECT key FROM ${table} WHERE key = $1 AND (value::jsonb ->> 'token') = $2 FOR UPDATE` +
       `) ` +
-      `SELECT 1 / count(*) AS catalog_write_lease_guard FROM held`,
+      `SELECT CASE WHEN count(*) = 1 THEN 1 ` +
+      `ELSE current_setting('${CATALOG_WRITE_LEASE_LOST_ERROR_MARKER}')::int END ` +
+      `AS catalog_write_lease_guard FROM held`,
     values: [guardKey, guardToken],
   };
 }

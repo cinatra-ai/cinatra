@@ -34,6 +34,7 @@ const engineMock = vi.hoisted(() => vi.fn());
 vi.mock("server-only", () => ({}));
 
 vi.mock("@/lib/database", () => ({
+  CATALOG_WRITE_LEASE_LOST_ERROR_MARKER: "cinatra.skills_catalog_rebuild_lease_lost",
   readSkillCatalogFromDatabase: vi.fn(() => state.rows),
   replaceSkillCatalogInDatabase: vi.fn(),
   readMetadataValueFromDatabase: vi.fn(<T,>(key: string, fallback: T): T => {
@@ -263,38 +264,73 @@ describe("rebuildSkillsCatalog — explicit locked rebuild", () => {
     expect(typeof tokenInLeaseRowDuringRun).toBe("string");
   });
 
-  it("resolves with the stealer's persisted catalog when the GUARDED write aborts on a stolen lease", async () => {
-    const stolenRows = { skillPackages: [PKG_B], skills: SKILLS_B };
+  it("retries ONCE behind the stealer when the GUARDED write aborts on a stolen lease", async () => {
+    const LEASE_LOST = new Error(
+      'unrecognized configuration parameter "cinatra.skills_catalog_rebuild_lease_lost"',
+    );
+    const freshRows = { skillPackages: [PKG_B], skills: SKILLS_B };
+    engineMock
+      .mockImplementationOnce(async () => {
+        // A stealer took our expired lease mid-run; our guarded write
+        // transaction rolled back with the guard's DISTINCTIVE marker error.
+        // The stealer's lease shown here is itself already expired (it
+        // finished/crashed), so the retry can re-acquire immediately.
+        state.meta.set(
+          SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+          JSON.stringify({ token: "stealer", expiresAt: new Date(Date.now() - 1).toISOString() }),
+        );
+        throw LEASE_LOST;
+      })
+      .mockImplementationOnce(async () => {
+        // The retry's OWN committed engine run.
+        state.rows = freshRows;
+        return state.rows;
+      });
+
+    // NOT a rejection, and NOT a passive snapshot: the retry re-acquired the
+    // lease and the result comes from OUR second, committed engine run.
+    const result = await rebuildSkillsCatalog({ reason: "steal-abort" });
+    expect(engineMock).toHaveBeenCalledTimes(2);
+    expect(result.skillPackages.map((p) => p.id)).toEqual(["pkg-b"]);
+    // The RETRY completed fully: fence stamped, lease released.
+    const fence = await readSkillsCatalogRebuildState();
+    expect(fence?.reason).toBe("steal-abort");
+    expect(JSON.parse(state.meta.get(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY)!)).toEqual({
+      token: null,
+      expiresAt: null,
+    });
+  });
+
+  it("fails loudly when the lease is lost twice in a row (never an infinite retry)", async () => {
     engineMock.mockImplementation(async () => {
-      // The stealer took the lease AND committed its own (fresher) catalog;
-      // our engine's guarded write transaction then rolled back — the real
-      // guard raises Postgres's `division by zero` (1/count(*) over the
-      // no-longer-held lease row).
+      state.meta.set(
+        SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+        JSON.stringify({ token: `stealer-${Math.random()}`, expiresAt: new Date(Date.now() - 1).toISOString() }),
+      );
+      throw new Error(
+        'unrecognized configuration parameter "cinatra.skills_catalog_rebuild_lease_lost"',
+      );
+    });
+    await expect(rebuildSkillsCatalog({ reason: "double-steal" })).rejects.toThrow(
+      /lease lost twice in a row/,
+    );
+    expect(engineMock).toHaveBeenCalledTimes(2);
+    expect(state.meta.get(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY)).toBeUndefined();
+  });
+
+  it("CAUSALITY: a real engine error rethrows even when the lease WAS stolen meanwhile", async () => {
+    engineMock.mockImplementationOnce(async () => {
+      // The lease is stolen mid-run AND the engine dies of an unrelated bug —
+      // the abort classification must NOT swallow the real failure (the
+      // marker string is absent, so this cannot be the guard's abort).
       state.meta.set(
         SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
         JSON.stringify({ token: "stealer", expiresAt: new Date(Date.now() + 60_000).toISOString() }),
       );
-      state.rows = stolenRows;
       throw new Error("division by zero");
     });
-
-    // NOT a rejection: the caller gets the persisted (stealer's) catalog.
-    const result = await rebuildSkillsCatalog({ reason: "steal-abort" });
-    expect(result.skillPackages.map((p) => p.id)).toEqual(["pkg-b"]);
-    expect(result.skills.map((s) => s.id).sort()).toEqual(["pkg-b:one", "pkg-b:two"]);
-    // No fence stamp — the stolen run never completed a write.
-    expect(state.meta.get(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY)).toBeUndefined();
-    // The stealer's lease is untouched.
-    expect(JSON.parse(state.meta.get(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY)!).token).toBe(
-      "stealer",
-    );
-  });
-
-  it("rethrows a division-by-zero engine error when the lease is STILL ours (not a steal)", async () => {
-    engineMock.mockRejectedValueOnce(new Error("division by zero"));
-    await expect(rebuildSkillsCatalog({ reason: "not-a-steal" })).rejects.toThrow(
-      "division by zero",
-    );
+    await expect(rebuildSkillsCatalog({ reason: "real-bug" })).rejects.toThrow("division by zero");
+    expect(engineMock).toHaveBeenCalledTimes(1);
     expect(state.meta.get(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY)).toBeUndefined();
   });
 });

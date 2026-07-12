@@ -259,8 +259,9 @@ indefinitely. On the LOCKED rebuild path the engine's catalog-write
 transaction is additionally fenced on lease ownership: its first statement
 locks the lease row (`FOR UPDATE`, held to COMMIT) and aborts unless the row
 still carries the run's token — a rebuild that outlives its TTL rolls back
-instead of overwriting a stealer's fresher catalog (the caller is answered
-with the persisted snapshot), and a steal can never interleave mid-write.
+instead of overwriting a stealer's fresher catalog (the causally-marked abort
+retries once behind the stealer with a fresh lease and a fresh scan; a second
+consecutive loss fails loudly), and a steal can never interleave mid-write.
 The rebuild engine also runs inside an AsyncLocalStorage context so a
 re-entrant `rebuildSkillsCatalog()` call throws loudly instead of deadlocking
 the single-flight, and the completeness fence is written only while the lease

@@ -130,9 +130,10 @@ export function visibilityToLevelScope(
 // catalog write is one DB transaction (+ generation-token bump) whose FIRST
 // statement locks the lease row (`FOR UPDATE`, held to COMMIT) and aborts
 // unless it still carries our token — a rebuild that outlived its TTL can
-// never overwrite a stealer's fresher catalog (the abort is caught below and
-// answered with the persisted, at-least-as-fresh snapshot), and a steal can
-// never interleave mid-write (the stealer's CAS blocks on the row lock). The
+// never overwrite a stealer's fresher catalog (the causally-classified abort
+// retries ONCE behind the stealer with a fresh lease + fresh scan, so the
+// returned catalog always comes from a committed run of our own), and a steal
+// can never interleave mid-write (the stealer's CAS blocks on the row lock). The
 // completeness fence is likewise written through a SINGLE statement guarded
 // on the lease row still carrying our token, so a stolen run never stamps a
 // fence over the stealer's (no check-then-write window). Only the LEGACY
@@ -273,7 +274,10 @@ export async function rebuildSkillsCatalog(
   return inFlightRebuild;
 }
 
-async function runLockedRebuild(options: RebuildSkillsCatalogOptions): Promise<RebuiltSkillsCatalog> {
+async function runLockedRebuild(
+  options: RebuildSkillsCatalogOptions,
+  isLeaseLostRetry = false,
+): Promise<RebuiltSkillsCatalog> {
   const db = await loadDb();
   const leaseToken = await acquireCatalogRebuildLease(db, options);
   try {
@@ -292,17 +296,28 @@ async function runLockedRebuild(options: RebuildSkillsCatalogOptions): Promise<R
         }),
       );
     } catch (error) {
-      if (isLeaseLostWriteAbort(db, error, leaseToken)) {
-        // The stealer acquired the lease AFTER our scan started, so its scan
-        // (and its committed catalog) is at-least-as-fresh as ours — serving
-        // the persisted snapshot loses nothing, and failing the caller (e.g.
-        // an install handler) over bookkeeping another process already
-        // finished would be wrong.
+      // CAUSAL classification: the marker error can only originate from the
+      // guard statement itself (an unset namespaced GUC read in the guard's
+      // failure arm), so a real engine failure is NEVER swallowed here.
+      if (isCatalogWriteLeaseLostAbort(db, error)) {
+        if (isLeaseLostRetry) {
+          throw new Error(
+            "[skills-catalog] rebuild lease lost twice in a row — a stealer keeps outrunning " +
+              "this process; giving up so the failure is visible.",
+            { cause: error },
+          );
+        }
+        // Our write rolled back and the stealer may not have COMMITTED its
+        // catalog yet, so no persisted state can be served as "our" result.
+        // Retry ONCE behind the stealer: the fresh acquire waits out its
+        // lease, and the fresh engine run re-scans (at-least-as-fresh as the
+        // trigger). The returned catalog therefore always comes from a
+        // COMMITTED engine run of our own.
         console.warn(
           "[skills-catalog] rebuild outlived its lease — the guarded catalog write aborted; " +
-            "serving the stealer's (at-least-as-fresh) persisted catalog.",
+            "retrying once behind the stealer.",
         );
-        return await readSkillsCatalogSnapshot();
+        return await runLockedRebuild(options, true);
       }
       throw error;
     }
@@ -392,20 +407,16 @@ async function acquireCatalogRebuildLease(
 
 /**
  * True iff `error` is the catalog-write lease guard ABORTING because the lease
- * was stolen mid-run: the guard's deliberate `1/count(*)` raises Postgres's
- * `division by zero` (the only division in the write batch), and — the
- * definitive confirmation — the lease row no longer carries OUR token. Both
- * conditions are required: an unrelated engine error while the lease happens
- * to have been stolen must still surface to the caller.
+ * was stolen mid-run. CAUSAL: the guard's failure arm raises by reading the
+ * deliberately-unset `cinatra.skills_catalog_rebuild_lease_lost` GUC, so the
+ * marker appears in an error message ONLY when the guard statement itself
+ * fired — no coincidental engine error (nor a generic Postgres error class)
+ * can be misclassified as a lease loss.
  */
-function isLeaseLostWriteAbort(db: DatabaseModule, error: unknown, leaseToken: string): boolean {
-  if (!(error instanceof Error) || !error.message.includes("division by zero")) return false;
-  try {
-    const raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
-    return raw !== null && parseLeaseRaw(raw).token !== leaseToken;
-  } catch {
-    return false;
-  }
+function isCatalogWriteLeaseLostAbort(db: DatabaseModule, error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes(db.CATALOG_WRITE_LEASE_LOST_ERROR_MARKER)
+  );
 }
 
 /** Best-effort release; an expired-and-stolen lease is left alone (CAS-guarded). */
