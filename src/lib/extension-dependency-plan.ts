@@ -32,7 +32,11 @@ import "server-only";
 //    forward install gate stays the enforcement boundary.
 
 import { satisfiesVersionRange, dependencyScopePrefixesFor, comparePluginVersions } from "@cinatra-ai/registries";
-import type { ExtensionDependency, InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import type {
+  ExtensionDependency,
+  ExtensionOwnerLevel,
+  InstalledExtension,
+} from "@cinatra-ai/extensions/canonical-types";
 import {
   assertUpdateDoesNotBreakDependents,
   DependencyClosureError,
@@ -44,6 +48,49 @@ import {
  *  marketplace-mcp-client is banned for new importers; the planner stays
  *  decoupled from the wire package). */
 export type DependencyClosurePin = { name: string; version: string };
+
+/**
+ * The canonical ROW-OWNERSHIP tuple the planner resolves rows against
+ * (cinatra#1039 Phase 1, decision 1) — the `(organizationId, ownerLevel,
+ * ownerId)` identity a canonical install row is keyed on (canonical-store's
+ * `CanonicalIdentity`). Deliberately named `rowOwnership` (NEVER "scope") to
+ * stay visibly distinct from the access-popup's `accessTarget`: this is WHO
+ * OWNS the installed row (the conflict/dedupe basis), not who may USE it.
+ *
+ * On the extension-saga path the caller derives the canonical default
+ * (`ownerLevel: orgId ? "organization" : "platform"`); the agent path (Phase 2)
+ * threads its real five-level tuple. Decision 4: the ROOT's tuple is forced,
+ * immutable, onto every transitive `PlannedMember`.
+ */
+export type RowOwnership = {
+  ownerLevel: ExtensionOwnerLevel;
+  ownerId: string | null;
+  organizationId: string | null;
+};
+
+/**
+ * One level of a RESOLVED scope-ancestry chain (cinatra#1039 decision 2). The
+ * planner walks the chain IN ORDER; the FIRST level holding a live row of the
+ * package is the conflict basis, else the next ancestor, else platform (the
+ * chain's LAST element). `matches` selects the live rows AT this level;
+ * `organizationId` is the level's org key (the dependent-break admissibility
+ * check evaluates at the resolved level's org).
+ *
+ * The chain is produced by the INJECTED `resolveScopeAncestry` seam — NOT a
+ * naive tuple walk: the tuple alone cannot derive project→owning-team ancestry
+ * (a project's owning team is `project.owner_id` when `owner_level==="team"`,
+ * read via `readProjectById`), so the resolver is a seam. The extension-saga
+ * default yields the `[organization, platform]` binary that reproduces the
+ * pre-#1039 `findLiveRowsInScope` behavior exactly.
+ */
+export type ResolvedScopeLevel = {
+  /** Debug label, e.g. `"organization:org_x"`, `"team:team_y"`, `"platform"`. */
+  label: string;
+  /** The org key of rows at this level (dependent-break check scope). */
+  organizationId: string | null;
+  /** Selects the live rows AT this scope level. */
+  matches: (row: InstalledExtension) => boolean;
+};
 
 export class DependencyPlanError extends Error {
   constructor(
@@ -72,6 +119,17 @@ export type PlannedMember = {
   edges: ExtensionDependency[];
   /** Already installed at exactly the pinned version — the saga skips it. */
   alreadyInstalled: boolean;
+  /**
+   * The resolved ROW-OWNERSHIP tuple this member is installed/updated at
+   * (cinatra#1039 decision 4). This is the ROOT install's tuple, forced
+   * IMMUTABLY onto every transitive member — manifests, install callbacks, and
+   * existing-row selection may NEVER override it. The executor STAMPS each
+   * install/update member at this scope. On the extension-saga path it is the
+   * canonical default (`ownerLevel: orgId ? "organization" : "platform"`), so
+   * every existing plan carries the same tuple it already installs at
+   * (behavior-neutral); the agent path (Phase 2) threads its real tuple.
+   */
+  rowOwnership: RowOwnership;
   /**
    * How the saga realizes this member (#1039 Option B, dev/non-gatekept path):
    *  - `"install"`: a member NOT present pre-batch — installed fresh; rolled
@@ -147,7 +205,80 @@ export type DependencyPlanDeps = {
   isAutoInstallableEdge: (dep: ExtensionDependency) => boolean;
   /** Canonical rows snapshot (scope-aware install check). */
   readInstalledRows: () => Promise<InstalledExtension[]>;
+  /**
+   * cinatra#1039 decision 2: resolve the ordered scope-ancestry fallback chain
+   * for the root install's `rowOwnership` tuple (project→owning-team→org→
+   * platform). INJECTED — the tuple alone cannot derive project→team ancestry
+   * (needs `readProjectById`), so this is a SEAM, never a naive tuple walk.
+   *
+   * OPTIONAL: when ABSENT the planner falls back to the `[organization,
+   * platform]` binary derived from `input.orgId` — the EXACT pre-#1039
+   * `findLiveRowsInScope` behavior, so every existing caller/test is unchanged.
+   * The extension saga provides the binary explicitly (behavior-neutral); the
+   * agent path (Phase 2) provides the real ladder.
+   */
+  resolveScopeAncestry?: (
+    rowOwnership: RowOwnership,
+  ) => Promise<ResolvedScopeLevel[]> | ResolvedScopeLevel[];
+  /**
+   * cinatra#1039 decision 3: before a dedupe-upward MUTATES an existing shared
+   * row (emits `action:"update"`), the requesting principal must be
+   * INDEPENDENTLY authorized to mutate THAT row's exact scope — `assertCanInstallAtTarget`
+   * re-run against the EXISTING ROW's `{level,id}`, not merely satisfied at the
+   * requested/root scope. Throws (fail-closed) on deny; the planner then keeps
+   * the evidence-carrying INSTALLED_VERSION_CONFLICT refusal (side-by-side at
+   * the requesting scope is the #1040 follow-up, not this slice).
+   *
+   * A thrown DependencyPlanError PROPAGATES unchanged (a planner-domain failure,
+   * not an authz deny); any OTHER throw is treated as an authorization DENY and
+   * converted to the cross-scope INSTALLED_VERSION_CONFLICT refusal.
+   *
+   * INJECTED so the planner stays pure: the extension-saga default authorizes
+   * its own already-established scope (behavior-neutral — its rows are org-owned
+   * and the root auth ran at the org); the agent path (Phase 2) wires
+   * `assertCanInstallAtTarget` against the row's `{level,id}`; fail-closed tests
+   * inject a denying stub. OPTIONAL: absent = permit (pre-#1039 behavior).
+   */
+  authorizeExistingRowMutation?: (row: InstalledExtension) => Promise<void> | void;
 };
+
+/**
+ * The canonical DEFAULT `rowOwnership` (cinatra#1039): an org install is
+ * `organization`-owned, a null-org install is `platform`-owned. The value the
+ * extension saga derives + passes explicitly, and the fallback the planner
+ * applies when a caller omits the tuple — so an absent tuple plans identically.
+ */
+export function defaultRowOwnership(orgId: string | null): RowOwnership {
+  return {
+    ownerLevel: orgId ? "organization" : "platform",
+    ownerId: orgId ?? null,
+    organizationId: orgId ?? null,
+  };
+}
+
+/**
+ * The DEFAULT `[organization, platform]` ancestry chain (cinatra#1039) — the
+ * fallback the planner uses when no `resolveScopeAncestry` seam is injected, and
+ * the exact chain the extension saga's seam returns. Reproduces the pre-#1039
+ * `findLiveRowsInScope` binary EXACTLY: an org install resolves the org's own
+ * rows first, else platform; a platform install resolves platform only.
+ */
+export function defaultOrgPlatformChain(orgId: string | null): ResolvedScopeLevel[] {
+  const platform: ResolvedScopeLevel = {
+    label: "platform",
+    organizationId: null,
+    matches: (r) => (r.organizationId ?? null) === null,
+  };
+  if (orgId === null) return [platform];
+  return [
+    {
+      label: `organization:${orgId}`,
+      organizationId: orgId,
+      matches: (r) => (r.organizationId ?? null) === orgId,
+    },
+    platform,
+  ];
+}
 
 const KNOWN_KINDS = new Set(["agent", "skill", "connector", "artifact", "workflow"]);
 
@@ -220,6 +351,33 @@ function findLiveRowsInScope(
   const org = live.filter((r) => (r.organizationId ?? null) === organizationId);
   if (org.length > 0) return org;
   return live.filter((r) => (r.organizationId ?? null) === null);
+}
+
+/**
+ * LADDER-AWARE scope resolution (cinatra#1039 decision 2): walk the resolved
+ * ancestry `chain` in order and return the live rows at the FIRST level holding
+ * any, together with WHICH level matched (so the conflict classifier can
+ * re-scope its own dependent/self-satisfiability checks to that level via the
+ * sub-chain rooted there). Returns `{ rows: [], level: null }` when no level in
+ * the chain holds a live row.
+ *
+ * For the extension-saga default chain `[organization, platform]` this is
+ * IDENTICAL to `findLiveRowsInScope(rows, packageName, orgId)`: the org level
+ * wins when it holds any live row, else the platform level.
+ */
+function resolveScopeRows(
+  rows: InstalledExtension[],
+  packageName: string,
+  chain: ResolvedScopeLevel[],
+): { rows: InstalledExtension[]; level: ResolvedScopeLevel | null; index: number } {
+  const live = rows.filter(
+    (r) => r.packageName === packageName && (r.status === "active" || r.status === "locked"),
+  );
+  for (let i = 0; i < chain.length; i++) {
+    const at = live.filter(chain[i]!.matches);
+    if (at.length > 0) return { rows: at, level: chain[i]!, index: i };
+  }
+  return { rows: [], level: null, index: -1 };
 }
 
 /**
@@ -333,9 +491,27 @@ export function classifyInstalledVersionConflict(args: {
   installedRows: InstalledExtension[];
   orgId: string | null;
   isAutoInstallableEdge: (dep: ExtensionDependency) => boolean;
+  /**
+   * cinatra#1039 decision 2: the resolved scope-ancestry SUB-CHAIN rooted at the
+   * CONFLICT ROW's level (that level → … → platform), used to resolve the NEW
+   * version's OWN required deps ladder-aware for the self-satisfiability check.
+   * OPTIONAL: when absent, each dep resolves via the `[organization, platform]`
+   * binary derived from `orgId` (behavior-neutral — the extension-saga default).
+   * The dependent-break admissibility check always uses `orgId` (the resolved
+   * level's org), unchanged.
+   */
+  depScopeChain?: ResolvedScopeLevel[];
 }): InstalledVersionConflictClass {
-  const { packageName, installedVersion, pin, newEdges, installedRows, orgId, isAutoInstallableEdge } =
-    args;
+  const {
+    packageName,
+    installedVersion,
+    pin,
+    newEdges,
+    installedRows,
+    orgId,
+    isAutoInstallableEdge,
+    depScopeChain,
+  } = args;
 
   // NEWER (or equal — equal never reaches here) installed than required: a
   // downgrade / side-by-side concern, out of dedupe-upward scope.
@@ -364,7 +540,11 @@ export function classifyInstalledVersionConflict(args: {
   const unmetDeps: string[] = [];
   for (const edge of newEdges) {
     if (!isAutoInstallableEdge(edge)) continue;
-    const depRows = findLiveRowsInScope(installedRows, edge.packageName, orgId);
+    // Ladder-aware (decision 2): resolve the dep at the conflict row's level
+    // and below via the sub-chain; absent → the org-binary (behavior-neutral).
+    const depRows = depScopeChain
+      ? resolveScopeRows(installedRows, edge.packageName, depScopeChain).rows
+      : findLiveRowsInScope(installedRows, edge.packageName, orgId);
     if (depRows.length === 0) {
       unmetDeps.push(edge.packageName);
       continue;
@@ -394,6 +574,16 @@ export function classifyInstalledVersionConflict(args: {
 export type PlanDependencyInstallInput = {
   root: { packageName: string; version: string };
   orgId: string | null;
+  /**
+   * cinatra#1039 decision 1+4: the ROOT install's resolved ROW-OWNERSHIP tuple,
+   * forced immutably onto every transitive member (decision 4) and driving the
+   * ladder-aware conflict basis via `deps.resolveScopeAncestry` (decision 2).
+   * OPTIONAL: when absent, derived as the canonical default
+   * (`defaultRowOwnership(orgId)` = `{ ownerLevel: orgId ? "organization" :
+   * "platform", ownerId: orgId, organizationId: orgId }`) — the exact value the
+   * extension saga passes explicitly, so an absent tuple plans IDENTICALLY.
+   */
+  rowOwnership?: RowOwnership;
   /** The marketplace authorize closure (gatekept) — null on the dev path. */
   closure: DependencyClosurePin[] | null;
   /**
@@ -427,6 +617,18 @@ export async function planDependencyInstall(
   const source = closure ? ("marketplace-closure" as const) : ("manifest-walk" as const);
   const closureByName = new Map((closure ?? []).map((c) => [c.name, c]));
   const installedRows = await deps.readInstalledRows();
+
+  // cinatra#1039 decision 1+4: the ROOT install's rowOwnership tuple — the
+  // extension saga passes the canonical default explicitly; an absent tuple is
+  // derived to the same default, so plans are identical. Forced IMMUTABLY onto
+  // every member emitted below (existing-row selection never overrides it).
+  const rowOwnership = input.rowOwnership ?? defaultRowOwnership(orgId);
+  // decision 2: resolve the ladder-aware scope-ancestry chain ONCE via the
+  // injected seam. ABSENT → the [organization, platform] binary that reproduces
+  // the pre-#1039 findLiveRowsInScope behavior exactly (behavior-neutral).
+  const scopeChain: ResolvedScopeLevel[] = deps.resolveScopeAncestry
+    ? await deps.resolveScopeAncestry(rowOwnership)
+    : defaultOrgPlatformChain(orgId);
 
   // DEPENDENCY-CONFUSION GATE (#157 / #103): confine the resolved tree to the
   // ROOT package's own vendor scope + the first-party base scope. The agent
@@ -517,7 +719,7 @@ export async function planDependencyInstall(
       // Memoize the summary-derived fields below via the same fetch.
       const edges = deps.parseEdges(summary.manifest, packageName);
       if (requestedBy) assertPinSatisfiesConstraint(requestedBy.from, requestedBy.edge, pin);
-      return finalizeNode(packageName, pin, summary, edges, requestedBy);
+      return await finalizeNode(packageName, pin, summary, edges, requestedBy);
     }
 
     if (requestedBy) assertPinSatisfiesConstraint(requestedBy.from, requestedBy.edge, pin);
@@ -530,16 +732,16 @@ export async function planDependencyInstall(
       );
     }
     const edges = deps.parseEdges(summary.manifest, packageName);
-    return finalizeNode(packageName, pin, summary, edges, requestedBy);
+    return await finalizeNode(packageName, pin, summary, edges, requestedBy);
   }
 
-  function finalizeNode(
+  async function finalizeNode(
     packageName: string,
     pin: string,
     summary: MemberSummary,
     edges: ExtensionDependency[],
     requestedBy: { from: string; edge: ExtensionDependency } | null,
-  ): PlannedMember {
+  ): Promise<PlannedMember> {
     // 2. Installed check (item 7): same version → skip member; different →
     //    conflict CLASSIFICATION. The ROOT is exempt from the conflict check
     //    (installing/updating over an existing root is the flow the caller
@@ -566,7 +768,16 @@ export async function planDependencyInstall(
       // side-by-side rows installed). Otherwise the conflict basis is the
       // scope's DEFAULT row — ambiguity (0 or >1 defaults across owners)
       // fails closed rather than classifying an arbitrary owner's install.
-      const scopeRows = findLiveRowsInScope(installedRows, packageName, orgId);
+      // Ladder-aware (decision 2): the FIRST ancestry level holding a live row
+      // is the conflict basis. `scopeIndex` locates that level so the classifier
+      // re-scopes its own checks to the SUB-CHAIN rooted there. For the
+      // extension default `[organization, platform]` this equals the pre-#1039
+      // `findLiveRowsInScope(installedRows, packageName, orgId)`.
+      const { rows: scopeRows, index: scopeIndex } = resolveScopeRows(
+        installedRows,
+        packageName,
+        scopeChain,
+      );
       const atPin = scopeRows.find((r) => registryVersionOfRow(r) === pin);
       const row = atPin ?? (scopeRows.length > 0 ? defaultLiveRow(scopeRows) : null);
       if (scopeRows.length > 0 && row === null) {
@@ -605,6 +816,10 @@ export async function planDependencyInstall(
           // platform install cannot use).
           orgId: row.organizationId ?? null,
           isAutoInstallableEdge: deps.isAutoInstallableEdge,
+          // Resolve the NEW version's own required deps from the conflict row's
+          // level downward (decision 2). Behavior-neutral for the extension
+          // default (the sub-chain is [organization, platform] or [platform]).
+          depScopeChain: scopeIndex >= 0 ? scopeChain.slice(scopeIndex) : undefined,
         });
         // Option B execution: a CLEAN dedupe-upward on the non-gatekept path is
         // realized as a committed in-place update, NOT a refusal. `closure` is
@@ -612,7 +827,42 @@ export async function planDependencyInstall(
         // still a hard REFUSE-UP-FRONT gate (durable-restore is deferred), so the
         // switch below runs for every class as before.
         if (conflict.kind === "upgradable-clean" && closure === null) {
-          action = "update";
+          // DECISION 3 (cinatra#1039): a dedupe-upward MUTATES the existing
+          // shared row, so before emitting the committed `action:"update"` the
+          // requesting principal must be INDEPENDENTLY authorized to mutate THAT
+          // ROW's exact scope — re-authorized against the EXISTING ROW, not
+          // merely satisfied at the requested/root scope (a team request must
+          // not upgrade a project-scoped row without proving authorization for
+          // that project). Unauthorized → keep the evidence-carrying
+          // INSTALLED_VERSION_CONFLICT refusal (side-by-side at the requesting
+          // scope is the #1040 follow-up). The extension-saga authorizer permits
+          // its own already-established org scope (behavior-neutral); the agent
+          // path (Phase 2) wires assertCanInstallAtTarget against the row.
+          let rowMutationAuthorized = true;
+          if (deps.authorizeExistingRowMutation) {
+            try {
+              await deps.authorizeExistingRowMutation(row);
+            } catch (err) {
+              // A planner-domain error propagates unchanged; any OTHER throw is
+              // treated as an authorization DENY → the cross-scope refusal below.
+              if (err instanceof DependencyPlanError) throw err;
+              rowMutationAuthorized = false;
+            }
+          }
+          if (rowMutationAuthorized) {
+            action = "update";
+          } else {
+            const requestedFrom = requestedBy?.from ?? root.packageName;
+            throw new DependencyPlanError(
+              "INSTALLED_VERSION_CONFLICT",
+              `${packageName} is already installed at ${installedVersion} in an ownership scope ` +
+                `you are not authorized to modify (owner-level ${row.ownerLevel}` +
+                `${row.ownerId ? `, owner ${row.ownerId}` : ""}, org ${row.organizationId ?? "platform"}), ` +
+                `but ${requestedFrom} needs it at ${pin} — refusing to upgrade a shared dependency ` +
+                `row across an ownership scope you do not control. Install ${pin} at your own scope, ` +
+                `or have an admin of that scope update ${packageName} to ${pin} first.`,
+            );
+          }
         } else if (conflict.kind === "disjoint-dependents" && closure === null) {
           // SIDE-BY-SIDE (cinatra#1040 S3, non-gatekept path only): the
           // admissible-range intersection is EMPTY — the installed default is
@@ -685,6 +935,10 @@ export async function planDependencyInstall(
       typeId: kindToTypeId(summary.kind, packageName, !alreadyInstalled),
       edges,
       alreadyInstalled,
+      // decision 4: the ROOT install's tuple, forced IMMUTABLY onto EVERY member
+      // (existing-row selection above never overrides it — `row` informs the
+      // conflict class, not the member's ownership).
+      rowOwnership,
       action,
       ...(sideBySideEvidence ? { sideBySideEvidence } : {}),
       ...(sideBySideScopeOrgId !== undefined ? { sideBySideScopeOrgId } : {}),
