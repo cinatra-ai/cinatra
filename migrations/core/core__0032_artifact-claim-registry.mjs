@@ -12,7 +12,10 @@
 //     status='active' (one ACTIVE claim per scope key) and partial UNIQUE
 //     (scope, object_type_id) WHERE claim_kind='dedicated' AND
 //     status<>'retired' (two DEDICATED claimants on the same type at the same
-//     scope are a conflict — an install error). `install_id` is plain-text
+//     scope are a conflict — an install error) and the mirrored
+//     one-live-DEFAULT-claimant index (makes dormancy/reactivation total:
+//     at most one default per scope key can ever reactivate into the active
+//     slot). `install_id` is plain-text
 //     provenance, never an FK: the installed_extension row is deleted on
 //     uninstall and claim state must survive it.
 //   - artifact_claim_events           append-only claim-event history
@@ -49,7 +52,7 @@ export const artifactClaimRegistryDdlSql = `
     dispositions jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT artifact_type_claims_scope_check CHECK (scope = 'platform' OR scope LIKE 'org:%'),
+    CONSTRAINT artifact_type_claims_scope_check CHECK (scope = 'platform' OR scope LIKE 'org:_%'),
     CONSTRAINT artifact_type_claims_kind_check CHECK (claim_kind IN ('dedicated','default')),
     CONSTRAINT artifact_type_claims_status_check CHECK (status IN ('reserved','active','dormant','retiring','retired')),
     CONSTRAINT artifact_type_claims_dormant_default_check CHECK (status <> 'dormant' OR claim_kind = 'default')
@@ -58,6 +61,8 @@ export const artifactClaimRegistryDdlSql = `
     ON artifact_type_claims (scope, object_type_id) WHERE status = 'active';
   CREATE UNIQUE INDEX IF NOT EXISTS artifact_type_claims_one_live_dedicated
     ON artifact_type_claims (scope, object_type_id) WHERE claim_kind = 'dedicated' AND status <> 'retired';
+  CREATE UNIQUE INDEX IF NOT EXISTS artifact_type_claims_one_live_default
+    ON artifact_type_claims (scope, object_type_id) WHERE claim_kind = 'default' AND status <> 'retired';
   CREATE INDEX IF NOT EXISTS artifact_type_claims_type_status_idx
     ON artifact_type_claims (object_type_id, status);
   CREATE INDEX IF NOT EXISTS artifact_type_claims_scope_idx
@@ -65,6 +70,7 @@ export const artifactClaimRegistryDdlSql = `
 
   CREATE TABLE IF NOT EXISTS artifact_claim_events (
     id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    seq bigint GENERATED ALWAYS AS IDENTITY,
     claim_id text NOT NULL,
     scope text NOT NULL,
     object_type_id text NOT NULL,
@@ -114,13 +120,13 @@ export function up(pgm) {
 
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
-  // Reversible: the tables are a fresh addition. Claim/event/queue rows are
-  // derived registration state — every claim re-derives from the installed
-  // extensions' manifests on the next install/reconcile pass, so dropping the
-  // registry reverts to the pre-0032 in-memory-only shape without losing
-  // user-land content. (The event log is audit history; a deliberate `--down`
-  // accepts dropping it, matching the guarded-down precedent for derived
-  // tables.)
+  // Reversible in shape: the tables are a fresh addition, so dropping them
+  // restores the pre-0032 schema exactly. HONEST COST: the claim rows become
+  // re-seedable only once the manifest-claims sub-issue's install reconcile
+  // lands (nothing re-derives them at THIS slice), and the append-only event
+  // log + pending queue rows are audit/work state that is NOT recoverable —
+  // an operator-initiated `--down` deliberately accepts losing them (the
+  // extension_lifecycle_audit drop precedent).
   pgm.sql(`
     DROP TABLE IF EXISTS artifact_binding_reconcile_queue;
     DROP TRIGGER IF EXISTS trg_artifact_claim_events_append_only ON artifact_claim_events;

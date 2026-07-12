@@ -15,14 +15,16 @@ import { OBJECT_TYPE_NAMESPACE_RE } from "./namespace";
  * - Zero React / DB / server-only imports (safe to include in the SSR
  *   module graph — see CLAUDE.md Turbopack constraint).
  *
- * SCOPE (since cinatra#1425): this in-memory registry is a RENDER/SCHEMA
- * CACHE — renderers, zod schemas, lifecycle/crud policy for the running
- * process. It is NOT the type-ownership authority: ownership/claim state is
- * the DB claim registry (`artifact_type_claims`), arbitrated by the pure
- * claims leaf and resolved per org + actor by the host effective-type-catalog
- * resolver (src/lib/objects/effective-type-catalog.ts). Process-global,
- * replace-by-id, unscoped — exactly what a cache may be and an authority
- * must not.
+ * SCOPE DIRECTION (cinatra#1425, epic #1424): type-OWNERSHIP authority is
+ * moving to the DB claim registry (`artifact_type_claims`), arbitrated by
+ * the pure claims leaf and resolved per org + actor by the host
+ * effective-type-catalog resolver (src/lib/objects/effective-type-catalog
+ * .ts). #1425 ships that authority surface; existing consumers (e.g.
+ * `listArtifacts()` readers) still read THIS registry and are cut over by
+ * the epic's later sub-issues — until then this registry remains
+ * operationally load-bearing, destined to become a render/schema cache
+ * (process-global, replace-by-id, unscoped — what a cache may be and an
+ * ownership authority must not).
  */
 class ObjectTypeRegistryImpl {
   private entries: Map<string, ObjectTypeDefinition<unknown>> = new Map();

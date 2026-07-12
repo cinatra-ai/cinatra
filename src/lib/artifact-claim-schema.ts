@@ -28,6 +28,12 @@
 //     status <> 'retired': two DEDICATED claimants on the same type at the
 //     same scope are a CONFLICT (constraint-backed install error), while
 //     dedicated-vs-default coexistence stays legal (the default goes dormant).
+//   - artifact_type_claims_one_live_default — the SAME one-live-claimant rule
+//     for DEFAULT claims: at most one live default claimant per scope key.
+//     This is what makes dormancy/reactivation total: reactivation can never
+//     race two dormant defaults into one active slot (the transition SQL
+//     updates at most one row per scope key), and a retiring/active overlap
+//     of same-rank claims is structurally impossible.
 //
 // Kind-over-scope PRECEDENCE (dedicated-org > dedicated-platform >
 // default-org > default-platform) is cross-scope and therefore resolved in
@@ -65,7 +71,7 @@ export function artifactClaimSchemaQueries(schemaName: string): { text: string }
       dispositions jsonb,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
-      CONSTRAINT artifact_type_claims_scope_check CHECK (scope = 'platform' OR scope LIKE 'org:%'),
+      CONSTRAINT artifact_type_claims_scope_check CHECK (scope = 'platform' OR scope LIKE 'org:_%'),
       CONSTRAINT artifact_type_claims_kind_check CHECK (claim_kind IN ('dedicated','default')),
       CONSTRAINT artifact_type_claims_status_check CHECK (status IN ('reserved','active','dormant','retiring','retired')),
       CONSTRAINT artifact_type_claims_dormant_default_check CHECK (status <> 'dormant' OR claim_kind = 'default')
@@ -78,6 +84,9 @@ export function artifactClaimSchemaQueries(schemaName: string): { text: string }
     // while either is live (anything but 'retired') — the AC-1 constraint.
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_type_claims_one_live_dedicated
       ON "${q}"."artifact_type_claims" (scope, object_type_id) WHERE claim_kind = 'dedicated' AND status <> 'retired'` },
+    // ... and at most one live DEFAULT claimant per scope key (see header).
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_type_claims_one_live_default
+      ON "${q}"."artifact_type_claims" (scope, object_type_id) WHERE claim_kind = 'default' AND status <> 'retired'` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_type_claims_type_status_idx
       ON "${q}"."artifact_type_claims" (object_type_id, status)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_type_claims_scope_idx
@@ -89,8 +98,14 @@ export function artifactClaimSchemaQueries(schemaName: string): { text: string }
     // survives claim retirement and installed_extension deletion, and an FK
     // cascade would fire the append-only trigger below and abort the parent
     // delete. Every column an auditor needs is DENORMALIZED onto the event.
+    // `seq` is the AUTHORITATIVE event order (a monotonic identity): `now()`
+    // is transaction-stable and ids are random UUIDs, so timestamp+id reads
+    // would interleave same-transaction events arbitrarily. Writers order
+    // multi-event statements explicitly (single INSERT ... SELECT ... ORDER
+    // BY an ordinal), so seq reflects true transition order.
     { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_claim_events" (
       id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      seq bigint GENERATED ALWAYS AS IDENTITY,
       claim_id text NOT NULL,
       scope text NOT NULL,
       object_type_id text NOT NULL,

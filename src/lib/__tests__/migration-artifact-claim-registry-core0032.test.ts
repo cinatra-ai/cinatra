@@ -64,6 +64,17 @@ describe("core__0032 up()", () => {
     );
   });
 
+  it("enforces ONE live DEFAULT claimant per scope key (makes dormancy/reactivation total — at most one dormant default can ever reactivate into a scope key's active slot)", () => {
+    expect(upSql).toMatch(
+      /artifact_type_claims_one_live_default\s*\n?\s*ON artifact_type_claims \(scope, object_type_id\) WHERE claim_kind = 'default' AND status <> 'retired'/,
+    );
+  });
+
+  it("rejects the empty org scope ('org:') and gives events a monotonic order (seq identity)", () => {
+    expect(upSql).toContain("scope = 'platform' OR scope LIKE 'org:_%'");
+    expect(upSql).toMatch(/seq bigint GENERATED ALWAYS AS IDENTITY/);
+  });
+
   it("AC-3 backing: the event log carries NO foreign keys and is append-only via trigger", () => {
     // No REFERENCES anywhere in the events table DDL — deleting the
     // installed_extension row (uninstall) or the claim row can never cascade
@@ -99,6 +110,8 @@ describe("bootstrap-DDL parity (fresh install == operator upgrade)", () => {
     const mustMatch = [
       "artifact_type_claims_one_active_per_scope_type",
       "artifact_type_claims_one_live_dedicated",
+      "artifact_type_claims_one_live_default",
+      "seq bigint GENERATED ALWAYS AS IDENTITY",
       "artifact_type_claims_scope_check",
       "artifact_type_claims_kind_check",
       "artifact_type_claims_status_check",

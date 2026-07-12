@@ -52,7 +52,16 @@ export class ArtifactClaimConflictError extends Error {
 }
 
 const DEDICATED_CONFLICT_INDEX = "artifact_type_claims_one_live_dedicated";
+const DEFAULT_CONFLICT_INDEX = "artifact_type_claims_one_live_default";
 const ACTIVE_WINNER_INDEX = "artifact_type_claims_one_active_per_scope_type";
+
+function isClaimConflictMessage(message: string): boolean {
+  return (
+    message.includes(DEDICATED_CONFLICT_INDEX) ||
+    message.includes(DEFAULT_CONFLICT_INDEX) ||
+    message.includes(ACTIVE_WINNER_INDEX)
+  );
+}
 
 /** A full registry row (ArbitrableClaim + provenance the resolver/installers need). */
 export interface ArtifactTypeClaimRow extends ArbitrableClaim {
@@ -147,7 +156,7 @@ export function reserveArtifactTypeClaim(input: ReserveArtifactTypeClaimInput): 
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes(DEDICATED_CONFLICT_INDEX)) {
+    if (isClaimConflictMessage(message)) {
       throw new ArtifactClaimConflictError(input.scope, input.objectTypeId);
     }
     throw error;
@@ -202,7 +211,11 @@ export function buildActivateDormancyQuery(schemaName: string, claimId: string, 
  * (never a transient second 'active' that would trip the partial unique
  * winner index). Writes the 'activate' event always (payload carries the
  * landed status) and the 'winner-change' event + queue rows only when the
- * claim actually became the active winner of its scope key.
+ * claim actually became the active winner of its scope key. Both events go
+ * through ONE ordered INSERT (activate first, winner-change second) so the
+ * events table's identity `seq` reflects true transition order — sibling
+ * data-modifying CTEs carry no ordering guarantee and now() is
+ * transaction-stable.
  */
 export function buildActivateClaimQuery(schemaName: string, claimId: string, actor: string): QueryInput {
   const s = schemaName.replaceAll('"', '""');
@@ -223,26 +236,29 @@ export function buildActivateClaimQuery(schemaName: string, claimId: string, act
         WHERE t.id = $1 AND t.status = 'reserved'
         RETURNING t.id, t.scope, t.object_type_id, t.extension_package, t.extension_version, t.generation, t.status AS landed_status
       ),
-      ev_activate AS (
+      ev AS (
         INSERT INTO "${s}"."artifact_claim_events"
           (claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload)
-        SELECT a.id, a.scope, a.object_type_id, 'activate', $2, a.extension_package, a.extension_version, a.generation,
-               jsonb_build_object('landedStatus', a.landed_status)
-        FROM activated a
-        RETURNING id
-      ),
-      ev_winner AS (
-        INSERT INTO "${s}"."artifact_claim_events"
-          (claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload)
-        SELECT a.id, a.scope, a.object_type_id, 'winner-change', $2, a.extension_package, a.extension_version, a.generation,
-               jsonb_build_object('reason', 'claim-activated', 'transition', 'reserved->active')
-        FROM activated a
-        WHERE a.landed_status = 'active'
-        RETURNING id, scope, object_type_id
+        SELECT claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload
+        FROM (
+          SELECT a.id AS claim_id, a.scope, a.object_type_id, 'activate' AS event, $2::text AS actor,
+                 a.extension_package, a.extension_version, a.generation,
+                 jsonb_build_object('landedStatus', a.landed_status) AS payload, 1 AS ord
+          FROM activated a
+          UNION ALL
+          SELECT a.id, a.scope, a.object_type_id, 'winner-change', $2::text,
+                 a.extension_package, a.extension_version, a.generation,
+                 jsonb_build_object('reason', 'claim-activated', 'transition', 'reserved->active'), 2 AS ord
+          FROM activated a
+          WHERE a.landed_status = 'active'
+        ) ordered_events
+        ORDER BY ord
+        RETURNING id, scope, object_type_id, event
       )
       INSERT INTO "${s}"."artifact_binding_reconcile_queue" (scope, object_type_id, claim_event_id, kind)
       SELECT e.scope, e.object_type_id, e.id, k.kind
-      FROM ev_winner e CROSS JOIN (VALUES ('binding-reconcile'), ('re-projection')) AS k(kind)
+      FROM ev e CROSS JOIN (VALUES ('binding-reconcile'), ('re-projection')) AS k(kind)
+      WHERE e.event = 'winner-change'
       RETURNING claim_event_id`,
     values: [claimId, actor],
   };
@@ -272,7 +288,7 @@ export function activateArtifactTypeClaim(input: { claimId: string; actor: strin
     // Racing a same-scope activation lands on the one-active-winner partial
     // unique index — surface it as the typed conflict, same as reserve-time.
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes(ACTIVE_WINNER_INDEX) || message.includes(DEDICATED_CONFLICT_INDEX)) {
+    if (isClaimConflictMessage(message)) {
       throw new ArtifactClaimConflictError(claim.scope, claim.objectTypeId);
     }
     throw error;
@@ -320,7 +336,9 @@ export function beginArtifactTypeClaimRetirement(input: { claimId: string; actor
 }
 
 /** The retirement CAS + its events. Winner-change + queue rows are written
- * only when the claim WAS winner-eligible ('active' | 'retiring'). */
+ * only when the claim WAS winner-eligible ('active' | 'retiring'). Both
+ * events ride ONE ordered INSERT (retire first, winner-change second) so the
+ * identity `seq` reflects true transition order. */
 export function buildFinalizeRetirementQuery(schemaName: string, claimId: string, actor: string): QueryInput {
   const s = schemaName.replaceAll('"', '""');
   return {
@@ -334,26 +352,29 @@ export function buildFinalizeRetirementQuery(schemaName: string, claimId: string
         WHERE t.id = p.id AND p.prior_status <> 'retired'
         RETURNING t.id, t.scope, t.object_type_id, t.extension_package, t.extension_version, t.generation, p.prior_status
       ),
-      ev_retire AS (
+      ev AS (
         INSERT INTO "${s}"."artifact_claim_events"
           (claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload)
-        SELECT r.id, r.scope, r.object_type_id, 'retire', $2, r.extension_package, r.extension_version, r.generation,
-               jsonb_build_object('phase', 'retired', 'from', r.prior_status)
-        FROM retired r
-        RETURNING id
-      ),
-      ev_winner AS (
-        INSERT INTO "${s}"."artifact_claim_events"
-          (claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload)
-        SELECT r.id, r.scope, r.object_type_id, 'winner-change', $2, r.extension_package, r.extension_version, r.generation,
-               jsonb_build_object('reason', 'claim-retired', 'transition', r.prior_status || '->retired')
-        FROM retired r
-        WHERE r.prior_status IN ('active', 'retiring')
-        RETURNING id, scope, object_type_id
+        SELECT claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload
+        FROM (
+          SELECT r.id AS claim_id, r.scope, r.object_type_id, 'retire' AS event, $2::text AS actor,
+                 r.extension_package, r.extension_version, r.generation,
+                 jsonb_build_object('phase', 'retired', 'from', r.prior_status) AS payload, 1 AS ord
+          FROM retired r
+          UNION ALL
+          SELECT r.id, r.scope, r.object_type_id, 'winner-change', $2::text,
+                 r.extension_package, r.extension_version, r.generation,
+                 jsonb_build_object('reason', 'claim-retired', 'transition', r.prior_status || '->retired'), 2 AS ord
+          FROM retired r
+          WHERE r.prior_status IN ('active', 'retiring')
+        ) ordered_events
+        ORDER BY ord
+        RETURNING id, scope, object_type_id, event
       )
       INSERT INTO "${s}"."artifact_binding_reconcile_queue" (scope, object_type_id, claim_event_id, kind)
       SELECT e.scope, e.object_type_id, e.id, k.kind
-      FROM ev_winner e CROSS JOIN (VALUES ('binding-reconcile'), ('re-projection')) AS k(kind)`,
+      FROM ev e CROSS JOIN (VALUES ('binding-reconcile'), ('re-projection')) AS k(kind)
+      WHERE e.event = 'winner-change'`,
     values: [claimId, actor],
   };
 }
@@ -495,7 +516,9 @@ export interface ArtifactClaimEventRow {
   createdAt: string | null;
 }
 
-/** Append-only history for one (scope, objectTypeId) key, oldest first. */
+/** Append-only history for one (scope, objectTypeId) key, oldest first —
+ * ordered by the monotonic identity `seq` (created_at is transaction-stable
+ * and ids are random, so they cannot order same-transaction events). */
 export function readArtifactClaimEvents(scope: string, objectTypeId: string): ArtifactClaimEventRow[] {
   ensurePostgresSchema();
   const s = postgresSchema.replaceAll('"', '""');
@@ -506,7 +529,7 @@ export function readArtifactClaimEvents(scope: string, objectTypeId: string): Ar
         text: `SELECT id, claim_id, scope, object_type_id, event, actor, extension_package, extension_version, generation, payload, created_at
                FROM "${s}"."artifact_claim_events"
                WHERE scope = $1 AND object_type_id = $2
-               ORDER BY created_at ASC, id ASC`,
+               ORDER BY seq ASC`,
         values: [scope, objectTypeId],
       },
     ],

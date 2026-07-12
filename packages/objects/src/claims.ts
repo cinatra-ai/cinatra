@@ -154,18 +154,20 @@ export function isWinnerEligible(status: ArtifactClaimStatus): boolean {
 
 /**
  * Resolve the winning claim for one object type in one org's view.
- * Deterministic: within the org's scope chain at most one winner-eligible
- * claim exists per rank (the partial-unique ACTIVE index guarantees one
- * active claim per scope key; kinds at the same scope share that slot).
- * Ties (transiently possible while a retiring claim overlaps a newly active
- * one at the same rank) break by lower generation age — newest activation
- * wins — then by id for total determinism.
+ * Deterministic: within the org's scope chain at most ONE winner-eligible
+ * claim exists per rank — the one-live-claimant partial unique indexes
+ * (`artifact_type_claims_one_live_dedicated` /
+ * `..._one_live_default`) forbid two live same-kind claims at one scope key,
+ * and a rank encodes (kind, scope-class), so a same-rank overlap is
+ * structurally impossible. The generation/id fallback below is pure
+ * defense-in-depth determinism for data that violates those invariants
+ * (e.g. a hand-edited registry), never a load-bearing tie-break.
  */
-export function resolveClaimWinner(
-  claims: readonly ArbitrableClaim[],
+export function resolveClaimWinner<T extends ArbitrableClaim>(
+  claims: readonly T[],
   input: { orgId: string; objectTypeId: string },
-): ArbitrableClaim | null {
-  let winner: ArbitrableClaim | null = null;
+): T | null {
+  let winner: T | null = null;
   let winnerRank = Number.POSITIVE_INFINITY;
   for (const claim of claims) {
     if (claim.objectTypeId !== input.objectTypeId) continue;

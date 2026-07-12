@@ -29,7 +29,7 @@ describe("blog-pipeline passthrough seam shapers", () => {
       "run-fallback",
     );
     expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@cinatra-ai/dynamic:blog-pipeline-selected-idea");
+    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-selected-idea");
     expect(out!.rawData.idea).toEqual({ title: "B", summary: "sb", outline: ["2"] });
     expect(out!.rawData.cinatra_agent_run_id).toBe("run-1");
   });
@@ -80,7 +80,7 @@ describe("blog-pipeline passthrough seam shapers", () => {
       "fb",
     );
     expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@cinatra-ai/dynamic:blog-pipeline-draft-projection");
+    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-draft-projection");
     expect(out!.rawData).toEqual({
       cinatra_agent_run_id: "run-2",
       postTitle: "T",

@@ -103,6 +103,24 @@ describe("reserveArtifactTypeClaim", () => {
     ).toThrow(ArtifactClaimConflictError);
   });
 
+  it("maps the one-live-DEFAULT-claimant violation to the same typed conflict", () => {
+    runPostgresQueriesSync.mockImplementation(() => {
+      throw new Error(
+        'duplicate key value violates unique constraint "artifact_type_claims_one_live_default"',
+      );
+    });
+    expect(() =>
+      reserveArtifactTypeClaim({
+        scope: "platform",
+        objectTypeId: "@vendor/pkg:thing",
+        claimKind: "default",
+        extensionPackage: "@cinatra-ai/default-artifact",
+        extensionVersion: "1.0.0",
+        actor: "system",
+      }),
+    ).toThrow(ArtifactClaimConflictError);
+  });
+
   it("rejects an invalid scope and invalid dispositions BEFORE touching the DB (fail-closed)", () => {
     expect(() =>
       reserveArtifactTypeClaim({
@@ -170,6 +188,14 @@ describe("activateArtifactTypeClaim — atomic winner transition (AC-2)", () => 
     expect(activate.text).toMatch(/'activate'/);
     expect(activate.text).toMatch(/landedStatus/);
     expect(activate.text).toMatch(/VALUES \('binding-reconcile'\), \('re-projection'\)/);
+    // 4) both events ride ONE ordered INSERT (activate ord 1, winner-change
+    //    ord 2) so the events table's identity `seq` reflects transition
+    //    order — sibling CTEs carry no ordering guarantee.
+    expect(activate.text).toMatch(/UNION ALL/);
+    expect(activate.text).toMatch(/ORDER BY ord/);
+    expect(activate.text.indexOf("'activate' AS event")).toBeLessThan(activate.text.indexOf("'winner-change'"));
+    // 5) queue rows derive from the winner-change event only.
+    expect(activate.text).toMatch(/WHERE e\.event = 'winner-change'/);
   });
 
   it("reports changed=false (fail-closed no-op) when the claim is not reserved", () => {
@@ -216,6 +242,10 @@ describe("finalizeArtifactTypeClaimRetirement — retire + reactivate (AC-2)", (
     expect(retire.text).toMatch(/'retire'/);
     expect(retire.text).toMatch(/WHERE r\.prior_status IN \('active', 'retiring'\)/);
     expect(retire.text).toMatch(/VALUES \('binding-reconcile'\), \('re-projection'\)/);
+    // ordered single INSERT: retire (ord 1) before winner-change (ord 2).
+    expect(retire.text).toMatch(/UNION ALL/);
+    expect(retire.text).toMatch(/ORDER BY ord/);
+    expect(retire.text.indexOf("'retire' AS event")).toBeLessThan(retire.text.indexOf("'winner-change'"));
     // reactivation: dormant defaults, generation bump, NOT EXISTS mirrors the
     // domination rule, events + queue in the same statement.
     expect(reactivate.text).toMatch(/SET status = 'active', generation = t\.generation \+ 1/);

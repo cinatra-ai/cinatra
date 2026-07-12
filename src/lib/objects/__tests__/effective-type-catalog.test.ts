@@ -19,9 +19,9 @@ vi.mock("@/lib/objects/artifact-claim-store", () => ({
   readArtifactTypeClaimsForOrg: (...a: unknown[]) => readArtifactTypeClaimsForOrg(...a),
 }));
 
-const canAccessArtifactExtension = vi.fn();
+const canActorAccessClaimedArtifactExtension = vi.fn();
 vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
-  canAccessArtifactExtension: (...a: unknown[]) => canAccessArtifactExtension(...a),
+  canActorAccessClaimedArtifactExtension: (...a: unknown[]) => canActorAccessClaimedArtifactExtension(...a),
 }));
 
 import type { ActorContext } from "@/lib/authz/actor-context";
@@ -57,12 +57,12 @@ beforeEach(() => {
     { type: "@dynamic/types:competitor-profile", inferredName: "Competitor profile", inferredCategory: "profile" },
   ]);
   readArtifactTypeClaimsForOrg.mockReset().mockReturnValue([claimRow({})]);
-  canAccessArtifactExtension.mockReset();
+  canActorAccessClaimedArtifactExtension.mockReset();
 });
 
 describe("resolveEffectiveTypeCatalog", () => {
   it("exposes entry kinds: row-type vs artifact-extension-descriptor, plus ACTIVE dynamic types", async () => {
-    canAccessArtifactExtension.mockResolvedValue(true);
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
     const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
     const byId = new Map(catalog.map((e) => [e.typeId, e]));
     expect(byId.get("@cinatra-ai/campaigns:campaign")?.entryKind).toBe("row-type");
@@ -74,10 +74,16 @@ describe("resolveEffectiveTypeCatalog", () => {
   });
 
   it("AC-4: an actor inside the install's grant sees the winning claim WITH validated dispositions", async () => {
-    canAccessArtifactExtension.mockResolvedValue(true);
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
     const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: grantedActor });
     const entry = catalog.find((e) => e.typeId === "@cinatra-ai/campaigns:campaign");
-    expect(canAccessArtifactExtension).toHaveBeenCalledWith("@vendor/campaigns-artifact", grantedActor, "read");
+    // The gate is CLAIM-scoped (fail-closed): it receives the claim's
+    // package, bound installId, and scope — not just the package name.
+    expect(canActorAccessClaimedArtifactExtension).toHaveBeenCalledWith(
+      { extensionPackage: "@vendor/campaigns-artifact", installId: "inst1", scope: "org:org-1" },
+      grantedActor,
+      "read",
+    );
     expect(entry?.claim).toMatchObject({
       claimId: "c1",
       claimKind: "dedicated",
@@ -88,7 +94,7 @@ describe("resolveEffectiveTypeCatalog", () => {
   });
 
   it("AC-4: an actor OUTSIDE the grant sees NO claim (the entry itself stays)", async () => {
-    canAccessArtifactExtension.mockResolvedValue(false);
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(false);
     const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: outsideActor });
     const entry = catalog.find((e) => e.typeId === "@cinatra-ai/campaigns:campaign");
     expect(entry).toBeDefined();
@@ -96,7 +102,7 @@ describe("resolveEffectiveTypeCatalog", () => {
   });
 
   it("arbitrates kind-over-scope with the REAL policy leaf: dedicated-org beats default-platform", async () => {
-    canAccessArtifactExtension.mockResolvedValue(true);
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
     readArtifactTypeClaimsForOrg.mockReturnValue([
       claimRow({ id: "plat-default", scope: "platform", claimKind: "default", extensionPackage: "@cinatra-ai/default-artifact" }),
       claimRow({ id: "org-dedicated", scope: "org:org-1", claimKind: "dedicated" }),
@@ -107,7 +113,7 @@ describe("resolveEffectiveTypeCatalog", () => {
   });
 
   it("a claim on a type with no local definition still creates a catalog entry (DB state outranks the process cache)", async () => {
-    canAccessArtifactExtension.mockResolvedValue(true);
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
     readArtifactTypeClaimsForOrg.mockReturnValue([
       claimRow({ id: "c9", objectTypeId: "@other/unregistered:thing" }),
     ]);
@@ -117,8 +123,17 @@ describe("resolveEffectiveTypeCatalog", () => {
     expect(entry?.claim?.claimId).toBe("c9");
   });
 
+  it("a DENIED claim-only type is not surfaced at all (no existence leak)", async () => {
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(false);
+    readArtifactTypeClaimsForOrg.mockReturnValue([
+      claimRow({ id: "c9", objectTypeId: "@other/unregistered:thing" }),
+    ]);
+    const catalog = await resolveEffectiveTypeCatalog({ orgId: "org-1", actor: outsideActor });
+    expect(catalog.find((e) => e.typeId === "@other/unregistered:thing")).toBeUndefined();
+  });
+
   it("invalid dispositions resolve to null (fail-closed), the claim itself still surfaces", async () => {
-    canAccessArtifactExtension.mockResolvedValue(true);
+    canActorAccessClaimedArtifactExtension.mockResolvedValue(true);
     readArtifactTypeClaimsForOrg.mockReturnValue([
       claimRow({ dispositions: { projection: "everything-goes" } }),
     ]);

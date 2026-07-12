@@ -5,8 +5,9 @@ import "server-only";
 //
 // ONE resolution point for "which object types exist here, and who claims
 // them": the union of
-//   - STATIC registry types (in-memory objectTypeRegistry — since #1425 a
-//     render/schema CACHE, no longer an ownership authority), split by entry
+//   - STATIC registry types (the in-memory objectTypeRegistry — the epic
+//     demotes it to a render/schema cache; #1425 ships this authority
+//     surface and later sub-issues cut consumers over), split by entry
 //     kind: plain `row-type` vs `artifact-extension-descriptor` (an entry
 //     carrying `isArtifact`),
 //   - ACTIVE dynamic types (`dynamic_object_types`, admin-approved only),
@@ -32,7 +33,7 @@ import {
   type ClaimDispositions,
 } from "@cinatra-ai/objects/claims";
 
-import { canAccessArtifactExtension } from "@/lib/artifacts/artifact-extension-access";
+import { canActorAccessClaimedArtifactExtension } from "@/lib/artifacts/artifact-extension-access";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 
@@ -136,30 +137,47 @@ export async function resolveEffectiveTypeCatalog(input: {
 
   // 3. Winning claim per type for this org, gated per actor by the claiming
   // install's access grants.
+  //
+  // WINNER-BEFORE-AUTHORIZATION is deliberate: arbitration is ORG-level truth
+  // — the winner is the claim that governs the org's rows and drives binding
+  // reconciliation, so it never varies per actor. Access only decides whether
+  // THIS actor sees the claim; an actor outside the winner's grant does NOT
+  // fall back to a lower-ranked claim (that would fork effective identity
+  // per actor, which the binding write path cannot honor).
   const claims = readArtifactTypeClaimsForOrg(input.orgId);
   const typeIds = new Set(claims.map((c) => c.objectTypeId));
   for (const objectTypeId of typeIds) {
     const winner = resolveClaimWinner(claims, { orgId: input.orgId, objectTypeId });
     if (!winner) continue;
-    const actorSeesClaim = await canAccessArtifactExtension(
-      winner.extensionPackage,
+    // Claim-scoped, FAIL-CLOSED gate (never the disk-artifact "ungoverned"
+    // allowance): no live install row governing the claim's exact scope (or
+    // its bound installId) → the claim is invisible.
+    const actorSeesClaim = await canActorAccessClaimedArtifactExtension(
+      {
+        extensionPackage: winner.extensionPackage,
+        installId: winner.installId,
+        scope: winner.scope,
+      },
       input.actor,
       "read",
     );
+    if (!actorSeesClaim) continue; // entry (if any) stays claimless; a
+    // claim-only type is NOT surfaced at all — no existence leak.
     const existing = entries.get(objectTypeId);
     if (existing) {
-      if (actorSeesClaim) existing.claim = claimInfoFrom(winner);
+      existing.claim = claimInfoFrom(winner);
       continue;
     }
     // A claim over a type with no local definition: the claim itself
-    // establishes the catalog entry (DB state outranks the process cache).
+    // establishes the catalog entry (DB state outranks the process cache) —
+    // only for actors the claim's install grants admit.
     entries.set(objectTypeId, {
       typeId: objectTypeId,
       entryKind: "row-type",
       source: "claim",
       category: null,
       displayName: null,
-      claim: actorSeesClaim ? claimInfoFrom(winner) : null,
+      claim: claimInfoFrom(winner),
     });
   }
 
