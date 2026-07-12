@@ -176,6 +176,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Skills catalog store read on request paths. Migratable; converted with the skills subsystem.",
   },
+  "src/lib/skill-lifecycle-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Skill-lifecycle DB write primitives (cinatra#1361): records an immutable skill_revisions row on the custom/personal upsertSkill write path and applies the audited lifecycle-state compare-and-swap transition. Built as a sync leaf mirroring skills-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the skills subsystem.",
+  },
   "packages/skills/src/llm-matching/skill-matches-store.ts": {
     class: "migratable-request-path",
     justification:
