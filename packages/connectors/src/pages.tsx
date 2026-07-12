@@ -16,8 +16,9 @@ import {
 } from "./connectors-client";
 import type { AvailableScopes } from "@/components/access-scope";
 import {
-  DEFAULT_SCOPE_TOKEN,
-  scopeSelectionMatches,
+  isDefaultScopeSelection,
+  parseScopeFilterParam,
+  scopeSelectionMatchesAny,
   type NormalizedResourceScope,
 } from "@/lib/scope-filter";
 import { buildConnectionScopeEntries } from "@/lib/connection-scope-entries";
@@ -56,9 +57,6 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   const session = await requireAuthSession();
   const actor = await getActorContext();
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
-  const scopeRaw = resolvedSearchParams?.scope;
-  const requestedScope =
-    typeof scopeRaw === "string" ? scopeRaw : Array.isArray(scopeRaw) ? scopeRaw[0] : undefined;
 
   // Build the actor's accessible scopes (organizations they belong to,
   // projects they can read). Used to populate the scope-filter Select.
@@ -84,18 +82,20 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
 
   // The scope tokens the actor may select. "personal" / "workspace" / "admin"
   // are always selectable filters; org / team / project tokens are gated to the
-  // actor's memberships. Unknown / inaccessible tokens collapse to the default
-  // ("workspace" = the broadest view) — never honor a scope the actor can't see.
+  // actor's memberships. `?scope=` is a comma-separated multi-value OR-filter
+  // (cinatra#1074 W5) parsed by the ONE canonical parser: invalid / inaccessible
+  // tokens are dropped — never honor a scope the actor can't see — and an empty
+  // or workspace-containing selection collapses to the default (the broadest view).
   const accessibleScopeTokens = new Set<string>(["personal", "workspace", "admin"]);
   for (const org of orgs) {
     accessibleScopeTokens.add(`org:${org.id}`);
     for (const team of org.teams) accessibleScopeTokens.add(`team:${team.id}`);
   }
   for (const project of projects) accessibleScopeTokens.add(`project:${project.id}`);
-  const effectiveScope =
-    requestedScope && accessibleScopeTokens.has(requestedScope)
-      ? requestedScope
-      : DEFAULT_SCOPE_TOKEN;
+  const effectiveScopeTokens = parseScopeFilterParam(
+    resolvedSearchParams?.scope,
+    accessibleScopeTokens,
+  );
 
   // REAL granted-connection entries (cinatra#953 W3): one batched identity
   // read (the actor's org's rows + the actor's OWN rows — foreign null-org
@@ -146,16 +146,29 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
     .filter((entry) => isConnectorVisibleToActor(entry.packageId, actor))
     .filter(
       (entry) =>
-        effectiveScope === DEFAULT_SCOPE_TOKEN ||
-        connectorScopeEntries(entry.packageId).some(
-          (scopeEntry) => scopeSelectionMatches(effectiveScope, scopeEntry),
+        isDefaultScopeSelection(effectiveScopeTokens) ||
+        connectorScopeEntries(entry.packageId).some((scopeEntry) =>
+          scopeSelectionMatchesAny(effectiveScopeTokens, scopeEntry),
         ),
     );
   // Runtime-ONLY connectors (installed at runtime, NO build-time catalog
   // descriptor) — resolved behind the full trust gate (anchor → integrity →
   // signature → trust). Their card metadata is sourced from the TRUSTED
   // materialized manifest; route vendor/slug are derived from the package name.
-  const runtimeOnlyCards = await listRuntimeOnlyConnectorCards(actor);
+  // The scope filter applies to them too (cinatra#1074 W5 — pre-W5 they
+  // bypassed the filter entirely): under a non-default selection a
+  // runtime-only card shows only when one of its REAL granted-connection
+  // entries OR-matches the selection. Deliberately NOT connectorScopeEntries():
+  // the catalog default-visibility axis fail-closes an undeclared package to
+  // "admin", which would misclassify EVERY runtime-only card as an admin-tier
+  // match — the admin-tier axis is a catalog-card concept (codex round-2).
+  const runtimeOnlyCards = (await listRuntimeOnlyConnectorCards(actor)).filter(
+    (card) =>
+      isDefaultScopeSelection(effectiveScopeTokens) ||
+      (scopeEntriesByPackage.get(card.packageName) ?? []).some((scopeEntry) =>
+        scopeSelectionMatchesAny(effectiveScopeTokens, scopeEntry),
+      ),
+  );
   const catalogCards: ConnectorCardData[] = await Promise.all(
     visibleEntries.map(async (entry) => {
       // FAIL-SOFT per connector (cinatra#110): one throwing probe degrades its
@@ -198,7 +211,7 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
         divider={false}
       />
       <PageContent>
-        <ConnectorsClient cards={cards} scopeValue={effectiveScope} scopes={scopes} />
+        <ConnectorsClient cards={cards} scopeValue={effectiveScopeTokens} scopes={scopes} />
       </PageContent>
     </Main>
   );

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   extensionRegistry,
   ActiveDependentError,
+  ExpectedInstalledVersionMismatchError,
+  resolveLiveInstalledVersionForCas,
 } from "../index";
 import { setExtensionDataTeardownHook } from "../data-teardown-hook";
 import { makeHandler, makeRef, makeActor } from "./__mocks__/extension-handler";
@@ -164,6 +166,77 @@ describe("ExtensionRegistry", () => {
     const actor = makeActor();
     await extensionRegistry.update("agent", ref, actor);
     expect(handler.update).toHaveBeenCalledWith(ref, actor);
+  });
+
+  // #1042 slice-1: expected-version CAS threaded through the shared registry
+  // dispatch. The seeded canonical row is version "1.0.0" at NULL-org scope
+  // (makeActor is a NULL-org platform admin).
+  it("update with a MATCHING expectedInstalledVersion proceeds (handler.update runs)", async () => {
+    const handler = makeHandler("agent");
+    extensionRegistry.register(handler);
+    const ref = makeRef();
+    const actor = makeActor();
+    await extensionRegistry.update("agent", ref, actor, { expectedInstalledVersion: "1.0.0" });
+    expect(handler.update).toHaveBeenCalledWith(ref, actor);
+  });
+
+  it("update with a STALE expectedInstalledVersion refuses (CAS) BEFORE the handler — fail-closed, no double-apply", async () => {
+    const handler = makeHandler("agent");
+    extensionRegistry.register(handler);
+    const ref = makeRef();
+    const actor = makeActor();
+    // The live installed version is "1.0.0" (seed); the caller expected "0.9.0"
+    // (a concurrent update already advanced it) → refuse without mutating.
+    await expect(
+      extensionRegistry.update("agent", ref, actor, { expectedInstalledVersion: "0.9.0" }),
+    ).rejects.toBeInstanceOf(ExpectedInstalledVersionMismatchError);
+    expect(handler.update).not.toHaveBeenCalled();
+  });
+
+  it("update CAS fails closed when the scope has more than one live row (ambiguous)", async () => {
+    const handler = makeHandler("agent");
+    extensionRegistry.register(handler);
+    const canonicalStore = await import("../canonical-store");
+    vi.mocked(canonicalStore.readInstalledExtensionsByPackageName).mockResolvedValueOnce([
+      {
+        id: "r1",
+        packageName: "@cinatra/my-pkg",
+        organizationId: null,
+        status: "active",
+        source: { type: "verdaccio", version: "1.0.0" },
+      },
+      {
+        id: "r2",
+        packageName: "@cinatra/my-pkg",
+        organizationId: null,
+        status: "active",
+        source: { type: "verdaccio", version: "1.0.0" },
+      },
+    ] as never);
+    await expect(
+      extensionRegistry.update("agent", makeRef(), makeActor(), {
+        expectedInstalledVersion: "1.0.0",
+      }),
+    ).rejects.toBeInstanceOf(ExpectedInstalledVersionMismatchError);
+    expect(handler.update).not.toHaveBeenCalled();
+  });
+
+  it("update WITHOUT expectedInstalledVersion never runs the CAS (byte-unchanged manual path)", async () => {
+    const handler = makeHandler("agent");
+    extensionRegistry.register(handler);
+    const canonicalStore = await import("../canonical-store");
+    // Even with a wildly different live version, no option → no CAS → proceeds.
+    vi.mocked(canonicalStore.readInstalledExtensionsByPackageName).mockResolvedValueOnce([
+      {
+        id: "r1",
+        packageName: "@cinatra/my-pkg",
+        organizationId: null,
+        status: "active",
+        source: { type: "verdaccio", version: "5.5.5" },
+      },
+    ] as never);
+    await extensionRegistry.update("agent", makeRef(), makeActor());
+    expect(handler.update).toHaveBeenCalled();
   });
 
   it("uninstall calls handler.uninstall when extension never used and no dependents", async () => {
@@ -489,5 +562,74 @@ describe("ExtensionRegistry", () => {
     await expect(extensionRegistry.validate("missing", {})).rejects.toThrow(
       `No extension handler registered for typeId: "missing"`,
     );
+  });
+});
+
+describe("resolveLiveInstalledVersionForCas (#1042 slice-1 — fail-closed)", () => {
+  const row = (over: Partial<{
+    organizationId: string | null;
+    status: string;
+    version?: string;
+    source?: { version?: string } | null;
+  }> = {}) => ({
+    organizationId: null,
+    status: "active",
+    source: { version: "1.0.0" },
+    ...over,
+  });
+
+  it("a single live row at the scope resolves its version", () => {
+    expect(resolveLiveInstalledVersionForCas([row()], null)).toBe("1.0.0");
+  });
+
+  it("prefers the canonical `version` field, falling back to source.version", () => {
+    expect(resolveLiveInstalledVersionForCas([row({ version: "2.0.0" })], null)).toBe("2.0.0");
+    expect(resolveLiveInstalledVersionForCas([{ organizationId: null, status: "active", source: { version: "3.0.0" } }], null)).toBe("3.0.0");
+  });
+
+  it("a `locked` row still counts as live", () => {
+    expect(resolveLiveInstalledVersionForCas([row({ status: "locked" })], null)).toBe("1.0.0");
+  });
+
+  it("ZERO live rows at the scope → null (fail-closed)", () => {
+    expect(resolveLiveInstalledVersionForCas([], null)).toBeNull();
+    // archived-only → not live.
+    expect(resolveLiveInstalledVersionForCas([row({ status: "archived" })], null)).toBeNull();
+  });
+
+  it("MORE THAN ONE live row at the scope → null (ambiguous, fail-closed)", () => {
+    expect(resolveLiveInstalledVersionForCas([row(), row({ version: "1.1.0" })], null)).toBeNull();
+  });
+
+  it("filters by scope — a row in a DIFFERENT scope is not counted", () => {
+    // The candidate is NULL-org; an org-1 row of the same package is ignored.
+    expect(
+      resolveLiveInstalledVersionForCas([row(), row({ organizationId: "org-1", version: "9.9.9" })], null),
+    ).toBe("1.0.0");
+    // Asking for the org-1 scope resolves the org-1 row.
+    expect(
+      resolveLiveInstalledVersionForCas([row(), row({ organizationId: "org-1", version: "9.9.9" })], "org-1"),
+    ).toBe("9.9.9");
+  });
+
+  it("a missing version resolves to null (cannot prove)", () => {
+    expect(resolveLiveInstalledVersionForCas([{ organizationId: null, status: "active", source: null }], null)).toBeNull();
+  });
+});
+
+describe("ExpectedInstalledVersionMismatchError (#1042 slice-1)", () => {
+  it("carries the stable discriminant `code` and a descriptive message", () => {
+    const err = new ExpectedInstalledVersionMismatchError("@acme/foo", "1.0.0", "2.0.0");
+    expect(err.code).toBe("EXPECTED_VERSION_MISMATCH");
+    expect(err.name).toBe("ExpectedInstalledVersionMismatchError");
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain("@acme/foo");
+    expect(err.message).toContain("1.0.0");
+    expect(err.message).toContain("2.0.0");
+  });
+
+  it("renders a `(no single live row)` message when the actual version is null", () => {
+    const err = new ExpectedInstalledVersionMismatchError("@acme/foo", "1.0.0", null);
+    expect(err.message).toContain("no single live row");
   });
 });

@@ -1,7 +1,7 @@
 import "server-only";
 
 import * as path from "node:path";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -13,6 +13,7 @@ import {
   createLocalSkillShellTool,
   openAiModelSupportsShell,
   buildLlmMcpServerToolForAgentRun,
+  buildLlmMcpServerTool,
   getLlmMcpCredentials,
   PreferredProviderUnavailableError,
   type LlmTool,
@@ -21,12 +22,17 @@ import {
 import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
 import {
   getCustomSkillForCurrentUserAndAgent,
+  isRuntimeDeliverableLifecycleState,
+  readSkillsCatalog,
   registerExtensionSkill,
 } from "@cinatra-ai/skills";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
+import { readSkillLifecycleStates } from "@/lib/database";
 import {
   readAgentRunByContextId,
   readAgentRunById,
+  readAgentRunByTokenHash,
+  readAgentRunTokenHashById,
   readAgentTemplateById,
   OasCinatraLlmSchema,
   type LlmProvider,
@@ -49,9 +55,17 @@ import { parseUserEnvelope, UserEnvelopeParseError } from "./user-envelope";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
 import { setRunContext, clearRunContext } from "@/lib/agent-run-context-registry";
+import {
+  writeDurableRunContextBinding,
+  clearDurableRunContextBindings,
+} from "@/lib/agent-run-context-durable";
 import { issueAgentRunMcpActorToken } from "@/lib/agent-run-mcp-actor-token";
-import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
+import {
+  resolveAgentRunMcpActor,
+  resolveAssignedSkillsActorForRun,
+} from "@/lib/agent-run-actor-resolve";
 import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
+import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import {
@@ -213,23 +227,123 @@ const RequestSchema = z.object({
 // skills/ trees are projected, and where auto-discovery now resolves).
 // path.relative(root, p) escapes a root when it starts with ".." or is
 // absolute; empty rel ("" — candidate equals the root) counts as inside.
-// Conventional SKILL.md auto-discovery for an agent id (cinatra#793): probe
-// the agent RUNTIME MOUNT first (installed agents' projected skills/ trees),
-// then the dev/authoring tree (git-native dev agents that are never
-// mount-projected). Each root probes the canonical `<root>/cinatra-ai/<slug>/
-// skills/<slug>/SKILL.md` layout, then the legacy flat `<root>/<slug>/…`.
-// Returns the first EXISTING candidate; falls back to the mount-canonical path
-// (the downstream existsSync gate rejects it anyway).
+// Single filesystem-safe path segment (cinatra#1196). Mirrors the inline guard
+// the sibling run-mount slice (13bb6b97) added to `read-llm-requirement-from-
+// mount.ts` / `input-schema-resolver.ts`: rejects `.`/`..`/separators/backslash
+// so a segment can never escape the mount before it is join()ed. Kept INLINE
+// (no `@cinatra-ai/registries` barrel import) — this route module is in the
+// run-start route graph and the no-new-rot dev-perf ratchet is exact.
+function isSafeMountSegment(s: string): boolean {
+  return (
+    s !== "." &&
+    s !== ".." &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s)
+  );
+}
+
+// Conventional SKILL.md auto-discovery for an agent id (cinatra#793).
+//
+// Scope-derived multi-vendor (cinatra#1196): the request carries only the BARE
+// agent slug (never a `@vendor/slug` — the caller guard rejects any `/`), so the
+// vendor cannot be split off the name the way the sibling run-mount slice does.
+// Instead the vendor scope is DERIVED from the projection actually on disk: each
+// root is probed for the first-party `<root>/cinatra-ai/<slug>/skills/<slug>/
+// SKILL.md` FIRST (first-party precedence is byte-identical to the legacy
+// single-vendor probe), and only on a first-party miss do we consider the OTHER
+// vendor dirs projected under the mount (`<root>/<vendor>/<slug>/…`), each vendor
+// segment validated filesystem-safe. Because a bare slug cannot disambiguate two
+// vendors shipping the same slug, resolution FAILS CLOSED when 2+ vendor dirs
+// project the slug (returns the non-existent first-party path — the downstream
+// existsSync gate then rejects it, identical to a probe-miss). The legacy flat
+// `<root>/<slug>/…` fallback is preserved when no vendor projects the slug.
+// No registries import (the route-graph ratchet).
 function discoverBridgeSkillPath(agentId: string): string {
-  const candidates: string[] = [];
+  // Defense-in-depth: a `.`-only / otherwise-unsafe slug (which the caller's
+  // `..`/`/`/`\\` guard lets through) must not collapse into a probe path.
+  if (!isSafeMountSegment(agentId)) return "";
+
+  const firstPartyCandidates: string[] = [];
+  const vendorCandidates: string[] = [];
+  const flatCandidates: string[] = [];
   for (const root of [resolveAgentRuntimeMountDir(), path.join(process.cwd(), "extensions")]) {
-    candidates.push(path.join(root, "cinatra-ai", agentId, "skills", agentId, "SKILL.md"));
-    candidates.push(path.join(root, agentId, "skills", agentId, "SKILL.md"));
+    firstPartyCandidates.push(
+      path.join(root, "cinatra-ai", agentId, "skills", agentId, "SKILL.md"),
+    );
+    let vendors: string[] = [];
+    try {
+      vendors = readdirSync(root, { withFileTypes: true })
+        .filter(
+          (e) =>
+            e.isDirectory() &&
+            e.name !== "cinatra-ai" &&
+            isSafeMountSegment(e.name),
+        )
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      // Root absent / unreadable — no additional vendors from this root.
+    }
+    for (const vendor of vendors) {
+      vendorCandidates.push(
+        path.join(root, vendor, agentId, "skills", agentId, "SKILL.md"),
+      );
+    }
+    flatCandidates.push(
+      path.join(root, agentId, "skills", agentId, "SKILL.md"),
+    );
   }
-  for (const candidate of candidates) {
+
+  // First-party precedence — unchanged from the single-vendor probe.
+  for (const candidate of firstPartyCandidates) {
     if (existsSync(candidate)) return candidate;
   }
-  return candidates[0];
+  // Scope-derived multi-vendor: resolve ONLY when exactly one vendor projects
+  // the slug. 2+ = ambiguous (no vendor in the bare-slug request to pick one) →
+  // fail closed to the miss path below.
+  const vendorHits = vendorCandidates.filter((c) => existsSync(c));
+  if (vendorHits.length === 1) return vendorHits[0];
+  if (vendorHits.length === 0) {
+    for (const candidate of flatCandidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  // Miss (or ambiguous multi-vendor): the first-party canonical path — the
+  // downstream existsSync gate rejects it (identical to the legacy fallback).
+  return firstPartyCandidates[0];
+}
+
+// Derive the extension package name from a RESOLVED SKILL.md path (cinatra#1196).
+// Scope-derived multi-vendor replacement for the old `resolvedPath.includes(
+// "/cinatra-ai/")` substring test (which mislabelled EVERY dev-tree path because
+// the repo itself lives under a `cinatra-ai/` folder). The vendor is the first
+// segment under whichever skill root contains the file, in the exact projection
+// shape `<root>/<vendor>/<slug-dir>/skills/<skill-dir>/SKILL.md`; the package
+// slug stays `skillSlug` (the SKILL.md's own dir — the agent dir and skill dir
+// legitimately differ, e.g. `email-delivery-agent`/`email-delivery`). `cwd` is
+// deliberately NOT a root here (a bare `packages/<x>/skills/<x>/SKILL.md` would
+// mislabel `packages` as a vendor). Anything not matching the canonical shape
+// (legacy-flat, arbitrary explicit `skill_source_path`) has no vendor scope and
+// resolves to the bare slug. Inline; no registries import (route-graph ratchet).
+function deriveSkillPackageName(resolvedPath: string, skillSlug: string): string {
+  if (isSafeMountSegment(skillSlug)) {
+    for (const root of [
+      resolveAgentRuntimeMountDir(),
+      path.join(process.cwd(), "extensions"),
+    ]) {
+      const rel = path.relative(root, resolvedPath);
+      if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      const seg = rel.split(path.sep);
+      if (
+        seg.length === 5 &&
+        seg[2] === "skills" &&
+        seg[4] === "SKILL.md" &&
+        isSafeMountSegment(seg[0])
+      ) {
+        return `@${seg[0]}/${skillSlug}`;
+      }
+    }
+  }
+  return skillSlug;
 }
 
 function isInsideBridgeSkillRoots(resolvedPath: string): boolean {
@@ -238,6 +352,69 @@ function isInsideBridgeSkillRoots(resolvedPath: string): boolean {
     const rel = path.relative(root, resolvedPath);
     return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
   });
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle runtime-delivery gates (A3, cinatra#1363)
+// ---------------------------------------------------------------------------
+
+/**
+ * FAIL-CLOSED lifecycle gate for a single already-resolved skill id (the
+ * personal-delta path). True only when the lifecycle read succeeds AND the
+ * state is runtime-deliverable (active/deprecated, or a derived NULL). A read
+ * error, a missing row, or a draft/archived/unknown state → false (withheld).
+ */
+function isBridgeSkillRuntimeDeliverable(skillId: string): boolean {
+  const r = readSkillLifecycleStates([skillId]);
+  return (
+    r.ok &&
+    isRuntimeDeliverableLifecycleState(r.states.has(skillId) ? r.states.get(skillId) : undefined)
+  );
+}
+
+/**
+ * FAIL-CLOSED lifecycle gate for a bridge skill delivered by FILESYSTEM PATH.
+ * Only an EXPLICIT `skill_source_path` can resolve to a custom/personal skill's
+ * on-disk SKILL.md (auto-discovery probes only the extension/agent mount, whose
+ * skills are derived); callers apply this ONLY for the explicit-path case. When
+ * `resolvedPath` is the sourcePath of a custom/personal skill, its
+ * lifecycle_state governs delivery — an archived/draft skill's bytes are never
+ * delivered as direct content or a shell-injected skill. A path that is not a
+ * catalog custom skill (extension mount / dev tree) is derived → deliverable.
+ * A catalog-read failure fails closed (the path could be a custom skill).
+ */
+async function isBridgeSkillPathRuntimeDeliverable(resolvedPath: string): Promise<boolean> {
+  let skillId: string | undefined;
+  try {
+    const catalog = await readSkillsCatalog();
+    // Match the path to ANY catalog skill (personal OR team/org/project custom —
+    // whose `isCustomSkill` flag is often unset while their state is non-null —
+    // AND extension/derived skills). The lifecycle_state of whatever skill owns
+    // the path is the authority: a non-null draft/archived state (custom of any
+    // tier) is withheld; a NULL state (derived/extension) delivers. Classifying
+    // "is it custom?" is unnecessary — the state column already encodes it.
+    for (const s of catalog.skills as Array<{ id: string; sourcePath?: string }>) {
+      if (typeof s.sourcePath !== "string" || s.sourcePath.length === 0) continue;
+      let sp: string;
+      try {
+        sp = realpathSync(path.resolve(s.sourcePath));
+      } catch {
+        sp = path.resolve(s.sourcePath);
+      }
+      if (sp === resolvedPath) {
+        skillId = s.id;
+        break;
+      }
+    }
+  } catch {
+    // Catalog unreadable ⇒ cannot rule out a non-deliverable skill ⇒ fail closed.
+    return false;
+  }
+  // The path is not a catalog skill at all (raw dev-tree file) ⇒ deliverable.
+  if (!skillId) return true;
+  // Otherwise gate on the owning skill's lifecycle_state (NULL/derived and
+  // active/deprecated deliver; draft/archived/unknown are withheld, fail-closed).
+  return isBridgeSkillRuntimeDeliverable(skillId);
 }
 
 async function resolveBridgeSkillContent(body: {
@@ -271,6 +448,14 @@ async function resolveBridgeSkillContent(body: {
     !isInsideBridgeSkillRoots(resolvedPath) ||
     !existsSync(resolvedPath)
   ) {
+    return "";
+  }
+
+  // A3 (cinatra#1363): an EXPLICIT skill_source_path can resolve to a custom/
+  // personal skill's SKILL.md — withhold it when its lifecycle_state is not
+  // runtime-deliverable (archived/draft/unknown). Auto-discovered paths resolve
+  // only the extension/agent mount (derived) and skip the catalog lookup.
+  if (body.skill_source_path && !(await isBridgeSkillPathRuntimeDeliverable(resolvedPath))) {
     return "";
   }
 
@@ -657,7 +842,14 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       resolvedPath = path.resolve(candidateSkillPath);
     }
+    // A3 (cinatra#1363): gate an EXPLICIT skill_source_path pointing at a
+    // custom/personal skill's SKILL.md — an archived/draft skill's bytes are
+    // never shell-injected. Auto-discovered mount paths are derived; the `||`
+    // short-circuits so the common path adds no catalog read.
+    const bridgeShellPathAllowed =
+      !body.skill_source_path || (await isBridgeSkillPathRuntimeDeliverable(resolvedPath));
     if (
+      bridgeShellPathAllowed &&
       candidateSkillPath.endsWith("SKILL.md") &&
       isInsideBridgeSkillRoots(resolvedPath) &&
       existsSync(resolvedPath)
@@ -689,12 +881,12 @@ export async function POST(req: Request): Promise<Response> {
         // `ensureChatSkillRegistered`. This closes the bridge↔chat asymmetry
         // and eliminates the prior need to widen `readSkillFileContent`'s
         // containment with `allowedRoots`.
-        const isCanonicalLayout = resolvedPath.includes(
-          `${path.sep}cinatra-ai${path.sep}`,
-        );
-        const packageName = isCanonicalLayout
-          ? `@cinatra-ai/${skillSlug}`
-          : skillSlug;
+        // Scope-derived multi-vendor package name (cinatra#1196): the vendor is
+        // read from the resolved path's projection shape, not a `/cinatra-ai/`
+        // substring. First-party canonical paths still yield `@cinatra-ai/<slug>`
+        // byte-identically; an operator/third-party `<mount>/<vendor>/<slug>/…`
+        // now yields `@<vendor>/<slug>` instead of collapsing to a bare slug.
+        const packageName = deriveSkillPackageName(resolvedPath, skillSlug);
         const skillId = `${packageName}:${skillSlug}`;
         let mountedSourcePath = resolvedPath;
         let mountedDirectoryPath = skillDirPath;
@@ -751,23 +943,97 @@ export async function POST(req: Request): Promise<Response> {
   // ---------------------------------------------------------------------------
   // Resolve effective run ID — WayFlow Python containers always send
   // agent_run_id="" (empty string) because the StartNode binding bug prevents
-  // the run ID from flowing into the DFE context. Fall back to the
-  // X-Cinatra-A2A-Context-Id header (injected by the ContextVar patch in
-  // agent_loader.py) which maps to a unique context_id per WayFlow task.
-  // Artifact resolver ports MUST be built only from a request-bound run
-  // resolved via the auth-injected x-cinatra-a2a-context-id header
-  // (agent_loader.py inserts it). A caller-supplied body.agent_run_id alone
-  // is forgeable and would let a bridge token select another tenant's orgId
-  // as the resolver namespace. If BOTH context-id and body.agent_run_id
-  // resolve, they MUST match.
-  let runFromContext: Awaited<ReturnType<typeof readAgentRunByContextId>> = null;
+  // the run ID from flowing into the DFE context.
+  //
+  // #1193 run-token spine (W3) — resolve the run TOKEN-FIRST off the ONE
+  // dispatch-minted credential before the legacy context-id / dispatcher-signed
+  // binding channels. The loader attaches X-Cinatra-Run-Token on the host-
+  // anchored llm-bridge call (a per-task ContextVar the OAS author cannot
+  // write); the verifier hashes it and resolves the run by the unique index
+  // (never a body id). Semantics, mirroring the context route (W2) and the
+  // durable-binding posture (#1195):
+  //   - token ABSENT            ⇒ the legacy context-id + binding paths below
+  //                               run UNCHANGED (additive + reversible against
+  //                               the not-yet-rebuilt WayFlow image);
+  //   - token PRESENT+resolved  ⇒ it selects the run; a co-present context-id
+  //                               MUST name the same run or OBO is refused;
+  //   - token PRESENT+unresolvable (or a probe/re-read divergence) ⇒ FAIL
+  //                               CLOSED: suppress the weaker context-id +
+  //                               binding channels and degrade to the anonymous
+  //                               machine-token path — never downgrade a
+  //                               tampered token to a forgeable selector.
+  let runFromToken: Awaited<ReturnType<typeof readAgentRunById>> = null;
+  let tokenResolvedRunId: string | undefined;
+  let runTokenInvalid = false;
+  // Only consult the verifier when the loader actually attached the credential
+  // on this host-anchored call. A null/empty header is the "absent" case — the
+  // legacy context-id + binding paths below then run entirely UNCHANGED
+  // (additive + reversible against the not-yet-rebuilt WayFlow image).
+  const rawRunToken = isBridgeAuthorized
+    ? req.headers.get(RUN_TOKEN_HEADER)
+    : null;
+  if (rawRunToken) {
+    const tokenResult = await verifyRunToken(rawRunToken, readAgentRunByTokenHash);
+    if (tokenResult.ok) {
+      try {
+        // Re-read the FULL row by the SERVER-DERIVED id (the unique-index probe
+        // returns {id,orgId,runBy} only; the resolver ports + the OBO mint need
+        // the whole record). Deny on any divergence between the probe and the
+        // fresh read (fail closed) — never a body id.
+        const runById = await readAgentRunById(tokenResult.run.id);
+        if (
+          runById &&
+          runById.id === tokenResult.run.id &&
+          runById.orgId === tokenResult.run.orgId &&
+          runById.runBy === tokenResult.run.runBy
+        ) {
+          runFromToken = runById;
+          tokenResolvedRunId = runById.id;
+        } else {
+          runTokenInvalid = true;
+        }
+      } catch {
+        runTokenInvalid = true;
+      }
+    } else if (tokenResult.reason === "unresolvable") {
+      // Present-but-unresolvable ⇒ fail closed (a non-empty token that hashes to
+      // no row is tampering / a bug, never a legacy dispatch).
+      runTokenInvalid = true;
+    }
+  }
+
+  // Legacy channel — the auth-injected X-Cinatra-A2A-Context-Id header
+  // (agent_loader.py inserts it), mapping to a unique context_id per WayFlow
+  // task. Read unconditionally so a resolved token can cross-check it, but it
+  // only SELECTS a run when no token was presented. Artifact resolver ports
+  // MUST be built only from a request-bound run; a caller-supplied
+  // body.agent_run_id alone is forgeable and would let a bridge token select
+  // another tenant's orgId as the resolver namespace. If BOTH context-id and
+  // body.agent_run_id resolve, they MUST match.
+  let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
+    null;
   try {
     const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
     if (a2aContextId) {
-      runFromContext = await readAgentRunByContextId(a2aContextId);
+      runFromContextId = await readAgentRunByContextId(a2aContextId);
     }
   } catch {
-    // non-fatal — fall through to body.agent_run_id fallback below
+    // non-fatal — fall through to the binding / body.agent_run_id paths below
+  }
+
+  // Selection precedence: run-token (W3) > context-id > dispatcher-signed
+  // binding. A resolved token wins; a co-present context-id that names a
+  // DIFFERENT run refuses OBO selection (the W2 divergence invariant carried to
+  // the bridge). An invalid token suppresses the context-id channel entirely.
+  let runFromContext: Awaited<ReturnType<typeof readAgentRunByContextId>> = null;
+  let runTokenDivergent = false;
+  if (runFromToken) {
+    runFromContext = runFromToken;
+    if (runFromContextId && runFromContextId.id !== runFromToken.id) {
+      runTokenDivergent = true;
+    }
+  } else if (!runTokenInvalid) {
+    runFromContext = runFromContextId;
   }
   // Fallback for the FIRST bridge call of a run. The context-id lookup
   // misses on the first call because `updateAgentRunA2AContextId` only runs
@@ -801,6 +1067,7 @@ export async function POST(req: Request): Promise<Response> {
   let bindingVerifiedRunId: string | undefined;
   if (
     !runFromContext &&
+    !runTokenInvalid &&
     isBridgeAuthorized &&
     typeof body.cinatra_run_binding === "string" &&
     body.cinatra_run_binding.length > 0
@@ -831,8 +1098,11 @@ export async function POST(req: Request): Promise<Response> {
   // for objects_save run tagging. It may use the caller-supplied
   // body.agent_run_id (no token minting depends on it) but prefers the
   // binding-verified / context-resolved run id when available.
-  const effectiveRunId =
-    bindingVerifiedRunId || runFromContext?.id || body.agent_run_id || undefined;
+  // An invalid/tampered token suppresses even the best-effort run-context
+  // registry tagging (never let a bad token drive tagging off a body id).
+  const effectiveRunId = runTokenInvalid
+    ? undefined
+    : bindingVerifiedRunId || runFromContext?.id || body.agent_run_id || undefined;
   // Run usable for building the artifact resolver ports AND for minting the
   // MCP OBO actor token — ONLY a run resolved via the auth-injected
   // context-id OR a verified dispatcher-signed binding. `body.agent_run_id`
@@ -843,15 +1113,48 @@ export async function POST(req: Request): Promise<Response> {
     body.agent_run_id &&
     runFromContext?.id &&
     body.agent_run_id !== runFromContext.id &&
-    bindingVerifiedRunId !== runFromContext.id
+    bindingVerifiedRunId !== runFromContext.id &&
+    tokenResolvedRunId !== runFromContext.id
   ) {
+    // A non-empty body.agent_run_id that disagrees with the selected run refuses
+    // OBO — UNLESS the run was established by an authoritative credential (the
+    // dispatcher-signed binding or, W3, the run token), which outranks a
+    // forgeable body id.
+    runForPorts = null;
+  }
+  if (runTokenDivergent) {
+    // Token-selected run but a co-present context-id named a DIFFERENT run.
     runForPorts = null;
   }
   if (!runFromContext) {
     runForPorts = null;
   }
 
+  // #1193 run-token spine (W3) — which-path-served metric for the legacy-
+  // removal gate (a follow-up retires the context-id + binding precedence once
+  // the run-token path dominates production). Ids and outcome flags only — the
+  // raw token and its hash are NEVER logged.
+  if (isBridgeAuthorized) {
+    const runSelectServedBy: "run_token" | "binding" | "context_id" | "none" =
+      tokenResolvedRunId
+        ? "run_token"
+        : bindingVerifiedRunId
+          ? "binding"
+          : runFromContext
+            ? "context_id"
+            : "none";
+    console.info(
+      `[llm-bridge-run-select] served-by=${runSelectServedBy} ` +
+        `run=${runForPorts?.id ?? "-"} org=${runForPorts?.orgId ?? "-"} ` +
+        `token-invalid=${runTokenInvalid} token-divergent=${runTokenDivergent}`,
+    );
+  }
+
   let registryClientId: string | undefined;
+  // #1195 — redis keys of the durable run-context bindings THIS request wrote
+  // (one per machine-token mint inside cinatraMcpToolOverride below). Keys are
+  // per-invocation-unique, so the finally-clear can plain-DEL exactly these.
+  const durableBindingKeys: string[] = [];
   if (effectiveRunId) {
     try {
       let registryKey: string | undefined;
@@ -897,13 +1200,60 @@ export async function POST(req: Request): Promise<Response> {
     // Resolve custom skill delta + assigned base skill IDs for this agent.
     // Both lookups are INSIDE the try block so clearRunContext always runs
     // in finally even if a DB lookup throws.
-    // Bridge callers (WayFlow ApiNodes, Python containers) have no user session,
-    // so getCustomSkillForCurrentUserAndAgent throws when ownerUserId is
-    // absent. Catch gracefully — no personal skill applies to sessionless callers.
+    // #1360 — the personal delta skill is USER-SCOPED content, so its owner is
+    // derived SOLELY from the TRUSTED resolved run context, never from a
+    // caller-supplied identifier. `runForPorts` is the exact run this route
+    // already vetted to mint the user's MCP OBO actor token (run-token-first →
+    // context-id → dispatcher-signed binding, minus the confused-deputy
+    // disqualifications); its `runBy` is the verified run owner. Gating personal
+    // delivery on that same handle keeps it FAIL CLOSED:
+    //   - a verified run bound to a user ⇒ that user's delta is delivered;
+    //   - an unattributable call (no verified run, or a run with no runBy), or a
+    //     forged / mismatched / divergent run token (runForPorts is null) ⇒
+    //     `personalSkillOwnerUserId` stays undefined, so
+    //     getCustomSkillForCurrentUserAndAgent resolves to none — it throws for
+    //     an absent owner outside dev-bypass and the .catch swallows that to
+    //     null (no personal delta, no error noise), never a guess.
+    // #1401 — org/shared assigned-skill delivery (getAssignedSkillIdsForAgent)
+    // now resolves with a TRUSTWORTHY actor derived from the SAME vetted run
+    // handle (`runForPorts`) so ownership-scoped (team/project/org/workspace)
+    // custom-skill assignments reach the run. `resolveAssignedSkillsActorForRun`
+    // is fail-closed: an unverifiable identity (no run, no human runBy, or a
+    // membership-build failure) yields `undefined` and the resolver falls back
+    // to EXACTLY today's actor-less delivery — never more. No caller-supplied
+    // identity is ever consulted for scope (the run is server-vetted, never a
+    // body id).
+    const personalSkillOwnerUserId =
+      typeof runForPorts?.runBy === "string" && runForPorts.runBy.length > 0
+        ? runForPorts.runBy
+        : undefined;
     const [personalSkill, assignedSkillIds] = body.agent_id
       ? await Promise.all([
-          getCustomSkillForCurrentUserAndAgent(body.agent_id).catch(() => null),
-          getAssignedSkillIdsForAgent(body.agent_id),
+          getCustomSkillForCurrentUserAndAgent(
+            body.agent_id,
+            personalSkillOwnerUserId,
+          )
+            // A3 (cinatra#1363): a personal delta whose lifecycle_state is not
+            // runtime-deliverable (archived/draft/unknown) — or unresolvable —
+            // is withheld (fail-closed), so it never reaches provider delivery.
+            .then((skill) =>
+              skill && typeof (skill as { id?: unknown }).id === "string" &&
+              isBridgeSkillRuntimeDeliverable((skill as { id: string }).id)
+                ? skill
+                : null,
+            )
+            .catch(() => null),
+          // Derived lazily inside this Promise.all member so the membership
+          // expansion runs CONCURRENTLY with the personal-delta lookup above.
+          // Actor present ⇒ scope-aware resolution; absent (fail-closed) ⇒ the
+          // exact actor-less call delivered today (arity preserved).
+          (async () => {
+            const assignedSkillsActor =
+              await resolveAssignedSkillsActorForRun(runForPorts);
+            return assignedSkillsActor
+              ? getAssignedSkillIdsForAgent(body.agent_id!, assignedSkillsActor)
+              : getAssignedSkillIdsForAgent(body.agent_id!);
+          })(),
         ])
       : [null, [] as string[]];
 
@@ -995,17 +1345,82 @@ export async function POST(req: Request): Promise<Response> {
       // bridge has resolved a real agent_run row with both an `orgId`
       // and a `runBy`. The resolver does a LIVE platform-role +
       // membership check at mint time — a demoted user gets `null` and
-      // the orchestration layer falls back to the legacy machine
-      // `client_credentials` Bearer (same behavior as pre-fix, will
+      // the override falls back to the machine `client_credentials`
+      // Bearer it now mints itself (same authz outcome as pre-fix, will
       // fail at `enforceMcpBoundary` with `not_org_member`, never an
       // elevation).
+      //
+      // The provider gate keys on the provider the task actually RUNS on
+      // (#1195 codex round-1): a `cinatra_llm` dispatch overrides the
+      // configured runtime, and the orchestration attaches MCP tools for
+      // THAT provider. Gating on the configured provider would silently
+      // skip the OBO + durable-binding path whenever dispatch diverges
+      // (configured gemini, dispatched openai), leaving that run's machine
+      // token unbound on the alias-prone process-local registry.
+      const mcpEffectiveProvider =
+        dispatch.kind === "dispatch"
+          ? dispatch.effectiveProvider
+          : resolvedRuntime.provider;
       const cinatraMcpToolOverride =
         runForPorts?.orgId &&
         runForPorts?.runBy &&
         runForPorts?.id &&
-        (resolvedRuntime.provider === "openai" ||
-          resolvedRuntime.provider === "anthropic")
+        (mcpEffectiveProvider === "openai" ||
+          mcpEffectiveProvider === "anthropic")
           ? async () => {
+              // #1195 durable run-context binding — the machine-token fallback,
+              // minted HERE (byte-identical to the orchestration-layer fallback
+              // in packages/llm/src/registry.ts resolveCinatraMcpTool) so the
+              // bridge can read the exact per-mint access token back off the
+              // tool and key the durable binding to it. Every token-endpoint
+              // mint carries a random `jti`, so the key is unique per mint:
+              // concurrent runs can never alias each other's binding, and the
+              // finally-clear's plain DEL can never delete another request's.
+              // The binding value is the run's dispatch-minted credential HASH
+              // (never a raw run id): the MCP reader resolves it back through
+              // readAgentRunByTokenHash, keeping the run ROW the source of
+              // truth. Legacy runs without a credential hash write nothing and
+              // stay on the in-process registry (the measured transition
+              // fallback). Redis failure ⇒ no binding, same registry fallback:
+              // availability is never worse than today.
+              const buildMachineToolWithDurableBinding = async () => {
+                // Byte-equivalence with the orchestration fallback this
+                // replaces requires the EFFECTIVE provider (the gate above
+                // already keys on it): registry.ts would have minted the
+                // machine token for the OAuth client of the provider the
+                // task actually runs on.
+                const machineTool = await buildLlmMcpServerTool(
+                  mcpEffectiveProvider,
+                );
+                if (!machineTool) return null;
+                try {
+                  const authorization = machineTool.headers?.Authorization;
+                  const bearer =
+                    typeof authorization === "string" &&
+                    authorization.startsWith("Bearer ")
+                      ? authorization.slice("Bearer ".length)
+                      : undefined;
+                  if (bearer) {
+                    const runTokenHash = await readAgentRunTokenHashById(
+                      runForPorts.id,
+                    );
+                    if (runTokenHash) {
+                      const key = await writeDurableRunContextBinding(bearer, {
+                        tokenHash: runTokenHash,
+                        // Untrusted provenance for tagging only — mirrors the
+                        // legacy registry payload; never an authz input.
+                        agentId: body.agent_id,
+                        packageVersion: body.package_version,
+                        agentSpecVersion: body.agent_spec_version,
+                      });
+                      if (key) durableBindingKeys.push(key);
+                    }
+                  }
+                } catch {
+                  // best-effort — binding absent ⇒ registry fallback covers.
+                }
+                return machineTool;
+              };
               const actor = await resolveAgentRunMcpActor({
                 runId: runForPorts.id,
                 runBy: runForPorts.runBy!,
@@ -1018,7 +1433,7 @@ export async function POST(req: Request): Promise<Response> {
                 // and the end-user's rights gate the write (with #409).
                 sourceType: runForPorts.sourceType,
               });
-              if (!actor) return null;
+              if (!actor) return buildMachineToolWithDurableBinding();
               // Re-derive the OBO scope-ceiling from the run's LOCKED template
               // anchor + project launch and compare (containment) against the
               // persisted dispatch ceiling. A corrupt anchor, or a persisted
@@ -1041,7 +1456,7 @@ export async function POST(req: Request): Promise<Response> {
                 !recomputed ||
                 !oboCeilingContains(runForPorts.oboCeiling, recomputed)
               ) {
-                return null;
+                return buildMachineToolWithDurableBinding();
               }
               // #1214 — pin the cinatra self-MCP tool allowlist for in-admin
               // CMS content-editor agent runs (wordpress-agent / drupal-agent)
@@ -1051,14 +1466,34 @@ export async function POST(req: Request): Promise<Response> {
               // Any other agent run resolves to `null` (unrestricted, unchanged).
               const cinatraMcpAllowedTools =
                 resolveAgentRunCinatraMcpAllowedTools(
-                  isInAdminCmsContentEditorPackage(template?.packageName),
+                  // RUN-LEVEL STICKY PIN first (widget-stream runtime trust,
+                  // slice 2): a `public_site_widget` carrier run IS an
+                  // in-admin CMS content-editor relay by construction, so it
+                  // stays CMS-pinned for its whole lifetime — a runtime grant
+                  // revoked/drifted AFTER run creation (or a transient
+                  // runtime-arm lookup failure) can never widen a live
+                  // widget-carrier run to unrestricted self-MCP access. The
+                  // async package-membership check (the widget-stream UNION:
+                  // build map ∪ approved runtime grants) covers the
+                  // non-widget dispatch surfaces of the same relay agents.
+                  runForPorts.sourceType === "public_site_widget" ||
+                    // ...same construction argument for the headless/legacy
+                    // content-editor carrier discriminator.
+                    runForPorts.sourceType === "content_editor_dispatch" ||
+                    (await isInAdminCmsContentEditorPackage(
+                      template?.packageName,
+                    )),
                 );
-              return buildLlmMcpServerToolForAgentRun(
-                resolvedRuntime.provider as "openai" | "anthropic",
+              const oboTool = await buildLlmMcpServerToolForAgentRun(
+                mcpEffectiveProvider as "openai" | "anthropic",
                 { ...actor, oboCeiling: runForPorts.oboCeiling! },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
               );
+              // The OBO token carries the run id itself (the reader's
+              // delegated-actor path wins) — no durable binding needed.
+              if (oboTool) return oboTool;
+              return buildMachineToolWithDurableBinding();
             }
           : undefined;
       result = await runResolvedSkillAwareDeterministicLlmTask({
@@ -1147,5 +1582,10 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "Internal server error", detail: message }, { status: 500 });
   } finally {
     if (registryClientId) clearRunContext(registryClientId);
+    // #1195 — clear exactly the durable bindings this request wrote (keys are
+    // per-invocation-unique; the 300s TTL is the crash backstop).
+    if (durableBindingKeys.length > 0) {
+      await clearDurableRunContextBindings(durableBindingKeys);
+    }
   }
 }

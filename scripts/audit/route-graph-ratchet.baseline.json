@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 135,
-    "/api/mcp": 1390,
-    "/chat": 1428,
-    "/api/a2a": 1395,
-    "/api/llm-bridge": 1401
+    "/sign-in": 140,
+    "/api/mcp": 1411,
+    "/chat": 1449,
+    "/api/a2a": 1416,
+    "/api/llm-bridge": 1422
   },
   "absorbs": {
     "/sign-in": {
-      "from": 134,
-      "to": 135,
-      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 134->135.",
-      "pr": 1317
+      "from": 139,
+      "to": 140,
+      "reason": "cinatra#1041 (PR #1310): src/lib/extension-update-read-model-schema.ts — the extension_update_read_model bootstrap DDL EXTRACTED from drizzle-store.ts into a pure-strings zero-import leaf to hold the drizzle-store file-size ratchet (the #1317 / #1405 extract-leaf -> route-graph-absorb pattern). /sign-in reaches the store via auth -> DB (drizzle-store) but NOT the extensions surface, so it gains EXACTLY this 1 leaf and neither the read-model store accessor nor the registries derivation leaf. DISJOINT from the #1443 artifact-claim-schema leaf (already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 139->140.",
+      "pr": 1310
     },
     "/api/mcp": {
-      "from": 1389,
-      "to": 1390,
-      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1389->1390.",
-      "pr": 1317
+      "from": 1408,
+      "to": 1411,
+      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1408->1411.",
+      "pr": 1310
     },
     "/chat": {
-      "from": 1427,
-      "to": 1428,
-      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1427->1428.",
-      "pr": 1317
+      "from": 1446,
+      "to": 1449,
+      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1446->1449.",
+      "pr": 1310
     },
     "/api/a2a": {
-      "from": 1394,
-      "to": 1395,
-      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1394->1395.",
-      "pr": 1317
+      "from": 1413,
+      "to": 1416,
+      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1413->1416.",
+      "pr": 1310
     },
     "/api/llm-bridge": {
-      "from": 1400,
-      "to": 1401,
-      "reason": "cinatra#1317 (STEP A headroom for #1310/#1041): the skill co-owner constraint DDL (skill_package_co_owners + skill_co_owners post-CREATE index + FK-constraint-repair DO blocks) moved VERBATIM into a new zero-import pure-strings leaf src/lib/co-owner-constraint-schema.ts imported by drizzle-store.ts. Every tracked route reaching drizzle-store's schema builder gains exactly this ONE net-new first-party module. The emitted bootstrap DDL is byte-identical before/after (pure relocation, proven by source-expansion equality + a string-set-equality vitest). Measured B-A on the merged tree with the companion extension repos cloned pinned (missingCount 0, delta exact +1). Absorbed raise 1400->1401.",
-      "pr": 1317
+      "from": 1419,
+      "to": 1422,
+      "reason": "cinatra#1041 (PR #1310): the cached extension-update read model (outcome 3) adds +3 reachable first-party modules on every locked route that reaches the shared DB store barrel (src/lib/drizzle-store.ts): src/lib/extension-update-read-model-store.ts (the cached update read-model DB accessor), packages/registries/src/update-read-model.ts (the pure derivation/types it imports), and src/lib/extension-update-read-model-schema.ts (the bootstrap-DDL pure-strings leaf extracted from drizzle-store.ts for the file-size ratchet, the #1317/#1405 pattern). DISJOINT from the #1361/#1405 skill-lifecycle leaves, the #1439 edge-bound serving modules, and the #1443 artifact-claim-schema leaf (all already baked into this base ceiling). Re-measured on the lane<-origin/main merge tree (post-#1443 base) with the companion extension repos cloned pinned (missingCount 0, delta exact +3 vs the base ceiling). Absorbed raise 1419->1422.",
+      "pr": 1310
     }
   }
 }

@@ -1,7 +1,7 @@
 {
   "generatedBy": "scripts/build-postgres-sync-inventory.mjs",
   "note": "DO NOT EDIT BY HAND. Re-run `pnpm sync:inventory`. Per-file classification + justification lives in src/lib/postgres-sync-inventory.ts.",
-  "totalCallSites": 253,
+  "totalCallSites": 277,
   "callers": [
     {
       "file": "packages/extensions/src/permissions-store.ts",
@@ -13,7 +13,7 @@
     },
     {
       "file": "packages/notifications/src/service.ts",
-      "calls": 6
+      "calls": 8
     },
     {
       "file": "packages/objects/src/graphiti-projector.ts",
@@ -33,7 +33,7 @@
     },
     {
       "file": "packages/skills/src/llm-matching/skill-matches-store.ts",
-      "calls": 8
+      "calls": 10
     },
     {
       "file": "packages/skills/src/skills-store.ts",
@@ -116,6 +116,10 @@
       "calls": 4
     },
     {
+      "file": "src/lib/assistant-thread-store.ts",
+      "calls": 7
+    },
+    {
       "file": "src/lib/boot/phases/artifact-data-root-guard.ts",
       "calls": 1
     },
@@ -145,7 +149,7 @@
     },
     {
       "file": "src/lib/database.ts",
-      "calls": 16
+      "calls": 17
     },
     {
       "file": "src/lib/demo-seed-runner.ts",
@@ -208,6 +212,10 @@
       "calls": 12
     },
     {
+      "file": "src/lib/objects/artifact-claim-store.ts",
+      "calls": 7
+    },
+    {
       "file": "src/lib/postgres-schema-init.ts",
       "calls": 1
     },
@@ -218,6 +226,10 @@
     {
       "file": "src/lib/resource-project-move.ts",
       "calls": 3
+    },
+    {
+      "file": "src/lib/skill-lifecycle-store.ts",
+      "calls": 5
     },
     {
       "file": "src/lib/trigger-email-send-use-cases.ts",

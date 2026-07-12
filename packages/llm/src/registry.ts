@@ -81,10 +81,15 @@ export async function resolveMcpToolsForDeclaredIds(params: {
    * failing with `not_org_member`. External MCP toolboxes are
    * unaffected.
    *
-   * If the override returns null, fall back to the machine-token path
-   * — preserves pre-fix behavior for callers that opt in but cannot
-   * mint a delegated token (e.g. legacy A2A bridge calls without a
-   * resolved run-by user).
+   * A present override OWNS cinatra self-MCP resolution INCLUDING the
+   * machine-token fallback: the bridge mints the machine
+   * `client_credentials` token itself so the durable run-context binding
+   * (#1195) is keyed to the EXACT bearer attached to the tool. A null
+   * result is therefore AUTHORITATIVE (no tool) — re-minting here would
+   * attach a bearer that carries no binding (silently reintroducing the
+   * process-local registry's cross-run aliasing risk) and double the
+   * token-endpoint load. Degrade toward no tool, never toward an unbound
+   * one.
    */
   cinatraMcpToolOverride?: () => Promise<LlmMcpServerTool | null>;
 }): Promise<LlmMcpServerTool[]> {
@@ -96,8 +101,10 @@ export async function resolveMcpToolsForDeclaredIds(params: {
   } = params;
   const resolveCinatraMcpTool = async (): Promise<LlmMcpServerTool | null> => {
     if (cinatraMcpToolOverride) {
-      const overridden = await cinatraMcpToolOverride();
-      if (overridden) return overridden;
+      // Authoritative (see the option doc above): the override owns every
+      // fallback, so a null here must NOT trigger a second machine mint —
+      // that bearer would carry no durable run-context binding (#1195).
+      return cinatraMcpToolOverride();
     }
     return buildLlmMcpServerTool(provider);
   };

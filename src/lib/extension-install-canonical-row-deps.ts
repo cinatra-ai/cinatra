@@ -43,8 +43,34 @@ type CanonicalRowInstallDeps = Pick<
  */
 export function makeCanonicalRowInstallDeps(opts: {
   provenanceRegistryUrl: (requestRegistryUrl: string) => string;
+  /**
+   * BIND every canonical-row read/write to this EXACT row id instead of the
+   * (package, org) single-default-row resolution (cinatra#1040 S3 — the
+   * side-by-side installer targets its own NON-DEFAULT version row; the
+   * default resolution would bind the DEFAULT row and clobber its provenance/
+   * edges). The bound row must still match the requested (package, org) scope
+   * — a mismatch fails closed.
+   */
+  boundRowId?: string;
+  /**
+   * Whether `recordProvenance` mirrors the digest into the plain-text
+   * per-PACKAGE `current` store file (default true). The side-by-side
+   * installer passes FALSE: `current` is package-scoped shared state owned by
+   * the DEFAULT version — a non-default install must never repoint it.
+   */
+  mirrorCurrentDigest?: boolean;
 }): CanonicalRowInstallDeps {
   const resolveTarget = async (packageName: string, orgId: string | null) => {
+    if (opts.boundRowId) {
+      const { readInstalledExtensionById } = await import(
+        "@cinatra-ai/extensions/canonical-store"
+      );
+      const row = await readInstalledExtensionById(opts.boundRowId);
+      if (!row || row.packageName !== packageName || (row.organizationId ?? null) !== orgId) {
+        return null; // fail closed at the call sites, same as ambiguous scope
+      }
+      return row;
+    }
     const { readInstalledExtensionsByPackageName } = await import(
       "@cinatra-ai/extensions/canonical-store"
     );
@@ -92,13 +118,17 @@ export function makeCanonicalRowInstallDeps(opts: {
       );
       // Mirror the digest into the plain-text `current` store file (cinatra#792)
       // on EVERY activeDigest write — best-effort, never a selector/trust input.
-      const { mirrorCurrentDigestBestEffort } = await import("@/lib/extension-store-io");
-      await mirrorCurrentDigestBestEffort({
-        ...(p.storeRoot ? { dataRoot: p.storeRoot } : {}),
-        kind: target.kind,
-        packageName: p.packageName,
-        digest: p.digest,
-      });
+      // SKIPPED for a bound non-default row (cinatra#1040 S3): `current` is
+      // package-scoped shared state owned by the default version.
+      if (opts.mirrorCurrentDigest !== false) {
+        const { mirrorCurrentDigestBestEffort } = await import("@/lib/extension-store-io");
+        await mirrorCurrentDigestBestEffort({
+          ...(p.storeRoot ? { dataRoot: p.storeRoot } : {}),
+          kind: target.kind,
+          packageName: p.packageName,
+          digest: p.digest,
+        });
+      }
     },
     // FINALIZE-TIME CROSS-CHECK basis (cinatra#792): the canonical row's
     // just-written activeDigest at the SAME (package, org) scope.

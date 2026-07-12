@@ -1,6 +1,11 @@
 import "server-only";
 
-import { runChatTurn } from "@/app/api/chat/runner";
+// cinatra#1037 P2b: the MCP path binds the assistant RUNTIME directly (the
+// same call the /api/chat runner shim makes — parity-pinned) instead of
+// importing through the route folder, so the P3 route teardown cannot touch
+// this surface. The Cinatra reference config is the P2a byte-parity anchor.
+import { runAssistantTurn } from "@/lib/assistant-runtime/runtime";
+import { buildCinatraAssistantRuntimeConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
 import { resolveUserContextForUserId } from "@/lib/auth-session";
 import { readChatThreadsFromDatabase, readChatThreadsForSealedRoom, upsertChatThreadInDatabase } from "@/lib/database";
 // Sealed-room read filter gate.
@@ -289,7 +294,13 @@ async function handleChatThreadSend(
         ...new Set([...(thread.taggedAssistantUserIds ?? []), actor.userId]),
       ],
     };
-    upsertChatThreadInDatabase(updatedThread as unknown as { id: string } & Record<string, unknown>);
+    // assistantMirrorOrgId: the transport-verified org anchors the structured
+    // assistant_threads mirror (cinatra#1037 P2b); distinct from the pin-sync
+    // orgId option, team threads resolve to NULL centrally.
+    upsertChatThreadInDatabase(
+      updatedThread as unknown as { id: string } & Record<string, unknown>,
+      { assistantMirrorOrgId: transportOrgId ?? null },
+    );
 
     return {
       threadId: thread.id,
@@ -385,13 +396,16 @@ async function handleChatThreadSend(
   ];
 
   // Persist user message (and updated routing state) immediately.
-  upsertChatThreadInDatabase({
-    ...thread,
-    messages: updatedMessages,
-    taggedAssistantUserIds: allTagged,
-    activeAssistantHandle: newActiveHandle,
-    updatedAt: new Date().toISOString(),
-  } as unknown as { id: string } & Record<string, unknown>);
+  upsertChatThreadInDatabase(
+    {
+      ...thread,
+      messages: updatedMessages,
+      taggedAssistantUserIds: allTagged,
+      activeAssistantHandle: newActiveHandle,
+      updatedAt: new Date().toISOString(),
+    } as unknown as { id: string } & Record<string, unknown>,
+    { assistantMirrorOrgId: transportOrgId ?? null },
+  );
 
   // Fire webhook deliveries for external assistants (fire and forget; @cinatra and built-ins have no webhook URL).
   for (const mention of resolved) {
@@ -492,11 +506,14 @@ async function handleChatThreadSend(
     };
     messagesWithHandled.push(codexMsg);
 
-    upsertChatThreadInDatabase({
-      ...latestThread,
-      messages: messagesWithHandled,
-      updatedAt: new Date().toISOString(),
-    } as unknown as { id: string } & Record<string, unknown>);
+    upsertChatThreadInDatabase(
+      {
+        ...latestThread,
+        messages: messagesWithHandled,
+        updatedAt: new Date().toISOString(),
+      } as unknown as { id: string } & Record<string, unknown>,
+      { assistantMirrorOrgId: transportOrgId ?? null },
+    );
   }
 
   // Handle built-in @gemini mention synchronously in-process.
@@ -549,11 +566,14 @@ async function handleChatThreadSend(
     };
     messagesWithHandled.push(geminiMsg);
 
-    upsertChatThreadInDatabase({
-      ...latestThread,
-      messages: messagesWithHandled,
-      updatedAt: new Date().toISOString(),
-    } as unknown as { id: string } & Record<string, unknown>);
+    upsertChatThreadInDatabase(
+      {
+        ...latestThread,
+        messages: messagesWithHandled,
+        updatedAt: new Date().toISOString(),
+      } as unknown as { id: string } & Record<string, unknown>,
+      { assistantMirrorOrgId: transportOrgId ?? null },
+    );
   }
 
   // Step 4: If only external assistants are tagged, return early — they will
@@ -566,14 +586,15 @@ async function handleChatThreadSend(
     };
   }
 
-  // Step 5: Drive the Cinatra LLM via runChatTurn (in-process).
+  // Step 5: Drive the Cinatra LLM via the assistant runtime (in-process).
   //
-  // Invoke runChatTurn directly instead of routing through /api/chat. Browser
-  // sessions can authenticate there via cookie, but MCP callers authenticate
-  // with an OAuth Bearer JWT; /api/chat is cookie-only, so a Bearer-only call
-  // redirects to /sign-in and can produce a silent empty reply. Direct
-  // invocation uses the same orchestration code with actor context resolved up
-  // front.
+  // Invoke runAssistantTurn(cinatraConfig, …) directly instead of routing
+  // through /api/chat. Browser sessions can authenticate there via cookie, but
+  // MCP callers authenticate with an OAuth Bearer JWT; /api/chat is
+  // cookie-only, so a Bearer-only call redirects to /sign-in and can produce a
+  // silent empty reply. Direct invocation uses the same orchestration code
+  // (byte-identical to the legacy runChatTurn shim — the port-parity test pins
+  // the config + argument mapping) with actor context resolved up front.
   let assistantText = "";
   let chatErrorMessage: string | null = null;
   const toolResults: Array<{ name: string; resultLabel: string }> = [];
@@ -587,7 +608,7 @@ async function handleChatThreadSend(
       platformRole: transportPlatformRole,
     });
     const { actorContext, platformRole, sessionOrgId } = resolved;
-    await runChatTurn({
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), {
       messages: updatedMessages.map((m) => ({
         role: m.role === "assistant" ? "assistant" : "user",
         content: m.content,
@@ -663,7 +684,10 @@ async function handleChatThreadSend(
     activeAssistantHandle: newActiveHandle,
     updatedAt: new Date().toISOString(),
   };
-  upsertChatThreadInDatabase(updatedThread as unknown as { id: string } & Record<string, unknown>);
+  upsertChatThreadInDatabase(
+    updatedThread as unknown as { id: string } & Record<string, unknown>,
+    { assistantMirrorOrgId: transportOrgId ?? null },
+  );
 
   return {
     threadId: thread.id,

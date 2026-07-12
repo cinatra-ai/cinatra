@@ -9,6 +9,10 @@ import "server-only";
 // on the host-owned `invalidate*ForPackage` registries — the kinds that have an
 // in-process `register(ctx)` channel: { MCP tools, capability providers,
 // ctx.ui surfaces/actions, object types, runtime dashboard cubes/portlet kinds }.
+// It ALSO clears the version-keyed serving retention (cinatra#1392 Gap 1) — the
+// SAME four register-channel kinds retained per (packageName, version) for
+// non-default side-by-side serving — in lockstep, so a torn-down package stops
+// serving both its global (default) names AND its edge-bound non-default versions.
 // If a new in-memory register-channel kind is ever added, THIS closure must grow.
 // The per-kind-teardown invariant test asserts this exact function's current
 // contract — it catches a DROPPED kind; a newly-added un-wired register-channel
@@ -20,6 +24,28 @@ import {
   hasCapabilityProvidersForPackage,
   clearPackageSignedActivated,
 } from "@/lib/extension-capabilities-registry";
+// Version-keyed serving retention for NON-DEFAULT side-by-side versions
+// (cinatra#1392 Gap 1). The SAME four register-channel kinds, retained per
+// (packageName, version) for edge-bound serving. Cleared here in LOCKSTEP with
+// the global registries so a torn-down package's non-default versions stop
+// serving too (every retire path + the defensive pre-reactivate teardown).
+//
+// Read off a globalThis singleton — NOT a static import — on purpose: the
+// version-keyed serving module is reached ONLY via the loader's DYNAMIC import so
+// it stays OUT of the locked dev-perf routes' static graphs (the cinatra#732
+// route-graph ratchet is shrink-only; a static import of it from this
+// route-reachable chokepoint would trip it). The module publishes its
+// package-scoped clear on this `Symbol.for` surface when it loads; if it never
+// loaded (⇒ no retained entries exist) this is a safe no-op.
+const VERSION_KEYED_SERVING_TEARDOWN_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-version-keyed-serving-teardown/v1",
+);
+function clearVersionKeyedServingForPackage(packageName: string): string[] {
+  const fn = (globalThis as unknown as {
+    [k: symbol]: ((packageName: string) => string[]) | undefined;
+  })[VERSION_KEYED_SERVING_TEARDOWN_KEY];
+  return typeof fn === "function" ? fn(packageName) : [];
+}
 import { invalidateExtensionUiForPackage, hasExtensionUiForPackage } from "@/lib/extension-ui-registry";
 import { invalidateObjectTypesForPackage } from "@/lib/extension-object-types-teardown";
 import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
@@ -55,6 +81,7 @@ export function teardownExtensionCapabilities(packageName: string): {
   removedTypes: string[];
   removedCubes: string[];
   removedPortletKinds: string[];
+  removedVersionKeyedServing: string[];
 } {
   // Capture the void-delete kinds' presence BEFORE invalidating (those
   // `invalidate*` calls return no count of their own, so probe up front).
@@ -84,6 +111,13 @@ export function teardownExtensionCapabilities(packageName: string): {
     clearDashboardCubesPlatformForReconcile();
     clearMcpCubeToolsForReconcile();
   }
+  // Version-keyed serving retention (cinatra#1392 Gap 1) — drop EVERY retained
+  // non-default version of this package in lockstep. NOT counted toward the
+  // guarded control-plane generation bump below: version-keyed serving is an
+  // EDGE-BOUND, per-dependent serve surface, not one of the four operator
+  // control-plane global register-channel kinds in the generation-keyed snapshot
+  // (same rationale as the signed-activated marker clear above).
+  const removedVersionKeyedServing = clearVersionKeyedServingForPackage(packageName);
 
   // GUARDED bump: only when this teardown actually removed a live registration of
   // ANY kind (covers a provider-only or cube-only package too).
@@ -97,5 +131,5 @@ export function teardownExtensionCapabilities(packageName: string): {
   ) {
     bumpActivationGeneration("teardown", packageName);
   }
-  return { removedTools, removedTypes, removedCubes, removedPortletKinds };
+  return { removedTools, removedTypes, removedCubes, removedPortletKinds, removedVersionKeyedServing };
 }

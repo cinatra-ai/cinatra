@@ -38,6 +38,28 @@ import { resolveVersionBeforeRun } from "./version-pinning";
 // This prevents spurious canceled events on unrelated runs.
 // ---------------------------------------------------------------------------
 
+/**
+ * Decision returned by the injected `resolveEdgeBoundServing` seam (cinatra#1392
+ * Gap 2). The app binding resolves the TRUSTED dependent identity (from the run's
+ * signed lineage / ActorContext) against the target package's dependency edge:
+ *
+ *   - `{ kind: "none" }`  — no trusted dependent id, or no applicable edge: the
+ *     dispatch uses ordinary default / requestedVersion resolution
+ *     (compatibility-preserving; the untrusted client version is honored here).
+ *   - `{ kind: "serve", targetInstallId, snapshotId?, version? }` — the dependent
+ *     is served the resolved install. `snapshotId` present ⇒ a NON-DEFAULT pin
+ *     (immutable snapshot + `version`); absent ⇒ serve the DEFAULT (no snapshot
+ *     pin). `targetInstallId` is stamped onto the created run's
+ *     `dependent_install_id` so an edge-bound chain self-propagates.
+ *   - `{ kind: "refuse", code, message }` — the resolved edge points at an
+ *     unreachable non-default version (or a corrupt resolved shape):
+ *     refuse-with-evidence, NEVER serve the default silently.
+ */
+export type EdgeBoundServingDecision =
+  | { kind: "none" }
+  | { kind: "serve"; targetInstallId: string; snapshotId?: string; version?: string | null }
+  | { kind: "refuse"; code: string; message: string };
+
 export type MultiAgentExecutorOptions = {
   templates: AgentTemplateRecord[];
   /**
@@ -61,6 +83,17 @@ export type MultiAgentExecutorOptions = {
    * holding the send_message HTTP connection open for the run duration.
    */
   taskStore?: InMemoryTaskStore;
+  /**
+   * cinatra#1392 Gap 2 — injected edge-bound serving resolver. The app binding
+   * (src/lib/a2a-server.ts) reads the TRUSTED dependent install id from the
+   * request's ActorContext (the run's signed lineage) and resolves it against
+   * the target package's dependency edge, keeping this package free of `@/lib`
+   * imports (same DI pattern as `createAndEnqueueAgentRun`). Omitted ⇒ no
+   * edge-bound serving (legacy default / requestedVersion resolution).
+   */
+  resolveEdgeBoundServing?: (input: {
+    targetPackageName: string;
+  }) => Promise<EdgeBoundServingDecision>;
 };
 
 export class MultiAgentExecutor implements AgentExecutor {
@@ -69,15 +102,34 @@ export class MultiAgentExecutor implements AgentExecutor {
   // Pinned version per taskId — consumed by the owning InProcessAgentExecutor
   // via a constructor-injected lookup function, NOT via metadata mutation.
   private readonly pinnedVersionByTaskId: Map<string, string> = new Map();
+  // Pinned REQUIRED-snapshot id per taskId (cinatra#1040 S7). Set ONLY when the
+  // request-time seam resolved an explicit requestedVersion to an immutable
+  // agent_template_versions snapshot — threaded into the created run's
+  // `versionId` so the execution worker enforces the pin FAIL-CLOSED. Absent for
+  // a default resolution (the run stays best-effort live-template).
+  private readonly pinnedSnapshotIdByTaskId: Map<string, string> = new Map();
   // Ownership map — taskId → packageName. Used by ownsTask() to short-circuit
   // cancelTask broadcasts.
   private readonly ownerByTaskId: Map<string, string> = new Map();
+  // Stamped dependent install id per taskId (cinatra#1392 Gap 2) — the resolved
+  // install id the created run executes AS. Consumed by the owning
+  // InProcessAgentExecutor via getPinnedDependentInstallIdForTask and persisted
+  // on the run's dependent_install_id so an edge-bound chain self-propagates.
+  private readonly pinnedDependentInstallIdByTaskId: Map<string, string> = new Map();
+  // cinatra#1392 Gap 2 — injected app-side edge-bound serving resolver (reads the
+  // trusted dependent id from the request ActorContext). Undefined ⇒ disabled.
+  private readonly resolveEdgeBoundServing?: MultiAgentExecutorOptions["resolveEdgeBoundServing"];
 
   constructor(opts: MultiAgentExecutorOptions) {
     this.byPackageName = new Map();
     this.templateByPackageName = new Map();
+    this.resolveEdgeBoundServing = opts.resolveEdgeBoundServing;
     const pinnedLookup = (taskId: string): string | undefined =>
       this.pinnedVersionByTaskId.get(taskId);
+    const pinnedSnapshotIdLookup = (taskId: string): string | undefined =>
+      this.pinnedSnapshotIdByTaskId.get(taskId);
+    const pinnedDependentInstallIdLookup = (taskId: string): string | undefined =>
+      this.pinnedDependentInstallIdByTaskId.get(taskId);
     for (const t of opts.templates) {
       if (!t.packageName) continue;
       this.templateByPackageName.set(t.packageName, t);
@@ -91,6 +143,8 @@ export class MultiAgentExecutor implements AgentExecutor {
           enqueueJob: opts.enqueueJob,
           createAndEnqueueAgentRun: opts.createAndEnqueueAgentRun,
           getPinnedVersionForTask: pinnedLookup,
+          getPinnedSnapshotIdForTask: pinnedSnapshotIdLookup,
+          getPinnedDependentInstallIdForTask: pinnedDependentInstallIdLookup,
           taskStore: opts.taskStore,
         }),
       );
@@ -135,37 +189,98 @@ export class MultiAgentExecutor implements AgentExecutor {
       return;
     }
 
-    let pinned;
-    try {
-      pinned = await resolveVersionBeforeRun({
-        packageName: skillId,
-        requestedVersion,
-      });
-    } catch (err) {
-      publishFailed(
-        ctx,
-        eventBus,
-        "VERSION_RESOLUTION_FAILED",
-        (err as Error).message,
-      );
+    // cinatra#1392 Gap 2 — resolve the TRUSTED edge-bound serving decision FIRST,
+    // BEFORE consuming the untrusted client `requestedVersion`. A dependent's
+    // resolved edge (keyed on the trusted dependent install id carried on the
+    // run's signed lineage, read app-side by the injected resolver) is
+    // authoritative: it pins the resolved non-default snapshot, refuses an
+    // unreachable non-default pin with evidence, or serves the default — and the
+    // client `requestedVersion` is honored ONLY when no trusted edge applies.
+    // Fail closed: any UNEXPECTED error from the trusted resolver refuses the run
+    // rather than silently serving the default.
+    let edge: EdgeBoundServingDecision = { kind: "none" };
+    if (this.resolveEdgeBoundServing) {
+      try {
+        edge = await this.resolveEdgeBoundServing({ targetPackageName: skillId });
+      } catch (err) {
+        publishFailed(
+          ctx,
+          eventBus,
+          "EDGE_BOUND_RESOLUTION_FAILED",
+          (err as Error).message,
+        );
+        return;
+      }
+    }
+    if (edge.kind === "refuse") {
+      // Refuse-with-evidence — never fall through to a default serve.
+      publishFailed(ctx, eventBus, edge.code, edge.message);
       return;
     }
 
-    // Record pinned version + ownership BEFORE delegating so the sub-executor
-    // can read the pinned version when it calls createAgentRun, and cancelTask
-    // can route correctly.
+    let resolvedVersion: string;
+    let snapshotId: string | undefined;
+    let dependentInstallId: string | undefined;
+
+    if (edge.kind === "serve") {
+      // The created (target) run executes AS the resolved install id — stamped so
+      // an edge-bound chain self-propagates (A→B stamps B's run with B's id).
+      dependentInstallId = edge.targetInstallId;
+      if (edge.snapshotId) {
+        // NON-DEFAULT trusted pin — authoritative; overrides any client version.
+        snapshotId = edge.snapshotId;
+        resolvedVersion = edge.version ?? "";
+      } else {
+        // Serve the DEFAULT: resolve its version WITHOUT the untrusted client
+        // requestedVersion, and pin NO snapshot.
+        let pinned;
+        try {
+          pinned = await resolveVersionBeforeRun({ packageName: skillId });
+        } catch (err) {
+          publishFailed(ctx, eventBus, "VERSION_RESOLUTION_FAILED", (err as Error).message);
+          return;
+        }
+        resolvedVersion = pinned.resolvedVersion;
+      }
+    } else {
+      // No trusted edge applies — legacy path: honor the client requestedVersion.
+      let pinned;
+      try {
+        pinned = await resolveVersionBeforeRun({ packageName: skillId, requestedVersion });
+      } catch (err) {
+        publishFailed(ctx, eventBus, "VERSION_RESOLUTION_FAILED", (err as Error).message);
+        return;
+      }
+      resolvedVersion = pinned.resolvedVersion;
+      if (pinned.snapshotId) snapshotId = pinned.snapshotId;
+    }
+
+    // Record pinned version + snapshot + dependent id + ownership BEFORE
+    // delegating so the sub-executor can read them when it calls createAgentRun,
+    // and cancelTask can route correctly.
     const taskId = ctx.taskId ?? ctx.contextId ?? "unknown";
-    this.pinnedVersionByTaskId.set(taskId, pinned.resolvedVersion);
+    this.pinnedVersionByTaskId.set(taskId, resolvedVersion);
+    // REQUIRED-pin snapshot id (fail-closed marker: versionId + packageVersion
+    // both set) — from an explicit requestedVersion OR a trusted non-default edge.
+    if (snapshotId) {
+      this.pinnedSnapshotIdByTaskId.set(taskId, snapshotId);
+    }
+    // Trusted dependent install id stamped onto the created run.
+    if (dependentInstallId) {
+      this.pinnedDependentInstallIdByTaskId.set(taskId, dependentInstallId);
+    }
     this.ownerByTaskId.set(taskId, skillId);
 
     try {
       return await sub.execute(ctx, eventBus);
     } finally {
-      // Prune pinnedVersion after run — the sub-executor has already persisted
-      // it on the agent_runs row. Leave ownerByTaskId so a subsequent
-      // cancelTask can still route correctly. Cleanup is bounded by process
-      // lifetime until a finished() hook owns full cleanup.
+      // Prune the per-task pinned maps after run — the sub-executor has already
+      // persisted them on the agent_runs row. Leave ownerByTaskId so a
+      // subsequent cancelTask can still route correctly. Cleanup is bounded by
+      // process lifetime until a finished() hook owns full cleanup.
       this.pinnedVersionByTaskId.delete(taskId);
+      this.pinnedSnapshotIdByTaskId.delete(taskId);
+      this.pinnedDependentInstallIdByTaskId.delete(taskId);
     }
   }
 

@@ -91,7 +91,12 @@ class WriteActionError extends Error {}
 // The trusted session shape the authz checks read: the user id (for own-row
 // ownership) and the role (for `isPlatformAdmin`). `requireAuthSession` returns
 // the full Better Auth session, which carries both.
-type SessionLike = { user: { id: string; role?: string | null } };
+type SessionLike = {
+  user: { id: string; role?: string | null };
+  // The active org (Better Auth session) — the connection identity's org binding
+  // (cinatra#1407 defect 1), read exactly as the Twenty connect flow reads it.
+  session?: { activeOrganizationId?: string | null } | null;
+};
 
 /** Resolve the trusted session host-side (never from package input). */
 async function requireSession(): Promise<SessionLike> {
@@ -125,6 +130,10 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   const serverUrl = asString(input, "serverUrl")?.trim();
   const requestedScope = asString(input, "scope") ?? "user";
   const requestedId = asString(input, "id")?.trim() || undefined;
+  // The optional API key the connector's `secret` field posts (cinatra#1407
+  // defect 1). Blank/whitespace is treated as "no key" — the row's connection is
+  // left null (apiKeyConfigured stays false) rather than storing an empty secret.
+  const apiKey = asString(input, "apiKey")?.trim() || undefined;
 
   if (!label) throw new WriteActionError("A label is required.");
   if (!serverUrl) throw new WriteActionError("A server URL is required.");
@@ -141,6 +150,8 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     getExternalMcpServerByIdFresh,
     insertExternalMcpServerStrict,
     updateExternalMcpServerGuarded,
+    importExternalMcpApiKeyConnection,
+    revokeExternalMcpApiKeyConnection,
     ExternalMcpServerWriteConflictError,
   } = await import("@/lib/external-mcp-registry");
 
@@ -167,10 +178,17 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   // concurrently-created row). A race that flips the row under the actor surfaces
   // as a conflict → mapped to a fail-closed denial below.
   let preservedUserId: string | null | undefined;
-  let guard: { scope: ExternalMcpServerScope; userId: string | null } | undefined;
+  // Preserve an EXISTING row's stored connection on an edit that supplies no new
+  // key, so a label/URL-only update never silently drops a previously-stored API
+  // key (cinatra#1407 defect 1). Captured for an existing row of ANY scope.
+  let preservedNangoConnectionId: string | null | undefined;
+  let guard:
+    | { scope: ExternalMcpServerScope; userId: string | null; nangoConnectionId?: string | null }
+    | undefined;
   if (requestedId) {
     const existing = getExternalMcpServerByIdFresh(requestedId);
     if (existing) {
+      preservedNangoConnectionId = existing.nangoConnectionId;
       if (existing.scope === "global") {
         if (!actorIsAdmin) {
           throw new WriteActionError("Only a platform admin can modify a global MCP server.");
@@ -196,19 +214,77 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
           );
         }
       }
-      // The compare-and-write guard is the WITNESSED existing scope+owner; the
-      // conditional write only lands if the row still matches it at write time.
-      guard = { scope: existing.scope, userId: existing.userId };
+      // The compare-and-write guard is the WITNESSED existing scope+owner AND its
+      // current connection (cinatra#1407): a concurrent re-key/keyless-edit that
+      // moved the connection between this fresh read and the write fails closed
+      // instead of resurrecting a revoked pointer or landing a row that advertises
+      // an unmintable key.
+      guard = {
+        scope: existing.scope,
+        userId: existing.userId,
+        nangoConnectionId: existing.nangoConnectionId,
+      };
     }
   }
 
   const { randomUUID } = await import("node:crypto");
+  const id = requestedId || randomUUID();
+
+  // Persist the API key through the SANCTIONED connection-service path
+  // (cinatra#1407 defect 1), mirroring the Twenty connect flow's credential +
+  // identity seam. When a key is supplied: import it into Nango (readback-verified)
+  // under a UNIQUE per-write connection id, then register the `externalMcp`
+  // connection IDENTITY (folded into the helper) — without that identity the
+  // use-gate fails closed and `resolveExternalMcpServerBearer` mints NO bearer, so
+  // the stored key would never authenticate and `apiKeyConfigured` would be a lie.
+  // A UNIQUE connection id per write means a rejected write never overwrites or
+  // cross-wires a credential another row still references. When NO key is supplied
+  // on an edit, PRESERVE the existing connection (never drop a stored key on a
+  // label/URL-only edit); a new keyless row stays null. Fail-closed: a key that
+  // cannot be fully persisted rolls back and THROWS (the row write never runs), so
+  // no row ever advertises a key it cannot mint. The key is never logged/echoed —
+  // the helpers own the taint-not-access boundary (vault + readback failures throw
+  // a GENERIC message carrying no key value).
+  const organizationId = session.session?.activeOrganizationId ?? null;
+  let nangoConnectionId: string | null = preservedNangoConnectionId ?? null;
+  let newConnectionId: string | undefined;
+  if (apiKey) {
+    newConnectionId = `external-mcp-${randomUUID()}`;
+    try {
+      await importExternalMcpApiKeyConnection(newConnectionId, apiKey, {
+        // A user row's credential is owned by the row's owner (preserved on an
+        // admin edit of someone else's row) and is PERSONAL — bound to NO org so an
+        // admin editing another user's row never re-homes the credential to the
+        // admin's organization (cross-org safety). A global row's credential is
+        // owned by the registering admin and workspace-seeded (org-shared) so the
+        // org-bound InternalWorker use-gate can mint it — an owner-only grant would
+        // deny that mint.
+        ownerUserId: scope === "user" ? preservedUserId ?? session.user.id : session.user.id,
+        organizationId: scope === "user" ? null : organizationId,
+        seed: scope === "user" ? "owner" : "workspace",
+      });
+    } catch (err) {
+      // Roll back any partial credential/identity so a failed persist leaves
+      // nothing behind, then surface a non-secret message (the helpers never echo
+      // the key — every failure message is generic or field-level).
+      await revokeExternalMcpApiKeyConnection(newConnectionId);
+      throw err instanceof WriteActionError
+        ? err
+        : new WriteActionError(
+            err instanceof Error && err.message
+              ? err.message
+              : "Could not store the API key — please try again.",
+          );
+    }
+    nangoConnectionId = newConnectionId;
+  }
+
   const row = {
-    id: requestedId || randomUUID(),
+    id,
     label,
     serverUrl,
     scope,
-    nangoConnectionId: null,
+    nangoConnectionId,
     orgId: null,
     // For a user-scoped write: preserve the existing owner on an overwrite
     // (never steal it), else bind to the creating actor. Global rows have no owner.
@@ -225,6 +301,9 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
       insertExternalMcpServerStrict(row);
     }
   } catch (err) {
+    // The row write did NOT land — roll back the just-created credential+identity
+    // so no orphaned/foreign credential survives a rejected write (fail-closed).
+    if (newConnectionId) await revokeExternalMcpApiKeyConnection(newConnectionId);
     if (err instanceof ExternalMcpServerWriteConflictError) {
       // The row changed under the authorized operation (TOCTOU race) → deny.
       throw new WriteActionError(
@@ -232,6 +311,15 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
       );
     }
     throw err;
+  }
+  // The write landed under the NEW connection: best-effort revoke the PRIOR one it
+  // replaced (a re-key), so a stale credential never outlives its row pointer.
+  if (
+    newConnectionId &&
+    preservedNangoConnectionId &&
+    preservedNangoConnectionId !== newConnectionId
+  ) {
+    await revokeExternalMcpApiKeyConnection(preservedNangoConnectionId);
   }
   return { banner: "saved" };
 }
@@ -253,6 +341,7 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
   const {
     getExternalMcpServerByIdFresh,
     deleteExternalMcpServerGuarded,
+    revokeExternalMcpApiKeyConnection,
     ExternalMcpServerWriteConflictError,
   } = await import("@/lib/external-mcp-registry");
   const server = getExternalMcpServerByIdFresh(id);
@@ -274,8 +363,23 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
       throw new WriteActionError("Only a platform admin can delete this MCP server.");
     }
   }
+  // Revoke the stored key BEFORE removing the row (cinatra#1407) — identity
+  // soft-delete first, so a stale cross-worker cached copy of the row cannot mint
+  // the bearer during (or after a crash within) the delete window; the use-gate
+  // reads live-only identities and fails closed the instant the identity is gone.
+  // Mirrors disconnectTwentyConnection's revoke-before-row-delete ordering. On the
+  // rare losing race where the guarded delete then conflicts, the row survives
+  // with a revoked key (self-correcting — re-save the key), never a mint.
+  await revokeExternalMcpApiKeyConnection(server.nangoConnectionId);
   try {
-    deleteExternalMcpServerGuarded(id, { scope: server.scope, userId: server.userId });
+    // Witness the connection too: a concurrent re-key that moved it fails the
+    // delete closed (the row keeps its NEW, live connection) rather than removing
+    // the row and orphaning that new credential.
+    deleteExternalMcpServerGuarded(id, {
+      scope: server.scope,
+      userId: server.userId,
+      nangoConnectionId: server.nangoConnectionId,
+    });
   } catch (err) {
     if (err instanceof ExternalMcpServerWriteConflictError) {
       // The row changed/vanished under the authorized delete (TOCTOU race) → deny.

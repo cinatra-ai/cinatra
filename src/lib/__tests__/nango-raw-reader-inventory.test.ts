@@ -56,9 +56,9 @@ const PINNED: Record<string, { count: number; status: string; note?: string }> =
     note: "registry publish request-secrets/tokens — machine creds, not user connections",
   },
   "src/lib/external-mcp-registry.ts": {
-    count: 2,
+    count: 3,
     status: "gated-by-w2",
-    note: "bearer mint behind gateExternalMcpConnectionUse; Twenty import readback",
+    note: "bearer mint behind gateExternalMcpConnectionUse; Twenty import readback; setup-page apiKey import readback (cinatra#1407 — write-time verify, not a use-time read)",
   },
   "src/lib/extension-host-context.ts": {
     count: 2,

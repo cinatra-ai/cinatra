@@ -1,0 +1,9 @@
+{
+  "seq": "0014",
+  "file": "core/core__0014_pinned-shipped-fragment.mjs",
+  "summary": "Pinned fixture snapshot fragment for seq 0014 \u2014 a shipped per-migration manifest fragment; the gate reads it as base ledger state (its seq is the max shipped, and editing it is tampering).",
+  "destructive": false,
+  "tables": [
+    "metadata"
+  ]
+}

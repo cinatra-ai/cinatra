@@ -15,8 +15,10 @@ set -euo pipefail
 #        b. pg_dump the data; stop the source (KEEP the volume);
 #        c. restore into postgres:${PG_TO_TAG} on a FRESH volume; run migrate;
 #        d. assert every seeded row survived byte-identical + migrate idempotent.
-#      Default PG_FROM_TAG=PG_TO_TAG=17-alpine → a pure round-trip, green today;
-#      the lane sets PG_TO_TAG=18-alpine.
+#      Default PG_FROM_TAG=17-alpine, PG_TO_TAG=18-alpine → the REAL platform
+#      cross-major (the compose pin moved to 18; live stacks migrate 17→18),
+#      so a bare local run exercises both the positive and the negative arm.
+#      CI derives both tags from the repo (HEAD pin = TO, PR-base pin = FROM).
 #   2. NEGATIVE — the same-volume bare-tag bump REFUSES to start: point
 #      postgres:${PG_TO_TAG} at the ${PG_FROM_TAG} PGDATA volume and assert it
 #      exits with "database files are incompatible" (only meaningful across a
@@ -26,7 +28,7 @@ set -euo pipefail
 # run by the orchestrator's `postgres` arm too when PREV_IMAGE is supplied) +
 # this on-disk-volume major-bump proof — complementary failure modes.
 #
-# Env: PG_FROM_TAG (default 17-alpine), PG_TO_TAG (default 17-alpine),
+# Env: PG_FROM_TAG (default 17-alpine), PG_TO_TAG (default 18-alpine),
 #      SUPABASE_SCHEMA (default cinatra). Uses the candidate-checkout cinatra CLI
 #      from node_modules (@cinatra-ai/cinatra), same as upgrade-proof.sh.
 
@@ -35,8 +37,24 @@ WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 PG_FROM_TAG="${PG_FROM_TAG:-17-alpine}"
-PG_TO_TAG="${PG_TO_TAG:-17-alpine}"
+PG_TO_TAG="${PG_TO_TAG:-18-alpine}"
 SCHEMA="${SUPABASE_SCHEMA:-cinatra}"
+
+# Majors, needed up front: the volume MOUNT LAYOUT is major-dependent.
+# postgres <=17 declares a child volume at /var/lib/postgresql/data, so a
+# parent mount would be SHADOWED by an anonymous volume (the named volume would
+# not carry the cluster — a false-green for a volume-survival proof); it must
+# mount the LEGACY .../data target, exactly like every real deployed volume.
+# postgres >=18 moved PGDATA to /var/lib/postgresql/<major>/docker
+# (docker-library/postgres#1259) and REFUSES the legacy target; it must mount
+# the PARENT /var/lib/postgresql.
+FROM_MAJOR="${PG_FROM_TAG%%[.-]*}"
+TO_MAJOR="${PG_TO_TAG%%[.-]*}"
+pg_mount_target() { # $1 = major → the correct volume mount target for it
+  if [ "$1" -le 17 ]; then echo "/var/lib/postgresql/data"; else echo "/var/lib/postgresql"; fi
+}
+SRC_TARGET="$(pg_mount_target "$FROM_MAJOR")"
+DST_TARGET="$(pg_mount_target "$TO_MAJOR")"
 RUN_ID="wa-pg-$$"
 NET="${RUN_ID}-net"
 SRC="${RUN_ID}-src"
@@ -76,15 +94,15 @@ docker volume create "$VOL_TO" >/dev/null
 docker volume create "$VOL_NEG" >/dev/null
 
 # ── 1a. Source DB on a NAMED volume: provision + seed ────────────────────────
-# Mount the volume at the PARENT /var/lib/postgresql (NOT .../data). postgres 18+
-# moved PGDATA to a major-version-specific subdir (/var/lib/postgresql/18/docker;
-# docker-library/postgres#1259) and REFUSES to start when a volume is mounted at
-# the legacy .../data path. Mounting the parent is forward-compatible: pg 17 puts
-# its data in <vol>/data, pg 18 in <vol>/18/docker — both inside the same volume.
+# Mounted at the MAJOR-CORRECT target (see pg_mount_target above): a <=17
+# source uses the legacy .../data target — the layout every real deployed
+# volume has (and the only one where the NAMED volume actually carries the
+# cluster; a parent mount is shadowed by the image-declared child volume) —
+# an >=18 source uses the parent target the 18+ image requires.
 # All provisioning/dump/restore runs IN-CONTAINER via `docker exec` (no
 # host-side client), so no host port is published — the arm is fully isolated.
 docker run -d --name "$SRC" --network "$NET" \
-  -v "${VOL_FROM}:/var/lib/postgresql" \
+  -v "${VOL_FROM}:${SRC_TARGET}" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
   "postgres:${PG_FROM_TAG}" >/dev/null
 wa_wait_pg "$SRC" postgres 30 || fail "source postgres did not become ready within 60s."
@@ -121,6 +139,21 @@ SEED_COUNT="$(pgq "$SRC" "SELECT count(*) FROM \"${SCHEMA}\".works_after_data WH
 [ "${SEED_COUNT:-0}" -eq 3 ] || fail "expected 3 seeded rows on source, got '${SEED_COUNT}'."
 wa_info "seeded ${SEED_COUNT} rows"
 
+# Volume-persistence proof: the dump below must come from data the NAMED volume
+# actually carries (not container-local / anonymous-volume state), so REMOVE the
+# seed container and reopen the same volume with a fresh one before dumping. A
+# wrong mount layout (e.g. a <=17 source parent-mounted into the anonymous
+# shadow volume) fails HERE instead of false-greening the survival proof.
+wa_info "recreating the source from its named volume (persistence proof)"
+docker rm -f "$SRC" >/dev/null 2>&1 || true
+docker run -d --name "$SRC" --network "$NET" \
+  -v "${VOL_FROM}:${SRC_TARGET}" \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
+  "postgres:${PG_FROM_TAG}" >/dev/null
+wa_wait_pg "$SRC" postgres 30 || fail "source did not come back up from its named volume — the volume does not carry the cluster."
+PERSIST_COUNT="$(pgq "$SRC" "SELECT count(*) FROM \"${SCHEMA}\".works_after_data WHERE id LIKE 'works-after-pg-%';")"
+[ "${PERSIST_COUNT:-0}" -eq 3 ] || fail "seeded rows did NOT persist across a recreate from the named volume (got '${PERSIST_COUNT}'/3) — the source mount layout is not carrying the cluster."
+
 # ── 1b. Documented dump (pg_dump -Fc of the app database, the operator path) ──
 # Custom-format dump of the `postgres` database (the app's schema lives here).
 # pg_dump of the database — NOT pg_dumpall — so the restore does not re-CREATE
@@ -139,7 +172,7 @@ docker rm -f "$SRC" >/dev/null 2>&1 || true
 
 # ── 1c. Restore into the candidate on a FRESH volume ─────────────────────────
 docker run -d --name "$DST" --network "$NET" \
-  -v "${VOL_TO}:/var/lib/postgresql" \
+  -v "${VOL_TO}:${DST_TARGET}" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
   "postgres:${PG_TO_TAG}" >/dev/null
 wa_wait_pg "$DST" postgres 45 || fail "destination postgres:${PG_TO_TAG} did not become ready within 90s."
@@ -185,9 +218,7 @@ wa_info "POSITIVE OK — 3/3 rows survived value-identical into the new ${PG_TO_
 # LEGACY path /var/lib/postgresql/data (the place an existing deployment's data
 # already sits), then start ${PG_TO_TAG} on that SAME volume + SAME path. Only
 # meaningful across a real major (same-major reuse succeeds → would false-fail),
-# so SKIP when the majors match.
-FROM_MAJOR="${PG_FROM_TAG%%[.-]*}"
-TO_MAJOR="${PG_TO_TAG%%[.-]*}"
+# so SKIP when the majors match. (FROM_MAJOR/TO_MAJOR are computed up top.)
 if [ "$FROM_MAJOR" = "$TO_MAJOR" ]; then
   wa_info "NEGATIVE SKIPPED — PG_FROM_TAG and PG_TO_TAG share major ${FROM_MAJOR}; the same-volume bump only fails across a real major bump."
 else

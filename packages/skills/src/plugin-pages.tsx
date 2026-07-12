@@ -30,8 +30,9 @@ import { readOrgsWithTeamsForUser, readProjectsForUser } from "@/lib/better-auth
 import { SkillsToolbar } from "./skills-toolbar";
 import type { AvailableScopes } from "@/components/access-scope";
 import {
-  DEFAULT_SCOPE_TOKEN,
-  scopeSelectionMatches,
+  parseScopeFilterParam,
+  scopeSelectionMatchesAny,
+  serializeScopeFilterTokens,
   type NormalizedResourceScope,
 } from "@/lib/scope-filter";
 // Skill-authoring + edit pages list installed agents from the canonical
@@ -170,9 +171,14 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
     for (const team of org.teams) accessibleScopeTokens.add(`team:${team.id}`);
   }
   for (const project of projects) accessibleScopeTokens.add(`project:${project.id}`);
-  const requestedScope = pickSearchParam(resolvedSearchParams.scope);
-  const effectiveScope =
-    requestedScope && accessibleScopeTokens.has(requestedScope) ? requestedScope : DEFAULT_SCOPE_TOKEN;
+  // `?scope=` is a comma-separated multi-value OR-filter (cinatra#1074 W5),
+  // parsed by the ONE canonical parser: invalid / inaccessible tokens drop
+  // (a non-admin's stale `admin` token included), and an empty or
+  // workspace-containing selection collapses to the default (broadest view).
+  const effectiveScopeTokens = parseScopeFilterParam(
+    resolvedSearchParams.scope,
+    accessibleScopeTokens,
+  );
 
   // Map a skill's (level, scope) to the normalized two-axis scope shape. Only
   // bind a real org/team/project id; generic org skills (scope "org"/missing)
@@ -201,7 +207,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
 
   const filtered = skills
     .filter((skill) =>
-      scopeSelectionMatches(effectiveScope, normalizedScopeForSkill(skill.level, skill.scope)),
+      scopeSelectionMatchesAny(effectiveScopeTokens, normalizedScopeForSkill(skill.level, skill.scope)),
     )
     .filter(
       (skill) =>
@@ -224,7 +230,10 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
   const sortHref = (column: string) => {
     const params = new URLSearchParams();
     if (rawQuery) params.set("q", rawQuery);
-    if (effectiveScope !== DEFAULT_SCOPE_TOKEN) params.set("scope", effectiveScope);
+    // Carry the FULL multi-scope selection (comma-joined; default omitted) so a
+    // header click never silently narrows a multi-scope deep link.
+    const serializedScope = serializeScopeFilterTokens(effectiveScopeTokens);
+    if (serializedScope !== null) params.set("scope", serializedScope);
     params.set("view", "table");
     params.set("sort", column);
     params.set("dir", nextDirection(column));
@@ -250,7 +259,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
           basePath="/skills"
           query={query}
           view={view}
-          scopeValue={effectiveScope}
+          scopeValue={effectiveScopeTokens}
           scopes={scopes}
           showAdmin={isAdmin}
         />

@@ -39,6 +39,7 @@ vi.mock("@/lib/extension-trust", () => ({
 }));
 vi.mock("@/lib/extension-migration-host", () => ({
   applyMigrationsForTrustedRecords: async () => ({ applied: [], refused: [] }),
+  applyMigrationUnionForTrustedRecords: async () => ({ applied: [], refused: [] }),
 }));
 
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";

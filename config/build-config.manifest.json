@@ -395,6 +395,7 @@
     { "alias": "@cinatra-ai/objects/renderer-types", "target": "./packages/objects/src/renderer-types.ts" },
     { "alias": "@cinatra-ai/objects/module", "target": "./packages/objects/src/integration/module.ts" },
     { "alias": "@cinatra-ai/objects/namespace", "target": "./packages/objects/src/namespace.ts" },
+    { "alias": "@cinatra-ai/objects/claims", "target": "./packages/objects/src/claims.ts" },
     { "alias": "@cinatra-ai/objects/auto-registrar", "target": "./packages/objects/src/auto-registrar.ts" },
     { "alias": "@cinatra-ai/objects/registry", "target": "./packages/objects/src/registry.ts" },
     { "alias": "@cinatra-ai/objects/sync-adapters/registry", "target": "./packages/objects/src/sync-adapters/registry.ts" },
@@ -406,6 +407,7 @@
     { "alias": "@cinatra-ai/objects/classifier-signals", "target": "./packages/objects/src/classifier-signals.ts" },
     { "alias": "@cinatra-ai/registries", "target": "./packages/registries/src/index.ts" },
     { "alias": "@cinatra-ai/registries/src/version-compare", "target": "./packages/registries/src/version-compare.ts" },
+    { "alias": "@cinatra-ai/registries/src/update-read-model", "target": "./packages/registries/src/update-read-model.ts" },
     { "alias": "@cinatra-ai/registries/types", "target": "./packages/registries/src/types.ts" },
     { "alias": "@cinatra-ai/registries/install", "target": "./packages/registries/src/install/install-with-deps.ts" }
   ],

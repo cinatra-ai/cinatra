@@ -298,3 +298,84 @@ describe("skills_installed_get — visibility filter", () => {
     expect((result as { id: string }).id).toBe("sys-1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1360 — the create/update handler must forward the caller's userId as the
+// personal-skill OWNER. createOrUpdateCustomSkillForAgent REQUIRES input.userId
+// (personal-skills.ts throws without it outside dev-bypass), so the missing
+// forwarding silently broke every MCP personal-skill create/update in
+// production. The owner is derived from the authenticated actor, never a
+// caller-supplied input field; an unattributable caller fails closed.
+// ---------------------------------------------------------------------------
+describe("skills_personal_skill_create_or_update — owner userId forwarding (#1360)", () => {
+  const baseInput = {
+    agentId: "@cinatra-ai/asset-blog",
+    promptEntries: [{ kind: "draft", prompt: "make it punchy" }],
+    skillName: "My Custom Skill",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards the authenticated caller's userId as the skill owner (alongside the resource-gate actor)", async () => {
+    const { actorContextFromMcpRequest } = await import("@cinatra-ai/agents/auth-policy");
+    const actorCtx = { platformRole: "member", principalId: "user-9", organizationId: "org-1" };
+    vi.mocked(actorContextFromMcpRequest).mockResolvedValue(actorCtx as never);
+    const { createOrUpdateCustomSkillForAgent } = await import("../personal-skills");
+    // Return a result WITHOUT an id so the post-upsert enqueueInlineForSkill is skipped.
+    vi.mocked(createOrUpdateCustomSkillForAgent).mockResolvedValue({ ok: true } as never);
+
+    const handlers = createSkillsPrimitiveHandlers();
+    await handlers["skills_personal_skill_create_or_update"]({
+      primitiveName: "skills_personal_skill_create_or_update",
+      input: baseInput,
+      actor: { userId: "user-9", source: "ui" },
+    } as never);
+
+    expect(createOrUpdateCustomSkillForAgent).toHaveBeenCalledOnce();
+    const arg = vi.mocked(createOrUpdateCustomSkillForAgent).mock.calls[0]?.[0] as {
+      userId?: string;
+      actor?: unknown;
+      agentId?: string;
+    };
+    // Owner is the caller's userId, never a caller-supplied field.
+    expect(arg.userId).toBe("user-9");
+    // The resource-access gate still receives the resolved actor context.
+    expect(arg.actor).toBe(actorCtx);
+    expect(arg.agentId).toBe("@cinatra-ai/asset-blog");
+  });
+
+  it("fail-closed: an actor with NO userId ⇒ forwards userId=undefined and the resolver rejects an anonymous owner", async () => {
+    const { actorContextFromMcpRequest } = await import("@cinatra-ai/agents/auth-policy");
+    vi.mocked(actorContextFromMcpRequest).mockResolvedValue(
+      { platformRole: "member", principalId: "anonymous" } as never,
+    );
+    const { createOrUpdateCustomSkillForAgent } = await import("../personal-skills");
+    // Faithful to the real resolver: throw when the owner userId is absent.
+    vi.mocked(createOrUpdateCustomSkillForAgent).mockImplementation(
+      (async (arg: { userId?: string }) => {
+        if (!arg.userId) {
+          throw new Error(
+            "createOrUpdateCustomSkillForAgent: input.userId is required.",
+          );
+        }
+        return { ok: true };
+      }) as never,
+    );
+
+    const handlers = createSkillsPrimitiveHandlers();
+    await expect(
+      handlers["skills_personal_skill_create_or_update"]({
+        primitiveName: "skills_personal_skill_create_or_update",
+        input: baseInput,
+        actor: { source: "ui" }, // no userId
+      } as never),
+    ).rejects.toThrow(/input\.userId is required/);
+
+    const arg = vi.mocked(createOrUpdateCustomSkillForAgent).mock.calls[0]?.[0] as {
+      userId?: string;
+    };
+    expect(arg.userId).toBeUndefined();
+  });
+});

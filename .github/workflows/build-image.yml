@@ -81,7 +81,7 @@ jobs:
     steps:
       - id: filter
         if: ${{ github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         with:
           predicate-quantifier: 'every'
           filters: |
@@ -206,6 +206,45 @@ jobs:
       # `release-workflows-tests` job below with its own Postgres service
       # container. That topology lets the suite gate independently of the
       # agents-suite baseline.
+
+  # Full packages/skills unit suite (#1359). Runs in its OWN top-level job —
+  # NOT appended to `test` — for the same reason as rbac-authz-unit / auth-
+  # schema-drift: the shared `test` job has a well-known packages/agents
+  # baseline that would skip any step added after it. packages/skills is not in
+  # the root `src/` vitest include, so before this job only a hand-pinned 2-file
+  # slice ran in CI (formerly in the Better Auth schema parity job); the rest of
+  # the suite had no runner, so #1174's 15-test repair regressed within 48h
+  # (#1306) undetected. This job runs the ENTIRE suite (`pnpm test` = vitest run;
+  # the live golden-eval tests self-skip without OPENAI_API_KEY) and is made a
+  # REQUIRED gate STRUCTURALLY: the `build` job `needs` it and its "Guard
+  # prerequisite gates" step hard-fails the (branch-protection-required) `build`
+  # if this job did not succeed — the exact mechanism that makes `test`
+  # required, so no branch-protection contexts change is needed. The suite is
+  # self-contained (mocks DB/LLM; imports only in-repo workspace source), so no
+  # companion-extension clone is required.
+  skills-unit:
+    name: Skills unit tests
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Skills unit tests (full packages/skills suite)
+        run: cd packages/skills && pnpm test
 
   # RBAC authz unit tests — runs the whole `src/lib/authz` suite (20 files /
   # 160 tests), including the resolver matrix used by the e2e job as the
@@ -352,18 +391,13 @@ jobs:
       - name: MCP auth-plugins pure builder test
         run: cd packages/mcp-server && pnpm exec vitest run src/__tests__/auth-plugins.test.ts
 
-      # The generic, install/uninstall-aware skill resolver that
-      # replaces the per-consumer hardcoded skill self-heals. packages/skills is
-      # not in the root vitest include, so pin this contract test explicitly.
-      - name: Extension skill resolver test
-        run: cd packages/skills && pnpm exec vitest run --no-coverage src/extension-skill-resolver.test.ts
-
-      # Skills delete-race fix: deletePersonalSkillAction must REDIRECT on success
-      # (not return a MutationResult) so the /skills/<id>/edit page never re-renders
-      # to notFound() under the deleted row and 404s before the toast. packages/skills
-      # is not in the root vitest include, so pin this regression test explicitly.
-      - name: Skills delete-redirect action test (delete-race fix)
-        run: cd packages/skills && pnpm exec vitest run --no-coverage src/__tests__/delete-personal-skill-action.test.ts
+      # NOTE: the two pinned packages/skills contract tests that previously ran
+      # here (Extension skill resolver + Skills delete-redirect action) are now
+      # SUBSUMED by the full packages/skills suite, which runs as its own
+      # required `skills-unit` job (gated structurally via the `build`
+      # prerequisite guard). Pinning a 2-file slice let the rest of the suite
+      # regress uncaught (#1174 repaired 15 tests; #1306 re-broke them within
+      # 48h). See #1359.
 
       - name: Native Node smoke (migration loads via plain Node strip-types)
         run: |
@@ -475,7 +509,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:17' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -562,7 +596,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -1510,7 +1544,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:17' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -1523,7 +1557,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:7' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
         ports:
           - 6379:6379
         options: >-
@@ -1777,7 +1811,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:17' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -1790,7 +1824,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:7' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
         ports:
           - 6379:6379
         options: >-
@@ -1980,8 +2014,8 @@ jobs:
     # `needs: detect` is added so a docs-only PR skips the build entirely (the
     # `skip` gate below has no value without that edge); the publish-after-
     # test dependency is preserved.
-    needs: [detect, test]
-    # Run even when a prerequisite (`detect`/`test`) FAILED, so the guard step
+    needs: [detect, test, skills-unit]
+    # Run even when a prerequisite (`detect`/`test`/`skills-unit`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
     # `build` would NOT block a merge gated on the build status. The guard closes
@@ -2010,10 +2044,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -2029,7 +2063,7 @@ jobs:
       # asserts it serves — proving the no-private-extensions path end to end
       # (issue #81), not just at build/typecheck level.
 
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       # Build → boot-gate (issue #81). The image is FIRST built and loaded into
       # the local docker daemon, then booted by the prod-boot e2e below. This
@@ -2045,7 +2079,7 @@ jobs:
       # pause for approval; only the release publish + prod-deploy pause behind
       # the `release-approval` Environment.
       - name: Build image (load for prod-boot e2e)
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           load: true
@@ -2120,10 +2154,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -2131,7 +2165,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -2146,7 +2180,7 @@ jobs:
       # is rebuilt. Identical build-args (CI=true) to the load build keep the
       # cache hit total.
       - name: Push image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: true
@@ -2229,12 +2263,12 @@ jobs:
             echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, upgrade proof not applicable."
           fi
 
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         if: ${{ steps.guard.outputs.release == 'true' }}
 
       - name: Login to GHCR
         if: ${{ steps.guard.outputs.release == 'true' }}
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -2266,7 +2300,7 @@ jobs:
       # `load:` instead of `push:`.
       - name: Load candidate image from the build cache
         if: ${{ steps.guard.outputs.release == 'true' }}
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           load: true
@@ -2355,10 +2389,10 @@ jobs:
           echo "::notice::Release clearance confirmed for '$TAG'."
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -2366,7 +2400,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -2381,7 +2415,7 @@ jobs:
       # so its digest output feeds `release-dispatch` below.
       - name: Push image
         id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: true
@@ -2459,7 +2493,7 @@ jobs:
       # publish-release-image; GITHUB_TOKEN has packages:read for this repo's own
       # package.
       - name: Login to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

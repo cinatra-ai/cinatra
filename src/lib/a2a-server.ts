@@ -18,6 +18,10 @@ import {
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import { filterTemplatesToLiveManifest, readLiveAgentPackageNames } from "@/lib/a2a-manifest-gate";
 import { getActivationGeneration } from "@/lib/extension-activation-generation";
+// cinatra#1392 Gap 2 — the LIVE injection of the tested edge-bound serving
+// binding (deferred from #1403 behind the route-graph ratchet; this slice
+// carries the annotated absorb records for the growth).
+import { resolveEdgeBoundServingDecision } from "@/lib/a2a-edge-bound-serving";
 
 // ---------------------------------------------------------------------------
 // A2A server mount singleton builder.
@@ -101,6 +105,12 @@ async function buildA2AMount(): Promise<A2AMount> {
       await enqueueAgentRun({ runId: payload.runId });
     },
     taskStore: innerTaskStore,
+    // cinatra#1392 Gap 2 — edge-bound serving: resolve the TRUSTED dependent
+    // identity (the run's signed lineage on the ActorContext) against the
+    // target package's dependency edge BEFORE the untrusted client
+    // requestedVersion. The executor pins the resolved non-default snapshot,
+    // refuses an unreachable pin with evidence, or serves the default.
+    resolveEdgeBoundServing: (input) => resolveEdgeBoundServingDecision(input),
   });
   const taskStore = createA2ATaskStoreWithDbFallback(innerTaskStore);
   // Use CinatraResubscribeHandler instead of DefaultRequestHandler so

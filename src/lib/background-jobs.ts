@@ -32,7 +32,7 @@ export {
   LITELLM_PRICING_SYNC_LOOP_JOB_ID,
   MARKETPLACE_CATALOG_SYNC_LOOP_JOB_ID,
   VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID,
-  PM_SCHEDULE_RECONCILE_LOOP_JOB_ID, EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
+  PM_SCHEDULE_RECONCILE_LOOP_JOB_ID, EXTENSION_STORE_GC_REAP_LOOP_JOB_ID, EXTENSION_AUTO_UPDATE_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
 import type { BackgroundJobName } from "@/lib/background-jobs-names";
 
@@ -461,8 +461,8 @@ export async function ensureBackgroundJobRuntime() {
     if (!runtime.skillMatchDriftSamplerRegistered) {
       runtime.skillMatchDriftSamplerRegistered = true;
       try {
-        const { registerSkillMatchDriftSamplerAtBoot } = await import("@cinatra-ai/skills");
-        await registerSkillMatchDriftSamplerAtBoot();
+        const { registerSkillMatchSchedulersAtBoot } = await import("@cinatra-ai/skills");
+        await registerSkillMatchSchedulersAtBoot();
       } catch (err) {
         console.warn(
           "[background-jobs] skill-match drift sampler registration failed:",

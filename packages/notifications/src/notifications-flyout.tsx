@@ -14,9 +14,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { Bell, Copy } from "lucide-react";
+import { Bell, Copy, TriangleAlert } from "lucide-react";
 // Copy is used by NotificationRow's per-row copy button. The toast-side
-// copy button is auto-injected by `@/lib/toast`.
+// copy button is auto-injected by `@/lib/toast`. TriangleAlert is the
+// config-needs entry's warning glyph (mirrors the card needs-review strip).
 
 import type { AppNotification } from "./types";
 import {
@@ -25,6 +26,9 @@ import {
   getInProgressItems,
   getUnreadItems,
   isRunningProgressNotification,
+  isConfigurationNeedsNotification,
+  getConfigurationNeedsMetadata,
+  type ConfigurationNeedsConnector,
 } from "./flyout-state";
 import {
   NotificationContext,
@@ -555,6 +559,7 @@ export function NotificationsBellTrigger(): React.ReactElement {
               items={collapsed.slice(0, 10)}
               currentPathname={pathname}
               onSelect={onOpenNotification}
+              onCloseFlyout={() => setOpen(false)}
               emptyTitle="No notifications yet"
               emptyDescription="Saved settings, finished jobs, and admin updates will show up here."
             />
@@ -564,6 +569,7 @@ export function NotificationsBellTrigger(): React.ReactElement {
               items={unread}
               currentPathname={pathname}
               onSelect={onOpenNotification}
+              onCloseFlyout={() => setOpen(false)}
               emptyTitle="You're all caught up"
               emptyDescription="No unread notifications."
             />
@@ -573,6 +579,7 @@ export function NotificationsBellTrigger(): React.ReactElement {
               items={inProgress}
               currentPathname={pathname}
               onSelect={onOpenNotification}
+              onCloseFlyout={() => setOpen(false)}
               emptyTitle="No background tasks running"
               emptyDescription="Jobs you trigger will appear here while they run."
             />
@@ -602,12 +609,14 @@ function NotificationList({
   items,
   currentPathname,
   onSelect,
+  onCloseFlyout,
   emptyTitle,
   emptyDescription,
 }: {
   items: AppNotification[];
   currentPathname: string;
   onSelect: (n: AppNotification) => void;
+  onCloseFlyout: () => void;
   emptyTitle: string;
   emptyDescription: string;
 }): React.ReactElement {
@@ -634,6 +643,7 @@ function NotificationList({
               notification={notification}
               currentPathname={currentPathname}
               onSelect={onSelect}
+              onCloseFlyout={onCloseFlyout}
             />
           ))}
         </div>
@@ -646,11 +656,30 @@ function NotificationRow({
   notification,
   currentPathname,
   onSelect,
+  onCloseFlyout,
 }: {
   notification: AppNotification;
   currentPathname: string;
   onSelect: (n: AppNotification) => void;
+  onCloseFlyout: () => void;
 }): React.ReactElement {
+  // Agent post-install configuration-needs entry (cinatra #1057 ruling (c)):
+  // a dedicated row that lists each required connector's displayName as a link
+  // to its setup page. Rendered from `metadata.configurationNeeds`, in the same
+  // Needs-review mustard treatment as the Extensions-page card strip.
+  if (isConfigurationNeedsNotification(notification)) {
+    const meta = getConfigurationNeedsMetadata(notification);
+    if (meta) {
+      return (
+        <ConfigurationNeedsRow
+          notification={notification}
+          connectors={meta.connectors}
+          onCloseFlyout={onCloseFlyout}
+        />
+      );
+    }
+  }
+
   const running = isRunningProgressNotification(notification);
   const isReadOrCurrent =
     Boolean(notification.readAt) ||
@@ -718,6 +747,78 @@ function NotificationRow({
           <Copy className="h-4 w-4" />
         </Button>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent post-install "needs configuration" row (cinatra #1057 ruling (c)).
+//
+// One entry per affected agent. The title is the ruling copy
+// `Set up connections for "<displayName>":`; the body is the list of each
+// required connector's human-readable displayName linking to that connector's
+// setup page (never the bare package id). Rendered in the design system's
+// Needs-review status colours — the mustard tint (`bg-warning/10`) over the
+// mustard ink (`text-warning`) with a mustard hairline (`border-warning/42`) —
+// so the bell entry reads the same as the Extensions-page card strip it
+// mirrors. The links carry navigation (no whole-row nav button, no copy
+// button); each closes the flyout on click. The entry is not marked read on
+// interaction — it clears only when the agent becomes runnable, at which point
+// the server reconciler deletes it.
+// ---------------------------------------------------------------------------
+export function ConfigurationNeedsRow({
+  notification,
+  connectors,
+  onCloseFlyout,
+}: {
+  notification: AppNotification;
+  connectors: ConfigurationNeedsConnector[];
+  onCloseFlyout: () => void;
+}): React.ReactElement {
+  return (
+    <div
+      data-slot="notification-configuration-needs"
+      data-conformance="install-config-needs-callout"
+      className="flex flex-col gap-2 rounded-chip border border-warning/42 bg-warning/10 px-3 py-3"
+    >
+      <div className="flex items-start gap-2 text-warning">
+        <TriangleAlert
+          aria-hidden
+          className="mt-0.5 size-3.5 shrink-0"
+          strokeWidth={2.25}
+        />
+        <p className="text-sm font-semibold text-foreground">
+          {notification.title}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-xs text-warning">
+        {connectors.map((connector, index) => (
+          <span key={connector.packageName} className="inline-flex items-center">
+            {connector.settingsHref ? (
+              <Link
+                href={connector.settingsHref}
+                data-field="manifest.displayName"
+                onClick={onCloseFlyout}
+                className="font-semibold underline decoration-warning/50 underline-offset-2 hover:decoration-warning"
+              >
+                {connector.displayName}
+              </Link>
+            ) : (
+              <span data-field="manifest.displayName" className="font-semibold">
+                {connector.displayName}
+              </span>
+            )}
+            {index < connectors.length - 1 && (
+              <span aria-hidden className="ml-2 text-warning/60">
+                &middot;
+              </span>
+            )}
+          </span>
+        ))}
+      </div>
+      <p className="pl-5 text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
+        {formatNotificationTimestamp(notification.createdAt)}
+      </p>
     </div>
   );
 }

@@ -93,6 +93,14 @@ export function enqueueDepsForTemplate(
   };
 }
 
+// A single filesystem/URL-safe path segment (rejects `.`/`..`, separators,
+// query/fragment chars) — mirrors the registries `isSafePathSegment` shape but
+// kept local so this run-start leaf never imports the registries barrel
+// (cinatra#1196 route-graph pressure).
+function isSafeConnectorSegment(s: string): boolean {
+  return s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s);
+}
+
 export class ConnectorNotConfiguredError extends Error {
   override readonly name = "ConnectorNotConfiguredError";
   readonly code = "CONNECTOR_NOT_CONFIGURED" as const;
@@ -107,9 +115,38 @@ export class ConnectorNotConfiguredError extends Error {
     );
     this.packageId = packageId;
     this.reason = reason;
-    // Derive the slug from the canonical `@cinatra-ai/<slug>` packageId.
-    const slug = packageId.replace(/^@cinatra-ai\//, "");
-    this.settingsHref = `/connectors/cinatra-ai/${slug}/setup`;
+    // Multi-vendor (cinatra#1196): derive BOTH the vendor and the name from the
+    // connector packageId so an operator/third-party connector (`@vendor/<name>`)
+    // deep-links to its OWN `/connectors/<vendor>/<name>/setup` route (the route
+    // is `[vendor]/[slug]`) instead of the old literal `cinatra-ai` segment. A
+    // first-party `@cinatra-ai/<name>` resolves identically to before; an
+    // unscoped/malformed id falls back to the historical `cinatra-ai` vendor.
+    //
+    // Require EXACTLY one `/` and BOTH parts a single safe segment (the
+    // canonical `@vendor/name` rule) — so a malformed multi-slash id like
+    // `@v/a/b`, or query/fragment characters, can never leak EXTRA path
+    // segments into the deep-link. Done INLINE rather than via the registries
+    // `parsePackageId` on purpose: this is a leaf module eagerly imported by
+    // many run-start suites with partial module mocks, and a top-level
+    // `@cinatra-ai/registries` import would pull the registries barrel into
+    // that graph (breaking those suites at load).
+    const scoped = /^@([^/]+)\/([^/]+)$/.exec(packageId);
+    let vendor = "cinatra-ai";
+    let name: string;
+    if (scoped && isSafeConnectorSegment(scoped[1]) && isSafeConnectorSegment(scoped[2])) {
+      vendor = scoped[1];
+      name = scoped[2];
+    } else {
+      // Unscoped or malformed: strip a leading `@scope/`, keep only the FIRST
+      // path segment, and require it be a safe segment too — so a traversal
+      // (`..`), separator, or query/fragment payload can never reach the href.
+      // A still-unsafe fallback collapses to a stable safe placeholder (the
+      // deep-link stays well-formed; this path is unreachable for a canonical
+      // connector packageId). All under the historical `cinatra-ai` vendor.
+      const first = packageId.replace(/^@[^/]+\//, "").split(/[/?#]/)[0];
+      name = isSafeConnectorSegment(first) ? first : "unknown";
+    }
+    this.settingsHref = `/connectors/${vendor}/${name}/setup`;
   }
 }
 

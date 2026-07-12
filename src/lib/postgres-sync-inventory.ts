@@ -156,6 +156,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Tenant-scoped by-id reads of the legacy chat_threads JSON sync table (thread payload + team-org membership) that gate the authenticated chat read/write routes. Follows the same synchronous sync-table access pattern as the other chat_threads readers in database.ts; migrates to async typed reads when the legacy JSON sync tables are converted.",
   },
+  "src/lib/assistant-thread-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b.",
+  },
   "packages/objects/src/graphiti-projector.ts": {
     class: "migratable-request-path",
     justification:
@@ -170,6 +175,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     class: "migratable-request-path",
     justification:
       "Skills catalog store read on request paths. Migratable; converted with the skills subsystem.",
+  },
+  "src/lib/objects/artifact-claim-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Artifact-claim registry DB primitives (cinatra#1425): reserve/activate/retire claim transitions (advisory-locked, CTE-atomic with their claim events + reconcile-queue rows) plus the org scope-chain reads the effective-type-catalog resolver consumes. Built as a sync leaf mirroring skill-lifecycle-store.ts's pattern so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
+  "src/lib/skill-lifecycle-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Skill-lifecycle DB write primitives (cinatra#1361): records an immutable skill_revisions row on the custom/personal upsertSkill write path and applies the audited lifecycle-state compare-and-swap transition. Built as a sync leaf mirroring skills-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the skills subsystem.",
   },
   "packages/skills/src/llm-matching/skill-matches-store.ts": {
     class: "migratable-request-path",
