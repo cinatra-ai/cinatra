@@ -737,7 +737,7 @@ services:
   # tags this stack carried. Plane runs implicit DB migrations at boot, so a
   # floating `stable` can silently cross a schema-migrating major on a plain
   # `docker pull`; that class is now closed:
-  #   - Plane images default to `${PLANE_TAG:-v1.3.1@sha256:…}` — the IMMUTABLE
+  #   - Plane images default to the release tag `${PLANE_TAG:-v1.3.1@sha256:…}` — the IMMUTABLE
   #     v1.3.1 release (≡ the `stable` the #315/#320 smoke ran, resolved on the
   #     Docker registry), digest-bound. The `${PLANE_TAG}` override knob is kept:
   #     set PLANE_TAG=<tag> to pull a different Plane release (the whole
@@ -816,7 +816,7 @@ services:
     networks: ["plane"]
 
   plane-migrator:
-    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139} # immutable release tag, digest-bound
     container_name: cinatra-plane-migrator-1
     profiles: ["plane"]
     restart: "no"
@@ -869,7 +869,7 @@ services:
         condition: service_healthy
 
   plane-api:
-    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139} # immutable release tag, digest-bound
     container_name: cinatra-plane-api-1
     profiles: ["plane"]
     command: ./bin/docker-entrypoint-api.sh
@@ -901,7 +901,7 @@ services:
         condition: service_completed_successfully
 
   plane-worker:
-    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139} # immutable release tag, digest-bound
     container_name: cinatra-plane-worker-1
     profiles: ["plane"]
     command: ./bin/docker-entrypoint-worker.sh
@@ -912,7 +912,7 @@ services:
         condition: service_started
 
   plane-beat-worker:
-    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}
+    image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139} # immutable release tag, digest-bound
     container_name: cinatra-plane-beat-1
     profiles: ["plane"]
     command: ./bin/docker-entrypoint-beat.sh
@@ -923,7 +923,7 @@ services:
         condition: service_started
 
   plane-live:
-    image: makeplane/plane-live:${PLANE_TAG:-v1.3.1@sha256:2073b6950a394545ea1db6ed4157e951ad5a6e1881e74f4f9238ace6c35bbf3d}
+    image: makeplane/plane-live:${PLANE_TAG:-v1.3.1@sha256:2073b6950a394545ea1db6ed4157e951ad5a6e1881e74f4f9238ace6c35bbf3d} # immutable release tag, digest-bound
     container_name: cinatra-plane-live-1
     profiles: ["plane"]
     environment:
@@ -942,7 +942,7 @@ services:
         condition: service_started
 
   plane-web:
-    image: makeplane/plane-frontend:${PLANE_TAG:-v1.3.1@sha256:c178fd85c4588165262cfe748bd103fdeccebbbab827c53e71b9ce32fff84f86}
+    image: makeplane/plane-frontend:${PLANE_TAG:-v1.3.1@sha256:c178fd85c4588165262cfe748bd103fdeccebbbab827c53e71b9ce32fff84f86} # immutable release tag, digest-bound
     container_name: cinatra-plane-web-1
     profiles: ["plane"]
     networks:
@@ -955,7 +955,7 @@ services:
         condition: service_started
 
   plane-space:
-    image: makeplane/plane-space:${PLANE_TAG:-v1.3.1@sha256:e08c2c8741ae6f81a9326dc9201e7e09c0c411b87a20198f9ea9e5cf2fae3488}
+    image: makeplane/plane-space:${PLANE_TAG:-v1.3.1@sha256:e08c2c8741ae6f81a9326dc9201e7e09c0c411b87a20198f9ea9e5cf2fae3488} # immutable release tag, digest-bound
     container_name: cinatra-plane-space-1
     profiles: ["plane"]
     networks:
@@ -968,7 +968,7 @@ services:
         condition: service_started
 
   plane-admin:
-    image: makeplane/plane-admin:${PLANE_TAG:-v1.3.1@sha256:ff9219127a2c2c4a4bb066d6a0e25a5fc6a11204cf8484b521dada53d696fe43}
+    image: makeplane/plane-admin:${PLANE_TAG:-v1.3.1@sha256:ff9219127a2c2c4a4bb066d6a0e25a5fc6a11204cf8484b521dada53d696fe43} # immutable release tag, digest-bound
     container_name: cinatra-plane-admin-1
     profiles: ["plane"]
     networks:
@@ -981,7 +981,7 @@ services:
         condition: service_started
 
   plane-proxy:
-    image: makeplane/plane-proxy:${PLANE_TAG:-v1.3.1@sha256:b4f8bb6998052dcd1488171a90d473674cefbc6ec77114d5095b48c805f4ad27}
+    image: makeplane/plane-proxy:${PLANE_TAG:-v1.3.1@sha256:b4f8bb6998052dcd1488171a90d473674cefbc6ec77114d5095b48c805f4ad27} # immutable release tag, digest-bound
     container_name: cinatra-plane-proxy-1
     profiles: ["plane"]
     networks: ["plane"]

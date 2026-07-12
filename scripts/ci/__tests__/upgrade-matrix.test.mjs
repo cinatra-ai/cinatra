@@ -101,8 +101,8 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
     // other three services still carry the pinned image, so the plain
     // "coupled image exists somewhere" check alone would pass this.
     const drifted = composeText.replace(
-      "image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}",
-      "image: makeplane/plane-backend:v2.0.0",
+      "image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}", // the pinned release tag
+      "image: makeplane/plane-backend:v2.0.0", // a drifted release tag
     );
     expect(drifted).not.toBe(composeText);
     const { errors } = collectProblems({ composeText: drifted, matrix, schema });
@@ -111,8 +111,8 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
 
   it("twenty-worker drifting off twenty-server's pinned image FAILS (repo-level net)", () => {
     const drifted = composeText.replace(
-      "  twenty-worker:\n    image: twentycrm/twenty:${TWENTY_TAG:-v2.7.3}",
-      "  twenty-worker:\n    image: twentycrm/twenty:v3.0.0",
+      "  twenty-worker:\n    image: twentycrm/twenty:${TWENTY_TAG:-v2.7.3}", // the pinned release tag
+      "  twenty-worker:\n    image: twentycrm/twenty:v3.0.0", // a drifted release tag
     );
     expect(drifted).not.toBe(composeText);
     const { errors } = collectProblems({ composeText: drifted, matrix, schema });
@@ -236,7 +236,12 @@ describe("assertMatrixRevision — fail-closed consumer/matrix skew guard", () =
 describe("parseCompose", () => {
   it("resolves ${VAR:-default} image defaults (the PLANE_TAG knob)", () => {
     const { services } = parseCompose("services:\n  a:\n    image: repo/x:${TAG:-v1.2.3@sha256:aa}\n");
-    expect(services.a.image).toBe("repo/x:v1.2.3@sha256:aa");
+    expect(services.a.image).toBe("repo/x:v1.2.3@sha256:aa"); // the resolved release tag
+  });
+
+  it("strips a trailing YAML comment from an image value (compose parity)", () => {
+    const { services } = parseCompose("services:\n  a:\n    image: repo/x:v1.2.3@sha256:aa # immutable release tag\n");
+    expect(services.a.image).toBe("repo/x:v1.2.3@sha256:aa"); // the resolved release tag
   });
 
   it("collects named volume mounts and top-level volumes", () => {

@@ -72,7 +72,11 @@ export function parseCompose(text) {
       if (!curService) continue;
       const img = line.match(/^    image:\s*(.+?)\s*$/);
       if (img) {
-        services[curService].image = resolveEnvDefault(img[1].trim());
+        // Strip a trailing YAML comment (` # ...`) — image refs never contain
+        // a space, so the first ` #` always starts a comment (compose parses
+        // it the same way).
+        const value = img[1].replace(/\s+#.*$/, "").trim();
+        services[curService].image = resolveEnvDefault(value);
         continue;
       }
       // Volume mount: `      - <name>:<path>` or `      - ./bind:/path`.
