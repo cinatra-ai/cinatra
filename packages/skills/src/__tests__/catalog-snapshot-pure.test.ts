@@ -31,6 +31,9 @@ vi.mock("@/lib/database", () => ({
   writeMetadataValueToDatabase: vi.fn((key: string, value: unknown) => {
     state.meta.set(key, JSON.stringify(value));
   }),
+  writeMetadataValueIfAbsentToDatabase: vi.fn((key: string, value: unknown) => {
+    if (!state.meta.has(key)) state.meta.set(key, JSON.stringify(value));
+  }),
   readRawMetadataStringFromDatabase: vi.fn((key: string) => state.meta.get(key) ?? null),
   compareAndSwapMetadataValueFromDatabase: vi.fn(() => true),
 }));

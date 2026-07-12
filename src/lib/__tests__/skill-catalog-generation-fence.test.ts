@@ -2,19 +2,19 @@
  * Skills-catalog generation token — transactional fence + cross-process cache
  * (cinatra#1364, lifecycle A4).
  *
- * Loads the REAL @/lib/database module (real drizzle query builders) over a
- * captured fake postgres-sync executor, and pins:
- *   1. FENCE: replaceSkillCatalogInDatabase commits the generation-token bump
- *      IN THE SAME transaction as the row writes (one runPostgresQueriesSync
- *      call, transaction: true, batch includes the metadata write for
- *      `skills_catalog_generation`) — a reader can never observe new rows
- *      under an old token or vice versa.
- *   2. CACHE: readSkillCatalogFromDatabase keys its in-process cache on the
- *      DB token — same token ⇒ cache hit (no row re-read); changed token
- *      (a write from ANY process) ⇒ full refetch. The token is read BEFORE
- *      the rows (conservative-staleness ordering).
- *   3. The targeted writers (updateSkillPrefillTextInDatabase,
- *      applySkillRollbackInDatabase) bump the token atomically too.
+ * Loads the REAL @/lib/database + @/lib/database-metadata modules (real
+ * drizzle query builders) over a captured fake postgres-sync executor, and
+ * pins:
+ *   1. WRITE FENCE: replaceSkillCatalogInDatabase commits the generation-token
+ *      bump IN THE SAME transaction as the row writes (one
+ *      runPostgresQueriesSync call, transaction: true, batch includes the
+ *      metadata write for `skills_catalog_generation`).
+ *   2. READ FENCE: a cache miss reads token → rows → token in ONE sequential
+ *      batch and RETRIES when the tokens differ, so an interleaved commit can
+ *      never hand the caller a torn {old packages, new skills} mix.
+ *   3. CACHE: same token ⇒ cache hit (probe only, no row re-read); changed
+ *      token (a write from ANY process) ⇒ full refetch.
+ *   4. The targeted prefill writer bumps the token atomically too.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,7 +25,10 @@ const fake = vi.hoisted(() => ({
   calls: [] as Call[],
   meta: new Map<string, string>(),
   tables: new Map<string, Array<{ id: string; payload: string }>>(),
-  // Set per-test to classify queries (real builder texts computed after import).
+  // Optional per-test script: each metadata-token READ shifts the next value
+  // (simulates a concurrent writer landing between the two token reads).
+  tokenQueue: [] as Array<string | null>,
+  // Set in beforeEach to the REAL builder texts (used to classify queries).
   texts: { readMeta: "", selectPkgs: "", selectSkills: "" },
 }));
 
@@ -40,9 +43,10 @@ vi.mock("@/lib/postgres-sync", () => ({
     fake.calls.push({ transaction: opts.transaction, queries: opts.queries });
     return opts.queries.map((q) => {
       if (q.text === fake.texts.readMeta) {
+        const scripted = fake.tokenQueue.length > 0 ? fake.tokenQueue.shift()! : undefined;
         const key = String(q.values?.[0]);
-        const value = fake.meta.get(key);
-        return { rows: value === undefined ? [] : [{ value }], rowCount: value === undefined ? 0 : 1 };
+        const value = scripted !== undefined ? scripted : fake.meta.get(key) ?? null;
+        return { rows: value === null ? [] : [{ value }], rowCount: value === null ? 0 : 1 };
       }
       if (q.text === fake.texts.selectPkgs) {
         return { rows: fake.tables.get("skill_packages") ?? [], rowCount: 0 };
@@ -86,11 +90,6 @@ function seedRows(marker: string) {
   ]);
 }
 
-/** Flattened list of executed queries across all captured calls. */
-function executedQueries(): Query[] {
-  return fake.calls.flatMap((c) => c.queries);
-}
-
 function isGenerationBump(q: Query): boolean {
   return (
     /insert into .*metadata/i.test(q.text) &&
@@ -99,11 +98,17 @@ function isGenerationBump(q: Query): boolean {
   );
 }
 
+/** Calls whose batch contains the row-select queries (the fenced full read). */
+function rowReadCalls(): Call[] {
+  return fake.calls.filter((c) => c.queries.some((q) => q.text === fake.texts.selectPkgs));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   fake.calls.length = 0;
   fake.meta.clear();
   fake.tables.clear();
+  fake.tokenQueue.length = 0;
   fake.texts.readMeta = buildReadMetadataQuery(SCHEMA, GEN_KEY).text;
   fake.texts.selectPkgs = buildSelectJsonRowsQuery(SCHEMA, "skill_packages").text;
   fake.texts.selectSkills = buildSelectJsonRowsQuery(SCHEMA, "skills").text;
@@ -111,7 +116,7 @@ beforeEach(() => {
   seedRows("gen-1");
 });
 
-describe("replaceSkillCatalogInDatabase — transactional generation bump (fence)", () => {
+describe("replaceSkillCatalogInDatabase — transactional generation bump (write fence)", () => {
   it("commits rows + token bump in ONE transaction", () => {
     replaceSkillCatalogInDatabase({
       skillPackages: [{ id: "pkg", packageId: "pkg", slug: "pkg", name: "P", description: "d" }],
@@ -128,26 +133,29 @@ describe("replaceSkillCatalogInDatabase — transactional generation bump (fence
   });
 });
 
-describe("readSkillCatalogFromDatabase — token-keyed cross-process cache", () => {
-  it("reads the token BEFORE the rows, caches by token, and refetches when the token changes", () => {
+describe("readSkillCatalogFromDatabase — fenced batch read + token-keyed cache", () => {
+  it("reads token → rows → token in one batch, caches by token, refetches on token change", () => {
     fake.meta.set(GEN_KEY, JSON.stringify("token-1"));
 
-    // First read: token check + full row fetch, in that order.
+    // First read: a probe call + ONE fenced batch (token, pkgs, skills, token).
     const first = readSkillCatalogFromDatabase();
     expect(first.skillPackages).toHaveLength(1);
-    const firstQueries = executedQueries();
-    const tokenIdx = firstQueries.findIndex((q) => q.text === fake.texts.readMeta);
-    const rowsIdx = firstQueries.findIndex((q) => q.text === fake.texts.selectPkgs);
-    expect(tokenIdx).toBeGreaterThanOrEqual(0);
-    expect(rowsIdx).toBeGreaterThanOrEqual(0);
-    expect(tokenIdx).toBeLessThan(rowsIdx);
+    const batches = rowReadCalls();
+    expect(batches).toHaveLength(1);
+    const texts = batches[0]!.queries.map((q) => q.text);
+    expect(texts).toEqual([
+      fake.texts.readMeta,
+      fake.texts.selectPkgs,
+      fake.texts.selectSkills,
+      fake.texts.readMeta,
+    ]);
 
     // Same token: cache hit — rows are NOT re-read (only the token probe runs).
     fake.calls.length = 0;
     seedRows("gen-2"); // silently mutated rows must NOT surface under the same token
     const second = readSkillCatalogFromDatabase();
     expect(second).toBe(first);
-    expect(executedQueries().some((q) => q.text === fake.texts.selectPkgs)).toBe(false);
+    expect(rowReadCalls()).toHaveLength(0);
 
     // Changed token (another process wrote): full refetch surfaces the new rows.
     fake.meta.set(GEN_KEY, JSON.stringify("token-2"));
@@ -155,7 +163,21 @@ describe("readSkillCatalogFromDatabase — token-keyed cross-process cache", () 
     const third = readSkillCatalogFromDatabase();
     expect(third).not.toBe(first);
     expect((third.skillPackages[0] as { marker?: string }).marker).toBe("gen-2");
-    expect(executedQueries().some((q) => q.text === fake.texts.selectPkgs)).toBe(true);
+    expect(rowReadCalls()).toHaveLength(1);
+  });
+
+  it("RETRIES a torn read (token changed mid-batch) and never returns the torn snapshot", () => {
+    // Script the token reads: probe "t1"; batch 1 sees t1 → t2 (a writer
+    // committed between the row reads); batch 2 sees a stable t2.
+    fake.tokenQueue.push(JSON.stringify("t1")); // probe
+    fake.tokenQueue.push(JSON.stringify("t1"), JSON.stringify("t2")); // batch 1: torn
+    fake.tokenQueue.push(JSON.stringify("t2"), JSON.stringify("t2")); // batch 2: stable
+
+    const result = readSkillCatalogFromDatabase();
+    expect(rowReadCalls()).toHaveLength(2); // retried exactly once
+    expect(result.skillPackages).toHaveLength(1);
+    // The stable read is cached under the settled token.
+    expect(globalThis.__cinatraSkillCatalogCache?.token).toBe(JSON.stringify("t2"));
   });
 });
 

@@ -246,12 +246,18 @@ production call sites. A4 introduces the parallel split surface (both in
 **Fencing / no partial observation.** The engine's catalog write is one DB
 transaction that ALSO bumps the cross-process generation token
 (`skills_catalog_generation`); `readSkillCatalogFromDatabase` keys its
-in-process cache on that token (read BEFORE the rows, so an interleaved write
-can only mislabel a cache entry as older — never serve mixed state). A reader
+in-process cache on that token, and a cache miss goes through a FENCED batch
+read (token → skill_packages → skills → token on one connection, retried when
+the tokens differ — a stable token proves no writer committed between the row
+reads; an exhausted retry budget serves the freshest read uncached). A reader
 therefore sees the catalog fully-old or fully-new, and a write from ANY process
 (web, BullMQ worker) invalidates every process's cache on its next read. This
 replaces the old process-local cache counter, which could serve stale data
-cross-process indefinitely.
+cross-process indefinitely. The rebuild engine additionally runs inside an
+AsyncLocalStorage context so a re-entrant `rebuildSkillsCatalog()` call throws
+loudly instead of deadlocking the single-flight, and the completeness fence is
+written only while the lease is still held (a run that outlives the TTL never
+stamps its fence over a stealer's).
 
 **Rebuild wiring (this slice):** boot after extension activation +
 materialization (`skills-catalog-rebuild` phase, `degraded` policy), the dev

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { SkillPackageDefinition } from "@cinatra-ai/sdk-extensions";
 import { AgentAuthPolicySchema } from "@cinatra-ai/agents/auth-policy";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
@@ -121,7 +122,16 @@ export function visibilityToLevelScope(
 // RE-ENTRANCY RULE: never call `rebuildSkillsCatalog()` from code reachable
 // from the engine itself (github auto-sync, scanner, prefill enqueue) — the
 // single-flight would hand the inner caller its OWN in-flight promise and
-// deadlock. Trigger rebuilds from lifecycle CALLERS only.
+// deadlock. ENFORCED: the engine runs inside an AsyncLocalStorage context and
+// a re-entrant call throws loudly instead of deadlocking.
+//
+// LOCK SEMANTICS: the lease minimizes redundant concurrent rebuilds; catalog
+// INTEGRITY never depends on it — the engine's catalog write is one DB
+// transaction (+ generation-token bump) and the fenced reader retries torn
+// reads. A rebuild that outlives the lease TTL can overlap a stealer's run
+// (both writes are atomic; last writer wins, as on the legacy path); the
+// completeness fence is only written while the lease is STILL HELD, so a
+// stolen run never stamps a fence over the stealer's.
 //
 // All host-store access is via dynamic import so this module stays a
 // statically-pure leaf (existing tests import it without mocking the DB), and
@@ -203,7 +213,7 @@ export async function readSkillsCatalogRebuildState(): Promise<SkillsCatalogRebu
 export interface RebuildSkillsCatalogOptions {
   /** Recorded on the completeness fence — name the lifecycle trigger. */
   reason?: string;
-  /** Test seams. Defaults: ttl 120s, wait 150s (> ttl, so a crashed holder always expires within the wait), poll 500ms. */
+  /** Test seams. Defaults: ttl 300s (a slow first GitHub clone), wait 330s (> ttl, so a crashed holder always expires within the wait), poll 500ms. */
   leaseTtlMs?: number;
   leaseWaitMs?: number;
   leasePollIntervalMs?: number;
@@ -211,6 +221,10 @@ export interface RebuildSkillsCatalogOptions {
 
 let inFlightRebuild: Promise<RebuiltSkillsCatalog> | null = null;
 let queuedRebuild: Promise<RebuiltSkillsCatalog> | null = null;
+// Re-entrancy tripwire: set for the duration of the ENGINE run. A rebuild
+// call from inside the engine would await its own in-flight promise forever;
+// throwing here turns that silent deadlock into a loud bug report.
+const engineContext = new AsyncLocalStorage<true>();
 
 /**
  * EXPLICIT catalog rebuild (cinatra#1364): GitHub auto-sync (first call),
@@ -230,6 +244,12 @@ let queuedRebuild: Promise<RebuiltSkillsCatalog> | null = null;
 export async function rebuildSkillsCatalog(
   options: RebuildSkillsCatalogOptions = {},
 ): Promise<RebuiltSkillsCatalog> {
+  if (engineContext.getStore()) {
+    throw new Error(
+      "[skills-catalog] rebuildSkillsCatalog called from INSIDE the rebuild engine — " +
+        "re-entrancy would deadlock the single-flight. Trigger rebuilds from lifecycle callers only.",
+    );
+  }
   if (inFlightRebuild) {
     if (!queuedRebuild) {
       queuedRebuild = inFlightRebuild
@@ -252,21 +272,29 @@ async function runLockedRebuild(options: RebuildSkillsCatalogOptions): Promise<R
   const leaseToken = await acquireCatalogRebuildLease(db, options);
   try {
     const store = await loadSkillsStore();
-    const catalog = await store.syncInstalledSkillsToDatabase();
-    // Completeness fence AFTER the engine's transactional write committed.
-    db.writeMetadataValueToDatabase(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY, {
-      completedAt: new Date().toISOString(),
-      reason: options.reason ?? "unspecified",
-    });
+    const catalog = await engineContext.run(true, () => store.syncInstalledSkillsToDatabase());
+    // Completeness fence AFTER the engine's transactional write committed —
+    // and ONLY while the lease is still ours. A run that outlived the TTL
+    // (lease stolen) must not stamp its fence over the stealer's.
+    if (isCatalogRebuildLeaseStillHeld(db, leaseToken)) {
+      db.writeMetadataValueToDatabase(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY, {
+        completedAt: new Date().toISOString(),
+        reason: options.reason ?? "unspecified",
+      });
+    } else {
+      console.warn(
+        "[skills-catalog] rebuild outlived its lease (stolen by another process) — skipping the completeness-fence write.",
+      );
+    }
     return catalog;
   } finally {
     releaseCatalogRebuildLease(db, leaseToken);
   }
 }
 
-// Constant released-lease sentinel: the absent-row bootstrap write is
-// IDEMPOTENT under a race (both racers write identical bytes), so the CAS
-// below still elects exactly one winner.
+// Constant released-lease sentinel. Bootstrap uses INSERT-IF-ABSENT (never an
+// unconditional upsert): a delayed bootstrapper can therefore never clobber a
+// lease another process already CAS-acquired; the CAS elects one winner.
 const RELEASED_LEASE = { token: null, expiresAt: null };
 
 function parseLeaseRaw(raw: string): { token: unknown; expiresAt: unknown } {
@@ -284,7 +312,9 @@ function parseLeaseRaw(raw: string): { token: unknown; expiresAt: unknown } {
 function tryAcquireCatalogRebuildLease(db: DatabaseModule, ttlMs: number): string | null {
   let raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
   if (raw === null) {
-    db.writeMetadataValueToDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY, RELEASED_LEASE);
+    // INSERT-IF-ABSENT: a racer that already seeded (or CAS-acquired) the row
+    // is never clobbered by this delayed bootstrap.
+    db.writeMetadataValueIfAbsentToDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY, RELEASED_LEASE);
     raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
     if (raw === null) return null;
   }
@@ -308,8 +338,8 @@ async function acquireCatalogRebuildLease(
   db: DatabaseModule,
   options: RebuildSkillsCatalogOptions,
 ): Promise<string> {
-  const ttlMs = options.leaseTtlMs ?? 120_000;
-  const waitMs = options.leaseWaitMs ?? 150_000;
+  const ttlMs = options.leaseTtlMs ?? 300_000;
+  const waitMs = options.leaseWaitMs ?? 330_000;
   const pollMs = options.leasePollIntervalMs ?? 500;
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -322,6 +352,16 @@ async function acquireCatalogRebuildLease(
       );
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+/** True while the lease row still carries OUR token (not expired-and-stolen). */
+function isCatalogRebuildLeaseStillHeld(db: DatabaseModule, leaseToken: string): boolean {
+  try {
+    const raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+    return raw !== null && parseLeaseRaw(raw).token === leaseToken;
+  } catch {
+    return false; // fail closed: don't stamp the fence on an unverifiable lease
   }
 }
 

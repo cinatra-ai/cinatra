@@ -42,7 +42,9 @@ import {
   readMetadataValueInternal,
   readRawMetadataStringInternal,
   readSkillCatalogGenerationTokenInternal,
+  readSkillCatalogRowsFencedInternal,
   safeParseJson,
+  writeMetadataValueIfAbsentInternal,
   writeMetadataValueInternal,
 } from "@/lib/database-metadata";
 
@@ -320,6 +322,11 @@ export function writeMetadataValueToDatabase(key: string, value: unknown) {
   writeMetadataValueInternal(key, value);
 }
 
+// INSERT-IF-ABSENT (never clobbers a row) — the lease bootstrap (cinatra#1364).
+export function writeMetadataValueIfAbsentToDatabase(key: string, value: unknown) {
+  writeMetadataValueIfAbsentInternal(key, value);
+}
+
 // Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).
 // Pair with `compareAndSwapMetadataValueFromDatabase` to perform an atomic
 // read-modify-write: capture the snapshot, derive the next value, and swap only
@@ -345,25 +352,19 @@ export function compareAndSwapMetadataValueFromDatabase(
 }
 
 export function readSkillCatalogFromDatabase() {
-  // Cross-process cache invalidation (cinatra#1364): the cache is keyed on the
-  // generation token every catalog writer bumps ATOMICALLY with its row writes,
-  // so a write from any process invalidates every process's cache on the next
-  // read. Token read BEFORE rows: an interleaved write can only mislabel this
-  // entry as older (refetched next read) — never stale rows under a new token.
-  const token = readSkillCatalogGenerationTokenInternal();
+  // Cross-process cache invalidation (cinatra#1364): keyed on the generation
+  // token every catalog writer bumps ATOMICALLY with its row writes. A miss
+  // uses the FENCED batch read (token → rows → token, retried on token change)
+  // so a torn mix is never returned; an unfenced last resort is NOT cached.
+  const probe = readSkillCatalogGenerationTokenInternal();
   const cached = globalThis.__cinatraSkillCatalogCache;
-  if (cached && cached.token === token) {
+  if (cached && cached.token === probe) {
     return cached.data;
   }
-  const skillPackages = readJsonRows("skill_packages")
-    .map((row) => safeParseJson<Record<string, unknown> | null>(row.payload, null))
-    .filter(Boolean) as Array<Record<string, unknown>>;
-  const skills = readJsonRows("skills")
-    .map((row) => safeParseJson<Record<string, unknown> | null>(row.payload, null))
-    .filter(Boolean) as Array<Record<string, unknown>>;
-
-  const data = { skillPackages, skills };
-  globalThis.__cinatraSkillCatalogCache = { data, token };
+  const { data, token, fenced } = readSkillCatalogRowsFencedInternal();
+  if (fenced) {
+    globalThis.__cinatraSkillCatalogCache = { data, token };
+  }
   return data;
 }
 
@@ -571,8 +572,7 @@ export function replaceSkillCatalogInDatabase(input: {
   const keptPackageIds = input.skillPackages.map((row) => row.id);
   const keptSkillIds = input.skills.map((row) => row.id);
   runTransactionalBatch([
-    // Bump the cross-process generation token IN THIS transaction so readers
-    // in every process refetch, and never see new rows under the old token.
+    // Bump the cross-process generation token IN THIS transaction (#1364).
     buildBumpSkillCatalogGenerationQuery(postgresSchema),
     // UPSERT skill_packages with full identity columns set. The legacy
     // `buildUpsertJsonRowQuery` wrote only {id, payload}, which left the typed

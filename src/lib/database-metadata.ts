@@ -6,7 +6,9 @@ import {
   buildCompareAndSwapMetadataQuery,
   buildDeleteMetadataByPrefixQuery,
   buildDeleteMetadataQuery,
+  buildInsertMetadataIfAbsentQuery,
   buildReadMetadataQuery,
+  buildSelectJsonRowsQuery,
   buildWriteMetadataQuery,
 } from "@/lib/drizzle-store";
 
@@ -67,6 +69,19 @@ export function readRawMetadataStringInternal(key: string): string | null {
   return row?.value ?? null;
 }
 
+// INSERT-IF-ABSENT: seed a metadata row ONLY when no row exists yet. Unlike
+// `writeMetadataValueInternal` (unconditional upsert) this can NEVER clobber a
+// concurrent writer's value — the lease-bootstrap path depends on that
+// (cinatra#1364): two racing bootstrappers both attempt the seed, one no-ops,
+// and the CAS that follows elects exactly one lease winner.
+export function writeMetadataValueIfAbsentInternal(key: string, value: unknown) {
+  ensurePostgresSchema();
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [buildInsertMetadataIfAbsentQuery(postgresSchema, key, JSON.stringify(value))],
+  });
+}
+
 // Atomically update a metadata row's value to `newValue` ONLY when the stored
 // value is byte-equal to `expectedRaw`. Returns true when the swap landed (a
 // row was affected). A concurrent write that changed the stored value makes the
@@ -115,6 +130,57 @@ export function buildBumpSkillCatalogGenerationQuery(schema: string) {
     SKILL_CATALOG_GENERATION_METADATA_KEY,
     JSON.stringify(randomUUID()),
   );
+}
+
+export type SkillCatalogRowsFencedRead = {
+  data: { skillPackages: Array<Record<string, unknown>>; skills: Array<Record<string, unknown>> };
+  token: string | null;
+  /** True when the token was stable across the whole read (safe to cache). */
+  fenced: boolean;
+};
+
+/**
+ * FENCED full catalog read (cinatra#1364): one sequential batch on one
+ * connection reads token → skill_packages → skills → token and retries when
+ * the two token reads differ. Every catalog writer bumps the token in its own
+ * transaction, so a stable token PROVES no writer committed between the two
+ * row reads — the caller can never observe a torn {old packages, new skills}
+ * mix. After the retry budget (pathological write storm) the last read is
+ * returned with `fenced: false` so the caller serves it WITHOUT caching.
+ */
+export function readSkillCatalogRowsFencedInternal(): SkillCatalogRowsFencedRead {
+  ensurePostgresSchema();
+  const parseRows = (result: { rows?: unknown[] } | undefined) =>
+    ((result?.rows ?? []) as Array<{ payload: string }>)
+      .map((row) => safeParseJson<Record<string, unknown> | null>(row.payload, null))
+      .filter(Boolean) as Array<Record<string, unknown>>;
+  const tokenOf = (result: { rows?: unknown[] } | undefined) =>
+    ((result?.rows?.[0] as { value?: string } | undefined)?.value ?? null);
+
+  let last: SkillCatalogRowsFencedRead | null = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const [t0, pkgs, skills, t1] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        buildReadMetadataQuery(postgresSchema, SKILL_CATALOG_GENERATION_METADATA_KEY),
+        buildSelectJsonRowsQuery(postgresSchema, "skill_packages"),
+        buildSelectJsonRowsQuery(postgresSchema, "skills"),
+        buildReadMetadataQuery(postgresSchema, SKILL_CATALOG_GENERATION_METADATA_KEY),
+      ],
+    });
+    const tokenBefore = tokenOf(t0);
+    const tokenAfter = tokenOf(t1);
+    last = {
+      data: { skillPackages: parseRows(pkgs), skills: parseRows(skills) },
+      token: tokenAfter,
+      fenced: tokenBefore === tokenAfter,
+    };
+    if (last.fenced) return last;
+  }
+  console.warn(
+    "[database-metadata] skills-catalog fenced read exhausted retries under a write storm — serving the freshest read uncached.",
+  );
+  return last!;
 }
 
 export function deleteMetadataValueInternal(key: string) {

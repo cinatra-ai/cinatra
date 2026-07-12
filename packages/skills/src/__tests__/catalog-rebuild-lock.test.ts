@@ -48,6 +48,9 @@ vi.mock("@/lib/database", () => ({
   writeMetadataValueToDatabase: vi.fn((key: string, value: unknown) => {
     state.meta.set(key, JSON.stringify(value));
   }),
+  writeMetadataValueIfAbsentToDatabase: vi.fn((key: string, value: unknown) => {
+    if (!state.meta.has(key)) state.meta.set(key, JSON.stringify(value));
+  }),
   readRawMetadataStringFromDatabase: vi.fn((key: string) => state.meta.get(key) ?? null),
   compareAndSwapMetadataValueFromDatabase: vi.fn(
     (key: string, value: unknown, expectedRaw: string) => {
@@ -178,6 +181,50 @@ describe("rebuildSkillsCatalog — explicit locked rebuild", () => {
       token: null,
       expiresAt: null,
     });
+  });
+
+  it("bootstraps the lease row with INSERT-IF-ABSENT, never an unconditional write", async () => {
+    const db = await import("@/lib/database");
+    await rebuildSkillsCatalog({ reason: "bootstrap" });
+    // The absent-row seed went through the if-absent primitive; the
+    // unconditional writer touched ONLY the completeness-fence key (a delayed
+    // bootstrapper must never clobber a lease another process CAS-acquired).
+    expect(db.writeMetadataValueIfAbsentToDatabase).toHaveBeenCalledWith(
+      SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+      expect.anything(),
+    );
+    const unconditionalKeys = vi
+      .mocked(db.writeMetadataValueToDatabase)
+      .mock.calls.map(([key]) => key);
+    expect(unconditionalKeys).not.toContain(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+  });
+
+  it("throws loudly (never deadlocks) on a re-entrant call from inside the engine", async () => {
+    engineMock.mockImplementation(async () => {
+      await rebuildSkillsCatalog({ reason: "re-entrant" }); // must throw
+      return state.rows;
+    });
+    await expect(rebuildSkillsCatalog({ reason: "outer" })).rejects.toThrow(
+      /called from INSIDE the rebuild engine/,
+    );
+  });
+
+  it("skips the completeness fence when the lease was stolen mid-run (outlived TTL)", async () => {
+    engineMock.mockImplementation(async () => {
+      // Simulate another process stealing the lease while the engine runs.
+      state.meta.set(
+        SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+        JSON.stringify({ token: "stealer", expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+      );
+      return state.rows;
+    });
+    await rebuildSkillsCatalog({ reason: "stolen" });
+    // No fence stamp over the stealer's run…
+    expect(state.meta.get(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY)).toBeUndefined();
+    // …and the stealer's lease is left untouched by the release.
+    expect(JSON.parse(state.meta.get(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY)!).token).toBe(
+      "stealer",
+    );
   });
 });
 
