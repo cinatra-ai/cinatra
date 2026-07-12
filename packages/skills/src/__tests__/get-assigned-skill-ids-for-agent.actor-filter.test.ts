@@ -37,6 +37,14 @@ vi.mock("@/lib/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/database")>()),
   readCustomSkillAssignmentsForAgent: readCustomSkillAssignmentsForAgentMock,
   readSystemGlobalSkillIdsForAgent: readSystemGlobalSkillIdsForAgentMock,
+  // A3 (cinatra#1363): stub the lifecycle gate to deliverable ('active') for
+  // every resolved id — the real reader would hit an unavailable DB and
+  // fail-closed, withholding the union this test asserts. The gate's own
+  // fail-closed/exclusion behaviour is covered by the agents-store suite.
+  readSkillLifecycleStates: (ids: string[]) => ({
+    ok: true as const,
+    states: new Map(ids.map((id) => [id, "active" as string | null])),
+  }),
 }));
 
 // Module under test consumes readCustomSkillAssignmentsForAgent + ActorContext.

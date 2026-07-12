@@ -42,6 +42,12 @@ vi.mock("@/lib/database", () => ({
   // Reconfigured per test via vi.mocked(...). Default: no assignments.
   readCustomSkillAssignmentsForAgent: vi.fn(() => []),
   readSystemGlobalSkillIdsForAgent: vi.fn(() => []),
+  // A3 (cinatra#1363): lifecycle gate reads every resolved id as 'active'
+  // (deliverable) so the scope-union assertions below are unaffected.
+  readSkillLifecycleStates: (ids: string[]) => ({
+    ok: true,
+    states: new Map(ids.map((id) => [id, "active" as string | null])),
+  }),
 }));
 
 vi.mock("@cinatra-ai/agents/store", () => ({
@@ -62,8 +68,13 @@ vi.mock("@cinatra-ai/skills", async () => {
   const visibility = await vi.importActual<
     typeof import("../../../packages/skills/src/llm-matching/visibility")
   >("../../../packages/skills/src/llm-matching/visibility");
+  // A3 (cinatra#1363): the real (pure) runtime-delivery predicate.
+  const skillSource = await vi.importActual<
+    typeof import("../../../packages/skills/src/skill-source")
+  >("../../../packages/skills/src/skill-source");
   return {
     filterMatchRowsByVisibility: visibility.filterMatchRowsByVisibility,
+    isRuntimeDeliverableLifecycleState: skillSource.isRuntimeDeliverableLifecycleState,
     MANUAL_VERSION: "manual",
     resolveEffectiveSkillAccessPolicy: (
       skill: { packageId?: string; accessPolicy?: unknown } | undefined,

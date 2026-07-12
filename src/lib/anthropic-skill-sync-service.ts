@@ -21,9 +21,10 @@ import {
   readSkillsCatalog,
   getSkillAnthropicUploadFlag,
   assertSkillFilePathInsideRoot,
+  isRuntimeDeliverableLifecycleState,
 } from "@cinatra-ai/skills";
 
-import { readAnthropicConnectionFromDatabase } from "@/lib/database";
+import { readAnthropicConnectionFromDatabase, readSkillLifecycleStates } from "@/lib/database";
 import { isAnthropicSkillUploadAllowedFromConfig } from "@/lib/anthropic-skill-upload-governance";
 import { readAnthropicSkillSyncEnabledFromDatabase } from "@/lib/database";
 import {
@@ -215,8 +216,34 @@ async function readBundledDir(
  */
 export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
   const catalog = await readSkillsCatalog();
+  // A3 (cinatra#1363): exclude non-runtime-deliverable (archived/draft) skills
+  // from the mirror. An excluded skill drops out of the current-catalog set, so
+  // the sync engine's markStaleForRemovedCatalogSkills marks its existing remote
+  // copy stale and the GC path RECLAIMS it — the mirror is actively deleted, not
+  // merely skipped from future uploads. FAIL-SAFE (deliberately NOT fail-closed
+  // here): a lifecycle-read error ABORTS the whole sync (throw → the caller's
+  // fail-closed catch → a no-op that performs zero remote/state work), because
+  // "exclude on an ambiguous read" would let the engine re-version a stale row
+  // and CLEAR its stale flag — the opposite of reclamation. Only a DEFINITIVE
+  // non-deliverable state excludes a skill; a derived (NULL) state, a deliverable
+  // state, or a row missing from the read is KEPT (never over-reclaim).
+  const lifecycle = readSkillLifecycleStates(catalog.skills.map((s) => s.id));
+  if (!lifecycle.ok) {
+    throw new Error(
+      "Anthropic skill sync aborted: lifecycle_state read failed — refusing to sync on an ambiguous lifecycle read (fail-safe: never over-reclaim the mirror).",
+    );
+  }
   const candidates: SyncCandidateSkill[] = [];
   for (const skill of catalog.skills) {
+    // Drop a skill with a DEFINITIVE non-deliverable lifecycle state so its
+    // remote mirror is reclaimed (see the header comment). A NULL (derived) or
+    // deliverable state, or a row absent from the read, is retained.
+    if (
+      lifecycle.states.has(skill.id) &&
+      !isRuntimeDeliverableLifecycleState(lifecycle.states.get(skill.id))
+    ) {
+      continue;
+    }
     const sourcePath = typeof skill.sourcePath === "string" ? skill.sourcePath : "";
     // No on-disk body ⇒ not syncable (cannot upload a body that doesn't
     // exist). This is not an error — it's a non-syncable catalog entry.

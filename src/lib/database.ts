@@ -59,12 +59,14 @@ export {
   applySkillLifecycleTransitionInDatabase,
   readSkillRevisionContentForRollback,
   readSkillActiveRevisionFromDatabase,
+  readSkillLifecycleStates,
 } from "@/lib/skill-lifecycle-store";
 export type {
   SkillLifecycleRevisionWrite,
   SkillLifecycleTransitionWrite,
   SkillRevisionContentRow,
   SkillRollbackWrite,
+  SkillLifecycleStatesResult,
 } from "@/lib/skill-lifecycle-store";
 
 type ConnectorConfigCacheEntry = {

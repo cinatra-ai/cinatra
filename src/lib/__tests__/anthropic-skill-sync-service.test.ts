@@ -14,9 +14,22 @@ import { createHash, createHmac } from "node:crypto";
 
 const readAnthropicConnection = vi.fn<(...a: never[]) => unknown>();
 
+// A3 (cinatra#1363): the lifecycle-gate reader buildSyncCandidates now calls.
+// Default = ok:true with an EMPTY map ⇒ every id is "missing" ⇒ KEPT (never
+// over-reclaimed), so the existing full-pool test is unchanged. Tests reassign
+// this to inject an archived state or a reader error.
+type SyncLifecycleResult =
+  | { ok: true; states: Map<string, string | null> }
+  | { ok: false };
+let syncLifecycleReader: (ids: string[]) => SyncLifecycleResult = () => ({
+  ok: true,
+  states: new Map(),
+});
+
 vi.mock("@/lib/database", () => ({
   readAnthropicConnectionFromDatabase: () => readAnthropicConnection(),
   readAnthropicSkillSyncEnabledFromDatabase: () => false,
+  readSkillLifecycleStates: (ids: string[]) => syncLifecycleReader(ids),
 }));
 
 vi.mock("@cinatra-ai/llm", () => ({
@@ -35,6 +48,11 @@ vi.mock("@cinatra-ai/skills", () => ({
   // candidate-pool tests focused on the narrowing-vs-full-pool contract rather
   // than on path containment (covered by the skills-package suite).
   assertSkillFilePathInsideRoot: vi.fn(),
+  // A3 (cinatra#1363): faithful copy of the real runtime-delivery predicate
+  // (the real one — and its drift guard — is pinned by the skills-package
+  // lifecycle-consumer-matrix test).
+  isRuntimeDeliverableLifecycleState: (s: string | null | undefined) =>
+    s === null ? true : s === undefined ? false : s === "active" || s === "deprecated",
 }));
 
 vi.mock("@/lib/anthropic-skill-upload-governance", () => ({
@@ -226,6 +244,56 @@ describe("broad recommendable-pool sync", () => {
       "security-review",
     ]);
     expect(ids).toContain("general-recommendable-skill");
+  });
+
+  it("A3 (cinatra#1363): EXCLUDES an archived skill (⇒ stale ⇒ GC reclaims mirror); keeps active + derived NULL", async () => {
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "lifecycle-exclude-"));
+    const mk = (id: string) => {
+      const dir = nodePath.join(tmpRoot, id);
+      mkdirSync(dir, { recursive: true });
+      const p = nodePath.join(dir, "SKILL.md");
+      writeFileSync(p, `# ${id}\nbody`);
+      return p;
+    };
+    const catalog = {
+      skills: [
+        { id: "keep-active", name: "Keep", sourcePath: mk("keep-active") },
+        { id: "archived-one", name: "Archived", sourcePath: mk("archived-one") },
+        { id: "derived-null", name: "Derived", sourcePath: mk("derived-null") },
+      ],
+    };
+    vi.mocked(skillsPkg.readSkillsCatalog).mockReset().mockResolvedValue(catalog as never);
+    vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
+    syncLifecycleReader = (ids) => ({
+      ok: true,
+      states: new Map(
+        ids.map((id) => [id, id === "archived-one" ? "archived" : id === "derived-null" ? null : "active"]),
+      ),
+    });
+    try {
+      const ids = (await buildSyncCandidates()).map((c) => c.catalogSkillId).sort();
+      // archived-one is EXCLUDED (its existing mirror row is then marked stale by
+      // markStaleForRemovedCatalogSkills → GC reclaims). Derived (NULL) is kept.
+      expect(ids).toEqual(["derived-null", "keep-active"]);
+      expect(ids).not.toContain("archived-one");
+    } finally {
+      syncLifecycleReader = () => ({ ok: true, states: new Map() });
+    }
+  });
+
+  it("A3 (cinatra#1363): ABORTS the whole sync on a lifecycle READER ERROR (fail-safe — never over-reclaim on an ambiguous read)", async () => {
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "lifecycle-abort-"));
+    const dir = nodePath.join(tmpRoot, "s1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(nodePath.join(dir, "SKILL.md"), "# s1\nbody");
+    const catalog = { skills: [{ id: "s1", name: "S1", sourcePath: nodePath.join(dir, "SKILL.md") }] };
+    vi.mocked(skillsPkg.readSkillsCatalog).mockReset().mockResolvedValue(catalog as never);
+    syncLifecycleReader = () => ({ ok: false });
+    try {
+      await expect(buildSyncCandidates()).rejects.toThrow(/lifecycle_state read failed|over-reclaim/i);
+    } finally {
+      syncLifecycleReader = () => ({ ok: true, states: new Map() });
+    }
   });
 
   it("opt-in OFF ⇒ syncCatalogSkillsToAnthropic is fully inert (governance gate authoritative; no engine/client/namespace work)", async () => {

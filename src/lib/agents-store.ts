@@ -6,6 +6,7 @@ import {
   readAgentSkillMatchesFromDatabase,
   readConnectorConfigFromDatabase,
   readCustomSkillAssignmentsForAgent,
+  readSkillLifecycleStates,
   readSystemGlobalSkillIdsForAgent,
   replaceAgentCatalogInDatabase,
   replaceAgentSkillExclusionsInDatabase,
@@ -29,6 +30,7 @@ import {
   resolveEffectiveSkillAccessPolicy,
   skillMatchesStore,
   filterMatchRowsByVisibility,
+  isRuntimeDeliverableLifecycleState,
   MANUAL_VERSION,
   type VisibilitySkillMeta,
   type SkillMatchRow,
@@ -976,6 +978,36 @@ export async function writeManualSkillMatchRemove(args: {
   await skillMatchesStore.upsertSkillMatch(row);
 }
 
+/**
+ * Lifecycle runtime-delivery gate (A3, cinatra#1363) applied to a resolved set
+ * of assigned skill ids — the SINGLE chokepoint that gates EVERY tier of
+ * `getAssignedSkillIdsForAgent` (agent self-match, ranked skill_matches, system
+ * skills, system globals, custom assignments) plus its downstream provider
+ * delivery. FAIL-CLOSED: a lifecycle-read error drops EVERY id (an archived
+ * skill must be provably absent from delivery even during a DB blip), and an id
+ * with no lifecycle row, or a draft/archived/unknown state, is withheld. A
+ * resolved NULL state is DERIVED (extension/legacy) and passes through — the
+ * extension install-state authority governs it elsewhere, so this layer never
+ * becomes a second authority. Order is preserved so the downstream Anthropic
+ * rank-and-truncate-to-8 keep/drop set stays a pure function of the surviving
+ * tiers.
+ */
+function filterToRuntimeDeliverableSkillIds(ids: string[]): string[] {
+  if (ids.length === 0) return ids;
+  const lifecycle = readSkillLifecycleStates(ids);
+  if (!lifecycle.ok) {
+    console.warn(
+      `[agents-store] lifecycle read failed while gating ${ids.length} assigned skill id(s) — fail-closed (withholding all).`,
+    );
+    return [];
+  }
+  return ids.filter((id) =>
+    isRuntimeDeliverableLifecycleState(
+      lifecycle.states.has(id) ? lifecycle.states.get(id) : undefined,
+    ),
+  );
+}
+
 export async function getAssignedSkillIdsForAgent(
   agentId: string,
   actor?: AssignedSkillsActorContext,
@@ -1069,7 +1101,12 @@ export async function getAssignedSkillIdsForAgent(
       `[agents-store] catalog read failed in getAssignedSkillIdsForAgent (agent=${agentId}):`,
       err,
     );
-    return Array.from(new Set([...systemGlobalIds, ...customAssignmentIds]));
+    // Even on the degraded (catalog-read-failure) path the lifecycle gate still
+    // applies — it reads the lifecycle_state column independently of the failed
+    // catalog read, so a draft/archived skill is never delivered here either.
+    return filterToRuntimeDeliverableSkillIds(
+      Array.from(new Set([...systemGlobalIds, ...customAssignmentIds])),
+    );
   }
 
   // Resolve the input `agentId` (slug OR packageId) to the canonical
@@ -1195,7 +1232,10 @@ export async function getAssignedSkillIdsForAgent(
       result.push(id);
     }
   }
-  return result;
+  // Final lifecycle runtime-delivery gate across the whole deduped union — draft
+  // /archived/unknown-state skills are withheld from EVERY tier (fail-closed);
+  // derived (NULL) and active/deprecated skills pass.
+  return filterToRuntimeDeliverableSkillIds(result);
 }
 
 // ===========================================================================

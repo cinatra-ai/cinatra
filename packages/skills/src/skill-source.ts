@@ -319,6 +319,71 @@ export function isLegalTransition(from: LifecycleState, to: LifecycleState): boo
 }
 
 // ---------------------------------------------------------------------------
+// Consumer-side runtime-delivery enforcement (A3, cinatra#1363)
+// ---------------------------------------------------------------------------
+
+/**
+ * The SINGLE authority for whether a skill's `lifecycle_state` permits RUNTIME
+ * DELIVERY to a consumer — tier resolution (`getAssignedSkillIdsForAgent`),
+ * provider delivery (llm-bridge personal delta + explicit skill paths), MCP
+ * direct reads, matching candidacy, and default listings. Fail-closed by
+ * construction; every consumer resolves this ONE predicate so the matrix is
+ * enforced identically everywhere.
+ *
+ *   null         → true  — DERIVED (extension / legacy / bare-local): NOT a
+ *                          lifecycle authority here. The extension install-state
+ *                          is the single authority (read-time precedence), so
+ *                          this custom/personal gate is a pass-through and never
+ *                          becomes a second authority (docs/skills-lifecycle.md).
+ *   'active'     → true
+ *   'deprecated' → true  — still delivered (badging is display-only, not gating)
+ *   'draft'      → false — owner-visible only; never runtime-delivered
+ *   'archived'   → false — retired; excluded from runtime delivery + default lists
+ *   anything else (an unknown non-null value the CHECK could never store, or
+ *                `undefined` = the state could not be resolved / a reader error)
+ *              → false — FAIL-CLOSED (unknown state = not delivered)
+ *
+ * `null` (a resolved DB NULL = derived) is the ONLY nullish value that delivers.
+ * `undefined` (state absent / unresolved) fails closed — a caller that cannot
+ * resolve a state MUST pass `undefined`, never `null`, so a missing lifecycle
+ * read can never be mistaken for "derived".
+ */
+export function isRuntimeDeliverableLifecycleState(state: string | null | undefined): boolean {
+  if (state === null) return true; // derived — not gated by this layer
+  if (state === undefined) return false; // unresolved → fail-closed
+  return state === "active" || state === "deprecated";
+}
+
+/**
+ * The state × consumer enforcement matrix (cinatra#1363), pinned by a test so
+ * every cell is a deliberate, reviewed decision (acceptance criterion: "a
+ * state-x-consumer matrix in-repo; each cell covered by a test"). Rows are every
+ * `lifecycle_state` a custom/personal skill can carry, plus `null`
+ * (derived/extension) and `unknown` (the fail-closed guard for any value the DB
+ * CHECK could never store). Columns are the consumer axes.
+ *
+ * Decisions: `deliver`/`include`/`sync`/`list` = the skill flows to that
+ * consumer; `exclude` = it does not; `reclaim` = its remote Anthropic mirror is
+ * actively marked stale so the existing GC path deletes it; `owner-only` =
+ * visible only to the authoring owner's direct reads; `manage-only` = visible
+ * only to actors holding `manage` (management-plane restore/rollback/history);
+ * `visible` = the management-plane always sees the row.
+ *
+ * The delivery columns (`matching`, `tierResolution`, `providerDelivery`,
+ * `anthropicMirror`) MUST agree with `isRuntimeDeliverableLifecycleState` — the
+ * pin test asserts that equivalence, so the matrix and the predicate can never
+ * silently diverge.
+ */
+export const SKILL_LIFECYCLE_CONSUMER_MATRIX = Object.freeze({
+  draft:      Object.freeze({ matching: "exclude", tierResolution: "exclude", providerDelivery: "exclude", directDefaultList: "owner-only",  managementPlane: "visible", anthropicMirror: "exclude" }),
+  active:     Object.freeze({ matching: "include", tierResolution: "deliver", providerDelivery: "deliver", directDefaultList: "list",        managementPlane: "visible", anthropicMirror: "sync" }),
+  deprecated: Object.freeze({ matching: "include", tierResolution: "deliver", providerDelivery: "deliver", directDefaultList: "list",        managementPlane: "visible", anthropicMirror: "sync" }),
+  archived:   Object.freeze({ matching: "exclude", tierResolution: "exclude", providerDelivery: "exclude", directDefaultList: "manage-only", managementPlane: "visible", anthropicMirror: "reclaim" }),
+  null:       Object.freeze({ matching: "include", tierResolution: "deliver", providerDelivery: "deliver", directDefaultList: "list",        managementPlane: "visible", anthropicMirror: "sync" }),
+  unknown:    Object.freeze({ matching: "exclude", tierResolution: "exclude", providerDelivery: "exclude", directDefaultList: "exclude",     managementPlane: "visible", anthropicMirror: "exclude" }),
+} as const);
+
+// ---------------------------------------------------------------------------
 // Transition authorization
 // ---------------------------------------------------------------------------
 

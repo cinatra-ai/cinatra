@@ -260,6 +260,63 @@ async function buildSkillMatchCatalogProvider(): Promise<
   };
 }
 
+/**
+ * A3 (cinatra#1363): a lifecycle-gated wrapper of `buildSkillMatchCatalogProvider`
+ * for the candidate-CREATION handlers ONLY (inline-for-skill, inline-for-agent,
+ * batch-submit). It EXCLUDES non-runtime-deliverable (archived/draft/unknown)
+ * skills so the matcher never evaluates them — no wasted LLM cost and no new
+ * match rows for a retired skill. FAIL-CLOSED: a lifecycle-read error yields an
+ * EMPTY candidate set (`listSkills`) / a null single-skill lookup (`getSkillById`)
+ * — a safe no-op matching run retried on the next trigger, never an archived
+ * skill entering the match store.
+ *
+ * The maintenance + drift + batch-poll handlers deliberately keep the UNFILTERED
+ * provider: maintenance orphan-GC keys liveness off `listSkills()` (a filtered
+ * list would tombstone archived skills' match rows — and on a read error, EVERY
+ * row), drift observes existing rows, and batch-poll persists an
+ * already-submitted, already-gated batch. Two providers = the safety boundary.
+ *
+ * Lazy-imports inside each method mirror the base provider so this module never
+ * eagerly pulls `@cinatra-ai/skills` / `@/lib/database` at init.
+ */
+async function buildDeliverableSkillMatchCatalogProvider(): Promise<
+  import("@cinatra-ai/skills").CatalogProvider
+> {
+  const base = await buildSkillMatchCatalogProvider();
+  return {
+    readAgents: () => base.readAgents(),
+    async listSkills() {
+      const skills = await base.listSkills();
+      const { readSkillLifecycleStates } = await import("@/lib/database");
+      const { isRuntimeDeliverableLifecycleState } = await import("@cinatra-ai/skills");
+      const lifecycle = readSkillLifecycleStates(skills.map((s) => s.id));
+      // Fail-closed: an ambiguous lifecycle read yields NO candidates this run
+      // (a safe no-op — never a match row for an unresolved/archived skill).
+      if (!lifecycle.ok) return [];
+      return skills.filter((s) =>
+        isRuntimeDeliverableLifecycleState(
+          lifecycle.states.has(s.id) ? lifecycle.states.get(s.id) : undefined,
+        ),
+      );
+    },
+    async getSkillById(skillId: string) {
+      const skill = await base.getSkillById(skillId);
+      if (!skill) return skill;
+      const { readSkillLifecycleStates } = await import("@/lib/database");
+      const { isRuntimeDeliverableLifecycleState } = await import("@cinatra-ai/skills");
+      const lifecycle = readSkillLifecycleStates([skillId]);
+      const deliverable =
+        lifecycle.ok &&
+        isRuntimeDeliverableLifecycleState(
+          lifecycle.states.has(skillId) ? lifecycle.states.get(skillId) : undefined,
+        );
+      // Fail-closed: withhold a non-deliverable / unresolved skill so the
+      // inline-for-skill handler no-ops on it.
+      return deliverable ? skill : null;
+    },
+  };
+}
+
 // A permissive passthrough schema for handlers that read no required fields up
 // front (they cast `job.data` loosely or take an empty payload). Validating
 // these as "any object, extra keys preserved" keeps the platform-managed
@@ -555,7 +612,8 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // CatalogProvider seam; the handler no longer reaches into the host
       // app's stores directly.
       const { handleInlineForSkill } = await import("@cinatra-ai/skills");
-      const catalog = await buildSkillMatchCatalogProvider();
+      // A3 (cinatra#1363): candidate-creation path — gate out non-deliverable skills.
+      const catalog = await buildDeliverableSkillMatchCatalogProvider();
       await handleInlineForSkill(
         job.data as { skillId: string; jobStartedAt: string },
         { catalog },
@@ -569,7 +627,8 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     async handle(job) {
       // Inline-for-agent fan-out (one agent x all matchable skills).
       const { handleInlineForAgent } = await import("@cinatra-ai/skills");
-      const catalog = await buildSkillMatchCatalogProvider();
+      // A3 (cinatra#1363): candidate-creation path — gate out non-deliverable skills.
+      const catalog = await buildDeliverableSkillMatchCatalogProvider();
       await handleInlineForAgent(
         job.data as { agentId: string; jobStartedAt: string },
         { catalog },
@@ -581,7 +640,8 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     async handle(job) {
       // Submit a single OpenAI batch covering all current pairs.
       const { handleBatchSubmit } = await import("@cinatra-ai/skills");
-      const catalog = await buildSkillMatchCatalogProvider();
+      // A3 (cinatra#1363): candidate-creation path — gate out non-deliverable skills.
+      const catalog = await buildDeliverableSkillMatchCatalogProvider();
       await handleBatchSubmit(job.data as { submittedBy: string }, { catalog });
     },
   },
