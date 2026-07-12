@@ -35,12 +35,18 @@ import {
   unsealSecretFields,
 } from "@/lib/connector-config-secret-fields";
 import {
+  buildBumpSkillCatalogGenerationQuery,
+  buildCatalogWriteLeaseGuardQuery,
   compareAndSwapMetadataValueInternal,
   deleteMetadataByPrefixInternal,
   deleteMetadataValueInternal,
   readMetadataValueInternal,
   readRawMetadataStringInternal,
+  readSkillCatalogGenerationTokenInternal,
+  readSkillCatalogRowsFencedInternal,
   safeParseJson,
+  writeMetadataValueIfAbsentInternal,
+  writeMetadataValueIfGuardTokenHeldInternal,
   writeMetadataValueInternal,
 } from "@/lib/database-metadata";
 
@@ -77,7 +83,7 @@ type ConnectorConfigCacheEntry = {
 declare global {
   var __cinatraConnectorConfigCache: Map<string, ConnectorConfigCacheEntry> | undefined;
   var __cinatraStartupDatasetCache: { data: import("@/lib/types").StartupDataset; version: number } | undefined;
-  var __cinatraSkillCatalogCache: { data: { skillPackages: Array<Record<string, unknown>>; skills: Array<Record<string, unknown>> }; version: number } | undefined;
+  var __cinatraSkillCatalogCache: { data: { skillPackages: Array<Record<string, unknown>>; skills: Array<Record<string, unknown>> }; token: string | null } | undefined;
   var __cinatraStartupOverridesCache: { data: import("@/lib/types").StartupOverrideStore; version: number } | undefined;
   // (__cinatraPostgresSchemaInitialized moved to postgres-schema-init.ts.)
   // Survives HMR — prevents a Worker thread burst from notifications polling
@@ -90,17 +96,12 @@ declare global {
 
 // Incremented by replaceStartupDatasetInDatabase to invalidate the in-process cache.
 let startupDatasetCacheVersion = 0;
-// Incremented by replaceSkillCatalogInDatabase to invalidate the in-process cache.
-let skillCatalogCacheVersion = 0;
 // Incremented by replaceStartupOverridesInDatabase to invalidate the in-process cache.
 let startupOverridesCacheVersion = 0;
 
 function getDefaultOpenAIServiceTier() {
   return (isAppDevelopmentMode() ? "flex" : "default") as OpenAIServiceTier;
 }
-
-
-
 
 // Legacy GTM-era rebrand normalization (`normalizePersistedString` /
 // `normalizePersistedValue`) was removed from the hot core-store read/write
@@ -321,6 +322,11 @@ export function writeMetadataValueToDatabase(key: string, value: unknown) {
   writeMetadataValueInternal(key, value);
 }
 
+// cinatra#1364: lease bootstrap, guarded fence upsert, causal lease-guard abort marker.
+export const writeMetadataValueIfAbsentToDatabase = writeMetadataValueIfAbsentInternal;
+export const writeMetadataValueIfGuardTokenHeldToDatabase = writeMetadataValueIfGuardTokenHeldInternal;
+export { CATALOG_WRITE_LEASE_LOST_ERROR_MARKER } from "@/lib/database-metadata";
+
 // Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).
 // Pair with `compareAndSwapMetadataValueFromDatabase` to perform an atomic
 // read-modify-write: capture the snapshot, derive the next value, and swap only
@@ -346,19 +352,15 @@ export function compareAndSwapMetadataValueFromDatabase(
 }
 
 export function readSkillCatalogFromDatabase() {
+  // cinatra#1364: cache keyed on the cross-process generation token; a miss uses
+  // the snapshot-fenced batch read; an unfenced last-resort read is never cached.
+  const probe = readSkillCatalogGenerationTokenInternal();
   const cached = globalThis.__cinatraSkillCatalogCache;
-  if (cached && cached.version === skillCatalogCacheVersion) {
+  if (cached && cached.token === probe) {
     return cached.data;
   }
-  const skillPackages = readJsonRows("skill_packages")
-    .map((row) => safeParseJson<Record<string, unknown> | null>(row.payload, null))
-    .filter(Boolean) as Array<Record<string, unknown>>;
-  const skills = readJsonRows("skills")
-    .map((row) => safeParseJson<Record<string, unknown> | null>(row.payload, null))
-    .filter(Boolean) as Array<Record<string, unknown>>;
-
-  const data = { skillPackages, skills };
-  globalThis.__cinatraSkillCatalogCache = { data, version: skillCatalogCacheVersion };
+  const { data, token, fenced } = readSkillCatalogRowsFencedInternal();
+  if (fenced) globalThis.__cinatraSkillCatalogCache = { data, token };
   return data;
 }
 
@@ -562,11 +564,16 @@ export function replaceSkillCatalogInDatabase(input: {
    * (cinatra#1361) — content + its revision + active-revision pointer commit
    * together. Omit at catalog syncs / deletes that author no custom content. */
   lifecycleWrites?: SkillLifecycleRevisionWrite[];
+  /** cinatra#1364 (locked rebuild only): FIRST statement locks the lease row and
+   * aborts unless it still carries `guardToken` — see buildCatalogWriteLeaseGuardQuery. */
+  writeGuard?: { guardKey: string; guardToken: string };
 }) {
-  skillCatalogCacheVersion += 1; // Invalidate the in-process read cache.
   const keptPackageIds = input.skillPackages.map((row) => row.id);
   const keptSkillIds = input.skills.map((row) => row.id);
   runTransactionalBatch([
+    ...(input.writeGuard ? [buildCatalogWriteLeaseGuardQuery(postgresSchema, input.writeGuard.guardKey, input.writeGuard.guardToken)] : []),
+    // Bump the cross-process generation token IN THIS transaction (#1364).
+    buildBumpSkillCatalogGenerationQuery(postgresSchema),
     // UPSERT skill_packages with full identity columns set. The legacy
     // `buildUpsertJsonRowQuery` wrote only {id, payload}, which left the typed
     // identity columns NULL on INSERT. Every write now populates them so the
@@ -598,12 +605,9 @@ export function replaceSkillCatalogInDatabase(input: {
 /**
  * Targeted single-skill update for the LLM-generated `prefillText` field.
  * Used by the prefill-generation BullMQ job after each skill's prompt is generated.
- *
  * Performs a JSON-row upsert against the `skills` table — does NOT rewrite the
- * entire catalog (which `replaceSkillCatalogInDatabase` would do). Increments
- * `skillCatalogCacheVersion` so the in-process cache is invalidated and the
- * next `readSkillCatalogFromDatabase()` call sees the new value.
- *
+ * entire catalog (which `replaceSkillCatalogInDatabase` would do). Bumps the
+ * generation token so every process's read cache is invalidated (#1364).
  * No-op if the skill id is not present in the catalog. Trims the input.
  */
 export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: string): boolean {
@@ -627,14 +631,16 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
   };
 
   ensurePostgresSchema();
-  skillCatalogCacheVersion += 1; // Invalidate the in-process read cache.
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
+    transaction: true,
     queries: [
       buildUpsertJsonRowQuery(postgresSchema, "skills", {
         id: trimmedSkillId,
         payload: JSON.stringify(updatedSkill),
       }),
+      // Atomic cross-process cache invalidation (cinatra#1364).
+      buildBumpSkillCatalogGenerationQuery(postgresSchema),
     ],
   });
   return true;
@@ -646,16 +652,17 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
  * by `buildSkillRollbackQuery` (compare-and-swap on active_revision_id, gated
  * blob + rollback-revision inserts). Returns `{ changed }`; false = the head
  * moved underneath (the caller fails loudly). History is NEVER mutated — this
- * only INSERTs a new revision and moves the single mutable pointer. Increments
- * the in-process catalog cache version because the skill payload changed.
+ * only INSERTs a new revision and moves the single mutable pointer. Bumps the
+ * generation token because the skill payload changed (#1364).
  */
 export function applySkillRollbackInDatabase(input: SkillRollbackWrite): { changed: boolean } {
   ensurePostgresSchema();
-  skillCatalogCacheVersion += 1; // The payload changes — invalidate the read cache.
   const results = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
-    queries: [buildSkillRollbackQuery(postgresSchema, input)],
+    // The payload changes — bump the cross-process generation token in the
+    // SAME transaction (cinatra#1364). A CAS miss bumps too; harmless refetch.
+    queries: [buildSkillRollbackQuery(postgresSchema, input), buildBumpSkillCatalogGenerationQuery(postgresSchema)],
   });
   return { changed: (results[0]?.rows?.length ?? 0) > 0 };
 }

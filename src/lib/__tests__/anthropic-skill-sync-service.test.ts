@@ -41,7 +41,7 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 vi.mock("@cinatra-ai/skills", () => ({
-  readSkillsCatalog: vi.fn(),
+  readSkillsCatalogSnapshot: vi.fn(),
   getSkillAnthropicUploadFlag: vi.fn(),
   // Strict-containment guard on `sourcePath`. The fixture skills live under a
   // temp dir (outside the configured skills root), so the no-op keeps the
@@ -231,7 +231,7 @@ describe("broad recommendable-pool sync", () => {
         { id: "no-disk-body", name: "No Disk Body" },
       ],
     };
-    vi.mocked(skillsPkg.readSkillsCatalog).mockReset().mockResolvedValue(catalog as never);
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot).mockReset().mockResolvedValue(catalog as never);
     vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
 
     const candidates = await buildSyncCandidates();
@@ -262,7 +262,7 @@ describe("broad recommendable-pool sync", () => {
         { id: "derived-null", name: "Derived", sourcePath: mk("derived-null") },
       ],
     };
-    vi.mocked(skillsPkg.readSkillsCatalog).mockReset().mockResolvedValue(catalog as never);
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot).mockReset().mockResolvedValue(catalog as never);
     vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
     syncLifecycleReader = (ids) => ({
       ok: true,
@@ -287,7 +287,7 @@ describe("broad recommendable-pool sync", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(nodePath.join(dir, "SKILL.md"), "# s1\nbody");
     const catalog = { skills: [{ id: "s1", name: "S1", sourcePath: nodePath.join(dir, "SKILL.md") }] };
-    vi.mocked(skillsPkg.readSkillsCatalog).mockReset().mockResolvedValue(catalog as never);
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot).mockReset().mockResolvedValue(catalog as never);
     syncLifecycleReader = () => ({ ok: false });
     try {
       await expect(buildSyncCandidates()).rejects.toThrow(/lifecycle_state read failed|over-reclaim/i);
@@ -305,7 +305,7 @@ describe("broad recommendable-pool sync", () => {
     // test invoked buildSyncCandidates ⇒ readSkillsCatalog; vi.fn() retains
     // history across tests, so assert on a freshly-cleared mock).
     const catalogMock = vi
-      .mocked(skillsPkg.readSkillsCatalog)
+      .mocked(skillsPkg.readSkillsCatalogSnapshot)
       .mockReset()
       .mockResolvedValue({ skills: [] } as never);
     const result = await syncCatalogSkillsToAnthropic();

@@ -223,3 +223,63 @@ inconsistency A2 does not silently rewrite — it resolves on the skill's next w
 and fails closed at rollback until then. `down()` is guarded: it fails loudly if
 any `rollback` revision exists (immutable history is invalid under the narrowed
 A1 CHECK), otherwise fully reverses the A2 additions.
+
+## Catalog read/rebuild split (A4, cinatra#1364)
+
+`readSkillsCatalog()` historically delegated every read to the rebuild engine
+(`syncInstalledSkillsToDatabase`): GitHub auto-sync (first call), disk scan,
+merge, conditional full-catalog DB rewrite, and prefill-job enqueue — from 40+
+production call sites. A4 introduces the parallel split surface (both in
+`packages/skills/src/skill-packages.ts`, barrel-exported):
+
+- **`readSkillsCatalogSnapshot()`** — PURE read of the persisted catalog,
+  normalized through the same canonical normalizers as stored rows. No side
+  effects of any kind.
+- **`rebuildSkillsCatalog({ reason })`** — the EXPLICIT lifecycle operation:
+  the exact legacy engine under (a) an in-process single-flight that also
+  queues exactly ONE follow-up run for triggers arriving mid-rebuild (a running
+  rebuild's scan may predate the new trigger's change), and (b) a cross-process
+  metadata lease (CAS + TTL expiry, `skills_catalog_rebuild_lease`). On success
+  it records the completeness fence (`skills_catalog_rebuild_state`, exposed as
+  `readSkillsCatalogRebuildState()`).
+
+**Fencing / no partial observation.** The engine's catalog write is one DB
+transaction that ALSO bumps the cross-process generation token
+(`skills_catalog_generation`); `readSkillCatalogFromDatabase` keys its
+in-process cache on that token, and a cache miss goes through a FENCED batch
+read: token → skill_packages → skills → token inside one `REPEATABLE READ`
+transaction, so all four statements read the same MVCC snapshot and a torn
+{old packages, new skills} mix is impossible at the database level (the token
+pair doubles as a runtime self-check — if it ever differs, the read retries
+and is ultimately served uncached). A reader therefore sees the catalog
+fully-old or fully-new, and a write from ANY process (web, BullMQ worker)
+invalidates every process's cache on its next read. This replaces the old
+process-local cache counter, which could serve stale data cross-process
+indefinitely. On the LOCKED rebuild path the engine's catalog-write
+transaction is additionally fenced on lease ownership: its first statement
+locks the lease row (`FOR UPDATE`, held to COMMIT) and aborts unless the row
+still carries the run's token — a rebuild that outlives its TTL rolls back
+instead of overwriting a stealer's fresher catalog (the causally-marked abort
+retries once behind the stealer with a fresh lease and a fresh scan; a second
+consecutive loss fails loudly), and a steal can never interleave mid-write.
+The rebuild engine also runs inside an AsyncLocalStorage context so a
+re-entrant `rebuildSkillsCatalog()` call throws loudly instead of deadlocking
+the single-flight, and the completeness fence is written only while the lease
+is still held (a run that outlives the TTL never stamps its fence over a
+stealer's).
+
+**Rebuild wiring (this slice):** boot after extension activation +
+materialization (`skills-catalog-rebuild` phase, `degraded` policy), the dev
+extensions watcher settle, the dev boot skill-package scan, skill-extension
+install/update/uninstall, the MCP package install/uninstall handlers, and the
+GitHub-install server action. Never call `rebuildSkillsCatalog()` from code the
+engine itself reaches (github auto-sync, scanner, prefill enqueue) — the
+single-flight would deadlock on its own promise.
+
+**Incremental migration.** Call sites move to the snapshot read one by one,
+tracked per site in `docs/architecture/skills-catalog-read-inventory.json`
+(update it in the same PR as any migration). Read-merge-REPLACE write flows and
+the hot bridge/matching paths stay on the legacy read until their own slices;
+deleting the legacy path is S8's parity-gated last step. The A2 stale-clobber
+note above is narrowed by this slice (cross-process invalidation + serialized
+rebuilds) but only S8 retires the read-side trigger entirely.

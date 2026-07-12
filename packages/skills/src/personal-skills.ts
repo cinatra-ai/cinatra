@@ -281,8 +281,10 @@ export async function createOrUpdateCustomSkillForAgent(input: {
   if (input.actor) {
     const actor = input.actor;
     // Resolve package inheritance once for the leak-guard filter (W4).
-    const { readSkillsCatalog, resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
-    const matchedSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
+    // Pure policy lookup — snapshot read (cinatra#1364).
+    const { resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
+    const { readSkillsCatalogSnapshot } = await import("./skill-packages");
+    const matchedSkillPackages = (await readSkillsCatalogSnapshot()).skillPackages ?? [];
     matchedSkills = matchedSkills.filter((skill) => {
       try {
         // See auth-policy.ts buildSkillResourceRef.
