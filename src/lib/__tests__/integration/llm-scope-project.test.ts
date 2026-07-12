@@ -1,8 +1,9 @@
 /**
  * Project-scope integration test using real Postgres.
  *
- * `visibility="project:<id>"` rows are visible to actors whose
- * `projectIds` include `<id>`. Multi-project membership unions visibility.
+ * Project-tagged rows (canonical `project_id` column — cinatra#1428) are
+ * visible to actors whose `projectIds` include the tag. Multi-project
+ * membership unions visibility.
  */
 
 // Per-test fixture creates a fresh Postgres schema via `CREATE SCHEMA` and
@@ -40,23 +41,25 @@ beforeAll(async () => {
     p1Ids.push(
       await insertObject(client, schema, {
         orgId: orgA,
-        ownerType: "project",
-        ownerId: P1,
-        visibility: `project:${P1}`,
+        ownerLevel: "organization",
+        ownerId: orgA,
+        visibility: "private",
+        projectId: P1,
       }),
     );
   }
   p2Id = await insertObject(client, schema, {
     orgId: orgA,
-    ownerType: "project",
-    ownerId: P2,
-    visibility: `project:${P2}`,
+    ownerLevel: "organization",
+    ownerId: orgA,
+    visibility: "private",
+    projectId: P2,
   });
   orgRowId = await insertObject(client, schema, {
     orgId: orgA,
-    ownerType: "organization",
+    ownerLevel: "organization",
     ownerId: orgA,
-    visibility: "org",
+    visibility: "organization",
   });
   p1Ids.sort();
 }, 30_000);

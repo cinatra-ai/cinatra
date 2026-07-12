@@ -26,6 +26,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { normalizeOwnershipVocabulary } from "@/lib/derived-store-ownership";
 import { mcpRequestContextStorage } from "@/lib/mcp-request-context";
 import { assertProjectWritableSync } from "@/lib/project-writable";
 import { resolveProjectInheritanceForType } from "@/lib/project-inheritance";
@@ -273,6 +274,11 @@ function buildCreateStatement(args: CreateStmtArgs): {
   values: unknown[];
 } {
   const schema = args.schema;
+  // Vocabulary boundary (cinatra#1428): restore/replay callers feed HISTORICAL
+  // snapshots that may carry the retired composite-string visibility
+  // vocabulary (rows written before the core__0033 one-shot cutover).
+  // Normalize the tuple so composite values never re-enter the store.
+  args = { ...args, ...normalizeOwnershipVocabulary(args) };
   return {
     text: `WITH inserted AS (
              INSERT INTO "${schema}"."objects"
@@ -377,6 +383,9 @@ function buildUpdateStatement(args: UpdateStmtArgs): {
   values: unknown[];
 } {
   const schema = args.schema;
+  // Same vocabulary boundary as buildCreateStatement (cinatra#1428): restore
+  // paths replay pre-cutover snapshots; normalize before binding.
+  args = { ...args, ...normalizeOwnershipVocabulary(args) };
   return {
     text: `WITH updated AS (
              UPDATE "${schema}"."objects" SET

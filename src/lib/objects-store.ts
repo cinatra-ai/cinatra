@@ -210,7 +210,7 @@ export function readObjectsByType(type: string, opts?: ReadObjectsOptions): Obje
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at, created_by, org_id, source, run_id, agent_id, package_version, agent_spec_version, owner_level, owner_id, visibility
+        text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at, created_by, org_id, source, run_id, agent_id, package_version, agent_spec_version, owner_level, owner_id, visibility, project_id
 FROM "${schema}"."objects"
 ${whereClause}`,
         values,
@@ -252,7 +252,7 @@ export function readAllObjects(opts?: ReadAllObjectsOptions): ObjectRecord[] {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at, created_by, org_id, source, run_id, agent_id, package_version, agent_spec_version, owner_level, owner_id, visibility
+        text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at, created_by, org_id, source, run_id, agent_id, package_version, agent_spec_version, owner_level, owner_id, visibility, project_id
 FROM "${schema}"."objects"
 ${whereClause}
 ORDER BY created_at DESC
@@ -277,7 +277,7 @@ export function readObjectById(id: string): ObjectRecord | null {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at, created_by, org_id, source, run_id, agent_id, package_version, agent_spec_version, owner_level, owner_id, visibility
+        text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at, created_by, org_id, source, run_id, agent_id, package_version, agent_spec_version, owner_level, owner_id, visibility, project_id
 FROM "${schema}"."objects"
 WHERE id = $1 AND deleted_at IS NULL`,
         values: [id],
@@ -447,8 +447,9 @@ export function getObjectById(
   const schema = postgresSchema.replaceAll('"', '""');
 
   // When an actor is provided, splice buildOwnershipFilter into the WHERE
-  // clause so reads scope through the full ownership hierarchy (owner / org /
-  // team / project / workspace / admin). Callers reachable from LLM tool
+  // clause so reads scope through the canonical ownership vocabulary
+  // (owner axes / organization / public / project membership — cinatra#1428).
+  // Callers reachable from LLM tool
   // calls must pass an actor; handlers fail closed at the entry point.
   let ownershipClause = "";
   let ownershipValues: unknown[] = [];
@@ -473,7 +474,7 @@ export function getObjectById(
         text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                  created_by, org_id, source, run_id, agent_id, package_version,
                  agent_spec_version, version, deleted_at,
-                 owner_level, owner_id, visibility
+                 owner_level, owner_id, visibility, project_id
                FROM "${schema}"."objects"
                WHERE id = $1
                  AND (org_id = $2 OR $2 IS NULL)
@@ -586,7 +587,7 @@ export function listObjectsByFilter(
         text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                  created_by, org_id, source, run_id, agent_id, package_version,
                  agent_spec_version, version, deleted_at,
-                 owner_level, owner_id, visibility
+                 owner_level, owner_id, visibility, project_id
                FROM "${schema}"."objects"
                WHERE ${where.join(" AND ")}
                ${orderBy}

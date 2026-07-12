@@ -1,33 +1,55 @@
 /**
- * Derived-store ownership helpers.
+ * Derived-store ownership helpers — CANONICAL COLUMN VOCABULARY (cinatra#1428).
  *
- * Derived data stores (objects, graphiti_projection_outbox, embedding rows,
- * cached previews) carry the canonical ownership tuple — organization_id,
- * owner_type, owner_id, visibility — mirroring the source resource.
- * Visibility filtering uses these columns in WHERE clauses; this module supplies:
+ * The objects substrate carries ONE ownership vocabulary, the column model:
+ *
+ *   - owner_level ∈ 'user' | 'team' | 'organization' | 'workspace'  (owner axis)
+ *   - owner_id    — the owning principal's id (user id / team id / org id)
+ *   - visibility  ∈ 'private' | 'team' | 'organization' | 'public'  (share axis)
+ *   - project_id  — nullable sealed-room refinement, NEVER a 5th ownership tier
+ *
+ * The legacy composite-string visibility vocabulary ('org', 'workspace',
+ * 'team:<id>', 'user:<id>', 'project:<id>', 'owner', 'admin') is RETIRED:
+ * migration core__0033 one-shot-normalized every stored row onto the column
+ * model (fixed mapping ratified in cinatra#1428), and every writer emits
+ * canonical values only. This module supplies:
  *
  *   - buildOwnershipFilter(actor): parameterised SQL fragment safe to splice
- *     into a raw pg WHERE clause. Returns positional ($1, $2, ...) placeholders
- *     starting at 1 — callers using a higher base must remap.
+ *     into a raw pg WHERE clause over the `objects` columns. Returns positional
+ *     ($1, $2, ...) placeholders starting at 1 — callers using a higher base
+ *     must remap.
  *
- *   - lazyBackfillOwnershipOnRead(row, sourceLookup, persist): for legacy rows
- *     written before this migration, look up the canonical ownership from the
- *     source resource on read, fire-and-forget a persist UPDATE, and return the
- *     enriched row in-memory.
+ *   - normalizeOwnershipVocabulary(tuple): the runtime mirror of the
+ *     core__0033 mapping. Write boundaries that replay HISTORICAL tuples
+ *     (object-history restore snapshots recorded before the cutover) MUST pass
+ *     them through this normalizer so composite values never re-enter the
+ *     store after the one-shot migration.
  */
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
-// Types
+// Canonical vocabulary
 // ---------------------------------------------------------------------------
 
-export type DerivedStoreOwnership = {
-  organizationId: string | null;
-  ownerType: "user" | "team" | "organization" | "workspace";
-  ownerId: string;
-  visibility: string;
-};
+export const CANONICAL_OWNER_LEVELS = [
+  "user",
+  "team",
+  "organization",
+  "workspace",
+] as const;
+export type CanonicalOwnerLevel = (typeof CANONICAL_OWNER_LEVELS)[number];
+
+export const CANONICAL_VISIBILITIES = [
+  "private",
+  "team",
+  "organization",
+  "public",
+] as const;
+export type CanonicalVisibility = (typeof CANONICAL_VISIBILITIES)[number];
+
+const OWNER_LEVEL_SET: ReadonlySet<string> = new Set(CANONICAL_OWNER_LEVELS);
+const VISIBILITY_SET: ReadonlySet<string> = new Set(CANONICAL_VISIBILITIES);
 
 export type OwnershipFilterFragment = {
   /** Parameterised SQL fragment, no leading WHERE. */
@@ -41,15 +63,23 @@ export type OwnershipFilterFragment = {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a parameterised SQL fragment that filters derived-store rows visible
- * to the given actor. Visibility kinds covered:
+ * Build a parameterised SQL fragment that filters `objects` rows visible to
+ * the given actor, evaluated over the CANONICAL columns
+ * (owner_level, owner_id, visibility, project_id, org_id):
  *
- *   - owner: owner_id = principalId
- *   - org: visibility = 'org' AND organization_id = actor.organizationId
- *   - team:<id>: visibility LIKE 'team:%' AND substring(visibility, 6) = ANY(actor.teamIds)
- *   - project:<id>: visibility LIKE 'project:%' AND substring(visibility, 9) = ANY(actor.projectIds)
- *   - workspace: visibility = 'workspace' (anyone in the platform)
- *   - admin: visibility = 'admin' (only when actor.platformRole === 'platform_admin')
+ *   - user owner axis:  owner_level = 'user' AND owner_id = principalId
+ *     (the owning user always sees their rows, any visibility)
+ *   - team owner axis:  owner_level = 'team' AND owner_id ∈ actor.teamIds
+ *     (team members see team-owned rows; visibility = 'team' rows are
+ *     team-owned by construction, so this ONE clause covers both axes)
+ *   - organization:     visibility = 'organization' AND org_id = actor org
+ *   - public:           visibility = 'public' AND org_id = actor org —
+ *     'public' means "anyone in the OWNING org" (multi-tenant fail-closed,
+ *     same invariant the retired 'workspace' composite carried); platform
+ *     admins read public rows across orgs
+ *   - project axis:     project_id ∈ actor.projectIds — sealed-room
+ *     membership admits project-tagged rows (the refinement shares the row
+ *     with its room, mirroring the retired 'project:<id>' composite)
  *
  * The clauses are OR-joined and wrapped in parentheses so callers can splice
  * the result directly: `WHERE ${frag.sql} AND ...`.
@@ -62,51 +92,53 @@ export function buildOwnershipFilter(actor: ActorContext): OwnershipFilterFragme
     return `$${params.length}`;
   };
 
-  // Owner — direct principal match.
-  clauses.push(`owner_id = ${ph(actor.principalId)}`);
+  // User owner axis — direct principal match on user-owned rows.
+  clauses.push(
+    `(owner_level = 'user' AND owner_id = ${ph(actor.principalId)})`,
+  );
 
-  // Org — visibility = 'org' AND org_id matches actor.organizationId.
-  // The canonical column on objects + graphiti_projection_outbox is `org_id`
-  // (not `organization_id` — see drizzle-store.ts buildCreateStoreSchemaQueries).
-  // Always emit the param even when actor.organizationId is undefined so the
-  // positional sequence stays predictable; pg treats `= NULL` as never-match.
-  clauses.push(`(visibility = 'org' AND org_id = ${ph(actor.organizationId ?? null)})`);
-
-  // Team — visibility LIKE 'team:%' AND the suffix is in actor.teamIds.
+  // Team owner axis — team-owned rows of any team the actor belongs to.
   const teamIds = actor.teamIds ?? [];
   clauses.push(
-    `(visibility LIKE 'team:%' AND substring(visibility from 6) = ANY(${ph(teamIds)}::text[]))`,
+    `(owner_level = 'team' AND owner_id = ANY(${ph(teamIds)}::text[]))`,
   );
 
-  // Project — visibility LIKE 'project:%' AND suffix in actor.projectIds.
-  const projectIds = actor.projectIds ?? [];
+  // Organization visibility — org members see org-visible rows. Always emit
+  // the param even when actor.organizationId is undefined so the positional
+  // sequence stays predictable; pg treats `= NULL` as never-match.
   clauses.push(
-    `(visibility LIKE 'project:%' AND substring(visibility from 9) = ANY(${ph(projectIds)}::text[]))`,
+    `(visibility = 'organization' AND org_id = ${ph(actor.organizationId ?? null)})`,
   );
 
-  // Workspace visibility must be scoped to the owning org. Matching every
-  // row regardless of actor org/membership would let synthesized loopback
-  // contexts or undefined-org contexts leak workspace-visibility rows across
-  // orgs. Require either (a) the row's org_id matches the actor's organizationId,
-  // or (b) the actor is a platform admin. This makes workspace-visibility mean
-  // "visible to anyone in the OWNING org" — multi-tenant safe.
+  // Public visibility must be scoped to the owning org. Matching every row
+  // regardless of actor org/membership would let synthesized loopback
+  // contexts or undefined-org contexts leak public-visibility rows across
+  // orgs. Require either (a) the row's org_id matches the actor's
+  // organizationId, or (b) the actor is a platform admin. This makes 'public'
+  // mean "visible to anyone in the OWNING org" — multi-tenant safe (the same
+  // load-bearing invariant the retired 'workspace' composite value carried).
   if (actor.platformRole === "platform_admin") {
-    clauses.push(`visibility = 'workspace'`);
+    clauses.push(`visibility = 'public'`);
   } else {
     // Load-bearing fail-closed invariant: when actor.organizationId is
     // undefined this becomes `org_id = NULL`, which never matches in
     // Postgres SQL — a non-admin actor with no org claim sees zero rows.
     // Do NOT swap `=` for `IS NOT DISTINCT FROM` here; that would let
-    // null-org actors read every workspace-visible row across all orgs.
+    // null-org actors read every public-visible row across all orgs.
     clauses.push(
-      `(visibility = 'workspace' AND org_id = ${ph(actor.organizationId ?? null)})`,
+      `(visibility = 'public' AND org_id = ${ph(actor.organizationId ?? null)})`,
     );
   }
 
-  // Admin — only platform admins.
-  if (actor.platformRole === "platform_admin") {
-    clauses.push(`visibility = 'admin'`);
-  }
+  // Project axis — sealed-room membership. project_id is a refinement, not a
+  // tier: a project-tagged row is shared with its room's members regardless
+  // of the visibility axis (exactly what the retired 'project:<id>' composite
+  // granted). Non-members reach a project-tagged row only through the owner
+  // axes above.
+  const projectIds = actor.projectIds ?? [];
+  clauses.push(
+    `(project_id IS NOT NULL AND project_id = ANY(${ph(projectIds)}::text[]))`,
+  );
 
   const visibilitySql = `(${clauses.join(" OR ")})`;
 
@@ -115,8 +147,8 @@ export function buildOwnershipFilter(actor: ActorContext): OwnershipFilterFragme
   // must ALSO satisfy EVERY ceiling element (satisfy-all) — the ad-hoc-resolvable
   // adoption of the shared `resourceWithinCeiling` semantics, expressed in SQL.
   // It is AND-ed on top of the visibility OR-set, so it can only NARROW, never
-  // widen: even the widened `workspace`/`admin` clauses a platform-admin invoker
-  // gets above stay ceiling-bounded (the load-bearing ordering — the ceiling is
+  // widen: even the widened `public` clause a platform-admin invoker gets
+  // above stays ceiling-bounded (the load-bearing ordering — the ceiling is
   // NOT written into the OR-set). Non-OBO actors (no oboCeiling) are unaffected.
   // Shared with objects-store.ts (intentional double-cover with the #1051 kernel
   // surface; conflicting edits to this function are not).
@@ -129,17 +161,17 @@ export function buildOwnershipFilter(actor: ActorContext): OwnershipFilterFragme
 
 /**
  * Translate an OBO ceiling CHAIN into a satisfy-ALL SQL predicate over the
- * derived-store ownership columns, mirroring `resourceWithinCeiling`
+ * canonical ownership columns, mirroring `resourceWithinCeiling`
  * (@cinatra-ai/mcp-server/obo-ceiling) element-for-element:
  *
  *   - organization → `org_id = <id>`                 (tenancy floor)
  *   - user/team/workspace → `owner_level = <tier> AND owner_id = <id>`
  *                                                     (owner-axis anchor)
- *   - project → `visibility = 'project:<id>'`         (project refinement — this
- *                                                     store expresses project via
- *                                                     the visibility column, not a
- *                                                     separate project_id, per the
- *                                                     context-resolver invariant)
+ *   - project → `project_id = <id>`                   (project refinement — the
+ *                                                     canonical column, post
+ *                                                     core__0033; the composite
+ *                                                     'project:<id>' visibility
+ *                                                     encoding is retired)
  *
  * Elements are AND-joined (a resource must satisfy every applicable ceiling).
  * Returns null when there is no ceiling so callers keep their exact pre-ceiling
@@ -155,7 +187,7 @@ function buildCeilingClause(
     if (c.tier === "organization") {
       parts.push(`org_id = ${ph(c.id)}`);
     } else if (c.tier === "project") {
-      parts.push(`visibility = ${ph(`project:${c.id}`)}`);
+      parts.push(`project_id = ${ph(c.id)}`);
     } else {
       // user | team | workspace — owner-axis anchor.
       parts.push(`(owner_level = ${ph(c.tier)} AND owner_id = ${ph(c.id)})`);
@@ -165,47 +197,115 @@ function buildCeilingClause(
 }
 
 // ---------------------------------------------------------------------------
-// lazyBackfillOwnershipOnRead
+// normalizeOwnershipVocabulary — runtime mirror of core__0033
 // ---------------------------------------------------------------------------
 
-type MaybeOwnedRow = {
-  ownerType?: string | null;
+export type OwnershipVocabularyTuple = {
+  ownerLevel: string | null;
+  ownerId: string | null;
+  visibility: string | null;
+  projectId: string | null;
+};
+
+export type NormalizeOwnershipInput = {
+  ownerLevel?: string | null;
   ownerId?: string | null;
   visibility?: string | null;
-  organizationId?: string | null;
+  projectId?: string | null;
+  /** The row's org id — the owner_id target for the 'org' composite mapping. */
+  orgId?: string | null;
 };
 
 /**
- * For a legacy row missing ownership columns, fetch the canonical tuple from
- * the source resource via `sourceLookup`, fire-and-forget the `persist` UPDATE,
- * and return the row enriched in-memory.
+ * Normalize ONE ownership tuple from the retired composite-string vocabulary
+ * onto the canonical column model. This is the runtime MIRROR of migration
+ * `core__0033_objects-ownership-vocabulary.mjs` (keep the two in lockstep —
+ * same fixed mapping, ratified in cinatra#1428):
  *
- * Behaviour:
- *   - If the row already has ownerType populated, returns the row untouched
- *     and never invokes lookup/persist.
- *   - If sourceLookup returns null (orphan row), returns the row untouched
- *     and skips persist.
- *   - persist() is invoked synchronously with the resolved tuple — the caller
- *     decides whether to await or fire-and-forget.
+ *   - 'org'          → owner_level='organization', owner_id=orgId,
+ *                      visibility='organization'
+ *   - 'workspace'    → owner_level='workspace',    visibility='public'
+ *   - 'team:<id>'    → owner_level='team', owner_id=<id>, visibility='team'
+ *   - 'user:<id>'    → owner_level='user', owner_id=<id>, visibility='private'
+ *   - 'project:<id>' → project_id=<id> (kept if already set),
+ *                      visibility='private' (owner axis untouched)
+ *   - any other non-canonical value ('owner', 'admin', junk) → 'private'
+ *     (fail-closed, mirrors the objects-side normalizeObjectVisibility)
+ *
+ * Canonical visibility values and `null` (which callers COALESCE to their own
+ * defaults) pass through untouched. A non-canonical ownerLevel passes through
+ * unchanged unless the visibility mapping determines it — write boundaries
+ * validate levels separately.
+ *
+ * Used by write boundaries that replay HISTORICAL tuples (object-history
+ * restore snapshots recorded before the cutover). New writes never produce
+ * composite values.
  */
-export async function lazyBackfillOwnershipOnRead<T extends MaybeOwnedRow>(
-  row: T,
-  sourceLookup: () => Promise<DerivedStoreOwnership | null>,
-  persist: (o: DerivedStoreOwnership) => void,
-): Promise<T> {
-  if (row.ownerType) {
-    return row;
+export function normalizeOwnershipVocabulary(
+  input: NormalizeOwnershipInput,
+): OwnershipVocabularyTuple {
+  const ownerLevel = input.ownerLevel ?? null;
+  const ownerId = input.ownerId ?? null;
+  const visibility = input.visibility ?? null;
+  const projectId = input.projectId ?? null;
+
+  if (visibility === null || VISIBILITY_SET.has(visibility)) {
+    return { ownerLevel, ownerId, visibility, projectId };
   }
-  const resolved = await sourceLookup();
-  if (!resolved) {
-    return row;
+
+  if (visibility === "org") {
+    return {
+      ownerLevel: "organization",
+      ownerId: input.orgId ?? ownerId,
+      visibility: "organization",
+      projectId,
+    };
   }
-  persist(resolved);
-  return {
-    ...row,
-    organizationId: resolved.organizationId,
-    ownerType: resolved.ownerType,
-    ownerId: resolved.ownerId,
-    visibility: resolved.visibility,
-  } as T;
+  if (visibility === "workspace") {
+    return { ownerLevel: "workspace", ownerId, visibility: "public", projectId };
+  }
+  if (visibility.startsWith("team:") && visibility.length > "team:".length) {
+    return {
+      ownerLevel: "team",
+      ownerId: visibility.slice("team:".length),
+      visibility: "team",
+      projectId,
+    };
+  }
+  if (visibility.startsWith("user:") && visibility.length > "user:".length) {
+    return {
+      ownerLevel: "user",
+      ownerId: visibility.slice("user:".length),
+      visibility: "private",
+      projectId,
+    };
+  }
+  if (
+    visibility.startsWith("project:") &&
+    visibility.length > "project:".length
+  ) {
+    return {
+      ownerLevel,
+      ownerId,
+      visibility: "private",
+      projectId: projectId ?? visibility.slice("project:".length),
+    };
+  }
+
+  // 'owner', 'admin', or junk → fail-closed private; owner axis untouched.
+  return { ownerLevel, ownerId, visibility: "private", projectId };
+}
+
+/** True iff the value is a canonical visibility ('private'|'team'|'organization'|'public'). */
+export function isCanonicalVisibility(
+  value: unknown,
+): value is CanonicalVisibility {
+  return typeof value === "string" && VISIBILITY_SET.has(value);
+}
+
+/** True iff the value is a canonical owner level ('user'|'team'|'organization'|'workspace'). */
+export function isCanonicalOwnerLevel(
+  value: unknown,
+): value is CanonicalOwnerLevel {
+  return typeof value === "string" && OWNER_LEVEL_SET.has(value);
 }
