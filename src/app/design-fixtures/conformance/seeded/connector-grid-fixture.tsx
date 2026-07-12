@@ -56,7 +56,7 @@ export async function ConnectorGridFixture() {
     <div data-surface-id="connector-grid">
       <ConnectorsClient
         cards={cards}
-        scopeValue="workspace"
+        scopeValue={["workspace"]}
         scopes={{ orgs: [], projects: [], canGrantWorkspace: true }}
       />
     </div>

@@ -39,16 +39,19 @@ import { AccessComboboxHierarchical } from "@/components/access-combobox-hierarc
 import { getListViewCookieName } from "@/lib/list-view";
 import type { AvailableScopes } from "@/components/access-scope";
 import {
-  DEFAULT_SCOPE_TOKEN,
   comboboxValueToScopeToken,
+  scopeFilterComboboxRowState,
   scopeTokenToComboboxValue,
+  serializeScopeFilterTokens,
+  toggleScopeFilterComboboxValue,
 } from "@/lib/scope-filter";
 
 type SkillsToolbarProps = {
   basePath: string;
   query: string;
   view: "cards" | "table";
-  scopeValue: string;
+  /** The active scope selection (server-resolved by the canonical parser). */
+  scopeValue: string[];
   scopes: AvailableScopes;
   showAdmin: boolean;
 };
@@ -96,9 +99,27 @@ export function SkillsToolbar({
     router.push(qs ? `${pathname}?${qs}` : pathname);
   }
 
-  function selectScope(comboboxValue: string) {
-    const token = comboboxValueToScopeToken(comboboxValue);
-    pushWith({ scope: token === DEFAULT_SCOPE_TOKEN ? null : token });
+  // OPTIMISTIC local scope selection: the picker popover stays open on
+  // toggle, so a second toggle can fire BEFORE the navigation commits and the
+  // server-resolved `scopeValue` prop catches up. Toggling against the stale
+  // prop would drop the first toggle (codex round-1), so toggles compose
+  // against this local state, reconciled whenever the server value changes —
+  // adjusted DURING render (the sanctioned prop-change pattern; a
+  // setState-in-effect is a lint error).
+  const scopeServerKey = scopeValue.join(" ");
+  const [scopeSyncedKey, setScopeSyncedKey] = useState(scopeServerKey);
+  const [scopeSelection, setScopeSelection] = useState<string[]>(scopeValue);
+  if (scopeSyncedKey !== scopeServerKey) {
+    setScopeSyncedKey(scopeServerKey);
+    setScopeSelection(scopeValue);
+  }
+
+  function selectScope(nextComboboxSelection: string[]) {
+    const tokens = nextComboboxSelection.map(comboboxValueToScopeToken);
+    setScopeSelection(tokens);
+    // Comma-joined multi-scope selection (cinatra#1074 W5); the default
+    // (cleared) selection drops the param.
+    pushWith({ scope: serializeScopeFilterTokens(tokens) });
   }
 
   // Debounced search → preserves scope/view.
@@ -143,8 +164,11 @@ export function SkillsToolbar({
       <ToolbarGroup>
         <AccessComboboxHierarchical
           id="skills-scope-filter"
-          value={scopeTokenToComboboxValue(scopeValue)}
+          multiple
+          value={scopeSelection.map(scopeTokenToComboboxValue)}
           onChange={selectScope}
+          toggleSelection={toggleScopeFilterComboboxValue}
+          rowState={scopeFilterComboboxRowState}
           scopes={scopes}
           showAdmin={showAdmin}
         />

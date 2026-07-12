@@ -116,6 +116,24 @@ export type AccessComboboxHierarchicalMultiProps =
     multiple: true;
     value: string[];
     onChange: (next: string[]) => void;
+    /**
+     * Override the toggle semantics (default: the GRANT-mode
+     * `toggleAccessSelection` — owner/workspace exclusivity, owner-strip,
+     * non-empty floor). FILTER surfaces (cinatra#1074 W5) pass the
+     * filter-mode toggle from `@/lib/scope-filter`, where "personal" is an
+     * ordinary OR-token and "workspace" is the cleared default.
+     */
+    toggleSelection?: (value: string, selection: readonly string[]) => string[];
+    /**
+     * Override the per-row checked/disabled derivation (default: the
+     * GRANT-mode `accessRowState` with org/workspace implied-display).
+     * FILTER surfaces pass the implication-free filter row state.
+     */
+    rowState?: (
+      value: string,
+      selection: readonly string[],
+      scopes: AvailableScopes,
+    ) => AccessRowState;
   };
 
 export type AccessComboboxHierarchicalProps =
@@ -158,11 +176,16 @@ export function AccessComboboxHierarchical(
   const selection: string[] = multiple ? props.value : [props.value];
 
   const toggleMulti = (itemValue: string) => {
-    if (!multiple) return;
-    // Owner + workspace are EXCLUSIVE; scoped tokens + admin add/remove and
-    // canonicalise. Implied rows are disabled, so this only fires on a row
-    // whose checked state equals its explicit membership.
-    props.onChange(toggleAccessSelection(itemValue, selection) as string[]);
+    if (props.multiple !== true) return;
+    // Default (grant mode): owner + workspace are EXCLUSIVE; scoped tokens +
+    // admin add/remove and canonicalise. Implied rows are disabled, so this
+    // only fires on a row whose checked state equals its explicit membership.
+    // Filter surfaces override via `toggleSelection` (cinatra#1074 W5).
+    const toggle =
+      props.toggleSelection ??
+      ((value: string, current: readonly string[]) =>
+        toggleAccessSelection(value, current) as string[]);
+    props.onChange(toggle(itemValue, selection));
   };
 
   // Single-mode selected-row background (unchanged behaviour).
@@ -238,9 +261,10 @@ export function AccessComboboxHierarchical(
   // reason tooltip, and sets aria-disabled.
   const renderSelectableItem = (itemValue: string) => {
     const lockDisabled = disabledScopes?.includes(itemValue) ?? false;
-    const state: AccessRowState = multiple
-      ? accessRowState(itemValue, selection, scopes)
-      : { checked: false, impliedDisabled: false };
+    const state: AccessRowState =
+      props.multiple === true
+        ? (props.rowState ?? accessRowState)(itemValue, selection, scopes)
+        : { checked: false, impliedDisabled: false };
     const rowDisabled = lockDisabled || state.impliedDisabled;
     const body = multiple
       ? renderMultiRow(itemValue, state)

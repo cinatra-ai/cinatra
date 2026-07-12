@@ -201,3 +201,145 @@ export function isExactlyOwner(
 ): boolean {
   return selection.length === 1 && selection[0] === "owner";
 }
+
+// ---------------------------------------------------------------------------
+// Agent-creation approval access-scope mapping (cinatra#1327).
+//
+// A chat-created agent is authored INSIDE the product and is never
+// store-installed, so admin APPROVAL is the install-equivalent moment: the
+// reviewer must choose WHO can access the agent, exactly as the marketplace
+// install step does. This is the agent-approval analogue of
+// packages/extensions/src/install-access-target.ts — a PURE mapping. It lives
+// HERE (rather than a standalone module) so both the agent-MCP primitive and the
+// app-layer approval helper reach it via an ALREADY-loaded module — a standalone
+// file would enlarge the reachable first-party graph of the hot agent routes
+// (route-graph ratchet). Pure (no IO, no server-only) so it stays unit-testable.
+//
+// DELIBERATE divergence from accessTargetToInstallPolicy: that helper returns
+// `undefined` for the organization target so setExtensionInstallAccess applies
+// the KIND default. For "agent_template" that default is OWNER-scoped
+// (owner-only) — NOT what "organization access" means. So this mapper returns an
+// EXPLICIT policy for every level (never undefined): organization → `workspace`
+// (every same-org member), team → `team:<id>`, project → `project:<id>`. An
+// approval can therefore never silently fall back to owner-only, and the
+// org/team/project semantics match the agent install path
+// (installRegistryPackageAtScope), whose organization target grants org-wide
+// access.
+// ---------------------------------------------------------------------------
+
+/** The access target a reviewer picks at approval — the SAME three levels the
+ *  agent / extension install-scope dialogs offer. "user" / "workspace" are not
+ *  selectable targets (parity with the install-at-scope schema). */
+export type AgentApprovalAccessTarget = {
+  level: "organization" | "team" | "project";
+  id: string;
+};
+
+/**
+ * Zod schema for the accessTarget the agent-creation approve decision carries.
+ * `level` INTENTIONALLY omits "user" and "workspace".
+ */
+export const AgentApprovalAccessTargetSchema: z.ZodType<AgentApprovalAccessTarget> =
+  z.object({
+    level: z.enum(["organization", "team", "project"]),
+    id: z.string().min(1),
+  });
+
+/**
+ * The approval-time access decision. `scoped` carries the reviewer's chosen
+ * target (the approvals-UI path). `instant_grant_default` is the documented
+ * platform_admin chat-authoring instant grant (cinatra#382): a chat surface
+ * cannot show the access-scope dialog, so it keeps the pre-existing default
+ * access and persists NO explicit scope. Making this a required parameter of the
+ * shared approve→publish pipeline means a publish can never be reached WITHOUT
+ * the caller having decided access one way or the other.
+ */
+export type AgentApprovalAccessDecision =
+  | { mode: "scoped"; target: AgentApprovalAccessTarget }
+  | { mode: "instant_grant_default" };
+
+/**
+ * Map the reviewer's chosen access target to the agent_template access policy
+ * persisted at approval. Explicit for every level (never undefined):
+ *   organization → ["workspace"]  (every same-org member)
+ *   team         → ["team:<id>"]
+ *   project      → ["project:<id>"]
+ * Run-sharing disabled — parity with the marketplace install-time per-scope
+ * policy (accessTargetToInstallPolicy).
+ */
+export function agentApprovalAccessPolicy(
+  target: AgentApprovalAccessTarget,
+): AgentAuthPolicy {
+  if (target.level === "organization") {
+    return {
+      runListVisibility: ["workspace"],
+      runDataVisibility: ["workspace"],
+      runExecuteVisibility: ["workspace"],
+      allowRunSharing: false,
+    };
+  }
+  const visibility =
+    target.level === "team"
+      ? (`team:${target.id}` as const)
+      : (`project:${target.id}` as const);
+  return {
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
+    allowRunSharing: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Install-scope picker value adapter (cinatra#1327).
+//
+// The AccessCombobox (installMode) emits an id-carrying token — "org:<id>" /
+// "team:<id>" / "project:<id>" (legacy bare "org"). This is the SAME adapter the
+// install-scope dialogs use to turn that token into the {level, id} target; the
+// agent-creation APPROVAL scope step reuses it so both surfaces map identically.
+// Co-located HERE (a pure, client-safe, already-widely-reachable module) rather
+// than a standalone file so it does not enlarge the reachable first-party graph
+// of the hot agent routes (route-graph ratchet). owner / admin / workspace are
+// NOT selectable targets — the guard returns null so a stray value can never
+// reach the server with a malformed target.
+// ---------------------------------------------------------------------------
+
+/**
+ * Map an AccessCombobox picker value to the {level, id} target, or null when the
+ * value is not a selectable target (owner / admin / workspace / empty / an empty
+ * prefixed id like "team:"). `activeOrgId` backs the legacy bare "org" token.
+ */
+export function pickerValueToTarget(
+  value: string,
+  activeOrgId: string,
+): AgentApprovalAccessTarget | null {
+  if (value.startsWith("org:")) {
+    const id = value.slice("org:".length);
+    return id ? { level: "organization", id } : null;
+  }
+  if (value === "org") return { level: "organization", id: activeOrgId };
+  if (value.startsWith("team:")) {
+    const id = value.slice("team:".length);
+    return id ? { level: "team", id } : null;
+  }
+  if (value.startsWith("project:")) {
+    const id = value.slice("project:".length);
+    return id ? { level: "project", id } : null;
+  }
+  // owner / admin / workspace / "" — not a selectable target. Defensive guard.
+  return null;
+}
+
+/**
+ * Required-ness predicate for the approval / install scope step: a scope
+ * selection is REQUIRED, so a submit is only allowed when the picker value
+ * resolves to a valid target. No selection and the non-target rows both return
+ * false — the single source of truth the approval dialog's submit `disabled`
+ * binds to, so "cannot approve without a scope" is one pure, unit-tested function.
+ */
+export function canSubmitApprovalScope(
+  value: string,
+  activeOrgId: string,
+): boolean {
+  return pickerValueToTarget(value, activeOrgId) !== null;
+}

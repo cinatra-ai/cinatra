@@ -154,3 +154,73 @@ export function scopeSelectionMatchesAny(
 ): boolean {
   return tokens.some((token) => scopeSelectionMatches(token, resource));
 }
+
+// ---------------------------------------------------------------------------
+// Filter-mode multi-select picker behaviour (cinatra#1074, the W5 UI half).
+//
+// The GRANT picker's toggle/row-state semantics (owner-strip-when-mixed, the
+// owner floor, org→team implied display — src/components/access-scope.ts) are
+// grant rules and deliberately do NOT apply to the FILTER:
+//   - "personal" is an ordinary OR-token (personal + team:<id> is a
+//     meaningful union: "my stuff or that team's stuff");
+//   - nothing is implied: an org:<id> selection matches org-granted resources
+//     only, never the org's teams' resources (fail-closed, cinatra#953 W3),
+//     so no row may render "included via" another;
+//   - "Workspace: All" IS the cleared filter: selecting it (or unchecking the
+//     last token) returns to the default match-all selection.
+// These operate in URL-token space; the *ComboboxValue variants map through
+// the personal<->owner wrapper boundary for the picker.
+// ---------------------------------------------------------------------------
+
+/** Toggle one filter token, returning the canonical next selection. */
+export function toggleScopeFilterToken(
+  token: ScopeToken,
+  selection: readonly ScopeToken[],
+): ScopeToken[] {
+  // Selecting "Workspace: All" clears the filter back to the default.
+  if (token === DEFAULT_SCOPE_TOKEN) return [DEFAULT_SCOPE_TOKEN];
+  const without = selection.filter((t) => t !== token && t !== DEFAULT_SCOPE_TOKEN);
+  const next = selection.includes(token) ? without : [...without, token];
+  if (next.length === 0) return [DEFAULT_SCOPE_TOKEN];
+  return [...new Set(next)];
+}
+
+/**
+ * Checkbox + disabled state for one filter row. The workspace row is checked
+ * exactly when the selection is the default and is disabled then too (it is
+ * already the cleared state — re-clicking would be a surprising no-op, the
+ * same rationale as the grant picker's sole-owner floor). Every other row is
+ * independent: checked iff explicitly selected, never implied, never locked.
+ */
+export function scopeFilterRowState(
+  token: ScopeToken,
+  selection: readonly ScopeToken[],
+): { checked: boolean; impliedDisabled: boolean } {
+  if (token === DEFAULT_SCOPE_TOKEN) {
+    const isDefault = isDefaultScopeSelection(selection);
+    return { checked: isDefault, impliedDisabled: isDefault };
+  }
+  return { checked: selection.includes(token), impliedDisabled: false };
+}
+
+/** `toggleScopeFilterToken` in the picker's combobox-value space. */
+export function toggleScopeFilterComboboxValue(
+  value: string,
+  comboboxSelection: readonly string[],
+): string[] {
+  return toggleScopeFilterToken(
+    comboboxValueToScopeToken(value),
+    comboboxSelection.map(comboboxValueToScopeToken),
+  ).map(scopeTokenToComboboxValue);
+}
+
+/** `scopeFilterRowState` in the picker's combobox-value space. */
+export function scopeFilterComboboxRowState(
+  value: string,
+  comboboxSelection: readonly string[],
+): { checked: boolean; impliedDisabled: boolean } {
+  return scopeFilterRowState(
+    comboboxValueToScopeToken(value),
+    comboboxSelection.map(comboboxValueToScopeToken),
+  );
+}
