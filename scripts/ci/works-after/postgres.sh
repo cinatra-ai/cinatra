@@ -146,6 +146,16 @@ fail() { echo "${_WA_RED}ERROR: $*${_WA_RST}" >&2; dump_diag; exit 1; }
 # psql helper against a given container.
 pgq() { docker exec "$1" psql -U postgres -d postgres -tA -F '|' -c "$2"; }
 
+# assert_pg_major <container> <expected-major> <label> — binds the MATRIX-GATED
+# transition to the servers ACTUALLY RUNNING: an image override (PG_*_IMAGE)
+# that ships a different major than the gated FROM/TO majors must FAIL here,
+# never execute under the wrong verdict.
+assert_pg_major() {
+  local got
+  got="$(docker exec "$1" psql -U postgres -d postgres -tA -c 'SHOW server_version' 2>/dev/null | sed -E 's/^([0-9]+).*/\1/')"
+  [ "$got" = "$2" ] || fail "$3 runs postgres major '${got}', but the matrix-gated transition expects major '$2' — the executed image does not match the authorized hop."
+}
+
 wa_log "works-after postgres: data-survival ${PG_FROM_TAG} → ${PG_TO_TAG} (schema ${SCHEMA}; matrix service ${WA_MATRIX_SERVICE})"
 wa_info "source image: ${PG_FROM_IMAGE}"
 wa_info "target image: ${PG_TO_IMAGE}"
@@ -167,6 +177,7 @@ docker run -d --name "$SRC" --network "$NET" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
   "$PG_FROM_IMAGE" >/dev/null
 wa_wait_pg "$SRC" postgres 30 || fail "source postgres did not become ready within 60s."
+assert_pg_major "$SRC" "$FROM_MAJOR" "the SOURCE server"
 
 # Provision a representative data-bearing table in the app schema and seed it.
 #
@@ -237,6 +248,7 @@ docker run -d --name "$DST" --network "$NET" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
   "$PG_TO_IMAGE" >/dev/null
 wa_wait_pg "$DST" postgres 45 || fail "destination postgres:${PG_TO_TAG} did not become ready within 90s."
+assert_pg_major "$DST" "$TO_MAJOR" "the DESTINATION server"
 
 wa_info "restoring dump into postgres:${PG_TO_TAG} (fresh volume)"
 docker cp "${DUMP_DIR}/dump.pgc" "${DST}:/tmp/dump.pgc" \

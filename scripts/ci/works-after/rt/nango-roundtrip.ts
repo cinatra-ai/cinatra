@@ -55,9 +55,22 @@ if (VERIFY_ONLY && !process.env.WORKS_AFTER_CONNECTION_ID) {
 }
 
 const PROVIDER_CONFIG_KEY = "works-after-proof";
-const CONNECTION_ID = process.env.WORKS_AFTER_CONNECTION_ID || `works-after-${Date.now()}`;
+const STABLE_ID = process.env.WORKS_AFTER_CONNECTION_ID || null;
+const CONNECTION_ID = STABLE_ID ?? `works-after-${Date.now()}`;
 // A synthetic metadata payload — the value we round-trip through the store.
-const METADATA = { worksAfterNonce: NONCE, projectedAt: new Date().toISOString() };
+// In stable-id (migration-fixture) mode the payload is DETERMINISTIC, so the
+// later VERIFY run can reconstruct the exact expected object and deep-compare
+// the WHOLE metadata (a lost/mutated field fails, not just the nonce).
+const METADATA: Record<string, string> = STABLE_ID
+  ? { worksAfterNonce: NONCE, worksAfterConnectionId: STABLE_ID }
+  : { worksAfterNonce: NONCE, projectedAt: new Date().toISOString() };
+
+/** Key-sorted JSON — a stable representation for whole-object equality. */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return JSON.stringify(value);
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(",")}}`;
+}
 
 const nango = new Nango({ host: HOST, secretKey: SECRET });
 
@@ -87,13 +100,16 @@ async function main(): Promise<void> {
     };
     const conn = (await sdkV.getConnection(PROVIDER_CONFIG_KEY, CONNECTION_ID)) as { metadata?: Record<string, unknown> };
     const got = conn?.metadata ?? {};
-    if (got.worksAfterNonce !== NONCE) {
+    // WHOLE-OBJECT equality against the reconstructed deterministic payload —
+    // a dropped or mutated field fails, not just the nonce.
+    const expected = { worksAfterNonce: NONCE, worksAfterConnectionId: CONNECTION_ID };
+    if (stableJson(got) !== stableJson(expected)) {
       throw new Error(
-        `metadata did NOT survive the migration: expected worksAfterNonce='${NONCE}', read back '${JSON.stringify(got)}'`,
+        `metadata did NOT survive the migration: expected ${stableJson(expected)}, read back ${stableJson(got)}`,
       );
     }
     console.log(
-      `nango-roundtrip VERIFY OK — connection '${CONNECTION_ID}' survived: metadata read back byte-equal through get-connection (worksAfterNonce=${NONCE})`,
+      `nango-roundtrip VERIFY OK — connection '${CONNECTION_ID}' survived: the full metadata object read back equal through get-connection (worksAfterNonce=${NONCE})`,
     );
     return;
   }

@@ -110,6 +110,14 @@ wa_info "target: ${NANGO_DB_TO_IMAGE}"
 read_secret() { # $1 = pg container — the seeded dev-environment secret key
   docker exec "$1" psql -U nango -d nango -tA -c "SELECT secret_key FROM _nango_environments WHERE name='dev' LIMIT 1;" 2>/dev/null | tr -d '[:space:]'
 }
+assert_pg_major() { # $1 = container, $2 = expected major, $3 = label — binds
+  # the matrix-gated 15→17 verdict to the servers ACTUALLY RUNNING (an image
+  # override shipping a different major must fail, never execute under the
+  # case-scoped authorization).
+  local got
+  got="$(docker exec "$1" psql -U nango -d postgres -tA -c 'SHOW server_version' 2>/dev/null | sed -E 's/^([0-9]+).*/\1/')"
+  [ "$got" = "$2" ] || fail "$3 runs postgres major '${got}', but the case-scoped transition authorizes 15 -> 17 (expected '$2')."
+}
 wait_nango() { # wait for /health on the CURRENT $NS container; sets HOST_PORT
   HOST_PORT=""
   local i
@@ -142,6 +150,7 @@ docker run -d --name "$PG15" --network "$NET" \
   "$NANGO_DB_FROM_IMAGE" >/dev/null
 docker run -d --name "$REDIS" --network "$NET" "redis:${REDIS_TAG}" >/dev/null
 wa_wait_pg "$PG15" nango 30 || fail "pg15 source did not become ready within 60s."
+assert_pg_major "$PG15" 15 "the SOURCE nango-db"
 wa_wait_redis "$REDIS" 15 || fail "redis did not become ready within 30s."
 
 start_nango "$PG15"
@@ -212,6 +221,7 @@ docker run -d --name "$PG17" --network "$NET" \
   -e POSTGRES_DB=nango -e POSTGRES_USER=nango -e POSTGRES_PASSWORD=nango \
   "$NANGO_DB_TO_IMAGE" >/dev/null
 wa_wait_pg "$PG17" nango 45 || fail "pg17 target did not become ready within 90s."
+assert_pg_major "$PG17" 17 "the TARGET nango-db"
 docker cp "${DUMP_DIR}/nango.pgc" "${PG17}:/tmp/nango.pgc" || fail "could not copy the dump into the pg17 target."
 # The fresh cluster's bootstrap env already created the single `nango` role a
 # stock nango db uses (the defined collision strategy — no globals replay
