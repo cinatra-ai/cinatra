@@ -90,6 +90,48 @@ describe("canActorAccessClaimedArtifactExtension", () => {
     );
   });
 
+  it("a BOUND claim whose install row is archived/missing DENIES — never falls back to a sibling live install", async () => {
+    // Stale v1 claim (bound to inst1, now archived) + live v2 of the same
+    // package in the same org: v2's access policy must NOT re-authorize the
+    // v1 claim.
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      row({ id: "inst1", status: "archived" }),
+      row({ id: "inst2-v2" }),
+    ]);
+    await expect(
+      canActorAccessClaimedArtifactExtension(
+        { extensionPackage: "@vendor/pkg-artifact", installId: "inst1", scope: "org:org-1" },
+        actor,
+        "read",
+      ),
+    ).resolves.toBe(false);
+    expect(canExtensionAccess).not.toHaveBeenCalled();
+
+    // Bound id that simply does not exist anymore: same DENY, same no-fallback.
+    readInstalledExtensionsByPackageName.mockResolvedValue([row({ id: "inst2-v2" })]);
+    await expect(
+      canActorAccessClaimedArtifactExtension(
+        { extensionPackage: "@vendor/pkg-artifact", installId: "inst1", scope: "org:org-1" },
+        actor,
+        "read",
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("a BOUND claim whose install row lives in a DIFFERENT scope DENIES (scope-governance re-verified)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      row({ id: "inst1", organizationId: "org-2", ownerId: "org-2" }),
+    ]);
+    await expect(
+      canActorAccessClaimedArtifactExtension(
+        { extensionPackage: "@vendor/pkg-artifact", installId: "inst1", scope: "org:org-1" },
+        actor,
+        "read",
+      ),
+    ).resolves.toBe(false);
+    expect(canExtensionAccess).not.toHaveBeenCalled();
+  });
+
   it("a platform claim resolves against an ambient (organizationId null) live row", async () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([
       row({ id: "amb", organizationId: null, ownerLevel: "platform", ownerId: "__platform__" }),

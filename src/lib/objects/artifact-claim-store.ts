@@ -37,15 +37,16 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
 type QueryInput = { text: string; values?: unknown[] };
 
-/** Constraint-backed claim conflict (two DEDICATED claimants on the same type
- * at the same scope) — the install path surfaces this as an install error. */
+/** Constraint-backed claim conflict (a second live claimant for an occupied
+ * (scope, type, kind) slot, or a same-scope active-winner race) — the install
+ * path surfaces this as an install error. */
 export class ArtifactClaimConflictError extends Error {
   constructor(
     public readonly scope: string,
     public readonly objectTypeId: string,
   ) {
     super(
-      `dedicated artifact-type claim conflict: a live dedicated claim already exists for '${objectTypeId}' at scope '${scope}'`,
+      `artifact-type claim conflict: a live claim already occupies '${objectTypeId}' at scope '${scope}' for this claim slot`,
     );
     this.name = "ArtifactClaimConflictError";
   }
