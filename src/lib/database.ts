@@ -27,6 +27,7 @@ import type {
 import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import { buildSkillLifecycleRevisionQueries, type SkillLifecycleRevisionWrite } from "@/lib/skill-lifecycle-store";
 import {
   canonicalizeSealedFields,
   hasSecretFields,
@@ -53,6 +54,11 @@ import {
 // for the existing import surface.
 export { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 export { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+export {
+  recordSkillRevisionInDatabase,
+  applySkillLifecycleTransitionInDatabase,
+} from "@/lib/skill-lifecycle-store";
+export type { SkillLifecycleRevisionWrite, SkillLifecycleTransitionWrite } from "@/lib/skill-lifecycle-store";
 
 type ConnectorConfigCacheEntry = {
   value: unknown;
@@ -543,6 +549,10 @@ export function deriveSkillPackageIdentity(
 export function replaceSkillCatalogInDatabase(input: {
   skillPackages: Array<{ id: string } & Record<string, unknown>>;
   skills: Array<{ id: string } & Record<string, unknown>>;
+  /** Immutable revisions to write ATOMICALLY with this catalog write
+   * (cinatra#1361) — content + its revision + active-revision pointer commit
+   * together. Omit at catalog syncs / deletes that author no custom content. */
+  lifecycleWrites?: SkillLifecycleRevisionWrite[];
 }) {
   skillCatalogCacheVersion += 1; // Invalidate the in-process read cache.
   const keptPackageIds = input.skillPackages.map((row) => row.id);
@@ -569,6 +579,10 @@ export function replaceSkillCatalogInDatabase(input: {
       payload: JSON.stringify(row),
     })),
     buildDeleteRowsNotInQuery(postgresSchema, "skills", keptSkillIds),
+    // Lifecycle revision + pointer writes LAST: the skill row is already
+    // upserted (kept, never deleted), so the composite active-revision FK is
+    // satisfied within this same transaction.
+    ...buildSkillLifecycleRevisionQueries(postgresSchema, input.lifecycleWrites ?? []),
   ]);
 }
 
