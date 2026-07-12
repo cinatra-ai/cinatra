@@ -14,18 +14,26 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { planDependencyInstallMock, installAgentFromPackageMock, triggerWayflowReloadMock } =
-  vi.hoisted(() => ({
-    planDependencyInstallMock: vi.fn(),
-    installAgentFromPackageMock: vi.fn(),
-    triggerWayflowReloadMock: vi.fn(),
-  }));
+const {
+  planDependencyInstallMock,
+  installAgentFromPackageMock,
+  triggerWayflowReloadMock,
+  readAgentTemplateByPackageNameMock,
+} = vi.hoisted(() => ({
+  planDependencyInstallMock: vi.fn(),
+  installAgentFromPackageMock: vi.fn(),
+  triggerWayflowReloadMock: vi.fn(),
+  readAgentTemplateByPackageNameMock: vi.fn(),
+}));
 
 vi.mock("@/lib/extension-dependency-plan", () => ({
   planDependencyInstall: planDependencyInstallMock,
 }));
 vi.mock("../install-from-package", () => ({
   installAgentFromPackage: installAgentFromPackageMock,
+}));
+vi.mock("../store", () => ({
+  readAgentTemplateByPackageName: readAgentTemplateByPackageNameMock,
 }));
 vi.mock("../wayflow-reload-client", () => ({
   triggerWayflowReload: triggerWayflowReloadMock,
@@ -84,6 +92,8 @@ beforeEach(() => {
   installAgentFromPackageMock.mockImplementation(async (input: { packageName: string }) => ({
     templateId: `tpl-${input.packageName}`,
   }));
+  // Default: a skipped (already-at-pin) member HAS its template row.
+  readAgentTemplateByPackageNameMock.mockResolvedValue({ id: "tpl-existing" });
 });
 
 describe("installAgentPackageWithDependencies — unified-planner routing", () => {
@@ -95,7 +105,9 @@ describe("installAgentPackageWithDependencies — unified-planner routing", () =
     expect(planDependencyInstallMock).toHaveBeenCalledTimes(1);
     const [planInput] = planDependencyInstallMock.mock.calls[0]!;
     expect(planInput).toMatchObject({
-      root: { packageName: ROOT, version: "latest" },
+      // Absent version → "*" (the old resolver's default: highest STABLE
+      // version, not the "latest" dist-tag).
+      root: { packageName: ROOT, version: "*" },
       orgId: null,
       closure: null,
       // No explicit owner tier + no org → the canonical platform default.
@@ -155,6 +167,37 @@ describe("installAgentPackageWithDependencies — unified-planner routing", () =
     expect(res.plannedMembers.map((m) => m.packageName)).toEqual([DEP, ROOT]);
   });
 
+  it("SPLIT-STORE HEAL: an already-at-pin member with a MISSING template row installs anyway", async () => {
+    const ROOT = "@cinatra-ai/root-agent";
+    const DEP = "@cinatra-ai/dep-agent";
+    mockPlan(ROOT, [member(DEP, { alreadyInstalled: true }), member(ROOT)]);
+    // The canonical row says installed-at-pin, but agent_templates lost the row.
+    readAgentTemplateByPackageNameMock.mockResolvedValue(null);
+    await installAgentPackageWithDependencies({ packageName: ROOT }, INSTANCE_SCOPED_CONFIG);
+    expect(installAgentFromPackageMock.mock.calls.map((c) => c[0].packageName)).toEqual([
+      DEP,
+      ROOT,
+    ]);
+  });
+
+  it("plans the extension-handler shape at the ANCHOR org scope while leaving template stamping org-less", async () => {
+    const ROOT = "@cinatra-ai/root-agent";
+    mockPlan(ROOT, [member(ROOT)]);
+    await installAgentPackageWithDependencies(
+      { packageName: ROOT, anchorOrgId: "org-x", requireStorePayloadForRoot: true },
+      INSTANCE_SCOPED_CONFIG,
+    );
+    const [planInput] = planDependencyInstallMock.mock.calls[0]!;
+    // Planning scope falls back to the dispatcher anchor org — the org's own
+    // rows are the conflict basis, not the platform binary.
+    expect(planInput).toMatchObject({
+      orgId: "org-x",
+      rowOwnership: { ownerLevel: "organization", ownerId: "org-x", organizationId: "org-x" },
+    });
+    // But the template write keeps the caller's literal (absent) orgId.
+    expect(installAgentFromPackageMock.mock.calls[0]![0].orgId).toBeUndefined();
+  });
+
   it("routes the ROOT's store-payload flags only to the root node", async () => {
     const ROOT = "@cinatra-ai/root-agent";
     const DEP = "@cinatra-ai/dep-agent";
@@ -201,6 +244,9 @@ describe("installAgentPackageWithDependencies — unified-planner routing", () =
     await expect(
       installAgentPackageWithDependencies({ packageName: ROOT }, INSTANCE_SCOPED_CONFIG),
     ).rejects.toThrow(/SIDE-BY-SIDE/);
+    // PREFLIGHT: the refusal happens before ANY member executes — nothing
+    // mutated (this path has no compensation machinery).
+    expect(installAgentFromPackageMock).not.toHaveBeenCalled();
   });
 });
 

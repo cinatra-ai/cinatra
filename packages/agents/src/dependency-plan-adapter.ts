@@ -262,23 +262,29 @@ export function buildAgentRowMutationAuthorizer(opts: {
       deny("no actor role bag on this install path (cross-scope mutation is fail-closed)");
       return;
     }
-    if (actor.platformRole === "platform_admin") return;
 
+    // Platform-authority scopes (no tenant relation to validate): platform-
+    // and workspace-owned rows may only be mutated by a platform admin.
     if (rowLevel === "platform" || rowLevel === "workspace") {
+      if (actor.platformRole === "platform_admin") return;
       deny(`${rowLevel}-owned rows require platform admin`);
     }
-    if (rowOrgId !== actor.organizationId) {
-      // Tenant boundary FIRST: the grid's organization branch checks the
-      // actor's role, not the target org id — never let an org_admin of org A
-      // mutate org B's row.
-      deny("the row belongs to a different organization");
-    }
+    // USER-owned rows: their owner (or a platform admin).
     if (rowLevel === "user") {
+      if (actor.platformRole === "platform_admin") return;
       if (rowOwnerId === actor.principalId) return;
       deny("user-owned rows may only be modified by their owner");
     }
     if (rowLevel !== "organization" && rowLevel !== "team" && rowLevel !== "project") {
       deny(`unrecognized owner level`);
+    }
+    // TENANT BOUNDARY before the grid — mirrors the locked action ordering
+    // (assertTargetBelongsToActiveOrg runs before assertCanInstallAtTarget and
+    // platform_admin does NOT skip it): the grid's organization branch checks
+    // the actor's role, not the target org id, so the org/existence validation
+    // must run first for EVERY principal.
+    if (rowOrgId !== actor.organizationId) {
+      deny("the row belongs to a different organization");
     }
     const target: InstallScopeTarget =
       rowLevel === "organization"
@@ -287,6 +293,7 @@ export function buildAgentRowMutationAuthorizer(opts: {
           ? { level: rowLevel as "team" | "project", id: rowOwnerId }
           : (deny("the row carries no owner id") as never);
     const { projectOwnership } = await assertTenant(actor, target, actor.organizationId);
+    // The grid itself short-circuits platform_admin — AFTER the tenant gate.
     await assertGrid(actor, target, projectOwnership);
   };
 }

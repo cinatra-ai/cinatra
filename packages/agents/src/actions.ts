@@ -930,6 +930,16 @@ export async function updateRegistryPackage(input: {
     throw e;
   }
 
+  // cinatra#1039: plan the update at the ROW's REAL ownership tuple — the
+  // template row carries the install-time owner tier; without it a
+  // team/project-owned root would plan (and dedupe-classify) as
+  // organization-owned. Re-supplying the SAME owner tier is an explicit no-op
+  // in updateAgentTemplate (only a CHANGE trips the reassignment gate). The
+  // actor role bag rides along for the decision-3 cross-scope
+  // re-authorization; without it, cross-scope dedupe stays fail-closed.
+  const existingOwnerLevel = (
+    ["user", "team", "organization", "workspace", "project"] as const
+  ).find((l) => l === existing.ownerLevel);
   await installAgentPackageWithDependencies(
     {
       packageName: parsed.packageName,
@@ -937,6 +947,10 @@ export async function updateRegistryPackage(input: {
       orgId,
       creatorId: session.user.id,
       status: existing.status === "published" ? "published" : "draft",
+      ...(existingOwnerLevel
+        ? { ownerLevel: existingOwnerLevel, ...(existing.ownerId ? { ownerId: existing.ownerId } : {}) }
+        : {}),
+      ...(orgId ? { actor: readActorRolesForInstall(session, orgId, opts.orgRole) } : {}),
     },
     updateConfig,
   );

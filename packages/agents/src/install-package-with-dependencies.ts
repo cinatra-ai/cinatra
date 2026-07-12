@@ -36,6 +36,7 @@ import {
   type ReloadResult,
 } from "./wayflow-reload-client";
 import { installAgentFromPackage } from "./install-from-package";
+import { readAgentTemplateByPackageName } from "./store";
 import {
   agentRowOwnershipFromInstallInput,
   buildAgentDependencyPlanDeps,
@@ -131,7 +132,18 @@ async function _installAgentPackageWithDependenciesImpl(
   // `resolvedConfig.packageScope`). Dynamic import: the planner is a host-app
   // module (same posture as the other "@/lib/*" reads in this package).
   const { planDependencyInstall } = await import("@/lib/extension-dependency-plan");
-  const rowOwnership = agentRowOwnershipFromInstallInput(input);
+  // The PLANNING scope: `orgId` when the caller threads it, else the
+  // dispatcher anchor scope (`anchorOrgId` — the extension-handler flows pass
+  // ONLY that; without the fallback an org-scoped update would plan at
+  // PLATFORM scope and never see its own org rows). Deliberately decoupled
+  // from the TEMPLATE-ROW stamping below, which keeps forwarding the caller's
+  // literal `orgId`/owner tier so org/owner columns behave exactly as before.
+  const scopeOrgId = input.orgId ?? input.anchorOrgId ?? null;
+  const rowOwnership = agentRowOwnershipFromInstallInput({
+    ...(scopeOrgId !== null ? { orgId: scopeOrgId } : {}),
+    ...(input.ownerLevel !== undefined ? { ownerLevel: input.ownerLevel } : {}),
+    ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
+  });
   const planDeps = buildAgentDependencyPlanDeps({
     config: resolvedConfig,
     rowOwnership,
@@ -142,12 +154,13 @@ async function _installAgentPackageWithDependenciesImpl(
       root: {
         packageName: input.packageName,
         // The caller's version argument rides the planner's dev-path registry
-        // resolution verbatim (exact version, semver range, or dist-tag;
-        // absent → latest). The old resolver's "*" default and "latest"
-        // resolve to the same packument pick.
-        version: input.packageVersion ?? "latest",
+        // resolution verbatim (exact version, semver range, or dist-tag).
+        // Absent → "*": the deleted resolver's default range — the HIGHEST
+        // stable version, NOT the "latest" dist-tag (they diverge when the
+        // tag deliberately trails a newer stable release).
+        version: input.packageVersion ?? "*",
       },
-      orgId: input.orgId ?? null,
+      orgId: scopeOrgId,
       rowOwnership,
       // The direct agent path is never the gatekept marketplace closure — root
       // authorization stays with the callers' authz gates (which ran before
@@ -157,14 +170,10 @@ async function _installAgentPackageWithDependenciesImpl(
     planDeps,
   );
 
-  const installedTemplateIds: string[] = [];
-  let rootTemplateId: string | null = null;
+  // PREFLIGHT the WHOLE plan before executing anything: a member this
+  // executor cannot realize must refuse while NOTHING has mutated (this
+  // direct path has no compensation machinery — the batch saga owns that).
   for (const member of plan.ordered) {
-    const isRootNode = member.packageName === input.packageName;
-    // Saga semantics: a member already installed at the exact pin is skipped.
-    // The ROOT always executes — installing/updating over an existing root is
-    // the flow the caller chose (reinstall/refresh keeps working).
-    if (member.alreadyInstalled && !isRootNode) continue;
     if (member.action === "install-side-by-side") {
       throw new Error(
         `[installAgentPackageWithDependencies] ${member.packageName}@${member.version} plans as a ` +
@@ -181,6 +190,24 @@ async function _installAgentPackageWithDependenciesImpl(
           `${member.version} is a ${kind} extension; the direct agent full-tree installer can ` +
           `only install agents. Install cross-kind closures through the batch install saga.`,
       );
+    }
+  }
+
+  const installedTemplateIds: string[] = [];
+  let rootTemplateId: string | null = null;
+  for (const member of plan.ordered) {
+    const isRootNode = member.packageName === input.packageName;
+    // Saga semantics: a member already installed at the exact pin is skipped.
+    // The ROOT always executes — installing/updating over an existing root is
+    // the flow the caller chose (reinstall/refresh keeps working). SPLIT-STORE
+    // HEAL: `alreadyInstalled` is judged on the CANONICAL row, but this path
+    // executes into agent_templates — when the template row is missing (e.g.
+    // uninstalled out-of-band while the canonical row survived), skipping
+    // would leave the root referencing a dependency with no template, so the
+    // member installs anyway (idempotent upsert).
+    if (member.alreadyInstalled && !isRootNode) {
+      const template = await readAgentTemplateByPackageName(member.packageName);
+      if (template) continue;
     }
     const res = await installAgentFromPackage(
       {

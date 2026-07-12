@@ -449,6 +449,29 @@ describe("cinatra#1039 decision 3 — cross-scope dedupe re-authorization (fail-
     ).rejects.toThrow(/team admin/);
   });
 
+  it("platform_admin does NOT skip the tenant gate on org/team/project rows (locked action ordering)", async () => {
+    const admin = orgActor({ platformRole: "platform_admin", orgRole: "member" });
+    const seams = { assertTargetBelongsToActiveOrg: vi.fn(async () => ({})) };
+    // Same-org team row: tenant gate RUNS, then the grid short-circuits.
+    await expect(
+      buildAgentRowMutationAuthorizer({ rootRowOwnership: teamTuple, actor: admin, seams })(
+        row(DEP, "0.2.1", { organizationId: ORG, ownerLevel: "team", ownerId: "team-2" }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(seams.assertTargetBelongsToActiveOrg).toHaveBeenCalledWith(
+      expect.anything(),
+      { level: "team", id: "team-2" },
+      ORG,
+    );
+    // Another org's row: the tenant boundary denies even a platform_admin
+    // (they must operate within their active org, as in the action).
+    await expect(
+      buildAgentRowMutationAuthorizer({ rootRowOwnership: teamTuple, actor: admin, seams })(
+        row(DEP, "0.2.1", { organizationId: "org-OTHER", ownerLevel: "organization" }),
+      ),
+    ).rejects.toThrow(/different organization/);
+  });
+
   it("plan-level: an unauthorized cross-scope dedupe keeps the evidence-carrying INSTALLED_VERSION_CONFLICT refusal", async () => {
     // Root tuple = team-1; the only live basis row is ORG-owned; the actor is
     // a plain member → the dedupe-upward must refuse, naming the scope.
