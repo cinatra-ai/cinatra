@@ -35,9 +35,10 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
-  FieldLegend,
   FieldSet,
 } from "@/components/ui/field";
+import { Card, CardContent } from "@/components/ui/card";
+import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { Input } from "@/components/ui/input";
 import {
   InputGroup,
@@ -57,7 +58,8 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
+import { HELP_TAB_ID } from "@/lib/extension-schema-config";
 import type {
   NamedActionField,
   SchemaConfigField,
@@ -108,6 +110,26 @@ export type SchemaConfigConnectorFormProps = {
    * it false. Absent → treated as not connected.
    */
   initialConnected?: boolean;
+  /**
+   * The right-column Connection status card (design §II — the narrower 236px
+   * column of `ConnectorSetupColumns`). HOST-OWNED and input-free (it must not
+   * carry named form controls — `collectFormInputs()` scans the whole form).
+   * When present the form OWNS the §II content layout: on a flat surface it
+   * renders the two-column grid directly; on a tabbed surface the grid becomes
+   * the Setup panel's body so the tablist can sit ABOVE both columns at the
+   * Wide width (the tablist is page-header chrome, never inside the content
+   * column). Absent → single-column (the probe-less shape).
+   */
+  aside?: React.ReactNode;
+  /**
+   * Host-owned content that belongs to the SETUP surface only (e.g. the
+   * connection-sharing section). On a tabbed surface it renders inside the
+   * Setup panel — beneath the columns — so it never leaks under a custom or
+   * Help tab; on a flat surface it renders after the fields. Like `aside` it
+   * MUST stay input-free (no named form controls): it renders inside the form
+   * fieldset, and `collectFormInputs()` scans every named descendant control.
+   */
+  setupFooter?: React.ReactNode;
 };
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
@@ -180,6 +202,8 @@ export function SchemaConfigConnectorForm({
   onConnect,
   omitFieldKinds,
   initialConnected = false,
+  aside,
+  setupFooter,
 }: SchemaConfigConnectorFormProps) {
   // Kinds the host suppresses from the form column (Model-A lifts `status-probe`
   // into the right-column status card). A Set for O(1) membership; empty/absent
@@ -269,23 +293,45 @@ export function SchemaConfigConnectorForm({
 
   const hasTabs = !!surface.tabs && surface.tabs.length > 0;
 
+  // The Setup surface body. With a host `aside` the form owns the §II
+  // two-column grid (fields | 236px status card); without one it stays the
+  // single-column probe-less shape. `setupFooter` (e.g. connection sharing)
+  // belongs to the SETUP surface only, so it rides inside this body — never
+  // beneath a custom or Help tab.
+  const setupBody = (
+    <>
+      {aside ? (
+        <ConnectorSetupColumns fields={renderGroup(surface.fields)} aside={aside} />
+      ) : (
+        renderGroup(surface.fields)
+      )}
+      {setupFooter}
+    </>
+  );
+
+  // NOTE (design spec: app-connectors §II): the page header carries the
+  // connector name + "Connector setup" subtitle, and "the form drops the
+  // connector blurb" — so `surface.title` / `surface.description` are
+  // deliberately NOT rendered here (they would duplicate the page header).
   return (
     <FieldSet data-testid="schema-config-form" data-package={packageName}>
-      {surface.title ? <FieldLegend variant="label">{surface.title}</FieldLegend> : null}
-      {surface.description ? <FieldDescription>{surface.description}</FieldDescription> : null}
       {hasTabs ? (
         // Tabbed setup surface (design spec: app-connectors §II). The base fields
         // are the reserved "Setup" tab; each declared tab follows, and the parser
-        // has already ordered the reserved Help tab LAST.
-        <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-4">
-          <TabsList>
+        // has already ordered the reserved Help tab LAST. The tab row is
+        // page-header chrome: `TabsListRow` sits at the Wide column directly
+        // beneath the header (its etched rule runs right of the last tab — the
+        // page passes `divider={false}` so the rules never stack), ABOVE the
+        // Setup panel's two-column grid — never inside the content column.
+        <Tabs defaultValue={SETUP_TAB_VALUE} className="gap-6">
+          <TabsListRow>
             <TabsTrigger value={SETUP_TAB_VALUE}>Setup</TabsTrigger>
             {surface.tabs!.map((tab) => (
               <TabsTrigger key={tab.id} value={tab.id}>
                 {tab.label}
               </TabsTrigger>
             ))}
-          </TabsList>
+          </TabsListRow>
           {/* forceMount EVERY panel so collectFormInputs() — a live-DOM scan of
               the form — still sees inputs on inactive tabs. Radix unmounts
               inactive tab content by default, which would silently drop those
@@ -293,21 +339,40 @@ export function SchemaConfigConnectorForm({
               no longer sets `hidden`, so we hide the inactive ones ourselves via
               Radix's own `data-state` (display:none keeps inputs collectable). */}
           <TabsContent value={SETUP_TAB_VALUE} forceMount className="data-[state=inactive]:hidden">
-            {renderGroup(surface.fields)}
+            {setupBody}
           </TabsContent>
-          {surface.tabs!.map((tab) => (
-            <TabsContent
-              key={tab.id}
-              value={tab.id}
-              forceMount
-              className="data-[state=inactive]:hidden"
-            >
-              {renderGroup(tab.fields)}
-            </TabsContent>
-          ))}
+          {surface.tabs!.map((tab) =>
+            tab.id === HELP_TAB_ID ? (
+              // Reserved Help tab (§II): read-only setup how-to at the Narrow
+              // width — ONE card, no form, no Save. Rendered by HelpPanel
+              // (advisories become sections of a single card; input-bearing
+              // kinds are not rendered, so they never enter the submit scan).
+              <TabsContent
+                key={tab.id}
+                value={tab.id}
+                forceMount
+                className="data-[state=inactive]:hidden"
+              >
+                <div className="max-w-xl">
+                  <HelpPanel fields={tab.fields} installId={installId} />
+                </div>
+              </TabsContent>
+            ) : (
+              // Custom config tab (§II): content narrows to the Narrow width
+              // (max-w-xl · 576px), flush-left beneath the Wide tablist.
+              <TabsContent
+                key={tab.id}
+                value={tab.id}
+                forceMount
+                className="data-[state=inactive]:hidden"
+              >
+                <div className="max-w-xl">{renderGroup(tab.fields)}</div>
+              </TabsContent>
+            ),
+          )}
         </Tabs>
       ) : (
-        renderGroup(surface.fields)
+        setupBody
       )}
     </FieldSet>
   );
@@ -354,11 +419,12 @@ function SchemaConfigFieldRow({
     case "copyable-credential":
       return <CopyableCredentialRow field={field} value={initialValues[field.key]} />;
     case "nango-connect":
+      // The button IS the affordance — no FieldLabel echoing the same text
+      // (design §II drops the per-action section labels).
       return (
-        <Field orientation="horizontal">
-          <FieldLabel>{field.label}</FieldLabel>
+        <Field>
           <FieldContent>
-            <Button type="button" variant="outline" onClick={() => onConnect?.(field.providerConfigKey)}>
+            <Button type="button" variant="outline" className="self-start" onClick={() => onConnect?.(field.providerConfigKey)}>
               {field.label}
             </Button>
             {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
@@ -472,11 +538,13 @@ function NamedActionRow({
     // onActionResult — no in-form "Done."/error text.
     onActionResult(r);
   }, [field.confirm, field.actionId, installId, onActionResult]);
+  // The button IS the action: its text is the declared label, with NO FieldLabel
+  // row echoing the same text above it (design §II — the form drops the
+  // per-action section labels; a custom tab "ends in its own Save").
   return (
-    <Field orientation="horizontal">
-      <FieldLabel>{field.label}</FieldLabel>
+    <Field>
       <FieldContent>
-        <Button type="button" onClick={run} disabled={pending}>
+        <Button type="button" className="self-start" onClick={run} disabled={pending}>
           {field.label}
         </Button>
         {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
@@ -909,12 +977,15 @@ const BANNER_TONE_TO_VARIANT: Record<BannerTone, React.ComponentProps<typeof Ale
   info: "info",
 };
 
-function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: string }) {
+/** Shared advisory readiness probe: runs `probeActionId` once and resolves the
+ *  host-computed `{ ready }` verdict (`null` while in flight, fail-closed to
+ *  `false`). Used by the inline AdvisoryRow AND the Help-tab sections. */
+function useAdvisoryReady(installId: string, probeActionId: string): boolean | null {
   const [ready, setReady] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const r = await invokeAction(installId, field.probeActionId, {});
+      const r = await invokeAction(installId, probeActionId, {});
       if (cancelled) return;
       const v =
         r.ok && r.result && typeof r.result === "object" && "ready" in r.result
@@ -925,13 +996,54 @@ function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: st
     return () => {
       cancelled = true;
     };
-  }, [installId, field.probeActionId]);
+  }, [installId, probeActionId]);
+  return ready;
+}
+
+function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: string }) {
+  const ready = useAdvisoryReady(installId, field.probeActionId);
   if (ready === null) return null;
   return (
     <Alert data-testid="schema-config-advisory" variant={BANNER_TONE_TO_VARIANT[field.tone]}>
       <AlertTitle>{field.label}</AlertTitle>
       <AlertDescription>{ready ? field.whenReady : field.whenNotReady}</AlertDescription>
     </Alert>
+  );
+}
+
+/**
+ * The reserved Help tab's panel (design/specs/app-connectors.html §II): the
+ * connector's setup how-to — read-only prose at the Narrow width, rendered as
+ * ONE card ("no form, no Save"). Every advisory field becomes a titled SECTION
+ * of that single card (its copy still resolved by the same readiness probe the
+ * inline AdvisoryRow uses) — never its own separate card. Input-bearing field
+ * kinds are NOT rendered here: the Help surface is read-only by contract, and
+ * not rendering them also keeps stray inputs out of the `collectFormInputs()`
+ * live-DOM scan (the panels are force-mounted).
+ */
+function HelpPanel({ fields, installId }: { fields: SchemaConfigField[]; installId: string }) {
+  const advisories = fields.filter((f): f is AdvisoryField => f.kind === "advisory");
+  if (advisories.length === 0) return null;
+  return (
+    <Card data-testid="help-card" size="sm">
+      <CardContent className="flex flex-col gap-4">
+        {advisories.map((field, i) => (
+          <HelpSection key={`${field.probeActionId}-${i}`} field={field} installId={installId} />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function HelpSection({ field, installId }: { field: AdvisoryField; installId: string }) {
+  const ready = useAdvisoryReady(installId, field.probeActionId);
+  return (
+    <section data-testid="help-section" className="flex flex-col gap-1">
+      <h3 className="text-sm font-medium">{field.label}</h3>
+      <FieldDescription>
+        {ready === null ? null : ready ? field.whenReady : field.whenNotReady}
+      </FieldDescription>
+    </section>
   );
 }
 
