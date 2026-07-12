@@ -119,15 +119,21 @@ function registryVersionOfRow(row: InstalledExtension): string | null {
   return null;
 }
 
-/** Resolve the live row for a package at the [org, platform] binary — the
- *  same fallback the batch's pre-state reads use. */
+/** Resolve the live DEFAULT row for a package at the [org, platform] binary —
+ *  the same fallback the batch's pre-state reads use. Side-by-side siblings
+ *  (`isDefault === false`, cinatra#1040 S1) are NEVER the row a dedupe-upward
+ *  updates, so they are excluded here — otherwise a sibling's version could
+ *  masquerade as the "from" version (codex round-1). */
 function resolveLiveRow(
   rows: InstalledExtension[],
   packageName: string,
   orgId: string | null,
 ): InstalledExtension | null {
   const live = rows.filter(
-    (r) => r.packageName === packageName && (r.status === "active" || r.status === "locked"),
+    (r) =>
+      r.packageName === packageName &&
+      (r.status === "active" || r.status === "locked") &&
+      r.isDefault !== false,
   );
   return (
     live.find((r) => (r.organizationId ?? null) === (orgId ?? null)) ??
@@ -183,11 +189,18 @@ export function buildUpdatePlanPreviewMembers(input: {
         isRoot,
       });
       if (!isRoot) {
-        // REBOUND dependents: live rows whose install-blocking edge binds the
-        // row being upgraded. The plan already proved every binding dependent
-        // admits the pin (dedupe-upward admissibility), so each one is
+        // REBOUND dependents: live rows whose install-blocking edge binds THE
+        // row being upgraded — row IDENTITY, not just the package name (codex
+        // round-1): a dependent pinned to an untouched side-by-side sibling is
+        // NOT rebound. A persisted resolution must point at the updated
+        // default row; an unresolved edge binds via the dependent's own scoped
+        // lookup, which must also land on that row (the same identity rule
+        // `assertUpdateDoesNotBreakDependents` applies). The plan already
+        // proved every binding dependent admits the pin, so each one is
         // re-pointed to the new version by the write-time edge resolver.
+        const targetRow = resolveLiveRow(installedRows, m.packageName, orgId);
         for (const row of installedRows) {
+          if (targetRow === null) break;
           if (row.packageName === m.packageName) continue;
           if (row.status !== "active" && row.status !== "locked") continue;
           if (planNames.has(row.packageName) || reboundSeen.has(row.packageName)) continue;
@@ -196,11 +209,9 @@ export function buildUpdatePlanPreviewMembers(input: {
               edge.packageName === m.packageName &&
               isInstallBlockingEdge(edge) &&
               (edge.resolvedInstallId != null
-                ? installedRows.some(
-                    (r) => r.id === edge.resolvedInstallId && r.packageName === m.packageName,
-                  )
-                : makeScopedManifestLookup(installedRows, row.organizationId)(m.packageName) !=
-                  null),
+                ? edge.resolvedInstallId === targetRow.id
+                : makeScopedManifestLookup(installedRows, row.organizationId)(m.packageName)
+                    ?.id === targetRow.id),
           );
           if (!binds) continue;
           reboundSeen.add(row.packageName);

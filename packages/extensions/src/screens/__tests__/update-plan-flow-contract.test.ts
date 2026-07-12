@@ -114,9 +114,20 @@ describe("§II flow source contract — dry-run first, confirm before apply", ()
     // Names bind the manifest displayName (conformance stable-id contract).
     expect(FLOW).toContain('data-field="manifest.displayName"');
   });
-  it("offers Cancel back out of the plan without applying", () => {
-    expect(FLOW).toContain('onClick={() => setPlan(null)}');
+  it("offers Cancel back out of the plan without applying (disabled while applying)", () => {
+    expect(FLOW).toContain("CancelPlanButton");
+    expect(FLOW).toContain("disabled={pending}");
     expect(FLOW).toContain("Cancel");
+  });
+  it("renders the §II Applying state — pending submit + the members-tracked line", () => {
+    expect(FLOW).toContain('data-slot="update-plan-applying"');
+    expect(FLOW).toContain("tracked live in the install");
+  });
+  it("renders the §II Failed tile — red pill over category-mapped copy, batch compensated", () => {
+    expect(FLOW).toContain('data-slot="update-plan-failed"');
+    expect(FLOW).toContain("bg-destructive");
+    // The apply failure sets the panel state from the category map only.
+    expect(FLOW).toContain("setFailureCopy(failureCopyByCategory[result.category] ?? defaultFailureMessage)");
   });
 });
 

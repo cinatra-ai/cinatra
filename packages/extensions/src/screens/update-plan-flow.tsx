@@ -9,22 +9,28 @@
 // happens to it (Update / Install / Side-by-side / Rebound) — which the admin
 // confirms before anything is written. "Confirm update" applies through the
 // SAME planner/batch path as install (updateExtensionPackageFormAction →
-// rootAction:"update"), so the existing InstallBatchPanel / InstallBatchLive-
-// Refresh progress surface tracks each member live after the redirect lands
-// back on /configuration/extensions. A dry-run failure surfaces ONLY the
-// category-mapped #685 copy (raw reasons stay server-side).
+// rootAction:"update"). The §II footer states, per the drawing:
+//   • Update — the plan panel with Cancel / Confirm update;
+//   • Applying — the disabled "Updating…" submit plus the mono "{n} members ·
+//     tracked live in the install batch panel" line (the durable ledger drives
+//     the page-level InstallBatchPanel / InstallBatchLiveRefresh surface);
+//   • Failed — the red Failed pill over the CATEGORY-MAPPED #685 copy (raw
+//     reasons stay server-side); the batch has compensated, so Close returns
+//     to the idle CTA honestly (prior versions restored).
 //
-// This footer is the ONLY place the update runs (design §II/§III rule): the
-// installed card carries at most the Update-available chip, and its actions
-// stay exactly Settings + More details.
+// This footer is the ONLY place the §III installed extension's update runs:
+// the installed card carries at most the Update-available chip, and its
+// actions stay exactly Settings + More details.
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
+import { useFormStatus } from "react-dom";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/cinatra-toast";
-import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
+import { isRedirectError } from "./is-redirect-error";
+import { MarketplaceInstallSubmit } from "./marketplace-install-form";
 import type {
   MarketplaceFailureCategory,
   MarketplaceInstallActionResult,
@@ -72,8 +78,9 @@ export function ModalUpdatePlanFlow({
   failureCopyByCategory,
   defaultFailureMessage,
 }: ModalUpdatePlanFlowProps) {
-  const [phase, setPhase] = useState<"idle" | "planning">("idle");
+  const [phase, setPhase] = useState<"idle" | "planning" | "plan" | "failed">("idle");
   const [plan, setPlan] = useState<UpdatePlanPreviewDto | null>(null);
+  const [failureCopy, setFailureCopy] = useState<string | null>(null);
 
   async function runDryRun() {
     setPhase("planning");
@@ -81,20 +88,41 @@ export function ModalUpdatePlanFlow({
       const result = await planAction();
       if (result.ok) {
         setPlan(result.plan);
+        setPhase("plan");
       } else {
         // #685: category-mapped, non-technical copy only — never a raw reason.
+        // A dry-run failure wrote NOTHING, so a toast + return to the idle CTA
+        // is the honest state (the §II Failed tile is the APPLY failure).
         toast.error(failureCopyByCategory[result.category] ?? defaultFailureMessage);
+        setPhase("idle");
       }
     } catch {
       // A thrown server-action failure is masked in production — default copy.
       toast.error(defaultFailureMessage);
-    } finally {
       setPhase("idle");
     }
   }
 
+  // §II Failed state (apply): the batch failed AND compensated (prior versions
+  // restored). Surface the category-mapped copy in the footer panel per the
+  // drawing — never the raw reason (#685). Success never reaches this: the
+  // apply action redirect()s (the sentinel is re-thrown for Next.js).
+  async function handleConfirm() {
+    try {
+      const result = await updateAction();
+      if (result && result.ok === false) {
+        setFailureCopy(failureCopyByCategory[result.category] ?? defaultFailureMessage);
+        setPhase("failed");
+      }
+    } catch (error) {
+      if (isRedirectError(error)) throw error;
+      setFailureCopy(defaultFailureMessage);
+      setPhase("failed");
+    }
+  }
+
   // Phase 1 — the footer CTA: "Update now" runs the dry-run (never the write).
-  if (plan === null) {
+  if (phase === "idle" || phase === "planning") {
     const planning = phase === "planning";
     return (
       <Button
@@ -117,10 +145,36 @@ export function ModalUpdatePlanFlow({
     );
   }
 
+  // §II Failed tile: the red Failed pill over the category-mapped copy.
+  if (phase === "failed") {
+    return (
+      <div
+        data-slot="update-plan-failed"
+        className="flex w-full flex-col gap-2.25 rounded-[8px] border border-line bg-surface-strong px-4 py-3.5"
+      >
+        <span className="self-start rounded-full bg-destructive px-2 py-0.75 font-mono text-badge-2xs font-bold uppercase text-white">
+          Failed
+        </span>
+        <p className="text-xs leading-relaxed text-foreground">{failureCopy}</p>
+        <div className="flex items-center justify-end border-t border-line pt-2.75">
+          <Button size="sm" variant="outline" onClick={() => {
+            setPlan(null);
+            setFailureCopy(null);
+            setPhase("idle");
+          }}>
+            Close
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   // Phase 2 — the Update plan panel (§II drawing): header + count, one row per
   // affected member (tag, displayName, mono version transition, muted note),
-  // then Cancel / Confirm update above a hairline.
-  const memberCount = plan.members.length;
+  // then Cancel / Confirm update above a hairline. Submitting flips the button
+  // to the Applying state ("Updating…" + the members-tracked line).
+  const members = plan?.members ?? [];
+  const memberCount = members.length;
   return (
     <div
       data-slot="update-plan-panel"
@@ -133,8 +187,8 @@ export function ModalUpdatePlanFlow({
         </span>
       </div>
 
-      {plan.members.map((member) => {
-        const note = updatePlanMemberNote(member, plan.members, displayName);
+      {members.map((member) => {
+        const note = updatePlanMemberNote(member, members, displayName);
         const versionLabel = updatePlanMemberVersionLabel(member);
         return (
           <div
@@ -167,24 +221,53 @@ export function ModalUpdatePlanFlow({
         );
       })}
 
-      <div className="mt-0.75 flex items-center justify-end gap-2 border-t border-line pt-2.75">
-        <Button size="sm" variant="outline" onClick={() => setPlan(null)}>
-          Cancel
-        </Button>
-        {/* Confirm applies through the planner/batch path; failures toast the
-            category-mapped copy (MarketplaceInstallForm, #685); success
-            redirects to /configuration/extensions where the install batch
-            panel tracks the members live. */}
-        <MarketplaceInstallForm
-          action={updateAction}
-          failureCopyByCategory={failureCopyByCategory}
-          defaultFailureMessage={defaultFailureMessage}
-        >
+      {/* Confirm applies through the planner/batch path; the pending submit is
+          the §II Applying state; a failure flips this panel to the Failed tile
+          (category-mapped, batch compensated); success redirects to
+          /configuration/extensions where the install batch panel tracks the
+          members live. */}
+      <form action={handleConfirm} className="mt-0.75 border-t border-line pt-2.75">
+        <div className="flex items-center justify-end gap-2">
+          <ApplyingMembersNote memberCount={memberCount} />
+          <CancelPlanButton
+            onCancel={() => {
+              setPlan(null);
+              setPhase("idle");
+            }}
+          />
           <MarketplaceInstallSubmit pendingLabel="Updating…">
             Confirm update
           </MarketplaceInstallSubmit>
-        </MarketplaceInstallForm>
-      </div>
+        </div>
+      </form>
     </div>
+  );
+}
+
+/** §II Applying state: the mono "tracked live in the install batch panel"
+ *  line beside the pending "Updating…" submit (the durable ledger drives the
+ *  page-level batch panel; this modal never re-implements that surface). */
+function ApplyingMembersNote({ memberCount }: { memberCount: number }) {
+  const { pending } = useFormStatus();
+  if (!pending) return null;
+  return (
+    <span
+      data-slot="update-plan-applying"
+      className="mr-auto font-mono text-badge-xs text-muted-foreground"
+    >
+      {memberCount} {memberCount === 1 ? "member" : "members"} · tracked live in the install
+      batch panel
+    </span>
+  );
+}
+
+/** Cancel disables while the apply is in flight (a half-submitted batch must
+ *  not be "cancelled" into a stale idle CTA — the ledger owns the outcome). */
+function CancelPlanButton({ onCancel }: { onCancel: () => void }) {
+  const { pending } = useFormStatus();
+  return (
+    <Button size="sm" type="button" variant="outline" disabled={pending} onClick={onCancel}>
+      Cancel
+    </Button>
   );
 }
