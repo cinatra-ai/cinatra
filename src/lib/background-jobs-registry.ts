@@ -610,9 +610,58 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // handler is invoked via the same CatalogProvider seam as the inline +
       // batch transports so this has no new structural coupling to host-side
       // stores.
-      const { handleDriftSample } = await import("@cinatra-ai/skills");
+      const {
+        handleDriftSample,
+        recordDriftObservations,
+        readSkillMatchDriftFlags,
+        writeSkillMatchDriftFlags,
+      } = await import("@cinatra-ai/skills");
       const catalog = await buildSkillMatchCatalogProvider();
-      await handleDriftSample({ catalog });
+      await handleDriftSample({
+        catalog,
+        // Persist per-pair drift observations (cinatra #1365) so repeatedly
+        // drifting pairs are auto-flagged. The KV read/write is host-side; the
+        // sampler stays decoupled behind this injected recorder.
+        recordDriftObservations: async (observations) => {
+          await recordDriftObservations(observations, {
+            readDriftFlags: async () => readSkillMatchDriftFlags(),
+            writeDriftFlags: async (map) => writeSkillMatchDriftFlags(map),
+          });
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.SKILL_MATCH_MAINTENANCE_TICK]: {
+    payloadSchema: looseObject(),
+    async handle() {
+      // Matching-maintenance tick (cinatra #1365): tombstoned orphan GC then the
+      // hash staleness sweep. Invoked via the same CatalogProvider seam as the
+      // inline / batch / drift transports; the tombstone / drift-flag / manual-
+      // stale KV are host-side and injected here so the package stays decoupled.
+      const {
+        handleMaintenanceTick,
+        enqueueInlineForSkill,
+        readSkillMatchOrphanTombstones,
+        writeSkillMatchOrphanTombstones,
+        clearSkillMatchDriftFlagsForPairKeys,
+        writeSkillMatchManualStale,
+      } = await import("@cinatra-ai/skills");
+      const catalog = await buildSkillMatchCatalogProvider();
+      await handleMaintenanceTick({
+        catalog,
+        // --- orphan GC deps ---
+        readTombstones: async () => readSkillMatchOrphanTombstones(),
+        writeTombstones: async (map) => writeSkillMatchOrphanTombstones(map),
+        clearDriftFlags: async (pairKeys) => clearSkillMatchDriftFlagsForPairKeys(pairKeys),
+        // A pair that reappeared after a delete gets a fresh inline eval. The
+        // per-skill fan-out covers the pair (skill × all agents) and is
+        // idempotent by jobId, so multiple reappearances coalesce.
+        enqueueReeval: async (_agentId, skillId) => {
+          await enqueueInlineForSkill(skillId);
+        },
+        // --- sweep deps ---
+        recordManualStale: async (pairs) => writeSkillMatchManualStale(pairs),
+      });
     },
   },
   [BACKGROUND_JOB_NAMES.ARTIFACT_PROVIDER_CACHE_EVICT]: {
