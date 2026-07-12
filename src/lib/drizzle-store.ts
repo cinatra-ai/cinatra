@@ -17,6 +17,7 @@ import {
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
@@ -2790,6 +2791,9 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
          AND owner_id <> '__platform__')
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
+    // Artifact-claim registry tables (cinatra#1425): sync leaf, no FKs
+    // (claims/events survive uninstall); existing deployments via core__0034.
+    ...artifactClaimSchemaQueries(schemaName),
     // ---------------------------------------------------------------------------
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
