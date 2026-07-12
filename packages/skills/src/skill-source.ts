@@ -275,10 +275,13 @@ export const INITIAL_LIFECYCLE_STATE: LifecycleState = "active";
 /**
  * Where a recorded revision originated. `migration` is the backfill seed
  * source (cinatra#1361); the others are the live write paths (manual save,
- * autosave, HITL draft-update, chat-capture). Mirrored by the
- * `skill_revisions.source` CHECK constraint.
+ * autosave, HITL draft-update, chat-capture). `rollback` (cinatra#1362) is a
+ * restore write — a NEW revision that re-points the active head at a prior
+ * revision's exact content (never a mutation of history). Mirrored by the
+ * `skill_revisions.source` CHECK constraint (a drift test asserts the CHECK
+ * enumerates EXACTLY this set).
  */
-export const REVISION_SOURCES = ["manual", "autosave", "hitl", "chat-capture", "migration"] as const;
+export const REVISION_SOURCES = ["manual", "autosave", "hitl", "chat-capture", "migration", "rollback"] as const;
 export type RevisionSource = (typeof REVISION_SOURCES)[number];
 
 export function isRevisionSource(value: unknown): value is RevisionSource {
@@ -431,6 +434,12 @@ export interface SkillRevisionInput {
   baseDigests?: Readonly<Record<string, string>> | null;
   authorUserId?: string | null;
   /**
+   * The prior revision whose exact content this write RESTORES (cinatra#1362).
+   * Set on — and ONLY on — a `rollback` revision (the pure mirror of the DB
+   * `skill_revisions_rollback_provenance_check`: rollback ⇔ restoresRevisionId).
+   */
+  restoresRevisionId?: string | null;
+  /**
    * Caller-supplied revision id for RETRY idempotency (a re-driven logical
    * write reuses its id + ON CONFLICT DO NOTHING). Omit for a fresh distinct
    * id (the common live-write case).
@@ -446,15 +455,26 @@ export interface SkillRevisionRecord {
   basedOnSkillIds: string[] | null;
   baseDigests: Record<string, string> | null;
   authorUserId: string | null;
+  /** Non-null iff `source === "rollback"` — the restored revision (cinatra#1362). */
+  restoresRevisionId: string | null;
 }
 
 /**
- * Build an immutable revision record. Throws on an invalid source (fail-closed).
- * Empty based-on / base-digest collections normalize to null.
+ * Build an immutable revision record. Throws on an invalid source (fail-closed)
+ * and enforces the rollback-provenance biconditional: `restoresRevisionId` is
+ * set iff `source === "rollback"` (the pure mirror of the DB CHECK). Empty
+ * based-on / base-digest collections normalize to null.
  */
 export function buildRevisionRecord(input: SkillRevisionInput): SkillRevisionRecord {
   if (!isRevisionSource(input.source)) {
     throw new Error(`invalid revision source: ${String(input.source)}`);
+  }
+  const restoresRevisionId = input.restoresRevisionId ?? null;
+  const isRollback = input.source === "rollback";
+  if (isRollback !== (restoresRevisionId != null)) {
+    throw new Error(
+      `rollback provenance mismatch: source=${input.source} restoresRevisionId=${String(restoresRevisionId)} — a rollback revision MUST carry restoresRevisionId and only a rollback revision may`,
+    );
   }
   const basedOn = input.basedOnSkillIds && input.basedOnSkillIds.length > 0 ? [...input.basedOnSkillIds] : null;
   const baseDigests =
@@ -467,6 +487,7 @@ export function buildRevisionRecord(input: SkillRevisionInput): SkillRevisionRec
     basedOnSkillIds: basedOn,
     baseDigests,
     authorUserId: input.authorUserId ?? null,
+    restoresRevisionId,
   };
 }
 
@@ -499,16 +520,24 @@ export interface UpsertRevisionSkill {
   source?: { revision?: { value?: string | null } } | null;
   basedOnSkillIds?: readonly string[] | null;
   basedOnSkillId?: string | null;
+  /**
+   * The SKILL.md body being written (cinatra#1362 content authority). Carried
+   * so the write path durably stores the content blob keyed by its digest — the
+   * authoritative content the active revision resolves to. When present it MUST
+   * hash to `source.revision.value` (the DB blob-integrity CHECK enforces it).
+   */
+  content?: string | null;
 }
 
 /**
  * Build the atomic `lifecycleWrites` entry for a custom/personal `upsertSkill`
  * write (cinatra#1361): a distinct immutable revision (content digest = the
  * sha256 the SkillSource already computed) + the state to initialize a
- * brand-new skill to. Pure — the caller passes it to
- * replaceSkillCatalogInDatabase so it commits atomically with the content. The
- * `SkillLifecycleRevisionWrite` return type is a compile-time-only import, so
- * this builder stays a pure leaf (no server module pulled into the graph).
+ * brand-new skill to + the content blob to store (cinatra#1362). Pure — the
+ * caller passes it to replaceSkillCatalogInDatabase so it commits atomically
+ * with the content. The `SkillLifecycleRevisionWrite` return type is a
+ * compile-time-only import, so this builder stays a pure leaf (no server module
+ * pulled into the graph).
  */
 export function buildUpsertRevisionWrite(
   skill: UpsertRevisionSkill,
@@ -535,6 +564,11 @@ export function buildUpsertRevisionWrite(
     basedOnSkillIds: revision.basedOnSkillIds,
     baseDigests: revision.baseDigests,
     authorUserId: revision.authorUserId,
+    restoresRevisionId: revision.restoresRevisionId,
+    // Content authority (cinatra#1362): store the blob whenever we have both the
+    // content and its digest. When they disagree the DB CHECK aborts the write
+    // (fail-closed) — a revision can never claim a digest it did not hash to.
+    content: typeof skill.content === "string" && digest != null ? skill.content : null,
     initialState: INITIAL_LIFECYCLE_STATE,
   };
 }

@@ -14,6 +14,9 @@ vi.mock("@/lib/postgres-config", () => ({
 import {
   applySkillLifecycleTransitionInDatabase,
   buildSkillLifecycleRevisionQueries,
+  buildSkillRollbackQuery,
+  readSkillRevisionContentForRollback,
+  readSkillActiveRevisionFromDatabase,
   recordSkillRevisionInDatabase,
 } from "@/lib/skill-lifecycle-store";
 
@@ -79,5 +82,95 @@ describe("recordSkillRevisionInDatabase", () => {
     const arg = runPostgresQueriesSync.mock.calls[0][0] as { transaction?: boolean; queries: unknown[] };
     expect(arg.transaction).toBe(true);
     expect(arg.queries).toHaveLength(2);
+  });
+});
+
+// ---- cinatra#1362: content authority + rollback ----
+
+describe("buildSkillLifecycleRevisionQueries — content blob + restores column (#1362)", () => {
+  it("stores the content blob BEFORE the revision insert, dedup-safe, and carries restores_revision_id", () => {
+    const queries = buildSkillLifecycleRevisionQueries("cinatra", [
+      {
+        skillId: "s1", revisionId: "r1", contentDigest: "sha", source: "manual",
+        basedOnSkillIds: null, baseDigests: null, authorUserId: "u1",
+        content: "hello", restoresRevisionId: null, initialState: "active",
+      },
+    ]);
+    // blob first (so the revision's digest resolves), ON CONFLICT DO NOTHING dedup
+    expect(queries[0].text).toMatch(/INSERT INTO "cinatra"\."skill_revision_contents" \(content_digest, content, byte_length\)/);
+    expect(queries[0].text).toMatch(/octet_length\(\$2\)/);
+    expect(queries[0].text).toMatch(/ON CONFLICT \(content_digest\) DO NOTHING/);
+    expect(queries[0].values).toEqual(["sha", "hello"]);
+    // revision insert now carries the restores_revision_id column
+    expect(queries[1].text).toMatch(/INSERT INTO "cinatra"\."skill_revisions"[\s\S]*restores_revision_id/);
+    expect(queries[1].values?.[7]).toBeNull();
+  });
+
+  it("emits NO blob insert when content is absent (legacy/seed rows)", () => {
+    const queries = buildSkillLifecycleRevisionQueries("cinatra", [
+      { skillId: "s1", revisionId: "r1", contentDigest: "sha", source: "migration",
+        basedOnSkillIds: null, baseDigests: null, authorUserId: null, initialState: "active" },
+    ]);
+    expect(queries).toHaveLength(2); // revision + pointer only — no blob
+    expect(queries[0].text).toMatch(/INSERT INTO "cinatra"\."skill_revisions"/);
+  });
+});
+
+describe("buildSkillRollbackQuery — atomic compare-and-swap (#1362)", () => {
+  const q = buildSkillRollbackQuery("cinatra", {
+    skillId: "s1", expectedActiveRevisionId: "head0", newRevisionId: "roll1",
+    targetRevisionId: "revPrior", restoredContent: "prior body", restoredContentDigest: "shaPrior",
+    restoredPayloadJson: "{\"id\":\"s1\"}", authorUserId: "u1",
+  });
+
+  it("swaps payload + pointer ONLY while active_revision_id still equals the expected head", () => {
+    expect(q.text).toMatch(/UPDATE "cinatra"\."skills"[\s\S]*SET payload = \$1, active_revision_id = \$2[\s\S]*WHERE id = \$3 AND active_revision_id = \$4/);
+  });
+
+  it("gates the blob + rollback-revision inserts on the CAS (SELECT ... FROM upd) so a miss writes NOTHING", () => {
+    expect(q.text).toMatch(/WITH upd AS \(/);
+    expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_revision_contents"[\s\S]*SELECT \$5, \$6, octet_length\(\$6\) FROM upd[\s\S]*ON CONFLICT \(content_digest\) DO NOTHING/);
+    expect(q.text).toMatch(/INSERT INTO "cinatra"\."skill_revisions"[\s\S]*SELECT \$2, \$3, \$5, 'rollback', \$7, \$8 FROM upd/);
+    expect(q.text).toMatch(/RETURNING id/);
+  });
+
+  it("orders params: payload, newRev, skill, expectedHead, digest, content, target, author", () => {
+    expect(q.values).toEqual(["{\"id\":\"s1\"}", "roll1", "s1", "head0", "shaPrior", "prior body", "revPrior", "u1"]);
+  });
+});
+
+describe("readSkillRevisionContentForRollback — same-skill scoped, blob-resolving (#1362)", () => {
+  it("matches on (id AND skill_id) and LEFT JOINs the content blob; null row → null", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    expect(readSkillRevisionContentForRollback("s1", "revX")).toBeNull();
+    const { queries } = runPostgresQueriesSync.mock.calls[0][0] as { queries: Array<{ text: string; values?: unknown[] }> };
+    expect(queries[0].text).toMatch(/FROM "cinatra"\."skill_revisions" r/);
+    expect(queries[0].text).toMatch(/LEFT JOIN "cinatra"\."skill_revision_contents" c ON c\.content_digest = r\.content_digest/);
+    expect(queries[0].text).toMatch(/WHERE r\.id = \$1 AND r\.skill_id = \$2/);
+    expect(queries[0].values).toEqual(["revX", "s1"]);
+  });
+
+  it("returns the resolved content when present", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ revision_id: "revX", content_digest: "sha", content: "body" }] }]);
+    expect(readSkillRevisionContentForRollback("s1", "revX")).toEqual({ revisionId: "revX", contentDigest: "sha", content: "body" });
+  });
+
+  it("surfaces a blob-less revision as content=null (caller fails closed)", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ revision_id: "revX", content_digest: "sha", content: null }] }]);
+    expect(readSkillRevisionContentForRollback("s1", "revX")).toEqual({ revisionId: "revX", contentDigest: "sha", content: null });
+  });
+});
+
+describe("readSkillActiveRevisionFromDatabase — authoritative head resolver (#1362)", () => {
+  it("resolves active_revision_id → revision → content blob", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ active_revision_id: "head0", content_digest: "sha", content: "body" }] }]);
+    expect(readSkillActiveRevisionFromDatabase("s1")).toEqual({ activeRevisionId: "head0", contentDigest: "sha", content: "body" });
+    const { queries } = runPostgresQueriesSync.mock.calls[0][0] as { queries: Array<{ text: string }> };
+    expect(queries[0].text).toMatch(/r\.id = s\.active_revision_id AND r\.skill_id = s\.id/);
+  });
+
+  it("returns null when the skill row is absent", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    expect(readSkillActiveRevisionFromDatabase("s1")).toBeNull();
   });
 });
