@@ -5,9 +5,12 @@ Foundation layer for treating custom/personal skills as managed, living objects
 STATE, an immutable REVISION history, and a transition AUDIT log to the core
 store, and defines who may drive a transition.
 
-The machine-readable authority is the pure policy leaf
-[`packages/skills/src/lifecycle.ts`](../packages/skills/src/lifecycle.ts) — the
-tables below document it; the code is the source of truth. The DDL lives in
+The machine-readable authority is the pure policy — co-located in the
+already-reachable skill-source leaf
+[`packages/skills/src/skill-source.ts`](../packages/skills/src/skill-source.ts)
+(the "Skill lifecycle policy" section), with the DB-writing transition mechanism
+in [`packages/skills/src/lifecycle-store.ts`](../packages/skills/src/lifecycle-store.ts)
+— the tables below document it; the code is the source of truth. The DDL lives in
 `buildCreateStoreSchemaQueries` (the `skills` columns) +
 [`src/lib/skill-lifecycle-schema.ts`](../src/lib/skill-lifecycle-schema.ts) (the
 new tables + immutability trigger), with the migration artifact

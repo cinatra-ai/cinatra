@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 // immutability + constraint shape ships in the schema.
 import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 
-import { REVISION_SOURCES } from "./lifecycle";
+import { REVISION_SOURCES } from "./skill-source";
 
 const SCHEMA = "cinatra_test";
 const ddl = () => skillLifecycleSchemaQueries(SCHEMA).map((q) => q.text).join("\n;;\n");

@@ -8,66 +8,20 @@
 //
 // This is the transition MECHANISM the later lifecycle slices (transition UI /
 // API) call; A1 ships it wired to the pure policy + the audited DB primitive.
+// It is a SERVER module (it imports @/lib/database), reached only by those
+// callers and its tests — NOT by the `upsertSkill` write path, whose pure
+// revision builder lives in the already-reachable `skill-source` leaf. The pure
+// policy it enforces is the single authority co-located in `skill-source.ts`.
 
-import {
-  applySkillLifecycleTransitionInDatabase,
-  type SkillLifecycleRevisionWrite,
-} from "@/lib/database";
+import { applySkillLifecycleTransitionInDatabase } from "@/lib/database";
 
 import {
   authorizeTransition,
-  buildRevisionRecord,
-  INITIAL_LIFECYCLE_STATE,
   newRevisionId,
   wouldCreateSupersedeCycle,
   type LifecycleActorType,
   type LifecycleState,
-  type RevisionSource,
-} from "./lifecycle";
-
-/** The minimal skill projection needed to record an upsert revision. */
-export interface UpsertRevisionSkill {
-  id: string;
-  source?: { revision?: { value?: string | null } } | null;
-  basedOnSkillIds?: readonly string[] | null;
-  basedOnSkillId?: string | null;
-}
-
-/**
- * Build the atomic `lifecycleWrites` entry for a custom/personal `upsertSkill`
- * write (cinatra#1361): a distinct immutable revision (content digest = the
- * sha256 the SkillSource already computed) + the state to initialize a
- * brand-new skill to. Pure — the caller passes it to
- * replaceSkillCatalogInDatabase so it commits atomically with the content.
- */
-export function buildUpsertRevisionWrite(
-  skill: UpsertRevisionSkill,
-  isPersonal: boolean,
-  ownerUserId?: string | null,
-  revisionSource?: RevisionSource,
-): SkillLifecycleRevisionWrite {
-  const digest =
-    skill.source?.revision && typeof skill.source.revision.value === "string"
-      ? skill.source.revision.value
-      : null;
-  const revision = buildRevisionRecord({
-    skillId: skill.id,
-    contentDigest: digest,
-    source: revisionSource ?? "manual",
-    basedOnSkillIds: skill.basedOnSkillIds ?? (skill.basedOnSkillId ? [skill.basedOnSkillId] : null),
-    authorUserId: isPersonal ? (ownerUserId ?? null) : null,
-  });
-  return {
-    skillId: revision.skillId,
-    revisionId: revision.id,
-    contentDigest: revision.contentDigest,
-    source: revision.source,
-    basedOnSkillIds: revision.basedOnSkillIds,
-    baseDigests: revision.baseDigests,
-    authorUserId: revision.authorUserId,
-    initialState: INITIAL_LIFECYCLE_STATE,
-  };
-}
+} from "./skill-source";
 
 export interface TransitionSkillLifecycleInput {
   skillId: string;

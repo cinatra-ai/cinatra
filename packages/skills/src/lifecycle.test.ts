@@ -14,7 +14,7 @@ import {
   newRevisionId,
   isCustomOrPersonalSkillPayload,
   type LifecycleState,
-} from "./lifecycle";
+} from "./skill-source";
 
 const ALL: LifecycleState[] = [...LIFECYCLE_STATES];
 
