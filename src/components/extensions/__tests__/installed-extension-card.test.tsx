@@ -25,7 +25,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   InstalledExtensionCard,
-  InstalledUpdateNote,
   UpdateAvailableChip,
 } from "../installed-extension-card";
 import { Button } from "@/components/ui/button";
@@ -256,8 +255,12 @@ describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)"
 
 // ---------------------------------------------------------------------------
 // §III update affordance (cinatra#1041 outcome 3): the "Update available"
-// chip, the ABI-incompatible greyed spec line + note, and the fail-quiet /
-// up-to-date states that add nothing.
+// chip, the ABI-incompatible greyed spec line, and the fail-quiet /
+// up-to-date states that add nothing. The chip is the ONLY update information
+// the card carries (owner direction 2026-07-12): NO explanatory update text —
+// "Newer version needs a newer Cinatra" / "No registry version to compare"
+// live on the §V settings page's Maintenance · Update row, and their ABSENCE
+// from the card is pinned below.
 // ---------------------------------------------------------------------------
 
 function renderWithUpdate(over: Record<string, unknown>): string {
@@ -299,33 +302,35 @@ describe("InstalledExtensionCard — §III spec-line update states", () => {
     expect(html).not.toContain('data-slot="installed-update-note"');
   });
 
-  it("incompatible: the spec line greys (opacity-55) and a full-opacity note explains why — no chip", () => {
-    const html = renderWithUpdate({
-      specLineMuted: true,
-      updateNote: <InstalledUpdateNote>Newer version needs a newer Cinatra</InstalledUpdateNote>,
-    });
+  it("incompatible: the spec line greys (opacity-55) with NO chip and NO explanatory text", () => {
+    const html = renderWithUpdate({ specLineMuted: true });
     expect(html).toContain("opacity-55");
-    expect(html).toContain('data-slot="installed-update-note"');
-    expect(html).toContain("Newer version needs a newer Cinatra");
     expect(html).not.toContain('data-status="update-available"');
+    // The wording lives on the §V settings page, never in the card.
+    expect(html).not.toContain("Newer version needs a newer Cinatra");
+    expect(html).not.toContain('data-slot="installed-update-note"');
   });
 
-  it("non-comparable: a note renders (no chip, no greying)", () => {
-    const html = renderWithUpdate({
-      updateNote: <InstalledUpdateNote>No registry version to compare</InstalledUpdateNote>,
-    });
-    expect(html).toContain('data-slot="installed-update-note"');
-    expect(html).toContain("No registry version to compare");
-    expect(html).not.toContain("opacity-55");
-    expect(html).not.toContain('data-status="update-available"');
-  });
-
-  it("up-to-date / fail-quiet: no update props → spec line is byte-unchanged (no chip, no note, no greying)", () => {
+  it("non-comparable / up-to-date / fail-quiet: no update props → spec line is byte-unchanged (no chip, no text, no greying)", () => {
     const html = renderWithUpdate({});
     expect(html).toContain('data-slot="installed-extension-spec-line"');
     expect(html).not.toContain('data-status="update-available"');
+    expect(html).not.toContain("No registry version to compare");
     expect(html).not.toContain('data-slot="installed-update-note"');
     expect(html).not.toContain("opacity-55");
+  });
+
+  it("the card carries at most the Update-available chip — no state renders explanatory update text (§III)", () => {
+    for (const over of [
+      { updateChip: <UpdateAvailableChip /> },
+      { specLineMuted: true },
+      {},
+    ]) {
+      const html = renderWithUpdate(over as Record<string, unknown>);
+      expect(html).not.toContain("Newer version needs a newer Cinatra");
+      expect(html).not.toContain("No registry version to compare");
+      expect(html).not.toContain('data-slot="installed-update-note"');
+    }
   });
 });
 
@@ -353,18 +358,8 @@ describe("InstalledExtensionCard — §III description survives every update-chi
 
   const STATES: Array<[string, Record<string, unknown>]> = [
     ["update-available (blue chip)", { updateChip: <UpdateAvailableChip /> }],
-    [
-      "incompatible (greyed spec line + note)",
-      {
-        specLineMuted: true,
-        updateNote: <InstalledUpdateNote>Newer version needs a newer Cinatra</InstalledUpdateNote>,
-      },
-    ],
-    [
-      "non-comparable (note, no chip)",
-      { updateNote: <InstalledUpdateNote>No registry version to compare</InstalledUpdateNote> },
-    ],
-    ["up-to-date / fail-quiet (no chip)", {}],
+    ["incompatible (greyed spec line, no text)", { specLineMuted: true }],
+    ["non-comparable / up-to-date / fail-quiet (no chip)", {}],
   ];
 
   for (const [label, over] of STATES) {

@@ -32,7 +32,6 @@ import { InstallBatchLiveRefresh } from "@/components/extensions/install-batch-l
 import {
   InstalledExtensionCard,
   InstalledStatusIndicator,
-  InstalledUpdateNote,
   UpdateAvailableChip,
 } from "@/components/extensions/installed-extension-card";
 import {
@@ -293,9 +292,11 @@ export async function RegistryCatalogScreen({
   // props. Derives the chip state from the cached read model and the newer
   // version's ABI compat, then maps it to the presentational bits:
   //   • update-available → the blue chip
-  //   • incompatible     → greyed spec line + "needs a newer Cinatra" note
-  //   • non-comparable   → "no registry version to compare" note
-  //   • up-to-date / none (stale/missing, fail-quiet) → nothing
+  //   • incompatible     → greyed spec line (the §I ABI-compat treatment), no text
+  //   • non-comparable / up-to-date / none (stale/missing, fail-quiet) → nothing
+  // The chip is the ONLY update information the card carries (design §III;
+  // owner direction 2026-07-12): the explanatory per-state wordings surface on
+  // the §V settings page's Maintenance · Update row, never here.
   // Only ACTIVE rows carry it — an archived (fully greyed) card shows no chip.
   const updateAffordanceFor = (row: InstalledCardRow, isArchived: boolean) => {
     if (isArchived) return {} as const;
@@ -310,14 +311,8 @@ export async function RegistryCatalogScreen({
       case "update-available":
         return { updateChip: <UpdateAvailableChip /> } as const;
       case "incompatible":
-        return {
-          specLineMuted: true,
-          updateNote: <InstalledUpdateNote>Newer version needs a newer Cinatra</InstalledUpdateNote>,
-        } as const;
+        return { specLineMuted: true } as const;
       case "non-comparable":
-        return {
-          updateNote: <InstalledUpdateNote>No registry version to compare</InstalledUpdateNote>,
-        } as const;
       case "up-to-date":
       case "none":
       default:

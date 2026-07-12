@@ -62,18 +62,19 @@ export type InstalledExtensionCardProps = {
    * caller derives the chip via `deriveInstalledUpdateChipState`. Absent for
    * every non-§VI caller (§VII agents, marketplace) and for the up-to-date /
    * fail-quiet states, so the spec line renders exactly as before.
+   *
+   * The chip is the ONLY update information the card carries (design §III;
+   * owner direction 2026-07-12): no explanatory update text ever appears in
+   * the card. The per-state wordings ("Newer version needs a newer Cinatra",
+   * "No registry version to compare") surface on the §V extension-settings
+   * page's Maintenance · Update row instead.
    */
   updateChip?: ReactNode;
   /**
-   * §III explanatory note (`InstalledUpdateNote`) rendered BELOW the spec line
-   * for the two no-chip-but-explained states: `incompatible` and
-   * `non-comparable`. The fail-quiet state passes nothing.
-   */
-  updateNote?: ReactNode;
-  /**
    * §III ABI-incompatible greying: mutes the version/status spec-line row
    * (opacity, the §I ABI-compat treatment) when a newer version exists but
-   * needs a newer Cinatra. The `updateNote` sibling stays at full opacity.
+   * needs a newer Cinatra. Text-free on the card — the "why" wording lives on
+   * the §V settings page's Maintenance · Update row.
    */
   specLineMuted?: boolean;
   /**
@@ -202,24 +203,6 @@ export function UpdateAvailableChip() {
 }
 
 /**
- * §III spec-line explanatory note (published design system §III). A small,
- * muted mono caption rendered BELOW the version/status line for the two states
- * that show no chip but DO explain themselves: `incompatible` ("Newer version
- * needs a newer Cinatra") and `non-comparable` ("No registry version to
- * compare"). The fail-quiet `none` state renders nothing at all.
- */
-export function InstalledUpdateNote({ children }: { children: ReactNode }) {
-  return (
-    <div
-      data-slot="installed-update-note"
-      className="font-mono text-badge-2xs font-semibold tracking-normal text-muted-foreground"
-    >
-      {children}
-    </div>
-  );
-}
-
-/**
  * §"post-install configuration needs" strip (Extensions application-design
  * spec, needs-review section; cinatra#1057). A thin status strip attached to
  * the bottom of an affected agent's card, in the design system's Needs-review
@@ -278,7 +261,6 @@ export function InstalledExtensionCard({
   version,
   status,
   updateChip,
-  updateNote,
   specLineMuted = false,
   actions,
   archived = false,
@@ -370,8 +352,8 @@ export function InstalledExtensionCard({
               "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
               greyed && "opacity-70",
               // §III ABI-incompatible greying — the §I ABI-compat treatment
-              // dims the version/status row (design spec: opacity ≈ 0.55) while
-              // the explanatory note below stays legible.
+              // dims the version/status row (design spec: opacity ≈ 0.55).
+              // Text-free: the explanation lives on the §V settings page.
               specLineMuted && "opacity-55",
             )}
           >
@@ -382,9 +364,6 @@ export function InstalledExtensionCard({
             {updateChip}
           </div>
         )}
-        {/* §III explanatory note (incompatible / non-comparable) — a sibling of
-            the spec line so it stays at full opacity under the greyed row. */}
-        {updateNote}
       </div>
 
       {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly

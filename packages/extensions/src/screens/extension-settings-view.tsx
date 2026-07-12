@@ -25,6 +25,7 @@ import {
   DisabledActionButton,
   ForceDeleteDialog,
 } from "./extension-settings-actions";
+import type { SettingsUpdateRow } from "./extension-settings-model";
 import type { RemovalActionResult } from "../removal-failure";
 
 const REGISTRIES_HREF = "/configuration/environment?tab=registries";
@@ -46,10 +47,13 @@ export type ExtensionSettingsViewProps = {
   packageName: string;
   displayName: string;
   vendor: string | null;
-  rawVersion: string | null;
-  versionLabel: string | null;
-  newestVersion: string | null;
-  updateAvailable: boolean;
+  /**
+   * The §V Maintenance · Update row — the §III card update state spelled out
+   * in words (resolveUpdateRow), with the button live only when there is an
+   * update to run. This row is where the explanatory wording lives; the §III
+   * card carries at most the Update-available chip.
+   */
+  updateRow: SettingsUpdateRow;
   /** Disabled-action reasons (null ⇒ enabled) — the #1036 lifecycle-ui mechanism. */
   archiveDisabled: string | null;
   activateDisabled: string | null;
@@ -75,10 +79,7 @@ export function ExtensionSettingsView({
   packageName,
   displayName,
   vendor,
-  rawVersion,
-  versionLabel,
-  newestVersion,
-  updateAvailable,
+  updateRow,
   archiveDisabled,
   activateDisabled,
   reinstallDisabled,
@@ -91,7 +92,6 @@ export function ExtensionSettingsView({
   actions,
 }: ExtensionSettingsViewProps) {
   const { bg } = ACCENT_PALETTE[deriveExtensionAccent(packageName)];
-  const versionKnown = Boolean(rawVersion);
 
   return (
     <main data-surface-id="extension-settings" className="min-h-screen">
@@ -191,17 +191,14 @@ export function ExtensionSettingsView({
         <section data-slot="settings-maintenance" className="py-5.5">
           <h2 className="mb-3.5 text-lg font-bold text-foreground">Maintenance</h2>
 
+          {/* §V Maintenance · Update — the update status as the row's
+              description (the §III card states spelled out in words); the
+              button greys out whenever there is nothing to run. */}
           <SettingsRow
             title="Update"
-            description={
-              updateAvailable
-                ? `Currently on version ${rawVersion} — version ${newestVersion} is available.`
-                : versionKnown
-                  ? `You're on the latest version (${versionLabel ?? `v${rawVersion}`}).`
-                  : "The installed version could not be resolved."
-            }
+            description={updateRow.description}
             action={
-              updateAvailable ? (
+              updateRow.enabled ? (
                 <form action={actions.update}>
                   <Button type="submit" className="flex-none">
                     <RefreshCw data-icon="inline-start" />
@@ -213,7 +210,7 @@ export function ExtensionSettingsView({
                   label="Update"
                   icon={<RefreshCw data-icon="inline-start" />}
                   variant="default"
-                  reason={versionKnown ? "Already on the latest version" : "Installed version unknown"}
+                  reason={updateRow.disabledReason}
                 />
               )
             }
