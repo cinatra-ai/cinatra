@@ -64,6 +64,11 @@ export async function up(pgm) {
   // mapping always wins where both apply. Only rows whose owner_level still
   // carries the bare 'organization' column default adopt the recorded
   // owner_type (an explicitly-leveled row is never overridden).
+  // The prefixed exclusions use LIKE '<prefix>_%' (>= 1 suffix char): only a
+  // WELL-FORMED composite claims the row. A malformed bare prefix ('team:')
+  // carries no owner information — it falls to the catch-all as junk and the
+  // recorded owner_type still wins here (exact parity with the runtime
+  // mirror's non-empty-suffix checks).
   await pgm.db.query(`
     UPDATE objects
        SET owner_level = owner_type
@@ -72,9 +77,9 @@ export async function up(pgm) {
        AND owner_level = 'organization'
        AND (visibility IS NULL
             OR (visibility NOT IN ('org','workspace')
-                AND visibility NOT LIKE 'team:%'
-                AND visibility NOT LIKE 'user:%'
-                AND visibility NOT LIKE 'project:%'));
+                AND visibility NOT LIKE 'team:_%'
+                AND visibility NOT LIKE 'user:_%'
+                AND visibility NOT LIKE 'project:_%'));
   `);
 
   // ---- Fixed composite mapping (order matters: these fully determine the

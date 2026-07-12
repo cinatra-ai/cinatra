@@ -294,6 +294,21 @@ describe("normalizeOwnershipVocabulary", () => {
     expect(t.ownerLevel).toBe("team");
   });
 
+  it("pass 0: a MALFORMED bare composite prefix does not claim the row — owner_type wins (migration parity)", () => {
+    const t = normalizeOwnershipVocabulary({
+      ownerLevel: "organization",
+      ownerId: "u-9",
+      visibility: "team:",
+      projectId: null,
+      ownerType: "user",
+    });
+    // 'team:' has no suffix → junk, not a composite claim; pass 0 adopts
+    // owner_type, then the catch-all collapses visibility to 'private' —
+    // exactly what core__0033 produces (LIKE 'team:_%' exclusions).
+    expect(t.ownerLevel).toBe("user");
+    expect(t.visibility).toBe("private");
+  });
+
   it("pass 0 ignores non-canonical owner_type values", () => {
     const t = normalizeOwnershipVocabulary({
       ownerLevel: "organization",

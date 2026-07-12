@@ -136,6 +136,10 @@ describe.skipIf(!hasDb)(
     let cProject = "";
     let cOwnerLegacy = "";
     let cJunk = "";
+    // Malformed bare composite prefix + legacy owner_type: 'team:' carries
+    // no owner information, so pass 0 must still adopt the recorded
+    // owner_type (parity with the runtime mirror).
+    let cBarePrefix = "";
     // Adversarial mixed row: composite visibility AND a conflicting legacy
     // owner_type. The fixed mapping must win on run 1 AND the owner axis
     // must stay settled on a re-run (sequence idempotency — owner_type is
@@ -205,6 +209,13 @@ describe.skipIf(!hasDb)(
         ownerLevel: "organization",
         ownerId: orgA,
         visibility: `project:${P1}`,
+        legacyOwnerType: "user",
+      });
+      cBarePrefix = await insertObject(client, schema, {
+        orgId: orgA,
+        ownerLevel: "organization",
+        ownerId: U1,
+        visibility: "team:",
         legacyOwnerType: "user",
       });
 
@@ -320,6 +331,15 @@ describe.skipIf(!hasDb)(
         owner_id: orgA,
         visibility: "private",
         project_id: P1,
+      });
+    });
+
+    it("malformed bare composite prefix: owner_type wins, junk collapses to 'private'", async () => {
+      expect(await readOwnership(client, schema, cBarePrefix)).toEqual({
+        owner_level: "user",
+        owner_id: U1,
+        visibility: "private",
+        project_id: null,
       });
     });
 
