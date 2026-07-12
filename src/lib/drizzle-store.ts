@@ -16,6 +16,7 @@ import {
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
+import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
@@ -287,6 +288,64 @@ END $$` },
       PRIMARY KEY (skill_id, user_id)
     )` },
     ...skillCoOwnerConstraintQueries(schemaName),
+
+    // -----------------------------------------------------------------------
+    // Skill lifecycle (cinatra#1361, epic #1358). Custom/personal skills gain
+    // typed lifecycle columns on the EXISTING `skills` table; extension skills
+    // stay DERIVED (NULL lifecycle_state — precedence matrix in
+    // docs/skills-lifecycle.md; no second authority). The ADD CONSTRAINT
+    // statements are written as literal guarded SQL (not via the helper) so the
+    // schema-migration gate SEES the destructive constraint change and demands
+    // the core__0029 artifact. Idempotent + additive-safe on a populated table:
+    // every existing row carries NULLs, which satisfy the CHECK and both FKs.
+    // -----------------------------------------------------------------------
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS lifecycle_state text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS superseded_by text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS active_revision_id text` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_lifecycle_state_check'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_lifecycle_state_check
+            CHECK (lifecycle_state IS NULL OR lifecycle_state IN ('draft','active','deprecated','archived'));
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_superseded_by_fkey'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_superseded_by_fkey
+            FOREIGN KEY (superseded_by) REFERENCES "${schemaName.replaceAll('"', '""')}"."skills"(id) ON DELETE SET NULL;
+        END IF;
+      END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS skills_superseded_by_idx ON "${schemaName.replaceAll('"', '""')}"."skills" (superseded_by) WHERE superseded_by IS NOT NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS skills_lifecycle_state_idx ON "${schemaName.replaceAll('"', '""')}"."skills" (lifecycle_state) WHERE lifecycle_state IS NOT NULL` },
+    // skill_revisions (append-only immutable history) + skill_lifecycle_audit +
+    // the immutability trigger — the ADDITIVE half, in a sync leaf.
+    ...skillLifecycleSchemaQueries(schemaName),
+    // active_revision_id → skill_revisions composite FK: the active-revision
+    // pointer must reference a revision that BELONGS to this skill
+    // (active_revision_id = skill_revisions.id AND skills.id = skill_revisions.skill_id).
+    // Added AFTER skillLifecycleSchemaQueries so the referenced table exists on
+    // a fresh schema. Gate-visible (an added FK on the existing skills table).
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_active_revision_fkey'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_active_revision_fkey
+            FOREIGN KEY (active_revision_id, id)
+            REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_revisions"(id, skill_id);
+        END IF;
+      END $$;` },
 
     // -----------------------------------------------------------------------
     // Generic extension permissions consolidation.
