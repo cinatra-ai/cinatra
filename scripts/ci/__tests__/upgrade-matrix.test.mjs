@@ -96,6 +96,41 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
     expect(errors.join("\n")).toMatch(/floating-tag: service 'plane-minio' still on a floating tag/);
   });
 
+  it("a SINGLE plane-backend consumer drifting while its siblings stay pinned FAILS (repo-level net)", () => {
+    // Replace only the FIRST plane-backend occurrence (plane-migrator); the
+    // other three services still carry the pinned image, so the plain
+    // "coupled image exists somewhere" check alone would pass this.
+    const drifted = composeText.replace(
+      "image: makeplane/plane-backend:${PLANE_TAG:-v1.3.1@sha256:2cdcb5f778c6ccacebce0e5a751d39fac4a549a44e049a5b110a7623cfdad139}",
+      "image: makeplane/plane-backend:v2.0.0",
+    );
+    expect(drifted).not.toBe(composeText);
+    const { errors } = collectProblems({ composeText: drifted, matrix, schema });
+    expect(errors.join("\n")).toMatch(/pin-drift: service 'plane-migrator' image makeplane\/plane-backend:v2\.0\.0/);
+  });
+
+  it("twenty-worker drifting off twenty-server's pinned image FAILS (repo-level net)", () => {
+    const drifted = composeText.replace(
+      "  twenty-worker:\n    image: twentycrm/twenty:${TWENTY_TAG:-v2.7.3}",
+      "  twenty-worker:\n    image: twentycrm/twenty:v3.0.0",
+    );
+    expect(drifted).not.toBe(composeText);
+    const { errors } = collectProblems({ composeText: drifted, matrix, schema });
+    expect(errors.join("\n")).toMatch(/pin-drift: service 'twenty-worker' image twentycrm\/twenty:v3\.0\.0/);
+  });
+
+  it("nango-server (migrates nango-db at boot) drifting FAILS (tracked as a coupled app image)", () => {
+    const drifted = composeText.replace(
+      /image: nangohq\/nango-server:hosted@sha256:[0-9a-f]{64}/,
+      "image: nangohq/nango-server:v999",
+    );
+    expect(drifted).not.toBe(composeText);
+    const { errors } = collectProblems({ composeText: drifted, matrix, schema });
+    const joined = errors.join("\n");
+    expect(joined).toMatch(/coupledAppImage not found .* nangohq\/nango-server/);
+    expect(joined).toMatch(/pin-drift: service 'nango-server' image nangohq\/nango-server:v999/);
+  });
+
   it("a stale matrix volume (removed from compose) FAILS", () => {
     const m = clone(matrix);
     m.services.push({ ...clone(m.services[0]), id: "ghost", composeService: "postgres", volume: "ghost-volume" });

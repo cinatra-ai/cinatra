@@ -65,7 +65,10 @@
       "appManagedSchema": true,
       "upstreamDictated": true,
       "baselinePin": { "image": "postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca", "major": "17", "digest": "sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca" },
-      "notes": "Nango's own Postgres. Nango runs its OWN schema migrations at boot; the platform ledger does not cover it. HELD at 17 (Nango upstream reference compose pins 16, so 17 is already a validated divergence; 18 is unvalidated by upstream). Keeps the legacy .../data mount while <=17. The pre-baseline pg15 nango volume is a case exception (cinatra#1417), not a widening of the general baseline.",
+      "coupledAppImages": [
+        { "image": "nangohq/nango-server:hosted@sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869", "major": "hosted", "digest": "sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869" }
+      ],
+      "notes": "Nango's own Postgres. Nango runs its OWN schema migrations at boot; the platform ledger does not cover it. nango-server is therefore a coupled app image: it owns no volume but migrates THIS data dir at boot, so its pin is drift-checked alongside the engine. HELD at 17 (Nango upstream reference compose pins 16, so 17 is already a validated divergence; 18 is unvalidated by upstream). Keeps the legacy .../data mount while <=17. The pre-baseline pg15 nango volume is a case exception (cinatra#1417), not a widening of the general baseline.",
       "transitions": [
         { "from": "17", "to": "17", "supported": true, "mechanism": "logical-dump-restore", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold; in-major patch/digest currency only. The pre-baseline pg15 field volume is NOT a general transition — it is the nango-15-to-17 case exception (caseExceptions), so the general baseline stays at 17." },
         { "from": "17", "to": "18", "supported": false, "mechanism": "logical-dump-restore", "skippedMajor": "allowed", "downgrade": false, "notes": "FAIL-CLOSED: unvalidated by Nango upstream; revisit when Nango moves." }

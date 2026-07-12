@@ -50,8 +50,12 @@ platform secrets in the platform DB).
 
 Bind mounts (source checkouts, generated configs, the cinatra WP plugin dir) carry no
 engine state and are out of scope. `nango-server` and the Plane app services own **no
-volume**; the Plane app images are tracked as `coupledAppImages` of `plane-db` because
-they run implicit DB migrations at boot (see below).
+volume** but run implicit DB migrations at boot, so they are tracked as
+`coupledAppImages` (of `nango-db` and `plane-db` respectively) and pin-drift-checked.
+The gate additionally enforces a **repo-level net**: any compose service whose image
+repo is tracked by any matrix pin must carry a matrix pin string exactly — so a single
+Plane consumer, `twenty-worker`, or `nango-server` cannot drift off while its siblings
+stay pinned.
 
 ## Bundled apps run their OWN schema migrations
 

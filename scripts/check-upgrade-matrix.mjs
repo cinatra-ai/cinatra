@@ -167,6 +167,29 @@ export function collectProblems({ composeText, matrix, schema }) {
     }
   }
 
+  // 4b. repo-level pin net — every compose service whose image REPO is tracked
+  //     by ANY matrix pin (baselinePin or coupledAppImages) must carry one of
+  //     the tracked pin strings exactly. Catches drift on services that share a
+  //     tracked repo without being a matrix composeService themselves (e.g. a
+  //     single plane-backend consumer bumped while its siblings stay pinned,
+  //     twenty-worker vs twenty-server, nango-server vs nango-db).
+  const repoOf = (img) => img.split("@")[0].replace(/:[^/]*$/, "");
+  const allowedByRepo = new Map(); // repo -> Set(exact image strings)
+  for (const s of matrix.services) {
+    for (const pin of [s.baselinePin, ...(s.coupledAppImages ?? [])]) {
+      if (!pin?.image || /^built:/.test(pin.image)) continue;
+      const repo = repoOf(pin.image);
+      if (!allowedByRepo.has(repo)) allowedByRepo.set(repo, new Set());
+      allowedByRepo.get(repo).add(pin.image);
+    }
+  }
+  for (const [name, s] of Object.entries(compose)) {
+    if (!s.image) continue;
+    const allowed = allowedByRepo.get(repoOf(s.image));
+    if (allowed && !allowed.has(s.image))
+      fail(`pin-drift: service '${name}' image ${s.image} is on a matrix-tracked repo but matches no matrix pin (tracked: ${[...allowed].join(", ")})`);
+  }
+
   // 5. no floating tags
   for (const [name, s] of Object.entries(compose)) {
     if (s.image && /:(latest|stable)(@sha256:[0-9a-f]{64})?$/.test(s.image) && !/@sha256:/.test(s.image))
