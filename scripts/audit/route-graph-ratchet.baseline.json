@@ -2,10 +2,10 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 138,
-    "/api/mcp": 1403,
-    "/chat": 1441,
-    "/api/a2a": 1408,
-    "/api/llm-bridge": 1414
+    "/api/mcp": 1407,
+    "/chat": 1445,
+    "/api/a2a": 1412,
+    "/api/llm-bridge": 1418
   },
   "absorbs": {
     "/sign-in": {
@@ -15,28 +15,28 @@
       "pr": 1405
     },
     "/api/mcp": {
-      "from": 1401,
-      "to": 1403,
-      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. This route reaches the store via the skills surface, but it gains EXACTLY the same 2 net-new first-party leaf modules /sign-in does \u2014 src/lib/skill-lifecycle-schema.ts (the bootstrap-DDL leaf for skill_revisions + skill_lifecycle_audit, imported by drizzle-store.ts) and src/lib/skill-lifecycle-store.ts (the lifecycle DB write primitives, imported by database.ts) \u2014 both EXTRACTED from the hand-mirrored store DDL / write layer to stay under the file-size ratchet (the #1317 / #1304 extract-leaf -> route-graph-absorb pattern). It gains NONE of the packages/skills lifecycle policy: that pure single-authority leaf was FOLDED into the already route-reachable skill-source.ts (the store write path imports its buildUpsertRevisionWrite from a module it already reaches), and the transition MECHANISM stays in the server-only lifecycle-store.ts reached only by later slices / its tests \u2014 so neither adds a net-new reachable first-party leaf here. Delta measured B-A on the identical tree with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 1401->1403.",
-      "pr": 1405
+      "from": 1403,
+      "to": 1407,
+      "reason": "cinatra#1392 S7 (PR #1439) positive edge-bound serving wiring. This route gains EXACTLY 4 net-new first-party src/lib leaves, verified by a reachable-module-set probe on the identical tree with the 82 companion extension repos cloned pinned (missingCount 0): (1) a2a-edge-bound-serving.ts + (2) extension-edge-bound-agent.ts \u2014 the #1403-deferred LIVE injection of the tested A2A edge-bound binding into MultiAgentExecutor (a2a-server.ts), exactly the +2 that PR predicted; (3) extension-edge-bound-serving.ts + (4) extension-version-keyed-serving.ts \u2014 the #1410 registry's consume side: both mcp-server.ts extension-tool chokepoints now dispatch through the edge-bound serving binding so a dependent edge-bound to a non-default version is served that version's retained handler, fail-closed. /sign-in reaches neither a2a-server.ts nor mcp-server.ts and gains none of the 4. Absorbed raise 1403->1407.",
+      "pr": 1439
     },
     "/chat": {
-      "from": 1439,
-      "to": 1441,
-      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. This route reaches the store via the skills surface, but it gains EXACTLY the same 2 net-new first-party leaf modules /sign-in does \u2014 src/lib/skill-lifecycle-schema.ts (the bootstrap-DDL leaf for skill_revisions + skill_lifecycle_audit, imported by drizzle-store.ts) and src/lib/skill-lifecycle-store.ts (the lifecycle DB write primitives, imported by database.ts) \u2014 both EXTRACTED from the hand-mirrored store DDL / write layer to stay under the file-size ratchet (the #1317 / #1304 extract-leaf -> route-graph-absorb pattern). It gains NONE of the packages/skills lifecycle policy: that pure single-authority leaf was FOLDED into the already route-reachable skill-source.ts (the store write path imports its buildUpsertRevisionWrite from a module it already reaches), and the transition MECHANISM stays in the server-only lifecycle-store.ts reached only by later slices / its tests \u2014 so neither adds a net-new reachable first-party leaf here. Delta measured B-A on the identical tree with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 1439->1441.",
-      "pr": 1405
+      "from": 1441,
+      "to": 1445,
+      "reason": "cinatra#1392 S7 (PR #1439) positive edge-bound serving wiring. This route gains EXACTLY 4 net-new first-party src/lib leaves, verified by a reachable-module-set probe on the identical tree with the 82 companion extension repos cloned pinned (missingCount 0): (1) a2a-edge-bound-serving.ts + (2) extension-edge-bound-agent.ts \u2014 the #1403-deferred LIVE injection of the tested A2A edge-bound binding into MultiAgentExecutor (a2a-server.ts), exactly the +2 that PR predicted; (3) extension-edge-bound-serving.ts + (4) extension-version-keyed-serving.ts \u2014 the #1410 registry's consume side: both mcp-server.ts extension-tool chokepoints now dispatch through the edge-bound serving binding so a dependent edge-bound to a non-default version is served that version's retained handler, fail-closed. /sign-in reaches neither a2a-server.ts nor mcp-server.ts and gains none of the 4. Absorbed raise 1441->1445.",
+      "pr": 1439
     },
     "/api/a2a": {
-      "from": 1406,
-      "to": 1408,
-      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. This route reaches the store via the skills surface, but it gains EXACTLY the same 2 net-new first-party leaf modules /sign-in does \u2014 src/lib/skill-lifecycle-schema.ts (the bootstrap-DDL leaf for skill_revisions + skill_lifecycle_audit, imported by drizzle-store.ts) and src/lib/skill-lifecycle-store.ts (the lifecycle DB write primitives, imported by database.ts) \u2014 both EXTRACTED from the hand-mirrored store DDL / write layer to stay under the file-size ratchet (the #1317 / #1304 extract-leaf -> route-graph-absorb pattern). It gains NONE of the packages/skills lifecycle policy: that pure single-authority leaf was FOLDED into the already route-reachable skill-source.ts (the store write path imports its buildUpsertRevisionWrite from a module it already reaches), and the transition MECHANISM stays in the server-only lifecycle-store.ts reached only by later slices / its tests \u2014 so neither adds a net-new reachable first-party leaf here. Delta measured B-A on the identical tree with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 1406->1408.",
-      "pr": 1405
+      "from": 1408,
+      "to": 1412,
+      "reason": "cinatra#1392 S7 (PR #1439) positive edge-bound serving wiring. This route gains EXACTLY 4 net-new first-party src/lib leaves, verified by a reachable-module-set probe on the identical tree with the 82 companion extension repos cloned pinned (missingCount 0): (1) a2a-edge-bound-serving.ts + (2) extension-edge-bound-agent.ts \u2014 the #1403-deferred LIVE injection of the tested A2A edge-bound binding into MultiAgentExecutor (a2a-server.ts), exactly the +2 that PR predicted; (3) extension-edge-bound-serving.ts + (4) extension-version-keyed-serving.ts \u2014 the #1410 registry's consume side: both mcp-server.ts extension-tool chokepoints now dispatch through the edge-bound serving binding so a dependent edge-bound to a non-default version is served that version's retained handler, fail-closed. /sign-in reaches neither a2a-server.ts nor mcp-server.ts and gains none of the 4. Absorbed raise 1408->1412.",
+      "pr": 1439
     },
     "/api/llm-bridge": {
-      "from": 1412,
-      "to": 1414,
-      "reason": "cinatra#1361 (PR #1405) skill-lifecycle foundation. This route reaches the store via the skills surface, but it gains EXACTLY the same 2 net-new first-party leaf modules /sign-in does \u2014 src/lib/skill-lifecycle-schema.ts (the bootstrap-DDL leaf for skill_revisions + skill_lifecycle_audit, imported by drizzle-store.ts) and src/lib/skill-lifecycle-store.ts (the lifecycle DB write primitives, imported by database.ts) \u2014 both EXTRACTED from the hand-mirrored store DDL / write layer to stay under the file-size ratchet (the #1317 / #1304 extract-leaf -> route-graph-absorb pattern). It gains NONE of the packages/skills lifecycle policy: that pure single-authority leaf was FOLDED into the already route-reachable skill-source.ts (the store write path imports its buildUpsertRevisionWrite from a module it already reaches), and the transition MECHANISM stays in the server-only lifecycle-store.ts reached only by later slices / its tests \u2014 so neither adds a net-new reachable first-party leaf here. Delta measured B-A on the identical tree with the companion extension repos cloned pinned (missingCount 0). Absorbed raise 1412->1414.",
-      "pr": 1405
+      "from": 1414,
+      "to": 1418,
+      "reason": "cinatra#1392 S7 (PR #1439) positive edge-bound serving wiring. This route gains EXACTLY 4 net-new first-party src/lib leaves, verified by a reachable-module-set probe on the identical tree with the 82 companion extension repos cloned pinned (missingCount 0): (1) a2a-edge-bound-serving.ts + (2) extension-edge-bound-agent.ts \u2014 the #1403-deferred LIVE injection of the tested A2A edge-bound binding into MultiAgentExecutor (a2a-server.ts), exactly the +2 that PR predicted; (3) extension-edge-bound-serving.ts + (4) extension-version-keyed-serving.ts \u2014 the #1410 registry's consume side: both mcp-server.ts extension-tool chokepoints now dispatch through the edge-bound serving binding so a dependent edge-bound to a non-default version is served that version's retained handler, fail-closed. /sign-in reaches neither a2a-server.ts nor mcp-server.ts and gains none of the 4. Absorbed raise 1414->1418.",
+      "pr": 1439
     }
   }
 }

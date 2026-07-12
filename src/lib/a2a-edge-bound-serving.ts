@@ -2,13 +2,12 @@ import "server-only";
 
 // EDGE-BOUND SERVING — A2A DISPATCH BINDING (cinatra#1392 Gap 2).
 //
-// NOTE: this is the tested, ready-to-wire binding. Its LIVE injection into the
-// A2A mount (`src/lib/a2a-server.ts`) rides a FOLLOW-UP: wiring it grows the four
-// locked dev-perf route graphs (/api/a2a, /api/mcp, /api/llm-bridge, /chat) by
-// +2 reachable first-party modules, and the route-graph ratchet (cinatra#732) is
-// shrink-only (a self-raise of the ceiling is blocked by the base-ref ratchet),
-// so the injection needs an owner/operator dev-perf baseline bump on main first.
-// The fail-closed guard MECHANISM it feeds already ships in MultiAgentExecutor.
+// LIVE since the cinatra#1392 S7 wiring slice: `src/lib/a2a-server.ts` injects
+// this binding into `MultiAgentExecutor` as `resolveEdgeBoundServing` (the
+// route-graph growth is carried by ANNOTATED absorb records in
+// `scripts/audit/route-graph-ratchet.baseline.json`, per the sanctioned
+// absorb mechanism). The fail-closed guard MECHANISM it feeds ships in
+// MultiAgentExecutor.
 //
 // The app-side binding the A2A mount wires into MultiAgentExecutor as
 // `resolveEdgeBoundServing` (packages/a2a stays free of `@/lib` imports; same DI

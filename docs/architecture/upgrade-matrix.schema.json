@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinatra.ai/schemas/upgrade-matrix-1.json",
+  "title": "Cinatra stateful-service upgrade matrix",
+  "description": "Machine-readable, versioned source->target upgrade matrix for every stateful service in docker-compose.yml. Single source of truth shared by cinatra-cli (preflight + `db upgrade-major`) and the cinatra works-after harness (upgrade-from arm). See docs/architecture/stateful-service-inventory.md for the human-readable inventory and rationale. Generated/checked by scripts/check-upgrade-matrix.mjs against the live compose file (fail-closed completeness).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "revision",
+    "baselineRelease",
+    "generatedNote",
+    "stateClasses",
+    "migrationMechanisms",
+    "failClosed",
+    "consumptionContract",
+    "services",
+    "caseExceptions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "SemVer of THIS document's shape (the schema). A consumer built against a different MAJOR must refuse to parse.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "revision": {
+      "description": "Monotonic content revision. Bumped on ANY content change. Consumers pin the revision they were built against and fail-closed on skew (see consumptionContract).",
+      "type": "integer",
+      "minimum": 1
+    },
+    "baselineRelease": {
+      "description": "The release whose shipped pins define the supported source baseline (epic decision, cinatra#1419).",
+      "type": "string"
+    },
+    "generatedNote": { "type": "string" },
+    "stateClasses": {
+      "description": "The closed vocabulary of state classifications used by services[].stateClass.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": [
+        "canonical-data",
+        "derived-index",
+        "cache",
+        "queue",
+        "object-store",
+        "package-storage",
+        "key-material"
+      ] }
+    },
+    "migrationMechanisms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": [
+        "logical-dump-restore",
+        "in-place-store-format",
+        "app-managed-boot-migration",
+        "discard-recreate",
+        "object-store-in-place",
+        "rebuild"
+      ] }
+    },
+    "failClosed": {
+      "description": "The default resolution for any (service, from, to) tuple NOT explicitly listed as a supported transition or a case exception.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "policy"],
+      "properties": {
+        "default": { "type": "string", "const": "unsupported" },
+        "policy": { "type": "string" }
+      }
+    },
+    "consumptionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonicalPath", "loader", "consumers", "skewRule"],
+      "properties": {
+        "canonicalPath": { "type": "string" },
+        "loader": { "type": "string" },
+        "consumers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "uses"],
+            "properties": {
+              "name": { "type": "string" },
+              "uses": { "type": "string" }
+            }
+          }
+        },
+        "skewRule": { "type": "string" }
+      }
+    },
+    "services": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/service" }
+    },
+    "caseExceptions": {
+      "description": "Pre-baseline / concrete-deployment transitions supported for a NAMED case without widening the general baseline (epic decision; cinatra#1417 is the first consumer).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/caseException" }
+    }
+  },
+  "$defs": {
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "composeService",
+        "family",
+        "profile",
+        "stateClass",
+        "migrationMechanism",
+        "appManagedSchema",
+        "baselinePin",
+        "transitions"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "composeService": {
+          "description": "The exact service key in docker-compose.yml. `null` ONLY for a derived family that owns no compose service of its own (graphiti's state lives in neo4j).",
+          "type": ["string", "null"]
+        },
+        "volume": {
+          "description": "The named top-level volume this service persists to. null for stateless-but-schema-migrating (none currently) or derived services.",
+          "type": ["string", "null"]
+        },
+        "family": {
+          "type": "string",
+          "enum": ["postgres", "mariadb", "neo4j", "redis", "valkey", "rabbitmq", "minio", "verdaccio", "graphiti"]
+        },
+        "profile": {
+          "description": "The compose profile gating the service, or `default` if it starts on a bare `docker compose up`.",
+          "type": "string"
+        },
+        "stateClass": { "type": "string" },
+        "migrationMechanism": { "type": "string" },
+        "appManagedSchema": {
+          "description": "true when a bundled app (Plane/Twenty/WordPress/Drupal) runs its OWN schema migrations at boot ON TOP of the engine data dir — the platform drizzle ledger does NOT cover it.",
+          "type": "boolean"
+        },
+        "upstreamDictated": {
+          "description": "true when the engine major is chosen by an upstream bundled app (we track, we do not lead).",
+          "type": "boolean"
+        },
+        "baselinePin": { "$ref": "#/$defs/pin" },
+        "coupledAppImages": {
+          "description": "App images that own NO volume but run implicit schema migrations against THIS service's data dir at boot (e.g. the Plane app images migrate plane-db). Frozen alongside the engine and pin-drift-checked against compose, even though they carry no state of their own.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/pin" }
+        },
+        "notes": { "type": "string" },
+        "transitions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/transition" }
+        }
+      }
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "major"],
+      "properties": {
+        "image": {
+          "description": "The exact `repo:tag[@sha256:...]` string as it appears (after ${VAR:-default} resolution) in docker-compose.yml. Checked byte-for-byte against compose by scripts/check-upgrade-matrix.mjs.",
+          "type": "string"
+        },
+        "major": { "type": "string" },
+        "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "floatingBefore": {
+          "description": "The floating tag this pin replaced, if any (audit trail for the two frozen tags).",
+          "type": "string"
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "supported", "mechanism", "skippedMajor"],
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "supported": { "type": "boolean" },
+        "mechanism": { "type": "string" },
+        "skippedMajor": {
+          "description": "How skipped majors are handled for THIS family: `allowed` (one hop crosses any span — e.g. Postgres logical dump/restore), `sequential-only` (must step through each major — e.g. MariaDB), `linear` (single successor line — e.g. Neo4j CalVer, redis), or `n-a`.",
+          "type": "string",
+          "enum": ["allowed", "sequential-only", "linear", "n-a"]
+        },
+        "downgrade": { "type": "boolean" },
+        "notes": { "type": "string" }
+      }
+    },
+    "caseException": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case", "service", "from", "to", "issue", "notes"],
+      "properties": {
+        "case": { "type": "string" },
+        "service": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "issue": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}
