@@ -17,6 +17,7 @@ import {
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
@@ -2790,6 +2791,15 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
          AND owner_id <> '__platform__')
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
+    // Durable artifact-claim registry + append-only claim-event log + the
+    // winner-change reconcile queue (cinatra#1425, epic #1424 foundation) —
+    // brand-new tables with NO foreign keys, in a sync leaf. On an existing
+    // deployment they arrive via core__0032; fresh bootstrap ships them here
+    // (idempotent DDL, the two paths converge). Spread after the
+    // installed_extension section purely for reading order — the claim tables
+    // deliberately carry no FK to installed_extension (claims + events survive
+    // uninstall's row delete).
+    ...artifactClaimSchemaQueries(schemaName),
     // ---------------------------------------------------------------------------
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.

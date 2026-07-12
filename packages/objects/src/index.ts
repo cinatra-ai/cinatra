@@ -1,5 +1,15 @@
 // Absorbed from @cinatra/object-types — verbatim surface
 export { OBJECT_TYPE_NAMESPACE_RE, isNamespacedObjectTypeId } from "./namespace";
+// Reserved `@dynamic` scope for LLM-minted dynamic-type ids (cinatra#1425);
+// legacy `@cinatra-ai/dynamic:` ids stay valid on READ via the catalog.
+export {
+  DYNAMIC_TYPE_ID_PREFIX,
+  LEGACY_DYNAMIC_TYPE_ID_PREFIX,
+  DYNAMIC_TYPE_ID_RE,
+  LEGACY_DYNAMIC_TYPE_ID_RE,
+  isDynamicObjectTypeId,
+  mintDynamicObjectTypeId,
+} from "./namespace";
 
 // Single code-owned taxonomy.
 // (ObjectCategory + the namespace helpers are exported elsewhere in this barrel.)
@@ -66,6 +76,34 @@ export {
 
 export { objectTypeRegistry } from "./registry";
 export { canCompose, findCompositionMatches } from "./compose";
+
+// Artifact-type claims — pure policy leaf (cinatra#1425, epic #1424): the
+// status/kind vocabulary, the dispositions union validator, and kind-over-
+// scope arbitration. DB state lives in the host claim store
+// (src/lib/objects/artifact-claim-store.ts); this leaf is side-effect-free.
+export {
+  ARTIFACT_CLAIM_KINDS,
+  ARTIFACT_CLAIM_STATUSES,
+  ARTIFACT_CLAIM_EVENTS,
+  PLATFORM_CLAIM_SCOPE,
+  ORG_CLAIM_SCOPE_PREFIX,
+  orgClaimScope,
+  isValidClaimScope,
+  claimDispositionsSchema,
+  parseClaimDispositions,
+  claimPrecedenceRank,
+  isWinnerEligible,
+  resolveClaimWinner,
+  isDefaultClaimDominated,
+} from "./claims";
+export type {
+  ArtifactClaimKind,
+  ArtifactClaimStatus,
+  ArtifactClaimEvent,
+  ArtifactClaimScope,
+  ClaimDispositions,
+  ArbitrableClaim,
+} from "./claims";
 
 // Graphiti-backed object intelligence exports.
 export * as graphitiClient from "./graphiti-client";

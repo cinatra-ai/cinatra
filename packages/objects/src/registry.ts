@@ -14,6 +14,15 @@ import { OBJECT_TYPE_NAMESPACE_RE } from "./namespace";
  * - Dev-mode `console.warn` when a non-namespaced ID is registered.
  * - Zero React / DB / server-only imports (safe to include in the SSR
  *   module graph — see CLAUDE.md Turbopack constraint).
+ *
+ * SCOPE (since cinatra#1425): this in-memory registry is a RENDER/SCHEMA
+ * CACHE — renderers, zod schemas, lifecycle/crud policy for the running
+ * process. It is NOT the type-ownership authority: ownership/claim state is
+ * the DB claim registry (`artifact_type_claims`), arbitrated by the pure
+ * claims leaf and resolved per org + actor by the host effective-type-catalog
+ * resolver (src/lib/objects/effective-type-catalog.ts). Process-global,
+ * replace-by-id, unscoped — exactly what a cache may be and an authority
+ * must not.
  */
 class ObjectTypeRegistryImpl {
   private entries: Map<string, ObjectTypeDefinition<unknown>> = new Map();
