@@ -463,18 +463,27 @@ export function kernelActorForRead(
     approvedByUserId: actor.approvedByUserId,
     tokenScopes: actor.tokenScopes,
   };
+  // Preserve raw ownership facets the safe-actor narrowing / role-hint
+  // derivation would drop: teamIds feed the SQL team clause; projectIds /
+  // projectGrants feed the SQL project clause (dropping them would
+  // false-deny rows the actor holds explicit project grants for);
+  // teamRoles feed the team-admin short-circuit when this context is
+  // reused for a kernel decision.
+  const ext = actor as unknown as {
+    teamIds?: string[];
+    projectIds?: string[];
+    projectGrants?: ActorRoleHints["projectGrants"];
+  };
   const built = buildActorContextFromPrimitive(safeActor, orgId, {
     ...roleHints,
     actorOrganizationId: roleHints.actorOrganizationId ?? orgId,
+    ...(ext.teamIds ? { teamIds: ext.teamIds } : {}),
+    ...(ext.projectIds ? { projectIds: ext.projectIds } : {}),
+    ...(ext.projectGrants ? { projectGrants: ext.projectGrants } : {}),
   });
-  // Preserve raw team-role / a2a facets the safe-actor narrowing dropped:
-  // teamIds feed the SQL team clause; teamRoles feed the team-admin
-  // short-circuit when this context is reused for a kernel decision.
-  const teamIds = (actor as unknown as { teamIds?: string[] }).teamIds;
   const teamRoles = roleHints.teamRoles;
   return {
     ...built,
-    ...(teamIds ? { teamIds } : {}),
     ...(teamRoles ? { teamRoles } : {}),
     ...(actor.oboCeiling ? { oboCeiling: actor.oboCeiling } : {}),
   };

@@ -70,6 +70,10 @@ const ROWS: SeedRow[] = [
   // it must decide IDENTICALLY on both surfaces.
   { id: "r-user-other-private", ownerLevel: "user", ownerId: U2, visibility: "private" },
   { id: "r-org-column", ownerLevel: "organization", ownerId: ORG, visibility: "organization" },
+  // Project-scoped visibility: reachable ONLY through the actor's
+  // projectIds/projectGrants axis — locks the codex round-1 finding that
+  // the read-scope actor must carry project grants through the bridge.
+  { id: "r-project", ownerLevel: "organization", ownerId: ORG, visibility: "project:proj-1428" },
 ];
 
 describe.skipIf(!HAS_REAL_DB)("cinatra#1428 RBAC + deletion unification (real DB)", () => {
@@ -141,6 +145,18 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1428 RBAC + deletion unification (real DB
     orgAdmin: { actorType: "human", source: "ui", userId: ADMIN, orgId: ORG, organizationId: ORG, orgRole: "org_admin" },
     platformAdmin: { actorType: "human", source: "ui", userId: "user-1428-p", orgId: ORG, organizationId: ORG, platformRole: "platform_admin" },
     serviceAccount: { actorType: "model", source: "mcp", userId: "svc-1428", orgId: ORG, organizationId: ORG },
+    projectMember: {
+      actorType: "human",
+      source: "ui",
+      userId: "user-1428-proj",
+      orgId: ORG,
+      organizationId: ORG,
+      orgRole: "member",
+      projectIds: ["proj-1428"],
+      projectGrants: [
+        { projectId: "proj-1428", effectiveRole: "read", accessSource: "user" },
+      ],
+    },
   };
 
   async function objectsSurfaceListIds(primitive: PrimitiveShape): Promise<string[]> {
@@ -218,6 +234,18 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1428 RBAC + deletion unification (real DB
     expect(ids).not.toContain("r-user-other-private");
     const art = await artifactSurface(primitiveActors.ownerMember);
     expect(art.get("r-user-other-private")).toBe(false);
+  });
+
+  it("AC2 sanity: project grants reach the read scope — the granted member sees the project row on BOTH surfaces, others do not", async () => {
+    const grantedIds = await objectsSurfaceListIds(primitiveActors.projectMember);
+    expect(grantedIds).toContain("r-project");
+    const grantedArt = await artifactSurface(primitiveActors.projectMember);
+    expect(grantedArt.get("r-project")).toBe(true);
+
+    const ungrantedIds = await objectsSurfaceListIds(primitiveActors.otherMember);
+    expect(ungrantedIds).not.toContain("r-project");
+    const ungrantedArt = await artifactSurface(primitiveActors.otherMember);
+    expect(ungrantedArt.get("r-project")).toBe(false);
   });
 
   // -------------------------------------------------------------------------

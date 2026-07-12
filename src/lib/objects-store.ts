@@ -473,7 +473,7 @@ export function getObjectById(
         text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                  created_by, org_id, source, run_id, agent_id, package_version,
                  agent_spec_version, version, deleted_at,
-                 owner_level, owner_id, visibility
+                 owner_level, owner_id, visibility, project_id
                FROM "${schema}"."objects"
                WHERE id = $1
                  AND (org_id = $2 OR $2 IS NULL)
@@ -586,7 +586,7 @@ export function listObjectsByFilter(
         text: `SELECT id, type, parent_id, parent_type, data, created_at, updated_at,
                  created_by, org_id, source, run_id, agent_id, package_version,
                  agent_spec_version, version, deleted_at,
-                 owner_level, owner_id, visibility
+                 owner_level, owner_id, visibility, project_id
                FROM "${schema}"."objects"
                WHERE ${where.join(" AND ")}
                ${orderBy}
