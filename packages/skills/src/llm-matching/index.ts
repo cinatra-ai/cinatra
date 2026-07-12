@@ -41,6 +41,9 @@ export { registerSkillMatchScheduleAtBoot, unregisterSkillMatchSchedule } from "
 export {
   registerSkillMatchDriftSamplerAtBoot,
   unregisterSkillMatchDriftSampler,
+  // Combined opt-in match-store scheduler registration (drift + maintenance),
+  // called from the host boot's single drift-sampler boot site.
+  registerSkillMatchSchedulersAtBoot,
 } from "./drift-sampler-boot";
 
 // Event hooks called from skills + agents MCP handlers.
@@ -69,4 +72,31 @@ export {
   type DriftSampleDeps,
   type DriftSampleResult,
   type DriftSampleRowDiff,
+  // Matching maintenance (cinatra #1365 / S7): the combined tick handler and the
+  // drift-flag recorder are COLOCATED in drift-sampler.ts (same match-store
+  // maintenance domain / imports), so they stay off the barrel's own extra
+  // module surface. handleMaintenanceTick is dispatched from
+  // src/lib/background-jobs-registry.ts via the SKILL_MATCH_MAINTENANCE_TICK job;
+  // recordDriftObservations is injected into the drift sampler there.
+  handleMaintenanceTick,
+  recordDriftObservations,
+  // Maintenance KV (connector_config blobs) — colocated in drift-sampler.ts so
+  // the size-ratcheted src/lib/database.ts does not grow. Injected into the
+  // maintenance deps at the dispatch site.
+  readSkillMatchOrphanTombstones,
+  writeSkillMatchOrphanTombstones,
+  readSkillMatchDriftFlags,
+  writeSkillMatchDriftFlags,
+  clearSkillMatchDriftFlagsForPairKeys,
+  readSkillMatchManualStale,
+  writeSkillMatchManualStale,
 } from "./drift-sampler";
+
+// Opt-in maintenance-tick boot registration (colocated in drift-sampler-boot.ts;
+// gated by the SKILL_MATCH_MAINTENANCE_CRON env var, so it ships without a DB
+// migration).
+export {
+  registerSkillMatchMaintenanceAtBoot,
+  unregisterSkillMatchMaintenance,
+  resolveMaintenanceCron,
+} from "./drift-sampler-boot";

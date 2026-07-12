@@ -21,6 +21,7 @@ import {
 } from "../graphiti-client";
 import type { EntityNode } from "../graphiti-client";
 // Connector dispatch is intentionally not active in this handler.
+import { isDynamicObjectTypeId } from "../namespace";
 import { objectTypeRegistry } from "../registry";
 // Write paths go through Postgres-primary CRUD; the legacy
 // shadowUpsertObject (kept in src/lib/objects-dual-write.ts because asset-blog
@@ -49,8 +50,10 @@ import * as schemas from "./schemas";
 // environment that cannot resolve "server-only".
 import {
   enforceResourceAccess,
+  kernelActorForRead,
   type ResourceForAccessCheck,
 } from "@/lib/authz/enforce-resource-access";
+import type { ActorContext } from "@/lib/authz/actor-context";
 import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // Sealed-room read filter. `assertProjectReadAccess` 404-hides when the actor
@@ -248,6 +251,29 @@ function normalizeObjectVisibility(
   return KERNEL_VISIBILITY.has(v) ? v : "private";
 }
 
+/**
+ * Actor-scoped READ context (cinatra#1428 RBAC matrix): the canonical read
+ * surfaces (`objects_get` / `objects_list`) splice the SAME SQL ownership
+ * filter the artifact read surface uses, by passing this kernel actor into
+ * `getObjectById` / `listObjectsByFilter`. Without it, the objects surface
+ * returned rows (e.g. another user's private rows within the org) that the
+ * artifact surface's data layer denies — breaking the cross-surface
+ * invariant: neither surface returns a row the other would deny.
+ *
+ * Returns `undefined` (no filter — legacy trusted read) ONLY for the
+ * dev-bypass case (`A2A_DEV_BYPASS=true` with a sessionless model caller),
+ * mirroring `objects_save`'s `isTrustedDevModelCall` posture.
+ */
+function readScopeActor(
+  actor: PrimitiveActorContext,
+  orgId: string | null,
+): ActorContext | undefined {
+  if (process.env.A2A_DEV_BYPASS === "true" && !(actor.userId ?? null)) {
+    return undefined;
+  }
+  return kernelActorForRead(actor, orgId);
+}
+
 function buildObjectResourceCheck(row: ObjectRecord): ResourceForAccessCheck {
   return {
     resourceType: "object",
@@ -345,10 +371,13 @@ export function createObjectsPrimitiveHandlers() {
       const classificationModel = readObjectsClassificationModelFromDatabase();
       const classification = await classifyObject(rawData, input.typeHint, { model: classificationModel });
 
-      // 2. Auto-register dynamic type whenever the resolved type is a @cinatra-ai/dynamic:*
+      // 2. Auto-register dynamic type whenever the resolved type is a dynamic
       // ID (regardless of confidence / isNewType flag — the LLM may return high confidence
       // for a well-understood new type that simply has no static registration).
-      if (classification.isNewType || classification.confidence < 0.4 || classification.type.startsWith("@cinatra-ai/dynamic:")) {
+      // NEW ids mint under the reserved `@dynamic/types:` scope (cinatra#1425);
+      // the legacy `@cinatra-ai/dynamic:` prefix stays accepted on READ so
+      // existing rows keep resolving.
+      if (classification.isNewType || classification.confidence < 0.4 || isDynamicObjectTypeId(classification.type)) {
         // Build originContext from whatever provenance is available.
         // agentId/runId may be undefined for external callers. Conditionally
         // spread so the JSONB column stores a compact object (not
@@ -493,6 +522,11 @@ export function createObjectsPrimitiveHandlers() {
       const hasQuery =
         typeof input.query === "string" && input.query.trim().length > 0;
 
+      // Actor-scoped ownership filter (cinatra#1428): the same SQL filter the
+      // artifact read surface splices; the kernel post-filter below stays as
+      // the role-permission axis. Both surfaces now scope reads identically.
+      const scopeActor = readScopeActor(request.actor, orgId);
+
       // Common post-filter for the optional `category` enum. Type and runId
       // are pushed down into the SQL filter (listObjectsByFilter) so they hit
       // an index; category is resolved against the object-type registry which
@@ -538,16 +572,19 @@ export function createObjectsPrimitiveHandlers() {
       // No query: Postgres-only listing — type / runId / org filtered in SQL.
       // -----------------------------------------------------------------
       if (!hasQuery) {
-        const rows = listObjectsByFilter({
-          orgId,
-          type: input.type,
-          runId: input.runId,
-          limit: input.limit,
-          // Pass projectId straight through; the store appends
-          // `AND project_id = $projectId` when the per-table feature flag is
-          // ON (default).
-          projectId,
-        });
+        const rows = listObjectsByFilter(
+          {
+            orgId,
+            type: input.type,
+            runId: input.runId,
+            limit: input.limit,
+            // Pass projectId straight through; the store appends
+            // `AND project_id = $projectId` when the per-table feature flag is
+            // ON (default).
+            projectId,
+          },
+          scopeActor,
+        );
         const visible = await filterByAuthz(rows);
         const items = applyCategoryFilter(visible.map(mapRowToObject));
         return { items, nextCursor: null };
@@ -577,16 +614,19 @@ export function createObjectsPrimitiveHandlers() {
       }
 
       if (degraded || objectIds === null || objectIds.length === 0) {
-        const rows = listObjectsByFilter({
-          orgId,
-          type: input.type,
-          runId: input.runId,
-          limit: input.limit,
-          // Sealed-room filter applies on the Graphiti-fallback path too. The
-          // user supplied a projectId; the result must stay inside the project
-          // regardless of search path.
-          projectId,
-        });
+        const rows = listObjectsByFilter(
+          {
+            orgId,
+            type: input.type,
+            runId: input.runId,
+            limit: input.limit,
+            // Sealed-room filter applies on the Graphiti-fallback path too. The
+            // user supplied a projectId; the result must stay inside the project
+            // regardless of search path.
+            projectId,
+          },
+          scopeActor,
+        );
         const visible = await filterByAuthz(rows);
         const items = applyCategoryFilter(visible.map(mapRowToObject));
         // Distinguish "Graphiti unavailable" from "Graphiti responded but
@@ -614,13 +654,16 @@ export function createObjectsPrimitiveHandlers() {
       // NOT here. The UX caveat: when no candidate rows belong to the requested
       // project, the result is empty even though search returned hits — that is
       // the sealed-room contract, not a bug.
-      const rows = listObjectsByFilter({
-        orgId,
-        ids: objectIds,
-        type: input.type,
-        runId: input.runId,
-        projectId,
-      });
+      const rows = listObjectsByFilter(
+        {
+          orgId,
+          ids: objectIds,
+          type: input.type,
+          runId: input.runId,
+          projectId,
+        },
+        scopeActor,
+      );
       const byId = new Map<string, ObjectRecord>(rows.map((r) => [r.id, r]));
       const ordered = objectIds
         .map((id) => byId.get(id))
@@ -643,7 +686,14 @@ export function createObjectsPrimitiveHandlers() {
       // Postgres-primary read.
       // getObjectById applies (org_id = $2 OR $2 IS NULL) and `deleted_at IS NULL`
       // in SQL, so wrong-tenant lookups and tombstoned rows return null.
-      const row = getObjectById(input.objectId, { orgId });
+      // The actor-scoped ownership filter (cinatra#1428) additionally hides
+      // rows outside the actor's ownership/visibility reach — the same data
+      // layer the artifact read surface uses.
+      const row = getObjectById(
+        input.objectId,
+        { orgId },
+        readScopeActor(request.actor, orgId),
+      );
 
       // Authorization gate. 404-hidden if denied. We only run the kernel when
       // the row actually exists; a missing row returns `{ object: null }` to

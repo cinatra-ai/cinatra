@@ -49,6 +49,7 @@ import type {
 import type {
   DependencyInstallPlan,
   DependencyPlanDeps,
+  RowOwnership,
 } from "@/lib/extension-dependency-plan";
 import type {
   InstallBatch,
@@ -140,6 +141,9 @@ export type InstallBatchSagaDeps = {
   plan: (input: {
     root: { packageName: string; version: string };
     orgId: string | null;
+    /** cinatra#1039 decision 1+4: the root's derived-default rowOwnership tuple,
+     *  forced onto every member. */
+    rowOwnership?: RowOwnership;
     closure: GatekeptInstallResolution["authorize"]["closure"] | null;
     /** #1039 Option B (update-time): the root is a committed in-place update
      *  (dev/non-gatekept path) rather than a fresh install. */
@@ -166,9 +170,35 @@ export type InstallBatchSagaDeps = {
    * compensation loop and the boot sweeper both skip it), so no cross-batch
    * durable-restore is required (that is the deferred Option A subsystem).
    */
-  updateMemberPackage: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  updateMemberPackage: (
+    member: { typeId: string; packageName: string; version: string },
+    actor: Actor,
+    /**
+     * #1042 slice-1 CAS: forwarded to `extensionRegistry.update` as
+     * `expectedInstalledVersion` for the ROOT update member ONLY (the batch
+     * passes it only when `member.packageName === input.packageName`). A drift
+     * at the mutation boundary refuses the update before any mutation — the
+     * caller's stale target never overwrites a concurrent winner. Omitted for
+     * every non-root dedupe-upward member and every manual caller.
+     */
+    expectedInstalledVersion?: string,
+  ) => Promise<void>;
   /** Uninstall ONE package through the real dispatcher (compensation inverse). */
   uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  /**
+   * #1042 slice-2 ROW-SCOPED compensation inverse. Removes ONLY the freshly-
+   * installed (package, actor-scope) canonical row — never the package-global
+   * hard-delete branch of `extensionRegistry.uninstall` (which would tear down
+   * same-package OTHER-org rows). Used in place of `uninstallMember` for
+   * newly-installed non-side-by-side members when the caller opts in with
+   * `rowScopedCompensation:true` (the auto-update loop), so an org-multi-tenant
+   * instance's rows are provably untouched and the loop can lift its org-rows
+   * fence. Absent flag (all manual callers) → today's `uninstallMember`.
+   */
+  uninstallMemberRowScoped: (
+    member: { typeId: string; packageName: string; version: string },
+    actor: Actor,
+  ) => Promise<void>;
   /**
    * Install ONE shared dependency SIDE BY SIDE as a non-default version row
    * (cinatra#1040 S3 `action:"install-side-by-side"` member) — the storage-
@@ -242,13 +272,45 @@ export type InstallBatchSagaDeps = {
   now: () => number;
 };
 
+/**
+ * #1042 slice-2: resolve the SINGLE freshly-installed (package, scope, version)
+ * canonical row the row-scoped compensation must tear down — precisely, never an
+ * arbitrary live row. The freshly-installed row is the one at the actor scope
+ * carrying the exact version this batch installed. FAIL-CLOSED: more than one
+ * live row carrying that version at the scope is ambiguous → `ambiguous:true`
+ * (the caller refuses rather than delete the wrong row); zero → `rowId:null`
+ * (idempotent — already gone / the install never took). Pure + exported for
+ * direct testing. `source.version` is the canonical verdaccio version.
+ */
+export function resolveRowScopedCompensationTarget(
+  rows: {
+    id: string;
+    organizationId: string | null;
+    status: string;
+    source?: { version?: string } | null;
+  }[],
+  scope: string | null,
+  version: string,
+): { rowId: string | null; ambiguous: boolean; count: number } {
+  const matching = rows.filter(
+    (r) =>
+      (r.organizationId ?? null) === scope &&
+      (r.status === "active" || r.status === "locked") &&
+      ((r.source?.version ?? null) === version),
+  );
+  if (matching.length === 1) return { rowId: matching[0]!.id, ambiguous: false, count: 1 };
+  return { rowId: null, ambiguous: matching.length > 1, count: matching.length };
+}
+
 export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSagaDeps> {
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig, refreshGatekeptInstallGrant } =
     await import("@/lib/gatekept-install");
   const { withInstallGrantContext, getActiveInstallGrantContext } = await import(
     "@/lib/extension-install-grant-context"
   );
-  const { planDependencyInstall } = await import("@/lib/extension-dependency-plan");
+  const { planDependencyInstall, defaultOrgPlatformChain } = await import(
+    "@/lib/extension-dependency-plan"
+  );
   const { readInstallOp } = await import("@/lib/extension-install-ops");
   const batchOps = await import("@/lib/extension-install-batch-ops");
   const { parseManifestDependencyEdges } = await import(
@@ -325,6 +387,21 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
       const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
       return listInstalledExtensions({});
     },
+    // cinatra#1039 decision 2: the extension-saga scope-ancestry is the
+    // [organization, platform] binary — an org install resolves the org's own
+    // rows first, else platform (the EXACT pre-#1039 findLiveRowsInScope
+    // behavior). The agent path (Phase 2) injects the real
+    // project→owning-team→org→platform ladder here.
+    resolveScopeAncestry: (rowOwnership) => defaultOrgPlatformChain(rowOwnership.organizationId),
+    // cinatra#1039 decision 3: the extension-saga rows are ORG-owned and the
+    // root install already authorized the org, so a dedupe-upward of a
+    // same-org (or platform-fallback) row stays within the caller's established
+    // authority — PERMIT (behavior-neutral). The AGENT path (Phase 2) wires the
+    // real per-row assertCanInstallAtTarget against the EXISTING row's scope, so
+    // a cross-scope mutation refuses.
+    authorizeExistingRowMutation: () => {
+      /* permit: extension-path row ownership is org-uniform (see #1039 decision 3) */
+    },
   };
 
   return {
@@ -359,12 +436,15 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         actor,
       );
     },
-    updateMemberPackage: async (member, actor) => {
+    updateMemberPackage: async (member, actor, expectedInstalledVersion) => {
       const { extensionRegistry } = await import("@cinatra-ai/extensions");
       await extensionRegistry.update(
         member.typeId,
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
+        // #1042 slice-1: forward the CAS precondition only when the batch
+        // supplied it (root update member). `undefined` = no CAS.
+        ...(expectedInstalledVersion !== undefined ? [{ expectedInstalledVersion }] : []),
       );
     },
     uninstallMember: async (member, actor) => {
@@ -374,6 +454,60 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
       );
+    },
+    uninstallMemberRowScoped: async (member, actor) => {
+      // #1042 slice-2: ROW-SCOPED compensation. PRECISELY resolve the single
+      // freshly-installed (package, actor-scope, version) canonical row this
+      // batch added and delete EXACTLY that row via the scoped lifecycle
+      // primitive — never the package-global hard-delete, and never an
+      // arbitrary live row. FAIL-CLOSED on ambiguity (>1 live rows carrying the
+      // version at the scope): we refuse rather than delete the wrong row (the
+      // throw marks the member compensation-failed / ROLLBACK INCOMPLETE, which
+      // is the safe direction). Other-scope rows for the same package are
+      // provably untouched. Best-effort terminalize the row's install-op journal
+      // so it can never be mistaken for a live anchor.
+      const scope = actor.orgId ?? null;
+      const { readInstalledExtensionsByPackageName } = await import(
+        "@cinatra-ai/extensions/canonical-store"
+      );
+      const rows = await readInstalledExtensionsByPackageName(member.packageName);
+      const target = resolveRowScopedCompensationTarget(
+        rows.map((r) => ({
+          id: r.id,
+          organizationId: r.organizationId,
+          status: r.status,
+          source: r.source as { version?: string } | null,
+        })),
+        scope,
+        member.version,
+      );
+      if (target.ambiguous) {
+        throw new Error(
+          `[extension-install-batch] row-scoped compensation of ${member.packageName}@${member.version} ` +
+            `is ambiguous (${target.count} live rows at the scope carry that version) — refusing to ` +
+            `delete an arbitrary row (compensation left incomplete for manual review).`,
+        );
+      }
+      if (target.rowId === null) return; // already gone / never took — idempotent
+      const { deleteScopedCanonicalRow } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      await deleteScopedCanonicalRow(target.rowId);
+      try {
+        const { readInstallOp, advanceInstallOpPhase } = await import(
+          "@/lib/extension-install-ops"
+        );
+        const op = await readInstallOp(member.packageName, scope);
+        if (op && op.phase !== "rolled_back") {
+          await advanceInstallOpPhase({ installOpId: op.installOpId, phase: "rolled_back" });
+        }
+      } catch (err) {
+        console.warn(
+          "[extension-install-batch] terminalizing the install-op journal for %s (row-scoped compensation) failed:",
+          member.packageName,
+          err instanceof Error ? err.message : err,
+        );
+      }
     },
     installMemberSideBySide: async (member, actor) => {
       const { installExtensionVersionSideBySide } = await import(
@@ -455,6 +589,26 @@ export async function installExtensionWithDependencies(
      * flow. The gatekept update path is deferred (#1296) and never sets this.
      */
     rootAction?: "install" | "update";
+    /**
+     * #1042 slice-1 (auto-update loop only): the expected currently-installed
+     * version of the ROOT, forwarded to `extensionRegistry.update` as the
+     * compare-and-set precondition (`expectedInstalledVersion`) ONLY for the
+     * root update member. A drift at the mutation boundary refuses the update
+     * before any mutation, so the loop's cached target never overwrites a
+     * concurrent winner. Only meaningful with `rootAction:"update"`; absent for
+     * every manual caller (byte-unchanged).
+     */
+    expectedRootInstalledVersion?: string;
+    /**
+     * #1042 slice-2 (auto-update loop only): when true, freshly-installed
+     * NON-side-by-side members compensate via the ROW-SCOPED inverse
+     * (`uninstallMemberRowScoped`) instead of the package-global
+     * `extensionRegistry.uninstall`. This makes the batch's mid-batch
+     * compensation provably touch only the actor-scope row, so the loop can run
+     * on org-multi-tenant instances (lifting its org-rows fence). Absent (every
+     * manual caller) = today's package-scoped compensation, byte-unchanged.
+     */
+    rowScopedCompensation?: boolean;
   },
   depsOverride?: InstallBatchSagaDeps,
 ): Promise<BatchInstallResult> {
@@ -533,6 +687,16 @@ export async function installExtensionWithDependencies(
       const plan = await deps.plan({
         root: { packageName: input.packageName, version: rootVersion },
         orgId,
+        // cinatra#1039 decision 1+4: the extension-saga DERIVED-DEFAULT
+        // rowOwnership — an org install is organization-owned, a null-org
+        // install platform-owned (canonical-store's existing default). Forced
+        // immutably onto every member; behavior-neutral (the scope the path
+        // already installs at). The agent path (Phase 2) threads its real tuple.
+        rowOwnership: {
+          ownerLevel: orgId ? "organization" : "platform",
+          ownerId: orgId ?? null,
+          organizationId: orgId ?? null,
+        },
         closure: resolution ? resolution.authorize.closure : null,
         // #1039 Option B (update-time): route the root through the durable
         // update pipeline as a committed member. `resolution == null` on the
@@ -586,6 +750,11 @@ export async function installExtensionWithDependencies(
           typeId: m.typeId,
           status: m.alreadyInstalled ? "already-installed" : "planned",
           action: m.action,
+          // cinatra#1039: STAMP the resolved rowOwnership onto the ledger member
+          // (rides the existing JSONB `members` column — NO schema change). The
+          // executor thus records WHO OWNS each installed/updated row; for the
+          // extension default this equals the batch's org scope (behavior-neutral).
+          rowOwnership: m.rowOwnership,
           // The RESOLVED side-by-side scope rides the ledger so compensation
           // and the boot sweeper address the same scope (codex round-1).
           ...(m.action === "install-side-by-side"
@@ -629,7 +798,9 @@ export async function installExtensionWithDependencies(
       const rootIsUpdate = root.action === "update";
       await deps.withSagaOwnedFanout(input.packageName, () =>
         rootIsUpdate
-          ? deps.updateMemberPackage(root, input.actor)
+          ? // #1042 slice-1: the depless root is always `input.packageName`, so
+            // forward the CAS precondition (undefined for manual callers).
+            deps.updateMemberPackage(root, input.actor, input.expectedRootInstalledVersion)
           : deps.installMember(root, input.actor),
       );
       await maybeReloadAgentRuntime([root]);
@@ -737,7 +908,16 @@ export async function installExtensionWithDependencies(
         // the non-gatekept path exclusively.
         await deps.withSagaOwnedFanout(input.packageName, () =>
           member.action === "update"
-            ? deps.updateMemberPackage(member, input.actor)
+            ? // #1042 slice-1: forward the CAS precondition ONLY for the ROOT
+              // update member — a non-root dedupe-upward member is an internal
+              // committed upgrade with no caller-supplied expectation.
+              deps.updateMemberPackage(
+                member,
+                input.actor,
+                member.packageName === input.packageName
+                  ? input.expectedRootInstalledVersion
+                  : undefined,
+              )
             : member.action === "install-side-by-side"
               ? deps.installMemberSideBySide(
                   {
@@ -886,6 +1066,12 @@ export async function installExtensionWithDependencies(
               },
               input.actor,
             );
+          } else if (input.rowScopedCompensation) {
+            // #1042 slice-2: ROW-SCOPED inverse — tear down ONLY the freshly-
+            // installed actor-scope row, never the package-global hard-delete
+            // that would clobber same-package OTHER-org rows. Opt-in (the
+            // auto-update loop); manual callers keep `uninstallMember` below.
+            await deps.uninstallMemberRowScoped(m, input.actor);
           } else {
             await deps.uninstallMember(m, input.actor);
           }

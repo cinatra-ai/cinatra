@@ -207,6 +207,7 @@ export type AgentRunRecord = {
   // (fails closed at mint) or a pre-backfill row. Parsed from the JSON-as-text
   // column; re-derived + containment-checked at mint.
   oboCeiling: OboCeilingChain | null;
+  dependentInstallId: string | null; // installed_extension row id this run executes AS (cinatra#1392 Gap 2)
 };
 
 export type CreateAgentTemplateInput = {
@@ -307,6 +308,7 @@ export type CreateAgentRunInput = {
   // replays it at re-authz time. Optional — legacy callers (test fixtures,
   // schema-only paths) omit; new MCP handlers populate it from the actor.
   delegatedActorSnapshot?: string | null;
+  dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
 };
 
 // ---------------------------------------------------------------------------
@@ -1369,6 +1371,7 @@ export async function createAgentRun(
     // persist-at-dispatch OBO scope-ceiling chain (JSON-as-text; null = corrupt
     // anchor → fails closed at mint).
     oboCeiling: oboCeilingJson,
+    dependentInstallId: input.dependentInstallId ?? null, // server-only trusted id (cinatra#1392 Gap 2)
   } as const;
 
   // Fast path: no idempotency key → plain insert, legacy behavior unchanged.

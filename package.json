@@ -193,6 +193,7 @@
     "config:build:check": "node scripts/config/generate-build-config.mjs --check",
     "sync:inventory": "node scripts/build-postgres-sync-inventory.mjs",
     "sync:inventory:check": "node scripts/build-postgres-sync-inventory.mjs --check",
+    "upgrade-matrix:check": "node scripts/check-upgrade-matrix.mjs",
     "closeout:suite": "node scripts/ci/closeout-suite.mjs",
     "works-after:proof": "bash scripts/ci/works-after-proof.sh",
     "works-after:gate": "bash scripts/ci/works-after-gate.sh",

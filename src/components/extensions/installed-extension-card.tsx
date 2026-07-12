@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Check, TriangleAlert, X } from "lucide-react";
+import { Check, RefreshCw, TriangleAlert, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -55,6 +55,28 @@ export type InstalledExtensionCardProps = {
    * ONLY the mono version + this indicator (cinatra#948 reopen, gap 3).
    */
   status?: ReactNode;
+  /**
+   * §III update affordance (cinatra#1041 outcome 3) rendered on the spec line
+   * AFTER the lifecycle status — the blue `UpdateAvailableChip` when a newer
+   * compatible registry version is published. The card is presentational: the
+   * caller derives the chip via `deriveInstalledUpdateChipState`. Absent for
+   * every non-§VI caller (§VII agents, marketplace) and for the up-to-date /
+   * fail-quiet states, so the spec line renders exactly as before.
+   *
+   * The chip is the ONLY update information the card carries (design §III;
+   * owner direction 2026-07-12): no explanatory update text ever appears in
+   * the card. The per-state wordings ("Newer version needs a newer Cinatra",
+   * "No registry version to compare") surface on the §V extension-settings
+   * page's Maintenance · Update row instead.
+   */
+  updateChip?: ReactNode;
+  /**
+   * §III ABI-incompatible greying: mutes the version/status spec-line row
+   * (opacity, the §I ABI-compat treatment) when a newer version exists but
+   * needs a newer Cinatra. Text-free on the card — the "why" wording lives on
+   * the §V settings page's Maintenance · Update row.
+   */
+  specLineMuted?: boolean;
   /**
    * Right-panel actions — exactly the §VI drawing's two: Settings then More
    * details, ALWAYS both (owner ruling, 2026-07-05). No management actions
@@ -150,6 +172,37 @@ export function InstalledStatusIndicator({
 }
 
 /**
+ * §III "Update available" chip (published design system §III, spec-line update
+ * states). It REUSES the §VI status-indicator badge treatment — the same
+ * `text-badge-2xs`, mono, uppercase, weight-700, 12px-mark kicker style as
+ * `InstalledStatusIndicator` — but in the `--info` (`text-info`) blue action
+ * accent with a circular-arrow glyph, so it reads as timely NEWS, not an
+ * action (the update itself runs from the §II detail-modal footer; the card's
+ * actions stay exactly Settings + More details). It renders ONLY when a newer
+ * COMPATIBLE registry version is published for a registry-comparable source;
+ * the derivation lives in `deriveInstalledUpdateChipState`
+ * (installed-update-chip.ts). `strokeWidth` 2.4 matches the spec's arrow mark.
+ */
+export function UpdateAvailableChip() {
+  return (
+    <span
+      data-slot="status-indicator"
+      data-status="update-available"
+      className={cn(
+        // Mirror InstalledStatusIndicator's canonical badge kicker (named
+        // tokens per the ui-design-system gate; no arbitrary text-[]/tracking-[]).
+        "inline-flex items-center gap-1.5 font-mono text-badge-2xs font-bold uppercase",
+        "text-info",
+      )}
+      title="A newer compatible version is published — update from More details."
+    >
+      <RefreshCw aria-hidden className="size-3 shrink-0" strokeWidth={2.4} />
+      Update available
+    </span>
+  );
+}
+
+/**
  * §"post-install configuration needs" strip (Extensions application-design
  * spec, needs-review section; cinatra#1057). A thin status strip attached to
  * the bottom of an affected agent's card, in the design system's Needs-review
@@ -207,6 +260,8 @@ export function InstalledExtensionCard({
   description,
   version,
   status,
+  updateChip,
+  specLineMuted = false,
   actions,
   archived = false,
   configurationNeeds,
@@ -289,19 +344,24 @@ export function InstalledExtensionCard({
             nor status → the whole spec line is omitted (no empty middle-panel
             row). §VI callers always pass at least the lifecycle indicator, so
             the row renders exactly as before. */}
-        {(version || status) && (
+        {(version || status || updateChip) && (
           <div
             data-slot="installed-extension-spec-line"
             className={cn(
               // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
               "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
               greyed && "opacity-70",
+              // §III ABI-incompatible greying — the §I ABI-compat treatment
+              // dims the version/status row (design spec: opacity ≈ 0.55).
+              // Text-free: the explanation lives on the §V settings page.
+              specLineMuted && "opacity-55",
             )}
           >
             {version && (
               <span className="font-mono text-xs text-muted-foreground">{version}</span>
             )}
             {status}
+            {updateChip}
           </div>
         )}
       </div>

@@ -39,6 +39,14 @@ import {
   VendorCredentialsMissingError,
   resolveMarketplaceSyncWorkerToken,
 } from "@/lib/marketplace-credentials";
+// Cached "update read model" writer (cinatra#1041 outcome 3). Deep-path import
+// (barrel-avoidance, route-graph ratchet): the read-model leaf is DELIBERATELY
+// not re-exported from the registries barrel.
+import {
+  buildUpdateEntry,
+  type ExtensionUpdateReadModelStore,
+} from "@cinatra-ai/registries/src/update-read-model";
+import { getExtensionUpdateReadModelStore } from "@/lib/extension-update-read-model-store";
 
 /**
  * Sync-worker bearer is STRICTLY PARTITIONED from the consumer + vendor
@@ -103,6 +111,12 @@ function warnSyncWorkerLegacyFallback(): void {
 export async function buildMarketplaceSyncDeps(input: {
   packageName?: string;
   packageVersion?: string;
+  /**
+   * Injectable for tests — the persistent update-read-model store the
+   * per-package `recordUpdateEntry` writer upserts into. Defaults to the
+   * process-cached DB-backed store.
+   */
+  updateReadModelStore?: ExtensionUpdateReadModelStore;
 }): Promise<SyncWorkerDeps | null> {
   const token = resolveMarketplaceToken();
   if (!token) {
@@ -116,9 +130,28 @@ export async function buildMarketplaceSyncDeps(input: {
   }
 
   const client = createHttpMarketplaceMcpClient({ token });
+  const updateReadModelStore =
+    input.updateReadModelStore ?? getExtensionUpdateReadModelStore();
 
   return {
     client,
+    // Persist the cached "update read model" entry for this package
+    // (cinatra#1041 outcome 3). The sync worker calls this per-package after a
+    // successful scope + fetch + map, from the manifest already in hand, and
+    // wraps it in its own best-effort try/catch — a write failure is recorded
+    // as a per-package warning and never aborts the sweep nor fails the catalog
+    // POST. `buildUpdateEntry` normalises the structural fields (empty →
+    // null; ISO refreshedAt) before the upsert.
+    recordUpdateEntry: async (entry) => {
+      await updateReadModelStore.upsert([
+        buildUpdateEntry({
+          packageName: entry.packageName,
+          latestVersion: entry.latestVersion,
+          latestSdkAbiRange: entry.latestSdkAbiRange,
+          now: entry.refreshedAt,
+        }),
+      ]);
+    },
     verdaccioPackageNames: async () => {
       if (input.packageName) {
         return [input.packageName];

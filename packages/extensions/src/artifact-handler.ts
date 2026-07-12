@@ -109,13 +109,23 @@ const artifactDescriptorSchema = z
 //     bridge, not a bundle rebuild — so there is nothing to throw about.
 //
 // validate(): real validation — confirms the package declares
-//   `cinatra.kind === "artifact"`, matches the `@cinatra-ai/<slug>-artifact`
-//   kind-at-end naming convention, and does NOT carry an agent payload
+//   `cinatra.kind === "artifact"`, matches the `@<vendor>/<slug>-artifact`
+//   kind-at-end naming convention (VENDOR-AGNOSTIC since cinatra#1425 — the
+//   old first-party-only pattern made a third-vendor artifact package
+//   unregistrable; ids keep their vendor scope), and does NOT carry an agent payload
 //   (`cinatra.oas` / agent-only manifest fields) — an artifact extension is
 //   metadata-only and must never be mountable by WayFlow's agent loader.
 // ---------------------------------------------------------------------------
 
-const ARTIFACT_NAME_RE = /^@cinatra-ai\/[a-z0-9][a-z0-9-]*-artifact$/;
+// Vendor-agnostic kind-at-end convention (cinatra#1425 multi-vendor fix —
+// the old first-party-only pattern made a third-vendor `kind:"artifact"`
+// package unregistrable). Mirrors GENERIC_VENDOR_CONNECTOR_NAME_RE exactly:
+// vendor segment `@[a-z0-9][a-z0-9-]*`, slug `[a-z0-9][a-z0-9-]*-artifact`.
+// The KIND convention stays enforced; the VENDOR is not. Exported for the
+// policy-boundary tests (the connector-handler precedent).
+export const GENERIC_VENDOR_ARTIFACT_NAME_RE =
+  /^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*-artifact$/;
+const ARTIFACT_NAME_RE = GENERIC_VENDOR_ARTIFACT_NAME_RE;
 
 export function createArtifactExtensionHandler(): ExtensionTypeHandler {
   return {
@@ -214,7 +224,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
       } else if (!ARTIFACT_NAME_RE.test(s.name)) {
         errors.push(
           `package name "${s.name}" does not match the kind-at-end convention ` +
-            `(expected @cinatra-ai/<slug>-artifact)`,
+            `(expected @<vendor>/<slug>-artifact)`,
         );
       }
       const cinatra = s.cinatra as

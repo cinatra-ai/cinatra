@@ -342,6 +342,15 @@ export type InProcessAgentExecutorOptions = CinatraA2AConfig & {
    */
   getPinnedSnapshotIdForTask?: (taskId: string) => string | undefined;
   /**
+   * Constructor-injected lookup (cinatra#1392 Gap 2) for the server-resolved
+   * TRUSTED dependent install id for a taskId — the resolved install id the
+   * created run executes AS. Returning a string persists it on the run's
+   * `dependent_install_id` so an edge-bound chain self-propagates; undefined
+   * leaves it null (no dependent identity). Set ONLY from the trusted edge-bound
+   * serving decision, never from client-supplied metadata.
+   */
+  getPinnedDependentInstallIdForTask?: (taskId: string) => string | undefined;
+  /**
    * The InMemoryTaskStore from the A2A server bundle. Required for the
    * background-poll path: execute() closes the eventBus immediately after
    * publishing the initial Task (so send_message returns in < 1s), then a
@@ -370,11 +379,16 @@ export class InProcessAgentExecutor implements AgentExecutor {
   private readonly getPinnedSnapshotIdForTask?: (
     taskId: string,
   ) => string | undefined;
+  private readonly getPinnedDependentInstallIdForTask?: (
+    taskId: string,
+  ) => string | undefined;
 
   constructor(options: InProcessAgentExecutorOptions) {
     this.config = options;
     this.getPinnedVersionForTask = options.getPinnedVersionForTask;
     this.getPinnedSnapshotIdForTask = options.getPinnedSnapshotIdForTask;
+    this.getPinnedDependentInstallIdForTask =
+      options.getPinnedDependentInstallIdForTask;
   }
 
   async execute(
@@ -499,6 +513,11 @@ export class InProcessAgentExecutor implements AgentExecutor {
       // worker enforces the pin fail-closed; a default resolution leaves it
       // undefined (best-effort live-template).
       const pinnedSnapshotId = this.getPinnedSnapshotIdForTask?.(pinnedTaskId);
+      // cinatra#1392 Gap 2 — the TRUSTED dependent install id (the resolved
+      // install this run executes AS). Persisted on `dependent_install_id` so an
+      // edge-bound chain self-propagates. Server-derived only (never client).
+      const pinnedDependentInstallId =
+        this.getPinnedDependentInstallIdForTask?.(pinnedTaskId);
       // Child-run OBO ceiling composition (epic W5). This is the creation site
       // for orchestrator fan-out children. When the A2A caller is itself an
       // agent-run OBO actor, `actorCtx.oboCeiling` is its ceiling chain; the
@@ -515,6 +534,9 @@ export class InProcessAgentExecutor implements AgentExecutor {
           // cinatra#1040 S7 — the exact snapshot id for a REQUIRED pin. Together
           // with packageVersion it forms the fail-closed marker the worker reads.
           versionId: pinnedSnapshotId,
+          // cinatra#1392 Gap 2 — trusted dependent identity for edge-bound
+          // serving of THIS run's own downstream dispatches.
+          dependentInstallId: pinnedDependentInstallId,
           orgId,
           runBy,
           parentOboCeiling: actorCtx.oboCeiling ?? null,

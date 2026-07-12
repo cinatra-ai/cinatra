@@ -101,6 +101,16 @@ export type ActorContext = Principal & {
    * enforcement path consults it yet.
    */
   oboCeiling?: OboCeilingChain;
+  /**
+   * Trusted dependent install id — the `installed_extension` row id the run this
+   * actor was built from executes AS (cinatra#1392 Gap 2). Carried from the run
+   * row by `buildActorContextFromRun` so the A2A dispatch seam resolves
+   * edge-bound serving against a TRUSTED dependent identity (never a
+   * client-supplied one). Undefined for actors not built from a run row that
+   * carries it (service-account / interactive / worker paths). JSON-serializable
+   * (BullMQ-payload-safe).
+   */
+  dependentInstallId?: string;
   policyVersion: string;
 };
 

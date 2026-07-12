@@ -47,9 +47,9 @@ beforeAll(async () => {
     orgRowIds.push(
       await insertObject(client, schema, {
         orgId: serviceAccountOrg,
-        ownerType: "organization",
+        ownerLevel: "organization",
         ownerId: serviceAccountOrg,
-        visibility: "org",
+        visibility: "organization",
       }),
     );
   }

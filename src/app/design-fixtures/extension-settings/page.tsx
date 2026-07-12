@@ -7,9 +7,11 @@
 // pixel-diffed /design-fixtures index. Every state variant §V specifies is
 // rendered: editable Permissions (connector), the deferred-note Permissions
 // (agent/skill), the not-a-registered-vendor Marketplace state, the
-// registered-vendor Publish state, the already-published state, the
-// update-available vs up-to-date Maintenance states, the complementary
-// Archive/Activate pair, and the locked / system disabled-in-place Danger zone.
+// registered-vendor Publish state, the already-published state, the FOUR
+// Maintenance update-row states (update available / up to date / incompatible
+// / non-comparable — the per-state wording lives HERE, never on the card), the
+// complementary Archive/Activate pair, and the locked / system
+// disabled-in-place Danger zone.
 // ---------------------------------------------------------------------------
 
 import type { Metadata } from "next";
@@ -90,10 +92,10 @@ export default function ExtensionSettingsFixturePage() {
           packageName="@acme/crm-sync"
           displayName="CRM Sync"
           vendor="Acme Corp"
-          rawVersion="0.4.2"
-          versionLabel={null}
-          newestVersion="0.5.0"
-          updateAvailable
+          updateRow={{
+            enabled: true,
+            description: "Currently on version 0.4.2 — version 0.5.0 is available.",
+          }}
           archiveDisabled={null}
           activateDisabled="Already active"
           reinstallDisabled={null}
@@ -114,10 +116,11 @@ export default function ExtensionSettingsFixturePage() {
           packageName="@acme/research-assistant"
           displayName="Research Assistant"
           vendor="Cinatra"
-          rawVersion="1.2.0"
-          versionLabel={null}
-          newestVersion="1.2.0"
-          updateAvailable={false}
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 1.2.0 — up to date.",
+            disabledReason: "Already up to date",
+          }}
           archiveDisabled={null}
           activateDisabled="Already active"
           reinstallDisabled={null}
@@ -140,10 +143,10 @@ export default function ExtensionSettingsFixturePage() {
           packageName="@acme/directory-sync"
           displayName="Directory Sync"
           vendor="Acme Corp"
-          rawVersion="0.1.6"
-          versionLabel={null}
-          newestVersion="0.1.7"
-          updateAvailable
+          updateRow={{
+            enabled: true,
+            description: "Currently on version 0.1.6 — version 0.1.7 is available.",
+          }}
           archiveDisabled="Cannot archive — locked & required-in-prod"
           activateDisabled="Already active"
           reinstallDisabled="Cannot uninstall — locked; archive instead"
@@ -164,12 +167,67 @@ export default function ExtensionSettingsFixturePage() {
           packageName="@acme/quarterly-brief"
           displayName="Quarterly Brief"
           vendor="Acme Corp"
-          rawVersion="2.0.1"
-          versionLabel={null}
-          newestVersion="2.0.1"
-          updateAvailable={false}
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 2.0.1 — up to date.",
+            disabledReason: "Already up to date",
+          }}
           archiveDisabled="Already archived"
           activateDisabled={null}
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={<EditablePermissions />}
+          actions={ACTIONS}
+        />
+      </Case>
+
+      {/* Case E — incompatible: a newer version exists but needs a newer
+          Cinatra. The §V Maintenance · Update row spells it out verbatim and
+          the button greys out (the §III card shows no chip, no text — just the
+          greyed spec line). */}
+      <Case id="skill-incompatible" label="Skill · newer version needs a newer Cinatra">
+        <ExtensionSettingsView
+          kind="skill"
+          packageName="@acme/outreach-toolkit"
+          displayName="Outreach Toolkit"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "Newer version needs a newer Cinatra.",
+            disabledReason: "Newer version needs a newer Cinatra",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={
+            <DeferredPermissions note="Manage who can access this skill from the Skills configuration page." />
+          }
+          actions={ACTIONS}
+        />
+      </Case>
+
+      {/* Case F — non-comparable: a github/dev/local source has no registry
+          version to compare. Row wording verbatim, button greyed. */}
+      <Case id="workflow-non-comparable" label="Workflow · no registry version to compare">
+        <ExtensionSettingsView
+          kind="workflow"
+          packageName="@acme/pipeline-workflow"
+          displayName="Pipeline Workflow"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "No registry version to compare.",
+            disabledReason: "No registry version to compare",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
           reinstallDisabled={null}
           forceDeleteDisabled={null}
           isPublic={false}

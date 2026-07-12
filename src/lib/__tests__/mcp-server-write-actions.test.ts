@@ -22,13 +22,30 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // --- mocks ----------------------------------------------------------------
 let sessionUserId = "u1";
 let platformAdmin = false;
-type Row = { id: string; scope: string; userId: string | null; label: string; serverUrl: string };
+type Row = {
+  id: string;
+  scope: string;
+  userId: string | null;
+  label: string;
+  serverUrl: string;
+  // cinatra#1407 defect 1: the stored connection id (apiKeyConfigured is derived
+  // connector-side as `nangoConnectionId != null`).
+  nangoConnectionId?: string | null;
+};
 // The REAL backing store (what the guarded compare-and-write checks against).
 const servers = new Map<string, Row>();
 // The AUTHZ view the FRESH read returns. Defaults to mirroring `servers`; a test
 // can OVERRIDE a single id to a stale row to simulate the TOCTOU race (authz sees
 // the stale row, the guarded write sees the real — flipped — row).
 const authzOverride = new Map<string, Row | null>();
+
+// cinatra#1407 defect 1 — record the connection-service calls the handlers make
+// (plain-data recorders, mirroring the `servers`/`authzOverride` pattern so the
+// vi.mock factory closes over them without a hoisting concern). Never records or
+// asserts anything a real log would leak beyond the key the TEST itself supplies.
+const importedApiKeys: { connectionId: string; apiKey: string; identity: unknown }[] = [];
+const revokedConnections: string[] = [];
+let apiKeyImportShouldFail = false;
 
 class ExternalMcpServerWriteConflictError extends Error {
   constructor(message = "conflict") {
@@ -37,10 +54,20 @@ class ExternalMcpServerWriteConflictError extends Error {
   }
 }
 
-function guardMatches(real: Row | undefined, expected: { scope: string; userId: string | null }): boolean {
+function guardMatches(
+  real: Row | undefined,
+  expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
+): boolean {
   if (!real) return false;
   // NULL-safe equality, mirroring `user_id IS NOT DISTINCT FROM`.
-  return real.scope === expected.scope && real.userId === expected.userId;
+  if (real.scope !== expected.scope || real.userId !== expected.userId) return false;
+  // cinatra#1407: when a nango witness is provided, the row's current connection
+  // must ALSO still match (NULL-safe), mirroring the SQL `nango_connection_id IS
+  // NOT DISTINCT FROM $n` the guarded write/delete adds.
+  if (expected.nangoConnectionId !== undefined) {
+    return (real.nangoConnectionId ?? null) === (expected.nangoConnectionId ?? null);
+  }
+  return true;
 }
 
 vi.mock("@/lib/auth-session", () => ({
@@ -58,7 +85,7 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   },
   updateExternalMcpServerGuarded: (
     input: Row,
-    expected: { scope: string; userId: string | null },
+    expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
   ) => {
     if (!guardMatches(servers.get(input.id), expected)) {
       throw new ExternalMcpServerWriteConflictError("guard miss");
@@ -67,12 +94,28 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   },
   deleteExternalMcpServerGuarded: (
     id: string,
-    expected: { scope: string; userId: string | null },
+    expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
   ) => {
     if (!guardMatches(servers.get(id), expected)) {
       throw new ExternalMcpServerWriteConflictError("guard miss");
     }
     servers.delete(id);
+  },
+  // cinatra#1407 defect 1 — the sanctioned credential path. The import records
+  // its args (so a test can assert the key round-trips + the identity seed) and
+  // can be flipped to fail (fail-closed path). Revoke records the ids it revokes.
+  importExternalMcpApiKeyConnection: async (
+    connectionId: string,
+    apiKey: string,
+    identity: unknown,
+  ) => {
+    if (apiKeyImportShouldFail) {
+      throw new Error("The connection service could not store the API key. Please try again.");
+    }
+    importedApiKeys.push({ connectionId, apiKey, identity });
+  },
+  revokeExternalMcpApiKeyConnection: async (connectionId: string | null | undefined) => {
+    if (connectionId) revokedConnections.push(connectionId);
   },
 }));
 
@@ -84,6 +127,9 @@ beforeEach(() => {
   platformAdmin = false;
   servers.clear();
   authzOverride.clear();
+  importedApiKeys.length = 0;
+  revokedConnections.length = 0;
+  apiKeyImportShouldFail = false;
 });
 
 describe("createServerHandler authz", () => {
@@ -190,6 +236,125 @@ describe("createServerHandler authz", () => {
   });
 });
 
+describe("createServerHandler API key persistence (cinatra#1407 defect 1)", () => {
+  it("persists a supplied API key and sets nangoConnectionId (apiKeyConfigured round-trip)", async () => {
+    const r = await createServerHandler({
+      label: "Keyed",
+      serverUrl: "https://k",
+      scope: "user",
+      apiKey: "sk-secret",
+    });
+    expect(r.banner).toBe("saved");
+    const created = [...servers.values()][0];
+    // apiKeyConfigured is derived connector-side as `nangoConnectionId != null` —
+    // it can now become true (the whole point of the fix).
+    expect(created.nangoConnectionId).toBeTruthy();
+    expect(created.nangoConnectionId).toMatch(/^external-mcp-/);
+    // Exactly one credential import, under the SAME id stored on the row, with the
+    // key routed straight through, plus an OWNER-seeded identity (per-user row).
+    expect(importedApiKeys).toHaveLength(1);
+    expect(importedApiKeys[0].connectionId).toBe(created.nangoConnectionId);
+    expect(importedApiKeys[0].apiKey).toBe("sk-secret");
+    // A user row's credential is personal: owner-seeded, bound to NO org (never
+    // the acting admin's org).
+    expect(importedApiKeys[0].identity).toMatchObject({
+      ownerUserId: "u1",
+      organizationId: null,
+      seed: "owner",
+    });
+    expect(revokedConnections).toHaveLength(0);
+  });
+
+  it("a blank / absent API key leaves nangoConnectionId null and imports nothing", async () => {
+    await createServerHandler({ label: "NoKey", serverUrl: "https://n", scope: "user" });
+    await createServerHandler({ label: "Blank", serverUrl: "https://b", scope: "user", apiKey: "   " });
+    for (const row of servers.values()) expect(row.nangoConnectionId ?? null).toBeNull();
+    expect(importedApiKeys).toHaveLength(0);
+  });
+
+  it("a GLOBAL keyed server is WORKSPACE-seeded (org-shared) for the org-bound mint", async () => {
+    platformAdmin = true;
+    await createServerHandler({ label: "G", serverUrl: "https://g", scope: "global", apiKey: "sk-g" });
+    expect(importedApiKeys).toHaveLength(1);
+    expect(importedApiKeys[0].identity).toMatchObject({ ownerUserId: "u1", seed: "workspace" });
+  });
+
+  it("FAIL-CLOSED: a key that cannot be persisted never lands a row (and rolls back)", async () => {
+    apiKeyImportShouldFail = true;
+    await expect(
+      createServerHandler({ label: "X", serverUrl: "https://x", scope: "user", apiKey: "sk-x" }),
+    ).rejects.toThrow(/could not store the api key|connection service/i);
+    // No row persisted — never advertise a key it cannot mint.
+    expect(servers.size).toBe(0);
+  });
+
+  it("preserves an existing row's stored connection on a KEYLESS edit (no silent key drop)", async () => {
+    servers.set("k1", {
+      id: "k1",
+      scope: "user",
+      userId: "u1",
+      label: "K",
+      serverUrl: "https://k",
+      nangoConnectionId: "external-mcp-old",
+    });
+    const r = await createServerHandler({ id: "k1", label: "K-renamed", serverUrl: "https://k2", scope: "user" });
+    expect(r.banner).toBe("saved");
+    expect(servers.get("k1")?.nangoConnectionId).toBe("external-mcp-old");
+    expect(importedApiKeys).toHaveLength(0);
+    expect(revokedConnections).toHaveLength(0);
+  });
+
+  it("RE-KEYING imports a NEW connection and revokes the PRIOR one", async () => {
+    servers.set("k1", {
+      id: "k1",
+      scope: "user",
+      userId: "u1",
+      label: "K",
+      serverUrl: "https://k",
+      nangoConnectionId: "external-mcp-old",
+    });
+    const r = await createServerHandler({ id: "k1", label: "K", serverUrl: "https://k", scope: "user", apiKey: "sk-new" });
+    expect(r.banner).toBe("saved");
+    const stored = servers.get("k1")!;
+    expect(stored.nangoConnectionId).toMatch(/^external-mcp-/);
+    expect(stored.nangoConnectionId).not.toBe("external-mcp-old");
+    expect(importedApiKeys[0].connectionId).toBe(stored.nangoConnectionId);
+    // Prior credential revoked AFTER the successful re-key (no stale credential).
+    expect(revokedConnections).toContain("external-mcp-old");
+  });
+
+  it("rolls back the just-imported credential when the guarded write CONFLICTS (TOCTOU)", async () => {
+    // Real row is global; authz view says the actor owns a user row → per-op authz
+    // passes, guarded UPDATE conflicts. The imported credential must be revoked and
+    // the real row untouched.
+    servers.set("row1", { id: "row1", scope: "global", userId: null, label: "G", serverUrl: "https://g" });
+    authzOverride.set("row1", { id: "row1", scope: "user", userId: "u1", label: "G", serverUrl: "https://g" });
+    sessionUserId = "u1";
+    platformAdmin = false;
+    await expect(
+      createServerHandler({ id: "row1", label: "hijack", serverUrl: "https://x", scope: "user", apiKey: "sk-x" }),
+    ).rejects.toThrow(/changed while saving/i);
+    expect(importedApiKeys).toHaveLength(1);
+    expect(revokedConnections).toContain(importedApiKeys[0].connectionId);
+    expect(servers.get("row1")?.scope).toBe("global");
+    expect(servers.get("row1")?.label).toBe("G");
+  });
+
+  it("RESURRECTION guard: a keyless edit CONFLICTS when the connection moved under it", async () => {
+    // Real row already re-keyed to a NEW connection; the actor's fresh-authz view
+    // still shows the OLD one. A keyless edit that would write the OLD connection
+    // back must FAIL CLOSED — never resurrect the revoked pointer (which would
+    // leave the row advertising an unmintable key).
+    servers.set("k1", { id: "k1", scope: "user", userId: "u1", label: "K", serverUrl: "https://k", nangoConnectionId: "external-mcp-NEW" });
+    authzOverride.set("k1", { id: "k1", scope: "user", userId: "u1", label: "K", serverUrl: "https://k", nangoConnectionId: "external-mcp-OLD" });
+    await expect(
+      createServerHandler({ id: "k1", label: "renamed", serverUrl: "https://k", scope: "user" }),
+    ).rejects.toThrow(/changed while saving/i);
+    // The row keeps its NEW connection (not resurrected to OLD).
+    expect(servers.get("k1")?.nangoConnectionId).toBe("external-mcp-NEW");
+  });
+});
+
 describe("deleteServerHandler authz", () => {
   it("a non-admin CANNOT delete a GLOBAL server", async () => {
     servers.set("g1", { id: "g1", scope: "global", userId: null, label: "G", serverUrl: "https://g" });
@@ -230,6 +395,37 @@ describe("deleteServerHandler authz", () => {
 
   it("requires an id", async () => {
     await expect(deleteServerHandler({})).rejects.toThrow(/id is required/i);
+  });
+
+  it("REVOKES the row's stored API key connection on delete (cinatra#1407 defect 1)", async () => {
+    servers.set("k1", {
+      id: "k1",
+      scope: "user",
+      userId: "u1",
+      label: "K",
+      serverUrl: "https://k",
+      nangoConnectionId: "external-mcp-x",
+    });
+    const r = await deleteServerHandler({ id: "k1" });
+    expect(r.banner).toBe("deleted");
+    expect(revokedConnections).toContain("external-mcp-x");
+  });
+
+  it("a KEYLESS row delete revokes nothing", async () => {
+    servers.set("k2", { id: "k2", scope: "user", userId: "u1", label: "K2", serverUrl: "https://k2" });
+    await deleteServerHandler({ id: "k2" });
+    expect(revokedConnections).toHaveLength(0);
+  });
+
+  it("delete guard CONFLICTS when the row was re-keyed under the actor (keeps the live connection)", async () => {
+    // Real row re-keyed to NEW; the actor's fresh-authz view still shows OLD. The
+    // witnessed guarded delete must refuse (the row keeps its NEW, live connection)
+    // rather than removing the row and orphaning the new credential.
+    servers.set("k1", { id: "k1", scope: "user", userId: "u1", label: "K", serverUrl: "https://k", nangoConnectionId: "external-mcp-NEW" });
+    authzOverride.set("k1", { id: "k1", scope: "user", userId: "u1", label: "K", serverUrl: "https://k", nangoConnectionId: "external-mcp-OLD" });
+    await expect(deleteServerHandler({ id: "k1" })).rejects.toThrow(/changed while deleting/i);
+    expect(servers.has("k1")).toBe(true);
+    expect(servers.get("k1")?.nangoConnectionId).toBe("external-mcp-NEW");
   });
 
   // --- TOCTOU race (Refs cinatra#658) -------------------------------------

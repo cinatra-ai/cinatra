@@ -387,6 +387,13 @@ function buildInverseStatement(
           ((before as Record<string, unknown>).visibility as
             | string
             | null) ?? null,
+        // Legacy pre-cutover snapshot tuple (cinatra#1428): consumed by the
+        // writer's vocabulary normalizer, never written to the row.
+        ownerType:
+          ((before as Record<string, unknown>).owner_type as
+            | string
+            | null
+            | undefined) ?? null,
         projectId:
           ((before as Record<string, unknown>).project_id as
             | string
@@ -586,6 +593,9 @@ export async function restoreObjectToVersion(
         ownerId: (targetSnapshot.owner_id as string | undefined) ?? null,
         visibility:
           (targetSnapshot.visibility as string | undefined) ?? null,
+        // Legacy pre-cutover snapshot tuple (cinatra#1428) — see above.
+        ownerType:
+          (targetSnapshot.owner_type as string | undefined) ?? null,
         parentId:
           (targetSnapshot.parent_id as string | undefined) ?? null,
         parentType:

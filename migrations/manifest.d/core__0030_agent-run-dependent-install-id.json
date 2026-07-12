@@ -1,0 +1,7 @@
+{
+  "seq": "0030",
+  "file": "core/core__0030_agent-run-dependent-install-id.mjs",
+  "summary": "Add agent_runs.dependent_install_id (text, nullable): the installed_extension row id a run executes AS, carried onto the run's signed lineage (ActorContext) so the A2A dispatch seam reads a TRUSTED dependent install id and the edge-bound serving resolver (resolveEdgeBoundAgentVersion) + refuse-with-evidence guard can pin the resolved non-default snapshot or refuse rather than silently serve the default (cinatra#1040 edge-bound serving; cinatra#1392 Gap 2). dependentPackageName+orgId is ambiguous once a dependent has side-by-side versions, so the EXACT install id is threaded instead. ADDITIVE nullable column (no artifact required per migrations/README.md); shipped anyway per the core__0020/core__0027 precedent to keep the fresh-bootstrap and operator-upgrade paths aligned and give the column a ledgered row. Rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries in src/lib/drizzle-store.ts adds the same ADD COLUMN IF NOT EXISTS this PR) — no-op on a bootstrap-seeded schema, ledger-faked on a fresh install, executed by db migrate on an existing deployment. No index (read as part of the run row, never queried by it). down() drops the column. The no-copy invariant is enforced in code: every agent_runs insert uses an explicit column whitelist, so the dependent id is written only from the trusted dispatch identity, never inherited by a resumed/cloned/child run.",
+  "destructive": false,
+  "tables": ["agent_runs"]
+}

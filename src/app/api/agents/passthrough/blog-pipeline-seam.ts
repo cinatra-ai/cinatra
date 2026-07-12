@@ -82,7 +82,7 @@ export function shapeBlogPipelineObjectsSave(
       );
     }
     return {
-      typeHint: "@cinatra-ai/dynamic:blog-pipeline-selected-idea",
+      typeHint: "@dynamic/types:blog-pipeline-selected-idea",
       rawData: { cinatra_agent_run_id: runId, idea: matched ?? selected },
     };
   }
@@ -94,7 +94,7 @@ export function shapeBlogPipelineObjectsSave(
         : {};
     const str = (v: unknown) => (typeof v === "string" ? v : "");
     return {
-      typeHint: "@cinatra-ai/dynamic:blog-pipeline-draft-projection",
+      typeHint: "@dynamic/types:blog-pipeline-draft-projection",
       rawData: {
         cinatra_agent_run_id: runId,
         postTitle: str(draft.title),

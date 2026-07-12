@@ -1,7 +1,7 @@
 /**
  * Org-scope integration test (real Postgres).
  *
- * Verifies that for visibility='org' rows, an actor in orgA sees ONLY
+ * Verifies that for visibility='organization' rows, an actor in orgA sees ONLY
  * orgA rows, an actor in orgB sees ONLY orgB rows, and an actor with no
  * organizationId sees ZERO org-visible rows. Exercises the full path:
  * `withActorContext` frame -> `getActorContext()` -> `buildOwnershipFilter`
@@ -42,9 +42,9 @@ beforeAll(async () => {
     orgAIds.push(
       await insertObject(client, schema, {
         orgId: orgA,
-        ownerType: "organization",
+        ownerLevel: "organization",
         ownerId: orgA,
-        visibility: "org",
+        visibility: "organization",
       }),
     );
   }
@@ -53,9 +53,9 @@ beforeAll(async () => {
     orgBIds.push(
       await insertObject(client, schema, {
         orgId: orgB,
-        ownerType: "organization",
+        ownerLevel: "organization",
         ownerId: orgB,
-        visibility: "org",
+        visibility: "organization",
       }),
     );
   }
@@ -122,9 +122,9 @@ describe("llm-scope-org (real Postgres)", () => {
       const frag = buildOwnershipFilter(ctx);
       return await selectVisibleIds(client, schema, frag);
     });
-    // Owner clause: owner_id = 'user-X' (no match — owner_id is org-A/org-B).
-    // Org clause: visibility='org' AND organization_id = NULL — never matches.
-    // Workspace clause: visibility='workspace' — none seeded.
+    // User owner-axis clause: owner_level='user' — no match (rows are org-owned).
+    // Org clause: visibility='organization' AND org_id = NULL — never matches.
+    // Public clause: visibility='public' — none seeded.
     const orgLeak = ids.filter((id) => orgAIds.includes(id) || orgBIds.includes(id));
     expect(orgLeak).toEqual([]);
   });

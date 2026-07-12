@@ -26,7 +26,8 @@ import { readServiceAccountByClientId } from "@/lib/service-accounts";
 //     token is rejected here, and an `/api/cli` token is rejected by
 //     `verifyMcpAccessToken`).
 //   * The token MUST carry the EXACT endpoint scope (`cli:status` /
-//     `cli:agent:read` / `cli:agent:write`) — no "any cli:* scope" fallback.
+//     `cli:agent:read` / `cli:agent:write` / `cli:extensions:read` /
+//     `cli:extensions:write`) — no "any cli:* scope" fallback.
 //   * The actor's ROLE is resolved LIVE from the verified subject via
 //     `resolveUserContextForUserId` (never trusted from a token claim). The
 //     route's `minTier` gate (applied by `authorizeCliRequest`) is the real
@@ -50,7 +51,12 @@ const CLI_BASE_PATH = "/api/cli";
 const AUTH_BASE_PATH = "/api/auth";
 
 /** The exact CLI scopes; one is required per endpoint. */
-export type CliScope = "cli:status" | "cli:agent:read" | "cli:agent:write";
+export type CliScope =
+  | "cli:status"
+  | "cli:agent:read"
+  | "cli:agent:write"
+  | "cli:extensions:read"
+  | "cli:extensions:write";
 
 export type CliBearerActor = {
   /** Verified user id (authorization_code) or the service-account `created_by`. */

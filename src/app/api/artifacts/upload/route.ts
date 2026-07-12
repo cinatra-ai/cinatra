@@ -101,11 +101,12 @@ export async function POST(request: Request): Promise<Response> {
       orgId,
       createdBy: session.user?.id ?? null,
       // Ownership is required by the semantic creation contract. Web uploads
-      // use organization ownership with org visibility; note that ownerLevel
-      // uses "organization" while visibility uses "org".
+      // are organization-owned and org-visible — canonical vocabulary only
+      // (cinatra#1428): visibility 'organization', never the retired 'org'
+      // composite.
       ownerLevel: "organization",
       ownerId: orgId,
-      visibility: "org",
+      visibility: "organization",
       declaredMime: request.headers.get("content-type") ?? undefined,
       title: title ?? undefined,
       originKind: "upload",

@@ -7,6 +7,7 @@ import {
   installExtensionWithDependencies,
   sweepStaleInstallBatches,
   gcOrphanedSideBySideCapsules,
+  resolveRowScopedCompensationTarget,
   BatchMemberInstallError,
   type InstallBatchSagaDeps,
 } from "@/lib/extension-install-batch";
@@ -38,6 +39,9 @@ function member(packageName: string, over: Partial<PlannedMember> = {}): Planned
     typeId: "connector",
     edges: [],
     alreadyInstalled: false,
+    // cinatra#1039: the resolved rowOwnership tuple (decision 4). Default to the
+    // platform tuple for the batch harness; overridable per test via `over`.
+    rowOwnership: { ownerLevel: "platform", ownerId: null, organizationId: null },
     action: "install",
     ...over,
   };
@@ -77,6 +81,9 @@ function makeHarness(opts: {
 }) {
   const events: string[] = [];
   const sbsTeardownCapsules: Array<{ packageName: string; capsule: unknown }> = [];
+  // #1042 slice-1/2 captures.
+  const updateExpectedVersions: Array<{ packageName: string; expected: string | undefined }> = [];
+  const rowScopedUninstalls: string[] = [];
   const ledgerRows = new Map<string, InstallBatch>();
   const authorizeSpy = vi.fn(
     opts.authorize ?? (async () => resolution()),
@@ -148,7 +155,9 @@ function makeHarness(opts: {
       }
       events.push(`install:${m.packageName}`);
     }),
-    updateMemberPackage: vi.fn(async (m) => {
+    updateMemberPackage: vi.fn(async (m, _actor, expectedInstalledVersion) => {
+      // #1042 slice-1: record the CAS precondition the batch forwarded.
+      updateExpectedVersions.push({ packageName: m.packageName, expected: expectedInstalledVersion });
       const fail =
         typeof opts.installFail === "function"
           ? opts.installFail(m.packageName)
@@ -161,6 +170,11 @@ function makeHarness(opts: {
     }),
     uninstallMember: vi.fn(async (m) => {
       events.push(`uninstall:${m.packageName}`);
+    }),
+    // #1042 slice-2: row-scoped compensation inverse.
+    uninstallMemberRowScoped: vi.fn(async (m) => {
+      rowScopedUninstalls.push(m.packageName);
+      events.push(`uninstall-row-scoped:${m.packageName}`);
     }),
     // cinatra#1040 S3: version-scoped side-by-side install + teardown seams.
     installMemberSideBySide: vi.fn(async (m) => {
@@ -225,7 +239,15 @@ function makeHarness(opts: {
     },
     now: opts.now ?? (() => Date.now()),
   };
-  return { deps, events, ledgerRows, authorizeSpy, sbsTeardownCapsules };
+  return {
+    deps,
+    events,
+    ledgerRows,
+    authorizeSpy,
+    sbsTeardownCapsules,
+    updateExpectedVersions,
+    rowScopedUninstalls,
+  };
 }
 
 describe("installExtensionWithDependencies — happy path", () => {
@@ -627,6 +649,166 @@ describe("installExtensionWithDependencies — member failure ⇒ abort + invers
     expect(batch.members.find((m) => m.packageName === "@cinatra-ai/dep-a")!.status).toBe(
       "compensation-failed",
     );
+  });
+});
+
+describe("installExtensionWithDependencies — #1042 slice-2 row-scoped compensation", () => {
+  it("with rowScopedCompensation:true, freshly-installed members compensate via the ROW-SCOPED inverse (never the package-global uninstall), inverse order", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Row-scoped, inverse order — and NEVER the package-global uninstall.
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b", "@cinatra-ai/dep-a"]);
+    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([]);
+    expect(h.deps.uninstallMember).not.toHaveBeenCalled();
+    expect(h.deps.uninstallMemberRowScoped).toHaveBeenCalledTimes(2);
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.members.find((m) => m.packageName === "@cinatra-ai/dep-a")!.status).toBe(
+      "compensated",
+    );
+  });
+
+  it("WITHOUT the flag (default), compensation stays package-scoped (uninstallMember) — byte-unchanged", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    expect(h.events).toContain("uninstall:@cinatra-ai/dep-a");
+    expect(h.rowScopedUninstalls).toEqual([]);
+    expect(h.deps.uninstallMemberRowScoped).not.toHaveBeenCalled();
+  });
+
+  it("a PRE-EXISTING member is never row-scoped-compensated either (pre-state discriminator still holds)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+      preInstalled: ["@cinatra-ai/dep-a"],
+    });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Only the freshly-installed dep-b is torn down; the pre-existing dep-a is left.
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+  });
+});
+
+describe("installExtensionWithDependencies — #1042 slice-1 expected-version CAS forwarding", () => {
+  it("forwards expectedRootInstalledVersion to the ROOT update member ONLY (never a dedupe-upward member)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/shared", { action: "update" }), member(ROOT, { action: "update" })],
+      preInstalled: ["@cinatra-ai/shared", ROOT],
+    });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, rootAction: "update", expectedRootInstalledVersion: "0.9.0", actor },
+      h.deps,
+    );
+    expect(h.updateExpectedVersions).toContainEqual({ packageName: ROOT, expected: "0.9.0" });
+    expect(h.updateExpectedVersions).toContainEqual({
+      packageName: "@cinatra-ai/shared",
+      expected: undefined,
+    });
+  });
+
+  it("the depless root update (fast path) forwards the CAS precondition", async () => {
+    const h = makeHarness({ plan: [member(ROOT, { action: "update" })], preInstalled: [ROOT] });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, rootAction: "update", expectedRootInstalledVersion: "0.9.0", actor },
+      h.deps,
+    );
+    expect(h.updateExpectedVersions).toEqual([{ packageName: ROOT, expected: "0.9.0" }]);
+  });
+
+  it("a manual update (no expectedRootInstalledVersion) forwards undefined — byte-unchanged", async () => {
+    const h = makeHarness({ plan: [member(ROOT, { action: "update" })], preInstalled: [ROOT] });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, rootAction: "update", actor },
+      h.deps,
+    );
+    expect(h.updateExpectedVersions).toEqual([{ packageName: ROOT, expected: undefined }]);
+  });
+});
+
+describe("resolveRowScopedCompensationTarget (#1042 slice-2 — precise + fail-closed)", () => {
+  const row = (over: Partial<{
+    id: string;
+    organizationId: string | null;
+    status: string;
+    source: { version?: string } | null;
+  }> = {}) => ({
+    id: "r1",
+    organizationId: null as string | null,
+    status: "active",
+    source: { version: "1.1.0" },
+    ...over,
+  });
+
+  it("resolves the single (scope, version) live row exactly", () => {
+    expect(resolveRowScopedCompensationTarget([row()], null, "1.1.0")).toEqual({
+      rowId: "r1",
+      ambiguous: false,
+      count: 1,
+    });
+  });
+
+  it("returns null (idempotent) when no live row carries the version at the scope", () => {
+    expect(resolveRowScopedCompensationTarget([], null, "1.1.0")).toEqual({
+      rowId: null,
+      ambiguous: false,
+      count: 0,
+    });
+    // a live row of a DIFFERENT version is not the freshly-installed one.
+    expect(
+      resolveRowScopedCompensationTarget([row({ source: { version: "9.9.9" } })], null, "1.1.0"),
+    ).toEqual({ rowId: null, ambiguous: false, count: 0 });
+  });
+
+  it("FAILS CLOSED (ambiguous) on >1 live rows carrying the version at the scope — never picks arbitrarily", () => {
+    const res = resolveRowScopedCompensationTarget(
+      [row({ id: "r1" }), row({ id: "r2" })],
+      null,
+      "1.1.0",
+    );
+    expect(res.ambiguous).toBe(true);
+    expect(res.rowId).toBeNull();
+    expect(res.count).toBe(2);
+  });
+
+  it("ignores other-scope rows and non-live rows", () => {
+    // An org-scoped row of the same package+version is NOT a NULL-org target.
+    expect(
+      resolveRowScopedCompensationTarget(
+        [row({ id: "r1" }), row({ id: "r-org", organizationId: "org-1" })],
+        null,
+        "1.1.0",
+      ),
+    ).toEqual({ rowId: "r1", ambiguous: false, count: 1 });
+    // An archived row carrying the version is not live → not a target.
+    expect(
+      resolveRowScopedCompensationTarget([row({ status: "archived" })], null, "1.1.0"),
+    ).toEqual({ rowId: null, ambiguous: false, count: 0 });
+  });
+
+  it("resolves an org-scope target when the actor scope is an org", () => {
+    expect(
+      resolveRowScopedCompensationTarget(
+        [row({ id: "r-null" }), row({ id: "r-org", organizationId: "org-1" })],
+        "org-1",
+        "1.1.0",
+      ),
+    ).toEqual({ rowId: "r-org", ambiguous: false, count: 1 });
   });
 });
 

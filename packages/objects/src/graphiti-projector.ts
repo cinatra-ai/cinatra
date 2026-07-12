@@ -10,7 +10,13 @@ import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
 // Reads cinatra.graphiti_projection_outbox, calls Graphiti, updates objects
 // row with version-guard SQL. NEVER called synchronously from MCP handlers —
 // invoked exclusively via the GRAPHITI_PROJECTION_REPAIR BullMQ job
-// (background-jobs.ts) or directly by the cinatra graph rebuild CLI.
+// (background-jobs-registry.ts → processProjectionOutbox). There is currently
+// NO other production caller (a former "graph rebuild CLI" mention here was
+// stale). REBUILD NOTE: the equal-version dedup guard below suppresses
+// same-version re-projection BY DESIGN, so any future whole-graph rebuild
+// tooling must reset `graphiti_projected_version` bookkeeping (or ride the
+// epoch-fenced group rebuild planned in #1427) rather than re-driving rows
+// through this path unchanged.
 //
 // Exposed via tsconfig sub-path alias `@cinatra-ai/objects/graphiti-projector`
 // (NOT re-exported from packages/objects/src/index.ts) to avoid the
@@ -37,8 +43,12 @@ type CanonicalRow = {
   run_id: string | null;
   agent_id: string | null;
   graphiti_episode_uuid: string | null;
-  // `source` gates projection to cinatra-originated writes (agent | ui);
-  // `created_at` feeds the adapter's reference_time when routing.
+  // Last version already projected to Graphiti (null = never projected).
+  // Feeds the equal-version dedup guard so a re-enqueued outbox item for an
+  // already-projected version never appends a duplicate episode.
+  graphiti_projected_version: number | null;
+  // `source` gates projection to cinatra-originated writes (agent | ui |
+  // route); `created_at` feeds the adapter's reference_time when routing.
   source: string | null;
   created_at: string;
 };
@@ -120,7 +130,7 @@ function readCanonicalRow(objectId: string, orgId: string | null): CanonicalRow 
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, type, data, org_id, version, run_id, agent_id, graphiti_episode_uuid, source, created_at
+        text: `SELECT id, type, data, org_id, version, run_id, agent_id, graphiti_episode_uuid, graphiti_projected_version, source, created_at
              FROM "${schema}"."objects"
              WHERE id = $1 AND (org_id = $2 OR $2 IS NULL) AND deleted_at IS NULL
              LIMIT 1`,
@@ -208,13 +218,41 @@ export async function projectObjectToGraphiti(input: {
     return { episodeUuid: null, skipped: true };
   }
 
-  // Source gate. Graphiti indexes data ORIGINATED in cinatra (agent
-  // writes through a connector trigger ObjectSyncAdapter.export → Graphiti).
-  // Data PULLED from external systems is NOT projected. Rows with source ∉
-  // {agent, ui} are skipped terminally — the outbox row is marked done (not
-  // failed), no retry. A `null` source predates this gate and is treated as
-  // cinatra-originated to avoid dropping legacy rows.
-  if (row.source !== null && row.source !== "agent" && row.source !== "ui") {
+  // Equal-version dedup guard (BEFORE addEpisode, BEFORE adapter routing).
+  // The stale guard above only rejects entries whose CANONICAL version has
+  // advanced, and markProjected only moves graphiti_projected_version on
+  // strictly newer projections — so a re-enqueued outbox item for a version
+  // that is already projected (equal or older than graphiti_projected_version)
+  // would otherwise call addEpisode again and append a duplicate episode.
+  // Skip terminally instead: the outbox row settles as done (not failed),
+  // no retry, zero new episodes. `!= null` (loose) covers both SQL NULL and
+  // an absent field.
+  if (
+    row.graphiti_projected_version != null &&
+    input.objectVersion <= row.graphiti_projected_version
+  ) {
+    console.log(
+      `[graphiti-projector] skipping already-projected outbox entry for ${input.objectId} ` +
+        `(objectVersion=${input.objectVersion} <= graphiti_projected_version=${row.graphiti_projected_version})`,
+    );
+    return { episodeUuid: null, skipped: true };
+  }
+
+  // Source gate. Graphiti indexes data ORIGINATED in cinatra: agent writes,
+  // UI writes, and authenticated HTTP-route writes (canonical artifact
+  // creation — uploads included — persists source='route'; see the objects
+  // INSERT in src/lib/artifacts/artifact-creation.ts). Data PULLED from
+  // external systems by background sync (worker | scheduler) is NOT
+  // projected. Rows with source ∉ {agent, ui, route} are skipped terminally —
+  // the outbox row is marked done (not failed), no retry. A `null` source
+  // predates this gate and is treated as cinatra-originated to avoid
+  // dropping legacy rows.
+  if (
+    row.source !== null &&
+    row.source !== "agent" &&
+    row.source !== "ui" &&
+    row.source !== "route"
+  ) {
     console.log(
       `[graphiti-projector] skipping non-cinatra-originated row ${row.id} (source=${row.source})`,
     );

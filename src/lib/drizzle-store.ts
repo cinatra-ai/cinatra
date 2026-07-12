@@ -16,6 +16,9 @@ import {
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
+import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
@@ -287,6 +290,64 @@ END $$` },
       PRIMARY KEY (skill_id, user_id)
     )` },
     ...skillCoOwnerConstraintQueries(schemaName),
+
+    // -----------------------------------------------------------------------
+    // Skill lifecycle (cinatra#1361, epic #1358). Custom/personal skills gain
+    // typed lifecycle columns on the EXISTING `skills` table; extension skills
+    // stay DERIVED (NULL lifecycle_state — precedence matrix in
+    // docs/skills-lifecycle.md; no second authority). The ADD CONSTRAINT
+    // statements are written as literal guarded SQL (not via the helper) so the
+    // schema-migration gate SEES the destructive constraint change and demands
+    // the core__0029 artifact. Idempotent + additive-safe on a populated table:
+    // every existing row carries NULLs, which satisfy the CHECK and both FKs.
+    // -----------------------------------------------------------------------
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS lifecycle_state text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS superseded_by text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills" ADD COLUMN IF NOT EXISTS active_revision_id text` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_lifecycle_state_check'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_lifecycle_state_check
+            CHECK (lifecycle_state IS NULL OR lifecycle_state IN ('draft','active','deprecated','archived'));
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_superseded_by_fkey'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_superseded_by_fkey
+            FOREIGN KEY (superseded_by) REFERENCES "${schemaName.replaceAll('"', '""')}"."skills"(id) ON DELETE SET NULL;
+        END IF;
+      END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS skills_superseded_by_idx ON "${schemaName.replaceAll('"', '""')}"."skills" (superseded_by) WHERE superseded_by IS NOT NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS skills_lifecycle_state_idx ON "${schemaName.replaceAll('"', '""')}"."skills" (lifecycle_state) WHERE lifecycle_state IS NOT NULL` },
+    // skill_revisions (append-only immutable history) + skill_lifecycle_audit +
+    // the immutability trigger — the ADDITIVE half, in a sync leaf.
+    ...skillLifecycleSchemaQueries(schemaName),
+    // active_revision_id → skill_revisions composite FK: the active-revision
+    // pointer must reference a revision that BELONGS to this skill
+    // (active_revision_id = skill_revisions.id AND skills.id = skill_revisions.skill_id).
+    // Added AFTER skillLifecycleSchemaQueries so the referenced table exists on
+    // a fresh schema. Gate-visible (an added FK on the existing skills table).
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'skills'
+            AND constraint_name = 'skills_active_revision_fkey'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."skills"
+            ADD CONSTRAINT skills_active_revision_fkey
+            FOREIGN KEY (active_revision_id, id)
+            REFERENCES "${schemaName.replaceAll('"', '""')}"."skill_revisions"(id, skill_id);
+        END IF;
+      END $$;` },
 
     // -----------------------------------------------------------------------
     // Generic extension permissions consolidation.
@@ -1462,6 +1523,13 @@ END $$` },
     // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
+    // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
+    // run executes AS, carried onto the run's signed lineage (ActorContext) so
+    // the A2A dispatch seam resolves edge-bound serving against a TRUSTED
+    // dependent id (never client-supplied). Additive nullable; mirrors schema.ts
+    // + migration core__0030. No index (read as part of the run row, never
+    // queried by it).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
     // Delegated execution-actor snapshot.
     // Captured at instantiate from the requesting user's ActorContext and
     // replayed at run-start re-authz + mid-run authz checks. Nullable JSON
@@ -2724,6 +2792,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
          AND owner_id <> '__platform__')
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
+    ...artifactClaimSchemaQueries(schemaName), // cinatra#1425: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034
     // ---------------------------------------------------------------------------
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
@@ -3999,6 +4068,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
+    ...extensionUpdateReadModelSchemaQueries(schemaName), // cinatra#1041 outcome 3: DDL lives in the pure-strings leaf (file-size-ratchet headroom, the #1317/#1405 pattern)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

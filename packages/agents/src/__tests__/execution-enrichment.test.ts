@@ -123,6 +123,7 @@ function makeRun(
     workflowId: null,
     workflowTaskId: null,
     oboCeiling: null,
+    dependentInstallId: null,
   };
 }
 

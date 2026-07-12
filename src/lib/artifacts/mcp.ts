@@ -108,7 +108,7 @@ const TOOL_META = {
   },
   artifacts_tombstone: {
     description:
-      "Tombstone (soft-delete) an artifact. A version still referenced by a run/message is retained and stays replay-resolvable; bytes are reclaimed only after retention. Never hard-deletes.",
+      "Tombstone (soft-delete) an artifact through the canonical object soft-delete path (emits an object change event + outbox delete projection; returns `changeSetId` for Undo). Requires canonical `object.delete` authorization on the row. A version still referenced by a run/message is retained and stays replay-resolvable; bytes are reclaimed only after retention. Never hard-deletes.",
     inputSchema: idSchema,
   },
   // Semantic identity reads.

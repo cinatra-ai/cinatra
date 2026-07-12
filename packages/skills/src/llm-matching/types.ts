@@ -81,6 +81,50 @@ export type MatchInputHashes = {
   skillInputHash: string;
 };
 
+/**
+ * One drift observation handed from the drift sampler to the maintenance
+ * drift-flag recorder. Pure data (leaf-safe) so `drift-sampler.ts` can import
+ * it without pulling the server-only maintenance module. `isDrift` is
+ * `decisionFlipped || scoreDeltaAboveThreshold`; the input hashes + evaluator
+ * version key the cumulative counter so it resets when the pair's fingerprint
+ * changes (a fingerprint change is a legitimate re-eval, not model drift).
+ */
+export type DriftObservationInput = {
+  agentId: string;
+  skillId: string;
+  isDrift: boolean;
+  kind: "decision-flip" | "score-delta" | null;
+  scoreDelta: number;
+  agentInputHash: string;
+  skillInputHash: string;
+  evaluatorVersion: string;
+};
+
+// ---------------------------------------------------------------------------
+// Matching-maintenance KV shapes (cinatra #1365). Kept leaf-safe here so the
+// host connector-config store (src/lib/database.ts) can type its read/write
+// helpers via the `@cinatra-ai/skills/llm-matching/types` subpath WITHOUT
+// importing the server-only maintenance code.
+// ---------------------------------------------------------------------------
+
+/** One orphan-GC tombstone: when a pair was first observed absent. */
+export type OrphanTombstone = { agentId: string; skillId: string; firstAbsentAt: string };
+export type OrphanTombstoneMap = Record<string, OrphanTombstone>;
+
+/** One drift-flag record: cumulative drift count on the current fingerprint. */
+export type DriftFlagRecord = {
+  agentId: string;
+  skillId: string;
+  count: number;
+  lastDriftAt: string;
+  lastKind: "decision-flip" | "score-delta" | null;
+  agentInputHash: string;
+  skillInputHash: string;
+  evaluatorVersion: string;
+  flagged: boolean;
+};
+export type DriftFlagMap = Record<string, DriftFlagRecord>;
+
 // ---------------------------------------------------------------------------
 // CatalogProvider seam
 // ---------------------------------------------------------------------------
