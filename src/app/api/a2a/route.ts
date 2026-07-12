@@ -133,7 +133,15 @@ export async function POST(req: Request): Promise<Response> {
         // run.orgId is `string` because the column is NOT NULL; the narrow
         // RunForActorContext projection mirrors that contract.
         return run
-          ? { id: run.id, runBy: run.runBy, orgId: run.orgId }
+          ? {
+              id: run.id,
+              runBy: run.runBy,
+              orgId: run.orgId,
+              // Carry the trusted dependent install id onto the run-row lineage
+              // so the A2A dispatch seam can resolve edge-bound serving
+              // (cinatra#1392 Gap 2). NULL on runs with no dependent identity.
+              dependentInstallId: run.dependentInstallId,
+            }
           : null;
       },
       buildActorContextFromRun,

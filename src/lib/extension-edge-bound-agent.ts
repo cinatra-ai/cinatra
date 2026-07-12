@@ -38,6 +38,14 @@ export type EdgeBoundAgentResolution =
       /** The resolved install row's version (may be the default). */
       version: string | null;
       isDefault: boolean;
+      /**
+       * The EXACT `installed_extension` row id the dependent's edge resolved to
+       * (cinatra#1392 Gap 2). ALWAYS present on a resolved result — the dispatch
+       * seam stamps it onto the target run's `dependent_install_id` so an
+       * edge-bound chain self-propagates. A resolved result that somehow lacks it
+       * is treated as a refusal by the dispatch binding (never a silent default).
+       */
+      resolvedInstallId: string;
       /** The immutable `agent_template_versions` snapshot id when a non-default pin is servable. */
       snapshotId?: string;
     };
@@ -123,7 +131,8 @@ export async function resolveEdgeBoundAgentVersion(
 
   const isDefault = resolvedRow.isDefault !== false;
   const version = resolvedRow.version ?? null;
-  if (isDefault) return { resolved: true, version, isDefault: true };
+  if (isDefault)
+    return { resolved: true, version, isDefault: true, resolvedInstallId: resolvedRow.id };
 
   // NON-DEFAULT resolved edge → require a published snapshot, else refuse.
   const readTemplate =
@@ -145,5 +154,11 @@ export async function resolveEdgeBoundAgentVersion(
       resolvedVersion: version,
     });
   }
-  return { resolved: true, version, isDefault: false, snapshotId: snapshot.id };
+  return {
+    resolved: true,
+    version,
+    isDefault: false,
+    resolvedInstallId: resolvedRow.id,
+    snapshotId: snapshot.id,
+  };
 }
