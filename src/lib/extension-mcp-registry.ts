@@ -140,6 +140,27 @@ export function markEffectiveExtensionMcpTools(tools: ReadonlyArray<{ name: stri
   for (const t of tools) m.set(t.name, t.packageName);
 }
 
+/**
+ * Remove effective entries for extension tools a server build SKIPPED because
+ * their name is claimed by a host/platform registration (codex S8 round-0 #4:
+ * with merge semantics a stale entry would otherwise outlive the collision and
+ * let the boundary synthesize authorization for the HOST handler now serving
+ * that name — the exact escalation the effective set exists to prevent).
+ * Collisions are caller-INDEPENDENT (the platform/reserved name set does not
+ * vary per caller), so deleting here cannot erase a concurrent build's
+ * legitimately-registered entry. Scoped by package: the entry is dropped only
+ * while it still attributes the name to the SKIPPED tool's package.
+ */
+export function unmarkEffectiveExtensionMcpToolCollisions(
+  skipped: ReadonlyArray<{ name: string; packageName: string }>,
+): void {
+  const m = _effHolder[EFFECTIVE_KEY];
+  if (!m) return;
+  for (const t of skipped) {
+    if (m.get(t.name) === t.packageName) m.delete(t.name);
+  }
+}
+
 /** The owning package if `name` is an EFFECTIVELY-registered extension tool, else undefined. */
 export function getEffectiveExtensionMcpTool(name: string): { packageName: string } | undefined {
   const pkg = _effHolder[EFFECTIVE_KEY]?.get(name);

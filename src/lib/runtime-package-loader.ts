@@ -125,6 +125,30 @@ async function readLiveDependencyEdgesByPackage(): Promise<
  * activation attempt; never throws (a missing `/data` volume / empty store / no
  * trusted records is a clean no-op).
  */
+/**
+ * Recompute + publish the PRE-RESOLVED EDGE MAPS from ALL live canonical rows
+ * (cinatra#1392 S8 — the SYNC capability substitution's data). Best-effort by
+ * design: a failed read keeps the PREVIOUS maps (a stale pin can only select a
+ * still-retained version or fail closed at the version-keyed lookup — never a
+ * silent default serve), and boot must not gain a hard DB dependency from the
+ * maps alone (same posture as the dependency-order edge read).
+ */
+async function refreshPreResolvedEdgeMaps(): Promise<void> {
+  try {
+    const [{ listInstalledExtensions }, edges] = await Promise.all([
+      import("@cinatra-ai/extensions/canonical-store"),
+      import("@/lib/extension-pre-resolved-edges"),
+    ]);
+    const rows = await listInstalledExtensions({});
+    edges.publishPreResolvedEdgeMaps(edges.computePreResolvedEdgeMaps(rows));
+  } catch (err) {
+    console.warn(
+      `[runtime-package-loader] pre-resolved edge-map refresh failed (keeping previous maps): ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+}
+
 export async function loadRuntimePackageExtensions(
   storeRoot?: string,
   hostDeps: RuntimeLoaderHostDeps = {},
@@ -134,7 +158,13 @@ export async function loadRuntimePackageExtensions(
     storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const resolveInstallAnchor = hostDeps.resolveInstallAnchor ?? denyAllResolver;
   const discovered = await discoverStoreRecordsV2(dataRoot, realStoreFs);
-  if (discovered.length === 0) return [];
+  if (discovered.length === 0) {
+    // Even a no-op pass refreshes the pre-resolved edge maps (codex S8
+    // round-0 #2 — an early return must not strand stale pins after installs
+    // were purged out from under a previously-populated map).
+    await refreshPreResolvedEdgeMaps();
+    return [];
+  }
 
   // Targeted activation: when a single package is requested, narrow the scan to
   // just that record. Empty (the requested package isn't materialized in the
@@ -142,7 +172,10 @@ export async function loadRuntimePackageExtensions(
   const candidates = hostDeps.onlyPackage
     ? discovered.filter((r) => r.packageName === hostDeps.onlyPackage)
     : discovered;
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) {
+    await refreshPreResolvedEdgeMaps();
+    return [];
+  }
 
   // PER-PACKAGE ANCHOR NARROWING (cinatra#792). Multi-digest discovery is
   // NORMAL once retention lands (#796): the store may legitimately hold the
@@ -467,6 +500,12 @@ export async function loadRuntimePackageExtensions(
   // a structural supertype of the store record, hence the `object` key type).
   const pendingSinks = new Map<object, VersionKeyedRegistrationSink>();
 
+  // PUBLISH the pre-resolved edge maps BEFORE activation (codex S8 round-0
+  // #2): a dependent's `register(ctx)` may resolve capabilities during THIS
+  // pass and must already see its pins (the post-activation refresh below
+  // re-publishes for anything the pass changed).
+  await refreshPreResolvedEdgeMaps();
+
   const activationResults = await runRuntimePackageActivation(dataRoot, {
     fs: realStoreFs,
     records: orderedActivatable,
@@ -524,6 +563,13 @@ export async function loadRuntimePackageExtensions(
     // edge-bound consume seams (callPrimitive identity + capability
     // substitution).
     makeContext: (packageName, grantedPorts, record) => {
+      // The EXACT canonical install-row id for THIS (name, version) identity —
+      // resolved from the trusted anchor (cinatra#1392 S8, codex round-0 #1:
+      // the edge-bound consume seams must bind this row's edges, never a
+      // same-shape sibling's). Absent on legacy anchors → identity-less
+      // consult semantics (composite alias / package-level derivation).
+      const installId =
+        anchorByIdentity.get(identityKey(packageName, record.version))?.installId ?? null;
       if (record.isDefault === false) {
         let sink: VersionKeyedRegistrationSink | undefined;
         if (record.version) {
@@ -535,14 +581,14 @@ export async function loadRuntimePackageExtensions(
           grantedPorts,
           { envOverrides: record.envOverrides },
           sink,
-          { version: record.version ?? null, isDefault: false },
+          { installId, version: record.version ?? null, isDefault: false },
         );
       }
       return createExtensionHostContext(
         packageName,
         grantedPorts,
         { envOverrides: record.envOverrides },
-        { version: record.version ?? null, isDefault: true },
+        { installId, version: record.version ?? null, isDefault: true },
       );
     },
     // Per-record settle (cinatra#1392 Gap 1 / S8): commit a fully-successful
@@ -567,6 +613,14 @@ export async function loadRuntimePackageExtensions(
         trustedContentHash: anchor.contentHash,
       });
     },
+  }).finally(() => {
+    // ABORT any sink the driver never settled (a defensive throw mid-pass):
+    // onRegisterSettled removes every settled sink from pendingSinks, so the
+    // leftovers are exactly the never-settled attempts — their retained-but-
+    // uncommitted entries must not linger (codex S8 round-0 #5). Settled
+    // attempts are untouched (abort is ownership-guarded anyway).
+    for (const sink of pendingSinks.values()) sink.abort();
+    pendingSinks.clear();
   });
 
   // engineering#534 S1 — publish the SUCCESSFULLY-ACTIVATED `trusted-signed`
@@ -599,29 +653,12 @@ export async function loadRuntimePackageExtensions(
     }
   }
 
-  // PRE-RESOLVED EDGE MAPS (cinatra#1392 S8) — the SYNC consume side's data.
-  // Every loader pass (boot, targeted hot-activation, default re-election)
-  // recomputes the per-record versioned-pin maps from ALL live canonical rows
-  // (one batched read) and publishes them atomically, so the host ctx's
-  // synchronous `resolveProviders` substitution tracks planner re-resolutions
-  // at the same cadence activation does. Best-effort by design: a failed read
-  // keeps the PREVIOUS maps (a stale pin can only select a still-retained
-  // version or fail closed at the version-keyed lookup — never a silent
-  // default serve), and boot must not gain a hard DB dependency from the maps
-  // alone (same posture as the dependency-order edge read above).
-  try {
-    const [{ listInstalledExtensions }, edges] = await Promise.all([
-      import("@cinatra-ai/extensions/canonical-store"),
-      import("@/lib/extension-pre-resolved-edges"),
-    ]);
-    const rows = await listInstalledExtensions({});
-    edges.publishPreResolvedEdgeMaps(edges.computePreResolvedEdgeMaps(rows));
-  } catch (err) {
-    console.warn(
-      `[runtime-package-loader] pre-resolved edge-map refresh failed (keeping previous maps): ` +
-        (err instanceof Error ? err.message : String(err)),
-    );
-  }
+  // POST-activation refresh of the pre-resolved edge maps (cinatra#1392 S8):
+  // the pre-activation publish above fed this pass's registers; this refresh
+  // picks up anything the pass itself changed. Boot, targeted hot-activation
+  // and default re-election all flow through here, so the SYNC substitution
+  // tracks planner re-resolutions at the same cadence activation does.
+  await refreshPreResolvedEdgeMaps();
 
   return activationResults;
 }

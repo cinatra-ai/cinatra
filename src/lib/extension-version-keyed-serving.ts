@@ -153,13 +153,19 @@ export type VersionKeyedRegistrationSink = {
   /** Discard this attempt's entry — iff it still owns the slot (never a newer attempt's). */
   abort(): void;
   /**
-   * Whether this attempt has SETTLED (commit or abort was called). The host ctx
-   * factory gates the non-default `callPrimitive` on it (cinatra#1392 S8): a
-   * `register(ctx)` must stay dispatch-free (side-effect-free contract), but a
-   * RETAINED handler served edge-bound after a successful register may invoke
-   * host primitives.
+   * Whether this attempt has SETTLED (commit or abort was called). Diagnostic
+   * companion of `isCommitted` below.
    */
   isSettled(): boolean;
+  /**
+   * Whether this attempt COMMITTED (register fully succeeded). The host ctx
+   * factory gates the non-default `callPrimitive` on it (cinatra#1392 S8): a
+   * `register(ctx)` must stay dispatch-free (side-effect-free contract), and a
+   * FAILED/aborted registration's leaked callbacks must never dispatch either —
+   * only a RETAINED handler served edge-bound after a successful register may
+   * invoke host primitives (codex S8 round-0 #5).
+   */
+  isCommitted(): boolean;
 };
 
 /**
@@ -189,6 +195,7 @@ export function beginVersionKeyedRegistration(
   // orphaned) so a superseded attempt never mutates the live one.
   const owns = () => registry.get(key) === entry;
   let settled = false;
+  let committed = false;
 
   return {
     retainMcpTool: (tool) => {
@@ -240,6 +247,7 @@ export function beginVersionKeyedRegistration(
     },
     commit: () => {
       settled = true;
+      committed = true;
       if (owns()) entry.servable = true;
     },
     abort: () => {
@@ -247,6 +255,7 @@ export function beginVersionKeyedRegistration(
       if (owns()) registry.delete(key);
     },
     isSettled: () => settled,
+    isCommitted: () => committed,
   };
 }
 

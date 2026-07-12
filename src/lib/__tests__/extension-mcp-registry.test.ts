@@ -72,3 +72,34 @@ describe("extension MCP registry", () => {
     expect(removeExtensionMcpToolsForPackage("@cinatra-ai/never")).toEqual([]);
   });
 });
+
+// cinatra#1392 S8 round-1 (codex #4) — merge semantics + collision unmark.
+describe("effective set — merge + collision unmark (S8)", () => {
+  it("markEffective UPSERTS (concurrent per-caller builds never erase each other)", async () => {
+    const { markEffectiveExtensionMcpTools, getEffectiveExtensionMcpTool, _resetExtensionMcpForTests } =
+      await import("@/lib/extension-mcp-registry");
+    _resetExtensionMcpForTests();
+    markEffectiveExtensionMcpTools([{ name: "a_tool", packageName: "@x/a" }]);
+    markEffectiveExtensionMcpTools([{ name: "b_tool", packageName: "@x/b" }]); // a second build
+    expect(getEffectiveExtensionMcpTool("a_tool")).toEqual({ packageName: "@x/a" });
+    expect(getEffectiveExtensionMcpTool("b_tool")).toEqual({ packageName: "@x/b" });
+  });
+
+  it("unmark removes a collision-skipped name ONLY while it still attributes to that package", async () => {
+    const {
+      markEffectiveExtensionMcpTools,
+      unmarkEffectiveExtensionMcpToolCollisions,
+      getEffectiveExtensionMcpTool,
+      _resetExtensionMcpForTests,
+    } = await import("@/lib/extension-mcp-registry");
+    _resetExtensionMcpForTests();
+    markEffectiveExtensionMcpTools([{ name: "x_tool", packageName: "@x/old" }]);
+    // A later build skips @x/old's x_tool (a host name now claims it) → entry drops.
+    unmarkEffectiveExtensionMcpToolCollisions([{ name: "x_tool", packageName: "@x/old" }]);
+    expect(getEffectiveExtensionMcpTool("x_tool")).toBeUndefined();
+    // But an entry now owned by ANOTHER package survives a stale skip report.
+    markEffectiveExtensionMcpTools([{ name: "x_tool", packageName: "@x/new" }]);
+    unmarkEffectiveExtensionMcpToolCollisions([{ name: "x_tool", packageName: "@x/old" }]);
+    expect(getEffectiveExtensionMcpTool("x_tool")).toEqual({ packageName: "@x/new" });
+  });
+});

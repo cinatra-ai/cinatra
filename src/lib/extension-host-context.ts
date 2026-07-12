@@ -260,6 +260,12 @@ function denyReservedSystemCapabilityRegister(packageName: string, capability: s
 // ---------------------------------------------------------------------------
 
 export type ExtensionRecordIdentityInput = {
+  /**
+   * The EXACT canonical install-row id (from the trusted anchor). Binds the
+   * edge-bound consume seams to THIS row — never a same-shape sibling's
+   * (cinatra#1392 S8 codex round-0 #1). Omit for legacy/dev ctxs.
+   */
+  installId?: string | null;
   /** The record's version; omit/null for a legacy/unversioned record. */
   version?: string | null;
   /** Whether the record is the DEFAULT version of its package (default: true). */
@@ -267,10 +273,12 @@ export type ExtensionRecordIdentityInput = {
 };
 
 function effectiveIdentity(identity: ExtensionRecordIdentityInput | undefined): {
+  installId: string | null;
   version: string | null;
   isDefault: boolean;
 } {
   return {
+    installId: identity?.installId ?? null,
     version: identity?.version ?? null,
     isDefault: identity?.isDefault !== false,
   };
@@ -1105,11 +1113,16 @@ export function createNonDefaultVersionHostContext(
         // stays refused, preserving the register-only side-effect-free
         // contract this context exists for.
         callPrimitive: (primitiveName, input) => {
-          if (!sink.isSettled()) {
+          // Gate on COMMITTED, not merely settled (codex S8 round-0 #5): a
+          // FAILED/aborted registration's leaked callbacks must never
+          // dispatch — only handlers of a successfully-registered attempt are
+          // ever served, and only they may invoke primitives.
+          if (!sink.isCommitted()) {
             throw new Error(
               `[non-default-version] ${packageName}: ctx.mcp.callPrimitive is not available ` +
-                `during register(ctx) — a non-default sibling's register must stay dispatch-free. ` +
-                `Retained handlers may call primitives once activation has settled.`,
+                `during register(ctx) or after a failed registration — a non-default sibling's ` +
+                `register must stay dispatch-free, and only a successfully-committed activation's ` +
+                `retained handlers may call primitives.`,
             );
           }
           return makeCallPrimitive(packageName, identity)(primitiveName, input);

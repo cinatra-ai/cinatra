@@ -92,13 +92,13 @@ describe("ctx.mcp.callPrimitive — the extension-ctx identity frame (S8)", () =
   it("the DEFAULT ctx runs the invoker under its (packageName, default) identity", async () => {
     const ctx = createExtensionHostContext(CALLER, ["mcp"], {}, { version: "1.0.0", isDefault: true });
     await expect(ctx.mcp.callPrimitive("objects_list", {})).resolves.toEqual({ called: "objects_list" });
-    expect(seenIdentities).toEqual([{ packageName: CALLER, version: "1.0.0", isDefault: true }]);
+    expect(seenIdentities).toEqual([{ packageName: CALLER, installId: null, version: "1.0.0", isDefault: true }]);
   });
 
   it("an identity-less legacy ctx carries the default identity (compat)", async () => {
     const ctx = createExtensionHostContext(CALLER, ["mcp"]);
     await ctx.mcp.callPrimitive("objects_list", {});
-    expect(seenIdentities).toEqual([{ packageName: CALLER, version: null, isDefault: true }]);
+    expect(seenIdentities).toEqual([{ packageName: CALLER, installId: null, version: null, isDefault: true }]);
   });
 });
 
@@ -113,7 +113,7 @@ describe("ctx.mcp.callPrimitive on the NON-DEFAULT ctx (S8)", () => {
     expect(seenIdentities).toEqual([]);
   });
 
-  it("dispatches under the NON-DEFAULT identity once the sink settled", async () => {
+  it("dispatches under the NON-DEFAULT identity once the sink COMMITTED", async () => {
     const sink = beginVersionKeyedRegistration(CALLER, V);
     const ctx = createNonDefaultVersionHostContext(CALLER, ["mcp"], {}, sink, {
       version: V,
@@ -121,7 +121,7 @@ describe("ctx.mcp.callPrimitive on the NON-DEFAULT ctx (S8)", () => {
     });
     sink.commit();
     await expect(ctx.mcp.callPrimitive("objects_list", {})).resolves.toEqual({ called: "objects_list" });
-    expect(seenIdentities).toEqual([{ packageName: CALLER, version: V, isDefault: false }]);
+    expect(seenIdentities).toEqual([{ packageName: CALLER, installId: null, version: V, isDefault: false }]);
   });
 
   it("WITHOUT a sink the probe behavior is preserved (callPrimitive rejects)", async () => {
@@ -138,7 +138,7 @@ describe("ctx.capabilities.resolveProviders — SYNC edge-bound substitution (S8
     registerCapabilityProvider(CAP, { packageName: TARGET, impl: { tag: "default" } });
     const ctx = createExtensionHostContext(CALLER, ["capabilities"]);
     const out = ctx.capabilities.resolveProviders(CAP);
-    expect(out.map((p) => (p.impl as { tag: string }).tag)).toEqual(["default"]);
+    expect(out.map((p) => (p.impl as unknown as { tag: string }).tag)).toEqual(["default"]);
   });
 
   it("a versioned pin substitutes the RETAINED provider for the default's entry", () => {
@@ -149,7 +149,7 @@ describe("ctx.capabilities.resolveProviders — SYNC edge-bound substitution (S8
     sink.commit();
     const ctx = createExtensionHostContext(CALLER, ["capabilities"], {}, { version: null, isDefault: true });
     const out = ctx.capabilities.resolveProviders(CAP);
-    expect(out.map((p) => (p.impl as { tag: string }).tag)).toEqual(["versioned"]);
+    expect(out.map((p) => (p.impl as unknown as { tag: string }).tag)).toEqual(["versioned"]);
   });
 
   it("a pin whose version is not servable THROWS (fail-closed, never the default provider)", () => {
@@ -192,11 +192,24 @@ describe("ctx.capabilities.resolveProviders — SYNC edge-bound substitution (S8
       isDefault: false,
     });
     const out = ctx.capabilities.resolveProviders(CAP);
-    expect(out.map((p) => (p.impl as { tag: string }).tag)).toEqual(["versioned"]);
+    expect(out.map((p) => (p.impl as unknown as { tag: string }).tag)).toEqual(["versioned"]);
     // The DEFAULT identity of the same package resolves the global provider.
     const defCtx = createExtensionHostContext(CALLER, ["capabilities"]);
-    expect(defCtx.capabilities.resolveProviders(CAP).map((p) => (p.impl as { tag: string }).tag)).toEqual([
+    expect(defCtx.capabilities.resolveProviders(CAP).map((p) => (p.impl as unknown as { tag: string }).tag)).toEqual([
       "default",
     ]);
+  });
+});
+
+describe("ctx.mcp.callPrimitive on an ABORTED non-default registration (codex round-0 #5)", () => {
+  it("refuses after abort — a failed registration's leaked callbacks never dispatch", () => {
+    const sink = beginVersionKeyedRegistration(CALLER, V);
+    const ctx = createNonDefaultVersionHostContext(CALLER, ["mcp"], {}, sink, {
+      version: V,
+      isDefault: false,
+    });
+    sink.abort();
+    expect(() => ctx.mcp.callPrimitive("objects_list", {})).toThrow(/failed registration|not available/);
+    expect(seenIdentities).toEqual([]);
   });
 });

@@ -133,6 +133,16 @@ export type MaterializedPackage = {
  * not the in-store sidecar — is the root of trust for boot-time verification.
  */
 export type InstallTrustAnchor = {
+  /**
+   * The EXACT canonical `installed_extension` row id this anchor was resolved
+   * from (cinatra#1392 S8). Threaded by the loader into the host-ctx record
+   * identity so the edge-bound consume seams (ctx.mcp.callPrimitive identity,
+   * sync capability substitution) bind THIS row's dependency edges — never a
+   * same-shape sibling's (the canonical identity includes org/owner axes a
+   * bare (package, version) key cannot express). Optional: legacy resolvers /
+   * pure unit fixtures may omit it (identity-less consult semantics apply).
+   */
+  installId?: string | null;
   /** Authoritative tarball SRI (recorded at install). */
   integrity: string;
   /** Authoritative content hash of the materialized dir (recorded at install). */

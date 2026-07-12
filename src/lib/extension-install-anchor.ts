@@ -17,6 +17,13 @@ import type { InstallTrustAnchor } from "@/lib/extension-package-store";
 
 /** A minimal view of the canonical install row the resolver needs. */
 export type InstallAnchorRow = {
+  /**
+   * The canonical row's id (cinatra#1392 S8) — surfaced on the resolved anchor
+   * (`installId`) so the loader can thread the EXACT install identity into the
+   * host ctx's edge-bound consume seams. Optional so pure unit tests / legacy
+   * row views omit it (identity-less semantics).
+   */
+  id?: string;
   status: string;
   /**
    * The canonical row's `is_default` (cinatra#1040 S4) — surfaced on the resolved
@@ -238,6 +245,8 @@ export async function resolveInstallAnchor(
   // bootstrap case) means zero approved ports, not "untrusted to import".
   const portsApproved = grantForScope?.status === "approved";
   return {
+    // cinatra#1392 S8: the exact canonical row id (absent on legacy row views).
+    installId: row.id ?? null,
     integrity,
     contentHash,
     registryUrl: row.source.registryUrl ?? null,
@@ -323,7 +332,7 @@ export async function makeDefaultInstallAnchorResolver(
         // this still resolves exactly that one row.
         const active = pickSingleActiveRow(rows, oid);
         return active
-          ? { status: active.status, kind: active.kind, source: active.source as InstallAnchorRow["source"] }
+          ? { id: active.id, status: active.status, kind: active.kind, source: active.source as InstallAnchorRow["source"] }
           : null;
       },
       readGrant: async (pkg, oid) => {
@@ -400,6 +409,7 @@ export async function makeDefaultInstallAnchorsResolver(
       const anchor = await resolveInstallAnchor(packageName, {
         orgId: derivedOrgId,
         readActiveInstall: async () => ({
+          id: versionRow.id,
           status: versionRow.status,
           kind: versionRow.kind,
           isDefault: versionRow.isDefault,

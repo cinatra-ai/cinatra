@@ -9,51 +9,78 @@ import "server-only";
 // realized by the LIFECYCLE, not a resolve-time DB read). The edge-bound
 // resolution the async surfaces use (`resolveEdgeBoundExtensionVersion`) reads
 // canonical rows per dispatch, so it cannot back a sync port. Instead the
-// runtime loader PRE-RESOLVES, at activation time, each live install's
-// dependency edges into a map `targetPackageName → { version,
-// resolvedInstallId }` of its NON-DEFAULT (versioned) pins, and publishes the
-// maps here — keyed by the SAME (packageName, version|default) identity the
-// loader keys records on. At request time `resolveProviders` consults its own
-// record's map synchronously and substitutes a pinned target package's
-// version-keyed retained provider for the default's global registration.
+// runtime loader PRE-RESOLVES each live install's dependency edges into a map
+// `targetPackageName → pin` and publishes the maps here; at request time
+// `resolveProviders` consults its own record's map synchronously and
+// substitutes a pinned target package's version-keyed retained provider for
+// the default's global registration.
 //
-// FRESHNESS MODEL (deliberate, documented): the maps refresh on EVERY loader
-// pass — boot, targeted hot-activation (`onlyPackage`), and default
-// re-election all end in `loadRuntimePackageExtensions`, and each pass
-// recomputes the maps from ALL live canonical rows (one batched read), not
-// just the records it activates. Between passes the maps can lag a planner
-// edge re-resolution; the ASYNC surfaces stay DB-fresh, and the sanctioned GC
-// never reaps a version with live resolved dependents, so a lagging map can
-// only pin a STILL-RETAINED version (or fail closed at the version-keyed
-// lookup — never silently serve the default).
+// MAP KEYS (codex S8 round-0 #1). The canonical install-row identity includes
+// the organization/owner axes, so a bare `(packageName, version|default)` key
+// can collide across rows. Each row's map is therefore published under its
+// EXACT row id (`id:<installId>`; the loader threads the id from the trusted
+// anchor into the ctx identity), and ADDITIONALLY under the composite
+// `(packageName, version|default)` key ONLY while that composite is
+// UNAMBIGUOUS — a collision DROPS the composite entries entirely (a legacy
+// identity-less consult then finds no pins and serves the global registration;
+// it can never be served ANOTHER row's pins). Identity-less ctxs exist only
+// for the dev static bundle and lifecycle-special ctxs, whose packages the
+// platform-global loader refuses to activate ambiguously in the first place.
+//
+// FRESHNESS MODEL (deliberate, documented): the maps are published from the
+// live canonical rows BEFORE each loader activation pass (so a dependent's
+// `register(ctx)` already resolves under its pins — codex S8 round-0 #2) and
+// REFRESHED after it; boot, targeted hot-activation (`onlyPackage`) and
+// default re-election all end in `loadRuntimePackageExtensions`. Between
+// passes the maps can lag a planner edge re-resolution; the ASYNC surfaces
+// stay DB-fresh, and the sanctioned GC never reaps a version with live
+// resolved dependents, so a lagging map can only pin a STILL-RETAINED version
+// (or fail closed at the version-keyed lookup — never silently serve the
+// default).
 //
 // FAIL-CLOSED MATRIX for the sync substitution (mirrors the S7 dispatch
-// matrix, adapted to a capability SET query):
-//   - pinned target's version-keyed lookup SERVES        → substitute the
-//     retained provider(s) for the target's global entry (or ADD them when the
-//     default registered none — the union);
-//   - lookup refuses NO_SUCH_HANDLER                     → the pinned version
-//     genuinely registered no provider for this capability: the target
-//     contributes NOTHING (the default's provider is DROPPED — serving it
-//     would violate the pin);
-//   - lookup refuses UNKNOWN_VERSION / NOT_SERVABLE /
-//     UNPINNED, or the lookup surface is ABSENT           → THROW with evidence
-//     (torn retention: the pin exists but the pinned version is not servable —
-//     never fall through to the default).
-// A package with no published map, or a map with no pin for the target, is the
+// matrix, adapted to a capability SET query; codex S8 round-0 #2 made the
+// unsafe edge states EXPLICIT refuse pins instead of silent omissions):
+//   - edge resolved to a LIVE NON-DEFAULT versioned row               → a
+//     `versioned` pin (substitute / union at consult time);
+//   - edge resolved to the DEFAULT row                                → NO pin
+//     (the global registration IS that version — correct serve);
+//   - edge resolved to a MISSING / NOT-LIVE / versionless-non-default
+//     row                                                             → a
+//     `refuse` pin: ANY capability consult by that dependent THROWS with
+//     evidence (never a silent downgrade to the default);
+//   - pinned target's version-keyed lookup SERVES                     →
+//     substitute the retained provider(s) for the target's global entry (or
+//     ADD them when the default registered none — the union);
+//   - lookup refuses NO_SUCH_HANDLER                                  → the
+//     pinned version genuinely registered no provider for this capability: the
+//     target contributes NOTHING (the default's provider is DROPPED — serving
+//     it would violate the pin);
+//   - lookup refuses UNKNOWN_VERSION / NOT_SERVABLE / UNPINNED, or the lookup
+//     surface is ABSENT                                               → THROW
+//     with evidence (torn retention — never fall through to the default).
+// A record with no published map, or a map with no pin for the target, is the
 // byte-identical pre-S8 behavior (the global registry serves).
 
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import type { CapabilityProvider } from "@/lib/extension-capabilities-registry";
 
-/** A dependent's pre-resolved NON-DEFAULT pin for one target package. */
-export type PreResolvedVersionedPin = {
-  version: string;
-  resolvedInstallId: string;
-};
+/** A dependent's pre-resolved pin for one target package (see the matrix above). */
+export type PreResolvedPin =
+  | { kind: "versioned"; version: string; resolvedInstallId: string }
+  | {
+      kind: "refuse";
+      code:
+        | "EDGE_BOUND_RESOLVED_MISSING"
+        | "EDGE_BOUND_RESOLVED_NOT_LIVE"
+        | "EDGE_BOUND_VERSION_UNPINNED";
+      message: string;
+    };
 
-/** The (version|default) identity axis of a ctx-owning record. */
+/** The identity axes of a ctx-owning record (host-injected at activation). */
 export type PreResolvedEdgeIdentity = {
+  /** The exact canonical install-row id, when the loader could thread it. */
+  installId?: string | null;
   /** The record's version; `null` for a default/legacy identity. */
   version: string | null;
   /** Whether the record is the DEFAULT version (owns the map's default slot). */
@@ -65,20 +92,26 @@ const LIVE_STATUSES = new Set(["active", "locked"]);
 // CROSS-COMPILATION SINGLETON (same rationale as the sibling registries): the
 // loader publishes at boot/activation (instrumentation compilation); the host
 // ctx resolves at request time (route / RSC compilation).
-const PRE_RESOLVED_EDGES_KEY = Symbol.for("@cinatra-ai/host:extension-pre-resolved-edges/v1");
-type Holder = { [k: symbol]: Map<string, ReadonlyMap<string, PreResolvedVersionedPin>> | undefined };
+const PRE_RESOLVED_EDGES_KEY = Symbol.for("@cinatra-ai/host:extension-pre-resolved-edges/v2");
+type Holder = { [k: symbol]: Map<string, ReadonlyMap<string, PreResolvedPin>> | undefined };
 const _holder = globalThis as unknown as Holder;
-function store(): Map<string, ReadonlyMap<string, PreResolvedVersionedPin>> {
+function store(): Map<string, ReadonlyMap<string, PreResolvedPin>> {
   return (
     _holder[PRE_RESOLVED_EDGES_KEY] ??
-    (_holder[PRE_RESOLVED_EDGES_KEY] = new Map<string, ReadonlyMap<string, PreResolvedVersionedPin>>())
+    (_holder[PRE_RESOLVED_EDGES_KEY] = new Map<string, ReadonlyMap<string, PreResolvedPin>>())
   );
+}
+
+// The EXACT row-id key (never ambiguous). The `id:` prefix cannot collide with
+// a composite key (those always contain a space; row ids never do).
+function rowIdKey(installId: string): string {
+  return `id:${installId}`;
 }
 
 // The DEFAULT identity uses an empty version slot; package names cannot contain
 // a space, so the composite key is unambiguous (same scheme as the loader's
 // identityKey and the version-keyed serving key).
-function edgeMapKey(packageName: string, identity: PreResolvedEdgeIdentity): string {
+function compositeKey(packageName: string, identity: { version: string | null; isDefault: boolean }): string {
   return identity.isDefault === false && identity.version
     ? `${packageName} ${identity.version}`
     : `${packageName} `;
@@ -87,37 +120,78 @@ function edgeMapKey(packageName: string, identity: PreResolvedEdgeIdentity): str
 /**
  * Compute the pre-resolved edge maps from the LIVE canonical rows (pure — the
  * loader passes one batched read). For each LIVE row, every dependency edge
- * whose `resolvedInstallId` points at a LIVE, NON-DEFAULT, version-carrying row
- * becomes a versioned pin. Default-resolved / unresolved / dangling edges add
- * NO pin: the sync port then serves the global registration exactly as before,
- * and the ASYNC dispatch surfaces (which re-read the DB) own the fail-closed
- * handling of dangling/not-live rows.
+ * with a `resolvedInstallId` becomes a pin per the module-header matrix
+ * (`versioned` / no-pin-for-default / explicit `refuse` for the unsafe
+ * states). Each row's map is keyed by its EXACT row id; the composite
+ * `(packageName, version|default)` alias is added only while unambiguous
+ * (a collision drops the alias for every claimant — fail-closed against
+ * serving another row's pins).
  */
 export function computePreResolvedEdgeMaps(
   rows: readonly InstalledExtension[],
-): Map<string, ReadonlyMap<string, PreResolvedVersionedPin>> {
+): Map<string, ReadonlyMap<string, PreResolvedPin>> {
   const rowById = new Map(rows.map((r) => [r.id, r]));
-  const out = new Map<string, ReadonlyMap<string, PreResolvedVersionedPin>>();
+  const out = new Map<string, ReadonlyMap<string, PreResolvedPin>>();
+  const compositeOwners = new Map<string, string[]>(); // composite key → row ids with pins
   for (const row of rows) {
     if (!LIVE_STATUSES.has(row.status)) continue;
-    const pins = new Map<string, PreResolvedVersionedPin>();
+    const pins = new Map<string, PreResolvedPin>();
     for (const edge of row.dependencyEdges ?? []) {
       if (edge.resolvedInstallId == null) continue;
       const resolved = rowById.get(edge.resolvedInstallId);
-      if (!resolved || !LIVE_STATUSES.has(resolved.status)) continue;
+      if (!resolved) {
+        pins.set(edge.packageName, {
+          kind: "refuse",
+          code: "EDGE_BOUND_RESOLVED_MISSING",
+          message:
+            `dependent install ${row.id} resolved its edge to ${edge.packageName} install ` +
+            `${edge.resolvedInstallId}, but that row is gone`,
+        });
+        continue;
+      }
+      if (!LIVE_STATUSES.has(resolved.status)) {
+        pins.set(edge.packageName, {
+          kind: "refuse",
+          code: "EDGE_BOUND_RESOLVED_NOT_LIVE",
+          message:
+            `dependent install ${row.id} resolved its edge to ${edge.packageName} install ` +
+            `${resolved.id}, which is "${resolved.status}" (not live)`,
+        });
+        continue;
+      }
       if (resolved.isDefault !== false) continue; // default pin = global serve, no substitution
-      if (typeof resolved.version !== "string" || resolved.version.length === 0) continue;
+      if (typeof resolved.version !== "string" || resolved.version.length === 0) {
+        pins.set(edge.packageName, {
+          kind: "refuse",
+          code: "EDGE_BOUND_VERSION_UNPINNED",
+          message:
+            `dependent install ${row.id} resolved its edge to a NON-DEFAULT install of ` +
+            `${edge.packageName} (install ${resolved.id}) that carries NO version pin`,
+        });
+        continue;
+      }
       pins.set(edge.packageName, {
+        kind: "versioned",
         version: resolved.version,
         resolvedInstallId: resolved.id,
       });
     }
     if (pins.size === 0) continue;
-    const identity: PreResolvedEdgeIdentity = {
+    out.set(rowIdKey(row.id), pins);
+    const composite = compositeKey(row.packageName, {
       version: row.version ?? null,
       isDefault: row.isDefault !== false,
-    };
-    out.set(edgeMapKey(row.packageName, identity), pins);
+    });
+    const owners = compositeOwners.get(composite);
+    if (owners) owners.push(row.id);
+    else compositeOwners.set(composite, [row.id]);
+  }
+  // Composite aliases: only the UNAMBIGUOUS ones (codex S8 round-0 #1 — a
+  // collision must never let one row's consult read another row's pins).
+  for (const [composite, owners] of compositeOwners) {
+    if (owners.length === 1) {
+      out.set(composite, out.get(rowIdKey(owners[0]))!);
+    }
   }
   return out;
 }
@@ -128,17 +202,28 @@ export function computePreResolvedEdgeMaps(
  * never merge — keeps removed installs from leaving stale pins).
  */
 export function publishPreResolvedEdgeMaps(
-  maps: ReadonlyMap<string, ReadonlyMap<string, PreResolvedVersionedPin>>,
+  maps: ReadonlyMap<string, ReadonlyMap<string, PreResolvedPin>>,
 ): void {
   _holder[PRE_RESOLVED_EDGES_KEY] = new Map(maps);
 }
 
-/** The versioned pins of one ctx-owning record, or undefined when it has none. */
+/**
+ * The pre-resolved pins of one ctx-owning record, or undefined when it has
+ * none. Row-id key first (exact); the composite alias only for a legacy
+ * identity the loader could not thread an install id into.
+ */
 export function getPreResolvedVersionedEdges(
   packageName: string,
   identity: PreResolvedEdgeIdentity,
-): ReadonlyMap<string, PreResolvedVersionedPin> | undefined {
-  return store().get(edgeMapKey(packageName, identity));
+): ReadonlyMap<string, PreResolvedPin> | undefined {
+  const s = store();
+  if (identity.installId) {
+    // An id-carrying identity NEVER falls back to the composite alias: the id
+    // is exact, so an absent id entry means THIS row has no pins (falling back
+    // could serve a same-shape sibling's pins).
+    return s.get(rowIdKey(identity.installId));
+  }
+  return s.get(compositeKey(packageName, identity));
 }
 
 /** @internal Test-only reset. */
@@ -181,10 +266,10 @@ export class EdgeBoundCapabilityRefusal extends Error {
 }
 
 /**
- * Apply a record's pre-resolved versioned pins to a SYNC capability
- * resolution. `base` is the global registry's provider list for `capability`;
- * the result substitutes/extends it per the fail-closed matrix in the module
- * header. With no published pins the `base` array is returned UNCHANGED
+ * Apply a record's pre-resolved pins to a SYNC capability resolution. `base`
+ * is the global registry's provider list for `capability`; the result
+ * substitutes/extends it per the fail-closed matrix in the module header.
+ * With no published pins the `base` array is returned UNCHANGED
  * (byte-identical pre-S8 behavior).
  */
 export function substituteEdgeBoundCapabilityProviders(
@@ -197,7 +282,16 @@ export function substituteEdgeBoundCapabilityProviders(
   if (!pins || pins.size === 0) return base;
 
   const lookup = (globalThis as unknown as LookupHolder)[VERSION_KEYED_CAPABILITY_LOOKUP_KEY];
-  const resolvePin = (target: string, pin: PreResolvedVersionedPin): CapabilityProvider[] | null => {
+  const resolvePin = (target: string, pin: PreResolvedPin): CapabilityProvider[] | null => {
+    if (pin.kind === "refuse") {
+      // An UNSAFE edge state recorded at compute time (dangling / not-live /
+      // versionless target) — never a silent downgrade to the default.
+      throw new EdgeBoundCapabilityRefusal(
+        pin.code,
+        `edge-bound capability resolution refused for "${packageName}" → ${target} ` +
+          `(capability "${capability}"): ${pin.message}; refusing rather than serving the default provider`,
+      );
+    }
     if (!lookup) {
       throw new EdgeBoundCapabilityRefusal(
         "EDGE_BOUND_RETENTION_UNAVAILABLE",

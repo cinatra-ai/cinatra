@@ -207,7 +207,7 @@ describe("loadRuntimePackageExtensions — version-keyed retention wiring (S8)",
     expect(listInstalledExtensions).toHaveBeenCalled();
     expect(
       getPreResolvedVersionedEdges("@x/caller", { version: null, isDefault: true })?.get(PKG),
-    ).toEqual({ version: V_SIB, resolvedInstallId: "i-sib" });
+    ).toEqual({ kind: "versioned", version: V_SIB, resolvedInstallId: "i-sib" });
   });
 
   it("a failed canonical read keeps the PREVIOUS maps (loader never throws)", async () => {

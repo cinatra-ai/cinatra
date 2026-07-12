@@ -42,7 +42,11 @@ import { getAuthSession } from "@/lib/auth-session";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import { resolveProviderAdapter } from "@cinatra-ai/llm";
 import { z } from "zod";
-import { listExtensionMcpTools, markEffectiveExtensionMcpTools } from "@/lib/extension-mcp-registry";
+import {
+  listExtensionMcpTools,
+  markEffectiveExtensionMcpTools,
+  unmarkEffectiveExtensionMcpToolCollisions,
+} from "@/lib/extension-mcp-registry";
 // Edge-bound serving chokepoint (cinatra#1392 Gap 1 wiring): an extension tool
 // dispatch consults the TRUSTED dependent identity and — when its resolved edge
 // pins a NON-DEFAULT version of the tool's package — serves THAT version's
@@ -56,6 +60,7 @@ import { listExtensionMcpTools, markEffectiveExtensionMcpTools } from "@/lib/ext
 // dispatch), and hides default names the pinned version does not register.
 import {
   dispatchExtensionMcpToolEdgeBound,
+  dispatchPlannedExtensionMcpTool,
   dispatchVersionedOnlyExtensionMcpTool,
   planExtensionToolDiscovery,
 } from "@/lib/extension-edge-bound-serving";
@@ -225,6 +230,7 @@ export async function registerAllCapabilities(
     getVerifiedRunId: () => requestContext?.verifiedAgentRunId,
   });
   for (const note of plan.notes) console.warn(`[mcp] discovery union: ${note}`);
+  const skippedCollisions: { name: string; packageName: string }[] = [];
   for (const entry of plan.entries) {
     const name = entry.tool.name;
     const packageName = entry.mode === "default" ? entry.tool.packageName : entry.packageName;
@@ -232,15 +238,28 @@ export async function registerAllCapabilities(
       console.debug(
         `[mcp] extension tool "${name}" (${packageName}) skipped — name already claimed by a registered module or a reserved host built-in`,
       );
+      skippedCollisions.push({ name, packageName });
       continue;
     }
     registeredNames.add(name);
     effectiveExtensionTools.push({ name, packageName });
-    // The advertised description/schema follow the SERVED version: the default
-    // registration for default entries; the RETAINED registration for versioned
+    // The advertised description/schema follow the PLANNED registration: the
+    // default's for default entries; the RETAINED version's for versioned
     // entries (the MCP SDK validates input against `~standard` of this schema —
-    // the resolved version's, per the S8 contract).
+    // the resolved version's, per the S8 contract). The dispatch below is
+    // PLAN-PINNED: it re-resolves the edge at call time and REFUSES on drift
+    // (codex round-0 #3 — input validated against one version's schema must
+    // never reach another version's handler).
     const registration = entry.tool;
+    const dispatchPlanned =
+      entry.mode === "default"
+        ? (input: unknown) =>
+            dispatchPlannedExtensionMcpTool({ expected: "default", tool: entry.tool }, input)
+        : (input: unknown) =>
+            dispatchPlannedExtensionMcpTool(
+              { expected: "versioned", packageName: entry.packageName, name, version: entry.version },
+              input,
+            );
     (server.registerTool as (...a: unknown[]) => unknown)(
       name,
       {
@@ -250,20 +269,7 @@ export async function registerAllCapabilities(
         inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
       },
       async (input: unknown) => {
-        // Edge-bound serve (cinatra#1392 Gap 1 + S8): every call re-resolves the
-        // caller's edge binding at dispatch time. A both-present name keeps the
-        // exact S7 chokepoint (a mid-flight flip to default serves the global
-        // handler); a versioned-only name dispatches strictly (no global
-        // handler exists — none/default refuses with evidence).
-        const raw =
-          entry.mode === "default"
-            ? await dispatchExtensionMcpToolEdgeBound(entry.tool, input)
-            : entry.defaultTool
-              ? await dispatchExtensionMcpToolEdgeBound(entry.defaultTool, input)
-              : await dispatchVersionedOnlyExtensionMcpTool(
-                  { packageName: entry.packageName, name },
-                  input,
-                );
+        const raw = await dispatchPlanned(input);
         return wrapExtensionToolResult(raw);
       },
     );
@@ -273,8 +279,11 @@ export async function registerAllCapabilities(
   // MERGE semantics (cinatra#1392 S8): per-request builds now differ per caller
   // (a versioned-only name registers only for its edge-bound dependent), so a
   // replace-on-build would let concurrent builds erase each other's effective
-  // entries mid-call. Teardown still removes a package's entries.
+  // entries mid-call. Collision-skipped names are explicitly UNMARKED (codex
+  // round-0 #4 — a stale entry must not outlive a later host-name collision);
+  // teardown still removes a package's entries wholesale.
   markEffectiveExtensionMcpTools(effectiveExtensionTools);
+  unmarkEffectiveExtensionMcpToolCollisions(skippedCollisions);
 }
 
 /** A captured MCP tool handler — the SDK callback `(args, extra) => CallToolResult`. */
@@ -340,11 +349,18 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // with the live server). Wrap the plain handler result into the MCP envelope
   // so the captured handler shape is uniform with the module-registered ones.
   const unionEffective: { name: string; packageName: string }[] = [];
+  const unionSkipped: { name: string; packageName: string }[] = [];
   for (const tool of listExtensionMcpTools()) {
-    if (handlers.has(tool.name)) continue;
+    if (handlers.has(tool.name)) {
+      unionSkipped.push({ name: tool.name, packageName: tool.packageName });
+      continue;
+    }
     handlers.set(tool.name, async (input: unknown) => {
       // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
       // transport replay, so the in-process self-invoker serves identically.
+      // (No plan-pinning here: this map applies no schema validation, so the
+      // dispatch-time decision is authoritative — see
+      // dispatchPlannedExtensionMcpTool's doc.)
       const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
       return wrapExtensionToolResult(raw);
     });
@@ -374,7 +390,10 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // in-process invoker runs the same deny-by-default boundary as the live
   // transport, and an unmarked versioned-only name would be blocked as an
   // unclassified primitive even for its legitimately edge-bound caller.
+  // Collision-skipped names are unmarked for the same reason the live builder
+  // unmarks them (codex round-0 #4).
   markEffectiveExtensionMcpTools(unionEffective);
+  unmarkEffectiveExtensionMcpToolCollisions(unionSkipped);
 
   return handlers;
 }

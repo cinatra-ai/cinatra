@@ -37,6 +37,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 /** The activation identity of the ctx-owning record (host-injected, trusted). */
 export type ExtensionCtxIdentity = {
   packageName: string;
+  /**
+   * The EXACT canonical install-row id (threaded from the trusted anchor by
+   * the runtime loader; cinatra#1392 S8 codex round-0 #1). When present the
+   * edge-bound resolver binds THIS row directly — no shape-based derivation
+   * that could match a same-shape sibling (org/owner axes, default
+   * re-election). Absent for dev static-bundle / lifecycle-special ctxs.
+   */
+  installId?: string | null;
   /** The record's version; `null` for a legacy/unversioned default record. */
   version: string | null;
   /** Whether the record is the DEFAULT version of its package. */

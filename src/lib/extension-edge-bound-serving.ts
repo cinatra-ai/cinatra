@@ -279,6 +279,22 @@ async function resolveCtxIdentityRow(
   identity: ExtensionCtxIdentity,
   d: Required<ResolveEdgeBoundExtensionDeps>,
 ): Promise<EdgeBoundDependentResolution> {
+  // EXACT row binding when the loader threaded the install id (codex S8
+  // round-0 #1): no shape-based derivation that could match a same-shape
+  // sibling (org/owner axes) or the NEW default during a re-election window.
+  if (identity.installId) {
+    const row = await d.readInstalledExtensionById(identity.installId);
+    if (row && LIVE_STATUSES.has(row.status)) return { kind: "dependent", row };
+    return {
+      kind: "refuse",
+      code: "EDGE_BOUND_DEPENDENT_MISSING",
+      message:
+        `edge-bound serving refused — extension-ctx caller ${identity.packageName} ` +
+        `(install ${identity.installId}) has no live canonical row ` +
+        `(${row ? `status "${row.status}"` : "row gone"} — torn down mid-flight?); ` +
+        `refusing rather than serving an identity-less default`,
+    };
+  }
   const rows = await d.readInstalledExtensionsByPackageName(identity.packageName);
   const live = rows.filter((row) => LIVE_STATUSES.has(row.status));
   const candidates = identity.isDefault
@@ -555,6 +571,79 @@ export async function dispatchVersionedOnlyExtensionMcpTool(
   return versionedHandler(input);
 }
 
+/**
+ * Dispatch a PLANNED extension MCP tool on the per-request transport path
+ * (cinatra#1392 S8; codex round-0 #3). The per-request server build validated
+ * the input against the PLANNED registration's schema, so the dispatched
+ * handler must be from that SAME registration — a caller must never receive a
+ * handler whose schema differs from the one its input was validated against.
+ * The dispatch therefore re-resolves the edge decision and REFUSES on drift:
+ *
+ *   - planned DEFAULT:   decision none/default → the global handler;
+ *                        decision versioned    → EDGE_BOUND_PLAN_DRIFT (the
+ *                        edge re-resolved mid-request; input was validated
+ *                        against the DEFAULT's schema);
+ *   - planned VERSIONED v: decision versioned@v → the retained handler
+ *                        (fail-closed via the point lookup);
+ *                        anything else          → EDGE_BOUND_PLAN_DRIFT;
+ *   - decision refuse → the evidence-carrying refusal, always.
+ *
+ * The IN-PROCESS self-invoker deliberately does NOT use this wrapper: its
+ * memoised map applies no schema validation, so the dispatch-time decision is
+ * authoritative there and the S7 chokepoints remain correct.
+ */
+export async function dispatchPlannedExtensionMcpTool(
+  planned:
+    | {
+        expected: "default";
+        tool: { packageName: string; name: string; handler: (input: unknown) => unknown | Promise<unknown> };
+      }
+    | { expected: "versioned"; packageName: string; name: string; version: string },
+  input: unknown,
+  deps: ResolveEdgeBoundExtensionDeps = {},
+): Promise<unknown> {
+  const packageName = planned.expected === "default" ? planned.tool.packageName : planned.packageName;
+  const name = planned.expected === "default" ? planned.tool.name : planned.name;
+  // Detach the global handler BEFORE any await (same `this` semantics as the
+  // S7 chokepoint).
+  const globalHandler = planned.expected === "default" ? planned.tool.handler : undefined;
+
+  const decision = await resolveEdgeBoundExtensionVersion({ targetPackageName: packageName }, deps);
+  if (decision.kind === "refuse") {
+    throw new EdgeBoundMcpServeRefusal(decision.code, decision.message);
+  }
+  if (planned.expected === "default") {
+    if (decision.kind === "versioned") {
+      throw new EdgeBoundMcpServeRefusal(
+        "EDGE_BOUND_PLAN_DRIFT",
+        `edge-bound serving refused — MCP tool "${name}" was advertised (and its input validated) ` +
+          `against the DEFAULT registration of ${packageName}, but the caller's resolved edge now ` +
+          `pins ${packageName}@${decision.version}; refusing rather than crossing schema/handler ` +
+          `versions (retry re-plans against the current edges)`,
+      );
+    }
+    return globalHandler!(input);
+  }
+  if (decision.kind !== "versioned" || decision.version !== planned.version) {
+    throw new EdgeBoundMcpServeRefusal(
+      "EDGE_BOUND_PLAN_DRIFT",
+      `edge-bound serving refused — MCP tool "${name}" was advertised (and its input validated) ` +
+        `against ${packageName}@${planned.version}, but the caller's edge now resolves to ` +
+        `${decision.kind === "versioned" ? `${packageName}@${decision.version}` : "the default/no pin"}; ` +
+        `refusing rather than crossing schema/handler versions (retry re-plans against the current edges)`,
+    );
+  }
+  const served = resolveVersionKeyedMcpTool(packageName, planned.version, name);
+  if (served.kind === "refuse") {
+    throw new EdgeBoundMcpServeRefusal(
+      served.code,
+      `edge-bound serving refused for MCP tool "${name}" — ${served.message}`,
+    );
+  }
+  const versionedHandler = served.value.handler;
+  return versionedHandler(input);
+}
+
 // ---------------------------------------------------------------------------
 // TOOL DISCOVERY UNION (cinatra#1392 S8)
 // ---------------------------------------------------------------------------
@@ -574,11 +663,13 @@ export type ExtensionToolDiscoveryEntry =
   | { mode: "default"; tool: DiscoveryDefaultTool }
   /**
    * An edge-resolved NON-DEFAULT version's retained tool: advertise ITS
-   * name/description and validate input against ITS registered schema. When the
-   * default set has the same name, `defaultTool` carries it so the dispatch
-   * chokepoint keeps the exact S7 call-time semantics (a mid-flight decision
-   * flip to default serves the global handler); absent, the strict
-   * versioned-only dispatch applies.
+   * name/description and validate input against ITS registered schema. The
+   * transport dispatch is PLAN-PINNED to `version` (see
+   * `dispatchPlannedExtensionMcpTool` — a decision drift between planning and
+   * invocation refuses rather than crossing schema/handler versions).
+   * `defaultTool` marks a both-present name (the default set registers it
+   * too) — carried for diagnostics/tests; the pinned dispatch never falls back
+   * to it.
    */
   | {
       mode: "versioned";
