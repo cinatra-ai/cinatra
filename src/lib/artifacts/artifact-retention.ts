@@ -6,6 +6,10 @@ import {
   ensurePostgresSchema,
   postgresSchema,
 } from "@/lib/database";
+import {
+  buildSoftDeleteObjectQuery,
+  readSoftDeleteChangeSetId,
+} from "@/lib/objects-store";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { countArtifactRefs } from "./artifact-refs-store";
 
@@ -74,8 +78,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 }
 
 /**
- * Tombstone an artifact: soft-delete via `objects.deleted_at`. If
- * any `artifact_refs` row pins the artifact, push `retain_until` to
+ * Tombstone an artifact: soft-delete via the CANONICAL object soft-delete
+ * statement (cinatra#1428 deletion unification) — the same atomic CTE the
+ * objects surface uses, so an artifact-surface delete emits the
+ * object_change_event, the Graphiti 'delete' outbox projection, AND an
+ * undoable (restorable) change_set instead of bypassing object history.
+ * If any `artifact_refs` row pins the artifact, push `retain_until` to
  * `now() + 30 days` on each affected resource (via metadata) using
  * GREATEST semantics so a SHORTER retention from another concurrent
  * tombstone never overrides a longer one.
@@ -84,13 +92,25 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
  * tombstoned artifact's provider file id must NOT be replayed to the
  * LLM.
  *
- * Returns the pin count seen at tombstone time.
+ * All three effects (canonical soft-delete CTE, retention pinning,
+ * provider-cache invalidation) commit in ONE transaction.
+ *
+ * Undo note: `restoreChangeSet` on the returned `changeSetId` undeletes the
+ * object row (artifact visible again). The retention `retain_until` push and
+ * the provider-cache invalidation are intentionally NOT compensated — bytes
+ * being retained longer is conservative, and the provider cache re-primes on
+ * next use.
+ *
+ * Returns the pin count seen at tombstone time plus the `changeSetId` of the
+ * canonical soft-delete (null when the row was already deleted / not found).
  */
 export function tombstoneArtifact(input: {
   orgId: string;
   artifactId: string;
   actor?: string | null;
-}): { referenced: boolean; pinCount: number } {
+  /** Change-event attribution; defaults to "user" when `actor` is set. */
+  actorKind?: "user" | "agent" | "system";
+}): { referenced: boolean; pinCount: number; changeSetId: string | null } {
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
   const pinCount = countArtifactRefs(input.orgId, input.artifactId);
@@ -105,18 +125,22 @@ export function tombstoneArtifact(input: {
     detail: { referenced, pinCount },
   });
 
+  // Canonical soft-delete statement (deleted_at flip + version bump +
+  // outbox 'delete' + object_change_event + restorable change_set).
+  const softDelete = buildSoftDeleteObjectQuery({
+    id: input.artifactId,
+    orgId: input.orgId,
+    actorId: input.actor ?? null,
+    actorKind: input.actorKind ?? (input.actor ? "user" : "system"),
+  });
+
   const retainDays = referenced ? REFERENCED_RETENTION_DAYS : 0;
-  runPostgresQueriesSync({
+  const [softDeleteResult] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
     queries: [
-      // Soft-delete the artifact's object row.
-      {
-        text: `UPDATE "${schema}"."objects"
-SET deleted_at = now(), updated_at = now()
-WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
-        values: [input.artifactId, input.orgId],
-      },
+      // Soft-delete the artifact's object row through the canonical CTE.
+      softDelete.query,
       // Mark `retain_until` on every resource backing this artifact.
       // Use GREATEST semantics so a shared-resource tombstone with a
       // SHORTER retention can never override a longer one. The new
@@ -147,7 +171,11 @@ WHERE org_id = $2 AND artifact_id = $1`,
       },
     ],
   });
-  return { referenced, pinCount };
+  return {
+    referenced,
+    pinCount,
+    changeSetId: readSoftDeleteChangeSetId(softDeleteResult),
+  };
 }
 
 /**
