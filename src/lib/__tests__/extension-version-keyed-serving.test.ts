@@ -281,3 +281,17 @@ describe("S8 additions — bulk tool lookup, servable listing, isSettled", () =>
     expect(b.isSettled()).toBe(true);
   });
 });
+
+// codex S8 round-1 #4 — a SUPERSEDED attempt's commit never reports committed.
+describe("isCommitted — ownership-guarded (round-1)", () => {
+  it("a superseded attempt's commit is not committed (its entry never became servable)", () => {
+    const first = beginVersionKeyedRegistration(PKG, V);
+    const second = beginVersionKeyedRegistration(PKG, V); // supersedes first
+    first.commit();
+    expect(first.isCommitted()).toBe(false);
+    expect(first.isSettled()).toBe(true);
+    second.commit();
+    expect(second.isCommitted()).toBe(true);
+    expect(isVersionKeyedServable(PKG, V)).toBe(true);
+  });
+});

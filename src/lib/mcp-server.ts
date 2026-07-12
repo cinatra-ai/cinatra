@@ -68,6 +68,14 @@ import { listServableVersionKeyedMcpTools } from "@/lib/extension-version-keyed-
 
 const MCP_SERVER_SETTINGS_KEY = "mcp_server";
 
+// Reserved names the host registers OUTSIDE the shared registration pass: the
+// runtime server registers `system_screen_lookup` AFTER registerCapabilities
+// returns (packages/mcp-server). Seeded into BOTH builders (the live-transport
+// replay AND the in-process self-primitive capture — codex S8 round-1 #3) so
+// an extension can neither break the live server build by claiming the name
+// first nor slip an in-process handler + effective-set entry under it.
+const RESERVED_HOST_TOOL_NAMES = ["system_screen_lookup"];
+
 // Host/platform capability modules. Connector modules are NOT listed here —
 // they resolve from the generated extension manifest (loadConnectorMcpModules)
 // so no specific connector package is named on this registration path. The
@@ -170,11 +178,6 @@ export async function registerAllCapabilities(
   // duplicate behavior is not relied upon). Non-registerTool members delegate to
   // the real server (bound to it, not the proxy, to avoid proxy-`this` surprises).
   //
-  // SEED reserved names the host registers OUTSIDE this function: the runtime
-  // server registers `system_screen_lookup` AFTER registerCapabilities returns
-  // (packages/mcp-server). If an extension replayed that name first, the host's
-  // later registration would throw "already registered" and break server build.
-  const RESERVED_HOST_TOOL_NAMES = ["system_screen_lookup"];
   const registeredNames = new Set<string>(RESERVED_HOST_TOOL_NAMES);
   const recordingServer = new Proxy(server, {
     get(target, prop) {
@@ -350,8 +353,9 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // so the captured handler shape is uniform with the module-registered ones.
   const unionEffective: { name: string; packageName: string }[] = [];
   const unionSkipped: { name: string; packageName: string }[] = [];
+  const reservedNames = new Set(RESERVED_HOST_TOOL_NAMES);
   for (const tool of listExtensionMcpTools()) {
-    if (handlers.has(tool.name)) {
+    if (handlers.has(tool.name) || reservedNames.has(tool.name)) {
       unionSkipped.push({ name: tool.name, packageName: tool.packageName });
       continue;
     }
@@ -378,7 +382,13 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // on the CALLER's own pinned version, so the winner only fixes which package
   // the decision is resolved against).
   for (const retained of listServableVersionKeyedMcpTools()) {
-    if (handlers.has(retained.tool.name)) continue;
+    if (handlers.has(retained.tool.name) || reservedNames.has(retained.tool.name)) {
+      // A version-only name colliding with a module/host/reserved name is
+      // SKIPPED — and reported so a stale effective attribution to THIS
+      // package cannot survive the collision (codex S8 round-1 #3).
+      unionSkipped.push({ name: retained.tool.name, packageName: retained.packageName });
+      continue;
+    }
     const target = { packageName: retained.packageName, name: retained.tool.name };
     handlers.set(retained.tool.name, async (input: unknown) => {
       const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);

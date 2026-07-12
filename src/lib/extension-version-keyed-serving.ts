@@ -247,8 +247,13 @@ export function beginVersionKeyedRegistration(
     },
     commit: () => {
       settled = true;
-      committed = true;
-      if (owns()) entry.servable = true;
+      // COMMITTED only while this attempt still owns the slot (codex S8
+      // round-1 #4): a SUPERSEDED attempt's entry never became servable, so
+      // its leaked ctx callbacks must not pass the isCommitted dispatch gate.
+      if (owns()) {
+        entry.servable = true;
+        committed = true;
+      }
     },
     abort: () => {
       settled = true;

@@ -132,9 +132,19 @@ export function computePreResolvedEdgeMaps(
 ): Map<string, ReadonlyMap<string, PreResolvedPin>> {
   const rowById = new Map(rows.map((r) => [r.id, r]));
   const out = new Map<string, ReadonlyMap<string, PreResolvedPin>>();
-  const compositeOwners = new Map<string, string[]>(); // composite key → row ids with pins
+  // Composite key → EVERY live claimant row id (codex round-1 #1: a PINLESS
+  // same-shape row is still a claimant — publishing the pinned sibling's alias
+  // would hand the pinless row's identity-less consult ANOTHER row's edges).
+  const compositeOwners = new Map<string, string[]>();
   for (const row of rows) {
     if (!LIVE_STATUSES.has(row.status)) continue;
+    const composite = compositeKey(row.packageName, {
+      version: row.version ?? null,
+      isDefault: row.isDefault !== false,
+    });
+    const owners = compositeOwners.get(composite);
+    if (owners) owners.push(row.id);
+    else compositeOwners.set(composite, [row.id]);
     const pins = new Map<string, PreResolvedPin>();
     for (const edge of row.dependencyEdges ?? []) {
       if (edge.resolvedInstallId == null) continue;
@@ -178,20 +188,14 @@ export function computePreResolvedEdgeMaps(
     }
     if (pins.size === 0) continue;
     out.set(rowIdKey(row.id), pins);
-    const composite = compositeKey(row.packageName, {
-      version: row.version ?? null,
-      isDefault: row.isDefault !== false,
-    });
-    const owners = compositeOwners.get(composite);
-    if (owners) owners.push(row.id);
-    else compositeOwners.set(composite, [row.id]);
   }
-  // Composite aliases: only the UNAMBIGUOUS ones (codex S8 round-0 #1 — a
-  // collision must never let one row's consult read another row's pins).
+  // Composite aliases: only where EXACTLY ONE live row claims the shape at all
+  // (codex round-0 #1 / round-1 #1 — an ambiguity, pinned or pinless, must
+  // never let one row's identity-less consult read another row's pins).
   for (const [composite, owners] of compositeOwners) {
-    if (owners.length === 1) {
-      out.set(composite, out.get(rowIdKey(owners[0]))!);
-    }
+    if (owners.length !== 1) continue;
+    const pins = out.get(rowIdKey(owners[0]));
+    if (pins) out.set(composite, pins);
   }
   return out;
 }

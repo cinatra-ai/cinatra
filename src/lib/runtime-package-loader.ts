@@ -366,7 +366,12 @@ export async function loadRuntimePackageExtensions(
         refused.join("; "),
     );
   }
-  if (trusted.length === 0) return [];
+  if (trusted.length === 0) {
+    // Refresh even when the whole pass was refused by the trust gates (codex
+    // S8 round-1 #2 — a rejected pass must not strand stale pins).
+    await refreshPreResolvedEdgeMaps();
+    return [];
+  }
 
   // Apply each TRUSTED-SIGNED package's declared migrations (the node-pg-migrate
   // modules under `cinatra.migrationsDir`, #118) BEFORE activation, under the SAME
@@ -454,7 +459,11 @@ export async function loadRuntimePackageExtensions(
       !migrationRefused.has(rec.packageName) &&
       !ambiguousIdentities.has(identityKey(rec.packageName, rec.version)),
   );
-  if (activatable.length === 0) return [];
+  if (activatable.length === 0) {
+    // Same rationale as the trusted-empty return above (codex S8 round-1 #2).
+    await refreshPreResolvedEdgeMaps();
+    return [];
+  }
 
   // DEPENDENCY-ORDERED ACTIVATION (#180 item 8): topo-sort the activatable
   // records DEPENDENCIES-FIRST over the persisted canonical edges, so a

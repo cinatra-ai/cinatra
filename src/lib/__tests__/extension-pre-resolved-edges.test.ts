@@ -232,3 +232,23 @@ describe("substituteEdgeBoundCapabilityProviders — fail-closed matrix", () => 
     }
   });
 });
+
+// codex S8 round-1 #1 — a PINLESS same-shape live row is still an alias claimant.
+describe("composite alias — pinless claimants count (round-1)", () => {
+  it("a pinned row + a PINLESS same-shape row → alias dropped; id keys exact", () => {
+    const rows = [
+      row({ id: "i-pinned", packageName: CALLER, organizationId: "org-a", dependencyEdges: [edgeTo(TARGET, "i-sib")] }),
+      row({ id: "i-pinless", packageName: CALLER, organizationId: "org-b", dependencyEdges: [] }),
+      row({ id: "i-sib", isDefault: false, version: V }),
+    ];
+    publishPreResolvedEdgeMaps(computePreResolvedEdgeMaps(rows));
+    // Identity-less consult must NOT see the pinned sibling's edges.
+    expect(getPreResolvedVersionedEdges(CALLER, DEFAULT_ID)).toBeUndefined();
+    expect(
+      getPreResolvedVersionedEdges(CALLER, { installId: "i-pinned", version: null, isDefault: true })?.get(TARGET),
+    ).toEqual({ kind: "versioned", version: V, resolvedInstallId: "i-sib" });
+    expect(
+      getPreResolvedVersionedEdges(CALLER, { installId: "i-pinless", version: null, isDefault: true }),
+    ).toBeUndefined();
+  });
+});
