@@ -119,17 +119,25 @@ export function removeExtensionMcpToolsForPackage(packageName: string): string[]
 // registry membership) so an extension cannot unlock a host tool (e.g. an
 // unclassified built-in like `system_screen_lookup`) by registering its name —
 // such a registration is skipped by the replay and never becomes "effective".
-// globalThis-anchored (same cross-compilation reason as the registry); last
-// server-build wins (the static + reserved name set is stable per process).
+// globalThis-anchored (same cross-compilation reason as the registry).
+//
+// MERGE semantics (cinatra#1392 S8): server builds are per-request AND now
+// per-CALLER (the discovery union registers a retained versioned-only name only
+// for its edge-bound dependent), so a replace-on-build would let two concurrent
+// builds erase each other's entries between a tool's registration and its
+// boundary check. `markEffectiveExtensionMcpTools` therefore UPSERTS the
+// build's names; removal stays lifecycle-driven (`removeExtensionMcpToolsFor-
+// Package` at the capability-teardown chokepoint, which also clears the
+// version-keyed retention in lockstep — so a retired package's names leave
+// the effective set exactly when they stop being servable).
 const EFFECTIVE_KEY = Symbol.for("@cinatra-ai/host:extension-mcp-effective/v1");
 type EffectiveHolder = { [k: symbol]: Map<string, string> | undefined };
 const _effHolder = globalThis as unknown as EffectiveHolder;
 
-/** Record the extension tools that were effectively registered into a server build. */
+/** Record (upsert) the extension tools a server build effectively registered. */
 export function markEffectiveExtensionMcpTools(tools: ReadonlyArray<{ name: string; packageName: string }>): void {
-  const m = new Map<string, string>();
+  const m = _effHolder[EFFECTIVE_KEY] ?? (_effHolder[EFFECTIVE_KEY] = new Map<string, string>());
   for (const t of tools) m.set(t.name, t.packageName);
-  _effHolder[EFFECTIVE_KEY] = m;
 }
 
 /** The owning package if `name` is an EFFECTIVELY-registered extension tool, else undefined. */

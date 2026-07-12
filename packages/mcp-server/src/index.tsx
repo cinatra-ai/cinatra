@@ -30,6 +30,7 @@ import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelconte
 import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
+  type McpRegisterCapabilitiesRequestContext,
 } from "./runtime-server";
 import { mcpRequestContextStorage, resolveRequestRunContext, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
@@ -108,7 +109,10 @@ export type CreateMcpServerMountOptions = {
   getSession: () => Promise<SessionLike | null>;
   authBasePath?: string;
   mcpBasePath?: string;
-  registerCapabilities?: (server: McpRuntimeToolServer) => void | Promise<void>;
+  registerCapabilities?: (
+    server: McpRuntimeToolServer,
+    requestContext?: McpRegisterCapabilitiesRequestContext,
+  ) => void | Promise<void>;
   readSettings?: () => Promise<Partial<McpServerSettings> | null> | Partial<McpServerSettings> | null;
   /** Human-facing admin pages (overview, OAuth client management). */
   adminBasePath?: string;
@@ -827,6 +831,7 @@ export {
 export {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
+  type McpRegisterCapabilitiesRequestContext,
   type NavigationTarget,
   type ScreenDescriptor,
 } from "./runtime-server";
@@ -992,6 +997,16 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       name: serverName,
       version: serverVersion,
       registerCapabilities: options.registerCapabilities,
+      // cinatra#1392 S8 — thread the VERIFIED agent-run identity (signed OBO
+      // token only; the same trusted source the edge-bound dispatch consults)
+      // into the per-request registration pass, so the extension-tool
+      // DISCOVERY union can advertise the caller's edge-resolved tool set.
+      // A chat delegation / plain bearer carries no verified run → the pass
+      // stays caller-agnostic (pre-S8 behavior).
+      registerRequestContext:
+        delegatedActor?.delegation === "agent_run"
+          ? { verifiedAgentRunId: delegatedActor.runId }
+          : undefined,
       instructions: options.serverInstructions,
       experimental: options.serverExperimental,
       // Only the CHAT delegation type triggers the chat tool-policy

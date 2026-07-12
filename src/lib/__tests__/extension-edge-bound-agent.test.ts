@@ -124,7 +124,10 @@ describe("resolveEdgeBoundAgentVersion", () => {
     });
   });
 
-  it("returns { resolved: false } when the resolved install row dangles (target deleted after the edge was written)", async () => {
+  // cinatra#1392 S8 — aligned to the stricter non-agent fail-closed matrix: a
+  // DANGLING resolved id refuses with evidence (the pre-S8 "treat as no edge"
+  // lenience silently downgraded the dependent to the default template).
+  it("REFUSES when the resolved install row dangles (target deleted after the edge was written)", async () => {
     const dependent = install({
       id: DEP,
       packageName: "@cinatra-ai/consumer",
@@ -132,10 +135,42 @@ describe("resolveEdgeBoundAgentVersion", () => {
         { packageName: TARGET, versionConstraint: { kind: "range", range: "^0.1.0" }, resolvedInstallId: "iext_gone", resolutionReason: "scoped:org" } as never,
       ],
     });
-    const out = await resolveEdgeBoundAgentVersion(
-      { dependentInstallId: DEP, targetPackageName: TARGET },
-      deps({ [DEP]: dependent, iext_gone: null }),
-    );
-    expect(out).toEqual({ resolved: false });
+    await expect(
+      resolveEdgeBoundAgentVersion(
+        { dependentInstallId: DEP, targetPackageName: TARGET },
+        deps({ [DEP]: dependent, iext_gone: null }),
+      ),
+    ).rejects.toMatchObject({
+      name: "EdgeBoundAgentServingError",
+      code: "EDGE_BOUND_AGENT_RESOLVED_MISSING",
+      dependentInstallId: DEP,
+      targetPackageName: TARGET,
+      resolvedInstallId: "iext_gone",
+    });
+  });
+
+  // cinatra#1392 S8 — same alignment for a resolved row that is no longer LIVE.
+  it("REFUSES when the resolved install row is not live (archived mid-flight)", async () => {
+    const dependent = install({
+      id: DEP,
+      packageName: "@cinatra-ai/consumer",
+      dependencyEdges: [
+        { packageName: TARGET, versionConstraint: { kind: "range", range: "^0.1.0" }, resolvedInstallId: "iext_archived", resolutionReason: "scoped:org" } as never,
+      ],
+    });
+    const archived = install({ id: "iext_archived", status: "archived", isDefault: false, version: "0.1.4" });
+    await expect(
+      resolveEdgeBoundAgentVersion(
+        { dependentInstallId: DEP, targetPackageName: TARGET },
+        deps({ [DEP]: dependent, iext_archived: archived }),
+      ),
+    ).rejects.toMatchObject({
+      name: "EdgeBoundAgentServingError",
+      code: "EDGE_BOUND_AGENT_RESOLVED_NOT_LIVE",
+      dependentInstallId: DEP,
+      targetPackageName: TARGET,
+      resolvedInstallId: "iext_archived",
+      resolvedVersion: "0.1.4",
+    });
   });
 });

@@ -69,6 +69,9 @@ export type RetainedVersionKeyedObjectType = { typeId: string; ioSpec?: unknown;
 export type RetainedVersionKeyedUiAction = { id: string; handler: (input: unknown) => Promise<unknown> };
 
 type VersionKeyedEntry = {
+  /** The identity the entry was begun under (for whole-registry listings). */
+  packageName: string;
+  version: string;
   /** Flipped true ONLY by an explicit commit after a fully-successful register. */
   servable: boolean;
   mcpTools: Map<string, RetainedVersionKeyedMcpTool>;
@@ -115,8 +118,10 @@ function versionKey(packageName: string, version: string | null | undefined): st
   return `${packageName}${KEY_SEP}${version}`;
 }
 
-function newEntry(): VersionKeyedEntry {
+function newEntry(packageName: string, version: string): VersionKeyedEntry {
   return {
+    packageName,
+    version,
     servable: false,
     mcpTools: new Map(),
     capabilityProviders: new Map(),
@@ -147,6 +152,14 @@ export type VersionKeyedRegistrationSink = {
   commit(): void;
   /** Discard this attempt's entry — iff it still owns the slot (never a newer attempt's). */
   abort(): void;
+  /**
+   * Whether this attempt has SETTLED (commit or abort was called). The host ctx
+   * factory gates the non-default `callPrimitive` on it (cinatra#1392 S8): a
+   * `register(ctx)` must stay dispatch-free (side-effect-free contract), but a
+   * RETAINED handler served edge-bound after a successful register may invoke
+   * host primitives.
+   */
+  isSettled(): boolean;
 };
 
 /**
@@ -167,7 +180,7 @@ export function beginVersionKeyedRegistration(
         `pinned version — a non-default side-by-side version must carry a version identity (fail-closed).`,
     );
   }
-  const entry = newEntry();
+  const entry = newEntry(packageName, version as string);
   registry.set(key, entry);
   // ATTEMPT OWNERSHIP: this attempt owns the slot only while the map still points
   // at ITS entry object. A newer `begin` for the same identity replaces it, after
@@ -175,6 +188,7 @@ export function beginVersionKeyedRegistration(
   // attempt's entry). retain* always write to THIS attempt's `entry` (even if
   // orphaned) so a superseded attempt never mutates the live one.
   const owns = () => registry.get(key) === entry;
+  let settled = false;
 
   return {
     retainMcpTool: (tool) => {
@@ -225,11 +239,14 @@ export function beginVersionKeyedRegistration(
       entry.uiActions.push(action);
     },
     commit: () => {
+      settled = true;
       if (owns()) entry.servable = true;
     },
     abort: () => {
+      settled = true;
       if (owns()) registry.delete(key);
     },
+    isSettled: () => settled,
   };
 }
 
@@ -330,6 +347,49 @@ export function resolveVersionKeyedMcpTool(
     );
   }
   return { kind: "serve", value: tool };
+}
+
+/**
+ * Serve a non-default version's COMPLETE retained MCP tool set (cinatra#1392 S8
+ * — the tool DISCOVERY union). A BULK lookup: fail-closed on the servability
+ * axes (UNPINNED / UNKNOWN_VERSION / NOT_SERVABLE), but a servable version that
+ * registered NO tools serves `[]` — that empty set IS that version's genuine,
+ * complete tool surface (advertising nothing for the package is the correct
+ * discovery outcome for a dependent pinned to it), not a refusal. Point
+ * dispatch stays on `resolveVersionKeyedMcpTool` (which DOES refuse an
+ * unregistered name).
+ */
+export function resolveVersionKeyedMcpTools(
+  packageName: string,
+  version: string | null | undefined,
+): VersionKeyedServeResult<readonly RetainedVersionKeyedMcpTool[]> {
+  const e = resolveServableEntry(packageName, version);
+  if (e.kind === "refuse") return e;
+  return { kind: "serve", value: [...e.value.mcpTools.values()] };
+}
+
+/**
+ * Every SERVABLE retained MCP tool across all retained versions (cinatra#1392
+ * S8). Consumed by the in-process self-primitive map builder to UNION the
+ * version-keyed tool names into its `name → handler` map (the map is memoised
+ * per activation generation, so it cannot be per-caller; the strict
+ * versioned-only dispatch wrapper enforces the caller's edge binding at call
+ * time). Registration order within a version is preserved; versions enumerate
+ * in retention order.
+ */
+export function listServableVersionKeyedMcpTools(): ReadonlyArray<{
+  packageName: string;
+  version: string;
+  tool: RetainedVersionKeyedMcpTool;
+}> {
+  const out: Array<{ packageName: string; version: string; tool: RetainedVersionKeyedMcpTool }> = [];
+  for (const entry of registry.values()) {
+    if (!entry.servable) continue;
+    for (const tool of entry.mcpTools.values()) {
+      out.push({ packageName: entry.packageName, version: entry.version, tool });
+    }
+  }
+  return out;
 }
 
 /**
@@ -444,3 +504,22 @@ const VERSION_KEYED_SERVING_TEARDOWN_KEY = Symbol.for(
 type TeardownHolder = { [k: symbol]: ((packageName: string) => string[]) | undefined };
 (globalThis as unknown as TeardownHolder)[VERSION_KEYED_SERVING_TEARDOWN_KEY] =
   clearVersionKeyedServingForPackage;
+
+// SYNC CAPABILITY LOOKUP WITHOUT A STATIC ROUTE-GRAPH EDGE (cinatra#1392 S8 —
+// same shrink-only-ratchet rationale as the teardown seam above). The host ctx
+// factory's `resolveProviders` is SYNC by ABI, and its edge-bound substitution
+// (`extension-pre-resolved-edges.ts`) must consult THIS registry's capability
+// retention at request time. A static import from that (locked-route-reachable)
+// module would add this module to more route graphs; instead the point lookup is
+// published on the SAME globalThis singleton surface (cross-compilation safe via
+// `Symbol.for`) and read off it by the substitution. Absent (this module never
+// loaded ⇒ nothing was ever retained ⇒ no pin can exist) the substitution FAILS
+// CLOSED on any pin rather than serving the default.
+const VERSION_KEYED_CAPABILITY_LOOKUP_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-version-keyed-capability-lookup/v1",
+);
+type CapabilityLookupHolder = {
+  [k: symbol]: typeof resolveVersionKeyedCapabilityProviders | undefined;
+};
+(globalThis as unknown as CapabilityLookupHolder)[VERSION_KEYED_CAPABILITY_LOOKUP_KEY] =
+  resolveVersionKeyedCapabilityProviders;

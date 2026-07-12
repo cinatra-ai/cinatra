@@ -12,8 +12,18 @@ import "server-only";
 // serves THAT version's retained handler instead of the global (default) one,
 // FAIL-CLOSED (a refusal never falls through to the default handler).
 //
-// TRUSTED DEPENDENT IDENTITY (never client input). Two verified sources, in
+// TRUSTED DEPENDENT IDENTITY (never client input). Three verified sources, in
 // order:
+//   0. The EXTENSION-CTX identity frame (cinatra#1392 S8,
+//      `extension-ctx-dependent-identity.ts`) — set by the host ctx factory
+//      around `ctx.mcp.callPrimitive`, carrying the CALLING extension record's
+//      host-injected (packageName, version, isDefault). The immediate caller
+//      OUTRANKS the run lineage: an extension invoking a primitive is itself
+//      the consumer, so ITS resolved edges (not the outer run's) decide the
+//      served version. The identity maps to the canonical install row
+//      fail-closed (exactly-one live match; a torn non-default or an ambiguous
+//      match REFUSES; a default identity with no canonical row is `none` — a
+//      bare/dev extension that was never installed).
 //   1. `ActorContext.dependentInstallId` — the run's signed lineage, stamped by
 //      `buildActorContextFromRun` (cinatra#1392 Gap 2) and carried on the LLM
 //      ActorContext ALS (worker / A2A / llm-bridge mint paths).
@@ -61,27 +71,40 @@ import "server-only";
 //   - version-keyed lookup refuses (UNKNOWN_VERSION / NOT_SERVABLE /
 //     NO_SUCH_HANDLER) → the dispatch THROWS with that evidence — never the
 //     global handler.
-// NOTE: this is deliberately STRICTER than the agent-path resolver
-// (`extension-edge-bound-agent.ts` treats a dangling resolved id as "no edge",
-// relying on the closure gates' name-fallback re-heal). Aligning the agent path
-// to this matrix is a follow-up noted on cinatra#1392.
+// The agent-path resolver (`extension-edge-bound-agent.ts`) is ALIGNED to this
+// matrix since cinatra#1392 S8 (a dangling / not-live resolved row refuses with
+// evidence there too).
 // Absent trusted identity / no resolved edge to the target package ⇒ `none`
 // (compatibility-preserving: the global/default registration serves, exactly
 // as before this slice).
 //
-// OUT OF SCOPE (cinatra#1392 stays open for these): capability-provider
-// resolve substitution (`HostCapabilitiesPort.resolveProviders` is SYNC by
-// ABI; needs loader-side pre-resolved edge maps), object-type / ui-surface
-// serve surfaces, extension-ctx dependents (`ctx.mcp.callPrimitive` callers
-// carry no install identity yet), and the tool DISCOVERY union (tools/list
-// advertises the DEFAULT version's names; a name existing only in the pinned
-// version is not dispatchable — input is validated against the default's
-// registered schema).
+// TOOL DISCOVERY UNION (cinatra#1392 S8). `planExtensionToolDiscovery` computes,
+// for the CURRENT caller, the extension tool set a per-request MCP server build
+// must register: a package whose resolved edge pins a NON-DEFAULT version
+// advertises THAT version's retained tool names — with input validated against
+// the RESOLVED version's registered schema, not the default's — including names
+// that exist ONLY in the pinned version (registered with a strict dispatch that
+// re-verifies the edge at call time), and NOT advertising default names the
+// pinned version does not register (calling one would refuse NO_SUCH_HANDLER).
+// Absent identity / no pins ⇒ the plan is exactly the default replay,
+// byte-identical to the pre-S8 behavior.
+//
+// OUT OF SCOPE (cinatra#1392 stays open for these): the object-type /
+// ui-surface serve surfaces (S9, after the #1443 lane merges).
 
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
-import { resolveVersionKeyedMcpTool } from "@/lib/extension-version-keyed-serving";
+import {
+  resolveVersionKeyedMcpTool,
+  resolveVersionKeyedMcpTools,
+  type RetainedVersionKeyedMcpTool,
+  type VersionKeyedServeResult,
+} from "@/lib/extension-version-keyed-serving";
+import {
+  getExtensionCtxIdentity,
+  type ExtensionCtxIdentity,
+} from "@/lib/extension-ctx-dependent-identity";
 
 /** The LIVE canonical-row statuses (mirrors `pickActiveInstallId`'s filter). */
 const LIVE_STATUSES = new Set(["active", "locked"]);
@@ -118,6 +141,8 @@ export type EdgeBoundExtensionRefuseCode =
 
 /** Injectable seams — every default is the live trusted source / store read. */
 export type ResolveEdgeBoundExtensionDeps = {
+  /** Source 0: the extension-ctx dependent identity (`ctx.mcp.callPrimitive` ALS frame). */
+  getCtxIdentity?: () => ExtensionCtxIdentity | undefined;
   /** Source 1: the run-lineage dependent install id (ActorContext ALS). */
   getDependentInstallId?: () => string | undefined;
   /** Source 2: the VERIFIED (signed-OBO) delegated agent-run id on the MCP frame. */
@@ -136,6 +161,7 @@ export type ResolveEdgeBoundExtensionDeps = {
 
 function liveDeps(deps: ResolveEdgeBoundExtensionDeps): Required<ResolveEdgeBoundExtensionDeps> {
   return {
+    getCtxIdentity: deps.getCtxIdentity ?? (() => getExtensionCtxIdentity()),
     getDependentInstallId:
       deps.getDependentInstallId ?? (() => getActorContext()?.dependentInstallId),
     getVerifiedRunId:
@@ -229,16 +255,80 @@ export async function deriveDependentInstallIdForRun(
   };
 }
 
+/** The trusted-dependent resolution shared by dispatch AND discovery (S8). */
+export type EdgeBoundDependentResolution =
+  /** No trusted identity — the caller has no edge-bound constraint. */
+  | { kind: "none" }
+  /** The dependent's canonical row (its edges drive every per-package decision). */
+  | { kind: "dependent"; row: InstalledExtension }
+  /** Fail-closed refusal with evidence (torn/ambiguous identity). */
+  | { kind: "refuse"; code: EdgeBoundExtensionRefuseCode; message: string };
+
 /**
- * Resolve the edge-bound serving decision for a NON-AGENT dispatch to
- * `targetPackageName`. Pure over its injected deps (unit-testable without an
- * ALS frame or a DB); see the module header for the fail-closed matrix.
+ * Map the extension-ctx identity (source 0) to its canonical install row,
+ * fail-closed. The identity is host-injected activation identity: a DEFAULT
+ * identity selects the package's live default row(s); a NON-DEFAULT identity
+ * selects the live non-default row at ITS exact version. Exactly one match
+ * binds; zero matches are `none` for a default (a bare/dev extension never
+ * installed as a canonical row — compatibility-preserving) but REFUSE for a
+ * non-default (a versioned sibling only activates FROM a canonical row, so a
+ * missing row is torn state); multiple matches REFUSE (an arbitrary pick could
+ * bind the wrong install's edges — same rule as the run derivation).
  */
-export async function resolveEdgeBoundExtensionVersion(
-  input: { targetPackageName: string },
+async function resolveCtxIdentityRow(
+  identity: ExtensionCtxIdentity,
+  d: Required<ResolveEdgeBoundExtensionDeps>,
+): Promise<EdgeBoundDependentResolution> {
+  const rows = await d.readInstalledExtensionsByPackageName(identity.packageName);
+  const live = rows.filter((row) => LIVE_STATUSES.has(row.status));
+  const candidates = identity.isDefault
+    ? live.filter((row) => row.isDefault !== false)
+    : live.filter((row) => row.isDefault === false && (row.version ?? null) === identity.version);
+  if (candidates.length === 1) return { kind: "dependent", row: candidates[0] };
+  if (candidates.length === 0) {
+    if (identity.isDefault) return { kind: "none" };
+    return {
+      kind: "refuse",
+      code: "EDGE_BOUND_DEPENDENT_MISSING",
+      message:
+        `edge-bound serving refused — extension-ctx caller ${identity.packageName}@` +
+        `${identity.version ?? "(unversioned)"} (non-default) has no live canonical row ` +
+        `(torn down mid-flight?); refusing rather than serving an identity-less default`,
+    };
+  }
+  return {
+    kind: "refuse",
+    code: "EDGE_BOUND_DEPENDENT_AMBIGUOUS",
+    message:
+      `edge-bound serving refused — extension-ctx caller ${identity.packageName}` +
+      `${identity.isDefault ? " (default)" : `@${identity.version ?? "(unversioned)"}`} matches ` +
+      `${candidates.length} live install rows; refusing rather than binding an arbitrary ` +
+      `install's dependency edges`,
+  };
+}
+
+/**
+ * Resolve the TRUSTED dependent for the current caller — the shared first half
+ * of the fail-closed matrix (identity sources 0/1/2 + the top-level
+ * derivation). Returns the dependent's ROW so discovery can decide many
+ * packages from one resolution. `targetLabel` only shapes refusal messages.
+ */
+export async function resolveEdgeBoundDependent(
   deps: ResolveEdgeBoundExtensionDeps = {},
-): Promise<EdgeBoundExtensionVersionDecision> {
+  targetLabel = "(discovery)",
+): Promise<EdgeBoundDependentResolution> {
   const d = liveDeps(deps);
+
+  // Source 0 — the extension-ctx identity frame (the immediate caller).
+  const ctxIdentity = d.getCtxIdentity();
+  if (ctxIdentity) {
+    const viaCtx = await resolveCtxIdentityRow(ctxIdentity, d);
+    // A default identity with no canonical row falls THROUGH to the run
+    // lineage: the ctx frame proves an extension is calling, but a bare/dev
+    // extension without an install row has no edges of its own — the outer
+    // run's edges (if any) are then the only applicable constraint.
+    if (viaCtx.kind !== "none") return viaCtx;
+  }
 
   // TRUSTED dependent identity only — never client metadata.
   let dependentInstallId = d.getDependentInstallId();
@@ -252,7 +342,7 @@ export async function resolveEdgeBoundExtensionVersion(
         code: "EDGE_BOUND_RUN_MISSING",
         message:
           `edge-bound serving refused — verified run ${runId} has no run row; ` +
-          `cannot establish the dependent identity for a dispatch to ${input.targetPackageName}`,
+          `cannot establish the dependent identity for a dispatch to ${targetLabel}`,
       };
     }
     if (run.dependentInstallId) {
@@ -266,7 +356,7 @@ export async function resolveEdgeBoundExtensionVersion(
           code: "EDGE_BOUND_DEPENDENT_AMBIGUOUS",
           message:
             `edge-bound serving refused — cannot derive an unambiguous dependent identity for a ` +
-            `dispatch to ${input.targetPackageName}: ${derived.message}; refusing rather than ` +
+            `dispatch to ${targetLabel}: ${derived.message}; refusing rather than ` +
             `binding an arbitrary install's dependency edges`,
         };
       }
@@ -281,13 +371,28 @@ export async function resolveEdgeBoundExtensionVersion(
       code: "EDGE_BOUND_DEPENDENT_MISSING",
       message:
         `edge-bound serving refused — trusted dependent install ${dependentInstallId} has no ` +
-        `canonical row (torn down mid-flight?); refusing a dispatch to ${input.targetPackageName} ` +
+        `canonical row (torn down mid-flight?); refusing a dispatch to ${targetLabel} ` +
         `rather than serving an identity-less default`,
     };
   }
+  return { kind: "dependent", row: dependent };
+}
+
+/**
+ * Decide the served version of `targetPackageName` for a KNOWN dependent row —
+ * the shared second half of the fail-closed matrix (edge → resolved row →
+ * live → default/versioned).
+ */
+export async function decideEdgeBoundVersionForDependent(
+  dependent: InstalledExtension,
+  targetPackageName: string,
+  deps: ResolveEdgeBoundExtensionDeps = {},
+): Promise<EdgeBoundExtensionVersionDecision> {
+  const d = liveDeps(deps);
+  const dependentInstallId = dependent.id;
 
   const edge = (dependent.dependencyEdges ?? []).find(
-    (e) => e.packageName === input.targetPackageName && e.resolvedInstallId != null,
+    (e) => e.packageName === targetPackageName && e.resolvedInstallId != null,
   );
   if (!edge || edge.resolvedInstallId == null) return { kind: "none" };
 
@@ -298,7 +403,7 @@ export async function resolveEdgeBoundExtensionVersion(
       code: "EDGE_BOUND_RESOLVED_MISSING",
       message:
         `edge-bound serving refused — dependent install ${dependentInstallId} resolved its edge ` +
-        `to ${input.targetPackageName} install ${edge.resolvedInstallId}, but that row is gone; ` +
+        `to ${targetPackageName} install ${edge.resolvedInstallId}, but that row is gone; ` +
         `refusing rather than silently serving the default`,
     };
   }
@@ -308,7 +413,7 @@ export async function resolveEdgeBoundExtensionVersion(
       code: "EDGE_BOUND_RESOLVED_NOT_LIVE",
       message:
         `edge-bound serving refused — dependent install ${dependentInstallId} resolved its edge ` +
-        `to ${input.targetPackageName} install ${resolvedRow.id}, which is "${resolvedRow.status}" ` +
+        `to ${targetPackageName} install ${resolvedRow.id}, which is "${resolvedRow.status}" ` +
         `(not live); refusing rather than silently serving the default`,
     };
   }
@@ -322,11 +427,28 @@ export async function resolveEdgeBoundExtensionVersion(
       code: "EDGE_BOUND_VERSION_UNPINNED",
       message:
         `edge-bound serving refused — dependent install ${dependentInstallId} resolved its edge ` +
-        `to a NON-DEFAULT install of ${input.targetPackageName} (install ${resolvedRow.id}) that ` +
+        `to a NON-DEFAULT install of ${targetPackageName} (install ${resolvedRow.id}) that ` +
         `carries NO version pin; refusing rather than silently serving the default`,
     };
   }
   return { kind: "versioned", version, resolvedInstallId: resolvedRow.id };
+}
+
+/**
+ * Resolve the edge-bound serving decision for a NON-AGENT dispatch to
+ * `targetPackageName`. Pure over its injected deps (unit-testable without an
+ * ALS frame or a DB); see the module header for the fail-closed matrix.
+ * Composition of `resolveEdgeBoundDependent` + `decideEdgeBoundVersionForDependent`
+ * (behavior-identical to the pre-S8 single function for identity sources 1/2).
+ */
+export async function resolveEdgeBoundExtensionVersion(
+  input: { targetPackageName: string },
+  deps: ResolveEdgeBoundExtensionDeps = {},
+): Promise<EdgeBoundExtensionVersionDecision> {
+  const dependent = await resolveEdgeBoundDependent(deps, input.targetPackageName);
+  if (dependent.kind === "none") return { kind: "none" };
+  if (dependent.kind === "refuse") return dependent;
+  return decideEdgeBoundVersionForDependent(dependent.row, input.targetPackageName, deps);
 }
 
 /** Thrown by the dispatch wrapper on a fail-closed edge-bound refusal. */
@@ -386,4 +508,259 @@ export async function dispatchExtensionMcpToolEdgeBound(
     return versionedHandler(input);
   }
   return globalHandler(input);
+}
+
+/**
+ * Dispatch a VERSIONED-ONLY extension MCP tool — a name that exists in a
+ * retained NON-DEFAULT version but NOT in the default's global registration
+ * (cinatra#1392 S8 discovery union). There is no global handler to fall back
+ * to, so the matrix is STRICT:
+ *
+ *   - `versioned` → the version-keyed retained handler, fail-closed via
+ *     `resolveVersionKeyedMcpTool` (incl. NO_SUCH_HANDLER when the CALLER's
+ *     pinned version — possibly a different one than the version that
+ *     advertised the name — did not register it);
+ *   - `none` / `default` → THROW (the caller's edges do not pin a version
+ *     serving this name; for this caller the tool does not exist);
+ *   - `refuse` → THROW the evidence-carrying refusal.
+ */
+export async function dispatchVersionedOnlyExtensionMcpTool(
+  target: { packageName: string; name: string },
+  input: unknown,
+  deps: ResolveEdgeBoundExtensionDeps = {},
+): Promise<unknown> {
+  const decision = await resolveEdgeBoundExtensionVersion(
+    { targetPackageName: target.packageName },
+    deps,
+  );
+  if (decision.kind === "refuse") {
+    throw new EdgeBoundMcpServeRefusal(decision.code, decision.message);
+  }
+  if (decision.kind !== "versioned") {
+    throw new EdgeBoundMcpServeRefusal(
+      "EDGE_BOUND_VERSIONED_ONLY_UNBOUND",
+      `edge-bound serving refused — MCP tool "${target.name}" exists only in a retained ` +
+        `non-default version of ${target.packageName}, and the caller's resolved edges do not ` +
+        `pin a non-default version of that package (the tool is not served to this caller)`,
+    );
+  }
+  const served = resolveVersionKeyedMcpTool(target.packageName, decision.version, target.name);
+  if (served.kind === "refuse") {
+    throw new EdgeBoundMcpServeRefusal(
+      served.code,
+      `edge-bound serving refused for MCP tool "${target.name}" — ${served.message}`,
+    );
+  }
+  const versionedHandler = served.value.handler;
+  return versionedHandler(input);
+}
+
+// ---------------------------------------------------------------------------
+// TOOL DISCOVERY UNION (cinatra#1392 S8)
+// ---------------------------------------------------------------------------
+
+/** The default-registry tool shape the planner consumes (registry entry). */
+export type DiscoveryDefaultTool = {
+  name: string;
+  packageName: string;
+  description?: string;
+  inputSchema?: unknown;
+  handler: (input: unknown) => unknown | Promise<unknown>;
+};
+
+/** One tool a per-request MCP server build must register for the CURRENT caller. */
+export type ExtensionToolDiscoveryEntry =
+  /** The default replay entry — dispatch via `dispatchExtensionMcpToolEdgeBound`. */
+  | { mode: "default"; tool: DiscoveryDefaultTool }
+  /**
+   * An edge-resolved NON-DEFAULT version's retained tool: advertise ITS
+   * name/description and validate input against ITS registered schema. When the
+   * default set has the same name, `defaultTool` carries it so the dispatch
+   * chokepoint keeps the exact S7 call-time semantics (a mid-flight decision
+   * flip to default serves the global handler); absent, the strict
+   * versioned-only dispatch applies.
+   */
+  | {
+      mode: "versioned";
+      packageName: string;
+      version: string;
+      tool: RetainedVersionKeyedMcpTool;
+      defaultTool?: DiscoveryDefaultTool;
+    };
+
+export type ExtensionToolDiscoveryPlan = {
+  entries: ExtensionToolDiscoveryEntry[];
+  /**
+   * Diagnostics for the server build's log line: identity-level refusals and
+   * per-package torn-retention downgrades (where default names stay advertised
+   * so the call-time chokepoint surfaces the evidence-carrying refusal).
+   */
+  notes: string[];
+};
+
+/** Planner seams beyond the resolver deps (the bulk retained-tool lookup). */
+export type PlanExtensionToolDiscoveryDeps = ResolveEdgeBoundExtensionDeps & {
+  resolveVersionKeyedMcpToolSet?: (
+    packageName: string,
+    version: string,
+  ) => VersionKeyedServeResult<readonly RetainedVersionKeyedMcpTool[]>;
+};
+
+/**
+ * Plan the extension-tool registration set for the CURRENT caller (per-request
+ * server build). Order is deliberate and deterministic:
+ *   - the default registry order is preserved (a no-identity / no-pins plan is
+ *     the EXACT default replay — byte-identical pre-S8 behavior);
+ *   - a pinned package's both-present names occupy their default positions;
+ *   - names existing ONLY in the pinned version are appended after the default
+ *     block, grouped per package (first-seen package order, then lexicographic
+ *     for edge-target packages that register no default tools).
+ * Fail-closed downgrades (identity refuse / torn retained lookup) keep the
+ * DEFAULT names advertised: every call then flows through the dispatch
+ * chokepoint, which re-resolves and throws the evidence-carrying refusal (a
+ * hidden tool would swallow the evidence).
+ */
+export async function planExtensionToolDiscovery(
+  defaultTools: readonly DiscoveryDefaultTool[],
+  deps: PlanExtensionToolDiscoveryDeps = {},
+): Promise<ExtensionToolDiscoveryPlan> {
+  const notes: string[] = [];
+  const defaultPlan = (): ExtensionToolDiscoveryPlan => ({
+    entries: defaultTools.map((tool) => ({ mode: "default" as const, tool })),
+    notes,
+  });
+
+  const dependent = await resolveEdgeBoundDependent(deps);
+  if (dependent.kind === "none") return defaultPlan();
+  if (dependent.kind === "refuse") {
+    notes.push(`identity refuse (${dependent.code}) — default names advertised; calls will refuse`);
+    return defaultPlan();
+  }
+
+  const resolveToolSet =
+    deps.resolveVersionKeyedMcpToolSet ??
+    ((packageName: string, version: string) => resolveVersionKeyedMcpTools(packageName, version));
+
+  // One decision per package (memoised) across the default set + the
+  // dependent's resolved-edge targets.
+  const decisionByPkg = new Map<string, Promise<EdgeBoundExtensionVersionDecision>>();
+  const decide = (pkg: string): Promise<EdgeBoundExtensionVersionDecision> => {
+    let p = decisionByPkg.get(pkg);
+    if (!p) {
+      p = decideEdgeBoundVersionForDependent(dependent.row, pkg, deps);
+      decisionByPkg.set(pkg, p);
+    }
+    return p;
+  };
+
+  // The servable retained tool set per VERSIONED-pinned package; `null` marks a
+  // torn lookup (downgrade to default names, call-time refusal).
+  const servedSetByPkg = new Map<string, readonly RetainedVersionKeyedMcpTool[] | null>();
+  const versionByPkg = new Map<string, string>();
+
+  const entries: ExtensionToolDiscoveryEntry[] = [];
+  const pkgOrder: string[] = [];
+  const seenPkg = new Set<string>();
+  const defaultNamesByPkg = new Map<string, Set<string>>();
+  for (const tool of defaultTools) {
+    let names = defaultNamesByPkg.get(tool.packageName);
+    if (!names) defaultNamesByPkg.set(tool.packageName, (names = new Set()));
+    names.add(tool.name);
+  }
+
+  // Pass 1 — the default registry order, versioned substitution in place.
+  for (const tool of defaultTools) {
+    const pkg = tool.packageName;
+    if (!seenPkg.has(pkg)) {
+      seenPkg.add(pkg);
+      pkgOrder.push(pkg);
+    }
+    const decision = await decide(pkg);
+    if (decision.kind === "none" || decision.kind === "default") {
+      entries.push({ mode: "default", tool });
+      continue;
+    }
+    if (decision.kind === "refuse") {
+      if (!servedSetByPkg.has(pkg)) {
+        servedSetByPkg.set(pkg, null);
+        notes.push(`${pkg}: decision refuse (${decision.code}) — default names advertised; calls will refuse`);
+      }
+      entries.push({ mode: "default", tool });
+      continue;
+    }
+    // versioned — resolve the retained set once per package.
+    if (!servedSetByPkg.has(pkg)) {
+      const served = resolveToolSet(pkg, decision.version);
+      if (served.kind === "refuse") {
+        servedSetByPkg.set(pkg, null);
+        notes.push(
+          `${pkg}@${decision.version}: retained lookup refuse (${served.code}) — default names ` +
+            `advertised; calls will refuse`,
+        );
+      } else {
+        servedSetByPkg.set(pkg, served.value);
+        versionByPkg.set(pkg, decision.version);
+      }
+    }
+    const servedSet = servedSetByPkg.get(pkg);
+    if (servedSet === null || servedSet === undefined) {
+      entries.push({ mode: "default", tool });
+      continue;
+    }
+    const retained = servedSet.find((t) => t.name === tool.name);
+    if (retained) {
+      entries.push({
+        mode: "versioned",
+        packageName: pkg,
+        version: decision.version,
+        tool: retained,
+        defaultTool: tool,
+      });
+    }
+    // else: the pinned version does not register this default name — for this
+    // caller the tool does not exist (calling it would refuse NO_SUCH_HANDLER),
+    // so it is NOT advertised.
+  }
+
+  // Edge-target packages that register no default tools still contribute their
+  // pinned version's names (lexicographic for determinism).
+  const edgeTargets = (dependent.row.dependencyEdges ?? [])
+    .filter((e) => e.resolvedInstallId != null)
+    .map((e) => e.packageName)
+    .filter((pkg) => !seenPkg.has(pkg))
+    .sort();
+  for (const pkg of edgeTargets) {
+    if (seenPkg.has(pkg)) continue;
+    seenPkg.add(pkg);
+    pkgOrder.push(pkg);
+    const decision = await decide(pkg);
+    if (decision.kind !== "versioned") continue; // no default names to advertise either
+    const served = resolveToolSet(pkg, decision.version);
+    if (served.kind === "refuse") {
+      servedSetByPkg.set(pkg, null);
+      notes.push(
+        `${pkg}@${decision.version}: retained lookup refuse (${served.code}) — no names advertised ` +
+          `(the package registers no default tools)`,
+      );
+      continue;
+    }
+    servedSetByPkg.set(pkg, served.value);
+    versionByPkg.set(pkg, decision.version);
+  }
+
+  // Pass 2 — append the VERSIONED-ONLY names (retained names the default set
+  // does not register), grouped per package in first-seen order.
+  for (const pkg of pkgOrder) {
+    const servedSet = servedSetByPkg.get(pkg);
+    if (!servedSet) continue;
+    const version = versionByPkg.get(pkg);
+    if (!version) continue;
+    const defaultNames = defaultNamesByPkg.get(pkg) ?? new Set<string>();
+    for (const retained of servedSet) {
+      if (defaultNames.has(retained.name)) continue; // placed in pass 1
+      entries.push({ mode: "versioned", packageName: pkg, version, tool: retained });
+    }
+  }
+
+  return { entries, notes };
 }
