@@ -140,6 +140,47 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     expect(registerArtifactExtensions(root)).toBe(1);
     expect(objectTypeRegistry.listArtifacts()).toHaveLength(1);
   });
+
+  // cinatra#1425 AC-5 — MULTI-VENDOR registration. A THIRD-VENDOR
+  // kind:"artifact" package under `<root>/<vendor>/*-artifact` registers
+  // through the widened path exactly like a first-party one, keeping its
+  // vendor scope in the type id. (The host fix: register-all-object-types
+  // now passes the extensions ROOT, not the first-party vendor dir, so the
+  // bridge's vendor-dir scan actually sees other vendors.)
+  it("registers a THIRD-VENDOR kind:'artifact' fixture from its vendor dir, id keeps the vendor scope (AC-5)", () => {
+    writeExt(root, path.join("acme-vendor", "competitor-teardown-artifact"), {
+      name: "@acme-vendor/competitor-teardown-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+        },
+      },
+    });
+    // A first-party sibling registers alongside — neither shadows the other.
+    writeExt(root, path.join("cinatra-ai", "first-party-artifact"), {
+      name: "@cinatra-ai/first-party-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: { accepts: { file: { mimeTypes: ["application/pdf"] } } },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(2);
+    const thirdVendor = objectTypeRegistry.resolve(
+      "@acme-vendor/competitor-teardown-artifact:artifact",
+    );
+    expect(thirdVendor).not.toBeNull();
+    expect(thirdVendor?.isArtifact?.accepts.file?.mimeTypes).toEqual(["text/markdown"]);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/first-party-artifact:artifact"),
+    ).not.toBeNull();
+    // Provenance carries the third-vendor package name (teardown symmetry).
+    expect(
+      objectTypeRegistry.getTypesForPackage("@acme-vendor/competitor-teardown-artifact"),
+    ).toEqual(["@acme-vendor/competitor-teardown-artifact:artifact"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ import {
 } from "../graphiti-client";
 import type { EntityNode } from "../graphiti-client";
 // Connector dispatch is intentionally not active in this handler.
+import { isDynamicObjectTypeId } from "../namespace";
 import { objectTypeRegistry } from "../registry";
 // Write paths go through Postgres-primary CRUD; the legacy
 // shadowUpsertObject (kept in src/lib/objects-dual-write.ts because asset-blog
@@ -370,10 +371,13 @@ export function createObjectsPrimitiveHandlers() {
       const classificationModel = readObjectsClassificationModelFromDatabase();
       const classification = await classifyObject(rawData, input.typeHint, { model: classificationModel });
 
-      // 2. Auto-register dynamic type whenever the resolved type is a @cinatra-ai/dynamic:*
+      // 2. Auto-register dynamic type whenever the resolved type is a dynamic
       // ID (regardless of confidence / isNewType flag — the LLM may return high confidence
       // for a well-understood new type that simply has no static registration).
-      if (classification.isNewType || classification.confidence < 0.4 || classification.type.startsWith("@cinatra-ai/dynamic:")) {
+      // NEW ids mint under the reserved `@dynamic/types:` scope (cinatra#1425);
+      // the legacy `@cinatra-ai/dynamic:` prefix stays accepted on READ so
+      // existing rows keep resolving.
+      if (classification.isNewType || classification.confidence < 0.4 || isDynamicObjectTypeId(classification.type)) {
         // Build originContext from whatever provenance is available.
         // agentId/runId may be undefined for external callers. Conditionally
         // spread so the JSONB column stores a compact object (not

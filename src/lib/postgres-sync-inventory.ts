@@ -176,6 +176,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Skills catalog store read on request paths. Migratable; converted with the skills subsystem.",
   },
+  "src/lib/objects/artifact-claim-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Artifact-claim registry DB primitives (cinatra#1425): reserve/activate/retire claim transitions (advisory-locked, CTE-atomic with their claim events + reconcile-queue rows) plus the org scope-chain reads the effective-type-catalog resolver consumes. Built as a sync leaf mirroring skill-lifecycle-store.ts's pattern so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
   "src/lib/skill-lifecycle-store.ts": {
     class: "migratable-request-path",
     justification:
