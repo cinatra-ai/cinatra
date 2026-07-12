@@ -80,30 +80,10 @@ export { canCompose, findCompositionMatches } from "./compose";
 // Artifact-type claims — pure policy leaf (cinatra#1425, epic #1424): the
 // status/kind vocabulary, the dispositions union validator, and kind-over-
 // scope arbitration. DB state lives in the host claim store
-// (src/lib/objects/artifact-claim-store.ts); this leaf is side-effect-free.
-export {
-  ARTIFACT_CLAIM_KINDS,
-  ARTIFACT_CLAIM_STATUSES,
-  ARTIFACT_CLAIM_EVENTS,
-  PLATFORM_CLAIM_SCOPE,
-  ORG_CLAIM_SCOPE_PREFIX,
-  orgClaimScope,
-  isValidClaimScope,
-  claimDispositionsSchema,
-  parseClaimDispositions,
-  claimPrecedenceRank,
-  isWinnerEligible,
-  resolveClaimWinner,
-  isDefaultClaimDominated,
-} from "./claims";
-export type {
-  ArtifactClaimKind,
-  ArtifactClaimStatus,
-  ArtifactClaimEvent,
-  ArtifactClaimScope,
-  ClaimDispositions,
-  ArbitrableClaim,
-} from "./claims";
+// (src/lib/objects/artifact-claim-store.ts). DELIBERATELY NOT re-exported
+// from this barrel: consumers import the `@cinatra-ai/objects/claims`
+// subpath (the classifier-signals leaf pattern) so the leaf never joins the
+// barrel's route-reachable module graph (route-graph ratchet).
 
 // Graphiti-backed object intelligence exports.
 export * as graphitiClient from "./graphiti-client";
