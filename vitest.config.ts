@@ -195,8 +195,9 @@ export default defineConfig({
       // Dependency-free leaves of @cinatra-ai/registries (pure read-model
       // builders / semver compare — no pacote chain), mapped to the REAL
       // modules and listed BEFORE the barrel stub (first match wins) so the
-      // deep-path consumers (extension-auto-update) get the genuine
-      // implementations.
+      // deep-path consumers (extension-auto-update,
+      // extension-update-read-model-store, marketplace-sync-deps) get the
+      // genuine implementations.
       {
         find: "@cinatra-ai/registries/src/update-read-model",
         replacement: path.join(

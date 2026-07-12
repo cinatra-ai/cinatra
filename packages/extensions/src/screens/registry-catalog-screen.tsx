@@ -32,6 +32,7 @@ import { InstallBatchLiveRefresh } from "@/components/extensions/install-batch-l
 import {
   InstalledExtensionCard,
   InstalledStatusIndicator,
+  UpdateAvailableChip,
 } from "@/components/extensions/installed-extension-card";
 import {
   extensionKindEmblem,
@@ -40,6 +41,12 @@ import {
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
+// §III per-extension update-available chip (cinatra#1041 outcome 3): the
+// cached read model + the pure chip-state derivation.
+import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
+import { readInstalledUpdateReadouts } from "@/lib/extension-update-read-model-store";
+import { deriveInstalledUpdateChipState } from "./installed-update-chip";
+import type { InstalledUpdateReadout } from "@cinatra-ai/registries/src/update-read-model";
 // Register the built-in per-connector readiness probes (side effect) — the
 // SAME import the /connectors grid + setup routes carry (connector-setup-badge
 // pins it). Without it a cold extensions-page load would probe unregistered
@@ -106,6 +113,29 @@ export async function RegistryCatalogScreen({
     );
     return [] as Awaited<ReturnType<typeof listRecentInstallBatches>>;
   });
+
+  // §III per-extension "Update available" chip source (cinatra#1041 outcome 3).
+  // The cached update read model is refreshed per-package by the hourly
+  // catalog-sync loop and read HERE in one batched query (no per-render
+  // packument storm; works on gatekept instances that cannot enumerate
+  // registry versions live). Best-effort: a read failure degrades to "no
+  // chips" (fail-quiet) — an update indicator must never blank the list.
+  const updateReadoutByName = new Map<string, InstalledUpdateReadout>();
+  {
+    const installedPackageNames = [...activeRows, ...archivedRows].map(
+      (row) => row.packageName,
+    );
+    const readouts = await readInstalledUpdateReadouts(installedPackageNames).catch(
+      (err: unknown) => {
+        console.warn(
+          "[registry-catalog] could not read the update model (chips omitted):",
+          err instanceof Error ? err.message : err,
+        );
+        return [] as InstalledUpdateReadout[];
+      },
+    );
+    for (const readout of readouts) updateReadoutByName.set(readout.packageName, readout);
+  }
 
   // Post-install "needs configuration" affordance (cinatra #1057): for each
   // installed AGENT whose REQUIRED connector dependencies are not yet
@@ -258,6 +288,38 @@ export async function RegistryCatalogScreen({
     </>
   );
 
+  // §III update affordance (cinatra#1041 outcome 3) → the card's spec-line
+  // props. Derives the chip state from the cached read model and the newer
+  // version's ABI compat, then maps it to the presentational bits:
+  //   • update-available → the blue chip
+  //   • incompatible     → greyed spec line (the §I ABI-compat treatment), no text
+  //   • non-comparable / up-to-date / none (stale/missing, fail-quiet) → nothing
+  // The chip is the ONLY update information the card carries (design §III;
+  // owner direction 2026-07-12): the explanatory per-state wordings surface on
+  // the §V settings page's Maintenance · Update row, never here.
+  // Only ACTIVE rows carry it — an archived (fully greyed) card shows no chip.
+  const updateAffordanceFor = (row: InstalledCardRow, isArchived: boolean) => {
+    if (isArchived) return {} as const;
+    const readout = updateReadoutByName.get(row.packageName) ?? null;
+    const state = deriveInstalledUpdateChipState({
+      installedVersion: row.rawVersion,
+      latestVersion: readout?.entry?.latestVersion ?? null,
+      latestCompat: deriveExtensionCompatState(readout?.entry?.latestSdkAbiRange),
+      stale: readout?.stale ?? true,
+    });
+    switch (state) {
+      case "update-available":
+        return { updateChip: <UpdateAvailableChip /> } as const;
+      case "incompatible":
+        return { specLineMuted: true } as const;
+      case "non-comparable":
+      case "up-to-date":
+      case "none":
+      default:
+        return {} as const;
+    }
+  };
+
   const renderCard = (row: InstalledCardRow, isArchived: boolean) => (
     <InstalledExtensionCard
       key={rowKey(row.kind, row.packageName)}
@@ -270,6 +332,7 @@ export async function RegistryCatalogScreen({
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}
+      {...updateAffordanceFor(row, isArchived)}
       actions={renderCardActions(row, isArchived)}
       // Archived extensions render the fully-greyed §VI card (cinatra#957):
       // category ground → light grey, muted logo tile, all text/status/actions

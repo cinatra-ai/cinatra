@@ -7,9 +7,9 @@
 // pair, and the marketplace vendor gating — are unit-testable without a DB.
 // ---------------------------------------------------------------------------
 
-import { comparePluginVersions } from "@cinatra-ai/registries/src/version-compare";
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
 import { disabledActionReason } from "../lifecycle-ui";
+import type { InstalledUpdateChipState } from "./installed-update-chip";
 
 /** The kinds whose access policy is keyed by the canonical install row — the
  * identity install (setExtensionInstallAccess) and enforcement both use. Agent
@@ -39,16 +39,63 @@ export function settingsHrefFor(kind: ExtensionKind, packageName: string): strin
   return `/configuration/extensions/settings/${kind}/${packageName}`;
 }
 
-/** True when the installed version is strictly behind the newest published one. */
-export function resolveUpdateAvailable(
-  rawVersion: string | null,
-  newestVersion: string | null,
-): boolean {
-  return Boolean(
-    rawVersion &&
-      newestVersion &&
-      comparePluginVersions(rawVersion, newestVersion) === "update-available",
-  );
+/**
+ * The §V Maintenance · Update row: the update status spelled out in words as
+ * the row's description, with the Update button live ONLY when there is an
+ * update to run (design §V — "the button greyed out whenever there is nothing
+ * to run"). Discriminated on `enabled` so a disabled row always carries its
+ * greyed-button reason.
+ */
+export type SettingsUpdateRow =
+  | { enabled: true; description: string }
+  | { enabled: false; description: string; disabledReason: string };
+
+/**
+ * Map the §III card update state (the SAME `deriveInstalledUpdateChipState`
+ * verdict the installed card's chip renders from) to the §V Maintenance ·
+ * Update row. Per-state wording from the design spec:
+ *   • update-available → "Currently on version X — version Y is available."
+ *     (the only live-button state);
+ *   • incompatible     → "Newer version needs a newer Cinatra.";
+ *   • non-comparable   → "No registry version to compare." (github/dev/local
+ *     sources — `installedVersion` may be null here);
+ *   • up-to-date / none (fail-quiet stale readout) → the up-to-date line.
+ * This row is where the explanation lives — the §III card itself never
+ * carries explanatory update text (owner direction 2026-07-12).
+ */
+export function resolveUpdateRow(input: {
+  state: InstalledUpdateChipState;
+  installedVersion: string | null;
+  latestVersion: string | null;
+}): SettingsUpdateRow {
+  const { state, installedVersion, latestVersion } = input;
+  switch (state) {
+    case "update-available":
+      return {
+        enabled: true,
+        description: `Currently on version ${installedVersion} — version ${latestVersion} is available.`,
+      };
+    case "incompatible":
+      return {
+        enabled: false,
+        description: "Newer version needs a newer Cinatra.",
+        disabledReason: "Newer version needs a newer Cinatra",
+      };
+    case "non-comparable":
+      return {
+        enabled: false,
+        description: "No registry version to compare.",
+        disabledReason: "No registry version to compare",
+      };
+    case "up-to-date":
+    case "none":
+    default:
+      return {
+        enabled: false,
+        description: `Currently on version ${installedVersion} — up to date.`,
+        disabledReason: "Already up to date",
+      };
+  }
 }
 
 /** A registered marketplace vendor is one whose vendor state is approved/active. */
