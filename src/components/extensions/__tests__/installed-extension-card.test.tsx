@@ -345,7 +345,7 @@ describe("InstalledExtensionCard — §III spec-line update states", () => {
 // was already correct. These invariants pin that contract so the update-chip
 // wiring can never DISPLACE or DROP the description element in any chip state:
 // the two-line-clamped description paragraph must render alongside the chip,
-// the greyed incompatible line, the non-comparable note, AND the empty state.
+// the greyed incompatible line, AND the empty state.
 // ---------------------------------------------------------------------------
 describe("InstalledExtensionCard — §III description survives every update-chip state", () => {
   const DESCRIPTION = "Stateless schema-driven web research enricher.";

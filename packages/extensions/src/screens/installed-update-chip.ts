@@ -11,8 +11,9 @@
 //   • up-to-date       — installed is the latest (or newer) → no chip.
 //   • incompatible     — a newer version exists but its declared ABI needs a
 //       newer Cinatra → the spec line greys out under the §I ABI-compat
-//       treatment and shows NO chip (a "Newer version needs a newer Cinatra"
-//       note explains why).
+//       treatment and shows NO chip and NO text (the "Newer version needs a
+//       newer Cinatra" wording surfaces on the §V settings page's
+//       Maintenance · Update row, never on the card).
 //   • non-comparable   — github refs, `0.0.0-dev.*` and local builds have no
 //       registry version to compare, so they NEVER show a chip and NEVER fall
 //       back to a string-equality guess (outcome 4).
