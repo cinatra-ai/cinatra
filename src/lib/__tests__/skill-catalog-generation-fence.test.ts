@@ -8,10 +8,13 @@
  *   1. WRITE FENCE: replaceSkillCatalogInDatabase commits the generation-token
  *      bump IN THE SAME transaction as the row writes (one
  *      runPostgresQueriesSync call, transaction: true, batch includes the
- *      metadata write for `skills_catalog_generation`).
- *   2. READ FENCE: a cache miss reads token → rows → token in ONE sequential
- *      batch and RETRIES when the tokens differ, so an interleaved commit can
- *      never hand the caller a torn {old packages, new skills} mix.
+ *      metadata write for `skills_catalog_generation`); with a `writeGuard`
+ *      the batch STARTS with the lease-ownership guard statement (FOR UPDATE
+ *      lock + division-by-zero abort on a lost lease — cinatra#1364).
+ *   2. READ FENCE: a cache miss reads token → rows → token inside ONE
+ *      REPEATABLE READ transaction (single MVCC snapshot — a torn
+ *      {old packages, new skills} mix is impossible) and still RETRIES if the
+ *      tokens ever differ (isolation-downgrade backstop).
  *   3. CACHE: same token ⇒ cache hit (probe only, no row re-read); changed
  *      token (a write from ANY process) ⇒ full refetch.
  *   4. The targeted prefill writer bumps the token atomically too.
@@ -130,6 +133,30 @@ describe("replaceSkillCatalogInDatabase — transactional generation bump (write
     expect(bumps).toHaveLength(1);
     // The bump writes a FRESH opaque token (a JSON string value).
     expect(() => JSON.parse(String(bumps[0]!.values?.[1]))).not.toThrow();
+    // No writeGuard ⇒ no lease-guard statement anywhere in the batch.
+    expect(call.queries.some((q) => /catalog_write_lease_guard/.test(q.text))).toBe(false);
+  });
+
+  it("with a writeGuard, the batch STARTS with the lease-ownership guard statement (cinatra#1364)", () => {
+    replaceSkillCatalogInDatabase({
+      skillPackages: [{ id: "pkg", packageId: "pkg", slug: "pkg", name: "P", description: "d" }],
+      skills: [],
+      writeGuard: { guardKey: "skills_catalog_rebuild_lease", guardToken: "lease-token-1" },
+    });
+
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
+    const call = fake.calls[0]!;
+    expect(call.transaction).toBe(true);
+    const guard = call.queries[0]!;
+    // FIRST statement: locks the lease row (FOR UPDATE, held to COMMIT) and
+    // aborts the whole transaction (1/count(*) → division by zero) unless the
+    // row still carries our token.
+    expect(guard.text).toMatch(/FOR UPDATE/);
+    expect(guard.text).toMatch(/1 \/ count\(\*\)/);
+    expect(guard.text).toMatch(/catalog_write_lease_guard/);
+    expect(guard.values).toEqual(["skills_catalog_rebuild_lease", "lease-token-1"]);
+    // The generation bump still commits in the SAME guarded transaction.
+    expect(call.queries.filter(isGenerationBump)).toHaveLength(1);
   });
 });
 
@@ -137,13 +164,16 @@ describe("readSkillCatalogFromDatabase — fenced batch read + token-keyed cache
   it("reads token → rows → token in one batch, caches by token, refetches on token change", () => {
     fake.meta.set(GEN_KEY, JSON.stringify("token-1"));
 
-    // First read: a probe call + ONE fenced batch (token, pkgs, skills, token).
+    // First read: a probe call + ONE fenced batch — a REPEATABLE READ
+    // transaction reading (token, pkgs, skills, token) off one snapshot.
     const first = readSkillCatalogFromDatabase();
     expect(first.skillPackages).toHaveLength(1);
     const batches = rowReadCalls();
     expect(batches).toHaveLength(1);
+    expect(batches[0]!.transaction).toBe(true);
     const texts = batches[0]!.queries.map((q) => q.text);
     expect(texts).toEqual([
+      "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
       fake.texts.readMeta,
       fake.texts.selectPkgs,
       fake.texts.selectSkills,

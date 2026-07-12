@@ -125,14 +125,19 @@ export function visibilityToLevelScope(
 // deadlock. ENFORCED: the engine runs inside an AsyncLocalStorage context and
 // a re-entrant call throws loudly instead of deadlocking.
 //
-// LOCK SEMANTICS: the lease minimizes redundant concurrent rebuilds; catalog
-// INTEGRITY never depends on it — the engine's catalog write is one DB
-// transaction (+ generation-token bump) and the fenced reader retries torn
-// reads. A rebuild that outlives the lease TTL can overlap a stealer's run
-// (both writes are atomic; last writer wins, as on the legacy path); the
-// completeness fence is written through a SINGLE statement guarded on the
-// lease row still carrying our token, so a stolen run never stamps a fence
-// over the stealer's (no check-then-write window).
+// LOCK SEMANTICS: the lease serializes explicit rebuilds cross-process, and
+// on THIS locked path catalog integrity is fenced end-to-end: the engine's
+// catalog write is one DB transaction (+ generation-token bump) whose FIRST
+// statement locks the lease row (`FOR UPDATE`, held to COMMIT) and aborts
+// unless it still carries our token — a rebuild that outlived its TTL can
+// never overwrite a stealer's fresher catalog (the abort is caught below and
+// answered with the persisted, at-least-as-fresh snapshot), and a steal can
+// never interleave mid-write (the stealer's CAS blocks on the row lock). The
+// completeness fence is likewise written through a SINGLE statement guarded
+// on the lease row still carrying our token, so a stolen run never stamps a
+// fence over the stealer's (no check-then-write window). Only the LEGACY
+// read-triggers-rebuild path (unmigrated call sites, deleted in S8) still
+// writes unguarded last-writer-wins.
 //
 // All host-store access is via dynamic import so this module stays a
 // statically-pure leaf (existing tests import it without mocking the DB), and
@@ -273,7 +278,34 @@ async function runLockedRebuild(options: RebuildSkillsCatalogOptions): Promise<R
   const leaseToken = await acquireCatalogRebuildLease(db, options);
   try {
     const store = await loadSkillsStore();
-    const catalog = await engineContext.run(true, () => store.syncInstalledSkillsToDatabase());
+    let catalog: RebuiltSkillsCatalog;
+    try {
+      catalog = await engineContext.run(true, () =>
+        store.syncInstalledSkillsToDatabase({
+          // Fence the engine's catalog-write TRANSACTION on the lease still
+          // being ours: a run that outlived its TTL aborts (rolls back)
+          // instead of clobbering the stealer's fresher catalog.
+          catalogWriteGuard: {
+            guardKey: SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+            guardToken: leaseToken,
+          },
+        }),
+      );
+    } catch (error) {
+      if (isLeaseLostWriteAbort(db, error, leaseToken)) {
+        // The stealer acquired the lease AFTER our scan started, so its scan
+        // (and its committed catalog) is at-least-as-fresh as ours — serving
+        // the persisted snapshot loses nothing, and failing the caller (e.g.
+        // an install handler) over bookkeeping another process already
+        // finished would be wrong.
+        console.warn(
+          "[skills-catalog] rebuild outlived its lease — the guarded catalog write aborted; " +
+            "serving the stealer's (at-least-as-fresh) persisted catalog.",
+        );
+        return await readSkillsCatalogSnapshot();
+      }
+      throw error;
+    }
     // Completeness fence AFTER the engine's transactional write committed.
     // The write is a SINGLE guarded statement that validates the lease row
     // still carries OUR token — atomic, so a run that outlived its TTL can
@@ -355,6 +387,24 @@ async function acquireCatalogRebuildLease(
       );
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+/**
+ * True iff `error` is the catalog-write lease guard ABORTING because the lease
+ * was stolen mid-run: the guard's deliberate `1/count(*)` raises Postgres's
+ * `division by zero` (the only division in the write batch), and — the
+ * definitive confirmation — the lease row no longer carries OUR token. Both
+ * conditions are required: an unrelated engine error while the lease happens
+ * to have been stolen must still surface to the caller.
+ */
+function isLeaseLostWriteAbort(db: DatabaseModule, error: unknown, leaseToken: string): boolean {
+  if (!(error instanceof Error) || !error.message.includes("division by zero")) return false;
+  try {
+    const raw = db.readRawMetadataStringFromDatabase(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+    return raw !== null && parseLeaseRaw(raw).token !== leaseToken;
+  } catch {
+    return false;
   }
 }
 

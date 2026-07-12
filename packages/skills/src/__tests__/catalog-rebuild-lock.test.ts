@@ -123,6 +123,14 @@ describe("rebuildSkillsCatalog — explicit locked rebuild", () => {
     expect(engineMock).toHaveBeenCalledTimes(1);
     expect(result).toBe(state.rows);
 
+    // The engine received the catalog-write lease guard, and the guard token
+    // is EXACTLY the token the lease row carried while the engine ran.
+    const options = engineMock.mock.calls[0]![0] as {
+      catalogWriteGuard?: { guardKey: string; guardToken: string };
+    };
+    expect(options?.catalogWriteGuard?.guardKey).toBe(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY);
+    expect(typeof options?.catalogWriteGuard?.guardToken).toBe("string");
+
     const fence = await readSkillsCatalogRebuildState();
     expect(fence).not.toBeNull();
     expect(fence!.reason).toBe("unit-test");
@@ -240,6 +248,54 @@ describe("rebuildSkillsCatalog — explicit locked rebuild", () => {
     expect(JSON.parse(state.meta.get(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY)!).token).toBe(
       "stealer",
     );
+  });
+
+  it("hands the engine a write guard whose token matches the HELD lease row", async () => {
+    let tokenInLeaseRowDuringRun: unknown;
+    engineMock.mockImplementation(async (options?: { catalogWriteGuard?: { guardToken: string } }) => {
+      tokenInLeaseRowDuringRun = JSON.parse(
+        state.meta.get(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY)!,
+      ).token;
+      expect(options?.catalogWriteGuard?.guardToken).toBe(tokenInLeaseRowDuringRun);
+      return state.rows;
+    });
+    await rebuildSkillsCatalog({ reason: "guard-token" });
+    expect(typeof tokenInLeaseRowDuringRun).toBe("string");
+  });
+
+  it("resolves with the stealer's persisted catalog when the GUARDED write aborts on a stolen lease", async () => {
+    const stolenRows = { skillPackages: [PKG_B], skills: SKILLS_B };
+    engineMock.mockImplementation(async () => {
+      // The stealer took the lease AND committed its own (fresher) catalog;
+      // our engine's guarded write transaction then rolled back — the real
+      // guard raises Postgres's `division by zero` (1/count(*) over the
+      // no-longer-held lease row).
+      state.meta.set(
+        SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY,
+        JSON.stringify({ token: "stealer", expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+      );
+      state.rows = stolenRows;
+      throw new Error("division by zero");
+    });
+
+    // NOT a rejection: the caller gets the persisted (stealer's) catalog.
+    const result = await rebuildSkillsCatalog({ reason: "steal-abort" });
+    expect(result.skillPackages.map((p) => p.id)).toEqual(["pkg-b"]);
+    expect(result.skills.map((s) => s.id).sort()).toEqual(["pkg-b:one", "pkg-b:two"]);
+    // No fence stamp — the stolen run never completed a write.
+    expect(state.meta.get(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY)).toBeUndefined();
+    // The stealer's lease is untouched.
+    expect(JSON.parse(state.meta.get(SKILLS_CATALOG_REBUILD_LEASE_METADATA_KEY)!).token).toBe(
+      "stealer",
+    );
+  });
+
+  it("rethrows a division-by-zero engine error when the lease is STILL ours (not a steal)", async () => {
+    engineMock.mockRejectedValueOnce(new Error("division by zero"));
+    await expect(rebuildSkillsCatalog({ reason: "not-a-steal" })).rejects.toThrow(
+      "division by zero",
+    );
+    expect(state.meta.get(SKILLS_CATALOG_REBUILD_STATE_METADATA_KEY)).toBeUndefined();
   });
 });
 

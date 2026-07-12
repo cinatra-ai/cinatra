@@ -177,13 +177,14 @@ export type SkillCatalogRowsFencedRead = {
 };
 
 /**
- * FENCED full catalog read (cinatra#1364): one sequential batch on one
- * connection reads token → skill_packages → skills → token and retries when
- * the two token reads differ. Every catalog writer bumps the token in its own
- * transaction, so a stable token PROVES no writer committed between the two
- * row reads — the caller can never observe a torn {old packages, new skills}
- * mix. After the retry budget (pathological write storm) the last read is
- * returned with `fenced: false` so the caller serves it WITHOUT caching.
+ * FENCED full catalog read (cinatra#1364): token → skill_packages → skills →
+ * token inside ONE `REPEATABLE READ` transaction, so all four statements read
+ * the SAME MVCC snapshot — a torn {old packages, new skills} mix is impossible
+ * at the database level, regardless of concurrent writers. The token pair is
+ * kept as a runtime self-check (it also carries the cache key): if the two
+ * token reads EVER differ the snapshot guarantee was violated (e.g. a
+ * connection pooler silently downgrading isolation), so the read retries and,
+ * after the budget, is served WITHOUT caching (`fenced: false`).
  */
 export function readSkillCatalogRowsFencedInternal(): SkillCatalogRowsFencedRead {
   ensurePostgresSchema();
@@ -196,9 +197,12 @@ export function readSkillCatalogRowsFencedInternal(): SkillCatalogRowsFencedRead
 
   let last: SkillCatalogRowsFencedRead | null = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const [t0, pkgs, skills, t1] = runPostgresQueriesSync({
+    const [, t0, pkgs, skills, t1] = runPostgresQueriesSync({
       connectionString: getPostgresConnectionString(),
+      transaction: true,
       queries: [
+        // First statement after BEGIN — pins the snapshot for the whole batch.
+        { text: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ" },
         buildReadMetadataQuery(postgresSchema, SKILL_CATALOG_GENERATION_METADATA_KEY),
         buildSelectJsonRowsQuery(postgresSchema, "skill_packages"),
         buildSelectJsonRowsQuery(postgresSchema, "skills"),
@@ -215,9 +219,34 @@ export function readSkillCatalogRowsFencedInternal(): SkillCatalogRowsFencedRead
     if (last.fenced) return last;
   }
   console.warn(
-    "[database-metadata] skills-catalog fenced read exhausted retries under a write storm — serving the freshest read uncached.",
+    "[database-metadata] skills-catalog fenced read saw an unstable generation token INSIDE a repeatable-read snapshot (isolation not honored?) — serving the freshest read uncached.",
   );
   return last!;
+}
+
+/**
+ * Lease-ownership guard statement for the catalog-write transaction
+ * (cinatra#1364): locks the lease row (`FOR UPDATE`) and verifies it still
+ * carries `guardToken`; on mismatch the deliberate `1/count(*)` raises
+ * `division by zero`, ABORTING the surrounding transaction so a rebuild that
+ * outlived its TTL can never overwrite a stealer's fresher catalog. On match
+ * the row lock is held until COMMIT, so a stealer's CAS blocks and can never
+ * interleave mid-write. Prepend as the FIRST statement of the write batch.
+ */
+export function buildCatalogWriteLeaseGuardQuery(
+  schema: string,
+  guardKey: string,
+  guardToken: string,
+) {
+  const table = `"${schema.replaceAll('"', '""')}"."metadata"`;
+  return {
+    text:
+      `WITH held AS (` +
+      `SELECT key FROM ${table} WHERE key = $1 AND (value::jsonb ->> 'token') = $2 FOR UPDATE` +
+      `) ` +
+      `SELECT 1 / count(*) AS catalog_write_lease_guard FROM held`,
+    values: [guardKey, guardToken],
+  };
 }
 
 export function deleteMetadataValueInternal(key: string) {

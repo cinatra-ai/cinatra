@@ -36,6 +36,7 @@ import {
 } from "@/lib/connector-config-secret-fields";
 import {
   buildBumpSkillCatalogGenerationQuery,
+  buildCatalogWriteLeaseGuardQuery,
   compareAndSwapMetadataValueInternal,
   deleteMetadataByPrefixInternal,
   deleteMetadataValueInternal,
@@ -568,10 +569,27 @@ export function replaceSkillCatalogInDatabase(input: {
    * (cinatra#1361) — content + its revision + active-revision pointer commit
    * together. Omit at catalog syncs / deletes that author no custom content. */
   lifecycleWrites?: SkillLifecycleRevisionWrite[];
+  /** Lease-ownership guard (cinatra#1364, explicit locked rebuild): when set,
+   * the transaction FIRST locks the guard row (`FOR UPDATE`, held to COMMIT)
+   * and ABORTS (division-by-zero rollback) unless it still carries
+   * `guardToken` — a rebuild that outlived its lease TTL can never overwrite
+   * a stealer's fresher catalog, and a steal can never interleave mid-write.
+   * Omitted on the legacy read-triggers-rebuild path (last-writer-wins there
+   * until S8 deletes it) and on direct catalog mutations, which own no lease. */
+  writeGuard?: { guardKey: string; guardToken: string };
 }) {
   const keptPackageIds = input.skillPackages.map((row) => row.id);
   const keptSkillIds = input.skills.map((row) => row.id);
   runTransactionalBatch([
+    ...(input.writeGuard
+      ? [
+          buildCatalogWriteLeaseGuardQuery(
+            postgresSchema,
+            input.writeGuard.guardKey,
+            input.writeGuard.guardToken,
+          ),
+        ]
+      : []),
     // Bump the cross-process generation token IN THIS transaction (#1364).
     buildBumpSkillCatalogGenerationQuery(postgresSchema),
     // UPSERT skill_packages with full identity columns set. The legacy

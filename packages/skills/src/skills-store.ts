@@ -923,7 +923,13 @@ function catalogSignature(input: { skillPackages: PersistedSkillPackage[]; skill
   });
 }
 
-export async function syncInstalledSkillsToDatabase() {
+export async function syncInstalledSkillsToDatabase(options?: {
+  /** Threaded by the EXPLICIT locked rebuild (cinatra#1364): fences the
+   * catalog-write transaction on the rebuild lease still being held, so a run
+   * that outlived its TTL aborts instead of clobbering a stealer's fresher
+   * write. Absent on the legacy read-triggers-rebuild path. */
+  catalogWriteGuard?: { guardKey: string; guardToken: string };
+}) {
   if (!githubAutoSyncAttempted) {
     githubAutoSyncAttempted = true;
     await tryAutoSyncConfiguredRepository();
@@ -1014,6 +1020,7 @@ export async function syncInstalledSkillsToDatabase() {
     replaceSkillCatalogInDatabase({
       skillPackages: mergedPackages,
       skills: mergedSkills,
+      writeGuard: options?.catalogWriteGuard,
     });
   }
 
