@@ -38,6 +38,15 @@ vi.mock("../representation-store", () => ({
   getLatestRepresentation: vi.fn(),
   getRepresentationByIdForReplay: vi.fn(),
 }));
+// Effective-identity resolver stubbed (no DB) — summaries get the floor
+// identity; this suite exercises only the authz axis (cinatra#1426).
+vi.mock("@/lib/objects/effective-identity", () => ({
+  resolveArtifactEffectiveIdentities: vi.fn().mockReturnValue(new Map()),
+  resolveArtifactEffectiveIdentity: vi.fn().mockReturnValue({
+    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    eligibleExtensions: [],
+  }),
+}));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: vi.fn(),
 }));

@@ -30,6 +30,15 @@ vi.mock("../semantic-assertion-store", () => ({
   listArtifactIdsForExtension: vi.fn(),
   primaryExtensionFor: vi.fn().mockReturnValue("@cinatra-ai/default-artifact"),
 }));
+// Effective-identity resolver stubbed (no DB) — summaries get the floor
+// identity; this suite exercises only the sourceUrl projection (cinatra#1426).
+vi.mock("@/lib/objects/effective-identity", () => ({
+  resolveArtifactEffectiveIdentities: vi.fn().mockReturnValue(new Map()),
+  resolveArtifactEffectiveIdentity: vi.fn().mockReturnValue({
+    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    eligibleExtensions: [],
+  }),
+}));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: vi.fn(),
 }));

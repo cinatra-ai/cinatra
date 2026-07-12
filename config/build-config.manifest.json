@@ -396,6 +396,7 @@
     { "alias": "@cinatra-ai/objects/module", "target": "./packages/objects/src/integration/module.ts" },
     { "alias": "@cinatra-ai/objects/namespace", "target": "./packages/objects/src/namespace.ts" },
     { "alias": "@cinatra-ai/objects/claims", "target": "./packages/objects/src/claims.ts" },
+    { "alias": "@cinatra-ai/objects/effective-identity", "target": "./packages/objects/src/effective-identity.ts" },
     { "alias": "@cinatra-ai/objects/auto-registrar", "target": "./packages/objects/src/auto-registrar.ts" },
     { "alias": "@cinatra-ai/objects/registry", "target": "./packages/objects/src/registry.ts" },
     { "alias": "@cinatra-ai/objects/sync-adapters/registry", "target": "./packages/objects/src/sync-adapters/registry.ts" },

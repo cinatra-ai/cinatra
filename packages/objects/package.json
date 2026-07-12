@@ -11,6 +11,7 @@
     "./module": "./src/integration/module.ts",
     "./namespace": "./src/namespace.ts",
     "./claims": "./src/claims.ts",
+    "./effective-identity": "./src/effective-identity.ts",
     "./auto-registrar": "./src/auto-registrar.ts",
     "./registry": "./src/registry.ts",
     "./sync-adapters/registry": "./src/sync-adapters/registry.ts",

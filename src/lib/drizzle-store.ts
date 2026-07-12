@@ -1897,21 +1897,55 @@ $body$` },
   asserted_by_principal text,
   asserted_at           timestamptz NOT NULL DEFAULT now(),
   archived_at           timestamptz,
+  assertion_basis       text NOT NULL DEFAULT 'classic',
+  binding_claim_id      text,
+  binding_generation    integer,
   CONSTRAINT sa_assertedby_chk CHECK (asserted_by IN ('user','authoring_skill','agent','matcher')),
   CONSTRAINT sa_elig_chk CHECK (eligibility IN ('eligible','draft','archived')),
   CONSTRAINT sa_matcher_draft_chk CHECK (asserted_by <> 'matcher' OR eligibility IN ('draft','archived')),
-  CONSTRAINT sa_nonmatcher_nodraft_chk CHECK (asserted_by = 'matcher' OR eligibility <> 'draft')
+  CONSTRAINT sa_nonmatcher_nodraft_chk CHECK (asserted_by = 'matcher' OR eligibility <> 'draft'),
+  CONSTRAINT sa_basis_chk CHECK (assertion_basis IN ('binding','classic')),
+  CONSTRAINT sa_binding_generation_chk CHECK ((assertion_basis = 'binding') = (binding_generation IS NOT NULL)),
+  CONSTRAINT sa_binding_claim_chk CHECK ((assertion_basis = 'binding') = (binding_claim_id IS NOT NULL)),
+  CONSTRAINT sa_binding_never_matcher_chk CHECK (assertion_basis <> 'binding' OR asserted_by <> 'matcher')
 )` },
+    // `assertion_basis` discriminant (cinatra#1426, epic #1424): 'binding'
+    // (extension-required identity written by binding reconciliation,
+    // anchored to the claim ROW + activation generation it was written
+    // under) vs 'classic' (the existing assertion flow — matcher/agent/
+    // authoring_skill/user classification + the floor).
+    // Live-schema path: idempotent ALTERs; existing rows backfill 'classic'
+    // via the column DEFAULT (metadata-only on PG11+). Classic INSERTs never
+    // name the column, so every existing writer keeps working unchanged.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."semantic_assertion" ADD COLUMN IF NOT EXISTS assertion_basis text NOT NULL DEFAULT 'classic'` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."semantic_assertion" ADD COLUMN IF NOT EXISTS binding_claim_id text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."semantic_assertion" ADD COLUMN IF NOT EXISTS binding_generation integer` },
+    { text: `DO $$ BEGIN
+        ${addConstraintIfAbsentSql(schemaName, "semantic_assertion", "sa_basis_chk", `CHECK (assertion_basis IN ('binding','classic'))`)}
+        ${addConstraintIfAbsentSql(schemaName, "semantic_assertion", "sa_binding_generation_chk", `CHECK ((assertion_basis = 'binding') = (binding_generation IS NOT NULL))`)}
+        ${addConstraintIfAbsentSql(schemaName, "semantic_assertion", "sa_binding_claim_chk", `CHECK ((assertion_basis = 'binding') = (binding_claim_id IS NOT NULL))`)}
+        ${addConstraintIfAbsentSql(schemaName, "semantic_assertion", "sa_binding_never_matcher_chk", `CHECK (assertion_basis <> 'binding' OR asserted_by <> 'matcher')`)}
+      END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS sa_active_unique_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id, extension) WHERE eligibility <> 'archived'` },
+    // ONE ACTIVE binding per artifact ACROSS ALL EXTENSIONS (cinatra#1426):
+    // the DB arbitration the binding write path (cinatra#1429) relies on — a
+    // second concurrent binding insert rejects here, never a service race.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS sa_one_active_binding_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id) WHERE assertion_basis = 'binding' AND eligibility <> 'archived'` },
     { text: `CREATE INDEX IF NOT EXISTS sa_artifact_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id)` },
     { text: `CREATE INDEX IF NOT EXISTS sa_eligible_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id) WHERE eligibility = 'eligible'` },
+    // (org, extension, artifact) lookup — serves the per-extension identity
+    // scans (listArtifactIdsForExtension, binding reconciliation sweeps).
+    { text: `CREATE INDEX IF NOT EXISTS sa_extension_artifact_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, extension, artifact_id)` },
     { text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_semantic_assertion_frozen"() RETURNS trigger LANGUAGE plpgsql AS $body$
 BEGIN
   IF NEW.extension <> OLD.extension OR NEW.asserted_by <> OLD.asserted_by
      OR NEW.asserted_at <> OLD.asserted_at
      OR NEW.confidence IS DISTINCT FROM OLD.confidence
-     OR NEW.artifact_id <> OLD.artifact_id OR NEW.org_id <> OLD.org_id THEN
-    RAISE EXCEPTION 'semantic_assertion identity is immutable: extension/asserted_by/asserted_at/confidence/artifact_id/org_id cannot change — reclassification must INSERT a new assertion';
+     OR NEW.artifact_id <> OLD.artifact_id OR NEW.org_id <> OLD.org_id
+     OR NEW.assertion_basis <> OLD.assertion_basis
+     OR NEW.binding_claim_id IS DISTINCT FROM OLD.binding_claim_id
+     OR NEW.binding_generation IS DISTINCT FROM OLD.binding_generation THEN
+    RAISE EXCEPTION 'semantic_assertion identity is immutable: extension/asserted_by/asserted_at/confidence/artifact_id/org_id/assertion_basis/binding_claim_id/binding_generation cannot change — reclassification must INSERT a new assertion';
   END IF;
   -- The ONLY legal eligibility UPDATE is a
   -- transition INTO 'archived' from a non-archived state. No resurrection

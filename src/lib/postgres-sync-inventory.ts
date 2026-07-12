@@ -176,6 +176,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Skills catalog store read on request paths. Migratable; converted with the skills subsystem.",
   },
+  "src/lib/objects/effective-identity.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Effective-identity resolver host half (cinatra#1426): batched semantic_assertion + installed_extension reads feeding the pure truth-table leaf, consumed by the artifact service's sync list/get enrichment. Built as a sync leaf mirroring artifact-claim-store.ts's pattern so it composes into the synchronous store graph; migrates to async typed reads with the objects subsystem.",
+  },
   "src/lib/objects/artifact-claim-store.ts": {
     class: "migratable-request-path",
     justification:
