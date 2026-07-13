@@ -19,7 +19,7 @@ import {
 // (`runPostgresQueriesSync`) deliberately: this is BOOT-TIME / settings state
 // (startup dataset, connector/agent config, LLM provider pins) read on cold
 // paths, NOT a per-request hot store — see the #303 sync-bridge inventory
-// (`docs/architecture/postgres-sync-inventory.json`), where they are classified
+// (`config/postgres-sync-inventory.json`), where they are classified
 // `migratable-background-setup`. They live in their own module so `database.ts`
 // stays focused on the higher-level store surface that imports them.
 // ---------------------------------------------------------------------------

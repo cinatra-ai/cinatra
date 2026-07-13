@@ -181,7 +181,7 @@ export function projectSelectionToLevelScope(
 // Wiring (this slice): boot after extension activation/materialization, the
 // dev extensions watcher, install/uninstall paths, and the MCP package
 // handlers. Call-site migration is tracked per site in
-// docs/architecture/skills-catalog-read-inventory.json; deleting the legacy
+// config/skills-catalog-read-inventory.json; deleting the legacy
 // read-triggers-rebuild path is the LAST step (S8, cinatra#1358).
 //
 // RE-ENTRANCY RULE: never call `rebuildSkillsCatalog()` from code reachable
