@@ -44,6 +44,15 @@ export type SkillManifest = {
    * inherit the package policy (see `resolveEffectiveSkillAccessPolicy`).
    */
   accessPolicy?: AgentAuthPolicy | null;
+  /**
+   * DURABLE owner identity for user-authored (personal/custom) skills
+   * (cinatra#1416). Unlike `scope` — a projection of the access policy — this
+   * never changes when the skill is shared. Thread it onto
+   * `buildSkillResourceRef({ ownerUserId })` at every enforcement site.
+   */
+  ownerUserId?: string;
+  /** True for user-authored (personal/custom) skills. Storage key: isPersonal. */
+  isCustomSkill?: boolean;
 };
 
 export type SkillPackageManifest = {

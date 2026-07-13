@@ -55,6 +55,14 @@ export type VisibilitySkillMeta = {
    * ⇒ the transitional `(level, scope)` fallback runs.
    */
   accessPolicy?: AgentAuthPolicy | null;
+  /**
+   * DURABLE owner identity for user-authored (personal/custom) skills
+   * (cinatra#1416, AC1). `scope` is a projection of the access policy and
+   * stops naming the owner once the skill is shared; this field never
+   * changes. When set, the owner is admitted regardless of the policy union
+   * (mirrors `requireResourceAccess`'s durable-owner short-circuit).
+   */
+  ownerUserId?: string;
 };
 
 const SCOPED_LEVELS = new Set(["personal", "team", "organization", "workspace", "project"]);
@@ -86,7 +94,12 @@ function actorMatchesSkillPolicy(
     if (token === "org") return owner !== "" && actor.orgId === owner;
     if (token.startsWith("team:")) return actor.teamIds.includes(token.slice("team:".length));
     if (token.startsWith("project:")) return actor.projectIds.includes(token.slice("project:".length));
-    if (token === "owner") return owner !== "" && actor.userId === owner;
+    if (token === "owner") {
+      // Durable owner identity first (cinatra#1416): the tuple's scope stops
+      // naming the owner once the skill is shared.
+      if (skill.ownerUserId) return actor.userId === skill.ownerUserId;
+      return owner !== "" && actor.userId === owner;
+    }
     // "admin" and anything unrecognized: deny (platform_admin already returned
     // above in the caller's short-circuit).
     return false;
@@ -130,6 +143,14 @@ export function filterMatchRowsByVisibility(
     const skill = skillsById.get(row.skillId);
     if (!skill) return false; // defensive: skill no longer installed
     const level = skill.level;
+    // DURABLE-owner short-circuit (cinatra#1416, AC1): the owner of a
+    // user-authored skill always sees it — sharing must never lock the owner
+    // out of their own skill's delivery (the policy union strips the
+    // redundant `owner` token when broadened, and the projected tuple's
+    // scope names the granted locus, not the owner).
+    if (skill.ownerUserId && actor.userId && actor.userId === skill.ownerUserId) {
+      return true;
+    }
     // Canonical multi-scope enforcement (W4, #1073). When the effective policy
     // is present it is the SOLE membership decision (any-match) — the tuple
     // below can't represent an OR-policy. Applies at every level EXCEPT the
