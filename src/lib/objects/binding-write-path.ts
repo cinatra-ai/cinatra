@@ -38,9 +38,9 @@
 // winner transition enqueues a 're-projection' queue row alongside
 // 'binding-reconcile'; the write-path's own object write already bumps version
 // + outbox; the browse-stage backfill re-projects via the #1427 epoch rebuild).
-// This module is allowlisted in the objects-writer-drift gate for the
-// SELECT-objects-inside-an-INSERT-INTO-semantic_assertion false positive, exactly
-// like artifact-uninstall-operations.ts.
+// The only reads of the objects table here are existence guards inside
+// INSERT INTO semantic_assertion ... WHERE EXISTS subqueries — this module
+// never mutates object rows themselves.
 
 import "server-only";
 import { randomUUID } from "node:crypto";
