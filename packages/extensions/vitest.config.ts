@@ -142,6 +142,20 @@ export default defineConfig({
         __dirname,
         "../../src/components/extension-card-icon-image.tsx",
       ),
+      // cinatra#1325: MarketplaceCardIcon (in extension-card-icon-image.tsx)
+      // resolves the pure icon-chain model via its client-safe subpath and the
+      // shared connector brand-icon leaf. All pure/presentational (no
+      // server-only/DB) — real source, no stubs.
+      "@cinatra-ai/extensions/screens/marketplace-card-model": path.join(
+        __dirname,
+        "src/screens/marketplace-card-model.ts",
+      ),
+      "@/components/connector-brand-icons": path.join(
+        __dirname,
+        "../../src/components/connector-brand-icons.tsx",
+      ),
+      "@/components/domain-icons": path.join(__dirname, "../../src/components/domain-icons.tsx"),
+      "@/components/tailscale-logo": path.join(__dirname, "../../src/components/tailscale-logo.tsx"),
       "@/components/extension-kind-emblem": path.join(
         __dirname,
         "../../src/components/extension-kind-emblem.tsx",

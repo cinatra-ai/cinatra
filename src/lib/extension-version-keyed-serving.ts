@@ -485,6 +485,33 @@ export function resolveVersionKeyedUiActions(
 }
 
 /**
+ * Serve a non-default version's ui action by id, fail-closed (cinatra#1392 S9 —
+ * the ui-surface serve). A POINT lookup: a servable version that registered no
+ * action under `actionId` REFUSES (NO_SUCH_HANDLER) rather than returning
+ * nothing a consumer might read as a cue to fall back to the default's action.
+ * LAST-registration-wins (`findLast`): the retained list is append-on-register,
+ * so the last action registered under an id is authoritative — matching the
+ * global ui registry's replace-by-id Map semantics (codex S9 review), so a
+ * version that re-registers an id serves the same handler on both surfaces.
+ */
+export function resolveVersionKeyedUiAction(
+  packageName: string,
+  version: string | null | undefined,
+  actionId: string,
+): VersionKeyedServeResult<RetainedVersionKeyedUiAction> {
+  const e = resolveServableEntry(packageName, version);
+  if (e.kind === "refuse") return e;
+  const action = e.value.uiActions.findLast((a) => a.id === actionId);
+  if (!action) {
+    return refuse(
+      "NO_SUCH_HANDLER",
+      `version-keyed serving refused — ${packageName}@${version} registered no ui action "${actionId}"`,
+    );
+  }
+  return { kind: "serve", value: action };
+}
+
+/**
  * Whether a `(packageName, version)` is currently retained AND servable. A thin
  * predicate for a serve surface that only needs the gate (not the payload) —
  * still fail-closed (unpinned / unknown / not-servable all return false).

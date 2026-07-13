@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Check, CircleCheck, CircleHelp, Star, TriangleAlert } from "lucide-react";
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
+import { MarketplaceCardIcon } from "@/components/extension-card-icon-image";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { type ExtensionAccent } from "@/lib/extension-accent";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
@@ -33,16 +34,6 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 // the "More details" modal trigger) are supplied by the caller as slots —
 // one source of truth for the card anatomy.
 // ---------------------------------------------------------------------------
-
-/**
- * First non-null link of the icon fallback chain: icon → vendor logo.
- * Scheme-guarded here (`safeHttpUrl`) — same defence-in-depth as the detail
- * modal's `iconUrl` — so a non-http(s) URL never reaches the tile's `<img
- * src>` even though the storefront already sanitizes upstream.
- */
-export function resolveCardIconUrl(card: MarketplaceCardData): string | null {
-  return safeHttpUrl(card.iconUrl) ?? safeHttpUrl(card.vendorLogoUrl) ?? null;
-}
 
 /** "Updated N ago" freshness label, or null for a missing/invalid date. */
 export function freshnessLabel(freshnessAt: string | null): string | null {
@@ -276,7 +267,18 @@ export function MarketplaceListingCard({
         name={card.displayName}
         accentColor={accentColor}
         emblem={extensionKindEmblem(card.kindSlug)}
-        iconUrl={resolveCardIconUrl(card)}
+        // cinatra#1325: the card icon resolves the SAME chain `/connectors`
+        // uses — manifest.logo (cinatra.logo) → client icon map → catalog
+        // icon_url → vendor logo → kind emblem — so a connector card shows the
+        // connector's real logo, not the generic kind emblem. The order lives
+        // in the pure `resolveCardIconChain`; the node tiers resolve in the
+        // client `MarketplaceCardIcon`.
+        iconRender={
+          <MarketplaceCardIcon
+            card={card}
+            kindEmblem={extensionKindEmblem(card.kindSlug)}
+          />
+        }
         byline={<PublisherLine card={card} />}
       />
       <div className="flex flex-1 flex-col px-[14px] py-3">
