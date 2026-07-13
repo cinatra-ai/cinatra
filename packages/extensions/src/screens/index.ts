@@ -14,6 +14,9 @@ export {
   catalogEntryToCardData,
   normalizeCardDescription,
   resolveMarketplaceCardCta,
+  resolveCardIconChain,
+  safeManifestLogoSrc,
+  deriveIconSlug,
   marketplaceDetailHref,
 } from "./marketplace-card-model";
 export type {
@@ -21,4 +24,5 @@ export type {
   MarketplaceCardKind,
   MarketplaceCommerceBadge,
   MarketplaceCardCta,
+  CardIconChain,
 } from "./marketplace-card-model";

@@ -61,6 +61,12 @@ const WRITER_ALLOWLIST = new Set([
   "src/lib/artifacts/artifact-creation.ts",
   "src/lib/artifacts/artifact-retention.ts",
   "src/lib/artifacts/semantic-assertion-store.ts",
+  // cinatra#1432 uninstall-operation store — does NOT write the objects table;
+  // it writes semantic_assertion (archive UPDATE / replay INSERT) and only
+  // READS objects in the replay existence guard (INSERT INTO semantic_assertion
+  // ... SELECT ... WHERE EXISTS (SELECT 1 FROM objects ...)), which the DML
+  // lookahead flags as a false positive. Allowlisted like semantic-assertion-store.
+  "src/lib/objects/artifact-uninstall-operations.ts",
   // Project-move cascade — UPDATE objects SET project_id; documented
   // legacy writer that a follow-up routes through canonical writer.
   "src/lib/resource-project-move.ts",

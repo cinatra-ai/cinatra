@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { artifactObjectTypeClaimManifestSchema } from "./claims";
 import type { SemanticArtifactManifest, SemanticArtifactRef } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,14 @@ export const semanticArtifactManifestSchema: z.ZodType<SemanticArtifactManifest>
     // can't silently overmatch (>1 => never) or undermatch (<0 =>
     // always).
     matcherConfidenceThreshold: z.number().min(0).max(1).optional(),
+    // BEGIN objectTypes-claims-mirror (cinatra#1432) — this block is kept
+    // byte-identical across packages/objects/src/semantic-manifest.ts and
+    // packages/extensions/src/artifact-handler.ts (the established lock-step
+    // convention). The ENTRY schema itself is shared from the pure claims
+    // leaf (@cinatra-ai/objects/claims — both files import it), so only this
+    // block needs the mirror; the mirror test pins it byte-identical.
+    objectTypes: z.array(artifactObjectTypeClaimManifestSchema).min(1).optional(),
+    // END objectTypes-claims-mirror
   })
   .strict() as z.ZodType<SemanticArtifactManifest>;
 
