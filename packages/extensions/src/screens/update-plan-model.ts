@@ -70,8 +70,11 @@ export function updatePlanMemberNote(
     case "install":
       return "new dependency";
     case "side-by-side":
-      return member.fromVersion
-        ? `kept beside v${member.fromVersion} (ranges disjoint)`
+      // §II drawing: the row's primary label is the KEPT current version; the
+      // NEW version installed beside it is named in the note (row reads
+      // "Legacy Parser <current> · kept beside <new> (ranges disjoint)").
+      return member.toVersion
+        ? `kept beside v${member.toVersion} (ranges disjoint)`
         : "kept side by side (ranges disjoint)";
     case "rebound": {
       const target = allMembers.find(
@@ -97,6 +100,13 @@ export function updatePlanMemberVersionLabel(
   if (member.action === "rebound") return null;
   if (member.action === "update" && member.fromVersion && member.toVersion) {
     return `v${member.fromVersion} → v${member.toVersion}`;
+  }
+  // Side-by-side: the primary label is the KEPT current version (§II drawing —
+  // the row names the current version, then "kept beside <new>" in the note);
+  // fall back to the new pin if no current version resolved.
+  if (member.action === "side-by-side") {
+    const kept = member.fromVersion ?? member.toVersion;
+    return kept ? `v${kept}` : null;
   }
   return member.toVersion ? `v${member.toVersion}` : null;
 }

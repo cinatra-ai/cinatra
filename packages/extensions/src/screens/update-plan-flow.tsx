@@ -149,25 +149,28 @@ export function ModalUpdatePlanFlow({
     );
   }
 
-  // §II Failed tile: the red Failed pill over the category-mapped copy.
+  // §II Failed tile: the eyebrow + the red Failed pill over the category-mapped
+  // copy.
   if (phase === "failed") {
     return (
-      <div
-        data-slot="update-plan-failed"
-        className="flex w-full flex-col gap-2.25 rounded-[8px] border border-line bg-surface-strong px-4 py-3.5"
-      >
-        <span className="self-start rounded-full bg-destructive px-2 py-0.75 font-mono text-badge-2xs font-bold uppercase text-white">
-          Failed
-        </span>
-        <p className="text-xs leading-relaxed text-foreground">{failureCopy}</p>
-        <div className="flex items-center justify-end border-t border-line pt-2.75">
-          <Button size="sm" variant="outline" onClick={() => {
-            setPlan(null);
-            setFailureCopy(null);
-            setPhase("idle");
-          }}>
-            Close
-          </Button>
+      <div data-slot="update-plan-failed" className="flex w-full flex-col gap-2.25">
+        <div className="font-mono text-badge-2xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+          <span className="text-foreground">Failed</span> · category-mapped, compensated
+        </div>
+        <div className="flex flex-col gap-2.25 rounded-[8px] border border-line bg-surface-strong px-4 py-3.5">
+          <span className="self-start rounded-full bg-destructive px-2 py-0.75 font-mono text-badge-2xs font-bold uppercase text-white">
+            Failed
+          </span>
+          <p className="text-xs leading-relaxed text-foreground">{failureCopy}</p>
+          <div className="flex items-center justify-end border-t border-line pt-2.75">
+            <Button size="sm" variant="outline" onClick={() => {
+              setPlan(null);
+              setFailureCopy(null);
+              setPhase("idle");
+            }}>
+              Close
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -180,10 +183,15 @@ export function ModalUpdatePlanFlow({
   const members = plan?.members ?? [];
   const memberCount = members.length;
   return (
-    <div
-      data-slot="update-plan-panel"
-      className="flex w-full flex-col gap-2.75 rounded-[8px] border border-line bg-surface-strong px-4 py-3.5"
-    >
+    <div data-slot="update-plan" className="flex w-full flex-col gap-2.25">
+      {/* §II eyebrow: the mono-uppercase state label above the plan panel. */}
+      <div className="font-mono text-badge-2xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+        <span className="text-foreground">Update</span> · dry-run plan, confirm before apply
+      </div>
+      <div
+        data-slot="update-plan-panel"
+        className="flex flex-col gap-2.75 rounded-[8px] border border-line bg-surface-strong px-4 py-3.5"
+      >
       <div className="flex items-center justify-between gap-2.5">
         <span className="text-sm font-bold text-foreground">Update plan</span>
         <span className="font-mono text-badge-2xs font-bold uppercase text-muted-foreground">
@@ -244,6 +252,7 @@ export function ModalUpdatePlanFlow({
           </MarketplaceInstallSubmit>
         </div>
       </form>
+      </div>
     </div>
   );
 }

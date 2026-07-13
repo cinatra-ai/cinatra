@@ -69,8 +69,12 @@ describe("update-plan-model — rendered names are displayNames", () => {
     expect(updatePlanMemberNote(member({ action: "update", isRoot: true }), [], "Root")).toBeNull();
     expect(updatePlanMemberNote(member({ action: "install" }), [], "Root")).toBe("new dependency");
     expect(
-      updatePlanMemberNote(member({ action: "side-by-side", fromVersion: "1.4.0" }), [], "Root"),
-    ).toBe(`kept beside ${v("1.4.0")} (ranges disjoint)`);
+      updatePlanMemberNote(
+        member({ action: "side-by-side", fromVersion: "1.4.0", toVersion: "2.0.0" }),
+        [],
+        "Root",
+      ),
+    ).toBe(`kept beside ${v("2.0.0")} (ranges disjoint)`);
     // Rebound resolves the shared dep's displayName from the member list.
     expect(
       updatePlanMemberNote(
@@ -90,6 +94,12 @@ describe("update-plan-model — rendered names are displayNames", () => {
     expect(updatePlanMemberVersionLabel(member({ action: "install", toVersion: "2.0.0" }))).toBe(
       v("2.0.0"),
     );
+    // Side-by-side: the KEPT current version is the primary label (§II drawing).
+    expect(
+      updatePlanMemberVersionLabel(
+        member({ action: "side-by-side", fromVersion: "1.4.0", toVersion: "2.0.0" }),
+      ),
+    ).toBe(v("1.4.0"));
     expect(updatePlanMemberVersionLabel(member({ action: "rebound" }))).toBeNull();
   });
 });
@@ -113,6 +123,8 @@ describe("§II flow source contract — dry-run first, confirm before apply", ()
     expect(FLOW).toContain('"side-by-side": "bg-warning text-warning-foreground"');
     expect(FLOW).toContain('rebound: "bg-muted-foreground text-background"');
     expect(FLOW).toContain("Update plan");
+    // §II eyebrow above the plan panel (mono-uppercase state label).
+    expect(FLOW).toContain("dry-run plan, confirm before apply");
     expect(FLOW).toContain('data-slot="update-plan-panel"');
     expect(FLOW).toContain('data-slot="update-plan-member"');
     // Names bind the manifest displayName (conformance stable-id contract).
