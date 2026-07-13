@@ -48,6 +48,7 @@ import {
   writeMetadataValueIfAbsentInternal,
   writeMetadataValueIfGuardTokenHeldInternal,
   writeMetadataValueInternal,
+  systemGlobalSkillIdsFromCatalog,
 } from "@/lib/database-metadata";
 
 // Connection/schema primitives + schema init moved to SYNC LEAF modules
@@ -1495,11 +1496,7 @@ export function readCustomSkillAssignmentsForAgent(
  * Currently routes through readSkillCatalogFromDatabase + filter on level.
  */
 export function readSystemGlobalSkillIdsForAgent(_agentId: string): string[] {
-  const catalog = readSkillCatalogFromDatabase();
-  return catalog.skills
-    .filter((skill) => (skill as { level?: string }).level === "system")
-    .map((skill) => String((skill as { id?: string }).id ?? ""))
-    .filter(Boolean);
+  return systemGlobalSkillIdsFromCatalog(readSkillCatalogFromDatabase().skills);
 }
 
 export function upsertCustomSkillAssignment(input: {

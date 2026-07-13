@@ -126,6 +126,16 @@ function assertKind(kind: string): kind is ExtensionKind {
   return true;
 }
 
+/**
+ * Denial wire-shape per kind. For SKILLS the manage denial collapses to
+ * "not_found" (cinatra#1416, AC2), matching the `saveSkillVisibility` posture:
+ * a non-manager must not be able to probe skill existence by id through the
+ * permissions actions. Other kinds keep their established "forbidden" shape.
+ */
+function editDeniedError(kind: ExtensionKind): string {
+  return kind === "skill" ? "not_found" : "forbidden";
+}
+
 // ---------------------------------------------------------------------------
 // Revalidation — single owner so per-call-site mount paths can't drift.
 // ---------------------------------------------------------------------------
@@ -290,7 +300,7 @@ export async function saveExtensionAccessPolicy(
   }
 
   if (!(await canEditExtension(kind, resourceId, actor))) {
-    return { ok: false, error: "forbidden" };
+    return { ok: false, error: editDeniedError(kind) };
   }
 
   // A run's policy must be ⊆ the parent agent_template's policy. Other
@@ -457,7 +467,7 @@ export async function searchExtensionCoOwnerCandidates(
       return { ok: false, error: "not_found" };
     }
     if (!(await canEditExtension(kind, resourceId, actor))) {
-      return { ok: false, error: "forbidden" };
+      return { ok: false, error: editDeniedError(kind) };
     }
   }
 
@@ -553,7 +563,7 @@ export async function addExtensionCoOwner(
   }
 
   if (!(await canEditExtension(kind, resourceId, actor))) {
-    return { ok: false, error: "forbidden" };
+    return { ok: false, error: editDeniedError(kind) };
   }
 
   // Per-kind sharing gate (e.g. agent_run.allowRunSharing).
@@ -627,7 +637,7 @@ export async function removeExtensionCoOwner(
   }
 
   if (!(await canEditExtension(kind, resourceId, actor))) {
-    return { ok: false, error: "forbidden" };
+    return { ok: false, error: editDeniedError(kind) };
   }
 
   await removeExtensionCoOwnerStore(kind, resourceId, targetUserId);

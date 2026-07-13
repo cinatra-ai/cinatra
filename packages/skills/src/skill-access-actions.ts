@@ -64,6 +64,8 @@ export async function saveSkillVisibility(
   // Pure policy lookup — snapshot read (cinatra#1364).
   const { readSkillsCatalogSnapshot } = await import("./skill-packages");
   const actor = await requireActorContext();
+  const catalogSnapshot = await readSkillsCatalogSnapshot();
+  const skillRow = catalogSnapshot.skills.find((s) => s.id === skill.id);
   try {
     requireResourceAccess(
       actor,
@@ -71,17 +73,37 @@ export async function saveSkillVisibility(
         id: skill.id,
         level: skill.level,
         scope: skill.scope ?? null,
+        // DURABLE owner identity (cinatra#1416, AC1): the persisted
+        // ownerUserId, independent of the (level, scope) projection — a
+        // broadened personal skill stays manageable by its owner.
+        ownerUserId: skillRow?.ownerUserId ?? null,
         // Canonical effective policy (W4): skill override else parent package's.
         accessPolicy: resolveEffectiveSkillAccessPolicy(
           skill,
-          (await readSkillsCatalogSnapshot()).skillPackages ?? [],
+          catalogSnapshot.skillPackages ?? [],
         ),
       }),
       "manage",
     );
   } catch {
-    // Collapse forbidden + missing — do not leak whether the ID exists.
-    return { ok: false, error: "not_found" };
+    // ONE ownership model with the permissions loader / panel actions
+    // (cinatra#1416, AC2): skill-level co-owners (and, for package skills,
+    // the parent package's installer/co-owners) hold manage even though the
+    // kernel ref cannot see co-owner rows. HUMAN sessions only — a delegated
+    // OBO actor stays confined to the kernel gate above (no ceiling bypass).
+    let managed = false;
+    if (
+      skillRow &&
+      actor.principalType === "HumanUser" &&
+      !actor.oboCeiling
+    ) {
+      const { canManageSkillAccess } = await import("./permissions-page-data");
+      managed = await canManageSkillAccess(actor.principalId, false, skillRow);
+    }
+    if (!managed) {
+      // Collapse forbidden + missing — do not leak whether the ID exists.
+      return { ok: false, error: "not_found" };
+    }
   }
 
   if (!isValidVisibility(visibility)) return { ok: false, error: "invalid" };
