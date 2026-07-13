@@ -23,6 +23,8 @@ export type {
   LlmToolResult,
   LlmUsageData,
   LlmResponse,
+  SkillDeliveryMode,
+  SkillExposureEntry,
   LlmStreamCallbacks,
   LlmCitation,
   LlmFileReference,
@@ -402,6 +404,15 @@ export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecution
    */
   skillSelectionMode?: SkillSelectionMode;
   customSkillContent?: string;
+  /**
+   * Catalog id of the personal-delta skill whose body is `customSkillContent`
+   * (S10 efficacy loop, cinatra#1368). When both are set, the delta is recorded
+   * as a `"personal_inline"` exposure (NON-attributable — injected system-prompt
+   * content has no per-skill invocation signal), giving the personal delta a
+   * skill identity in the exposure telemetry it previously lacked. Content
+   * without an id still delivers; it just cannot be attributed.
+   */
+  customSkillId?: string;
   skillLoader?: { load(input: { skillIds?: string[]; customSkillContent?: string }): Promise<unknown[]> };
   useLiveTooling?: boolean;
   extraRequestBody?: Record<string, unknown>;
@@ -680,6 +691,13 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
   // Populated ONLY when the general selectable Anthropic path deterministically
   // rank-and-truncated an over-cap skill set.
   let skillSelection: LlmResponse["skillSelection"];
+  // S10 efficacy loop (cinatra#1368). `skillExposure` accumulates every skill
+  // delivered to the model on this call (adapter modes + the personal delta);
+  // `invokedSkillIds` collects attributable per-skill invocations observed
+  // during generate() (OpenAI shell reads). Both are surfaced on the response
+  // for the bridge to record against the run.
+  const skillExposure: LlmResponse["skillExposure"] = [];
+  const invokedSkillIds = new Set<string>();
 
   if (input.skillIds && input.skillIds.length > 0) {
     // Provider-specific skill delivery is centralized in the
@@ -695,9 +713,12 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
       // (llm-bridge) passes "general" to engage deterministic
       // rank-and-truncate-to-8 with visible droppedSkillIds reporting.
       selectionMode: input.skillSelectionMode,
+      // Attributable per-skill invocations (OpenAI shell reads) accrue here.
+      onSkillRead: (id) => invokedSkillIds.add(id),
     });
     skillTools = result.tools;
     skillContext = result.systemContext;
+    skillExposure.push(...result.exposure);
     // Set ONLY when the general path actually truncated.
     if (result.droppedSkillIds && result.selectionReason) {
       skillSelection = {
@@ -723,6 +744,19 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
   const personalContext = input.customSkillContent
     ? `\n\nCustom skill instructions:\n${input.customSkillContent}`
     : "";
+
+  // Record the personal delta as a NON-attributable `personal_inline` exposure
+  // when its identity is known (S10 efficacy loop). The delta is injected as
+  // system-prompt content on every provider, so it has no per-skill invocation
+  // signal — but it now carries a skill id in the exposure telemetry it
+  // previously lacked. Content without an id still delivers, just unattributed.
+  if (input.customSkillContent && input.customSkillId) {
+    skillExposure.push({
+      skillId: input.customSkillId,
+      deliveryMode: "personal_inline",
+      invocationAttributable: false,
+    });
+  }
 
   // Resolve attachments AFTER MCP/skill injection, BEFORE the adapter call.
   // The not-readable manifest is prepended at the TOP of the composed system
@@ -774,6 +808,15 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
   // call (creation, ≤8, OpenAI, Gemini).
   if (skillSelection) {
     response.skillSelection = skillSelection;
+  }
+
+  // S10 efficacy loop: surface exposure + attributable invocations so the
+  // bridge can record them against the run. Absent when nothing was delivered.
+  if (skillExposure.length > 0) {
+    response.skillExposure = skillExposure;
+  }
+  if (invokedSkillIds.size > 0) {
+    response.invokedSkillIds = [...invokedSkillIds];
   }
 
   return response;

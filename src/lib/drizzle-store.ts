@@ -17,7 +17,7 @@ import {
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
-import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -4018,7 +4018,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), // cinatra#1041 outcome 3: DDL lives in the pure-strings leaf (file-size-ratchet headroom, the #1317/#1405 pattern)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry (runs late — both agent_run_skills_used and skills already exist)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

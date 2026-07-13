@@ -21,7 +21,12 @@
  * agent-stream, llm-bridge).
  */
 
-import type { LlmProvider, LlmTool, LlmContainerSkillsTool } from "../types";
+import type {
+  LlmProvider,
+  LlmTool,
+  LlmContainerSkillsTool,
+  SkillExposureEntry,
+} from "../types";
 import { buildSkillTools, readSkillContent, resolveSkillSummaries } from "./skills";
 import {
   getAnthropicSkillSyncMap,
@@ -67,7 +72,16 @@ export type SkillDeliveryResult = {
   droppedSkillIds?: string[];
   /** Human + machine readable explanation of the truncation. */
   selectionReason?: string;
-};
+  /**
+   * Every skill this adapter actually delivered to the model, with its mode +
+   * invocation-attributability (S10 efficacy loop, cinatra#1368). Excludes
+   * skills the adapter dropped (unmountable for OpenAI, empty-body for Gemini,
+   * over-cap truncated for the general Anthropic path) — a dropped skill was
+   * never exposed. Never includes the personal delta (injected separately by
+   * the orchestration layer, which owns that skill's identity).
+   */
+  exposure: SkillExposureEntry[];
+}
 
 export interface SkillDeliveryAdapter {
   readonly provider: LlmProvider;
@@ -75,6 +89,12 @@ export interface SkillDeliveryAdapter {
     skillIds: string[];
     /** Absent ⇒ `"creation"` (hard cap). */
     selectionMode?: SkillSelectionMode;
+    /**
+     * Invoked once per attributable per-skill invocation observed DURING the
+     * subsequent LLM call (OpenAI shell reads of a named `/skills/<slug>`
+     * file). Non-attributable adapters (Gemini, Anthropic) never call it.
+     */
+    onSkillRead?: (skillId: string) => void;
   }): Promise<SkillDeliveryResult>;
 }
 
@@ -97,9 +117,29 @@ export class OpenAiShellSkillDelivery implements SkillDeliveryAdapter {
     // `selectionMode` is intentionally ignored — OpenAI native shell delivery
     // has no per-request skill cap.
     selectionMode?: SkillSelectionMode;
+    onSkillRead?: (skillId: string) => void;
   }): Promise<SkillDeliveryResult> {
-    const tools = await buildSkillTools({ skillIds: input.skillIds });
-    return { tools, systemContext: "" };
+    // Capture the skills actually MOUNTED as shell tools (some requested ids may
+    // lack an on-disk sourcePath and are silently dropped by buildSkillTools).
+    // Only mounted skills are exposed. `onSkillRead` fires later, when the model
+    // reads a named `/skills/<slug>` file — an attributable invocation.
+    let mountedSkillIds: string[] = [];
+    const tools = await buildSkillTools({
+      skillIds: input.skillIds,
+      onMounted: (ids) => {
+        mountedSkillIds = ids;
+      },
+      onSkillRead: input.onSkillRead,
+    });
+    return {
+      tools,
+      systemContext: "",
+      exposure: mountedSkillIds.map((skillId) => ({
+        skillId,
+        deliveryMode: "openai_shell" as const,
+        invocationAttributable: true,
+      })),
+    };
   }
 }
 
@@ -120,16 +160,29 @@ export class GeminiInlineSkillDelivery implements SkillDeliveryAdapter {
     // `selectionMode` is intentionally ignored — Gemini inlines skill bodies
     // into the system prompt; no per-request cap.
     selectionMode?: SkillSelectionMode;
+    // Gemini inline delivery has no per-skill invocation signal — never called.
+    onSkillRead?: (skillId: string) => void;
   }): Promise<SkillDeliveryResult> {
-    const contents = await Promise.all(
-      input.skillIds.map((id) => readSkillContent(id)),
+    const resolved = await Promise.all(
+      input.skillIds.map(async (id) => ({ id, content: await readSkillContent(id) })),
     );
-    const validContents = contents.filter(Boolean) as string[];
+    // Only skills whose body actually resolved were inlined → only those are
+    // exposed. Byte-identical systemContext to the prior filter(Boolean) join.
+    const withContent = resolved.filter((r) => Boolean(r.content));
     const systemContext =
-      validContents.length > 0
-        ? "\n\nSkill instructions:\n" + validContents.join("\n\n---\n\n")
+      withContent.length > 0
+        ? "\n\nSkill instructions:\n" +
+          withContent.map((r) => r.content).join("\n\n---\n\n")
         : "";
-    return { tools: [], systemContext };
+    return {
+      tools: [],
+      systemContext,
+      exposure: withContent.map((r) => ({
+        skillId: r.id,
+        deliveryMode: "gemini_inline" as const,
+        invocationAttributable: false,
+      })),
+    };
   }
 }
 
@@ -151,9 +204,12 @@ export class AnthropicContainerSkillDelivery implements SkillDeliveryAdapter {
   async deliver(input: {
     skillIds: string[];
     selectionMode?: SkillSelectionMode;
+    // Anthropic container skills run automatically — no per-skill invocation
+    // signal at our boundary; never called.
+    onSkillRead?: (skillId: string) => void;
   }): Promise<SkillDeliveryResult> {
     if (input.skillIds.length === 0) {
-      return { tools: [], systemContext: "" };
+      return { tools: [], systemContext: "", exposure: [] };
     }
 
     // Absent ⇒ "creation" (hard cap). Only an EXPLICIT "general" engages
@@ -279,7 +335,16 @@ export class AnthropicContainerSkillDelivery implements SkillDeliveryAdapter {
       ...lines,
     ].join("\n");
 
-    return { tools: [containerTool], systemContext, droppedSkillIds, selectionReason };
+    // Exposure = the SELECTED (post-truncation) skills only; a rank-and-truncate
+    // drop was never delivered. Container skills apply automatically → invocation
+    // is NON-attributable at our boundary.
+    const exposure: SkillExposureEntry[] = selected.map((r) => ({
+      skillId: r.catalogSkillId,
+      deliveryMode: "anthropic_container" as const,
+      invocationAttributable: false,
+    }));
+
+    return { tools: [containerTool], systemContext, droppedSkillIds, selectionReason, exposure };
   }
 }
 

@@ -36,6 +36,14 @@ import {
   type PrimitiveActorContext,
 } from "@cinatra-ai/mcp-client";
 import { createSkillsPrimitiveHandlers } from "@cinatra-ai/skills/mcp-handlers";
+// S10 efficacy loop (cinatra#1368): human-confirmed deprecation of a candidate
+// + candidate dismissal.
+import { randomUUID } from "node:crypto";
+import { applySkillLifecycleTransitionInDatabase } from "@/lib/skill-lifecycle-store";
+import {
+  dismissDeprecationCandidate,
+  reinstateDeprecationCandidate,
+} from "@/lib/skill-efficacy";
 
 // ---------------------------------------------------------------------------
 // Admin-gated server actions for skill matching.
@@ -443,4 +451,66 @@ export async function recreateLibraryAction(
     commitSha,
     forcePushError,
   };
+}
+
+// ---------------------------------------------------------------------------
+// S10 efficacy loop — human-confirmed deprecation candidates (cinatra#1368).
+//
+// A deprecation candidate is an EXPOSED-but-never-invoked skill over a minimum
+// attributable sample (computed live in @/lib/skill-efficacy). These actions
+// are the HUMAN decision arms; nothing auto-deprecates. Admin-gated: an admin
+// click IS the confirmation to change state.
+// ---------------------------------------------------------------------------
+
+export async function deprecateSkillFromEfficacyAction(formData: FormData) {
+  const session = await requireAdminSession();
+  const skillId = String(formData.get("skillId") ?? "").trim();
+  const from = String(formData.get("from") ?? "").trim();
+  if (!skillId) {
+    throw new Error("skillId is required");
+  }
+  // Only the legal active->deprecated transition is offered from the efficacy
+  // view (candidates are always 'active'); reject anything else rather than
+  // attempt an illegal transition. The DB primitive is a compare-and-swap on
+  // `expectedFrom`, so a state that moved underneath is a fail-closed no-op.
+  if (from !== "active") {
+    throw new Error(
+      `Only an active skill can be deprecated from the efficacy view (saw from='${from || "none"}').`,
+    );
+  }
+  const { changed } = applySkillLifecycleTransitionInDatabase({
+    skillId,
+    expectedFrom: "active",
+    to: "deprecated",
+    auditId: randomUUID(),
+    actorUserId: session.user.id,
+    actorType: "platform_admin",
+    reason: "Deprecation candidate confirmed via the skills-admin efficacy view.",
+  });
+  if (!changed) {
+    throw new Error(
+      "The skill's lifecycle state changed since the page was loaded — deprecation not applied. Reload and retry.",
+    );
+  }
+  revalidatePath("/configuration/skills");
+}
+
+export async function dismissDeprecationCandidateAction(formData: FormData) {
+  await requireAdminSession();
+  const skillId = String(formData.get("skillId") ?? "").trim();
+  if (!skillId) {
+    throw new Error("skillId is required");
+  }
+  dismissDeprecationCandidate(skillId);
+  revalidatePath("/configuration/skills");
+}
+
+export async function reinstateDeprecationCandidateAction(formData: FormData) {
+  await requireAdminSession();
+  const skillId = String(formData.get("skillId") ?? "").trim();
+  if (!skillId) {
+    throw new Error("skillId is required");
+  }
+  reinstateDeprecationCandidate(skillId);
+  revalidatePath("/configuration/skills");
 }

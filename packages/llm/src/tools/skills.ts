@@ -127,8 +127,15 @@ async function resolveSkills(skillIds: string[]): Promise<SkillSummary[]> {
  */
 export function createLocalSkillShellTool(options: {
   mountedSkills: SkillSummary[];
+  /**
+   * S10 efficacy loop (cinatra#1368): invoked with the catalog skill id each
+   * time the model successfully reads one of this skill's files — an
+   * attributable per-skill invocation. Absent ⇒ no invocation recording.
+   */
+  onSkillRead?: (skillId: string) => void;
 }): LlmShellTool {
   const mountedSkills = options.mountedSkills;
+  const onSkillRead = options.onSkillRead;
 
   // Map virtual paths (exposed to the LLM) to real directory paths.
   // We never expose real filesystem paths to avoid confusion and privacy leakage.
@@ -150,7 +157,7 @@ export function createLocalSkillShellTool(options: {
       return Promise.all(
         action.commands.map(async (command) => {
           try {
-            const result = await executeLocalSkillCommand(command, mountedSkills, virtualToReal);
+            const result = await executeLocalSkillCommand(command, mountedSkills, virtualToReal, onSkillRead);
             return {
               stdout: result,
               stderr: "",
@@ -342,6 +349,7 @@ async function executeLocalSkillCommand(
   command: string,
   mountedSkills: SkillSummary[],
   virtualToReal?: Map<string, string>,
+  onSkillRead?: (skillId: string) => void,
 ): Promise<string> {
   // Strip `cd "<dir>" &&` or `cd <dir> &&` prefix the LLM commonly emits.
   // Linear scanner equivalent to the retired `/^cd\s+"?([^"&]+)"?\s*&&\s*/`,
@@ -445,6 +453,27 @@ async function executeLocalSkillCommand(
   }
 
   const content = await readSkillFileContent(resolvedPath);
+
+  // Attribute this successful read to the mounted skill that owns the resolved
+  // path — an attributable per-skill invocation (S10 efficacy loop). Matched by
+  // directory containment, robust across the virtual / real / relative resolve
+  // branches above. Best-effort: a callback throw must never fail the read.
+  if (onSkillRead) {
+    for (const skill of mountedSkills) {
+      if (!skill.directoryPath) continue;
+      if (
+        resolvedPath === skill.directoryPath ||
+        resolvedPath.startsWith(skill.directoryPath + path.sep)
+      ) {
+        try {
+          onSkillRead(skill.id);
+        } catch {
+          // never let invocation recording break a skill read
+        }
+        break;
+      }
+    }
+  }
 
   // Apply head/tail line limits if requested.
   if (verb === "head" || verb === "tail") {
@@ -590,14 +619,25 @@ export async function buildSkillTools(input: {
    * when skills have disk paths.
    */
   includeShell?: boolean;
+  /**
+   * S10 efficacy loop (cinatra#1368): reports the catalog skill ids actually
+   * MOUNTED as shell tools (requested ids without an on-disk sourcePath are
+   * dropped and NOT reported). Called exactly once. Lets the OpenAI delivery
+   * adapter record exposure without re-resolving the catalog.
+   */
+  onMounted?: (mountedSkillIds: string[]) => void;
+  /** Forwarded to the local shell tool — fires on each attributable skill read. */
+  onSkillRead?: (skillId: string) => void;
 }): Promise<LlmTool[]> {
   const skillIds = input.skillIds ?? [];
   if (skillIds.length === 0) {
+    input.onMounted?.([]);
     return [];
   }
 
   const skills = await resolveSkills(skillIds);
   const mountableSkills = skills.filter((s) => s.directoryPath);
+  input.onMounted?.(mountableSkills.map((s) => s.id));
 
   // Guard: refuse to build a request when a skill file is missing on disk.
   for (const skill of mountableSkills) {
@@ -626,7 +666,12 @@ export async function buildSkillTools(input: {
     if (input.includeShell) {
       return [createShellTool({ mountedSkills: mountableSkills })];
     }
-    return [createLocalSkillShellTool({ mountedSkills: mountableSkills })];
+    return [
+      createLocalSkillShellTool({
+        mountedSkills: mountableSkills,
+        onSkillRead: input.onSkillRead,
+      }),
+    ];
   }
 
   // No skill resolved with an on-disk sourcePath. The legacy
