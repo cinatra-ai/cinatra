@@ -100,9 +100,15 @@ export async function maybeEnqueueChatCaptureForThread(
     }
     if (!enabled) return;
 
-    const { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs");
-    await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.CHAT_CAPTURE_DETECTION,
+    // Registry-free producer (./enqueue-queue) — NOT @/lib/background-jobs.
+    // The generic runtime statically imports the background-jobs registry
+    // (every job handler: agents/skills/llm/workflows/...); routing this
+    // store-graph-reachable hook through it drags that mega-hub into the
+    // first-party graph of every store route (/sign-in included) and blows the
+    // route-graph ratchet + the Turbopack build memory. The producer lands the
+    // job on the SAME queue by name; the boot-started worker drains it.
+    const { enqueueChatCaptureDetectionJob } = await import("./enqueue-queue");
+    await enqueueChatCaptureDetectionJob(
       {
         threadId: candidate.threadId,
         turnId: candidate.turnId,

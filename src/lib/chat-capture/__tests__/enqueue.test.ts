@@ -9,8 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // chat-capture-enqueue-hook.test.ts for the hook-presence tripwire).
 // ---------------------------------------------------------------------------
 
-const { enqueueBackgroundJobMock, readSkillAutosaveConfigMock } = vi.hoisted(() => ({
-  enqueueBackgroundJobMock: vi.fn(async () => undefined),
+const { enqueueChatCaptureDetectionJobMock, readSkillAutosaveConfigMock } = vi.hoisted(() => ({
+  enqueueChatCaptureDetectionJobMock: vi.fn(async () => undefined),
   readSkillAutosaveConfigMock: vi.fn(() => ({
     enabled: true,
     userCanConfigure: false,
@@ -18,9 +18,11 @@ const { enqueueBackgroundJobMock, readSkillAutosaveConfigMock } = vi.hoisted(() 
   })),
 }));
 
-vi.mock("@/lib/background-jobs", () => ({
-  enqueueBackgroundJob: enqueueBackgroundJobMock,
-  BACKGROUND_JOB_NAMES: { CHAT_CAPTURE_DETECTION: "chat-capture-detection" },
+// The enqueue hook routes through the registry-free producer (../enqueue-queue),
+// NOT @/lib/background-jobs — see enqueue-queue.ts for why. The producer owns the
+// job NAME, so the hook now passes only (data, options).
+vi.mock("../enqueue-queue", () => ({
+  enqueueChatCaptureDetectionJob: enqueueChatCaptureDetectionJobMock,
 }));
 vi.mock("@/lib/skill-autosave", () => ({
   readSkillAutosaveConfig: readSkillAutosaveConfigMock,
@@ -97,7 +99,7 @@ describe("buildChatCaptureJobId", () => {
 
 describe("maybeEnqueueChatCaptureForThread", () => {
   beforeEach(() => {
-    enqueueBackgroundJobMock.mockClear();
+    enqueueChatCaptureDetectionJobMock.mockClear();
     readSkillAutosaveConfigMock.mockClear();
     readSkillAutosaveConfigMock.mockImplementation(() => ({
       enabled: true,
@@ -108,13 +110,12 @@ describe("maybeEnqueueChatCaptureForThread", () => {
 
   it("enqueues one detection job with the deterministic jobId + retry policy", async () => {
     await maybeEnqueueChatCaptureForThread(userThread());
-    expect(enqueueBackgroundJobMock).toHaveBeenCalledTimes(1);
-    const [name, payload, opts] = enqueueBackgroundJobMock.mock.calls[0] as unknown as [
-      string,
+    expect(enqueueChatCaptureDetectionJobMock).toHaveBeenCalledTimes(1);
+    // The producer owns the job NAME; the hook passes (data, options).
+    const [payload, opts] = enqueueChatCaptureDetectionJobMock.mock.calls[0] as unknown as [
       Record<string, unknown>,
       Record<string, unknown>,
     ];
-    expect(name).toBe("chat-capture-detection");
     expect(payload).toEqual({
       threadId: "thread-1",
       turnId: buildLegacyMirrorTurnId("thread-1", "m3"),
@@ -136,7 +137,7 @@ describe("maybeEnqueueChatCaptureForThread", () => {
       userCanSeeIndicator: true,
     }));
     await maybeEnqueueChatCaptureForThread(userThread());
-    expect(enqueueBackgroundJobMock).not.toHaveBeenCalled();
+    expect(enqueueChatCaptureDetectionJobMock).not.toHaveBeenCalled();
   });
 
   it("does not enqueue for non-candidates (team thread / assistant tail)", async () => {
@@ -148,11 +149,11 @@ describe("maybeEnqueueChatCaptureForThread", () => {
       content: "ok",
     });
     await maybeEnqueueChatCaptureForThread(thread);
-    expect(enqueueBackgroundJobMock).not.toHaveBeenCalled();
+    expect(enqueueChatCaptureDetectionJobMock).not.toHaveBeenCalled();
   });
 
   it("degrades to a no-op when the queue is unavailable (thread persist unaffected)", async () => {
-    enqueueBackgroundJobMock.mockRejectedValueOnce(new Error("redis down"));
+    enqueueChatCaptureDetectionJobMock.mockRejectedValueOnce(new Error("redis down"));
     await expect(maybeEnqueueChatCaptureForThread(userThread())).resolves.toBeUndefined();
   });
 
@@ -161,6 +162,6 @@ describe("maybeEnqueueChatCaptureForThread", () => {
       throw new Error("db down");
     });
     await maybeEnqueueChatCaptureForThread(userThread());
-    expect(enqueueBackgroundJobMock).not.toHaveBeenCalled();
+    expect(enqueueChatCaptureDetectionJobMock).not.toHaveBeenCalled();
   });
 });
