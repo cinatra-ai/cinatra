@@ -1341,8 +1341,7 @@ export async function installExtensionFromRegistry(
 export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineDeps> {
   const { resolveExtensionDistIntegrity } = await import("@cinatra-ai/registries");
   const { materializePackageToStore } = await import("@/lib/extension-package-store");
-  const { readRequestedHostPortsFromStore } = await import("@/lib/extension-host-port-grants");
-  const { makeHostPortGrantInstallDeps } = await import("@/lib/extension-host-port-grant-install-deps");
+  const [{ readRequestedHostPortsFromStore }, { makeHostPortGrantInstallDeps }] = await Promise.all([import("@/lib/extension-host-port-grants"), import("@/lib/extension-host-port-grant-install-deps")]);
   const { beginInstallOp, advanceInstallOpPhase, finalizeInstallOp, readInstallOp } = await import("@/lib/extension-install-ops");
   const { makeCanonicalRowInstallDeps } = await import("@/lib/extension-install-canonical-row-deps");
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import("@/lib/gatekept-install");
