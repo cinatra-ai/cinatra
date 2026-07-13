@@ -109,6 +109,13 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // via transitionExtensionByPackageName). The agent-builder `status` column
   // above is unrelated and stays.
   type:           text("type").notNull().default("leaf"), // leaf | proxy | orchestrator
+  // Interaction axis (cinatra#1037 P1) — ORTHOGONAL to `type`. 'assistant' = a
+  // conversational identity; 'executor' = a bounded task agent (default). The
+  // physical column + CHECK invariants were added transformationally by
+  // core__0019 (see src/lib/drizzle-store.ts); this ORM declaration is the READ
+  // wiring so `$inferSelect` / deserializeTemplate can surface the kind. `.default`
+  // keeps it optional on insert (writers omit it → DB default 'executor').
+  agentKind:      text("agent_kind").notNull().default("executor"), // assistant | executor
   taskSpec:       text("task_spec"), // nullable; free-form task specification for LangGraph agents
   packageName:       text("package_name").notNull(), // stable package identity; NOT NULL because vendor/slug routing requires every template to declare an identity.
   packageVersion:    text("package_version"),    // semantic version string

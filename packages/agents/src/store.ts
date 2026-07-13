@@ -103,6 +103,7 @@ export type AgentTemplateRecord = {
   approvalPolicy: ApprovalPolicy;
   status: string;
   type: "leaf" | "proxy" | "orchestrator" | "parallel" | "supervisor" | "iterative" | "node" | "flow";    // includes OAS-aligned node/flow templates
+  agentKind?: "assistant" | "executor"; // #1037 interaction axis — orthogonal to `type`; deserializeTemplate always sets it (null/unknown → "executor")
   taskSpec: string | null;                    // free-form task specification for LangGraph agents
   packageName?: string | null;               // stable package identity
   packageVersion?: string | null;            // semantic version string
@@ -426,9 +427,7 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     outputSchema: row.outputSchema ? (JSON.parse(row.outputSchema) as Record<string, unknown>) : null,
     approvalPolicy: JSON.parse(row.approvalPolicy) as ApprovalPolicy,
     status: row.status,
-    // normalize unknown values (null, legacy rows, direct SQL writes) to "leaf"
-    // widened to six values (parallel|supervisor|iterative added)
-    // preserve OAS-aligned "flow" and "node" types (were silently coerced to "leaf")
+    // Normalize null / legacy / unknown values to "leaf"; OAS-aligned "flow"|"node" preserved.
     type: (row.type === "proxy" ? "proxy"
          : row.type === "orchestrator" ? "orchestrator"
          : row.type === "parallel" ? "parallel"
@@ -437,6 +436,7 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
          : row.type === "node" ? "node"
          : row.type === "flow" ? "flow"
          : "leaf") as AgentTemplateRecord["type"],
+    agentKind: row.agentKind === "assistant" ? "assistant" : "executor", // #1037: only an explicit "assistant" opts in; else the column DEFAULT ("executor")
     taskSpec: row.taskSpec,
     packageName: row.packageName ?? null,
     packageVersion: row.packageVersion ?? null,
