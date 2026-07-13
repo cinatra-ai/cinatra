@@ -1,0 +1,9 @@
+{
+  "seq": "0037",
+  "file": "core/core__0037_chat-capture-ledger.mjs",
+  "summary": "Chat-capture turn ledger (cinatra#1367, epic #1358 S9 — lifecycle-only slice; assistant→agent target mapping deferred to #1037). Adds chat_capture_turns — one row per detected chat user turn, keyed PRIMARY KEY (thread_id, turn_id), doing triple duty for the autosave-style capture pipeline: durable idempotency (the detection job claims its row before any work; terminal rows make BullMQ re-deliveries no-ops — jobId dedup only suppresses while Redis retains the completed job), provenance (captured turns record the produced skill_id + revision_id; no FK to chat_threads on purpose so the record survives thread deletion), and per-user classifier-quota accounting (classifier_called rows per owner_user_id in a rolling window, reserved via an atomic conditional UPDATE; index (owner_user_id, created_at DESC)). Status CHECK: claimed/classifying/error are nonterminal (re-claimable after worker crash or transient failure), skipped_disabled/skipped_missing/skipped_prefilter/skipped_rate_capped/skipped_classifier/captured are terminal; vocabulary mirrored by CHAT_CAPTURE_TURN_STATUSES (src/lib/chat-capture/ledger.ts) and the bootstrap leaf src/lib/chat-capture-schema.ts, sync pinned by chat-capture-schema.test.ts. Additive (brand-new empty table) — artifact not REQUIRED, shipped to keep fresh-bootstrap and operator-upgrade aligned (core__0027/core__0030/core__0034 precedent); mirrors the idempotent bootstrap DDL (buildCreateStoreSchemaQueries → chatCaptureSchemaQueries). down() drops the table; ledger rows are deliberately non-recoverable operational state.",
+  "destructive": false,
+  "tables": [
+    "chat_capture_turns"
+  ]
+}

@@ -1273,6 +1273,33 @@ export function upsertChatThreadInDatabase(
       }),
     ],
   });
+
+  // Chat-capture detection enqueue (cinatra#1367). Fires AFTER the persist
+  // transaction above committed — "detection is enqueued once the user turn
+  // is persisted". This is the single chokepoint every chat entry point
+  // funnels through (save route, chat server actions, MCP handlers), so the
+  // hook covers all of them without touching any client contract; the #1216
+  // S2 cutover must re-hook the replacement persistence path with the same
+  // semantics (contract test: chat-capture-enqueue-hook.test.ts).
+  // Fire-and-forget by design: a sync caller cannot await it, every failure
+  // degrades to a warn inside maybeEnqueueChatCaptureForThread, and the
+  // dynamic import() keeps BullMQ/Redis out of this module's require() graph
+  // (route-graph ratchet).
+  try {
+    void import("@/lib/chat-capture/enqueue")
+      .then((mod) => mod.maybeEnqueueChatCaptureForThread(thread))
+      .catch((err) => {
+        console.warn(
+          "[chat-capture] enqueue hook failed (thread persist unaffected):",
+          err instanceof Error ? err.message : err,
+        );
+      });
+  } catch (err) {
+    console.warn(
+      "[chat-capture] enqueue hook failed (thread persist unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 // Attachment refs are extracted from every message (see

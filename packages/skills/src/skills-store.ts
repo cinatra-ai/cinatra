@@ -10,7 +10,7 @@ import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 import { installedSkillPackages, normalizeStoredAccessPolicy, readSkillsCatalogSnapshot, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
-import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
+import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type RevisionSource, type SkillSource } from "./skill-source";
 import { assertSafePathSegment } from "@cinatra-ai/registries";
 // Agent-bound skill identity / path derivation (cinatra#537) — extracted to a
 // sibling module to keep this file under the file-size ratchet (behavior
@@ -1116,6 +1116,13 @@ export async function upsertSkill(input: {
    * `path.join`, so a slash naturally produces a nested directory.
    */
   storagePackagePath?: string;
+  /**
+   * Provenance source recorded on the atomic skill_revisions row for this
+   * write (cinatra#1361 vocabulary). Defaults to "manual" — the pre-existing
+   * behavior for every interactive save path. The chat-capture pipeline
+   * passes "chat-capture" (cinatra#1367).
+   */
+  revisionSource?: RevisionSource;
 }): Promise<PersistedSkill> {
   const existingCatalog = await readSkillsCatalog();
   const updatedAt = new Date().toISOString();
@@ -1338,7 +1345,7 @@ export async function upsertSkill(input: {
   replaceSkillCatalogInDatabase({
     skillPackages: nextCatalog.skillPackages,
     skills: nextCatalog.skills,
-    lifecycleWrites: [buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId)], // atomic revision (cinatra#1361)
+    lifecycleWrites: [buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId, input.revisionSource)], // atomic revision (cinatra#1361; source threaded per cinatra#1367)
   });
 
   // Write SKILL.md to disk so the local path is available to the LLM shell tool.

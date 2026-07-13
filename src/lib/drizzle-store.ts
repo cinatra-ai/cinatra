@@ -18,6 +18,7 @@ import {
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
 import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -556,6 +557,7 @@ END $$` },
       END $$;` },
     ...capabilityOwnershipGrantSchemaQueries(schemaName), // capability-ownership grant (S0), additive
     ...widgetStreamMetadataGrantSchemaQueries(schemaName), // widget-stream metadata grant (runtime trust slice 1), additive
+    ...chatCaptureSchemaQueries(schemaName), // chat-capture turn ledger (cinatra#1367), additive — mirrors core__0037
 
     // Runtime installer — snapshot leases. An in-flight run that imports
     // a digest-pinned package dir holds a lease so the GC reaper never deletes
