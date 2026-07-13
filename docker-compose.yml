@@ -16,7 +16,7 @@
 services:
   postgres:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-    # MAJOR: Postgres 17 -> 18 (upgrade track; see docs/upgrade-track.md §3).
+    # MAJOR: Postgres 17 -> 18 (upgrade track; see docs/internals/workflows/upgrade-track.md §3).
     # Pinned to the CONFIRMED multi-arch (amd64/arm64/...) OCI index digest of
     # postgres:18-alpine (18.4, resolved 2026-07-11 via imagetools) — the tag is
     # human-readable, the @sha256 is the binding pin.
@@ -47,7 +47,7 @@ services:
       retries: 10
 
   redis:
-    # MAJOR: Redis 7 -> 8 (upgrade track; see docs/upgrade-track.md §9). Pinned
+    # MAJOR: Redis 7 -> 8 (upgrade track; see docs/internals/workflows/upgrade-track.md §9). Pinned
     # to the CONFIRMED multi-arch OCI index digest of redis:8-alpine (8.8.0,
     # resolved 2026-07-11 via the registry API; index digest unchanged since
     # 2026-06-23) — the tag is human-readable, the @sha256 is the binding pin.
@@ -78,7 +78,7 @@ services:
     # @sha256 is the binding pin. verdaccio 6.7.4 is the latest stable line (no
     # newer major offered). Dev registry only, ephemeral storage. Re-resolve at
     # bump time: `docker buildx imagetools inspect verdaccio/verdaccio:6`.
-    # See docs/upgrade-track.md §8.
+    # See docs/internals/workflows/upgrade-track.md §8.
     image: verdaccio/verdaccio:6@sha256:e3ac7e335e69504cd0b09616aa52066399868282313c34762d2a77b8169a3575
     ports:
       - "4873:4873"
@@ -98,7 +98,7 @@ services:
   nango-db:
     image: postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca
     # Upgrade track: HELD at postgres 17-alpine as a CURRENT VALIDATED HOLD
-    # while the platform DB moved to 18 (see docs/upgrade-track.md §3): this
+    # while the platform DB moved to 18 (see docs/internals/workflows/upgrade-track.md §3): this
     # store is app-coupled to Nango, whose upstream reference compose still
     # pins postgres 16 — 17 is already a deliberate, validated divergence, and
     # 18 is unvalidated by upstream (the works-after nango arm proves
@@ -109,7 +109,7 @@ services:
     # read-back is satisfied. The prod PGDATA volume is migrated by the
     # logical-dump -> fresh-volume restore in the ops pg-major-cutover tooling
     # (hub-nango profile), which rebinds nango-db to the external restored
-    # volume via the ops prod override. See docs/upgrade-track.md.
+    # volume via the ops prod override. See docs/internals/workflows/upgrade-track.md.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
     # (this is a Postgres with default nango/nango creds). Only the host-side CLI
@@ -135,7 +135,7 @@ services:
     #   docker buildx imagetools inspect nangohq/nango-server:hosted
     # Renovate owns bumps (it already tracks nangohq/nango-server). The hosted
     # deployment re-resolves and smokes its own digest independently — do not
-    # hand-sync the two. Resolved 2026-06-23. See docs/upgrade-track.md.
+    # hand-sync the two. Resolved 2026-06-23. See docs/internals/workflows/upgrade-track.md.
     image: nangohq/nango-server:hosted@sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869
     # Keep the connector backend alive across the intermittent qemu SIGSEGVs the
     # amd64-only image hits on arm64 dev hosts. `unless-stopped` (NOT
@@ -429,7 +429,7 @@ services:
     # multi-arch index digest; the prior index digest was sha256:b91a6fa7b1d8…
     # The digest-bound graphiti works-after dispatch gates this (NEO4J_IMAGE
     # carries the full tag@sha256 ref).
-    # See docs/upgrade-track.md §7 for the major's two behavior changes:
+    # See docs/internals/workflows/upgrade-track.md §7 for the major's two behavior changes:
     #  (1) the default Cypher language is now CYPHER_25 (was 5) — pinned back to
     #      CYPHER_5 below so graphiti's Cypher-5-shaped MCP queries keep parsing;
     #  (2) a NEO4J_AUTH password now has an 8-char minimum (the default
@@ -745,7 +745,7 @@ services:
   #   - MinIO defaults to the immutable dated `RELEASE.2025-09-07T16-13-09Z`
   #     (≡ the `latest` digest at pin time), digest-bound (see plane-minio).
   # Existing `latest`/`stable` volumes have unknown last-writer versions — the
-  # supported source→target rules live in docs/architecture/upgrade-matrix.json
+  # supported source→target rules live in config/upgrade/upgrade-matrix.json
   # (the machine-readable matrix) + docs/internals/architecture/stateful-service-inventory.md.
   # A major must now arrive as a reviewable pin-diff, never absorbed by a pull.
   plane-db:
