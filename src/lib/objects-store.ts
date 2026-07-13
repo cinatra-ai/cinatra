@@ -948,6 +948,48 @@ export function upsertObjectAndEnqueue(
       `upsertObjectAndEnqueue: no row returned for id=${id} — possible cross-tenant collision (org_id mismatch on ON CONFLICT DO UPDATE)`,
     );
   }
+
+  // Binding write-path composition (cinatra#1429, epic #1424). After the object
+  // row commits, reconcile this artifact's BINDING semantic assertion to its
+  // CURRENT type's live claim winner — a create into a claimed type, or a type
+  // change across / away from a claim. `reconcileArtifactBindingForWrite` is
+  // GATED (one guard SELECT): substrate / plain writes with no claim + no
+  // binding short-circuit; only a claimed-type write or an artifact that already
+  // carries a binding opens the advisory-locked reconcile tx. It resolves the
+  // winner from live DB state under the per-artifact advisory lock and writes
+  // ONLY semantic_assertion (never `objects`).
+  //
+  // ⚠ STOPGAP (NOT merge-ready — cinatra#1429 write-path-composition remainder).
+  // Fired FIRE-AND-FORGET via a dynamic import to avoid growing the REQUIRED
+  // route-graph gate on the /sign-in + MCP/chat routes, which in-flight PR #1473
+  // is concurrently raising in the fenced route-graph-ratchet.baseline.json. But
+  // codex flagged this as a DURABILITY BUG (Q2): a claimed→unclaimed type change
+  // leaves a stale binding that NO later type-sweep can select (the row is no
+  // longer the claimed type), so if the floating reconcile does not flush the
+  // stale binding never converges; and the guard runs OUTSIDE the advisory lock
+  // (Q1 race). The CORRECT design (the issue's own protocol) reconciles IN the
+  // upsert transaction (durable, under the same advisory lock) — which requires
+  // the binding module in this writer's static graph, i.e. the exact route-graph
+  // raise blocked by #1473. This wiring therefore SERIALIZES behind #1473 and
+  // must be reimplemented in-transaction before it ships.
+  const reconcileOrgId = (row.org_id as string | null) ?? input.upsertInput.orgId ?? null;
+  const reconcileArtifactId = String(row.id);
+  const reconcileType = String(row.type);
+  void import("@/lib/objects/binding-write-path")
+    .then(({ reconcileArtifactBindingForWrite }) =>
+      reconcileArtifactBindingForWrite({
+        orgId: reconcileOrgId,
+        artifactId: reconcileArtifactId,
+        type: reconcileType,
+      }),
+    )
+    .catch((err) => {
+      console.warn(
+        `[objects-store] binding reconcile after write for object ${reconcileArtifactId} failed (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+
   // Surface the synthetic legacy change-set id so write callers
   // (objects_update → MutationResult) can offer an Undo. Additive spread on
   // the ObjectRecord: existing field readers (objects_save etc.) are

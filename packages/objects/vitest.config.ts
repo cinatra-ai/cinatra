@@ -33,6 +33,18 @@ export default defineConfig({
       // projector loads in the sandbox. Behaviour tests vi.mock these locally.
       "@/lib/objects/artifact-claim-store": path.join(__dirname, "src/__tests__/__stubs__/artifact-claim-store.ts"),
       "@/lib/objects/effective-identity": path.join(__dirname, "src/__tests__/__stubs__/effective-identity.ts"),
+      // Per-claim activation gate (cinatra#1429). The objects_save /
+      // objects_update handlers import the NEW-write enforcement + the claim
+      // probe at top level; the real module pulls server-only + postgres reads.
+      // Route to a stub (claim probe → false, real pure enforcement logic) so
+      // the handler tests load; behaviour tests vi.mock locally.
+      "@/lib/objects/claim-activation-gate": path.join(__dirname, "src/__tests__/__stubs__/claim-activation-gate.ts"),
+      // Binding write path (cinatra#1429). `src/lib/objects-store.ts` (aliased
+      // to real source) calls `reconcileArtifactBindingForWrite` after every
+      // object write; the real module pulls server-only + postgres reads. Route
+      // to a stub (no-op reconcile) so the objects-store CRUD tests load;
+      // behaviour tests vi.mock locally.
+      "@/lib/objects/binding-write-path": path.join(__dirname, "src/__tests__/__stubs__/binding-write-path.ts"),
       // objects-store.ts resolves project inheritance for new object rows at
       // INSERT time via this pure helper (its only side-effecting import is
       // `server-only`, already neutralised by the stub alias below). Route to

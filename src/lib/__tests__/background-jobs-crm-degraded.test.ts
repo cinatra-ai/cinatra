@@ -23,6 +23,16 @@ vi.mock("@cinatra-ai/objects/graphiti-rebuild", () => ({
   processGraphitiProjectionCycle: processGraphitiProjectionCycleMock,
 }));
 
+// cinatra#1429: the GRAPHITI_PROJECTION_REPAIR cycle also drains the
+// binding-reconcile queue. Mock the app-layer sweep the run closure lazy-imports.
+const { processBindingReconcileQueueMock } = vi.hoisted(() => ({
+  processBindingReconcileQueueMock: vi.fn(() => ({ processed: 0, failed: 0 })),
+}));
+
+vi.mock("@/lib/objects/binding-reconcile-sweep", () => ({
+  processBindingReconcileQueue: processBindingReconcileQueueMock,
+}));
+
 import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,
@@ -45,6 +55,7 @@ function makeJob(name: string, data: unknown = {}, id = "test-job") {
 beforeEach(() => {
   __resetCapabilityRegistry();
   processGraphitiProjectionCycleMock.mockClear();
+  processBindingReconcileQueueMock.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -124,5 +135,25 @@ describe("GRAPHITI_PROJECTION_REPAIR sync bootstrap through the crm-sync-bootstr
       makeJob(BACKGROUND_JOB_NAMES.GRAPHITI_PROJECTION_REPAIR, {}, "anonymous-duplicate"),
     );
     expect(calls).toEqual(["bootstrap", "outbox"]);
+  });
+
+  it("drains the binding-reconcile queue BEFORE the projection cycle (cinatra#1429)", async () => {
+    const order: string[] = [];
+    processGraphitiProjectionCycleMock.mockImplementationOnce(async () => {
+      order.push("projection-cycle");
+      return { processed: 0, failed: 0, epochBumps: 0, journalsAdvanced: 0, journalsOpen: 0 };
+    });
+    processBindingReconcileQueueMock.mockImplementationOnce(() => {
+      order.push("binding-drain");
+      return { processed: 0, failed: 0 };
+    });
+    await dispatchBackgroundJob(
+      makeJob(BACKGROUND_JOB_NAMES.GRAPHITI_PROJECTION_REPAIR, {}, "anonymous-duplicate"),
+    );
+    expect(processBindingReconcileQueueMock).toHaveBeenCalledTimes(1);
+    // Drain the claim-winner-transition axis FIRST so fresh bindings project
+    // this cycle and a later projection-cycle throw cannot starve the drain
+    // (codex Q4).
+    expect(order).toEqual(["binding-drain", "projection-cycle"]);
   });
 });
