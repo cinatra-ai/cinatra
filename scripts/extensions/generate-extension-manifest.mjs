@@ -55,6 +55,7 @@ import {
   mergeRoleDeclarations,
   ARTIFACT_DEFAULT_FLOOR_ROLE,
 } from "./agent-binding-kinds.mjs";
+import { validateArtifactObjectTypeClaims } from "./artifact-objecttypes-claims.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -1884,6 +1885,15 @@ export async function buildManifest() {
     allFieldRendererEntries.push(...entries);
     if (cin.roles !== undefined) {
       roleDeclarations.push({ packageName: r.packageName, roles: cin.roles });
+    }
+    // objectTypes claims gate (cinatra#1432): a present `kind:"artifact"`
+    // extension's manifest claims are validated FAIL-CLOSED at generation —
+    // entry shape, disposition vocabulary, and the schema-source rule
+    // (inline JSON Schema OR self-registered type OR a declared dependency
+    // on the registering extension). Structural .mjs restatement of the
+    // canonical TS rules (see artifact-objecttypes-claims.mjs header).
+    if (cin.kind === "artifact") {
+      bindingErrors.push(...validateArtifactObjectTypeClaims(r.packageName, cin));
     }
   }
   const { merged: agentFieldRendererBindings, errors: mergeErrors } =

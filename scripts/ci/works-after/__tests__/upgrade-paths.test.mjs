@@ -35,6 +35,7 @@ const RESOLVE = resolve(REPO_ROOT, "scripts/upgrade/resolve-transition.mjs");
 const LEDGER = resolve(REPO_ROOT, "scripts/upgrade/ledger.mjs");
 const MARIADB_PATH = resolve(REPO_ROOT, "scripts/upgrade/mariadb-upgrade-major.sh");
 const REDIS_PATH = resolve(REPO_ROOT, "scripts/upgrade/redis-upgrade-major.sh");
+const PG_PATH = resolve(REPO_ROOT, "scripts/upgrade/postgres-upgrade-major.sh");
 
 function runNode(args, opts = {}) {
   return spawnSync("node", args, { encoding: "utf8", ...opts });
@@ -218,4 +219,75 @@ test("upgrade-from fixtures default to digest-bound source AND target images", (
     }
     assert.match(src, /scripts\/upgrade\//, `${file} must drive the committed family path`);
   }
+});
+
+// ── postgres family (cinatra#1422 / cinatra-cli#129) ─────────────────────────
+
+test("postgres: supported transitions resolve (platform 17→18 baseline, nango 15→17 case exception)", () => {
+  for (const [svc, from, to] of [
+    ["platform-postgres", "17", "18"],
+    ["nango-postgres", "15", "17"],
+  ]) {
+    const r = runNode([RESOLVE, svc, from, to]);
+    assert.equal(r.status, 0, `${svc} ${from}->${to} should be supported: ${r.stderr}`);
+    const v = JSON.parse(r.stdout);
+    assert.equal(v.supported, true);
+    assert.equal(v.service.family, "postgres");
+    assert.equal(v.mechanism, "logical-dump-restore");
+  }
+});
+
+test("postgres: a downgrade and an unsupported hop fail closed (exit 3)", () => {
+  for (const [svc, from, to, why] of [
+    ["platform-postgres", "18", "17", "downgrade"],
+    ["nango-postgres", "17", "18", "unvalidated upstream"],
+    ["twenty-postgres", "16", "18", "no in-place major path"],
+  ]) {
+    const r = runNode([RESOLVE, svc, from, to]);
+    assert.equal(r.status, 3, `${svc} ${from}->${to} (${why}) must exit 3, got ${r.status}`);
+  }
+});
+
+test("postgres path script: bad invocations exit usage code 2; an unsupported tuple refuses fail-closed 3 with no ledger", () => {
+  assert.equal(runBash([PG_PATH]).status, 2, "missing required args");
+  assert.equal(runBash([PG_PATH, "--bogus", "x"]).status, 2, "unknown flag");
+  // A --from-tag off the resolved series is a misconfigured invocation.
+  const rBind = runBash(
+    [PG_PATH, "--service", "platform-postgres", "--volume", "v", "--from", "17", "--to", "18", "--from-tag", "18-alpine", "--backup-dir", "/tmp"],
+    { UPGRADE_LEDGER_FILE: "/tmp/never-upgrade-postgres-test.json" },
+  );
+  assert.equal(rBind.status, 2, "a --from-tag off the resolved series must refuse");
+  assert.match(rBind.stderr, /does not run the matrix version/);
+  // An unsupported tuple refuses fail-closed BEFORE any mutation — ledger never created.
+  const dir = mkdtempSync(join(tmpdir(), "uf-pg-refuse-"));
+  const ledger = join(dir, "never.json");
+  const down = runBash(
+    [PG_PATH, "--service", "platform-postgres", "--volume", "v", "--from", "18", "--to", "17", "--backup-dir", dir],
+    { UPGRADE_LEDGER_FILE: ledger },
+  );
+  assert.equal(down.status, 3, `postgres 18->17 downgrade must refuse: ${down.stderr}`);
+  assert.ok(!existsSync(ledger), "a refusal must never touch the ledger");
+});
+
+test("postgres path script runs with errtrace + the subshell trap guard", () => {
+  const src = readFileSync(PG_PATH, "utf8");
+  assert.match(src, /set -Eeuo pipefail/, "postgres path: ERR-trap transaction handling requires errtrace (-E)");
+  assert.match(src, /BASH_SUBSHELL/, "postgres path: the trap must no-op in subshells via BASH_SUBSHELL");
+});
+
+test("upgrade-postgres fixture: digest-bound TARGET pins, bare-major sources, drives the committed pg family path", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-postgres.sh"), "utf8");
+  // Field pg SOURCES have no single canonical digest (cinatra#1417) — bare majors.
+  for (const v of ["PG_CASEA_FROM_TAG", "PG_CASEB_FROM_TAG"]) {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    assert.doesNotMatch(m[1], /@sha256:/, `${v} is a field source (no canonical digest) — must be a bare tag`);
+  }
+  // TARGETS are the matrix pins — digest-bound (pins the fixture's proven bytes).
+  for (const v of ["PG_CASEA_TO_TAG", "PG_CASEB_TO_TAG"]) {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${v} default must be digest-bound (the matrix target pin)`);
+  }
+  assert.match(src, /scripts\/upgrade\/postgres-upgrade-major\.sh/, "must drive the committed pg family path");
 });

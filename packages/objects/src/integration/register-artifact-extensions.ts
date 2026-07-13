@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import { objectTypeRegistry } from "../registry";
 import type { SemanticArtifactManifest } from "../types";
+import { validateObjectTypeClaimSchemaSources } from "../claims";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import {
   GenericObjectListRow,
@@ -70,6 +71,36 @@ function registerOneArtifactDir(dir: string): boolean {
     return false;
   }
   const descriptor: SemanticArtifactManifest = parsed.manifest;
+  // Schema-source rule for objectTypes claims (cinatra#1432 AC-4): same
+  // fail-closed check the handler's validate() runs — a claim with no inline
+  // JSON Schema, no self-registered type, and no declared dependency on the
+  // registering extension never registers (warn + skip, the bridge's skip
+  // convention).
+  if (descriptor.objectTypes && descriptor.objectTypes.length > 0) {
+    const rawDeps = (pkg.cinatra as { dependencies?: unknown } | undefined)?.dependencies;
+    const declaredDeps = Array.isArray(rawDeps)
+      ? rawDeps
+          .map((d) =>
+            d != null &&
+            typeof d === "object" &&
+            typeof (d as { packageName?: unknown }).packageName === "string"
+              ? (d as { packageName: string }).packageName
+              : null,
+          )
+          .filter((n): n is string => n != null)
+      : [];
+    const sourceErrors = validateObjectTypeClaimSchemaSources({
+      packageName: pkg.name,
+      claims: descriptor.objectTypes,
+      dependencyPackageNames: declaredDeps,
+    });
+    if (sourceErrors.length > 0) {
+      console.warn(
+        `[artifacts:bridge] ${pkg.name} has objectTypes claims without a schema source — skipped: ${sourceErrors.join("; ")}`,
+      );
+      return false;
+    }
+  }
   objectTypeRegistry.register(
     {
       // Namespaced id `@scope/pkg:artifact` (matches OBJECT_TYPE_NAMESPACE_RE).

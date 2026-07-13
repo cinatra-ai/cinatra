@@ -13,6 +13,15 @@ export default defineConfig({
         __dirname,
         "../../packages/extension-types/src/index.ts",
       ),
+      // Pure zod claims leaf (@cinatra-ai/objects/claims) — the artifact
+      // handler imports the objectTypes-claim entry schema + schema-source
+      // validator from it (cinatra#1432). Aliased as a leaf subpath BEFORE any
+      // barrel so vitest resolves the source without the objects barrel (which
+      // the handler tests mock).
+      "@cinatra-ai/objects/claims": path.join(
+        __dirname,
+        "../../packages/objects/src/claims.ts",
+      ),
       // Leaf subpath for the byte-mirror lock test. Drops the agents
       // barrel, which would drag drizzle + pacote + better-auth init
       // into vitest.

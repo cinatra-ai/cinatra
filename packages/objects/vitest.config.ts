@@ -25,6 +25,14 @@ export default defineConfig({
       // touching a real PG instance.
       "@/lib/objects-store": path.join(root, "src/lib/objects-store.ts"),
       "@/lib/postgres-sync": path.join(root, "src/lib/postgres-sync.ts"),
+      // Host-app claim registry + effective-identity resolver. The graphiti
+      // projector / rebuild worker call these for claimed-row faceted
+      // projection (cinatra#1427 AC-3), importing them at top level. The real
+      // modules pull server-only + postgres-config/schema-init; route to
+      // lightweight stubs (safe no-claims / floor-identity defaults) so the
+      // projector loads in the sandbox. Behaviour tests vi.mock these locally.
+      "@/lib/objects/artifact-claim-store": path.join(__dirname, "src/__tests__/__stubs__/artifact-claim-store.ts"),
+      "@/lib/objects/effective-identity": path.join(__dirname, "src/__tests__/__stubs__/effective-identity.ts"),
       // objects-store.ts resolves project inheritance for new object rows at
       // INSERT time via this pure helper (its only side-effecting import is
       // `server-only`, already neutralised by the stub alias below). Route to

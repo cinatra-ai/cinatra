@@ -57,8 +57,10 @@ GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 
 # All arms, in run order. postgres is last-ish (slowest with the negative test);
 # the upgrade-from arms (cinatra#1421/#1422) sit before it — upgrade-redis is
-# cheap, upgrade-mariadb boots several MariaDB servers.
-ALL_ARMS="redis verdaccio nango wayflow graphiti upgrade-redis upgrade-mariadb postgres"
+# cheap, upgrade-mariadb boots several MariaDB servers, upgrade-postgres boots
+# several Postgres servers across two transitions (Case A 17->18, Case B nango
+# 15->17).
+ALL_ARMS="redis verdaccio nango wayflow graphiti upgrade-redis upgrade-mariadb upgrade-postgres postgres"
 
 # Resolve the selected set from WORKS_AFTER_ONLY (comma/space separated).
 if [ -n "${WORKS_AFTER_ONLY:-}" ]; then
@@ -115,6 +117,7 @@ for arm in $SELECTED; do
     graphiti)  run_arm graphiti  "${ARMS_DIR}/graphiti.sh" ;;
     upgrade-redis)   run_arm upgrade-redis   "${ARMS_DIR}/upgrade-redis.sh" ;;
     upgrade-mariadb) run_arm upgrade-mariadb "${ARMS_DIR}/upgrade-mariadb.sh" ;;
+    upgrade-postgres) run_arm upgrade-postgres "${ARMS_DIR}/upgrade-postgres.sh" ;;
     postgres)
       run_arm postgres "${ARMS_DIR}/postgres.sh"
       # Complementary prev-release proof: the previously-unwired upgrade-proof.sh

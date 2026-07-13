@@ -118,12 +118,14 @@ import "server-only";
 //   - DENY LIST (`CINATRA_EXTENSION_AUTO_UPDATE_DENY`, comma-separated exact
 //     package names): a denied package skips selection as `deny-listed`.
 //
-// READ-MODEL WIRING STATUS: the persistent (DB-backed)
-// `ExtensionUpdateReadModelStore` adapter is #1041's own slice (open PR
-// #1310). Until it lands and is wired into `defaultResolveUpdateReadModelStore`
-// below (a one-line follow-up), the default resolver returns null and every
-// cycle reports `readModelWired:false` with all rows skipped as
-// `read-model-unwired` — the loop is dormant even when the flag is ON.
+// READ-MODEL WIRING (#1042 wire-up slice; formerly dormant): the default
+// resolver now returns the persistent DB-backed
+// `ExtensionUpdateReadModelStore` adapter (#1041, PR #1310 —
+// `getExtensionUpdateReadModelStore`), the SAME process-cached store the
+// /configuration/extensions indicator reads. The `read-model-unwired`
+// path is KEPT fail-honest: a deployment whose injected resolver yields null
+// still reports `readModelWired:false` loudly with every scanned row skipped
+// as `read-model-unwired` — never a falsely-empty "up to date" run.
 // ---------------------------------------------------------------------------
 
 import type { Actor } from "@cinatra-ai/extension-types";
@@ -329,7 +331,9 @@ export type ExtensionAutoUpdateDeps = {
   isRequiredInProd: (packageName: string) => boolean | Promise<boolean>;
   /**
    * The persistent update read-model store, or null when no adapter is wired
-   * on this deployment (see the module header — PR #1310 follow-up).
+   * on this deployment (the default resolves the #1310 DB-backed adapter;
+   * null keeps the fail-honest `read-model-unwired` path — see the module
+   * header).
    */
   resolveUpdateReadModelStore: () => Promise<ExtensionUpdateReadModelStore | null>;
   /** The loaders' ABI verdict over the candidate's declared range. */
@@ -408,9 +412,14 @@ export function buildDefaultExtensionAutoUpdateDeps(): ExtensionAutoUpdateDeps {
       return isSystemExtension(packageName);
     },
     resolveUpdateReadModelStore: async () => {
-      // The persistent adapter is #1041's slice (open PR #1310). Wire it here
-      // once it lands; until then the loop is dormant (read-model-unwired).
-      return null;
+      // #1042 wire-up: the persistent DB-backed adapter (#1041, PR #1310) —
+      // the SAME process-cached store the /configuration/extensions indicator
+      // reads, so the loop and the UI agree on update availability. Lazy so
+      // this module never drags the pooled-DB import graph at load time.
+      const { getExtensionUpdateReadModelStore } = await import(
+        "@/lib/extension-update-read-model-store"
+      );
+      return getExtensionUpdateReadModelStore();
     },
     evaluateAbiCompat: (sdkAbiRange) => evaluateHostSdkCompat(sdkAbiRange),
     isSignatureReady: async () => {

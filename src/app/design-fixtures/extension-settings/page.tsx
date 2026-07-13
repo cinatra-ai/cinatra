@@ -39,8 +39,9 @@ async function noopSave(): Promise<{ ok: boolean; error?: string }> {
   return { ok: true };
 }
 
+// NOTE (cinatra#1041): no update action — the live Update button is a LINK
+// opening the §II detail-modal update flow on the Installed page.
 const ACTIONS: ExtensionSettingsActions = {
-  update: noop,
   archive: noop,
   activate: noop,
   reinstall: noop,
