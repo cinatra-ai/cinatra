@@ -16,6 +16,8 @@ import {
   updateExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
+// §II modal-footer dry-run (cinatra#1041) — screens-only server action.
+import { planExtensionUpdateFormAction } from "./update-plan-action";
 import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
@@ -132,6 +134,13 @@ export async function ExtensionsMarketplaceScreen({
     });
     const restoreAction = restoreExtensionPackageFormAction.bind(null, {
       packageName: card.packageName,
+    });
+    // §II modal-footer dry-run (cinatra#1041): the footer's "Update now" plans
+    // first (against THIS card's catalog version) and the admin confirms the
+    // rendered Update plan before `updateAction` applies through the batch.
+    const planUpdateAction = planExtensionUpdateFormAction.bind(null, {
+      packageName: card.packageName,
+      targetVersion: card.packageVersion,
     });
 
     const ctaControl =
@@ -254,6 +263,7 @@ export async function ExtensionsMarketplaceScreen({
             installAction={installAction}
             updateAction={updateAction}
             restoreAction={restoreAction}
+            planUpdateAction={planUpdateAction}
           />
         }
       />

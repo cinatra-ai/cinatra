@@ -42,7 +42,7 @@ export type MentionPayload = {
 // triplet (`webhook-id` / `webhook-timestamp` / `webhook-signature`). The
 // assistant identity is PRESERVED as the `X-Cinatra-Assistant-Id` extra header
 // (applied by the engine). External assistant receivers must switch to
-// Standard-Webhooks verification — see docs/webhooks/outbound-delivery.md.
+// Standard-Webhooks verification — see docs/internals/workflows/webhooks/outbound-delivery.md.
 // ---------------------------------------------------------------------------
 
 export async function deliverMentionWebhook(

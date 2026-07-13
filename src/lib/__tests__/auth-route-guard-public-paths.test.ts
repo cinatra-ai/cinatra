@@ -158,7 +158,7 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
   // `/api/wordpress/bundle.js` bundle path; cinatra#977 then DELETED the dead
   // pre-Option-A bundle routes together with that exemption (the vendored
   // plugin/module widget copies are the only shipped widget source — see
-  // docs/widget-source-of-truth.md). No `/api/wordpress` public entry of ANY
+  // docs/internals/contracts/widget-source-of-truth.md). No `/api/wordpress` public entry of ANY
   // width may come back: the precise one would exempt a nonexistent route, a
   // broad prefix would expose EVERY WordPress API route unauthenticated. These
   // regressions are a source edit, so a source-text pin (matching this file's
@@ -303,5 +303,72 @@ describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harnes
     const res = await guardAppRoute(fakeRequest("/design-fixtures/anything-else"));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/sign-in");
+  });
+});
+
+describe("auth-route-guard - /api/cli control-plane exemption (behavioral + pin)", () => {
+  // The published `cinatra` bin drives a remote instance as a COOKIELESS OAuth
+  // API client. Every /api/cli/* route enforces its OWN authorization at the
+  // route via authorizeCliRequest (src/lib/cli-api/route-guard.ts): a Better-Auth
+  // session, a JWKS-verified OAuth Bearer on the dedicated /api/cli audience with
+  // per-endpoint scope + LIVE role, or the loopback dev-admin bypass. Without the
+  // PUBLIC_PATH_PREFIXES exemption guardAppRoute 307s the cookieless request to
+  // /sign-in BEFORE authorizeCliRequest runs, and the CLI crashes parsing the
+  // /sign-in HTML as JSON. This mirrors /api/mcp and /api/extensions/purge.
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    // NextResponse.next() has no Location header and is not a 307 redirect.
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+
+  it("keeps /api/cli in PUBLIC_PATH_PREFIXES with an in-handler-auth comment naming authorizeCliRequest", () => {
+    // Source-text pin (this file's convention for every security-relevant
+    // exemption, e.g. /api/extensions/purge and /webhook): defends against a
+    // future refactor silently dropping the entry and re-breaking the CLI.
+    expect(guardSource).toMatch(/"\/api\/cli"/);
+    const line = guardSource.split("\n").find((l) => l.includes('"/api/cli"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+    expect(line ?? "").toMatch(/authorizeCliRequest/);
+  });
+
+  it("a cookieless /api/cli/status request passes the guard (NextResponse.next(), no 307)", async () => {
+    const res = await guardAppRoute(fakeRequest("/api/cli/status"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("cookieless /api/cli/extensions/reconcile/{plan,apply} pass the guard (no 307)", async () => {
+    for (const p of [
+      "/api/cli/extensions/reconcile/plan",
+      "/api/cli/extensions/reconcile/apply",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(isNext(res), `${p} should reach its route`).toBe(true);
+    }
+  });
+
+  it("the bare /api/cli path is exempt (boundary-aware prefix match)", async () => {
+    const res = await guardAppRoute(fakeRequest("/api/cli"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("PREFIX-BOUNDARY CONTROL: a string-prefix sibling NOT under /api/cli/ (e.g. /api/cli-foo) still 307s", async () => {
+    // The guard matches `pathname === prefix || pathname.startsWith(prefix + "/")`,
+    // not a loose substring — /api/cli-foo must NOT be exempted by the /api/cli entry.
+    const res = await guardAppRoute(fakeRequest("/api/cli-foo"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
+  });
+
+  it("CONTROL: a cookieless request to an unrelated protected path (/dashboards) still 307s to /sign-in", async () => {
+    const res = await guardAppRoute(fakeRequest("/dashboards"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
+  });
+
+  it("the exemption is the precise /api/cli prefix, never a bare /api prefix", () => {
+    // A bare "/api" prefix would make EVERY api route public. Only /api/cli.
+    expect(guardSource).not.toMatch(/"\/api"\s*,/);
   });
 });

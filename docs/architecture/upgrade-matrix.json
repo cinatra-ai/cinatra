@@ -3,7 +3,7 @@
   "schemaVersion": "1.0.0",
   "revision": 2,
   "baselineRelease": "0.1.9",
-  "generatedNote": "Supported source->target upgrade matrix for every stateful service in docker-compose.yml. Hand-authored source of truth; completeness + pin-drift + schema conformance are gated by scripts/check-upgrade-matrix.mjs (and the vitest suite scripts/ci/__tests__/upgrade-matrix.test.mjs). Human-readable inventory + rationale: docs/architecture/stateful-service-inventory.md. Slice 1 of the upgrade-paths epic (cinatra#1420 / cinatra#1419). This slice defines the DATA; the CLI preflight + `db upgrade-major` (cinatra-cli#128/#129) and the works-after upgrade-from arm (cinatra#1421/#1422) are the consumers.",
+  "generatedNote": "Supported source->target upgrade matrix for every stateful service in docker-compose.yml. Hand-authored source of truth; completeness + pin-drift + schema conformance are gated by scripts/check-upgrade-matrix.mjs (and the vitest suite scripts/ci/__tests__/upgrade-matrix.test.mjs). Human-readable inventory + rationale: docs/internals/architecture/stateful-service-inventory.md. Slice 1 of the upgrade-paths epic (cinatra#1420 / cinatra#1419). This slice defines the DATA; the CLI preflight + `db upgrade-major` (cinatra-cli#128/#129) and the works-after upgrade-from arm (cinatra#1421/#1422) are the consumers.",
   "stateClasses": [
     "canonical-data",
     "derived-index",
