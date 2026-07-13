@@ -1207,8 +1207,15 @@ export async function getAssignedSkillIdsForAgent(
 
   // level: "system" skills are
   // globally available to every agent — no LLM call, no DB read.
+  // SECURITY (cinatra#1416): only genuine PLATFORM system skills (no durable
+  // owner) are globally delivered. A user-authored skill that somehow carries
+  // level="system" (e.g. a forged admin-only policy) must NEVER leak into
+  // another user's LLM execution. The projection guard in
+  // projectSelectionToLevelScope already prevents an owned skill from being
+  // labelled system; excluding `ownerUserId` here is the defense-in-depth at
+  // the delivery gate.
   const systemSkillIds = catalog.skills
-    .filter((skill) => skill.level === "system")
+    .filter((skill) => skill.level === "system" && !skill.ownerUserId)
     .map((skill) => skill.id)
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 

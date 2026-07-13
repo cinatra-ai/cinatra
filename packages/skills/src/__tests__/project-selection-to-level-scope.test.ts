@@ -83,10 +83,24 @@ describe("projectSelectionToLevelScope — personal baseline (cinatra#1416, AC1)
   });
 });
 
-describe("projectSelectionToLevelScope — admin never drives the label (cinatra#1416, AC1)", () => {
-  it("admin-only keeps the legacy system projection", () => {
-    expect(project(["admin"])).toEqual(visibilityToLevelScope("admin", OWNER));
-    expect(project(["admin"])).toEqual({ level: "system", scope: undefined });
+describe("projectSelectionToLevelScope — admin never drives the label (cinatra#1416, AC1/AC8)", () => {
+  it("admin-only on an OWNED (personal) skill collapses to the personal baseline, NOT system", () => {
+    // SECURITY (cinatra#1416, AC8): a user-authored skill must NEVER project to
+    // level="system" — system skills are delivered UNCONDITIONALLY to every
+    // agent run, so an admin-only projection would leak the personal skill's
+    // content into non-admin LLM execution. With a durable owner, admin-only
+    // restores the owner-only baseline instead.
+    expect(project(["admin"])).toEqual({ level: "personal", scope: OWNER });
+  });
+
+  it("admin-only on a package skill (NO durable owner) keeps the legacy system projection", () => {
+    expect(projectSelectionToLevelScope(["admin"], undefined)).toEqual(
+      visibilityToLevelScope("admin", undefined),
+    );
+    expect(projectSelectionToLevelScope(["admin"], undefined)).toEqual({
+      level: "system",
+      scope: undefined,
+    });
   });
 
   it("admin mixed with a real grant: the real grant drives the label", () => {
@@ -98,7 +112,10 @@ describe("projectSelectionToLevelScope — admin never drives the label (cinatra
 });
 
 describe("projectSelectionToLevelScope — single-token parity with visibilityToLevelScope", () => {
-  for (const token of ["owner", "workspace", "admin", ORG, TEAM_A, PROJ] as const) {
+  // `admin` deliberately DIVERGES under a durable owner (the personal-skill
+  // system-leak guard, cinatra#1416/AC8) — its parity for the no-owner (package)
+  // context is covered in the admin block above.
+  for (const token of ["owner", "workspace", ORG, TEAM_A, PROJ] as const) {
     it(`single [${token}] reproduces visibilityToLevelScope`, () => {
       expect(projectSelectionToLevelScope([token], OWNER)).toEqual(
         visibilityToLevelScope(token, OWNER),

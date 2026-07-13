@@ -375,27 +375,40 @@ async function skillHooks(): Promise<ExtensionKindHooks> {
       if (ctx.actor?.platformRole === "platform_admin") return null;
 
       const { readExtensionAccessPolicy } = await import("./permissions-store");
+      const { resolveEffectiveSkillAccessPolicy } = await import(
+        "@cinatra-ai/skills/skill-packages"
+      );
       const catalog = await readSkillsCatalogSnapshot();
       const skill = catalog.skills.find((s) => s.id === id);
+      // Baseline = the persisted EFFECTIVE policy: an explicit per-skill override
+      // else the INHERITED parent-package policy (cinatra#1416, AC3). Resolving
+      // the inherited policy stops an unchanged inherited grant from looking
+      // "newly added" (which would wrongly force the manager to re-prove
+      // grantability for a scope they never touched).
       const persisted =
-        (await readExtensionAccessPolicy("skill", id)) ?? skill?.accessPolicy ?? null;
-      const previousTokens = new Set<string>(
-        persisted
-          ? [
-              ...persisted.runListVisibility,
-              ...persisted.runDataVisibility,
-              ...persisted.runExecuteVisibility,
-            ]
-          : [],
-      );
-      const proposed = [
-        ...new Set<AgentAuthPolicyVisibility>([
-          ...policy.runListVisibility,
-          ...policy.runDataVisibility,
-          ...policy.runExecuteVisibility,
-        ]),
-      ];
-      const added = proposed.filter((t) => !previousTokens.has(t));
+        (await readExtensionAccessPolicy("skill", id)) ??
+        (skill ? resolveEffectiveSkillAccessPolicy(skill, catalog.skillPackages ?? []) : null);
+      // Per-FIELD diff (cinatra#1416, AC3): a token counts as newly ADDED only
+      // when it appears in a proposed visibility field the persisted policy did
+      // NOT carry in the SAME field. Diffing the flattened UNION of the three
+      // fields would let a forged payload MOVE a retained token out of a
+      // low-privilege field (runDataVisibility) into the security-relevant
+      // runListVisibility with no grantability re-check. RETAINED/REMOVED tokens
+      // (already present in that field) are always permitted, so a full-array
+      // update never strands an existing grant a manager could not re-grant.
+      const VIS_FIELDS = [
+        "runListVisibility",
+        "runDataVisibility",
+        "runExecuteVisibility",
+      ] as const;
+      const addedSet = new Set<AgentAuthPolicyVisibility>();
+      for (const field of VIS_FIELDS) {
+        const before = new Set<string>(persisted ? persisted[field] : []);
+        for (const t of policy[field]) {
+          if (!before.has(t)) addedSet.add(t);
+        }
+      }
+      const added = [...addedSet];
       if (added.length === 0) return null;
 
       // Owner is always grantable (narrowing back to the personal baseline);

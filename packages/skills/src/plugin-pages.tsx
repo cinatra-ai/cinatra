@@ -378,6 +378,24 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
   // The system/admin special-case above is preserved: `requireResourceAccess`
   // throws 404 hidden for non-admin on system rows, and both paths converge
   // on `notFound()`.
+  // Load the per-skill permissions context FIRST (cinatra#1416, AC5/AC6). It is
+  // the co-owner-aware authority (owner / skill co-owners / platform admin, and
+  // for package skills the parent-package editors); the tuple/union inside
+  // requireResourceAccess below cannot see skill co-owners. Result is null only
+  // when the skill can't be anchored (a package-shipped row with no parent
+  // package); personal skills anchor on their own durable ownership. The panel
+  // mounts ONLY for managers (canRead): granted-scope readers see the skill but
+  // no access panel (the AC5 mounting matrix).
+  const skillPermissions = await loadSkillPermissionsContext(skill.id);
+
+  // Read gate for the rendered `{skill.content}` markdown. requireResourceAccess
+  // admits the durable owner + granted-scope members + platform_admin; a skill
+  // CO-OWNER is authorized by the loader (canRead) and by the write action, but
+  // is invisible to the tuple/union here — so a bare requireResourceAccess would
+  // 404 them before they ever reach the panel the write gate authorizes
+  // (AC5/AC6). Fall through to the loader's canRead before notFound(). AuthzError
+  // → notFound() keeps "denied" indistinguishable from "not found" by timing.
+  let canReadSkill = true;
   try {
     // Keep the UI authorization shape aligned with auth-policy.ts.
     requireResourceAccess(actor, buildSkillResourceRef({
@@ -393,6 +411,9 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
       ),
     }));
   } catch {
+    canReadSkill = skillPermissions?.canRead === true;
+  }
+  if (!canReadSkill) {
     notFound();
   }
 
@@ -406,16 +427,6 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
     skill.isCustomSkill === true && skill.ownerUserId
       ? skill.ownerUserId === userId
       : skill.level === "personal" && skill.scope === userId;
-
-  // Load the per-skill permissions context up front. Falls through to the
-  // parent package's policy when a package-shipped skill row has no override;
-  // personal skills anchor on their own durable ownership (loader semantics).
-  // Result is null when the skill is not found (short-circuited by the
-  // notFound() above) OR when a package-shipped row has no parent package.
-  // The panel mounts ONLY for authorized managers (canRead — owner /
-  // skill co-owners / platform admin): granted-scope readers see the skill
-  // but no access panel (the AC5 mounting matrix).
-  const skillPermissions = await loadSkillPermissionsContext(skill.id);
 
   return (
     <Main className="min-h-screen">

@@ -141,6 +141,43 @@ describe("requireResourceAccess — durable owner of a user-authored skill (cina
   });
 });
 
+describe("requireResourceAccess — owned skill with NO canonical policy (tuple fallback, cinatra#1416, AC2)", () => {
+  // A personal skill whose (level, scope) projected to (team, t1) but whose ref
+  // carries NO accessPolicy (the legacy / tuple-only path). The owned-skill
+  // MANAGE denial must fire BEFORE the tuple branch — otherwise a t1 member
+  // would match the team tuple (which does not distinguish read from manage)
+  // and wrongly receive manage on someone else's personal skill.
+  const tupleRef = buildSkillResourceRef({
+    id: "@custom/personal-skills/tuple-only",
+    level: "team",
+    scope: T1_ID,
+    ownerUserId: OWNER,
+    // no accessPolicy → falls through to the (level, scope) tuple branch
+  });
+
+  it("a granted-scope member READS the owned skill via the tuple", () => {
+    expect(() =>
+      requireResourceAccess(actor({ principalId: "member-x", teamIds: [T1_ID] }), tupleRef),
+    ).not.toThrow();
+  });
+
+  it("a granted-scope member is DENIED manage even on the tuple-fallback path (security)", () => {
+    expect(() =>
+      requireResourceAccess(
+        actor({ principalId: "member-x", teamIds: [T1_ID] }),
+        tupleRef,
+        "manage",
+      ),
+    ).toThrow();
+  });
+
+  it("the durable owner still MANAGES the tuple-only owned skill", () => {
+    expect(() =>
+      requireResourceAccess(actor({ principalId: OWNER, teamIds: [] }), tupleRef, "manage"),
+    ).not.toThrow();
+  });
+});
+
 describe("requireResourceAccess — package-shipped skills keep legacy union manage (no ownerUserId)", () => {
   // No ownerUserId → the AC2 manage restriction does NOT apply; the legacy
   // union admits any matching token for read AND manage, exactly as before.

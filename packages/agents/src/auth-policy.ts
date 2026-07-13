@@ -313,6 +313,18 @@ export function requireResourceAccess(
   // OBO ceiling containment (a delegated actor stays confined even when the
   // invoking user owns the resource) — mirroring the platform_admin ordering.
   if (resource.ownerUserId && actor.principalId === resource.ownerUserId) return;
+  // Ownership-keyed MANAGE for user-authored skills (cinatra#1416, AC2/AC5).
+  // On a durable-owner skill, only the owner (returned just above) and
+  // platform_admin (returned earlier) may MANAGE; every other principal —
+  // members of granted scopes included — gets read/use ONLY. This runs BEFORE
+  // both the canonical-policy union AND the (level, scope) tuple fallback
+  // below, so a broadened personal skill that projected to level="team"/
+  // "project" (and thus has no canonical `policy` on the ref) can never leak
+  // `manage` to a tuple-matching scope member. Package-shipped skills (no
+  // ownerUserId) keep the legacy union/tuple manage semantics untouched.
+  if (mode === "manage" && resource.ownerUserId) {
+    throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
+  }
   // Canonical multi-scope enforcement (W4, #1073). When the ref carries an
   // effective access policy, the visibility union is the SOLE membership
   // decision: admit on ANY matching token (OR-visibility), else deny. This
@@ -323,16 +335,8 @@ export function requireResourceAccess(
   // available above (system-hidden, OBO facets) and inside the workspace/owner
   // token predicates as structural hints — never as the union decision here.
   if (resource.policy && resource.policy.length > 0) {
-    // Ownership-keyed manage for user-authored skills (cinatra#1416, AC2/AC5):
-    // on a resource with a durable owner, a scope grant conveys read/use ONLY.
-    // The owner already returned above and platform_admin before that; every
-    // other principal — including members of granted scopes — is denied
-    // manage here. (Skill co-owners are admitted by the co-owner-aware action
-    // gates, which never route through this tuple/union path for manage.)
-    // Package-shipped skills (no ownerUserId) keep the legacy union semantics.
-    if (mode === "manage" && resource.ownerUserId) {
-      throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
-    }
+    // (The owned-skill `manage` denial is hoisted above the policy branch so
+    // it also covers the tuple-fallback path — cinatra#1416, AC2/AC5.)
     for (const token of resource.policy) {
       if (matchSkillAccessToken(token, actor, resource, mode)) return;
     }

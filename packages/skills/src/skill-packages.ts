@@ -136,9 +136,18 @@ export function projectSelectionToLevelScope(
   const ranked = [...selection].filter((t) => projectionRank(t) > 0);
   if (ranked.length === 0) {
     // No positive grant tokens. An admin-only selection keeps the legacy
-    // `system` projection; anything else (empty / unrecognized) restores the
-    // personal baseline.
+    // `system` projection ONLY for package-shipped rows (no durable owner);
+    // anything else (empty / unrecognized) restores the personal baseline.
     if (selection.length > 0 && selection.every((t) => t === "admin")) {
+      // SECURITY (cinatra#1416, AC1/AC8): a user-authored (personal) skill —
+      // identified by its durable `ownerUserId` — must NEVER project to
+      // level="system". system skills are delivered UNCONDITIONALLY to every
+      // agent run (agents-store.getAssignedSkillIdsForAgent), so an admin-only
+      // projection would leak a personal skill's content into non-admin LLM
+      // execution. Collapse admin-only-on-an-owned-skill to the personal
+      // baseline (owner-only) instead; only the whole platform (no owner) may
+      // legitimately be system-level.
+      if (ownerUserId) return { level: "personal", scope: ownerUserId };
       return visibilityToLevelScope("admin", ownerUserId);
     }
     return { level: "personal", scope: ownerUserId };
