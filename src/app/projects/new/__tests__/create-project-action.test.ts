@@ -95,3 +95,48 @@ describe("/projects/new server component + createProjectAction", () => {
     expect(SOURCE).not.toMatch(/^"use server";/m);
   });
 });
+
+describe("createProjectAction team-owner authorization (cinatra#1499 regression)", () => {
+  // Slice the action body so assertions target the server action, not the
+  // page-level dropdown queries.
+  const fnStart = SOURCE.indexOf("async function createProjectAction");
+  const pageStart = SOURCE.indexOf("export default async function NewProjectPage");
+  const actionBody = SOURCE.slice(fnStart, pageStart);
+
+  it("has an extractable createProjectAction body", () => {
+    expect(fnStart).toBeGreaterThan(-1);
+    expect(pageStart).toBeGreaterThan(fnStart);
+  });
+
+  it("team-membership check selects a real teamMember column (id), matching the live Better Auth schema", () => {
+    // Better Auth's public.\"teamMember\" table is id/teamId/userId/createdAt.
+    expect(actionBody).toMatch(/SELECT\s+id\s+FROM\s+public\."teamMember"/);
+  });
+
+  it("NEVER selects a non-existent `role` column from teamMember (the root cause of #1499)", () => {
+    // The original bug: `SELECT role FROM public.\"teamMember\"` — Postgres
+    // errored 'column \"role\" does not exist', surfacing as a generic
+    // DB-unreachable toast. Guard against any teamMember query re-introducing
+    // a role selection.
+    expect(actionBody).not.toMatch(/SELECT\s+role\s+FROM\s+public\."teamMember"/);
+    // The removed local that derived team-admin from that column must be gone.
+    expect(actionBody).not.toMatch(/teamMemberRole/);
+    expect(actionBody).not.toMatch(/===\s*"admin"\s*\?\s*"team_admin"/);
+  });
+
+  it("authorizes team-owned creation on plain MEMBERSHIP (existence), not a team role", () => {
+    // Membership decision is existence-based (rows present), not role-based.
+    expect(actionBody).toMatch(/isTeamMember\s*=\s*memberRows\.rows\.length\s*>\s*0/);
+    // A confirmed member is mapped to the org-member role so the kernel's
+    // `project.create` (granted to `member`) gate passes.
+    expect(actionBody).toMatch(/enrichedRoles\.push\("member"\)/);
+  });
+
+  it("denies a non-member with a permission-style error redirect (not the generic DB toast)", () => {
+    expect(actionBody).toMatch(/error=not-a-team-member/);
+  });
+
+  it("leaves the org-owned path querying public.member.role unchanged (member DOES have a role column)", () => {
+    expect(actionBody).toMatch(/SELECT\s+role\s+FROM\s+public\.member\b/);
+  });
+});
