@@ -355,4 +355,39 @@ describe("computeExtensionUpdatePlanPreview — guards (outcomes 4/5)", () => {
     await expectRefusal(deps, "unrecoverable");
     expect(deps.plan).not.toHaveBeenCalled();
   });
+
+  it("refuses when the org level holds only a NON-default sibling — matches the planner's level-then-default resolution", async () => {
+    // The planner's `findLiveRowsInScope` claims the org level whenever it holds
+    // ANY live row (default or not), THEN `defaultLiveRow` refuses because that
+    // level has no default; it never falls through to the platform default. The
+    // preview must resolve to null here too (not the platform row's version),
+    // or it would render a plan the apply path refuses (row-selection parity).
+    const deps = makeDeps({
+      readInstalledRows: async () => [
+        row(ROOT, "9.9.9", { organizationId: "org-1", isDefault: false } as Partial<InstalledExtension>),
+        row(ROOT, "0.1.2", { organizationId: null }),
+      ],
+    });
+    await expectRefusal(deps, "unrecoverable", { orgId: "org-1" });
+    expect(deps.plan).not.toHaveBeenCalled();
+  });
+
+  it("refuses a ROOT update that would BREAK a live dependent — the same apply-time gate, run read-only in the preview", async () => {
+    // The planner exempts the root from the conflict classifier, so its dry-run
+    // alone misses a root update that violates a live dependent's blocking edge;
+    // the apply path runs `assertUpdateDoesNotBreakDependents` for the root and
+    // refuses. The preview runs the SAME gate so it refuses in lockstep instead
+    // of showing a plan the admin confirms and apply then rejects.
+    const deps = makeDeps({
+      readInstalledRows: async () => [
+        row(ROOT, "0.1.2"),
+        // A live dependent pinned to the CURRENT root version — the 0.1.5 target
+        // violates its blocking edge.
+        row("@acme/summarizer", "2.2.0", { dependencies: [edge(ROOT, "0.1.2")] }),
+      ],
+    });
+    const refusal = await expectRefusal(deps, "denied-entitlement");
+    expect(refusal.message).toContain("@acme/summarizer");
+    expect(deps.plan).not.toHaveBeenCalled();
+  });
 });

@@ -30,6 +30,8 @@ import "server-only";
 
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import {
+  assertUpdateDoesNotBreakDependents,
+  DependencyClosureError,
   edgesOf,
   isInstallBlockingEdge,
   makeScopedManifestLookup,
@@ -134,28 +136,30 @@ function resolveLiveRow(
   packageName: string,
   orgId: string | null,
 ): InstalledExtension | null {
+  // Mirror the planner's row resolution EXACTLY (extension-dependency-plan.ts
+  // `findLiveRowsInScope` + `defaultLiveRow`) so the preview never resolves a
+  // row the apply path would refuse (codex round-4 — preview↔apply row-identity
+  // parity). Two steps, in the planner's order:
+  //   (1) pick the scope LEVEL by whether it holds ANY live (active|locked)
+  //       row — DEFAULT OR NOT: the org level wins when it holds any such row,
+  //       else the platform level. A non-default side-by-side sibling at the
+  //       org level therefore CLAIMS the org level (it does NOT fall through to
+  //       platform), exactly as `findLiveRowsInScope` does;
+  //   (2) return the EXACTLY-ONE default of that level — null when the level
+  //       holds zero defaults (e.g. only a side-by-side sibling) OR more than
+  //       one (cross-owner ambiguity). The apply path fails closed on both, so
+  //       the preview refuses there too rather than reporting an arbitrary
+  //       (or a non-default sibling's) `fromVersion` and succeeding where apply
+  //       refuses.
+  const orgKey = orgId ?? null;
   const live = rows.filter(
     (r) =>
-      r.packageName === packageName &&
-      (r.status === "active" || r.status === "locked") &&
-      r.isDefault !== false,
+      r.packageName === packageName && (r.status === "active" || r.status === "locked"),
   );
-  // Fail CLOSED on cross-owner ambiguity exactly like the planner's
-  // `defaultLiveRow` (extension-dependency-plan.ts): MORE THAN ONE default at a
-  // scope tier is not a row this preview may pick arbitrarily — the apply path
-  // returns null and refuses on that ambiguity, so the preview must too or it
-  // would report an arbitrary owner's `fromVersion` and succeed where apply
-  // refuses (codex round-3 — preview↔apply row-identity parity). Only a scope
-  // tier with EXACTLY one default resolves; an empty org tier falls through to
-  // the platform tier, an AMBIGUOUS one does not.
-  const pickExactlyOne = (candidates: InstalledExtension[]): InstalledExtension | null =>
-    candidates.length === 1 ? candidates[0]! : null;
-  const orgKey = orgId ?? null;
-  if (orgKey !== null) {
-    const atOrg = live.filter((r) => (r.organizationId ?? null) === orgKey);
-    if (atOrg.length > 0) return pickExactlyOne(atOrg);
-  }
-  return pickExactlyOne(live.filter((r) => (r.organizationId ?? null) === null));
+  const atOrg = live.filter((r) => (r.organizationId ?? null) === orgKey);
+  const scope = atOrg.length > 0 ? atOrg : live.filter((r) => (r.organizationId ?? null) === null);
+  const defaults = scope.filter((r) => r.isDefault !== false);
+  return defaults.length === 1 ? defaults[0]! : null;
 }
 
 /**
@@ -381,8 +385,14 @@ export async function computeExtensionUpdatePlanPreview(
   // CTA grey out on). Range source: the read model when it covers the target,
   // else the target's packument manifest (dev path). FAIL CLOSED when neither
   // source can prove anything on the gatekept path.
+  // Trust the cached ABI ONLY from a NON-stale readout whose entry is the very
+  // target (a specific version's declared range is immutable, but a stale
+  // readout may not be trusted at all — the dev path then falls through to the
+  // fresh packument read, the gatekept path refuses; codex round-4).
   let abiRange: string | null | undefined =
-    readout?.entry?.latestVersion === target ? readout.entry.latestSdkAbiRange : undefined;
+    readout && !readout.stale && readout.entry?.latestVersion === target
+      ? readout.entry.latestSdkAbiRange
+      : undefined;
   let fetchedRootDisplay: string | null = null;
   if (abiRange === undefined) {
     if (deps.isGatekeptInstallEnabled()) {
@@ -424,6 +434,31 @@ export async function computeExtensionUpdatePlanPreview(
   const pin = deps.checkRequiredPin({ packageName, version: target, op: "update" });
   if (!pin.ok) {
     throw new UpdatePlanRefusal("denied-entitlement", `update-plan: ${pin.reason}`);
+  }
+
+  // Outcome 5 — the ROOT dependent-break fence. The planner exempts the root
+  // from the conflict classifier, so its dry-run alone would NOT catch a root
+  // update that violates a live dependent's install-blocking edge; the apply
+  // path runs `assertUpdateDoesNotBreakDependents` for the root at write time
+  // (packages/extensions index.ts "UPDATE GATE") and refuses. Run the SAME gate
+  // here (read-only, same args) so the preview refuses in lockstep instead of
+  // rendering a plan the admin confirms and the apply then rejects (codex
+  // round-4 — preview↔apply root-fence parity). Same compatibility-constraint
+  // family as the required-pin refusal above → `denied-entitlement`; the named
+  // dependents stay server-side (#685).
+  try {
+    assertUpdateDoesNotBreakDependents(packageName, target, installedRows, {
+      organizationId: orgId,
+    });
+  } catch (err) {
+    if (err instanceof DependencyClosureError && err.code === "UPDATE_BREAKS_DEPENDENTS") {
+      throw new UpdatePlanRefusal(
+        "denied-entitlement",
+        `update-plan: ${packageName}@${target} would break live dependents ` +
+          `(${err.dependents.join(", ")}) — the apply-time update gate would refuse it`,
+      );
+    }
+    throw err;
   }
 
   // The plan. Gatekept: the ratified #1296 fence keeps updates as a direct
