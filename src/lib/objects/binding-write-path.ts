@@ -188,6 +188,71 @@ export function reconcileArtifactBinding(input: {
   return { archived, inserted, changed: archived > 0 || inserted > 0 };
 }
 
+/**
+ * Write-path composition entry (cinatra#1429). Called from the ordinary object
+ * write path (`upsertObjectAndEnqueue`) AFTER an object row is written, to keep
+ * the row's BINDING assertion consistent with its CURRENT type's live claim
+ * winner — the OBJECT-side reconcile axis (a create into a claimed type, or a
+ * type change across / away from a claim). The CLAIM-side axis (a winner
+ * transition) is driven by the reconcile-queue drain + backfill sweep.
+ *
+ * GATED for the hot path: a single cheap indexed guard SELECT decides whether
+ * this write could affect a binding at all —
+ *   - the row's type carries a live DEDICATED claim in the org scope chain (a
+ *     create / type-change INTO a claimed type needs a binding INSERT), OR
+ *   - the artifact already carries an active binding (a type-change AWAY from a
+ *     claimed type, or a since-retired claim, needs the stale binding ARCHIVED).
+ * Only then does it open the advisory-locked REPEATABLE READ reconcile tx.
+ * Substrate / plain writes (no claim, no binding) short-circuit to a no-op after
+ * the one guard SELECT — the universal writer pays at most one indexed lookup,
+ * never the reconcile tx.
+ *
+ * A null org has no binding surface (both `artifact_type_claims` org scopes and
+ * `semantic_assertion` binding rows key on a concrete org, and the winner CTE
+ * requires `objects.org_id = $org`), so a null-org write short-circuits.
+ *
+ * Idempotent + safe: `reconcileArtifactBinding` resolves the CURRENT winner from
+ * live DB state under the per-artifact advisory lock at REPEATABLE READ, so a
+ * concurrent claim winner change is invisible to this snapshot (it enqueued its
+ * own reconcile row; the drain converges). Never mutates `objects`.
+ */
+export function reconcileArtifactBindingForWrite(input: {
+  orgId: string | null;
+  artifactId: string;
+  type: string;
+}): ReconcileArtifactBindingResult {
+  if (input.orgId == null) return { archived: 0, inserted: 0, changed: false };
+  ensurePostgresSchema();
+  const s = q();
+  const guard = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT
+  EXISTS (
+    SELECT 1 FROM "${s}"."artifact_type_claims" c
+    WHERE c.object_type_id = $3 AND c.claim_kind = 'dedicated'
+      AND c.status IN ('active','retiring')
+      AND (c.scope = 'platform' OR c.scope = 'org:' || $1)
+  ) AS has_claim,
+  EXISTS (
+    SELECT 1 FROM "${s}"."semantic_assertion" sa
+    WHERE sa.org_id = $1 AND sa.artifact_id = $2
+      AND sa.assertion_basis = 'binding' AND sa.eligibility <> 'archived'
+  ) AS has_binding`,
+        values: [input.orgId, input.artifactId, input.type],
+      },
+    ],
+  });
+  const row = guard?.[0]?.rows?.[0] as
+    | { has_claim?: boolean; has_binding?: boolean }
+    | undefined;
+  if (!row || (row.has_claim !== true && row.has_binding !== true)) {
+    return { archived: 0, inserted: 0, changed: false };
+  }
+  return reconcileArtifactBinding({ orgId: input.orgId, artifactId: input.artifactId });
+}
+
 export interface ActiveBindingRow {
   id: string;
   extension: string;

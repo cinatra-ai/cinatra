@@ -460,6 +460,26 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           // (formerly outside the inner try) skipping moveToDelayed and silently
           // killing the loop until the next reboot re-seeded it.
           ensureCrmSyncRegistrations();
+
+          // Binding-reconcile queue drain (cinatra#1429, epic #1424). The claim
+          // registry enqueues a durable 'binding-reconcile' row on every winner
+          // transition; drain it in the SAME 30s repair cadence so a claim
+          // winner change reconciles every affected row's binding. Drained
+          // BEFORE the projection cycle so (a) the freshly-reconciled bindings
+          // project THIS cycle, and (b) a later projection-cycle throw cannot
+          // starve binding reconciliation (codex Q4). The sweep is idempotent +
+          // FOR UPDATE SKIP LOCKED. Lazy-imported (same alias pattern as the
+          // cycle) to keep the objects binding graph off the registry's
+          // module-load path. A throw surfaces to the loop's error reporter and
+          // the loop re-delays — the #849 no-cycle-try/catch contract.
+          const { processBindingReconcileQueue } = await import(
+            "@/lib/objects/binding-reconcile-sweep"
+          );
+          const drain = processBindingReconcileQueue({ limit: 50 });
+          if (drain.processed > 0 || drain.failed > 0) {
+            console.log("[graphiti-projection-repair] binding-reconcile drain:", drain);
+          }
+
           // Full projection cycle (#1427): batch pending claim-set changes
           // into projection-policy epoch bumps, advance open epoch-fenced
           // rebuild journals, then drain the outbox (stale-epoch fencing
