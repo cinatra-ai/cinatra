@@ -45,12 +45,35 @@ export type ResolveSchemaConfigInitialValuesInput = {
    * the SAME package + actor as the surface being rendered.
    */
   installId: string | null;
+  /**
+   * Whether the addressed install is the package's DEFAULT version
+   * (cinatra#1392 S9). Absent / true → the global registry serves the hydrate
+   * action (byte-identical pre-S9 behavior). Explicitly `false` → the install
+   * is a NON-DEFAULT side-by-side version and its hydrate action is served
+   * EDGE-BOUND from the version-keyed registry (via `resolveVersionedAction`),
+   * fail-closed to a BLANK form — never the default version's action.
+   */
+  isDefault?: boolean;
+  /** The addressed install's pinned version — needed to serve a NON-DEFAULT version. */
+  version?: string | null;
 };
 
 export type ResolveSchemaConfigInitialValuesDeps = {
-  /** Look up a registered `ctx.ui` action — the `extension-ui-registry` read. */
+  /** Look up a registered `ctx.ui` action — the `extension-ui-registry` read (DEFAULT installs). */
   resolveAction: (
     packageName: string,
+    actionId: string,
+  ) => { handler: (input: unknown) => Promise<unknown> } | null | undefined;
+  /**
+   * Serve a NON-DEFAULT version's hydrate action from the version-keyed
+   * registry (cinatra#1392 S9). Consulted ONLY when the addressed install is
+   * `isDefault === false`. A null/absent result fail-closes to a BLANK form
+   * (never the default version's action) — consistent with this resolver's
+   * "can only ever produce a blank form" contract.
+   */
+  resolveVersionedAction?: (
+    packageName: string,
+    version: string | null | undefined,
     actionId: string,
   ) => { handler: (input: unknown) => Promise<unknown> } | null | undefined;
   /**
@@ -74,7 +97,7 @@ const TIMED_OUT: unique symbol = Symbol("schema-config-hydration-timeout");
  * Never throws; every failure path resolves `{}` (a blank form).
  */
 export async function resolveSchemaConfigInitialValues(
-  { surface, packageName, installId }: ResolveSchemaConfigInitialValuesInput,
+  { surface, packageName, installId, isDefault, version }: ResolveSchemaConfigInitialValuesInput,
   deps: ResolveSchemaConfigInitialValuesDeps,
 ): Promise<Record<string, string>> {
   // Opt-out default: no declaration → blank form, no registry lookup, no call.
@@ -83,7 +106,15 @@ export async function resolveSchemaConfigInitialValues(
   // the Install/Activate CTA instead of the form on this branch anyway).
   if (!installId) return {};
 
-  const action = deps.resolveAction(packageName, surface.hydrateAction);
+  // A NON-DEFAULT addressed install is served ITS version's hydrate action from
+  // the version-keyed registry — never the default's (cinatra#1392 S9). Absent
+  // an edge-bound serve (no resolver wired, or the pinned version registers no
+  // such action) the resolution fail-closes to a BLANK form, consistent with
+  // this resolver's contract. A DEFAULT/legacy install keeps the global path.
+  const action =
+    isDefault === false
+      ? deps.resolveVersionedAction?.(packageName, version, surface.hydrateAction) ?? null
+      : deps.resolveAction(packageName, surface.hydrateAction);
   if (!action) return {};
 
   const timeoutMs =

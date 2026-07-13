@@ -153,5 +153,93 @@ $body$` },
     )` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_binding_reconcile_queue_pending_idx
       ON "${q}"."artifact_binding_reconcile_queue" (status, created_at)` },
+    // cinatra#1432: the uninstall-operation lineage tables ride THIS claim-system
+    // schema leaf so the drizzle-store bootstrap wires the whole claim system
+    // through the single existing spread call — holding the drizzle-store
+    // file-size ratchet (the #1426 extract-to-hold-the-ratchet pattern). They
+    // are the claim system's uninstall archival + replay lineage; kept a
+    // separately-exported function below for direct SQL-shape tests.
+    ...artifactUninstallOperationSchemaQueries(schemaName),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Artifact-extension UNINSTALL-OPERATION lineage (cinatra#1432, epic #1424).
+//
+//   - artifact_uninstall_operations            one row per uninstall archival
+//     run (scope 'platform' | 'org:<id>' × claiming extension), status
+//     running → completed (or failed), jsonb checkpoint so an interrupted
+//     archival resumes; replayed_at/replayed_install_id set ONCE by the
+//     reinstall replay (an operation replays at most once).
+//   - artifact_uninstall_operation_assertions  append-only lineage of EXACTLY
+//     the semantic_assertion rows an operation archived, denormalized with
+//     everything replay needs (org/artifact/extension/asserted_by/principal +
+//     assertion_basis so replay restores only the CLASSIC subset — BINDING
+//     lineage regenerates from current claims, never replayed as classic);
+//     UNIQUE (operation_id, assertion_id) makes checkpoint-resumed archival
+//     idempotent; a BEFORE UPDATE OR DELETE trigger raises (immutable history).
+//
+// No FKs on purpose (the artifact_claim_events precedent above): operation +
+// lineage survive installed_extension deletion and assertion-table evolution.
+// On an existing deployment these tables arrive via migration core__0037; on a
+// fresh bootstrap they ship here — the two paths converge (idempotent DDL).
+// ---------------------------------------------------------------------------
+export function artifactUninstallOperationSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    // `scope` matches the claim registry's scope vocabulary
+    // ('platform' | 'org:<id>'). `checkpoint` carries the resumable cursor
+    // ({"orgId","artifactId"} of the last fully-archived artifact).
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_uninstall_operations" (
+      id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      scope text NOT NULL,
+      extension_package text NOT NULL,
+      extension_version text NOT NULL,
+      actor text NOT NULL,
+      status text NOT NULL DEFAULT 'running',
+      archived_count integer NOT NULL DEFAULT 0,
+      checkpoint jsonb,
+      replayed_at timestamptz,
+      replayed_install_id text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      completed_at timestamptz,
+      CONSTRAINT artifact_uninstall_operations_scope_check CHECK (scope = 'platform' OR scope LIKE 'org:_%'),
+      CONSTRAINT artifact_uninstall_operations_status_check CHECK (status IN ('running','completed','failed'))
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_uninstall_operations_pkg_scope_idx
+      ON "${q}"."artifact_uninstall_operations" (extension_package, scope, created_at DESC)` },
+
+    // Append-only lineage: one row per assertion the operation ARCHIVED,
+    // written in the SAME transaction as the archive UPDATE (a data-modifying
+    // CTE selects from the archived rows), so it is exactly-the-archived-set by
+    // construction. `assertion_basis` lets replay restore only the CLASSIC
+    // subset (binding lineage regenerates from current claims). UNIQUE
+    // (operation_id, assertion_id) makes checkpoint-resumed archival idempotent.
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_uninstall_operation_assertions" (
+      id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      operation_id text NOT NULL,
+      assertion_id text NOT NULL,
+      org_id text NOT NULL,
+      artifact_id text NOT NULL,
+      extension text NOT NULL,
+      asserted_by text NOT NULL,
+      asserted_by_principal text,
+      assertion_basis text NOT NULL DEFAULT 'classic',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT artifact_uninstall_operation_assertions_basis_check CHECK (assertion_basis IN ('binding','classic')),
+      CONSTRAINT artifact_uninstall_operation_assertions_op_assertion_uq UNIQUE (operation_id, assertion_id)
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_uninstall_operation_assertions_op_idx
+      ON "${q}"."artifact_uninstall_operation_assertions" (operation_id, org_id, artifact_id)` },
+    // DB-level immutability: lineage rows are history (what replay is owed); any
+    // UPDATE or DELETE raises. Mirrors fn_artifact_claim_events_append_only.
+    { text: `CREATE OR REPLACE FUNCTION "${q}"."fn_artifact_uninstall_op_assertions_append_only"() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE EXCEPTION 'artifact_uninstall_operation_assertions is append-only: % forbidden — uninstall lineage is immutable', TG_OP;
+END;
+$body$` },
+    { text: `DROP TRIGGER IF EXISTS trg_artifact_uninstall_op_assertions_append_only ON "${q}"."artifact_uninstall_operation_assertions"` },
+    { text: `CREATE TRIGGER trg_artifact_uninstall_op_assertions_append_only BEFORE UPDATE OR DELETE ON "${q}"."artifact_uninstall_operation_assertions" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_artifact_uninstall_op_assertions_append_only"()` },
   ];
 }

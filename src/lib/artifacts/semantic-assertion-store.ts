@@ -156,13 +156,20 @@ type Query = { text: string; values: unknown[] };
  *    [opsCount+1..]           (floor rebalance + outbox refresh)
  *  Callers locate their RETURNING-bearing op via the `opsCount`
  *  passed in. */
-function runOneLockedTx(
+/**
+ * TX-COMPOSABLE floor-rebalance + Graphiti-refresh tail. EXPORTED for callers
+ * that run their own held-lock transaction over an artifact's assertions
+ * (the uninstall archival / reinstall replay store, cinatra#1432) so the
+ * floor mechanics stay single-sourced — the queries are EXACTLY the tail
+ * `runOneLockedTx` appends after the caller-supplied ops. The caller's outer
+ * transaction MUST already hold the per-artifact advisory lock
+ * (`pg_advisory_xact_lock(hashtext(artifactId))`).
+ */
+export function buildFloorRebalanceAndRefreshQueries(
   orgId: string,
   artifactId: string,
   floorSource: AssertionSource,
-  ops: Query[],
-): Array<{ rows: Array<Record<string, unknown>>; rowCount: number }> {
-  ensurePostgresSchema();
+): Query[] {
   // floor assertion is never asserted_by 'matcher'
   const fSrc: AssertionSource = floorSource === "matcher" ? "agent" : floorSource;
   // CRITICAL: each floor-rebalance query gets ONLY the parameters its SQL
@@ -205,14 +212,23 @@ WHERE o.id=$1 AND o.org_id=$2`,
       values: [artifactId, orgId],
     },
   ];
+  return [...reb, ...refresh];
+}
+
+function runOneLockedTx(
+  orgId: string,
+  artifactId: string,
+  floorSource: AssertionSource,
+  ops: Query[],
+): Array<{ rows: Array<Record<string, unknown>>; rowCount: number }> {
+  ensurePostgresSchema();
   return runPostgresQueriesSync({
     connectionString: conn(),
     transaction: true,
     queries: [
       { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [artifactId] },
       ...ops,
-      ...reb,
-      ...refresh,
+      ...buildFloorRebalanceAndRefreshQueries(orgId, artifactId, floorSource),
     ],
   });
 }

@@ -35,6 +35,8 @@ function cardData(over: Partial<MarketplaceCardData> = {}): MarketplaceCardData 
     rating: { average: 4.6, count: 124 },
     detailHref: "/configuration/marketplace/cinatra-ai/blog-skills",
     installCount: 880,
+    manifestLogoUrl: null,
+    iconSlug: null,
     iconUrl: null,
     vendorLogoUrl: null,
     sdkAbiRange: null,

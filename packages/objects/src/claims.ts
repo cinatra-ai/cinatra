@@ -112,6 +112,116 @@ export function parseClaimDispositions(
 }
 
 // ---------------------------------------------------------------------------
+// Manifest `objectTypes` claim entries (cinatra#1432).
+//
+// A `kind:"artifact"` extension declares claims over TYPED object rows in its
+// manifest: `cinatra.artifact.objectTypes` is an array of these entries. The
+// ENTRY schema lives here in the pure policy leaf so the canonical semantic
+// manifest (packages/objects/src/semantic-manifest.ts) and the extensions
+// handler's byte-mirrored descriptor copy
+// (packages/extensions/src/artifact-handler.ts) both consume ONE schema —
+// the mirrored field line referencing it is pinned byte-identical by the
+// lock-step test. Strict objects, fail-closed: claims gate install/serving
+// behavior, so an unknown key is a validation error, never carried.
+// ---------------------------------------------------------------------------
+
+/** `@scope/package:local-id` — mirrors OBJECT_TYPE_NAMESPACE_RE
+ * (./namespace.ts) without importing the registry-adjacent module so this
+ * leaf keeps zero non-zod imports. The namespace test pins the two regexes
+ * equal. */
+export const CLAIMED_OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
+
+export const artifactObjectTypeClaimManifestSchema = z.strictObject({
+  /** The claimed object type id (`@scope/package:local-id`). */
+  type: z.string().regex(CLAIMED_OBJECT_TYPE_ID_RE, {
+    message: "claimed object type must be a namespaced id (@scope/package:local-id)",
+  }),
+  /** Claim kind — arbitration is kind-over-scope (see claimPrecedenceRank). */
+  claim: z.enum(ARTIFACT_CLAIM_KINDS),
+  /** Per-claim disposition payload (projection/pinnable/snapshot/redaction/
+   * sensitivity) — the same strict union the claim registry validates at
+   * reserve time. Optional: an absent payload defers to platform defaults. */
+  dispositions: claimDispositionsSchema.optional(),
+  /** Inline JSON Schema for the claimed type's rows — REQUIRED unless the
+   * claimant itself registers the type or declares a manifest dependency on
+   * the registering extension (validateObjectTypeClaimSchemaSources). */
+  schema: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type ArtifactObjectTypeClaimManifest = z.infer<
+  typeof artifactObjectTypeClaimManifestSchema
+>;
+
+/** The package that REGISTERS a claimed type: the namespace of its id
+ * (`@scope/pkg:slug` → `@scope/pkg`). */
+export function claimedTypeRegisteringPackage(objectTypeId: string): string | null {
+  const idx = objectTypeId.indexOf(":");
+  if (idx <= 0) return null;
+  const pkg = objectTypeId.slice(0, idx);
+  return /^@[\w-]+\/[\w-]+$/.test(pkg) ? pkg : null;
+}
+
+/**
+ * The third-party schema-source rule (cinatra#1432 AC-4, fail-closed): every
+ * claimed type must have a resolvable row schema at validation time — an
+ * inline JSON Schema shipped IN the claim, OR the claimant IS the registering
+ * package (self-namespaced type), OR the manifest declares a dependency on
+ * the registering extension (`cinatra.dependencies` — the same edges the
+ * production acquisition lock set already carries). A claim with none of the
+ * three is rejected. Pure: callers pass the declared dependency package
+ * names; no fs/DB here.
+ */
+export function validateObjectTypeClaimSchemaSources(input: {
+  packageName: string;
+  claims: readonly Pick<ArtifactObjectTypeClaimManifest, "type" | "schema">[];
+  dependencyPackageNames: readonly string[];
+}): string[] {
+  const errors: string[] = [];
+  const deps = new Set(input.dependencyPackageNames);
+  for (const claim of input.claims) {
+    if (claim.schema !== undefined) continue;
+    const registrant = claimedTypeRegisteringPackage(claim.type);
+    if (registrant == null) {
+      errors.push(`objectTypes claim '${claim.type}': not a namespaced object type id`);
+      continue;
+    }
+    if (registrant === input.packageName) continue; // self-registered type
+    if (deps.has(registrant)) continue; // registering extension is a declared dependency
+    errors.push(
+      `objectTypes claim '${claim.type}' has no schema source: ship a JSON Schema in the claim ` +
+        `or declare a cinatra.dependencies entry on the type-registering extension '${registrant}'`,
+    );
+  }
+  return errors;
+}
+
+/**
+ * Validate a manifest `objectTypes` array (structure only — the schema-source
+ * rule needs the dependency list and runs separately). Returns parsed entries
+ * or a flat error list (never throws). Duplicate claimed types within one
+ * manifest are rejected: one extension never races itself for a type.
+ */
+export function parseArtifactObjectTypeClaims(
+  value: unknown,
+): { ok: true; claims: ArtifactObjectTypeClaimManifest[] } | { ok: false; errors: string[] } {
+  const parsed = z.array(artifactObjectTypeClaimManifestSchema).min(1).safeParse(value);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      errors: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`),
+    };
+  }
+  const seen = new Set<string>();
+  for (const claim of parsed.data) {
+    if (seen.has(claim.type)) {
+      return { ok: false, errors: [`duplicate objectTypes claim for '${claim.type}'`] };
+    }
+    seen.add(claim.type);
+  }
+  return { ok: true, claims: parsed.data };
+}
+
+// ---------------------------------------------------------------------------
 // Arbitration — kind-over-scope precedence.
 // ---------------------------------------------------------------------------
 

@@ -5,8 +5,17 @@ import {
   normalizeCardDescription,
   resolveMarketplaceCardCta,
   resolveCardPriceLabel,
+  resolveCardIconChain,
+  safeManifestLogoSrc,
+  deriveIconSlug,
   marketplaceDetailHref,
+  type MarketplaceCardData,
 } from "../screens/marketplace-card-model";
+
+// A representative sanitized inline-SVG logo data URI — the EXACT form the
+// manifest generator emits for `cinatra.logo`.
+const LOGO_DATA_URI =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
 
 function catalogEntry(over: Partial<MarketplaceCatalogEntry> = {}): MarketplaceCatalogEntry {
   return {
@@ -322,5 +331,172 @@ describe("resolveCardPriceLabel (§IV price row, cinatra#988)", () => {
 describe("marketplaceDetailHref", () => {
   it("drops the leading @ for the detail route", () => {
     expect(marketplaceDetailHref("@cinatra-ai/foo")).toBe("/configuration/marketplace/cinatra-ai/foo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1325 — the card icon resolves the SAME chain /connectors uses:
+//   manifest.logo → client icon map → catalog icon_url → vendor logo → kind emblem
+// ---------------------------------------------------------------------------
+
+describe("safeManifestLogoSrc — the extension's own logo guard (cinatra#1325)", () => {
+  it("passes the exact sanitized inline-SVG data URI the manifest generator emits", () => {
+    expect(safeManifestLogoSrc(LOGO_DATA_URI)).toBe(LOGO_DATA_URI);
+  });
+
+  it("passes a plain http(s) hosted logo URL", () => {
+    expect(safeManifestLogoSrc("https://assets.example/logo.svg")).toBe(
+      "https://assets.example/logo.svg",
+    );
+  });
+
+  it("REJECTS a bare/arbitrary data: payload — only the bounded image/svg+xml;base64 form is trusted", () => {
+    expect(safeManifestLogoSrc("data:text/html;base64,PHNjcmlwdD4=")).toBeNull();
+    expect(safeManifestLogoSrc("data:image/svg+xml,<svg/>")).toBeNull(); // not base64-marked
+    expect(safeManifestLogoSrc("data:application/octet-stream;base64,AAAA")).toBeNull();
+  });
+
+  it("REJECTS an active/dangerous scheme and blank/non-string input", () => {
+    expect(safeManifestLogoSrc("javascript:alert(1)")).toBeNull();
+    expect(safeManifestLogoSrc("not a url")).toBeNull();
+    expect(safeManifestLogoSrc("   ")).toBeNull();
+    expect(safeManifestLogoSrc(null)).toBeNull();
+    expect(safeManifestLogoSrc(42)).toBeNull();
+  });
+});
+
+describe("deriveIconSlug — the client-icon-map key (cinatra#1325)", () => {
+  it("strips the npm scope to the /connectors + ICON_BY_SLUG slug", () => {
+    expect(deriveIconSlug("@cinatra-ai/youtube-connector")).toBe("youtube-connector");
+    expect(deriveIconSlug("@cinatra-ai/linkedin-connector")).toBe("linkedin-connector");
+  });
+
+  it("returns a bare (unscoped) name as-is and degrades garbage to null", () => {
+    expect(deriveIconSlug("plane-connector")).toBe("plane-connector");
+    expect(deriveIconSlug("")).toBeNull();
+    expect(deriveIconSlug("   ")).toBeNull();
+    expect(deriveIconSlug("@cinatra-ai/")).toBeNull();
+  });
+});
+
+describe("catalogEntryToCardData — cinatra#1325 icon-chain enrichment", () => {
+  it("populates manifestLogoUrl from the injected manifest.logo + iconSlug from the package name", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: "@cinatra-ai/youtube-connector", kind_slug: "connector" }),
+      { manifestLogo: LOGO_DATA_URI },
+    );
+    expect(card!.manifestLogoUrl).toBe(LOGO_DATA_URI);
+    expect(card!.iconSlug).toBe("youtube-connector");
+  });
+
+  it("leaves manifestLogoUrl null when no manifest.logo is injected (un-enriched / storefront-only)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: "@cinatra-ai/youtube-connector" }),
+    );
+    expect(card!.manifestLogoUrl).toBeNull();
+    expect(card!.iconSlug).toBe("youtube-connector");
+  });
+
+  it("guards an injected manifest.logo through safeManifestLogoSrc (a bad scheme → null)", () => {
+    const card = catalogEntryToCardData(catalogEntry(), {
+      manifestLogo: "javascript:alert(1)",
+    });
+    expect(card!.manifestLogoUrl).toBeNull();
+  });
+});
+
+describe("resolveCardIconChain — the explicit fallback order (cinatra#1325)", () => {
+  function card(over: Partial<MarketplaceCardData> = {}): MarketplaceCardData {
+    return { ...catalogEntryToCardData(catalogEntry())!, ...over };
+  }
+
+  // TIER 1: manifest.logo — first in EVERY branch.
+  it("puts manifest.logo first when there is no client icon (tier 1 → catalog → vendor)", () => {
+    const chain = resolveCardIconChain(
+      card({
+        manifestLogoUrl: LOGO_DATA_URI,
+        iconUrl: "https://a.example/catalog.png",
+        vendorLogoUrl: "https://a.example/vendor.png",
+      }),
+      { hasClientIcon: false },
+    );
+    expect(chain.imageSrcs).toEqual([
+      LOGO_DATA_URI,
+      "https://a.example/catalog.png",
+      "https://a.example/vendor.png",
+    ]);
+    expect(chain.emblem).toBe("kind-emblem");
+  });
+
+  // TIER 2: client icon map — BEATS catalog icon_url + vendor logo.
+  it("drops the catalog + vendor <img> tiers when a client icon exists — the client icon wins over catalog", () => {
+    const chain = resolveCardIconChain(
+      card({
+        manifestLogoUrl: null,
+        iconUrl: "https://a.example/catalog.png",
+        vendorLogoUrl: "https://a.example/vendor.png",
+      }),
+      { hasClientIcon: true },
+    );
+    expect(chain.imageSrcs).toEqual([]); // catalog/vendor unreachable behind the client-icon node
+    expect(chain.emblem).toBe("client-icon");
+  });
+
+  it("keeps manifest.logo above the client icon (tier 1 → tier 2 terminal)", () => {
+    const chain = resolveCardIconChain(
+      card({ manifestLogoUrl: LOGO_DATA_URI, iconUrl: "https://a.example/catalog.png" }),
+      { hasClientIcon: true },
+    );
+    expect(chain.imageSrcs).toEqual([LOGO_DATA_URI]);
+    expect(chain.emblem).toBe("client-icon");
+  });
+
+  // TIER 3/4: catalog icon → vendor logo (legacy chain), guarded to http(s).
+  it("falls to catalog icon then vendor logo, http(s)-guarded, then the kind emblem", () => {
+    const chain = resolveCardIconChain(
+      card({
+        manifestLogoUrl: null,
+        iconUrl: "https://a.example/catalog.png",
+        vendorLogoUrl: "ftp://nope/vendor.png",
+      }),
+      { hasClientIcon: false },
+    );
+    expect(chain.imageSrcs).toEqual(["https://a.example/catalog.png"]); // non-http(s) vendor dropped
+    expect(chain.emblem).toBe("kind-emblem");
+  });
+
+  // TIER 5: kind emblem — the guaranteed tail when nothing else resolves.
+  it("degrades to the kind emblem with no img candidates when every URL tier is empty (AC#4)", () => {
+    const chain = resolveCardIconChain(
+      card({ manifestLogoUrl: null, iconUrl: null, vendorLogoUrl: null }),
+      { hasClientIcon: false },
+    );
+    expect(chain.imageSrcs).toEqual([]);
+    expect(chain.emblem).toBe("kind-emblem");
+  });
+
+  it("re-guards manifest.logo inside the resolver (a fixture-supplied bad value is dropped)", () => {
+    const chain = resolveCardIconChain(
+      { manifestLogoUrl: "data:text/html;base64,PHN2Zy8+", iconUrl: null, vendorLogoUrl: null },
+      { hasClientIcon: false },
+    );
+    expect(chain.imageSrcs).toEqual([]);
+  });
+
+  it("DEDUPES a shared URL across tiers so the progressive fallback can't stall on it (codex round-1)", () => {
+    // catalog icon_url === vendor_logo_url (a common storefront shape): a naive
+    // chain would be [X, X] and the second onError could never fire (same key +
+    // src → node reused), stalling on a dead image. The chain must be [X] so the
+    // single failure advances straight to the kind emblem.
+    const chain = resolveCardIconChain(
+      card({
+        manifestLogoUrl: null,
+        iconUrl: "https://a.example/same.png",
+        vendorLogoUrl: "https://a.example/same.png",
+      }),
+      { hasClientIcon: false },
+    );
+    expect(chain.imageSrcs).toEqual(["https://a.example/same.png"]);
+    expect(chain.emblem).toBe("kind-emblem");
   });
 });
