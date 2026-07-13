@@ -31,7 +31,10 @@ import type { RemovalActionResult } from "../removal-failure";
 const REGISTRIES_HREF = "/configuration/environment?tab=registries";
 
 export type ExtensionSettingsActions = {
-  update: () => void | Promise<void>;
+  // NOTE (cinatra#1041): there is deliberately NO update action here — the §V
+  // Maintenance · Update row's live button OPENS the §II detail-modal update
+  // flow (a link to the Installed page with `?update=<pkg>`); the update
+  // itself runs only from that modal footer (dry-run plan → admin confirm).
   // cinatra#1061: archive RETURNS the classified removal refusal (dependents /
   // system) on failure so the client can surface it; it still redirects on
   // success (a returned value always means failure).
@@ -193,18 +196,25 @@ export function ExtensionSettingsView({
 
           {/* §V Maintenance · Update — the update status as the row's
               description (the §III card states spelled out in words); the
-              button greys out whenever there is nothing to run. */}
+              button greys out whenever there is nothing to run. The LIVE
+              button opens the §II detail-modal update flow on the Installed
+              page (`?update=<pkg>` auto-opens this extension's modal) — the
+              update itself runs ONLY there (dry-run plan → admin confirm),
+              never directly from this row (cinatra#1041). */}
           <SettingsRow
             title="Update"
             description={updateRow.description}
             action={
               updateRow.enabled ? (
-                <form action={actions.update}>
-                  <Button type="submit" className="flex-none">
+                <Button asChild className="flex-none">
+                  <Link
+                    data-slot="settings-update-link"
+                    href={`/configuration/extensions?update=${encodeURIComponent(packageName)}`}
+                  >
                     <RefreshCw data-icon="inline-start" />
                     Update
-                  </Button>
-                </form>
+                  </Link>
+                </Button>
               ) : (
                 <DisabledActionButton
                   label="Update"

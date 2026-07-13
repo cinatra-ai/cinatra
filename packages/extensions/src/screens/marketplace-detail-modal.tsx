@@ -69,6 +69,10 @@ import {
 } from "./marketplace-failure-copy";
 import type { MarketplaceCardData, MarketplaceCardCta } from "./marketplace-card-model";
 import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
+// §II footer update flow (cinatra#1041): "Update now" dry-runs the resolver and
+// renders the Update plan the admin confirms; apply rides the batch path.
+import { ModalUpdatePlanFlow } from "./update-plan-flow";
+import type { PlanExtensionUpdateResult } from "./update-plan-model";
 
 type BoundLifecycleAction = () => Promise<MarketplaceInstallActionResult | void>;
 
@@ -102,6 +106,27 @@ export interface MarketplaceDetailModalProps {
   installAction?: BoundLifecycleAction;
   updateAction?: BoundLifecycleAction;
   restoreAction?: BoundLifecycleAction;
+  /**
+   * §II footer update DRY-RUN (cinatra#1041 outcome 2): the bound
+   * `planExtensionUpdateFormAction`. When provided and the footer resolves to
+   * the update state, "Update now" runs the resolver dry-run FIRST and renders
+   * the Update plan (direct update / shared-dep upgrades / side-by-side /
+   * dependents rebound) for the admin to confirm; "Confirm update" then applies
+   * through the planner/batch path (`updateAction`). The §VI Installed page
+   * passes ONLY `cta` (update state) + `updateAction` + this — its modal footer
+   * exists exclusively for the update flow (every other installed state stays
+   * details-only, per the 2026-07-05 owner ruling refined by the §II/§III
+   * update-flow spec at the 2026-07-12 pin: the update runs ONLY from this
+   * footer; the card's actions stay exactly Settings + More details).
+   */
+  planUpdateAction?: () => Promise<PlanExtensionUpdateResult>;
+  /**
+   * Open the (uncontrolled) modal on mount — the §V settings page's
+   * Maintenance · Update row deep-links to the Installed page with
+   * `?update=<pkg>` and the matching row's modal opens directly onto the
+   * update flow (the spec's "opens the §II detail-modal update flow").
+   */
+  defaultOpen?: boolean;
   /**
    * Detail loader override — defaults to the admin-gated marketplace server
    * action. Injectable so the /design-fixtures harness can seed a
@@ -149,6 +174,8 @@ export function MarketplaceDetailModal({
   installAction,
   updateAction,
   restoreAction,
+  planUpdateAction,
+  defaultOpen = false,
   loadDetail = getPublicMarketplaceDetailAction,
   trigger,
   initialLoad,
@@ -159,9 +186,10 @@ export function MarketplaceDetailModal({
   // cinatra#1121 — opt-in controlled open. When `controlledOpen` is passed the
   // Dialog is externally controlled and the lifted setter is the single source
   // of truth for both hit-areas; otherwise the modal owns its own open state
-  // exactly as before.
+  // exactly as before (seeded open by `defaultOpen` for the settings-row
+  // `?update=<pkg>` deep link).
   const isControlled = controlledOpen !== undefined;
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
   const open = isControlled ? controlledOpen : uncontrolledOpen;
   const [status, setStatus] = useState<LoadStatus>(initialLoad?.status ?? "idle");
   const [detail, setDetail] = useState<MarketplaceDetailView | null>(
@@ -218,14 +246,16 @@ export function MarketplaceDetailModal({
   // onOpenChange, so the lazy detail fetch is driven off the open transition
   // here. `prevOpen` fires load exactly once per open — it never re-fires when a
   // notfound/error status change re-runs this effect while the modal stays open.
+  // An UNCONTROLLED `defaultOpen` mount (cinatra#1041 `?update=` deep link)
+  // bypasses onOpenChange the same way, so it rides this effect too.
   const prevOpen = useRef(false);
   useEffect(() => {
-    if (!isControlled) return;
+    if (!isControlled && !defaultOpen) return;
     if (open && !prevOpen.current && !pinned && status !== "loaded" && status !== "loading") {
       void load();
     }
     prevOpen.current = open;
-  }, [isControlled, open, pinned, status, load]);
+  }, [isControlled, defaultOpen, open, pinned, status, load]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -323,12 +353,14 @@ export function MarketplaceDetailModal({
         </div>
 
         {/* Footer — the six-state install CTA, right-aligned per the §V
-            drawing (hairline separator, 15px/26px padding). Rendered ONLY for
-            the Marketplace browse card (all four footer props supplied). The
-            §VI Installed-extensions modal supplies none of them, so the footer
-            bar is omitted entirely: an installed extension's "More details" is
-            details-only, with no install/uninstall/manage buttons and no
-            footer info (owner ruling, 2026-07-05). */}
+            drawing (hairline separator, 15px/26px padding). Rendered for the
+            Marketplace browse card (all four footer props supplied). The §VI
+            Installed-extensions modal stays details-only (no footer) in every
+            state EXCEPT update-available, where it passes exactly `cta`
+            (update) + `updateAction` + `planUpdateAction` and the footer
+            carries the §II update flow — the ONLY place the update runs
+            (2026-07-05 owner ruling refined by the update-flow spec at the
+            2026-07-12 §II/§III pin). */}
         {cta != null &&
         installAction != null &&
         updateAction != null &&
@@ -340,6 +372,21 @@ export function MarketplaceDetailModal({
               installAction={installAction}
               updateAction={updateAction}
               restoreAction={restoreAction}
+              planUpdateAction={planUpdateAction}
+            />
+          </div>
+        ) : cta?.state === "update" && updateAction != null && planUpdateAction != null ? (
+          <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
+            <ModalUpdatePlanFlow
+              displayName={card.displayName}
+              planAction={planUpdateAction}
+              updateAction={updateAction}
+              failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
+              defaultFailureMessage={marketplaceFailureCopy(
+                "unrecoverable",
+                "update",
+                card.displayName,
+              )}
             />
           </div>
         ) : null}
@@ -911,12 +958,14 @@ function ModalFooterCta({
   installAction,
   updateAction,
   restoreAction,
+  planUpdateAction,
 }: {
   card: MarketplaceCardData;
   cta: MarketplaceCardCta;
   installAction: BoundLifecycleAction;
   updateAction: BoundLifecycleAction;
   restoreAction: BoundLifecycleAction;
+  planUpdateAction?: () => Promise<PlanExtensionUpdateResult>;
 }) {
   const compat = deriveExtensionCompatState(card.sdkAbiRange);
   const state = resolveModalInstallState(cta, compat);
@@ -967,6 +1016,21 @@ function ModalFooterCta({
       >
         {isUpdate ? "Update now" : "Install now"}
       </Button>
+    );
+  }
+  // §II update flow (cinatra#1041): when the dry-run action is wired, "Update
+  // now" plans FIRST and the admin confirms the rendered Update plan before
+  // the write — the direct-submit form below remains only for callers that do
+  // not pass `planUpdateAction`.
+  if (isUpdate && planUpdateAction) {
+    return (
+      <ModalUpdatePlanFlow
+        displayName={card.displayName}
+        planAction={planUpdateAction}
+        updateAction={updateAction}
+        failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
+        defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
+      />
     );
   }
   const op = isUpdate ? "update" : "install";

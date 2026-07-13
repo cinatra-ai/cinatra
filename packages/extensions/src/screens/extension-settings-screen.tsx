@@ -45,7 +45,6 @@ import {
   promoteExtensionToPublicAction,
   reinstallLatestFormAction,
   restoreExtensionPackageFormAction,
-  updateExtensionPackageFormAction,
 } from "../actions";
 import { ExtensionAccessControl } from "./extension-access-control";
 import { ExtensionSettingsView } from "./extension-settings-view";
@@ -111,10 +110,9 @@ export async function ExtensionSettingsScreen({
   // Server actions — identity baked into the closure, each returning void so
   // they satisfy the native `<form action>` / confirm-dialog contract (the
   // underlying form-actions redirect on success and throw on failure).
-  async function updateAction() {
-    "use server";
-    await updateExtensionPackageFormAction({ packageName, packageVersion });
-  }
+  // NOTE (cinatra#1041): no update action — the §V Maintenance · Update row's
+  // live button is a LINK opening the §II detail-modal update flow on the
+  // Installed page; the update runs only there (dry-run plan → admin confirm).
   async function archiveAction() {
     "use server";
     // cinatra#1061: RETURN (not await-and-drop) so the classified removal
@@ -251,7 +249,6 @@ export async function ExtensionSettingsScreen({
       canPublish={canPublish}
       permissions={permissions}
       actions={{
-        update: updateAction,
         archive: archiveAction,
         activate: activateAction,
         reinstall: reinstallAction,
