@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 
 import { deserializeTemplate } from "../store";
-import { agentRuns } from "../schema";
+import { agentRuns, agentTemplates } from "../schema";
 import type { AgentRunRecord } from "../store";
 
 function makeRow(overrides: Record<string, unknown> = {}): any {
@@ -70,6 +70,34 @@ describe("deserializeTemplate — flag normalization", () => {
       const rec = deserializeTemplate(makeRow({ executionProvider: p }));
       expect(rec.executionProvider).toBe(p);
     }
+  });
+
+  // Interaction axis (#1037 P1) — deserializeTemplate READ wiring for agent_kind.
+  it("null agent_kind → 'executor' (matches the column DEFAULT)", () => {
+    // makeRow omits agentKind, simulating a pre-migration row / direct SQL write.
+    const rec = deserializeTemplate(makeRow());
+    expect(rec.agentKind).toBe("executor");
+  });
+
+  it("agent_kind='assistant' round-trips", () => {
+    const rec = deserializeTemplate(makeRow({ agentKind: "assistant" }));
+    expect(rec.agentKind).toBe("assistant");
+  });
+
+  it("agent_kind='executor' round-trips", () => {
+    const rec = deserializeTemplate(makeRow({ agentKind: "executor" }));
+    expect(rec.agentKind).toBe("executor");
+  });
+
+  it("unknown agent_kind string normalizes to 'executor'", () => {
+    const rec = deserializeTemplate(makeRow({ agentKind: "project" }));
+    expect(rec.agentKind).toBe("executor");
+  });
+});
+
+describe("agent_templates.agent_kind schema surface", () => {
+  it("Drizzle agentTemplates table declares an agentKind column", () => {
+    expect(agentTemplates).toHaveProperty("agentKind");
   });
 });
 

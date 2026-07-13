@@ -64,6 +64,19 @@ export type AgentCardSkill = {
    * bump so pinned callers continue to resolve the old type until they upgrade.
    */
   type: "leaf" | "proxy" | "orchestrator" | "parallel" | "supervisor" | "iterative" | "node" | "flow";
+  /**
+   * Interaction-axis kind (cinatra#1037 — "agent cards carry an app-level kind
+   * tag"). ORTHOGONAL to `type` (the execution-topology axis above):
+   *
+   * - `assistant` — a conversational identity (a first-class conversation agent).
+   * - `executor` — a bounded task agent (default).
+   *
+   * Sourced from `agent_templates.agent_kind`. Lets remote A2A consumers and the
+   * mention/remote-assistant layer distinguish conversational assistants from
+   * task agents at discovery time, without probing a run. Defaults to `executor`
+   * for legacy rows / fixtures that predate the axis.
+   */
+  agentKind: "assistant" | "executor";
 };
 
 /**
@@ -193,6 +206,11 @@ export function buildAgentCard(input: BuildAgentCardInput): AgentCard {
     // Surface agent type to A2A consumers. Defaults to "leaf" for legacy/test
     // fixtures that predate the field.
     const type = template.type ?? "leaf";
+    // Surface the interaction-axis kind (cinatra#1037). Defaults to "executor"
+    // for legacy/test fixtures that predate the axis, matching the DB column
+    // DEFAULT and deserializeTemplate's normalization — only an explicit
+    // "assistant" opts in.
+    const agentKind = template.agentKind === "assistant" ? "assistant" : "executor";
 
     skills.push({
       id: toolName,
@@ -208,6 +226,7 @@ export function buildAgentCard(input: BuildAgentCardInput): AgentCard {
       hitlScreens,
       agentDependencies,
       type,
+      agentKind,
     });
   }
 
