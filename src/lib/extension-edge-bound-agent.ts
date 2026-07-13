@@ -50,14 +50,26 @@ export type EdgeBoundAgentResolution =
       snapshotId?: string;
     };
 
+/** The agent-path fail-closed refusal classes (cinatra#1392 S8 alignment). */
+export type EdgeBoundAgentRefuseCode =
+  /** A NON-DEFAULT pin with no `agent_template_versions` snapshot to serve. */
+  | "EDGE_BOUND_AGENT_UNREACHABLE"
+  /** The resolved edge's target row is GONE (dangling resolved id). */
+  | "EDGE_BOUND_AGENT_RESOLVED_MISSING"
+  /** The resolved edge's target row exists but is not live (archived mid-flight). */
+  | "EDGE_BOUND_AGENT_RESOLVED_NOT_LIVE";
+
 /**
- * Thrown when a dependent's resolved edge points at a NON-DEFAULT agent version
- * that is UNREACHABLE (no `agent_template_versions` snapshot to pin the run to).
- * Carries the full evidence set so the JSON-RPC / dispatch surface can surface a
- * clean, actionable refusal instead of silently serving the default.
+ * Thrown when a dependent's resolved edge cannot be served fail-closed: a
+ * NON-DEFAULT pin that is UNREACHABLE (no `agent_template_versions` snapshot to
+ * pin the run to), or — since the cinatra#1392 S8 alignment to the stricter
+ * non-agent matrix — a resolved edge whose target row is MISSING (dangling) or
+ * NOT LIVE. Carries the full evidence set so the JSON-RPC / dispatch surface
+ * can surface a clean, actionable refusal instead of silently serving the
+ * default.
  */
 export class EdgeBoundAgentServingError extends Error {
-  readonly code = "EDGE_BOUND_AGENT_UNREACHABLE";
+  readonly code: EdgeBoundAgentRefuseCode;
   readonly dependentInstallId: string;
   readonly targetPackageName: string;
   readonly resolvedInstallId: string;
@@ -67,16 +79,21 @@ export class EdgeBoundAgentServingError extends Error {
     targetPackageName: string;
     resolvedInstallId: string;
     resolvedVersion: string | null;
+    code?: EdgeBoundAgentRefuseCode;
+    /** Overrides the default (snapshot-unreachable) message when set. */
+    message?: string;
   }) {
     super(
-      `edge-bound serving refused — dependent install ${input.dependentInstallId} resolved its ` +
-        `edge to ${input.targetPackageName}@${input.resolvedVersion ?? "(unversioned)"} ` +
-        `(install ${input.resolvedInstallId}), a NON-DEFAULT side-by-side version with no ` +
-        `agent_template_versions snapshot to pin the run to — refusing rather than silently ` +
-        `serving the default. Publish a template snapshot for that version, or re-resolve the ` +
-        `edge to the default.`,
+      input.message ??
+        `edge-bound serving refused — dependent install ${input.dependentInstallId} resolved its ` +
+          `edge to ${input.targetPackageName}@${input.resolvedVersion ?? "(unversioned)"} ` +
+          `(install ${input.resolvedInstallId}), a NON-DEFAULT side-by-side version with no ` +
+          `agent_template_versions snapshot to pin the run to — refusing rather than silently ` +
+          `serving the default. Publish a template snapshot for that version, or re-resolve the ` +
+          `edge to the default.`,
     );
     this.name = "EdgeBoundAgentServingError";
+    this.code = input.code ?? "EDGE_BOUND_AGENT_UNREACHABLE";
     this.dependentInstallId = input.dependentInstallId;
     this.targetPackageName = input.targetPackageName;
     this.resolvedInstallId = input.resolvedInstallId;
@@ -97,10 +114,13 @@ export type ResolveEdgeBoundAgentDeps = {
 
 /**
  * Resolve the version a KNOWN dependent must be served for `targetPackageName`,
- * fail-closed on an unreachable non-default pin.
+ * fail-closed (cinatra#1392 S8: aligned to the stricter non-agent matrix).
  *
  *   - no dependent row / no resolved edge to the target  → { resolved: false }
  *     (the caller uses ordinary default resolution — no non-default requirement).
+ *   - resolved edge → target row MISSING (dangling)       → throws (refuse-with-
+ *     evidence; never a silent downgrade to the default).
+ *   - resolved edge → target row NOT LIVE                 → throws (as above).
  *   - resolved edge → the DEFAULT version                 → { resolved: true, isDefault: true }
  *     (serving the default is always fine).
  *   - resolved edge → a NON-DEFAULT version WITH a snapshot → { resolved: true, isDefault: false, snapshotId }.
@@ -125,9 +145,41 @@ export async function resolveEdgeBoundAgentVersion(
   if (!edge || edge.resolvedInstallId == null) return { resolved: false };
 
   const resolvedRow = await readById(edge.resolvedInstallId);
-  // A dangling resolved id (target row deleted after the edge was written) is
-  // treated as "no resolved edge" — the closure gates' name-fallback re-heals.
-  if (!resolvedRow) return { resolved: false };
+  // cinatra#1392 S8 — ALIGNED to the stricter non-agent fail-closed matrix
+  // (`extension-edge-bound-serving.ts`): a DANGLING resolved id (target row
+  // deleted after the edge was written) REFUSES with evidence. The previous
+  // "treat as no edge" lenience silently downgraded the dependent to the
+  // default template — exactly the outcome the edge pin exists to prevent; the
+  // closure gates' name-fallback re-heal repairs the EDGE ROW, not a live
+  // dispatch already bound to it.
+  if (!resolvedRow) {
+    throw new EdgeBoundAgentServingError({
+      dependentInstallId: input.dependentInstallId,
+      targetPackageName: input.targetPackageName,
+      resolvedInstallId: edge.resolvedInstallId,
+      resolvedVersion: null,
+      code: "EDGE_BOUND_AGENT_RESOLVED_MISSING",
+      message:
+        `edge-bound serving refused — dependent install ${input.dependentInstallId} resolved its ` +
+        `edge to ${input.targetPackageName} install ${edge.resolvedInstallId}, but that row is ` +
+        `gone; refusing rather than silently serving the default`,
+    });
+  }
+  // Same alignment: a resolved row that is no longer LIVE (archived/uninstalled
+  // mid-flight) refuses rather than serving anything on a retired pin.
+  if (resolvedRow.status !== "active" && resolvedRow.status !== "locked") {
+    throw new EdgeBoundAgentServingError({
+      dependentInstallId: input.dependentInstallId,
+      targetPackageName: input.targetPackageName,
+      resolvedInstallId: resolvedRow.id,
+      resolvedVersion: resolvedRow.version ?? null,
+      code: "EDGE_BOUND_AGENT_RESOLVED_NOT_LIVE",
+      message:
+        `edge-bound serving refused — dependent install ${input.dependentInstallId} resolved its ` +
+        `edge to ${input.targetPackageName} install ${resolvedRow.id}, which is ` +
+        `"${resolvedRow.status}" (not live); refusing rather than silently serving the default`,
+    });
+  }
 
   const isDefault = resolvedRow.isDefault !== false;
   const version = resolvedRow.version ?? null;

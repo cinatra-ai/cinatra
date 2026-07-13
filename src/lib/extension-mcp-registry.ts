@@ -119,17 +119,46 @@ export function removeExtensionMcpToolsForPackage(packageName: string): string[]
 // registry membership) so an extension cannot unlock a host tool (e.g. an
 // unclassified built-in like `system_screen_lookup`) by registering its name —
 // such a registration is skipped by the replay and never becomes "effective".
-// globalThis-anchored (same cross-compilation reason as the registry); last
-// server-build wins (the static + reserved name set is stable per process).
+// globalThis-anchored (same cross-compilation reason as the registry).
+//
+// MERGE semantics (cinatra#1392 S8): server builds are per-request AND now
+// per-CALLER (the discovery union registers a retained versioned-only name only
+// for its edge-bound dependent), so a replace-on-build would let two concurrent
+// builds erase each other's entries between a tool's registration and its
+// boundary check. `markEffectiveExtensionMcpTools` therefore UPSERTS the
+// build's names; removal stays lifecycle-driven (`removeExtensionMcpToolsFor-
+// Package` at the capability-teardown chokepoint, which also clears the
+// version-keyed retention in lockstep — so a retired package's names leave
+// the effective set exactly when they stop being servable).
 const EFFECTIVE_KEY = Symbol.for("@cinatra-ai/host:extension-mcp-effective/v1");
 type EffectiveHolder = { [k: symbol]: Map<string, string> | undefined };
 const _effHolder = globalThis as unknown as EffectiveHolder;
 
-/** Record the extension tools that were effectively registered into a server build. */
+/** Record (upsert) the extension tools a server build effectively registered. */
 export function markEffectiveExtensionMcpTools(tools: ReadonlyArray<{ name: string; packageName: string }>): void {
-  const m = new Map<string, string>();
+  const m = _effHolder[EFFECTIVE_KEY] ?? (_effHolder[EFFECTIVE_KEY] = new Map<string, string>());
   for (const t of tools) m.set(t.name, t.packageName);
-  _effHolder[EFFECTIVE_KEY] = m;
+}
+
+/**
+ * Remove effective entries for extension tools a server build SKIPPED because
+ * their name is claimed by a host/platform registration (codex S8 round-0 #4:
+ * with merge semantics a stale entry would otherwise outlive the collision and
+ * let the boundary synthesize authorization for the HOST handler now serving
+ * that name — the exact escalation the effective set exists to prevent).
+ * Collisions are caller-INDEPENDENT (the platform/reserved name set does not
+ * vary per caller), so deleting here cannot erase a concurrent build's
+ * legitimately-registered entry. Scoped by package: the entry is dropped only
+ * while it still attributes the name to the SKIPPED tool's package.
+ */
+export function unmarkEffectiveExtensionMcpToolCollisions(
+  skipped: ReadonlyArray<{ name: string; packageName: string }>,
+): void {
+  const m = _effHolder[EFFECTIVE_KEY];
+  if (!m) return;
+  for (const t of skipped) {
+    if (m.get(t.name) === t.packageName) m.delete(t.name);
+  }
 }
 
 /** The owning package if `name` is an EFFECTIVELY-registered extension tool, else undefined. */

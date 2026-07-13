@@ -239,3 +239,59 @@ describe("lifecycle guards", () => {
     expect(isVersionKeyedServable("@x/sibling-two", V)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#1392 S8 — the discovery-union read surfaces + the settle flag
+// ---------------------------------------------------------------------------
+
+describe("S8 additions — bulk tool lookup, servable listing, isSettled", () => {
+  it("resolveVersionKeyedMcpTools is BULK: fail-closed on the servability axes, [] is a valid serve", async () => {
+    const { resolveVersionKeyedMcpTools } = await import("@/lib/extension-version-keyed-serving");
+    expect(resolveVersionKeyedMcpTools(PKG, undefined)).toMatchObject({ kind: "refuse", code: "UNPINNED" });
+    expect(resolveVersionKeyedMcpTools(PKG, V)).toMatchObject({ kind: "refuse", code: "UNKNOWN_VERSION" });
+    const empty = beginVersionKeyedRegistration(PKG, V);
+    expect(resolveVersionKeyedMcpTools(PKG, V)).toMatchObject({ kind: "refuse", code: "NOT_SERVABLE" });
+    empty.commit();
+    // A servable version that registered NO tools serves its complete (empty) set.
+    expect(resolveVersionKeyedMcpTools(PKG, V)).toEqual({ kind: "serve", value: [] });
+    retainAndCommit(PKG, "9.9.9");
+    const served = resolveVersionKeyedMcpTools(PKG, "9.9.9");
+    if (served.kind !== "serve") throw new Error("expected serve");
+    expect(served.value.map((t) => t.name)).toEqual(["sib_tool"]);
+  });
+
+  it("listServableVersionKeyedMcpTools enumerates SERVABLE retained tools only", async () => {
+    const { listServableVersionKeyedMcpTools } = await import("@/lib/extension-version-keyed-serving");
+    retainAndCommit(PKG, V);
+    const uncommitted = beginVersionKeyedRegistration("@x/other", "1.0.0");
+    uncommitted.retainMcpTool({ name: "hidden", handler: () => ({}), packageName: "@x/other" });
+    // no commit — must not be listed
+    const listed = listServableVersionKeyedMcpTools();
+    expect(listed.map((e) => [e.packageName, e.version, e.tool.name])).toEqual([[PKG, V, "sib_tool"]]);
+  });
+
+  it("isSettled flips on commit AND on abort (the non-default callPrimitive gate)", () => {
+    const a = beginVersionKeyedRegistration(PKG, V);
+    expect(a.isSettled()).toBe(false);
+    a.commit();
+    expect(a.isSettled()).toBe(true);
+    const b = beginVersionKeyedRegistration("@x/other", V);
+    expect(b.isSettled()).toBe(false);
+    b.abort();
+    expect(b.isSettled()).toBe(true);
+  });
+});
+
+// codex S8 round-1 #4 — a SUPERSEDED attempt's commit never reports committed.
+describe("isCommitted — ownership-guarded (round-1)", () => {
+  it("a superseded attempt's commit is not committed (its entry never became servable)", () => {
+    const first = beginVersionKeyedRegistration(PKG, V);
+    const second = beginVersionKeyedRegistration(PKG, V); // supersedes first
+    first.commit();
+    expect(first.isCommitted()).toBe(false);
+    expect(first.isSettled()).toBe(true);
+    second.commit();
+    expect(second.isCommitted()).toBe(true);
+    expect(isVersionKeyedServable(PKG, V)).toBe(true);
+  });
+});

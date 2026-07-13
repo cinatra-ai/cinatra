@@ -4,10 +4,20 @@ import {
   resolveEdgeBoundExtensionVersion,
   deriveDependentInstallIdForRun,
   dispatchExtensionMcpToolEdgeBound,
+  dispatchPlannedExtensionMcpTool,
+  dispatchVersionedOnlyExtensionMcpTool,
+  planExtensionToolDiscovery,
+  planSelfInvokerRetainedUnion,
   EdgeBoundMcpServeRefusal,
   type ResolveEdgeBoundExtensionDeps,
   type RunRowForEdgeBoundServing,
 } from "@/lib/extension-edge-bound-serving";
+import {
+  _resetExtensionMcpForTests,
+  getEffectiveExtensionMcpTool,
+  markEffectiveExtensionMcpTools,
+  unmarkEffectiveExtensionMcpToolCollisions,
+} from "@/lib/extension-mcp-registry";
 import {
   beginVersionKeyedRegistration,
   __resetVersionKeyedServingForTests,
@@ -496,5 +506,431 @@ describe("dispatchExtensionMcpToolEdgeBound — the serve chokepoint", () => {
       ),
     ).rejects.toBeInstanceOf(EdgeBoundMcpServeRefusal);
     expect(globalHandler).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1392 S8 — extension-ctx dependent identity (source 0)
+// ---------------------------------------------------------------------------
+
+describe("resolveEdgeBoundExtensionVersion — extension-ctx identity (S8 source 0)", () => {
+  const CALLER = "@x/caller";
+
+  it("ctx identity OUTRANKS the ActorContext dependent id (the immediate caller wins)", async () => {
+    const ctxRow = row({
+      id: "install-ctx-caller",
+      packageName: CALLER,
+      dependencyEdges: [edgeTo(TARGET, "install-target-sib")],
+    });
+    const otherDependent = row({ id: DEP_ID, packageName: "@x/outer", dependencyEdges: [] });
+    const sib = row({ id: "install-target-sib", isDefault: false, version: V });
+    const out = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      {
+        ...makeDeps({
+          dependentInstallId: DEP_ID, // would decide "none" (no edges)
+          rows: { [DEP_ID]: otherDependent, "install-target-sib": sib },
+          rowsByPackage: { [CALLER]: [ctxRow] },
+        }),
+        getCtxIdentity: () => ({ packageName: CALLER, version: null, isDefault: true }),
+      },
+    );
+    expect(out).toEqual({ kind: "versioned", version: V, resolvedInstallId: "install-target-sib" });
+  });
+
+  it("DEFAULT ctx identity with no canonical row falls through to the run lineage (none here)", async () => {
+    const out = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      {
+        ...makeDeps({ rowsByPackage: { [CALLER]: [] } }),
+        getCtxIdentity: () => ({ packageName: CALLER, version: null, isDefault: true }),
+      },
+    );
+    expect(out).toEqual({ kind: "none" });
+  });
+
+  it("NON-DEFAULT ctx identity with no live row → refuse (torn state, never an identity-less default)", async () => {
+    const out = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      {
+        ...makeDeps({ rowsByPackage: { [CALLER]: [] } }),
+        getCtxIdentity: () => ({ packageName: CALLER, version: V, isDefault: false }),
+      },
+    );
+    expect(out).toMatchObject({ kind: "refuse", code: "EDGE_BOUND_DEPENDENT_MISSING" });
+  });
+
+  it("NON-DEFAULT ctx identity binds the row at ITS exact version", async () => {
+    const sibCaller = row({
+      id: "install-caller-sib",
+      packageName: CALLER,
+      isDefault: false,
+      version: "9.9.9",
+      dependencyEdges: [edgeTo(TARGET, "install-target-sib")],
+    });
+    const defCaller = row({ id: "install-caller-def", packageName: CALLER, dependencyEdges: [] });
+    const sib = row({ id: "install-target-sib", isDefault: false, version: V });
+    const out = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      {
+        ...makeDeps({
+          rows: { "install-target-sib": sib },
+          rowsByPackage: { [CALLER]: [defCaller, sibCaller] },
+        }),
+        getCtxIdentity: () => ({ packageName: CALLER, version: "9.9.9", isDefault: false }),
+      },
+    );
+    expect(out).toEqual({ kind: "versioned", version: V, resolvedInstallId: "install-target-sib" });
+  });
+
+  it("ambiguous ctx-identity match (two live defaults) → refuse (never an arbitrary pick)", async () => {
+    const a = row({ id: "install-a", packageName: CALLER, organizationId: "org-1" });
+    const b = row({ id: "install-b", packageName: CALLER, organizationId: "org-2" });
+    const out = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      {
+        ...makeDeps({ rowsByPackage: { [CALLER]: [a, b] } }),
+        getCtxIdentity: () => ({ packageName: CALLER, version: null, isDefault: true }),
+      },
+    );
+    expect(out).toMatchObject({ kind: "refuse", code: "EDGE_BOUND_DEPENDENT_AMBIGUOUS" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1392 S8 — the strict VERSIONED-ONLY dispatch
+// ---------------------------------------------------------------------------
+
+describe("dispatchVersionedOnlyExtensionMcpTool — strict matrix (S8)", () => {
+  const versionedHandler = vi.fn(async () => ({ served: "versioned" }));
+
+  beforeEach(() => versionedHandler.mockClear());
+
+  function pinnedDeps() {
+    const dependent = row({ id: DEP_ID, packageName: "@x/consumer", dependencyEdges: [edgeTo(TARGET, "install-sib")] });
+    const sib = row({ id: "install-sib", isDefault: false, version: V });
+    return makeDeps({ dependentInstallId: DEP_ID, rows: { [DEP_ID]: dependent, "install-sib": sib } });
+  }
+
+  it("versioned + servable → the retained handler", async () => {
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "only_in_v", handler: versionedHandler, packageName: TARGET });
+    sink.commit();
+    const out = await dispatchVersionedOnlyExtensionMcpTool(
+      { packageName: TARGET, name: "only_in_v" },
+      { q: 1 },
+      pinnedDeps(),
+    );
+    expect(out).toEqual({ served: "versioned" });
+    expect(versionedHandler).toHaveBeenCalledWith({ q: 1 });
+  });
+
+  it("caller with NO pin on the package → EDGE_BOUND_VERSIONED_ONLY_UNBOUND (the tool does not exist for it)", async () => {
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "only_in_v", handler: versionedHandler, packageName: TARGET });
+    sink.commit();
+    await expect(
+      dispatchVersionedOnlyExtensionMcpTool({ packageName: TARGET, name: "only_in_v" }, {}, makeDeps({})),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_VERSIONED_ONLY_UNBOUND" });
+    expect(versionedHandler).not.toHaveBeenCalled();
+  });
+
+  it("caller pinned to a DIFFERENT version lacking the name → NO_SUCH_HANDLER", async () => {
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "other_tool", handler: versionedHandler, packageName: TARGET });
+    sink.commit();
+    await expect(
+      dispatchVersionedOnlyExtensionMcpTool({ packageName: TARGET, name: "only_in_v" }, {}, pinnedDeps()),
+    ).rejects.toMatchObject({ code: "NO_SUCH_HANDLER" });
+  });
+
+  it("identity refuse propagates with its evidence", async () => {
+    await expect(
+      dispatchVersionedOnlyExtensionMcpTool(
+        { packageName: TARGET, name: "only_in_v" },
+        {},
+        makeDeps({ dependentInstallId: DEP_ID }), // dependent row missing
+      ),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_DEPENDENT_MISSING" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1392 S8 — the tool DISCOVERY union planner
+// ---------------------------------------------------------------------------
+
+describe("planExtensionToolDiscovery — the per-caller tool set (S8)", () => {
+  const OTHER = "@x/other";
+  const h = async () => ({});
+  const defaults = [
+    { name: "t_shared", packageName: TARGET, description: "default shared", inputSchema: "SCHEMA_DEFAULT", handler: h },
+    { name: "t_default_only", packageName: TARGET, handler: h },
+    { name: "o_tool", packageName: OTHER, handler: h },
+  ];
+
+  function pinnedDeps(extra: Partial<ResolveEdgeBoundExtensionDeps> = {}) {
+    const dependent = row({ id: DEP_ID, packageName: "@x/consumer", dependencyEdges: [edgeTo(TARGET, "install-sib")] });
+    const sib = row({ id: "install-sib", isDefault: false, version: V });
+    return {
+      ...makeDeps({ dependentInstallId: DEP_ID, rows: { [DEP_ID]: dependent, "install-sib": sib } }),
+      ...extra,
+    };
+  }
+
+  it("no identity → the EXACT default replay (order preserved)", async () => {
+    const plan = await planExtensionToolDiscovery(defaults, makeDeps({}));
+    expect(plan.entries).toEqual(defaults.map((tool) => ({ mode: "default", tool })));
+    expect(plan.notes).toEqual([]);
+  });
+
+  it("identity refuse → default names stay advertised (call-time refusal carries the evidence) + a note", async () => {
+    const plan = await planExtensionToolDiscovery(
+      defaults,
+      makeDeps({ dependentInstallId: DEP_ID }), // dependent row missing
+    );
+    expect(plan.entries).toEqual(defaults.map((tool) => ({ mode: "default", tool })));
+    expect(plan.notes.join(" ")).toContain("EDGE_BOUND_DEPENDENT_MISSING");
+  });
+
+  it("versioned pin: both-present name carries the RESOLVED schema; default-only hidden; versioned-only appended; other packages untouched", async () => {
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "t_shared", inputSchema: "SCHEMA_V", handler: h, packageName: TARGET } as never);
+    sink.retainMcpTool({ name: "t_only_in_v", handler: h, packageName: TARGET });
+    sink.commit();
+
+    const plan = await planExtensionToolDiscovery(defaults, pinnedDeps());
+    expect(plan.entries.map((e) => [e.mode, e.tool.name])).toEqual([
+      ["versioned", "t_shared"],   // in the default position, resolved schema
+      // t_default_only HIDDEN (the pinned version does not register it)
+      ["default", "o_tool"],       // unpinned package: untouched
+      ["versioned", "t_only_in_v"], // appended versioned-only name
+    ]);
+    const shared = plan.entries[0];
+    if (shared.mode !== "versioned") throw new Error("expected versioned");
+    expect(shared.tool.inputSchema).toBe("SCHEMA_V");
+    expect(shared.defaultTool?.name).toBe("t_shared"); // S7 chokepoint dispatch
+    expect(shared.version).toBe(V);
+    const last = plan.entries[plan.entries.length - 1];
+    if (last.mode !== "versioned") throw new Error("expected versioned");
+    expect(last.defaultTool).toBeUndefined(); // strict versioned-only dispatch
+  });
+
+  it("torn retained lookup (pin exists, version never retained) → default names advertised + a note", async () => {
+    const plan = await planExtensionToolDiscovery(defaults, pinnedDeps());
+    expect(plan.entries).toEqual(defaults.map((tool) => ({ mode: "default", tool })));
+    expect(plan.notes.join(" ")).toContain("UNKNOWN_VERSION");
+  });
+
+  it("an edge-target package with NO default tools still contributes its pinned names", async () => {
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "fresh_tool", handler: h, packageName: TARGET });
+    sink.commit();
+    const plan = await planExtensionToolDiscovery(
+      defaults.filter((t) => t.packageName !== TARGET), // TARGET registers no default tools
+      pinnedDeps(),
+    );
+    expect(plan.entries.map((e) => [e.mode, e.tool.name])).toEqual([
+      ["default", "o_tool"],
+      ["versioned", "fresh_tool"],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1392 S8 round-1 — exact installId binding + plan-pinned dispatch
+// ---------------------------------------------------------------------------
+
+describe("extension-ctx identity with an EXACT installId (codex round-0 #1)", () => {
+  const CALLER = "@x/caller";
+
+  it("binds the exact row — no shape-based derivation", async () => {
+    const exact = row({
+      id: "install-exact",
+      packageName: CALLER,
+      dependencyEdges: [edgeTo(TARGET, "install-target-sib")],
+    });
+    // A same-shape sibling with DIFFERENT edges exists — must not be consulted.
+    const sibling = row({ id: "install-shape-sibling", packageName: CALLER, dependencyEdges: [] });
+    const sib = row({ id: "install-target-sib", isDefault: false, version: V });
+    const out = await resolveEdgeBoundExtensionVersion(
+      { targetPackageName: TARGET },
+      {
+        ...makeDeps({
+          rows: { "install-exact": exact, "install-target-sib": sib },
+          rowsByPackage: { [CALLER]: [sibling, exact] },
+        }),
+        getCtxIdentity: () => ({ packageName: CALLER, installId: "install-exact", version: null, isDefault: true }),
+      },
+    );
+    expect(out).toEqual({ kind: "versioned", version: V, resolvedInstallId: "install-target-sib" });
+  });
+
+  it("an id whose row is gone or not live REFUSES (torn; never falls back to shape matching)", async () => {
+    const archived = row({ id: "install-exact", packageName: CALLER, status: "archived" });
+    for (const rows of [{}, { "install-exact": archived }]) {
+      const out = await resolveEdgeBoundExtensionVersion(
+        { targetPackageName: TARGET },
+        {
+          ...makeDeps({ rows: rows as never, rowsByPackage: { [CALLER]: [row({ id: "x", packageName: CALLER })] } }),
+          getCtxIdentity: () => ({ packageName: CALLER, installId: "install-exact", version: null, isDefault: true }),
+        },
+      );
+      expect(out).toMatchObject({ kind: "refuse", code: "EDGE_BOUND_DEPENDENT_MISSING" });
+    }
+  });
+});
+
+describe("dispatchPlannedExtensionMcpTool — plan-pinned dispatch (codex round-0 #3)", () => {
+  const globalHandler = vi.fn(async () => ({ served: "global" }));
+  const versionedHandler = vi.fn(async () => ({ served: "versioned" }));
+  beforeEach(() => {
+    globalHandler.mockClear();
+    versionedHandler.mockClear();
+  });
+
+  const defaultTool = { packageName: TARGET, name: "the_tool", handler: globalHandler };
+
+  function depsWith(decisionRows: { edges?: boolean; sib?: InstalledExtension }) {
+    const dependent = row({
+      id: DEP_ID,
+      packageName: "@x/consumer",
+      dependencyEdges: decisionRows.edges === false ? [] : [edgeTo(TARGET, "install-sib")],
+    });
+    const sib = decisionRows.sib ?? row({ id: "install-sib", isDefault: false, version: V });
+    return makeDeps({ dependentInstallId: DEP_ID, rows: { [DEP_ID]: dependent, "install-sib": sib } });
+  }
+
+  it("planned DEFAULT + decision none/default → the global handler", async () => {
+    const out = await dispatchPlannedExtensionMcpTool(
+      { expected: "default", tool: defaultTool },
+      { a: 1 },
+      depsWith({ edges: false }),
+    );
+    expect(out).toEqual({ served: "global" });
+  });
+
+  it("planned DEFAULT + decision flips to versioned → EDGE_BOUND_PLAN_DRIFT (never crosses schemas)", async () => {
+    await expect(
+      dispatchPlannedExtensionMcpTool({ expected: "default", tool: defaultTool }, {}, depsWith({})),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+    expect(globalHandler).not.toHaveBeenCalled();
+  });
+
+  it("planned VERSIONED + decision matches → the retained handler", async () => {
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "the_tool", handler: versionedHandler, packageName: TARGET });
+    sink.commit();
+    const out = await dispatchPlannedExtensionMcpTool(
+      { expected: "versioned", packageName: TARGET, name: "the_tool", version: V },
+      { b: 2 },
+      depsWith({}),
+    );
+    expect(out).toEqual({ served: "versioned" });
+    expect(versionedHandler).toHaveBeenCalledWith({ b: 2 });
+  });
+
+  it("planned VERSIONED + decision flips to default/none or ANOTHER version → EDGE_BOUND_PLAN_DRIFT", async () => {
+    // Flip to none (edge gone).
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "versioned", packageName: TARGET, name: "the_tool", version: V },
+        {},
+        depsWith({ edges: false }),
+      ),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+    // Flip to a DIFFERENT version.
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "versioned", packageName: TARGET, name: "the_tool", version: "9.9.9" },
+        {},
+        depsWith({}),
+      ),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+  });
+
+  it("identity refuse propagates with its evidence", async () => {
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "default", tool: defaultTool },
+        {},
+        makeDeps({ dependentInstallId: DEP_ID }), // dependent row missing
+      ),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_DEPENDENT_MISSING" });
+  });
+});
+
+describe("planSelfInvokerRetainedUnion — collision classes (codex S8 round-2 #1)", () => {
+  const P = "@x/pkg";
+  const retained = (name: string, version: string, pkg = P) => ({
+    packageName: pkg,
+    version,
+    tool: { name, packageName: pkg, handler: async () => "retained" },
+  });
+
+  beforeEach(() => {
+    _resetExtensionMcpForTests();
+  });
+
+  it("default P:x + retained P@v:x → deduped, NOT unmark-worthy; the default's effective attribution SURVIVES", () => {
+    const plan = planSelfInvokerRetainedUnion([retained("x", "0.2.0")], {
+      hostClaimedNames: new Set(),
+      extensionClaimedNames: new Set(["x"]), // the default replay registered P:x
+    });
+    expect(plan.register).toEqual([]);
+    expect(plan.effective).toEqual([]);
+    expect(plan.skippedHostCollisions).toEqual([]);
+    expect(plan.dedupedExtensionNames).toEqual([{ name: "x", packageName: P, version: "0.2.0" }]);
+
+    // The full mark/unmark cycle the self-invoker builder runs: the winning
+    // default attribution must survive (the regression: pushing the dedupe
+    // into the skip list erased it because the packages match, and the
+    // deny-by-default boundary then blocked the registered handler).
+    markEffectiveExtensionMcpTools([{ name: "x", packageName: P }, ...plan.effective]);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("x")).toEqual({ packageName: P });
+  });
+
+  it("two retained versions of P:x → first wins + registers; second deduped; the winner's attribution SURVIVES", () => {
+    const plan = planSelfInvokerRetainedUnion([retained("x", "0.2.0"), retained("x", "0.3.0")], {
+      hostClaimedNames: new Set(),
+      extensionClaimedNames: new Set(), // no default registers the name
+    });
+    expect(plan.register).toEqual([{ name: "x", packageName: P, version: "0.2.0" }]);
+    expect(plan.effective).toEqual([{ name: "x", packageName: P }]);
+    expect(plan.skippedHostCollisions).toEqual([]);
+    expect(plan.dedupedExtensionNames).toEqual([{ name: "x", packageName: P, version: "0.3.0" }]);
+
+    markEffectiveExtensionMcpTools(plan.effective);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("x")).toEqual({ packageName: P });
+  });
+
+  it("cross-package retained collision (P@v:x then Q@w:x) → first wins; loser deduped, winner survives", () => {
+    const Q = "@y/other";
+    const plan = planSelfInvokerRetainedUnion([retained("x", "0.2.0"), retained("x", "1.0.0", Q)], {
+      hostClaimedNames: new Set(),
+      extensionClaimedNames: new Set(),
+    });
+    expect(plan.register).toEqual([{ name: "x", packageName: P, version: "0.2.0" }]);
+    expect(plan.dedupedExtensionNames).toEqual([{ name: "x", packageName: Q, version: "1.0.0" }]);
+
+    markEffectiveExtensionMcpTools(plan.effective);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("x")).toEqual({ packageName: P });
+  });
+
+  it("host/module/reserved collision → unmark-worthy: a stale attribution to the SAME package is erased (round-1 #3 preserved)", () => {
+    const plan = planSelfInvokerRetainedUnion([retained("system_screen_lookup", "0.2.0")], {
+      hostClaimedNames: new Set(["system_screen_lookup"]),
+      extensionClaimedNames: new Set(),
+    });
+    expect(plan.register).toEqual([]);
+    expect(plan.skippedHostCollisions).toEqual([{ name: "system_screen_lookup", packageName: P }]);
+
+    // A stale effective entry attributing the host name to this package (e.g.
+    // from a build before the host claimed the name) must NOT survive.
+    markEffectiveExtensionMcpTools([{ name: "system_screen_lookup", packageName: P }]);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("system_screen_lookup")).toBeUndefined();
   });
 });

@@ -21,6 +21,9 @@ describe("resolveInstallAnchor (closes the runtime-loader trust loop)", () => {
   it("returns a full anchor for an active real-pipeline install with an approved grant", async () => {
     const a = await resolveInstallAnchor("@cinatra-ai/foo", base);
     expect(a).toEqual({
+      // cinatra#1392 S8: the anchor surfaces the canonical row id (null — this
+      // row view omits it).
+      installId: null,
       integrity: "sha512-abc",
       contentHash: "deadbeef",
       registryUrl: REGISTRY,

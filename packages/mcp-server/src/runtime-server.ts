@@ -33,6 +33,18 @@ export type McpRuntimeToolServer = {
   registerScreen(descriptor: ScreenDescriptor): void;
 };
 
+/**
+ * Request-scoped, transport-VERIFIED facts threaded into the per-request
+ * `registerCapabilities` pass (cinatra#1392 S8 — the extension-tool discovery
+ * union registers a caller-dependent tool set). `verifiedAgentRunId` is the
+ * run id from a VERIFIED agent-run OBO token ONLY (the delegated-actor
+ * verifier's output) — never a header/registry-derived run id, which stays
+ * forgeable on the legacy channels (#1195).
+ */
+export type McpRegisterCapabilitiesRequestContext = {
+  verifiedAgentRunId?: string;
+};
+
 function registerPlaceholderCapabilities(server: InstanceType<typeof McpServer>) {
   void server;
   // Placeholder for future tools/resources/prompts registration.
@@ -53,7 +65,16 @@ function registerPlaceholderCapabilities(server: InstanceType<typeof McpServer>)
 export async function createMcpRuntimeServer(input: {
   name: string;
   version: string;
-  registerCapabilities?: (server: McpRuntimeToolServer) => void | Promise<void>;
+  registerCapabilities?: (
+    server: McpRuntimeToolServer,
+    requestContext?: McpRegisterCapabilitiesRequestContext,
+  ) => void | Promise<void>;
+  /**
+   * Forwarded verbatim as the second argument of `registerCapabilities`
+   * (cinatra#1392 S8). Optional; an absent context keeps the registration pass
+   * caller-agnostic (the exact pre-S8 behavior).
+   */
+  registerRequestContext?: McpRegisterCapabilitiesRequestContext;
   instructions?: string;
   experimental?: Record<string, object>;
   /**
@@ -191,7 +212,7 @@ export async function createMcpRuntimeServer(input: {
   };
 
   registerPlaceholderCapabilities(server);
-  await input.registerCapabilities?.(toolServer);
+  await input.registerCapabilities?.(toolServer, input.registerRequestContext);
 
   policedRegisterTool(
     "system_screen_lookup",

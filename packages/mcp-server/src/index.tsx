@@ -108,7 +108,7 @@ export type CreateMcpServerMountOptions = {
   getSession: () => Promise<SessionLike | null>;
   authBasePath?: string;
   mcpBasePath?: string;
-  registerCapabilities?: (server: McpRuntimeToolServer) => void | Promise<void>;
+  registerCapabilities?: (server: McpRuntimeToolServer, requestContext?: { verifiedAgentRunId?: string }) => void | Promise<void>;
   readSettings?: () => Promise<Partial<McpServerSettings> | null> | Partial<McpServerSettings> | null;
   /** Human-facing admin pages (overview, OAuth client management). */
   adminBasePath?: string;
@@ -991,7 +991,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     const server = await createMcpRuntimeServer({
       name: serverName,
       version: serverVersion,
-      registerCapabilities: options.registerCapabilities,
+      registerCapabilities: options.registerCapabilities, registerRequestContext: delegatedActor?.delegation === "agent_run" ? { verifiedAgentRunId: delegatedActor.runId } : undefined, // cinatra#1392 S8: the VERIFIED (signed-OBO) agent-run identity for the extension-tool discovery union; chat delegations / plain bearers carry no verified run and stay caller-agnostic (pre-S8 behavior). One line to hold the tracked-file size ratchet.
       instructions: options.serverInstructions,
       experimental: options.serverExperimental,
       // Only the CHAT delegation type triggers the chat tool-policy

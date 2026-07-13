@@ -75,6 +75,16 @@ import {
 // its commit/abort settle) — for edge-bound serving by a resolved dependent —
 // instead of being discarded into an inert probe recorder.
 import type { VersionKeyedRegistrationSink } from "@/lib/extension-version-keyed-serving";
+// cinatra#1392 S8 — the two edge-bound consume seams of the host ctx:
+//   - `runWithExtensionCtxIdentity` wraps `ctx.mcp.callPrimitive` so the
+//     CALLING extension record's identity (not the outer run's) drives the
+//     edge-bound version resolution of the invoked primitive;
+//   - `substituteEdgeBoundCapabilityProviders` applies the record's
+//     loader-published pre-resolved versioned pins to the SYNC
+//     `resolveProviders` (the version-keyed retained provider replaces the
+//     default's global registration, fail-closed on torn retention).
+import { runWithExtensionCtxIdentity } from "@/lib/extension-ctx-dependent-identity";
+import { substituteEdgeBoundCapabilityProviders } from "@/lib/extension-pre-resolved-edges";
 import {
   resolveExtensionActorContext,
   resolveExtensionActorSummary,
@@ -239,7 +249,59 @@ function denyReservedSystemCapabilityRegister(packageName: string, capability: s
   );
 }
 
-function makeCapabilities(packageName: string): ExtensionHostContext["capabilities"] {
+// ---------------------------------------------------------------------------
+// Record identity (cinatra#1392 S8) — the (version | default) axis of the ctx-
+// owning record, injected by the loaders. Optional + defaulted so every legacy
+// caller (static bundle, destroy hooks, tests) keeps the pre-S8 DEFAULT
+// identity, under which both consume seams below are byte-identical no-ops
+// (no pre-resolved pins are ever published for a package with no versioned
+// edges, and the ctx-identity frame resolves to the same default row the
+// run-lineage path would).
+// ---------------------------------------------------------------------------
+
+export type ExtensionRecordIdentityInput = {
+  /**
+   * The EXACT canonical install-row id (from the trusted anchor). Binds the
+   * edge-bound consume seams to THIS row — never a same-shape sibling's
+   * (cinatra#1392 S8 codex round-0 #1). Omit for legacy/dev ctxs.
+   */
+  installId?: string | null;
+  /** The record's version; omit/null for a legacy/unversioned record. */
+  version?: string | null;
+  /** Whether the record is the DEFAULT version of its package (default: true). */
+  isDefault?: boolean;
+};
+
+function effectiveIdentity(identity: ExtensionRecordIdentityInput | undefined): {
+  installId: string | null;
+  version: string | null;
+  isDefault: boolean;
+} {
+  return {
+    installId: identity?.installId ?? null,
+    version: identity?.version ?? null,
+    isDefault: identity?.isDefault !== false,
+  };
+}
+
+/** The SYNC edge-bound substitution over the global registry's resolution. */
+function resolveProvidersEdgeBound(
+  packageName: string,
+  identity: ExtensionRecordIdentityInput | undefined,
+  capability: string,
+) {
+  return substituteEdgeBoundCapabilityProviders(
+    packageName,
+    effectiveIdentity(identity),
+    capability,
+    resolveCapabilityProviders(capability),
+  );
+}
+
+function makeCapabilities(
+  packageName: string,
+  identity?: ExtensionRecordIdentityInput,
+): ExtensionHostContext["capabilities"] {
   return {
     registerProvider: (capability, provider) => {
       if (isReservedSystemCapabilityDeniedFor(packageName, capability)) {
@@ -256,7 +318,10 @@ function makeCapabilities(packageName: string): ExtensionHostContext["capabiliti
         );
         return [];
       }
-      return resolveCapabilityProviders(capability);
+      // cinatra#1392 S8: a versioned pin on the resolved target substitutes the
+      // pinned version's retained provider for the default's global entry,
+      // fail-closed (torn retention throws; no pins = the global set unchanged).
+      return resolveProvidersEdgeBound(packageName, identity, capability);
     },
   };
 }
@@ -266,16 +331,36 @@ function makeCapabilities(packageName: string): ExtensionHostContext["capabiliti
 // invoker) + listExternalServers (global external MCP registry).
 // ---------------------------------------------------------------------------
 
-function makeMcp(packageName: string): ExtensionHostContext["mcp"] {
+/**
+ * The dispatch-time `callPrimitive` impl, shared by the default ctx and the
+ * sink-carrying non-default ctx (cinatra#1392 S8). Runs the whole invocation
+ * inside the extension-ctx identity ALS frame so the edge-bound resolver binds
+ * the CALLING record's dependency edges (highest-precedence identity source),
+ * never the outer run's.
+ */
+function makeCallPrimitive(
+  packageName: string,
+  identity: ExtensionRecordIdentityInput | undefined,
+): ExtensionHostContext["mcp"]["callPrimitive"] {
+  const ctxIdentity = { packageName, ...effectiveIdentity(identity) };
+  return async (primitiveName, input) => {
+    const [{ callHostPrimitive }, actor] = await Promise.all([
+      import("@/lib/extension-self-mcp"),
+      resolveExtensionActorContext(),
+    ]);
+    return runWithExtensionCtxIdentity(ctxIdentity, () =>
+      callHostPrimitive(primitiveName, input, { actor }),
+    );
+  };
+}
+
+function makeMcp(
+  packageName: string,
+  identity?: ExtensionRecordIdentityInput,
+): ExtensionHostContext["mcp"] {
   return {
     registerTool: (tool) => registerExtensionMcpTool(packageName, tool),
-    callPrimitive: async (primitiveName, input) => {
-      const [{ callHostPrimitive }, actor] = await Promise.all([
-        import("@/lib/extension-self-mcp"),
-        resolveExtensionActorContext(),
-      ]);
-      return callHostPrimitive(primitiveName, input, { actor });
-    },
+    callPrimitive: makeCallPrimitive(packageName, identity),
     listExternalServers: async () => {
       const { listEnabledGlobalExternalMcpServers } = await import("@/lib/external-mcp-registry");
       return listEnabledGlobalExternalMcpServers();
@@ -717,6 +802,10 @@ export function createExtensionHostContext(
   packageName: string,
   grantedPorts: readonly HostPortName[] = [],
   envInput: ExtensionEnvOverrideInput = {},
+  // cinatra#1392 S8: the record's (version | default) identity, threaded by the
+  // loaders into the two edge-bound consume seams (callPrimitive identity frame
+  // + sync capability substitution). Omitted = the legacy DEFAULT identity.
+  identity?: ExtensionRecordIdentityInput,
 ): ExtensionHostContext {
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
   const logger = makeLogger(packageName);
@@ -762,12 +851,12 @@ export function createExtensionHostContext(
     secrets: gated("secrets", () => makeSecrets(packageName, envByPort.secrets)),
     nango: gated("nango", () => makeNango()),
     authSession: gated("authSession", () => makeAuthSession(packageName)),
-    mcp: gated("mcp", () => makeMcp(packageName)),
+    mcp: gated("mcp", () => makeMcp(packageName, identity)),
     objects: gated("objects", () => makeObjects(packageName)),
     jobs: gated("jobs", () => makeJobs(packageName)),
     notifications: gated("notifications", () => makeNotifications(packageName)),
     ui: gated("ui", () => makeUi(packageName)),
-    capabilities: gated("capabilities", () => makeCapabilities(packageName)),
+    capabilities: gated("capabilities", () => makeCapabilities(packageName, identity)),
     telemetry: gated("telemetry", () => makeTelemetry(packageName, logger)),
   };
 }
@@ -794,6 +883,10 @@ export function createExtensionProbeHostContext(
   packageName: string,
   grantedPorts: readonly HostPortName[] = [],
   envInput: ExtensionEnvOverrideInput = {},
+  // cinatra#1392 S8: forwarded to the real base ctx + applied to the probe's
+  // OWN capability reads, so a pre-verify resolves the same edge-bound
+  // substituted providers the real activation would.
+  identity?: ExtensionRecordIdentityInput,
 ): {
   ctx: ExtensionHostContext;
   recorder: {
@@ -805,7 +898,7 @@ export function createExtensionProbeHostContext(
     uiActions: unknown[];
   };
 } {
-  const real = createExtensionHostContext(packageName, grantedPorts, envInput);
+  const real = createExtensionHostContext(packageName, grantedPorts, envInput, identity);
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
 
   const recorder = {
@@ -859,7 +952,9 @@ export function createExtensionProbeHostContext(
     // still sees the same live providers the real activation would.
     resolveProviders: (capability) => {
       if (isReservedSystemCapabilityDeniedFor(packageName, capability)) return [];
-      return resolveCapabilityProviders(capability);
+      // Same edge-bound substitution as the live port (cinatra#1392 S8) — the
+      // pre-verify must resolve what the real activation would.
+      return resolveProvidersEdgeBound(packageName, identity, capability);
     },
   };
   const probeObjects: ExtensionHostContext["objects"] = granted.has("objects")
@@ -965,8 +1060,13 @@ export function createNonDefaultVersionHostContext(
   grantedPorts: readonly HostPortName[] = [],
   envInput: ExtensionEnvOverrideInput = {},
   sink?: VersionKeyedRegistrationSink,
+  // cinatra#1392 S8: the NON-DEFAULT record's own (version, isDefault:false)
+  // identity. Threaded into the probe base (edge-bound capability reads bind
+  // THIS version's pre-resolved pins, not the default's) and into the
+  // dispatch-time `callPrimitive` below.
+  identity?: ExtensionRecordIdentityInput,
 ): ExtensionHostContext {
-  const { ctx: base } = createExtensionProbeHostContext(packageName, grantedPorts, envInput);
+  const { ctx: base } = createExtensionProbeHostContext(packageName, grantedPorts, envInput, identity);
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
   const inertVoid = async () => {};
 
@@ -1000,7 +1100,34 @@ export function createNonDefaultVersionHostContext(
   // write into it, applying the same guards the live/probe ports apply.
   // Grant-gating preserved: an ungranted port keeps the probe's fail-loud proxy.
   const mcp: ExtensionHostContext["mcp"] = granted.has("mcp")
-    ? { ...base.mcp, registerTool: (tool) => sink.retainMcpTool({ ...tool, packageName }) }
+    ? {
+        ...base.mcp,
+        registerTool: (tool) => sink.retainMcpTool({ ...tool, packageName }),
+        // cinatra#1392 S8: a retained (edge-bound-served) handler of this
+        // non-default version may itself call host primitives at DISPATCH time.
+        // The probe base's callPrimitive throws unconditionally; with a sink
+        // this ctx is a REAL activation, so wire the real invoker under THIS
+        // record's identity frame — its own resolved edges (not the default's,
+        // not the outer run's) drive the versions it is served. GATED on the
+        // sink having SETTLED: during `register(ctx)` (pre-settle) dispatching
+        // stays refused, preserving the register-only side-effect-free
+        // contract this context exists for.
+        callPrimitive: (primitiveName, input) => {
+          // Gate on COMMITTED, not merely settled (codex S8 round-0 #5): a
+          // FAILED/aborted registration's leaked callbacks must never
+          // dispatch — only handlers of a successfully-registered attempt are
+          // ever served, and only they may invoke primitives.
+          if (!sink.isCommitted()) {
+            throw new Error(
+              `[non-default-version] ${packageName}: ctx.mcp.callPrimitive is not available ` +
+                `during register(ctx) or after a failed registration — a non-default sibling's ` +
+                `register must stay dispatch-free, and only a successfully-committed activation's ` +
+                `retained handlers may call primitives.`,
+            );
+          }
+          return makeCallPrimitive(packageName, identity)(primitiveName, input);
+        },
+      }
     : base.mcp;
 
   const capabilities: ExtensionHostContext["capabilities"] = granted.has("capabilities")
