@@ -97,7 +97,6 @@
       "@cinatra-ai/slide-deck-artifact": "https://github.com/cinatra-ai/slide-deck-artifact.git",
       "@cinatra-ai/social-media-connector": "https://github.com/cinatra-ai/social-media-connector.git",
       "@cinatra-ai/tailscale-connector": "https://github.com/cinatra-ai/tailscale-connector.git",
-      "@cinatra-ai/trigger-agent": "https://github.com/cinatra-ai/trigger-agent.git",
       "@cinatra-ai/twenty-connector": "https://github.com/cinatra-ai/twenty-connector.git",
       "@cinatra-ai/web-research-agent": "https://github.com/cinatra-ai/web-research-agent.git",
       "@cinatra-ai/web-scrape-agent": "https://github.com/cinatra-ai/web-scrape-agent.git",

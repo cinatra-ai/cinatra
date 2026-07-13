@@ -10,11 +10,18 @@ import {
   readInstalledUpdateReadouts,
   UPDATE_READ_MODEL_TTL_MS,
 } from "@/lib/extension-update-read-model-store";
+import { EXTENSION_AUTO_UPDATE_READ_MODEL_TTL_MS } from "@/lib/extension-auto-update";
 import type { ExtensionUpdateEntry } from "@cinatra-ai/registries/src/update-read-model";
 
 function store(query: ReturnType<typeof vi.fn>) {
   return new DbExtensionUpdateReadModelStore({ query: query as never, schema: "cinatra" });
 }
+
+describe("read-model TTL agreement (#1042 wire-up)", () => {
+  it("the auto-update loop applies the SAME freshness window as the indicator — every reader of the shared store agrees on staleness", () => {
+    expect(EXTENSION_AUTO_UPDATE_READ_MODEL_TTL_MS).toBe(UPDATE_READ_MODEL_TTL_MS);
+  });
+});
 
 describe("DbExtensionUpdateReadModelStore.read", () => {
   it("selects only the requested names and maps rows (timestamptz Date → ISO)", async () => {

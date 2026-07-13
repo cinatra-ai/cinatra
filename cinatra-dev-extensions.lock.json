@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "45c34e0e773820c282548e870070232ff2aea2d2"
+      "resolvedSha": "50d2183c4225f7bf97ccb467dd66469f6f77dd35"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
@@ -326,11 +326,6 @@
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
       "resolvedSha": "971281510a4ade398b15c35c2a61d2f03996b152"
-    },
-    {
-      "packageName": "@cinatra-ai/trigger-agent",
-      "repo": "cinatra-ai/trigger-agent",
-      "resolvedSha": "09b940a6b0fb246fde2f8c38223974499a2c1432"
     },
     {
       "packageName": "@cinatra-ai/twenty-connector",

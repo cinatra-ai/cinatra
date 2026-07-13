@@ -138,6 +138,31 @@ export type ArtifactSkillBundle = {
   enrichers?: string[];
 };
 
+/**
+ * A manifest `objectTypes` claim entry (cinatra#1432): the claimant declares
+ * a claim over one TYPED object type. Structural twin of the zod schema in
+ * `./claims` (`artifactObjectTypeClaimManifestSchema`) — this file stays
+ * type-only, so the shape is restated structurally; the schema is the
+ * validator of record.
+ */
+export type ArtifactObjectTypeClaim = {
+  /** The claimed object type id (`@scope/package:local-id`). */
+  type: string;
+  /** Claim kind — arbitration is kind-over-scope (dedicated beats default). */
+  claim: "dedicated" | "default";
+  /** Per-claim disposition payload (the claim registry's strict union). */
+  dispositions?: {
+    projection: "raw" | "artifact-safe" | "none";
+    pinnable?: boolean;
+    snapshotPolicy?: "content" | "metadata" | "none";
+    redactionPolicyVersion?: string;
+    sensitivity?: "normal" | "sensitive";
+  };
+  /** Inline JSON Schema for the claimed type's rows (schema-source rule:
+   * required unless self-registered or dependency-registered). */
+  schema?: Record<string, unknown>;
+};
+
 export type SemanticArtifactManifest = {
   accepts: ArtifactRepresentationForms;
   satisfies?: string[];
@@ -150,6 +175,13 @@ export type SemanticArtifactManifest = {
    * confidence ≥ this value. The runtime defaults to 0.7 when absent.
    */
   matcherConfidenceThreshold?: number;
+  /**
+   * Claims over TYPED object rows (cinatra#1432, epic #1424): installing
+   * this extension reserves→activates these claims in the durable claim
+   * registry; uninstalling retires them. Optional — a purely semantic
+   * artifact extension (representation forms only) declares none.
+   */
+  objectTypes?: ArtifactObjectTypeClaim[];
 };
 
 /**

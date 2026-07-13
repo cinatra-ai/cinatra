@@ -25,6 +25,10 @@ import {
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
 } from "./screens/marketplace-failure-copy";
+// NOTE (cinatra#1041): the §II modal-footer DRY-RUN action deliberately does
+// NOT live here — it is screens-only (screens/update-plan-action.ts). This
+// module is reachable from the MCP / A2A / LLM-bridge dispatch surfaces, and
+// homing a UI-only action here would grow those locked route graphs.
 // cinatra#1061: the REMOVAL-side returned contract (uninstall/archive). Separate
 // from the marketplace taxonomy above — a removal refusal is a local closure
 // gate that NAMES its blockers, not a registry install failure.

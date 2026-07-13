@@ -35,6 +35,7 @@ const RESOLVE = resolve(REPO_ROOT, "scripts/upgrade/resolve-transition.mjs");
 const LEDGER = resolve(REPO_ROOT, "scripts/upgrade/ledger.mjs");
 const MARIADB_PATH = resolve(REPO_ROOT, "scripts/upgrade/mariadb-upgrade-major.sh");
 const REDIS_PATH = resolve(REPO_ROOT, "scripts/upgrade/redis-upgrade-major.sh");
+const PG_PATH = resolve(REPO_ROOT, "scripts/upgrade/postgres-upgrade-major.sh");
 
 function runNode(args, opts = {}) {
   return spawnSync("node", args, { encoding: "utf8", ...opts });
@@ -218,4 +219,145 @@ test("upgrade-from fixtures default to digest-bound source AND target images", (
     }
     assert.match(src, /scripts\/upgrade\//, `${file} must drive the committed family path`);
   }
+});
+
+// ── postgres family (cinatra#1422 / cinatra-cli#129) ─────────────────────────
+
+test("postgres: supported transitions resolve (platform 17→18 baseline, nango 15→17 case exception)", () => {
+  for (const [svc, from, to] of [
+    ["platform-postgres", "17", "18"],
+    ["nango-postgres", "15", "17"],
+  ]) {
+    const r = runNode([RESOLVE, svc, from, to]);
+    assert.equal(r.status, 0, `${svc} ${from}->${to} should be supported: ${r.stderr}`);
+    const v = JSON.parse(r.stdout);
+    assert.equal(v.supported, true);
+    assert.equal(v.service.family, "postgres");
+    assert.equal(v.mechanism, "logical-dump-restore");
+  }
+});
+
+test("postgres: a downgrade and an unsupported hop fail closed (exit 3)", () => {
+  for (const [svc, from, to, why] of [
+    ["platform-postgres", "18", "17", "downgrade"],
+    ["nango-postgres", "17", "18", "unvalidated upstream"],
+    ["twenty-postgres", "16", "18", "no in-place major path"],
+  ]) {
+    const r = runNode([RESOLVE, svc, from, to]);
+    assert.equal(r.status, 3, `${svc} ${from}->${to} (${why}) must exit 3, got ${r.status}`);
+  }
+});
+
+test("postgres path script: bad invocations exit usage code 2; an unsupported tuple refuses fail-closed 3 with no ledger", () => {
+  assert.equal(runBash([PG_PATH]).status, 2, "missing required args");
+  assert.equal(runBash([PG_PATH, "--bogus", "x"]).status, 2, "unknown flag");
+  // A --from-tag off the resolved series is a misconfigured invocation.
+  const rBind = runBash(
+    [PG_PATH, "--service", "platform-postgres", "--volume", "v", "--from", "17", "--to", "18", "--from-tag", "18-alpine", "--backup-dir", "/tmp"],
+    { UPGRADE_LEDGER_FILE: "/tmp/never-upgrade-postgres-test.json" },
+  );
+  assert.equal(rBind.status, 2, "a --from-tag off the resolved series must refuse");
+  assert.match(rBind.stderr, /does not run the matrix version/);
+  // An unsupported tuple refuses fail-closed BEFORE any mutation — ledger never created.
+  const dir = mkdtempSync(join(tmpdir(), "uf-pg-refuse-"));
+  const ledger = join(dir, "never.json");
+  const down = runBash(
+    [PG_PATH, "--service", "platform-postgres", "--volume", "v", "--from", "18", "--to", "17", "--backup-dir", dir],
+    { UPGRADE_LEDGER_FILE: ledger },
+  );
+  assert.equal(down.status, 3, `postgres 18->17 downgrade must refuse: ${down.stderr}`);
+  assert.ok(!existsSync(ledger), "a refusal must never touch the ledger");
+});
+
+test("postgres path script runs with errtrace + the subshell trap guard", () => {
+  const src = readFileSync(PG_PATH, "utf8");
+  assert.match(src, /set -Eeuo pipefail/, "postgres path: ERR-trap transaction handling requires errtrace (-E)");
+  assert.match(src, /BASH_SUBSHELL/, "postgres path: the trap must no-op in subshells via BASH_SUBSHELL");
+});
+
+test("upgrade-postgres fixture: digest-bound TARGET pins, bare-major sources, drives the committed pg family path", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-postgres.sh"), "utf8");
+  // Field pg SOURCES have no single canonical digest (cinatra#1417) — bare majors.
+  for (const v of ["PG_CASEA_FROM_TAG", "PG_CASEB_FROM_TAG"]) {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    assert.doesNotMatch(m[1], /@sha256:/, `${v} is a field source (no canonical digest) — must be a bare tag`);
+  }
+  // TARGETS are the matrix pins — digest-bound (pins the fixture's proven bytes).
+  for (const v of ["PG_CASEA_TO_TAG", "PG_CASEB_TO_TAG"]) {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${v} default must be digest-bound (the matrix target pin)`);
+  }
+  assert.match(src, /scripts\/upgrade\/postgres-upgrade-major\.sh/, "must drive the committed pg family path");
+});
+
+// ── neo4j family (cinatra#1421) ──────────────────────────────────────────────
+// The one non-Postgres stateful family whose supported hop is a real
+// DATA-MIGRATING transition (the semver->CalVer store-format upgrade). The LIVE
+// guarded behaviour (offline `neo4j-admin database migrate`, rollback, cutover,
+// failure injection) is proven by the docker-driving upgrade-neo4j arm; these
+// pin the container-free invariants.
+const NEO4J_PATH = resolve(REPO_ROOT, "scripts/upgrade/neo4j-upgrade-major.sh");
+
+test("neo4j: the supported store-format hop resolves; downgrade + unlisted + unknown fail closed", () => {
+  const ok = runNode([RESOLVE, "neo4j", "5.26", "2026.05"]);
+  assert.equal(ok.status, 0, `neo4j 5.26->2026.05 should be supported: ${ok.stderr}`);
+  const v = JSON.parse(ok.stdout);
+  assert.equal(v.supported, true);
+  assert.equal(v.service.family, "neo4j");
+  assert.equal(v.mechanism, "in-place-store-format");
+  for (const [from, to, why] of [
+    ["2026.05", "5.26", "downgrade"],
+    ["5.26", "5.26", "unlisted no-op"],
+    ["4.4", "2026.05", "unlisted source"],
+  ]) {
+    assert.equal(runNode([RESOLVE, "neo4j", from, to]).status, 3, `neo4j ${from}->${to} (${why}) must fail closed`);
+  }
+});
+
+test("neo4j path script: bad invocations exit usage code 2; the neo4j password is required via env", () => {
+  assert.equal(runBash([NEO4J_PATH]).status, 2, "missing required args");
+  assert.equal(runBash([NEO4J_PATH, "--bogus", "x"]).status, 2, "unknown flag");
+  // The neo4j password must come from the environment (never argv).
+  const rPw = runBash(
+    [NEO4J_PATH, "--service", "neo4j", "--volume", "v", "--from", "5.26", "--to", "2026.05", "--backup-dir", "/tmp"],
+    { UPGRADE_NEO4J_PASSWORD: "", UPGRADE_LEDGER_FILE: "/tmp/never-neo4j-paths-test.json" },
+  );
+  assert.equal(rPw.status, 2, "missing UPGRADE_NEO4J_PASSWORD must refuse");
+  assert.match(rPw.stderr, /UPGRADE_NEO4J_PASSWORD/);
+  // A --from-tag that does not bind to the resolved series is a usage error.
+  const rBind = runBash(
+    [NEO4J_PATH, "--service", "neo4j", "--volume", "v", "--from", "5.26", "--to", "2026.05", "--from-tag", "2026.05-community", "--backup-dir", "/tmp"],
+    { UPGRADE_NEO4J_PASSWORD: "longenough8", UPGRADE_LEDGER_FILE: "/tmp/never-neo4j-paths-test.json" },
+  );
+  assert.equal(rBind.status, 2, "a --from-tag off the resolved series must refuse");
+  assert.match(rBind.stderr, /does not run the matrix version/);
+});
+
+test("neo4j path script: an unsupported tuple refuses fail-closed (3) BEFORE any mutation — ledger never created", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uf-neo-refuse-"));
+  const ledger = join(dir, "never.json");
+  const down = runBash(
+    [NEO4J_PATH, "--service", "neo4j", "--volume", "v", "--from", "2026.05", "--to", "5.26", "--backup-dir", dir],
+    { UPGRADE_NEO4J_PASSWORD: "longenough8", UPGRADE_LEDGER_FILE: ledger },
+  );
+  assert.equal(down.status, 3, `neo4j 2026.05->5.26 downgrade must refuse: ${down.stderr}`);
+  assert.ok(!existsSync(ledger), "a refusal must never touch the ledger");
+});
+
+test("neo4j path script runs with errtrace + the subshell trap guard", () => {
+  const src = readFileSync(NEO4J_PATH, "utf8");
+  assert.match(src, /set -Eeuo pipefail/, "neo4j path: ERR-trap transaction handling requires errtrace (-E)");
+  assert.match(src, /BASH_SUBSHELL/, "neo4j path: the trap must no-op in subshells via BASH_SUBSHELL");
+});
+
+test("upgrade-neo4j fixture: digest-bound source AND target defaults, drives the committed neo4j family path", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-neo4j.sh"), "utf8");
+  for (const v of ["NEO4J_FROM_TAG", "NEO4J_TO_TAG"]) {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${v} default must be digest-bound (pins the fixture bytes)`);
+  }
+  assert.match(src, /scripts\/upgrade\/neo4j-upgrade-major\.sh/, "must drive the committed neo4j family path");
 });

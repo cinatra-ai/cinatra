@@ -37,8 +37,6 @@ export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "send-confirmation",
   "skill-recommend",
   "test-delivery-input",
-  "trigger-configure",
-  "trigger-confirm",
   "wayflow-setup-form",
   "wordpress-draft-confirm",
 ]);

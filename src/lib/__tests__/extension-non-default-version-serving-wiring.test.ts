@@ -10,10 +10,12 @@ import {
   resolveVersionKeyedCapabilityProviders,
   resolveVersionKeyedObjectType,
   resolveVersionKeyedUiActions,
+  resolveVersionKeyedUiAction,
   isVersionKeyedServable,
   __resetVersionKeyedServingForTests,
   type VersionKeyedRegistrationSink,
 } from "@/lib/extension-version-keyed-serving";
+import { dispatchExtensionUiAction } from "@/lib/extension-action-dispatch";
 import {
   resolveCapabilityProviders,
   __resetCapabilityRegistry,
@@ -207,5 +209,70 @@ describe("end-to-end: runStaticBundleActivation drives retain → commit/abort",
     // Global registry owns it; no version-keyed retention for the default.
     expect(listExtensionMcpTools().some((t) => t.packageName === SIB)).toBe(true);
     expect(isVersionKeyedServable(SIB, V)).toBe(false);
+  });
+});
+
+// cinatra#1392 S9 — the UI-SURFACE SERVE consume side, end-to-end over the REAL
+// retention: a non-default version's ctx.ui action is retained via the REAL host
+// ctx + sink, committed, then SERVED through the REAL dispatchExtensionUiAction
+// consume path for a NON-DEFAULT addressed install — never the default's action.
+describe("ui-surface serve end-to-end: real retention → dispatchExtensionUiAction (S9)", () => {
+  // The version-keyed resolver the actions route wires (identical to route.ts).
+  const versionedResolver = (packageName: string, version: string | null | undefined, actionId: string) => {
+    const served = resolveVersionKeyedUiAction(packageName, version, actionId);
+    return served.kind === "serve"
+      ? ({ kind: "serve" as const, handler: served.value.handler })
+      : ({ kind: "refuse" as const, code: served.code, message: served.message });
+  };
+  const dispatchDeps = (installRow: {
+    packageName: string;
+    status: string;
+    isDefault?: boolean;
+    version?: string | null;
+  }) => ({
+    resolveInstall: async () => installRow,
+    authorize: async () => true,
+    // The GLOBAL registry resolver — must NEVER be consulted for a non-default install.
+    resolveAction: () => ({ packageName: installRow.packageName, id: "x", handler: async () => ({ FROM: "DEFAULT-GLOBAL" }) }),
+    resolveVersionedAction: versionedResolver,
+  });
+
+  it("serves the RETAINED non-default action to a non-default install; refuses (never default) when torn", async () => {
+    // Retain a non-default version's ui action through the REAL host ctx + sink.
+    const sink = beginVersionKeyedRegistration(SIB, V);
+    const ctx = createNonDefaultVersionHostContext(SIB, ["ui"], {}, sink);
+    ctx.ui.registerAction({ id: "sib_action", handler: async (i) => ({ FROM: "v-" + V, echo: i }) });
+
+    // Pre-commit: the retained entry is NOT servable → dispatch fail-closes (500),
+    // NEVER the default's action.
+    const preCommit = await dispatchExtensionUiAction(
+      { installId: "inst-nd", actionId: "sib_action", input: { a: 1 }, actor: { principalId: "u" } },
+      dispatchDeps({ packageName: SIB, status: "active", isDefault: false, version: V }),
+    );
+    expect(preCommit.status).toBe(500); // NOT_SERVABLE torn retention — not a default serve
+
+    sink.commit();
+
+    // Committed: the NON-DEFAULT install is served ITS version's retained action.
+    const served = await dispatchExtensionUiAction(
+      { installId: "inst-nd", actionId: "sib_action", input: { a: 1 }, actor: { principalId: "u" } },
+      dispatchDeps({ packageName: SIB, status: "active", isDefault: false, version: V }),
+    );
+    expect(served).toEqual({ status: 200, result: { FROM: "v-" + V, echo: { a: 1 } } });
+
+    // A DEFAULT install of the same package is served the GLOBAL registry action.
+    const defaultServed = await dispatchExtensionUiAction(
+      { installId: "inst-default", actionId: "sib_action", input: {}, actor: { principalId: "u" } },
+      dispatchDeps({ packageName: SIB, status: "active", isDefault: true, version: V }),
+    );
+    expect(defaultServed).toEqual({ status: 200, result: { FROM: "DEFAULT-GLOBAL" } });
+
+    // A non-default install asking for an id the pinned version does NOT register
+    // → 404 (NO_SUCH_HANDLER), never the default's action.
+    const missing = await dispatchExtensionUiAction(
+      { installId: "inst-nd", actionId: "not_registered", input: {}, actor: { principalId: "u" } },
+      dispatchDeps({ packageName: SIB, status: "active", isDefault: false, version: V }),
+    );
+    expect(missing.status).toBe(404);
   });
 });

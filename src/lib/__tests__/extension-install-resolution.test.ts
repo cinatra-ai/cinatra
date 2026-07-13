@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  pickActiveInstall,
   pickActiveInstallId,
   isInstallRowAddressableByActor,
   buildActorScopeForPick,
@@ -26,6 +27,28 @@ function row(p: Partial<InstallRowForPick>): InstallRowForPick {
 function actor(p: Partial<ActorScopeForPick> = {}): ActorScopeForPick {
   return { organizationId: ORG, ownerId: USER, teamIds: [TEAM], ...p };
 }
+
+// cinatra#1392 S9: `pickActiveInstallId` now delegates to the row-returning
+// `pickActiveInstall` so the setup-hydration caller can read the picked
+// install's version identity (isDefault/version).
+describe("pickActiveInstall (row-returning; pickActiveInstallId delegates to it)", () => {
+  it("returns the WHOLE picked row (not just the id), preserving extra fields", () => {
+    const rows = [
+      { ...row({ id: "inst-nd", organizationId: ORG, ownerLevel: "organization" }), isDefault: false, version: "0.1.4" },
+    ];
+    const picked = pickActiveInstall(rows, actor());
+    expect(picked?.id).toBe("inst-nd");
+    expect(picked?.isDefault).toBe(false);
+    expect((picked as { version?: string }).version).toBe("0.1.4");
+    // The delegating wrapper returns the same row's id.
+    expect(pickActiveInstallId(rows, actor())).toBe("inst-nd");
+  });
+
+  it("returns null (both forms) when no row is addressable", () => {
+    expect(pickActiveInstall([], actor())).toBeNull();
+    expect(pickActiveInstallId([], actor())).toBeNull();
+  });
+});
 
 describe("pickActiveInstallId", () => {
   it("returns the id of an active org-scoped row for a member of that org", () => {
