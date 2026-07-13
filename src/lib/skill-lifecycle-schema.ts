@@ -161,11 +161,11 @@ $body$` },
 
 /**
  * Skill efficacy-loop exposure telemetry (cinatra#1368, epic #1358 S10),
- * mirrored by core__0037. Kept in this pure-strings leaf (not inline in
+ * mirrored by core__0038. Kept in this pure-strings leaf (not inline in
  * buildCreateStoreSchemaQueries) for file-size-ratchet headroom — all statements
  * are ADDITIVE (nullable columns + a non-unique index), so the schema-migration
  * gate has nothing destructive to see and the operator-upgrade path is covered
- * by the shipped core__0037 artifact.
+ * by the shipped core__0038 artifact.
  *
  * MUST be spread AFTER the `agent_run_skills_used` CREATE TABLE (it ALTERs that
  * table) — the drizzle-store composition places it near the end, where both
