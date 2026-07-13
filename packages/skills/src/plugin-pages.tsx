@@ -255,15 +255,11 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
       />
       <PageHeader title="Skills" divider={false} />
       <PageContent className="flex flex-col gap-6 pb-8">
-        {/* Transitional (multi-scope W5): the toolbar picker is still
-            single-select, so it displays the FIRST effective token; FILTERING
-            honors every token. The multi-select filter picker adoption is the
-            W5 UI half (ships separately with render verification). */}
         <SkillsToolbar
           basePath="/skills"
           query={query}
           view={view}
-          scopeValue={effectiveScopeTokens[0]}
+          scopeValue={effectiveScopeTokens}
           scopes={scopes}
           showAdmin={isAdmin}
         />

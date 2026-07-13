@@ -10,7 +10,7 @@ import {
   canPublishToMarketplace,
   isRegisteredMarketplaceVendor,
   resolveSettingsAffordances,
-  resolveUpdateAvailable,
+  resolveUpdateRow,
   settingsHrefFor,
 } from "../extension-settings-model";
 
@@ -59,19 +59,56 @@ describe("settingsHrefFor (§V — the card's Settings action target)", () => {
   });
 });
 
-describe("resolveUpdateAvailable (§V — Maintenance › Update gating)", () => {
-  it("is available when the installed version is behind the newest", () => {
-    expect(resolveUpdateAvailable("0.4.2", "0.5.0")).toBe(true);
+describe("resolveUpdateRow (§V — Maintenance · Update: the §III card states spelled out in words)", () => {
+  it("update-available: names the current and available versions; the button is live", () => {
+    expect(
+      resolveUpdateRow({
+        state: "update-available",
+        installedVersion: "0.4.2",
+        latestVersion: "0.5.0",
+      }),
+    ).toEqual({
+      enabled: true,
+      description: "Currently on version 0.4.2 — version 0.5.0 is available.",
+    });
   });
-  it("is not available when already on the newest", () => {
-    expect(resolveUpdateAvailable("1.2.0", "1.2.0")).toBe(false);
+  it('incompatible: the verbatim "Newer version needs a newer Cinatra." wording; the button greys out', () => {
+    const row = resolveUpdateRow({
+      state: "incompatible",
+      installedVersion: "0.4.2",
+      latestVersion: "0.5.0",
+    });
+    expect(row.description).toBe("Newer version needs a newer Cinatra.");
+    expect(row.enabled).toBe(false);
   });
-  it("is not available when the installed version is newer", () => {
-    expect(resolveUpdateAvailable("2.0.0", "1.0.0")).toBe(false);
+  it('non-comparable (github/dev/local sources): the verbatim "No registry version to compare." wording; the button greys out', () => {
+    for (const installedVersion of [null, "0.0.0-dev.20260701"]) {
+      const row = resolveUpdateRow({
+        state: "non-comparable",
+        installedVersion,
+        latestVersion: null,
+      });
+      expect(row.description).toBe("No registry version to compare.");
+      expect(row.enabled).toBe(false);
+    }
   });
-  it("is not available when either version is unknown", () => {
-    expect(resolveUpdateAvailable(null, "1.0.0")).toBe(false);
-    expect(resolveUpdateAvailable("1.0.0", null)).toBe(false);
+  it("up-to-date: the up-to-date line; the button greys out (nothing to run)", () => {
+    const row = resolveUpdateRow({
+      state: "up-to-date",
+      installedVersion: "1.2.0",
+      latestVersion: "1.2.0",
+    });
+    expect(row.description).toBe("Currently on version 1.2.0 — up to date.");
+    expect(row.enabled).toBe(false);
+  });
+  it("none (fail-quiet stale readout): falls back to the up-to-date line with the button greyed — never a stale claim of an update", () => {
+    const row = resolveUpdateRow({
+      state: "none",
+      installedVersion: "1.2.0",
+      latestVersion: null,
+    });
+    expect(row.description).toBe("Currently on version 1.2.0 — up to date.");
+    expect(row.enabled).toBe(false);
   });
 });
 

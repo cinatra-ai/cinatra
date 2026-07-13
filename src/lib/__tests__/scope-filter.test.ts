@@ -5,9 +5,13 @@ import {
   isDefaultScopeSelection,
   parseScopeFilterParam,
   scopeSelectionMatches,
+  scopeFilterComboboxRowState,
+  scopeFilterRowState,
   scopeSelectionMatchesAny,
   scopeTokenToComboboxValue,
   serializeScopeFilterTokens,
+  toggleScopeFilterComboboxValue,
+  toggleScopeFilterToken,
   type NormalizedResourceScope,
 } from "@/lib/scope-filter";
 
@@ -257,5 +261,92 @@ describe("scopeSelectionMatchesAny (the OR-predicate)", () => {
     for (const url of ["workspace,team:t1", "bogus", ""]) {
       expect(filterBy(url)).toEqual(rows.map(([id]) => id));
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Filter-mode multi-select picker behaviour (cinatra#1074, the W5 UI half).
+// ---------------------------------------------------------------------------
+
+describe("toggleScopeFilterToken", () => {
+  it("adds and removes ordinary tokens, order-preserving", () => {
+    expect(toggleScopeFilterToken("team:t1", [DEFAULT_SCOPE_TOKEN])).toEqual(["team:t1"]);
+    expect(toggleScopeFilterToken("project:p1", ["team:t1"])).toEqual(["team:t1", "project:p1"]);
+    expect(toggleScopeFilterToken("team:t1", ["team:t1", "project:p1"])).toEqual(["project:p1"]);
+  });
+
+  it("unchecking the last token returns to the default (cleared) selection", () => {
+    expect(toggleScopeFilterToken("team:t1", ["team:t1"])).toEqual([DEFAULT_SCOPE_TOKEN]);
+  });
+
+  it("selecting Workspace: All clears the filter", () => {
+    expect(toggleScopeFilterToken(DEFAULT_SCOPE_TOKEN, ["team:t1", "project:p1"])).toEqual([
+      DEFAULT_SCOPE_TOKEN,
+    ]);
+  });
+
+  it("personal is an ordinary OR-token — mixable, no grant-style owner-strip", () => {
+    expect(toggleScopeFilterToken("team:t1", ["personal"])).toEqual(["personal", "team:t1"]);
+    expect(toggleScopeFilterToken("personal", ["team:t1"])).toEqual(["team:t1", "personal"]);
+  });
+
+  it("round-trips with the canonical parser/serializer", () => {
+    const selection = toggleScopeFilterToken("project:p1", toggleScopeFilterToken("team:t1", [DEFAULT_SCOPE_TOKEN]));
+    expect(parseScopeFilterParam(serializeScopeFilterTokens(selection)!, accessible)).toEqual(selection);
+  });
+});
+
+describe("scopeFilterRowState", () => {
+  it("workspace row is checked+locked exactly when the selection is the default", () => {
+    expect(scopeFilterRowState(DEFAULT_SCOPE_TOKEN, [DEFAULT_SCOPE_TOKEN])).toEqual({
+      checked: true,
+      impliedDisabled: true,
+    });
+    expect(scopeFilterRowState(DEFAULT_SCOPE_TOKEN, ["team:t1"])).toEqual({
+      checked: false,
+      impliedDisabled: false,
+    });
+  });
+
+  it("every other row is independent — checked iff explicitly selected, never implied", () => {
+    expect(scopeFilterRowState("team:t1", ["team:t1", "project:p1"])).toEqual({
+      checked: true,
+      impliedDisabled: false,
+    });
+    expect(scopeFilterRowState("org:o1", ["team:t1"])).toEqual({
+      checked: false,
+      impliedDisabled: false,
+    });
+    // No org->team implication in filter mode (org:o1 does not imply t1's row).
+    expect(scopeFilterRowState("team:t1", ["org:o1"])).toEqual({
+      checked: false,
+      impliedDisabled: false,
+    });
+    // No workspace implication either: under the default, scope rows stay
+    // unchecked and selectable (they NARROW the view).
+    expect(scopeFilterRowState("team:t1", [DEFAULT_SCOPE_TOKEN])).toEqual({
+      checked: false,
+      impliedDisabled: false,
+    });
+  });
+});
+
+describe("combobox-value-space wrappers (personal <-> owner boundary)", () => {
+  it("toggleScopeFilterComboboxValue maps owner to personal and back", () => {
+    expect(toggleScopeFilterComboboxValue("owner", ["workspace"])).toEqual(["owner"]);
+    expect(toggleScopeFilterComboboxValue("team:t1", ["owner"])).toEqual(["owner", "team:t1"]);
+    expect(toggleScopeFilterComboboxValue("owner", ["owner", "team:t1"])).toEqual(["team:t1"]);
+    expect(toggleScopeFilterComboboxValue("workspace", ["owner", "team:t1"])).toEqual(["workspace"]);
+  });
+
+  it("scopeFilterComboboxRowState mirrors the token-space state", () => {
+    expect(scopeFilterComboboxRowState("owner", ["owner", "team:t1"])).toEqual({
+      checked: true,
+      impliedDisabled: false,
+    });
+    expect(scopeFilterComboboxRowState("workspace", ["workspace"])).toEqual({
+      checked: true,
+      impliedDisabled: true,
+    });
   });
 });

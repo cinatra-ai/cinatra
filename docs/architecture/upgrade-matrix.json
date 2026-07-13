@@ -1,7 +1,7 @@
 {
   "$schema": "./upgrade-matrix.schema.json",
   "schemaVersion": "1.0.0",
-  "revision": 1,
+  "revision": 2,
   "baselineRelease": "0.1.9",
   "generatedNote": "Supported source->target upgrade matrix for every stateful service in docker-compose.yml. Hand-authored source of truth; completeness + pin-drift + schema conformance are gated by scripts/check-upgrade-matrix.mjs (and the vitest suite scripts/ci/__tests__/upgrade-matrix.test.mjs). Human-readable inventory + rationale: docs/architecture/stateful-service-inventory.md. Slice 1 of the upgrade-paths epic (cinatra#1420 / cinatra#1419). This slice defines the DATA; the CLI preflight + `db upgrade-major` (cinatra-cli#128/#129) and the works-after upgrade-from arm (cinatra#1421/#1422) are the consumers.",
   "stateClasses": [
@@ -144,7 +144,7 @@
       "notes": "WordPress database (profile wordpress). WordPress runs its own schema upgrades at boot; the MariaDB engine upgrade is in-place (`mariadb-upgrade` on the same data dir). MariaDB requires SEQUENTIAL major steps (11.4 -> 11.8 -> 12.x); skipping a major is unsupported.",
       "transitions": [
         { "from": "11.4", "to": "11.4", "supported": true, "mechanism": "in-place-store-format", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold." },
-        { "from": "11.4", "to": "11.8", "supported": true, "mechanism": "in-place-store-format", "skippedMajor": "sequential-only", "downgrade": false, "notes": "Next in-line minor-LTS hop; in-place data-dir upgrade. Own lane + upgrade-from proof." },
+        { "from": "11.4", "to": "11.8", "supported": true, "mechanism": "in-place-store-format", "skippedMajor": "sequential-only", "downgrade": false, "notes": "Next in-line minor-LTS hop; in-place data-dir upgrade. Executable guarded path: scripts/upgrade/mariadb-upgrade-major.sh (explicit mariadb-upgrade on a CANDIDATE volume; dump/restore fallback); upgrade-from fixture: scripts/ci/works-after/upgrade-mariadb.sh (cinatra#1421/#1422)." },
         { "from": "11.4", "to": "12.0", "supported": false, "mechanism": "in-place-store-format", "skippedMajor": "sequential-only", "downgrade": false, "notes": "FAIL-CLOSED: MariaDB forbids skipping 11.8 on the way to 12.x. Step through 11.8 first." }
       ]
     },
@@ -162,7 +162,7 @@
       "notes": "Drupal database (profile drupal). Drupal runs its own schema updates at boot; the MariaDB engine upgrade is in-place and sequential-major (same rule as wordpress-mariadb).",
       "transitions": [
         { "from": "11.4", "to": "11.4", "supported": true, "mechanism": "in-place-store-format", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold." },
-        { "from": "11.4", "to": "11.8", "supported": true, "mechanism": "in-place-store-format", "skippedMajor": "sequential-only", "downgrade": false, "notes": "Next in-line hop; own lane + upgrade-from proof." },
+        { "from": "11.4", "to": "11.8", "supported": true, "mechanism": "in-place-store-format", "skippedMajor": "sequential-only", "downgrade": false, "notes": "Next in-line hop; same executable guarded path + fixture as wordpress-mariadb (one family path, both services): scripts/upgrade/mariadb-upgrade-major.sh + scripts/ci/works-after/upgrade-mariadb.sh (cinatra#1421/#1422)." },
         { "from": "11.4", "to": "12.0", "supported": false, "mechanism": "in-place-store-format", "skippedMajor": "sequential-only", "downgrade": false, "notes": "FAIL-CLOSED: sequential-only; step through 11.8." }
       ]
     },
@@ -244,9 +244,9 @@
       "baselinePin": { "image": "redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005", "major": "8", "digest": "sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005" },
       "notes": "BullMQ cache/queue backend. The volume holds regenerable cache/queue state, so the fail-safe upgrade path is discard-recreate. Forward RDB is readable (7 -> 8 upgrade in place is fine); DOWNGRADE is unsafe — Redis 8 writes RDB v14 which Redis 7 refuses (crash-loop), so a downgrade requires CLEARING the dump first (documented downgrade path).",
       "transitions": [
-        { "from": "7", "to": "8", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "linear", "downgrade": false, "notes": "Applied major. Forward RDB is compatible; the works-after redis arm proves a real bullmq enqueue->run->complete round-trip on 8." },
+        { "from": "7", "to": "8", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "linear", "downgrade": false, "notes": "Applied major. Forward RDB is compatible; the works-after redis arm proves a real bullmq enqueue->run->complete round-trip on 8. Data-preserving guarded superset of discard-recreate for a still-populated 7-era volume: scripts/upgrade/redis-upgrade-major.sh (AOF explicit); upgrade-from fixture: scripts/ci/works-after/upgrade-redis.sh (cinatra#1421/#1422)." },
         { "from": "8", "to": "8", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "n-a", "downgrade": false, "notes": "Baseline hold." },
-        { "from": "8", "to": "7", "supported": false, "mechanism": "discard-recreate", "skippedMajor": "linear", "downgrade": true, "notes": "FAIL-CLOSED downgrade: clear the RDB dump first (regenerable cache/queue state), then recreate on 7." }
+        { "from": "8", "to": "7", "supported": false, "mechanism": "discard-recreate", "skippedMajor": "linear", "downgrade": true, "notes": "FAIL-CLOSED downgrade: clear the RDB dump first (regenerable cache/queue state), then recreate on 7. scripts/upgrade/redis-upgrade-major.sh refuses this hop at resolve time (cinatra#1421)." }
       ]
     },
     {

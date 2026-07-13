@@ -211,11 +211,7 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
         divider={false}
       />
       <PageContent>
-        {/* Transitional (multi-scope W5): the combobox is still single-select,
-            so its trigger displays the FIRST effective token; FILTERING honors
-            every token. The multi-select filter picker adoption is the W5 UI
-            half (ships separately with render verification). */}
-        <ConnectorsClient cards={cards} scopeValue={effectiveScopeTokens[0]} scopes={scopes} />
+        <ConnectorsClient cards={cards} scopeValue={effectiveScopeTokens} scopes={scopes} />
       </PageContent>
     </Main>
   );

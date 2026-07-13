@@ -59,7 +59,6 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
-import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 
@@ -254,6 +253,14 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       { resolveAction: resolveExtensionUiAction },
     );
     const statusProbeActionId = findStatusProbeActionId(render.surface);
+    // A tabbed surface's tab row is page-header chrome (design §II — "the page
+    // header and tablist stay at the Wide column"): the form renders it as a
+    // `TabsListRow` whose etched rule replaces the header's own, so the header
+    // divider is suppressed EXACTLY when that tab row actually renders (the
+    // form renders — installId present — AND the surface declares tabs). The
+    // Install/Activate CTA state keeps the header rule.
+    const hasTabs = !!render.surface.tabs && render.surface.tabs.length > 0;
+    const headerDivider = !(installId && hasTabs);
     if (statusProbeActionId) {
       // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
       // the connection-status badge that once sat top-right of the header now
@@ -268,26 +275,28 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       // disconnect), seeded with the connector's connected state so Disconnect is
       // disabled until connected (design §II items 7/8/15/16). `initialConnected`
       // is the SAME `resolveConnectorBadgeState` seed the status card reads.
+      //
+      // The status card + sharing section are passed INTO the form as the
+      // `aside` / `setupFooter` slots: the form owns the §II content layout so
+      // a tabbed surface can hoist its tablist ABOVE the two-column grid
+      // (tablist = header chrome, never inside the content column) and keep
+      // the sharing section on the SETUP surface only.
       return (
         <ConnectorSetupPage
           title={displayName}
           description="Connector setup"
+          divider={headerDivider}
           className="flex flex-col gap-6 pb-8"
         >
           {installId ? (
-            <ConnectorSetupColumns
-              conformanceId="connector-setup"
-              fields={
-                <SchemaConfigConnectorForm
-                  installId={installId}
-                  packageName={packageId}
-                  surface={render.surface}
-                  isAdmin={isAdmin}
-                  initialValues={initialValues}
-                  omitFieldKinds={["status-probe"]}
-                  initialConnected={badgeState.connected}
-                />
-              }
+            <SchemaConfigConnectorForm
+              installId={installId}
+              packageName={packageId}
+              surface={render.surface}
+              isAdmin={isAdmin}
+              initialValues={initialValues}
+              omitFieldKinds={["status-probe"]}
+              initialConnected={badgeState.connected}
               aside={
                 <ConnectorStatusProbeCard
                   installId={installId}
@@ -296,42 +305,49 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
                   connectedLabel={badgeState.connectedLabel}
                 />
               }
+              setupFooter={sharingSection}
             />
           ) : (
-            <InstallActivateCta displayName={displayName} />
+            <>
+              <InstallActivateCta displayName={displayName} />
+              {sharingSection}
+            </>
           )}
-          {sharingSection}
         </ConnectorSetupPage>
       );
     }
-    // Probe-less schema-config connector: unchanged single-column body with the
-    // header status badge (this lane rescopes Model-A to the status-probe shape
-    // only; the multi-connection / record-list layouts are separate epic items).
+    // Probe-less schema-config connector: single-column body (no status card to
+    // lift), but the SAME §II Wide shell as every other setup page — "the page
+    // holds to the Wide column and never spans full width" — with the header
+    // status badge kept top-right. A tabbed probe-less surface gets the same
+    // hoisted tablist treatment via the form.
     return (
-      <Main className="min-h-screen">
-        <PageHeader
-          title={displayName}
-          description="Connector setup"
-          actions={statusBadge}
-        />
-        <PageContent className="flex flex-col gap-6 pb-8">
-          <Suspense fallback={null}>
-            <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
-          </Suspense>
-          {installId ? (
-            <SchemaConfigConnectorForm
-              installId={installId}
-              packageName={packageId}
-              surface={render.surface}
-              isAdmin={isAdmin}
-              initialValues={initialValues}
-            />
-          ) : (
+      <ConnectorSetupPage
+        title={displayName}
+        description="Connector setup"
+        actions={statusBadge}
+        divider={headerDivider}
+        className="flex flex-col gap-6 pb-8"
+      >
+        <Suspense fallback={null}>
+          <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
+        </Suspense>
+        {installId ? (
+          <SchemaConfigConnectorForm
+            installId={installId}
+            packageName={packageId}
+            surface={render.surface}
+            isAdmin={isAdmin}
+            initialValues={initialValues}
+            setupFooter={sharingSection}
+          />
+        ) : (
+          <>
             <InstallActivateCta displayName={displayName} />
-          )}
-          {sharingSection}
-        </PageContent>
-      </Main>
+            {sharingSection}
+          </>
+        )}
+      </ConnectorSetupPage>
     );
   }
 

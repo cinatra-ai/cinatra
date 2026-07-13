@@ -23,6 +23,7 @@ import { schemaVersionPreconditionPhases } from "@/lib/boot/phases/schema-versio
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
+import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
@@ -144,6 +145,12 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // canonical rows are loaded. `retryable`: a backfill failure logs and boot
   // continues (the pass is idempotent and retries next boot).
   await run(agentRuntimeDepBackfillPhases());
+
+  // ── skills-catalog explicit rebuild (cinatra#1364) ────────────────────────────
+  // AFTER extension activation + the materialize/projection phases above, so the
+  // scanner merges the on-disk skill trees those phases produced. `degraded`: a
+  // failure logs and boot continues (the legacy read path still self-heals).
+  await run(skillsCatalogRebuildPhases());
 
   // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────
   // Original interleave point: right after install-op cleanup, before the

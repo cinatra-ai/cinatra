@@ -142,6 +142,72 @@ export async function hasLiveInstallRow(packageName: string): Promise<boolean> {
   }
 }
 
+/**
+ * CLAIM-SCOPED actor access gate (cinatra#1425). Unlike
+ * `canAccessArtifactExtension` (whose no-row "ungoverned" allowance exists for
+ * disk-registered dev artifacts), a CLAIM is a positive DB assertion of
+ * governance — so this gate FAILS CLOSED when no live install row governs the
+ * claim's scope: a claim whose install was uninstalled/archived is invisible,
+ * never "ungoverned".
+ *
+ * Row selection is CLAIM-scoped, not package-global:
+ *   - a claim BOUND to an install (`installId` present) authorizes ONLY
+ *     through that exact row, and only while that row is live AND governs the
+ *     claim's scope — a bound row that is archived, missing, or in another
+ *     scope DENIES (never a fallback to a sibling install: a stale v1 claim
+ *     must not be re-authorized through v2's access policy);
+ *   - an UNBOUND claim resolves the row governing its scope: `org:<id>` → the
+ *     org-owned live row for THAT org; `platform` → an ambient
+ *     (organizationId == null) live row. A live row belonging to a DIFFERENT
+ *     org or scope never authorizes this claim (no cross-scope bleed).
+ * The actor decision then delegates to the same polymorphic
+ * `canExtensionAccess` the actor-path gate uses.
+ */
+export async function canActorAccessClaimedArtifactExtension(
+  claim: { extensionPackage: string; installId?: string | null; scope: string },
+  actor: ActorContext | undefined | null,
+  op: ExtensionAccessOp,
+): Promise<boolean> {
+  try {
+    const rows = (await readInstalledExtensionsByPackageName(claim.extensionPackage)).filter(
+      (r) => r.kind === "artifact",
+    );
+    const live = rows.filter((r) => r.status === "active" || r.status === "locked");
+    if (live.length === 0) return false; // fail-closed: a claim is never ungoverned.
+
+    const orgId = claim.scope.startsWith("org:") ? claim.scope.slice("org:".length) : null;
+    const governsClaimScope = (r: (typeof live)[number]) =>
+      orgId != null ? r.organizationId === orgId : r.organizationId == null;
+    let row: (typeof live)[number] | null = null;
+    if (claim.installId) {
+      // Bound claim: EXACT row only — live AND scope-governing, no fallback.
+      const bound = live.find((r) => r.id === claim.installId) ?? null;
+      row = bound && governsClaimScope(bound) ? bound : null;
+    } else {
+      row = live.find(governsClaimScope) ?? null;
+    }
+    if (!row) return false; // bound row dead/foreign, or nothing governs this scope.
+
+    const effectiveActor = await withResolvedOrgRole(actor);
+    const decision = await canExtensionAccess(
+      {
+        kind: "artifact",
+        resourceId: row.id,
+        owner: {
+          ownerLevel: row.ownerLevel,
+          ownerId: row.ownerId,
+          organizationId: row.organizationId,
+        },
+      },
+      effectiveActor ?? null,
+      op,
+    );
+    return decision.allowed;
+  } catch {
+    return false; // fail-closed on any access-store read error.
+  }
+}
+
 export async function canAccessArtifactExtension(
   packageName: string,
   actor: ActorContext | undefined | null,

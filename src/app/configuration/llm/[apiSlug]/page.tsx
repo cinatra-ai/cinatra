@@ -39,7 +39,14 @@ export default async function SettingsAPIPluginRoutePage({ params, searchParams 
   }
 
   if (apiSlug === "openai-skills") {
-    redirect("/configuration/skills?tab=shell");
+    // The local-shell / sandboxed-executor policy now lives on the OpenAI
+    // connector's own schema-config setup surface (its configSchema carries the
+    // shell fields) — not the retired skills shell-tab placeholder. Mirror the
+    // drupal dispatch above: resolve the connector's setup href from the
+    // manifest instead of hardcoding a dispatch path.
+    const href = getConnectorSetupHref("openai-connector");
+    if (!href) notFound();
+    redirect(href);
   }
 
   return await renderAPIPluginPage(apiSlug, { searchParams });

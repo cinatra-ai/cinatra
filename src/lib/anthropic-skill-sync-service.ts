@@ -18,7 +18,9 @@ import {
   type AnthropicSkillLeasePort,
 } from "@cinatra-ai/llm";
 import {
-  readSkillsCatalog,
+  // Pure candidate-pool read — snapshot (cinatra#1364); the explicit rebuild
+  // wired at boot/install/watcher keeps the persisted catalog current.
+  readSkillsCatalogSnapshot,
   getSkillAnthropicUploadFlag,
   assertSkillFilePathInsideRoot,
   isRuntimeDeliverableLifecycleState,
@@ -208,14 +210,14 @@ async function readBundledDir(
  * may dynamically pick ANY catalog skill, so every such skill must be
  * pre-synced; an unsynced recommended skill must surface as the config_error
  * (`AnthropicSkillNotSyncedError`), never a function-tool fallback. The loop
- * already iterates `readSkillsCatalog().skills` in full; this comment pins the
+ * already iterates the full catalog snapshot`s skills; this comment pins the
  * invariant so a future change cannot silently narrow it to the creation set.
  * Every governance gate (the per-skill `allowAnthropicUpload` flag below + the
  * engine's default-OFF global opt-in), namespace scoping, and leased GC still
  * apply unchanged — this function is purely upstream of the gated engine.
  */
 export async function buildSyncCandidates(): Promise<SyncCandidateSkill[]> {
-  const catalog = await readSkillsCatalog();
+  const catalog = await readSkillsCatalogSnapshot();
   // A3 (cinatra#1363): exclude non-runtime-deliverable (archived/draft) skills
   // from the mirror. An excluded skill drops out of the current-catalog set, so
   // the sync engine's markStaleForRemovedCatalogSkills marks its existing remote

@@ -94,9 +94,27 @@ describe("§V — Marketplace: one-way Publish, vendor-gated", () => {
 });
 
 describe("§V — Maintenance: Update + complementary Archive/Activate", () => {
-  it("Update shows current → newest", () => {
-    expect(VIEW).toContain("Currently on version ");
-    expect(VIEW).toContain(" is available.");
+  const MODEL = read("../extension-settings-model.ts");
+
+  it("the Update row's description carries the §III state spelled out in words (resolveUpdateRow)", () => {
+    expect(VIEW).toContain("description={updateRow.description}");
+    // The per-state wordings live in the pure model — verbatim per the spec.
+    expect(MODEL).toContain(
+      "`Currently on version ${installedVersion} — version ${latestVersion} is available.`",
+    );
+    expect(MODEL).toContain('"Newer version needs a newer Cinatra."');
+    expect(MODEL).toContain('"No registry version to compare."');
+    expect(MODEL).toContain("`Currently on version ${installedVersion} — up to date.`");
+  });
+  it("the Update button greys out whenever there is nothing to run", () => {
+    expect(VIEW).toContain("updateRow.enabled ? (");
+    expect(VIEW).toContain("reason={updateRow.disabledReason}");
+  });
+  it("the loader derives the update state with the SAME derivation the §III card chip uses", () => {
+    expect(SCREEN).toContain("deriveInstalledUpdateChipState");
+    expect(SCREEN).toContain("readInstalledUpdateReadouts");
+    expect(SCREEN).toContain("deriveExtensionCompatState");
+    expect(SCREEN).toContain("resolveUpdateRow");
   });
   it("renders the Archive and Activate complementary pair", () => {
     expect(VIEW).toContain("moves to the Archived tab");

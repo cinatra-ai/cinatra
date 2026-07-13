@@ -28,6 +28,22 @@ vi.mock("@cinatra-ai/agents/mcp-handlers", () => ({
   }),
 }));
 
+// cinatra#1327 — a successful agent approve persists the scope through the
+// shared install path (lazy-imported). Mock it so the parity round-trip does not
+// touch a live DB.
+vi.mock("@cinatra-ai/extensions/install-access-contract", () => ({
+  setExtensionInstallAccess: vi.fn(async () => {}),
+}));
+
+// The helper authorizes the access target with the shared install gates before
+// publishing (cinatra#1327). Mock to allow the in-org org target used here.
+vi.mock("@cinatra-ai/agents/install-target-authz", () => ({
+  assertTargetBelongsToActiveOrg: vi.fn(async () => ({})),
+  assertCanInstallAtTarget: vi.fn(async () => {}),
+}));
+
+const AGENT_APPROVE_SCOPE = { level: "organization" as const, id: "org-1" };
+
 // Register a single source whose `actions.decide` is the REAL shared helper the
 // agent source uses (decideAgentCreationRequest) — proving MCP decide dispatch
 // routes to the genuine per-source decision path. The async factory pulls only
@@ -78,10 +94,12 @@ beforeEach(() => decideHandler.mockReset());
 
 describe("approvals_decide → REAL agent-creation-requests decide helper (UI parity)", () => {
   it("an approve round-trips to the audited primitive with the UI-identical payload (admin actor + CAS token)", async () => {
-    decideHandler.mockResolvedValue({}); // primitive success (no `error` field)
+    // primitive success carries the published template id so the shared install
+    // path can persist the chosen scope (cinatra#1327).
+    decideHandler.mockResolvedValue({ structuredContent: { agentTemplateId: "tmpl-1" } });
 
     const res = await decide(
-      { sourceId: AGENT_SOURCE_ID, id: "req-1", decision: "approve", expectedVersion: "hash-1" },
+      { sourceId: AGENT_SOURCE_ID, id: "req-1", decision: "approve", expectedVersion: "hash-1", accessTarget: AGENT_APPROVE_SCOPE },
       admin,
     );
 
@@ -130,7 +148,7 @@ describe("approvals_decide → REAL agent-creation-requests decide helper (UI pa
       error: "self-approval is disallowed (set connector_config.agent_creation.allowSelfApproval=true to override).",
     });
     const res = await decide(
-      { sourceId: AGENT_SOURCE_ID, id: "req-1", decision: "approve", expectedVersion: "h" },
+      { sourceId: AGENT_SOURCE_ID, id: "req-1", decision: "approve", expectedVersion: "h", accessTarget: AGENT_APPROVE_SCOPE },
       admin,
     );
     expect(res).toMatchObject({ ok: false, error: { code: "self_approval_forbidden", kind: "refused" } });
@@ -139,7 +157,7 @@ describe("approvals_decide → REAL agent-creation-requests decide helper (UI pa
   it("a non-admin viewer claims only 'member' at the primitive (the primitive re-checks; the MCP layer never widens authority)", async () => {
     decideHandler.mockResolvedValue({});
     await decide(
-      { sourceId: AGENT_SOURCE_ID, id: "req-1", decision: "approve", expectedVersion: "h" },
+      { sourceId: AGENT_SOURCE_ID, id: "req-1", decision: "approve", expectedVersion: "h", accessTarget: AGENT_APPROVE_SCOPE },
       member,
     );
     expect(decideHandler.mock.calls[0][0].actor.platformRole).toBe("member");

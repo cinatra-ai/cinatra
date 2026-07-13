@@ -71,7 +71,9 @@ export async function createSkillFromTemplateAction(formData: FormData) {
     if (!source) {
       redirect(`/skills?error=source-skill-not-found`);
     }
-    const { readSkillsCatalog, resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
+    const { resolveEffectiveSkillAccessPolicy } = await import("./skills-store");
+    // Pure policy lookup — snapshot read (cinatra#1364).
+    const { readSkillsCatalogSnapshot } = await import("./skill-packages");
     try {
       requireResourceAccess(actor, buildSkillResourceRef({
         id: source.id,
@@ -80,7 +82,7 @@ export async function createSkillFromTemplateAction(formData: FormData) {
         // Canonical effective policy (W4): skill override else parent package's.
         accessPolicy: resolveEffectiveSkillAccessPolicy(
           source,
-          (await readSkillsCatalog()).skillPackages ?? [],
+          (await readSkillsCatalogSnapshot()).skillPackages ?? [],
         ),
       }));
     } catch {
@@ -405,6 +407,11 @@ export async function installGitHubSkillExtension(
     }
 
     const result = await installSkillPackageFromGitHub(repoUrl, { ref });
+
+    // Explicit lifecycle rebuild (cinatra#1364): merge the newly-installed
+    // package into the catalog NOW instead of on some later implicit read.
+    const { rebuildSkillsCatalog } = await import("./skill-packages");
+    await rebuildSkillsCatalog({ reason: "skill-package-install-action" });
 
     // Non-fatal warnings are collected while applying permissions after
     // creation. Each sub-call is wrapped so a single failure doesn't roll back

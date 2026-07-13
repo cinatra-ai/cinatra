@@ -634,9 +634,13 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
     pending.clear();
     try {
       let agentChanged = false;
+      let skillChanged = false;
       if (targets.length === 0 || targets.includes("*")) {
         const res = await loadAllExtensionPackages(extensionsRoot);
         agentChanged = res.agentChanged;
+        // A whole-tree rescan may have re-registered skills — treat it as
+        // skill-affecting so the explicit catalog rebuild below runs.
+        skillChanged = true;
         console.info(
           `[cinatra:extensions] reloaded all packages (whole-tree rescan)`,
         );
@@ -663,6 +667,7 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
               `[cinatra:extensions:agent] reloaded ${vendorSlug} (agent — WayFlow reload follows)`,
             );
           } else if (res.kind === "skill") {
+            skillChanged = true;
             console.info(
               `[cinatra:extensions:skill] reloaded ${vendorSlug} (skill — ${res.skillsRegistered} SKILL.md re-registered)`,
             );
@@ -687,6 +692,20 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
               `[cinatra:extensions:unknown] ${vendorSlug} changed (unrecognized extension kind — nothing to reload)`,
             );
           }
+        }
+      }
+      if (skillChanged) {
+        // Explicit lifecycle rebuild on watcher events (cinatra#1364) so pure
+        // snapshot readers see the re-registered skills without an implicit
+        // legacy sync-read. Never aborts the reload loop.
+        try {
+          const { rebuildSkillsCatalog } = await import("@cinatra-ai/skills/skill-packages");
+          await rebuildSkillsCatalog({ reason: "dev-extensions-watcher" });
+        } catch (err) {
+          console.warn(
+            "[cinatra:extensions] catalog rebuild after reload failed:",
+            err instanceof Error ? err.message : err,
+          );
         }
       }
       if (agentChanged) {

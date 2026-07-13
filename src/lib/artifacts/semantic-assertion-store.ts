@@ -66,6 +66,14 @@ export type AssertionRecord = {
   assertedByPrincipal: string | null;
   assertedAt: string;
   archivedAt: string | null;
+  // `assertion_basis` discriminant (cinatra#1426): 'classic' for every row
+  // this store writes (the INSERTs never name the column — the DB DEFAULT
+  // applies); 'binding' rows are written ONLY by binding reconciliation (the
+  // cinatra#1429 write path) and are anchored to the exact claim row +
+  // activation generation they were written under.
+  assertionBasis: "binding" | "classic";
+  bindingClaimId: string | null;
+  bindingGeneration: number | null;
 };
 
 const conn = (): string => getPostgresConnectionString();
@@ -82,6 +90,9 @@ const toRec = (r: Row): AssertionRecord => ({
   assertedByPrincipal: (r.asserted_by_principal as string | null) ?? null,
   assertedAt: String(r.asserted_at),
   archivedAt: (r.archived_at as string | null) ?? null,
+  assertionBasis: (r.assertion_basis as "binding" | "classic") ?? "classic",
+  bindingClaimId: r.binding_claim_id == null ? null : String(r.binding_claim_id),
+  bindingGeneration: r.binding_generation == null ? null : Number(r.binding_generation),
 });
 
 // SQL fragment: integer precedence rank of the asserted_by column.
@@ -518,7 +529,7 @@ export function listEligibleAssertions(orgId: string, artifactId: string): Asser
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at
+        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at, assertion_basis, binding_claim_id, binding_generation
 FROM "${q()}"."semantic_assertion" WHERE org_id=$1 AND artifact_id=$2 AND eligibility='eligible' ORDER BY asserted_at`,
         values: [orgId, artifactId],
       },
@@ -538,7 +549,7 @@ export function listActiveAssertions(orgId: string, artifactId: string): Asserti
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at
+        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at, assertion_basis, binding_claim_id, binding_generation
 FROM "${q()}"."semantic_assertion"
 WHERE org_id=$1 AND artifact_id=$2 AND eligibility <> 'archived'
 ORDER BY asserted_at`,
@@ -564,7 +575,7 @@ export function listEligibleAssertionsForArtifacts(
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at
+        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at, assertion_basis, binding_claim_id, binding_generation
 FROM "${q()}"."semantic_assertion"
 WHERE org_id=$1 AND artifact_id = ANY($2::text[]) AND eligibility='eligible'
 ORDER BY artifact_id, asserted_at`,
@@ -607,7 +618,14 @@ WHERE org_id=$1 AND extension=$2 AND eligibility='eligible'`,
  *  non-default eligible assertion, or the floor default if no non-default
  *  eligible exists. Falls back to the default extension if the list is empty
  *  (no rows ⇒ no creation ever happened on this artifact id, which is a
- *  caller bug). */
+ *  caller bug).
+ *
+ *  NOTE (cinatra#1426): the artifact surfaces (service enrichment + MCP
+ *  outputs) now resolve identity through the effective-identity service
+ *  (src/lib/objects/effective-identity.ts), which additionally requires an
+ *  INSTALLED extension and understands bindings/claims. This helper remains
+ *  the raw assertion-precedence contract (no install/claim axis) — its
+ *  ordering is mirrored by the pure leaf's classic ranking. */
 export function primaryExtensionFor(eligible: AssertionRecord[]): string {
   if (eligible.length === 0) return DEFAULT_ARTIFACT_EXTENSION;
   // Same precedence ranking as RANK_SQL: user(3) > authoring_skill(2) >
@@ -642,7 +660,7 @@ export function getAssertionByIdForReplay(orgId: string, assertionId: string): A
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at
+        text: `SELECT id, org_id, artifact_id, extension, asserted_by, eligibility, confidence, asserted_by_principal, asserted_at, archived_at, assertion_basis, binding_claim_id, binding_generation
 FROM "${q()}"."semantic_assertion" WHERE org_id=$1 AND id=$2 LIMIT 1`,
         values: [orgId, assertionId],
       },

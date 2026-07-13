@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render } from "@testing-library/react";
+
+// Unmount between tests: repeated renders of the same fixture otherwise pile
+// up in the shared jsdom body and text queries match duplicates.
+afterEach(cleanup);
 
 // Import through the reusable renderer barrel (S3 #1219 boundary) so the S4
 // views are pinned as part of the PUBLIC embed entry every surface consumes.
@@ -33,6 +37,31 @@ describe("per-view render (each registered renderable renders its content)", () 
     expect(getByText("New title")).toBeTruthy();
     expect(getByText("Old title")).toBeTruthy();
     expect(getByText("post #42")).toBeTruthy();
+  });
+
+  it("content_change_proposal — draft-correlated payload renders the applied/refresh affordance (Option A)", () => {
+    const { container, getByText } = render(
+      <ContentChangeProposalCard view={parsedOr(valid.content_change_proposal)} />,
+    );
+    const affordance = container.querySelector('[data-affordance="applied-refresh"]');
+    expect(affordance).toBeTruthy();
+    // The correlation ids ride as data attributes for the S5 editor-patch
+    // consumer to key on.
+    expect(affordance?.getAttribute("data-proposal-id")).toBe("wp-42-prop-1");
+    expect(affordance?.getAttribute("data-change-set-id")).toBe("rev-311");
+    expect(getByText("draft saved")).toBeTruthy();
+    expect(getByText(/applying refreshes the editor/i)).toBeTruthy();
+    // DISPLAY-ONLY on this surface: no interactive control is wired (the
+    // refresh executor is the S5 CMS-widget consumer).
+    expect(affordance?.querySelector("button")).toBeNull();
+    expect(affordance?.querySelector("a")).toBeNull();
+  });
+
+  it("content_change_proposal — no applied/refresh affordance without correlation ids", () => {
+    const { container } = render(
+      <ContentChangeProposalCard view={parsedOr(valid.content_change_proposal_rich)} />,
+    );
+    expect(container.querySelector('[data-affordance="applied-refresh"]')).toBeNull();
   });
 
   it("content_change_proposal (rich, no fields) — shows the rich-edit note", () => {
