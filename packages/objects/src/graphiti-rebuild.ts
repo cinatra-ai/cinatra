@@ -399,6 +399,18 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
   ]);
   if (Number((inflight?.rows[0] as { n?: number } | undefined)?.n ?? 0) > 0) return false;
 
+  // Re-validate ownership immediately before the DESTRUCTIVE clear (clearGraph
+  // + the projected-version reset are both idempotent but WHOLE-GROUP): a fold
+  // (epoch bump) may have advanced this journal to a HIGHER epoch — under whose
+  // clearing/replay a newer driver could already be running — while we were
+  // checking in-flight work. A stale clearer at the old epoch must not wipe the
+  // newer epoch's group clear / bookkeeping. If the journal is no longer at our
+  // (phase, to_epoch), bail: the current-epoch driver owns the clear. (The
+  // residual sub-read window before clearGraph is self-healing — the newer
+  // epoch re-clears idempotently on its next cycle.)
+  const owned = readRebuildJournalById(journal.id);
+  if (!owned || owned.phase !== "clearing" || owned.toEpoch !== journal.toEpoch) return false;
+
   // Terminally settle superseded pending/failed items for the group: the full
   // replay below delivers every row's CURRENT state, so pre-bump items (both
   // ordinary NULL-epoch items and older-epoch replay leftovers) are obsolete.
@@ -467,6 +479,7 @@ export function buildReplayBatchQuery(schemaName: string, input: { journalId: st
                COALESCE((checkpoint->>'enqueued')::int, 0) AS enq
         FROM "${q}"."graphiti_rebuild_journal"
         WHERE id = $1 AND phase = 'replaying' AND to_epoch = $2
+        FOR UPDATE
       ),
       batch AS (
         SELECT o.id, o.version, o.org_id
@@ -688,8 +701,17 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
                    'expectedRows', $3::int, 'projectedRows', $4::int,
                    'episodeCount', $5::int, 'episodeCountExact', $6::boolean,
                    'spotRecallSampled', $7::int)
-             WHERE id = $1 AND phase = 'verifying' AND to_epoch = $2`,
-      values: [journal.id, journal.toEpoch, expected, projected, episodes.length, countExact, sampleIds.length],
+             WHERE id = $1 AND phase = 'verifying' AND to_epoch = $2
+               -- Close the drain-check → done window: a late same-epoch replay
+               -- item committed after the count read must keep the journal open.
+               AND NOT EXISTS (
+                 SELECT 1 FROM "${q}"."graphiti_projection_outbox" o
+                 JOIN (SELECT $8::text AS org_id) jj ON TRUE
+                 WHERE ((jj.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = jj.org_id)
+                   AND o.projection_epoch = $2
+                   AND o.status IN ('pending', 'processing', 'failed')
+               )`,
+      values: [journal.id, journal.toEpoch, expected, projected, episodes.length, countExact, sampleIds.length, journal.orgId],
     },
   ]);
   return (cas?.rowCount ?? 0) > 0;

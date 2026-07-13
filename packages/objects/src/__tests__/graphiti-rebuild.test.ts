@@ -118,6 +118,11 @@ describe("buildReplayBatchQuery", () => {
     expect(sql).toMatch(/o\.source\s+IS\s+NULL\s+OR\s+o\.source\s+IN\s*\('agent','ui','route'\)/i);
   });
 
+  it("serializes concurrent replay drivers on the journal row (FOR UPDATE)", () => {
+    // Two drivers must not read the same checkpoint and double-enqueue a batch.
+    expect(sql).toMatch(/phase\s*=\s*'replaying'\s+AND\s+to_epoch\s*=\s*\$2\s+FOR\s+UPDATE/i);
+  });
+
   it("advances the checkpoint cursor atomically with the batch (id-window, ordered)", () => {
     expect(sql).toMatch(/o\.id\s*>\s*j\.last_id/i);
     expect(sql).toMatch(/ORDER\s+BY\s+o\.id/i);
