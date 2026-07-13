@@ -410,4 +410,78 @@ describe("buildAgentCard", () => {
     expect(parsed.skills[0].type).toBe("proxy");
     expect(parsed.skills[1].type).toBe("orchestrator");
   });
+
+  // ---------------------------------------------------------------------------
+  // agentKind (interaction axis) surfaced on AgentCardSkill — cinatra#1037
+  // "agent cards carry an app-level kind tag".
+  // ---------------------------------------------------------------------------
+
+  it("AgentCardSkill exposes agentKind='assistant' from template", () => {
+    const template = makeTemplate({ agentKind: "assistant" } as Partial<AgentTemplateRecord>);
+
+    const card = buildAgentCard({
+      baseUrl: "https://cinatra.test",
+      templates: [template],
+      versionsByTemplateId: {},
+    });
+
+    expect(card.skills[0].agentKind).toBe("assistant");
+  });
+
+  it("AgentCardSkill exposes agentKind='executor' from template", () => {
+    const template = makeTemplate({ agentKind: "executor" } as Partial<AgentTemplateRecord>);
+
+    const card = buildAgentCard({
+      baseUrl: "https://cinatra.test",
+      templates: [template],
+      versionsByTemplateId: {},
+    });
+
+    expect(card.skills[0].agentKind).toBe("executor");
+  });
+
+  it("AgentCardSkill defaults agentKind to 'executor' when template omits it", () => {
+    // Fixture intentionally omits `agentKind` to simulate legacy data — the
+    // interaction axis predates these rows, so they surface as task executors.
+    const template = makeTemplate();
+
+    const card = buildAgentCard({
+      baseUrl: "https://cinatra.test",
+      templates: [template],
+      versionsByTemplateId: {},
+    });
+
+    expect(card.skills[0].agentKind).toBe("executor");
+    expect("agentKind" in card.skills[0]).toBe(true);
+  });
+
+  it("AgentCardSkill agentKind round-trips through JSON serialization", () => {
+    const t1 = makeTemplate({ id: "tpl_1", packageName: "@cinatra/first", agentKind: "assistant" } as Partial<AgentTemplateRecord>);
+    const t2 = makeTemplate({ id: "tpl_2", packageName: "@cinatra/second", agentKind: "executor" } as Partial<AgentTemplateRecord>);
+
+    const card = buildAgentCard({
+      baseUrl: "https://cinatra.test",
+      templates: [t1, t2],
+      versionsByTemplateId: {},
+    });
+
+    const parsed = JSON.parse(JSON.stringify(card));
+    expect(parsed.skills[0].agentKind).toBe("assistant");
+    expect(parsed.skills[1].agentKind).toBe("executor");
+  });
+
+  it("agentKind is orthogonal to type on the same skill", () => {
+    // An assistant can carry any execution topology — the two axes never
+    // overload onto one another.
+    const template = makeTemplate({ type: "orchestrator", agentKind: "assistant" } as Partial<AgentTemplateRecord>);
+
+    const card = buildAgentCard({
+      baseUrl: "https://cinatra.test",
+      templates: [template],
+      versionsByTemplateId: {},
+    });
+
+    expect(card.skills[0].type).toBe("orchestrator");
+    expect(card.skills[0].agentKind).toBe("assistant");
+  });
 });
