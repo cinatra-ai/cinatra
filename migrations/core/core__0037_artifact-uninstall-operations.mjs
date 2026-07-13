@@ -30,8 +30,10 @@
 // artifact is REQUIRED. Shipped anyway (the core__0034 precedent) to keep the
 // fresh-bootstrap and operator-upgrade paths aligned and give the tables a
 // ledgered row. The DDL MIRRORS the idempotent bootstrap
-// (buildCreateStoreSchemaQueries → artifactUninstallOperationSchemaQueries in
-// src/lib/artifact-uninstall-operation-schema.ts) — a no-op on a
+// (buildCreateStoreSchemaQueries → artifactUninstallOperationSchemaQueries,
+// which rides the claim-system schema leaf src/lib/artifact-claim-schema.ts —
+// bundled there so the store bootstrap wires the whole claim system through one
+// spread call, holding the drizzle-store file-size ratchet) — a no-op on a
 // bootstrap-seeded schema, ledger-faked on a fresh install, executed by
 // `db migrate` on an existing deployment. No `noTransaction()` (guarded DDL
 // on empty tables is instant). Unqualified names ride the runner's

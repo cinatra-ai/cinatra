@@ -34,9 +34,9 @@ vi.mock("@/lib/artifacts/semantic-assertion-store", () => ({
   buildFloorRebalanceAndRefreshQueries: () => [{ text: "FLOOR_TAIL", values: [] }],
 }));
 
-import {
-  artifactUninstallOperationSchemaQueries,
-} from "@/lib/artifact-uninstall-operation-schema";
+// The uninstall-operation lineage DDL rides the claim-system schema leaf
+// (cinatra#1432 — bundled to hold the drizzle-store file-size ratchet).
+import { artifactUninstallOperationSchemaQueries } from "@/lib/artifact-claim-schema";
 import {
   buildArchiveArtifactAssertionsWithLineageQuery,
   buildReplayReplacementAssertionQuery,
