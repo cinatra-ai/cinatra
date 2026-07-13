@@ -33,7 +33,28 @@ import { MatchesRowAction } from "./_matches-row-action";
 import { SkillAutosaveForm } from "./skill-autosave-form";
 import { SaveSkillsDataPathForm } from "./save-skills-data-path-form";
 import { SaveSkillsGitHubPatForm } from "./save-skills-github-pat-form";
-import { refreshAgentsAndMatchAction } from "./actions";
+import {
+  refreshAgentsAndMatchAction,
+  deprecateSkillFromEfficacyAction,
+  dismissDeprecationCandidateAction,
+  reinstateDeprecationCandidateAction,
+} from "./actions";
+// S10 efficacy loop (cinatra#1368): per-skill exposure/invocation + deprecation
+// candidates.
+import {
+  readSkillEfficacy,
+  SKILL_DEPRECATION_MIN_EXPOSURE_SAMPLE,
+  type SkillEfficacyRow,
+} from "@/lib/skill-efficacy";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import type { StatusPillStatus } from "@/components/ui/status-pill";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
@@ -50,6 +71,7 @@ const TABS = [
   { value: "library", label: "Library" },
   { value: "autosave", label: "Autosave" },
   { value: "matches", label: "Matches" },
+  { value: "efficacy", label: "Efficacy" },
 ];
 
 type Props = {
@@ -78,8 +100,157 @@ export default async function SettingsSkillsPage({ searchParams }: Props) {
         {tab === "library" && <LibraryTabContent />}
         {tab === "autosave" && <AutosaveTabContent />}
         {tab === "matches" && <MatchesTabContent searchParams={resolved} />}
+        {tab === "efficacy" && <EfficacyTabContent />}
       </PageContent>
     </Main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// S10 efficacy loop (cinatra#1368). Per-skill exposure/invocation from the run
+// ledger + human-confirmed deprecation candidates. No dedicated skills-admin
+// section exists in the design spec, so this follows the general
+// component/status rules (soft-panel card, Table, StatusPill).
+// ---------------------------------------------------------------------------
+
+const LIFECYCLE_PILL: Record<string, StatusPillStatus> = {
+  active: "approved",
+  draft: "queued",
+  deprecated: "hold",
+  archived: "archived",
+};
+
+async function EfficacyTabContent() {
+  const rows = readSkillEfficacy();
+  const candidateCount = rows.filter((r) => r.isDeprecationCandidate).length;
+
+  return (
+    <section className="soft-panel rounded-card px-6 py-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Skill efficacy</h2>
+          <p className="mt-2 max-w-[72ch] text-sm leading-[1.55] text-pretty text-muted-foreground">
+            Per-skill exposure and invocation counts from the run ledger.{" "}
+            <strong>Exposure</strong> is how many runs delivered the skill to a model;{" "}
+            <strong>invocation</strong> counts only attributable skill use (an OpenAI
+            shell read of the skill file). Inline and container delivery cannot
+            attribute invocation, so those exposures never produce a candidate.
+          </p>
+          <p className="mt-2 max-w-[72ch] text-sm leading-[1.55] text-pretty text-muted-foreground">
+            A <strong>deprecation candidate</strong> is an active skill exposed via an
+            attributable mode in at least{" "}
+            {SKILL_DEPRECATION_MIN_EXPOSURE_SAMPLE} runs yet never invoked. Candidates
+            are flagged for human review only — deprecation and dismissal are manual.
+          </p>
+        </div>
+        {candidateCount > 0 && (
+          <StatusPill status="needs-review">
+            {candidateCount} deprecation candidate{candidateCount === 1 ? "" : "s"}
+          </StatusPill>
+        )}
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="mt-6 text-sm text-muted-foreground">
+          No skill exposure has been recorded yet. Exposure and invocation counts
+          appear here once agent runs deliver skills to a model.
+        </p>
+      ) : (
+        <div className="mt-5 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Skill</TableHead>
+                <TableHead>Lifecycle</TableHead>
+                <TableHead className="text-right">Exposures</TableHead>
+                <TableHead className="text-right">Attributable</TableHead>
+                <TableHead className="text-right">Invocations</TableHead>
+                <TableHead>Delivery modes</TableHead>
+                <TableHead>Status / actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <EfficacyRow key={row.skillId} row={row} />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EfficacyRow({ row }: { row: SkillEfficacyRow }) {
+  const lifecyclePill: StatusPillStatus = row.lifecycleState
+    ? (LIFECYCLE_PILL[row.lifecycleState] ?? "idle")
+    : "idle";
+  return (
+    <TableRow>
+      <TableCell className="align-top">
+        <div className="font-medium text-foreground">{row.name ?? row.skillId}</div>
+        {row.name && (
+          <div className="font-mono text-xs text-muted-foreground">{row.skillId}</div>
+        )}
+      </TableCell>
+      <TableCell className="align-top">
+        {row.lifecycleState ? (
+          <StatusPill status={lifecyclePill}>{row.lifecycleState}</StatusPill>
+        ) : (
+          <span className="text-xs text-muted-foreground">derived</span>
+        )}
+      </TableCell>
+      <TableCell className="align-top text-right tabular-nums">{row.exposureRunCount}</TableCell>
+      <TableCell className="align-top text-right tabular-nums">{row.attributableExposureRunCount}</TableCell>
+      <TableCell className="align-top text-right tabular-nums">{row.invocationCount}</TableCell>
+      <TableCell className="align-top">
+        {row.deliveryModes.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {row.deliveryModes.map((mode) => (
+              <Badge key={mode} variant="outline" className="font-mono text-badge-2xs">
+                {mode}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell className="align-top">
+        {row.isDeprecationCandidate ? (
+          <div className="flex flex-col gap-2">
+            <StatusPill status="needs-review">Deprecation candidate</StatusPill>
+            <div className="flex flex-wrap gap-2">
+              <form action={deprecateSkillFromEfficacyAction}>
+                <Input type="hidden" name="skillId" value={row.skillId} readOnly />
+                <Input type="hidden" name="from" value={row.lifecycleState ?? ""} readOnly />
+                <Button type="submit" variant="outline" size="sm">
+                  Deprecate
+                </Button>
+              </form>
+              <form action={dismissDeprecationCandidateAction}>
+                <Input type="hidden" name="skillId" value={row.skillId} readOnly />
+                <Button type="submit" variant="ghost" size="sm">
+                  Keep (dismiss)
+                </Button>
+              </form>
+            </div>
+          </div>
+        ) : row.dismissedAt ? (
+          <div className="flex flex-col items-start gap-2">
+            <span className="text-xs text-muted-foreground">Dismissed as a candidate</span>
+            <form action={reinstateDeprecationCandidateAction}>
+              <Input type="hidden" name="skillId" value={row.skillId} readOnly />
+              <Button type="submit" variant="ghost" size="sm">
+                Reinstate
+              </Button>
+            </form>
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
+    </TableRow>
   );
 }
 

@@ -244,7 +244,12 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/agent-run-skills-used.ts": {
     class: "migratable-request-path",
     justification:
-      "Records skills used during an agent run. Request/run-time write; migratable to async pooled access.",
+      "Records skills used during an agent run — snapshot, exposure telemetry, and per-invocation counting (cinatra#1368). Request/run-time write; migratable to async pooled access.",
+  },
+  "src/lib/skill-efficacy.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Skill efficacy read model (cinatra#1368): the per-skill exposure/invocation rollup join for the skills-admin view plus the admin deprecation-candidate dismiss/reinstate writes. Admin request-time reads/writes; migratable to async pooled access.",
   },
   "src/lib/artifacts/artifact-creation.ts": {
     class: "migratable-request-path",

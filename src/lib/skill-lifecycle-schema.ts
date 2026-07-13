@@ -158,3 +158,35 @@ $body$` },
     { text: `CREATE INDEX IF NOT EXISTS skill_lifecycle_audit_skill_created_idx ON "${q}"."skill_lifecycle_audit" (skill_id, created_at DESC)` },
   ];
 }
+
+/**
+ * Skill efficacy-loop exposure telemetry (cinatra#1368, epic #1358 S10),
+ * mirrored by core__0041. Kept in this pure-strings leaf (not inline in
+ * buildCreateStoreSchemaQueries) for file-size-ratchet headroom — all statements
+ * are ADDITIVE (nullable columns + a non-unique index), so the schema-migration
+ * gate has nothing destructive to see and the operator-upgrade path is covered
+ * by the shipped core__0041 artifact.
+ *
+ * MUST be spread AFTER the `agent_run_skills_used` CREATE TABLE (it ALTERs that
+ * table) — the drizzle-store composition places it near the end, where both
+ * `agent_run_skills_used` and `skills` already exist.
+ *
+ * Columns:
+ *  - agent_run_skills_used.delivery_mode / invocation_attributable — how a skill
+ *    reached the model on the resolving step + whether that mode can attribute a
+ *    per-skill invocation. NULLABLE (NULL = the sessionless run-start snapshot,
+ *    mode not yet known). A skill exposed only via NULL/non-attributable rows can
+ *    never become a deprecation candidate.
+ *  - a non-unique agent_run_skills_used.skill_id index for the per-skill rollup.
+ *  - skills.deprecation_candidate_dismissed_at — the human "reviewed — keep it"
+ *    decision clearing a candidate without deprecating it.
+ */
+export function skillEfficacySchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS delivery_mode text` },
+    { text: `ALTER TABLE "${q}"."agent_run_skills_used" ADD COLUMN IF NOT EXISTS invocation_attributable boolean` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_skills_used_skill_id_idx ON "${q}"."agent_run_skills_used" (skill_id)` },
+    { text: `ALTER TABLE "${q}"."skills" ADD COLUMN IF NOT EXISTS deprecation_candidate_dismissed_at timestamptz` },
+  ];
+}
