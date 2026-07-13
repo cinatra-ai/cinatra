@@ -1657,4 +1657,76 @@ describe("gcOrphanedSideBySideCapsules — orphan GC of spent capsules on termin
     });
     expect(res.cleared).toBe(0);
   });
+
+  it("KEEPS an UNPROVEN capsule (a failed member is the only durable record of the shared-grant prior state) — cinatra#1391", async () => {
+    const cleared: Array<{ batchId: string; pkg: string }> = [];
+    const failed: InstallBatch = {
+      batchId: "failed-1",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "failed",
+      members: [
+        {
+          packageName: "@cinatra-ai/shared",
+          version: "2.0.0",
+          typeId: "connector",
+          status: "failed",
+          action: "install-side-by-side",
+          preState: { present: false },
+          // Carries the ports prior-state capsule — the ONLY recovery evidence.
+          grantCapsule: {
+            v: 1,
+            declaredTokenKeys: [],
+            declaredPorts: ["p2"],
+            portsPrior: { exists: true, status: "approved", approvedPorts: ["p1"], requestedPortsHash: "h1", approvedBy: "admin" },
+          },
+        },
+      ],
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const res = await gcOrphanedSideBySideCapsules({
+      listTerminalWithCapsules: async () => [failed],
+      updateMember: async (batchId, pkg) => {
+        cleared.push({ batchId, pkg });
+        return failed;
+      },
+    });
+    expect(res.cleared).toBe(0);
+    expect(cleared).toEqual([]); // never cleared an unproven capsule
+  });
+
+  it("clears a COMPENSATED member's capsule (the teardown already reconciled from it) — proven-spent", async () => {
+    const cleared: Array<{ batchId: string; pkg: string; patch: unknown }> = [];
+    const comp: InstallBatch = {
+      batchId: "comp-1",
+      rootPackage: ROOT,
+      orgId: null,
+      phase: "failed",
+      members: [
+        {
+          packageName: "@cinatra-ai/shared",
+          version: "2.0.0",
+          typeId: "connector",
+          status: "compensated",
+          action: "install-side-by-side",
+          preState: { present: false },
+          grantCapsule: { v: 1, declaredTokenKeys: ["k"] },
+        },
+      ],
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const res = await gcOrphanedSideBySideCapsules({
+      listTerminalWithCapsules: async () => [comp],
+      updateMember: async (batchId, pkg, patch) => {
+        cleared.push({ batchId, pkg, patch });
+        return comp;
+      },
+    });
+    expect(res.cleared).toBe(1);
+    expect(cleared).toEqual([
+      { batchId: "comp-1", pkg: "@cinatra-ai/shared", patch: { grantCapsule: null } },
+    ]);
+  });
 });

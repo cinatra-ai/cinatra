@@ -20,7 +20,7 @@ set -Eeuo pipefail
 # source major -> a FRESH target-major volume -> restore. pg_dump crosses any
 # source major in one hop, so a skipped major (the nango 15->17 case exception,
 # cinatra#1417) rides the same path. Eligibility is resolved fail-closed against
-# docs/architecture/upgrade-matrix.json BEFORE anything is touched.
+# config/upgrade/upgrade-matrix.json BEFORE anything is touched.
 #
 # THE PG18 MOUNT-LAYOUT MOVE. The volume mount target is dictated by each SIDE's
 # major (docker-library/postgres#1259): <=17 keeps the legacy .../data child

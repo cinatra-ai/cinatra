@@ -47,6 +47,7 @@ import {
   replayArtifactUninstallOperation,
   runArtifactUninstallArchival,
 } from "@/lib/objects/artifact-uninstall-operations";
+import { assertClaimActivatable } from "@/lib/objects/claim-activation-gate";
 import type { ArtifactClaimKind } from "@cinatra-ai/objects/claims";
 
 export { ArtifactClaimConflictError };
@@ -74,6 +75,17 @@ export interface ArtifactClaimLifecycleContext {
   actor: string;
   /** The install row id, when known (recorded on reserved claims). */
   installId?: string | null;
+  /**
+   * Per-claim ACTIVATION GATE (cinatra#1429). When supplied, a DEDICATED claim
+   * activates only after its type's registered validator is confirmed present
+   * (fail-closed — a `null` return means "no registered Zod schema", which
+   * blocks activation) and the type's legacy rows are audited + invalid rows
+   * quarantined (so activation never binds an invalid row). Omitted ⇒ the gate
+   * is skipped (existing callers / the pre-dispatch lifecycle fixtures);
+   * the live install dispatch supplies it. `validate` is a registered Zod
+   * schema's safeParse-success predicate.
+   */
+  resolveTypeValidator?: (objectTypeId: string) => ((data: unknown) => boolean) | null;
 }
 
 export interface ActivatedClaim {
@@ -96,6 +108,20 @@ export function activateArtifactExtensionClaims(
   const activated: ActivatedClaim[] = [];
   try {
     for (const claim of claims) {
+      // Per-claim activation gate (cinatra#1429): a DEDICATED claim cannot
+      // activate until its type's NEW-write validation is enforceable (a
+      // registered validator exists) and its legacy rows are audited + invalid
+      // rows quarantined. A missing validator throws ClaimNotActivatableError,
+      // which fails the whole install (the catch below retires what activated).
+      // Default claims (objects:object / approved dynamic) are not type-Zod
+      // gated. Skipped entirely when no resolver is supplied.
+      if (ctx.resolveTypeValidator && claim.claim === "dedicated") {
+        assertClaimActivatable({
+          scope: ctx.scope,
+          objectTypeId: claim.type,
+          validate: ctx.resolveTypeValidator(claim.type),
+        });
+      }
       const claimId = reserveArtifactTypeClaim({
         scope: ctx.scope,
         objectTypeId: claim.type,

@@ -2,7 +2,7 @@
 // the pure core + the LIVE enforcement test. The live test IS the CI
 // completeness gate: it runs schema + volume-completeness + pin-drift +
 // floating-tag + fail-closed checks against THIS repo's docker-compose.yml and
-// docs/architecture/upgrade-matrix.json inside the root Vitest suite, so a new
+// config/upgrade/upgrade-matrix.json inside the root Vitest suite, so a new
 // stateful service (new named volume), a compose pin bump without a matrix
 // update, or a reintroduced floating tag reds a required check.
 //
@@ -25,8 +25,8 @@ import {
 
 const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const composeText = readFileSync(path.join(REPO_ROOT, "docker-compose.yml"), "utf8");
-const matrix = JSON.parse(readFileSync(path.join(REPO_ROOT, "docs/architecture/upgrade-matrix.json"), "utf8"));
-const schema = JSON.parse(readFileSync(path.join(REPO_ROOT, "docs/architecture/upgrade-matrix.schema.json"), "utf8"));
+const matrix = JSON.parse(readFileSync(path.join(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
+const schema = JSON.parse(readFileSync(path.join(REPO_ROOT, "config/upgrade/upgrade-matrix.schema.json"), "utf8"));
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -175,7 +175,7 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
 });
 
 describe("resolveTransition — the shared fail-closed consumption contract", () => {
-  const live = loadUpgradeMatrix(path.join(REPO_ROOT, "docs/architecture/upgrade-matrix.json"));
+  const live = loadUpgradeMatrix(path.join(REPO_ROOT, "config/upgrade/upgrade-matrix.json"));
 
   it("platform 17->18 resolves supported via the general baseline transition", () => {
     const r = resolveTransition(live, "platform-postgres", "17", "18");

@@ -54,18 +54,21 @@ vi.mock("@/lib/extension-package-store", () => ({
   materializePackageToStore: h.materializePackageToStore,
 }));
 vi.mock("@/lib/extension-host-port-grants", () => ({
+  // The manifest requestedHostPorts reader (the pipeline's readRequestedPorts
+  // default) — no ports requested in these fixtures.
+  readRequestedHostPortsFromStore: vi.fn(async () => []),
+}));
+vi.mock("@/lib/extension-host-port-grant-install-deps", () => ({
   // The host-port grant lifecycle deps factory the pipeline wires (record/approve/
-  // read-scope/restore). No-op stubs: a fresh gatekept install requests no ports
-  // and has no prior grant → readGrantForScope null, the rest never observed here.
+  // read-scope/restore) — split out of the grant store (cinatra#1391). No-op
+  // stubs: a fresh gatekept install requests no ports and has no prior grant →
+  // readGrantForScope null, the rest never observed here.
   makeHostPortGrantInstallDeps: () => ({
     recordRequestedGrant: vi.fn(async () => {}),
     approveGrant: vi.fn(async () => {}),
     readGrantForScope: vi.fn(async () => null),
     restoreGrant: vi.fn(async () => {}),
   }),
-  // The manifest requestedHostPorts reader (the pipeline's readRequestedPorts
-  // default) — no ports requested in these fixtures.
-  readRequestedHostPortsFromStore: vi.fn(async () => []),
 }));
 vi.mock("@/lib/extension-install-ops", () => ({
   beginInstallOp: vi.fn(async () => {}),

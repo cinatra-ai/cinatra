@@ -103,7 +103,7 @@ function main() {
   if (diverged.length > 0) {
     console.log(
       "  -> companion tips have moved past the committed pins; land a bump PR " +
-        "(docs/extension-clone-pinning.md) to re-integrate them deliberately.",
+        "(docs/internals/contracts/extension-clone-pinning.md) to re-integrate them deliberately.",
     );
   }
 

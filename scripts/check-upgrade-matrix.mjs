@@ -6,7 +6,7 @@
 // new named volume) cannot be added without a matrix classification, and a pin
 // bump in compose cannot land without a matching matrix update. Checks:
 //
-//   1. schema — the matrix conforms to docs/architecture/upgrade-matrix.schema.json
+//   1. schema — the matrix conforms to config/upgrade/upgrade-matrix.schema.json
 //      (a dependency-free validator over the JSON-Schema subset the schema uses).
 //   2. volume completeness — the set of top-level named volumes in compose ==
 //      the set of services[].volume (non-null). Missing => unclassified state
@@ -31,8 +31,8 @@ import { REQUIRED_FAMILIES } from "./lib/upgrade-matrix.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const COMPOSE = join(ROOT, "docker-compose.yml");
-const MATRIX = join(ROOT, "docs/architecture/upgrade-matrix.json");
-const SCHEMA = join(ROOT, "docs/architecture/upgrade-matrix.schema.json");
+const MATRIX = join(ROOT, "config/upgrade/upgrade-matrix.json");
+const SCHEMA = join(ROOT, "config/upgrade/upgrade-matrix.schema.json");
 
 // ---------------------------------------------------------------------------
 // Minimal docker-compose parser (dependency-free; the repo carries no yaml dep).

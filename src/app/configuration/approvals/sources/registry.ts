@@ -1,6 +1,7 @@
 import "server-only";
 
 import { agentCreationRequestsSource } from "./agent-creation-requests";
+import { hostPortGrantsSource } from "./host-port-grants";
 import { workflowLegacyPassthroughSource } from "./workflow-legacy-passthrough";
 import { marketplaceSubmissionModerationSource } from "./marketplace-submission-moderation";
 import { marketplaceVendorAppModerationSource } from "./marketplace-vendor-app-moderation";
@@ -21,6 +22,7 @@ import type { ApprovalSource, ApprovalViewer } from "./types";
 
 export const approvalSourceRegistry: ApprovalSource[] = [
   agentCreationRequestsSource,
+  hostPortGrantsSource,
   workflowLegacyPassthroughSource,
   marketplaceSubmissionModerationSource,
   marketplaceVendorAppModerationSource,

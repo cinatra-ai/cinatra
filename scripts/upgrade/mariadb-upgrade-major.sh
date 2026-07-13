@@ -13,7 +13,7 @@ set -Eeuo pipefail
 # release series — the supported source ranges are exactly the matrix's
 # transitions (11.4 -> 11.8 today; 11.4 -> 12.0 is fail-closed until 11.8 is
 # stepped through). Eligibility is resolved fail-closed against
-# docs/architecture/upgrade-matrix.json before anything is touched.
+# config/upgrade/upgrade-matrix.json before anything is touched.
 #
 # THE GUARDED TRANSACTION (frame + exit-code contract: scripts/upgrade/lib.sh).
 # The ORIGINAL volume is never server-mounted before the commit boundary — it

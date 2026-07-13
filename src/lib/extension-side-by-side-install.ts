@@ -32,11 +32,17 @@ import "server-only";
 //     (`applyMigrationUnionForTrustedRecords`) at boot/activation — install
 //     preflight only VALIDATES (and its `true` return still lets the pipeline
 //     trust gate reject an UNSIGNED declarer before finalize).
-//   - Host-port grants + capability-OWNERSHIP grants: STILL refuse here
-//     (PORTS_NOT_COVERED / DECLARES_OWNERSHIP_KEYS). Their non-refusing grant
-//     UNION needs a DURABLE rollback capsule reconciled through batch
-//     compensation, boot recovery, and orphan GC (codex round-1 D1-D3) — a
-//     dedicated slice (S6), not this migration-union slice.
+//   - Host-port grants + capability-OWNERSHIP grants (cinatra#1391 S6): the
+//     injected `grantUnion` hooks ENABLE the non-refusing per-scope UNION on
+//     BOTH axes — ownership as a declaration-only capsule with survivor-check
+//     revoke, PORTS as a prior-state capsule (the grant is ONE shared
+//     per-(package, org) row) whose restore is HASH-GUARDED against the
+//     recomputed survivor union, reconciled through direct failure, batch
+//     compensation, boot recovery, and orphan GC. Their ABSENCE keeps the S3
+//     refusals (PORTS_NOT_COVERED / DECLARES_OWNERSHIP_KEYS) — fail-closed.
+//     A grown ports union pends the shared grant; the union-aware re-approval
+//     surface (extension-host-port-grant-review + the approvals source) makes
+//     that operable.
 // The compensation inverse (`uninstallExtensionVersionSideBySide`) is therefore a
 // pure version-scoped teardown: delete the non-default row (lifecycle
 // primitive, dependent-bound-edge + default-row guards), terminalize its
@@ -50,32 +56,39 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionStoreKind } from "@/lib/extension-package-store-core";
-// TYPE from the ledger module (already in the install route graph); the runtime
+// TYPES from the ledger module (already in the install route graph); the runtime
 // capsule module is reached ONLY via dynamic import (route-graph-ratchet).
-import type { SideBySideGrantCapsule } from "@/lib/extension-install-batch-ops";
+import type {
+  SideBySideGrantCapsule,
+  SideBySidePortsPriorState,
+} from "@/lib/extension-install-batch-ops";
 
 /**
- * Ownership grant-UNION hooks a caller (the dependency-batch saga) injects to
- * ENABLE the non-refusing capability-ownership union (cinatra#1040 S6). Their
- * presence lifts the S3 `DECLARES_OWNERSHIP_KEYS` refusal; their ABSENCE keeps
- * it (fail-closed — a side-by-side install must never mutate the shared
- * ownership grant without a durable capsule to reconcile it on teardown).
- * PORTS stay refused regardless (deferred: a grown ports union pends the shared
- * per-(package,org) grant and would degrade the running default with no
- * re-approval surface).
+ * Grant-UNION hooks a caller (the dependency-batch saga) injects to ENABLE the
+ * non-refusing per-scope union (cinatra#1040 S6 / cinatra#1391): the
+ * capability-OWNERSHIP per-key union AND the host-PORTS union. Their presence
+ * lifts the S3 `DECLARES_OWNERSHIP_KEYS` + `PORTS_NOT_COVERED` refusals; their
+ * ABSENCE keeps both (fail-closed — a side-by-side install must never mutate a
+ * shared grant without a durable capsule to reconcile it on teardown).
  */
 export type SideBySideGrantUnionHooks = {
-  /** Persist the declaration capsule DURABLY (idempotent, first-capture-wins)
-   * BEFORE any ownership-grant mutation. Production: the batch ledger member's
-   * `grantCapsule` (JSONB). The capsule records WHAT this version declared, so a
-   * later batch-compensation / boot-recovery teardown can reconcile the shared
-   * grant even when this version's store is gone. */
+  /** Persist the capsule DURABLY (idempotent; the installer passes the full
+   * MERGED capsule on each capture event, and the `portsPrior` prior-state part
+   * is first-capture-wins inside the merge). Production: the batch ledger
+   * member's `grantCapsule` (JSONB). The capsule records WHAT this version
+   * declared (+ the ports grant's prior state), so a later batch-compensation /
+   * boot-recovery teardown can reconcile the shared grants even when this
+   * version's store is gone. */
   persistCapsule: (capsule: SideBySideGrantCapsule) => Promise<void>;
   /** Read the ownership keys declared by the CURRENTLY-finalized siblings
    * (excluding `excludeVersion`) — the survivor set the teardown/unwind consults.
    * Defaults to the real fs+db reader (`defaultReadSurvivorOwnershipKeys`);
    * injected in tests. */
   readSurvivorOwnershipKeys?: (excludeVersion: string) => Promise<Set<string>>;
+  /** Read the host ports declared by the CURRENTLY-finalized siblings
+   * (excluding `excludeVersion`), journal-gated (cinatra#1391). Defaults to
+   * `defaultReadSiblingDeclaredHostPorts`; injected in tests. */
+  readSiblingDeclaredPorts?: (excludeVersion: string) => Promise<string[]>;
 };
 
 /**
@@ -158,6 +171,106 @@ async function readTornDownVersionDeclaredKeys(
   }
 }
 
+/**
+ * JOURNAL-GATED sibling host-port reader (cinatra#1391 ports axis): the union
+ * of `cinatra.requestedHostPorts` the CURRENTLY-finalized `active|locked`
+ * siblings at the exact scope declare (excluding `excludeVersion` when given),
+ * each read from a store dir bound through the SAME digest rule the runtime
+ * trust gate uses — a FINALIZED journal op for the row's namespace (the
+ * versionless anchor for the default row; the version-scoped op for a
+ * non-default sibling) cross-checked against the row's `source.activeDigest`
+ * via `selectActiveDigest` (cinatra#792). A row whose journal is not finalized,
+ * whose digest binding fails closed, or whose store is unreadable contributes
+ * NO ports (an un-verifiable declarer never keeps a port in the union). The
+ * still-installing placeholder row is digest-less by construction and is
+ * therefore always excluded. Sorted/de-duped. Reused by the install-time union,
+ * the teardown survivor recompute, AND the re-approval surface's recompute —
+ * ONE algorithm, never three.
+ */
+export async function defaultReadSiblingDeclaredHostPorts(
+  packageName: string,
+  orgId: string | null,
+  excludeVersion: string | null,
+): Promise<string[]> {
+  const { readInstalledExtensionsByPackageName } = await import(
+    "@cinatra-ai/extensions/canonical-store"
+  );
+  const { readInstallOp, readInstallOpForVersion } = await import(
+    "@/lib/extension-install-ops"
+  );
+  const { selectActiveDigest } = await import("@/lib/extension-install-anchor");
+  const { readRequestedHostPortsFromStore } = await import(
+    "@/lib/extension-host-port-grants"
+  );
+  const { storeDigestDirV2 } = await import("@/lib/extension-package-store-core");
+  const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
+  const rows = await readInstalledExtensionsByPackageName(packageName);
+  const siblings = rows.filter(
+    (r) =>
+      (r.status === "active" || r.status === "locked") &&
+      (r.organizationId ?? null) === orgId &&
+      (excludeVersion === null || (r.version ?? null) !== excludeVersion),
+  );
+  const dataRoot = resolveExtensionDataRoot();
+  const ports = new Set<string>();
+  for (const s of siblings) {
+    try {
+      // Journal gate: the DEFAULT row anchors in the versionless namespace; a
+      // non-default sibling in its own (package, org, version) namespace.
+      const op =
+        s.isDefault !== false
+          ? await readInstallOp(packageName, orgId)
+          : s.version
+            ? await readInstallOpForVersion(packageName, orgId, s.version)
+            : null;
+      if (op?.phase !== "finalized") continue; // no finalized anchor → no ports (fail closed)
+      const sel = selectActiveDigest({
+        activeDigest: (s.source as { activeDigest?: string } | null)?.activeDigest ?? null,
+        journalDigest: (op as { digest?: string | null }).digest ?? null,
+      });
+      if (!sel.ok || !sel.digest) continue; // unbound/contradicted digest → no ports (fail closed)
+      const dir = storeDigestDirV2(dataRoot, s.kind as ExtensionStoreKind, packageName, sel.digest);
+      for (const p of await readRequestedHostPortsFromStore(dir)) ports.add(p);
+    } catch {
+      // an unreadable sibling contributes no ports (fail closed)
+    }
+  }
+  return Array.from(ports).sort();
+}
+
+/**
+ * The host ports the TORN-DOWN version itself declared, read LIVE from its own
+ * digest-bound store manifest — the teardown TRIGGER fallback when no capsule
+ * carries `declaredPorts` (an EXPLICIT uninstall of a committed version whose
+ * capsule was released on batch finalize). Trigger-only: the reconcile always
+ * RECOMPUTES the survivor union; over-triggering is idempotent, so this read is
+ * digest-dir-bound but not journal-gated (the version's own journal op was just
+ * terminalized by the teardown). Absent digest / unreadable store → [].
+ */
+async function readTornDownVersionDeclaredPorts(
+  packageName: string,
+  row: { kind: string; source: unknown },
+): Promise<string[]> {
+  const digest = (row.source as { activeDigest?: string } | null)?.activeDigest;
+  if (!digest) return [];
+  try {
+    const { storeDigestDirV2 } = await import("@/lib/extension-package-store-core");
+    const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
+    const { readRequestedHostPortsFromStore } = await import(
+      "@/lib/extension-host-port-grants"
+    );
+    const storeDir = storeDigestDirV2(
+      resolveExtensionDataRoot(),
+      row.kind as ExtensionStoreKind,
+      packageName,
+      digest,
+    );
+    return await readRequestedHostPortsFromStore(storeDir);
+  } catch {
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Ownership DECLARATION CAPSULE helpers (cinatra#1040 S6). Kept INLINE in this
 // module (not a separate file) so no NEW module enters a locked route's
@@ -185,16 +298,95 @@ export function buildSideBySideGrantCapsule(
 
 /** Narrow an untrusted JSONB value (a ledger member's `grantCapsule`) to a
  * capsule, or null. Tolerant of legacy/absent rows (null/undefined → null) and
- * shape drift (garbage → null, never a throw). */
+ * shape drift (garbage → null, never a throw). The ports-axis fields
+ * (cinatra#1391) are OPTIONAL v:1 extensions: an ownership-only capsule parses
+ * unchanged; a malformed ports part is DROPPED (the reconcile then runs on the
+ * live-recomputed survivor union alone) without discarding the ownership part. */
 export function parseSideBySideGrantCapsule(value: unknown): SideBySideGrantCapsule | null {
   if (!value || typeof value !== "object") return null;
-  const v = value as { v?: unknown; declaredTokenKeys?: unknown };
+  const v = value as {
+    v?: unknown;
+    declaredTokenKeys?: unknown;
+    declaredPorts?: unknown;
+    portsPrior?: unknown;
+  };
   if (v.v !== 1) return null;
   if (!Array.isArray(v.declaredTokenKeys)) return null;
   const keys = Array.from(
     new Set(v.declaredTokenKeys.filter((k): k is string => typeof k === "string")),
   ).sort();
-  return { v: 1, declaredTokenKeys: keys };
+  const ports = Array.isArray(v.declaredPorts)
+    ? Array.from(new Set(v.declaredPorts.filter((p): p is string => typeof p === "string"))).sort()
+    : undefined;
+  const portsPrior = parsePortsPriorState(v.portsPrior);
+  return {
+    v: 1,
+    declaredTokenKeys: keys,
+    ...(ports !== undefined ? { declaredPorts: ports } : {}),
+    ...(portsPrior ? { portsPrior } : {}),
+  };
+}
+
+/** Narrow an untrusted `portsPrior` payload; garbage → null (never a throw). */
+function parsePortsPriorState(value: unknown): SideBySidePortsPriorState | null {
+  if (!value || typeof value !== "object") return null;
+  const p = value as {
+    exists?: unknown;
+    status?: unknown;
+    approvedPorts?: unknown;
+    requestedPortsHash?: unknown;
+    approvedBy?: unknown;
+  };
+  if (typeof p.exists !== "boolean") return null;
+  if (!p.exists) return { exists: false };
+  if (p.status !== "pending" && p.status !== "approved" && p.status !== "revoked") return null;
+  if (!Array.isArray(p.approvedPorts)) return null;
+  if (typeof p.requestedPortsHash !== "string" || p.requestedPortsHash.length === 0) return null;
+  if (p.approvedBy !== null && typeof p.approvedBy !== "string") return null;
+  return {
+    exists: true,
+    status: p.status,
+    approvedPorts: Array.from(
+      new Set(p.approvedPorts.filter((x): x is string => typeof x === "string")),
+    ).sort(),
+    requestedPortsHash: p.requestedPortsHash,
+    approvedBy: (p.approvedBy ?? null) as string | null,
+  };
+}
+
+/**
+ * Merge a capture event into the (possibly existing) capsule. The install path
+ * fires up to TWO capture events per member — the ownership declared-keys read
+ * and the ports prior-state capture — in pipeline order; each event persists
+ * the full MERGED capsule so the durable ledger value is always a superset of
+ * what has been mutated so far. `portsPrior` is FIRST-CAPTURE-WINS: a captured
+ * prior grant state is never overwritten by a later event (the later state is
+ * post-mutation, not prior). Returns null when nothing needs a capsule.
+ */
+export function mergeSideBySideGrantCapsule(
+  existing: SideBySideGrantCapsule | null,
+  patch: {
+    declaredTokenKeys?: readonly string[];
+    declaredPorts?: readonly string[];
+    portsPrior?: SideBySidePortsPriorState | null;
+  },
+): SideBySideGrantCapsule | null {
+  const keys = Array.from(
+    new Set((patch.declaredTokenKeys ?? existing?.declaredTokenKeys ?? []).map((k) => String(k))),
+  ).sort();
+  const portsInput = patch.declaredPorts ?? existing?.declaredPorts;
+  const ports =
+    portsInput !== undefined
+      ? Array.from(new Set(portsInput.map((p) => String(p)))).sort()
+      : undefined;
+  const portsPrior = existing?.portsPrior ?? patch.portsPrior ?? null;
+  if (keys.length === 0 && (ports === undefined || ports.length === 0) && !portsPrior) return null;
+  return {
+    v: 1,
+    declaredTokenKeys: keys,
+    ...(ports !== undefined ? { declaredPorts: ports } : {}),
+    ...(portsPrior ? { portsPrior } : {}),
+  };
 }
 
 /**
@@ -243,6 +435,158 @@ export async function reconcileSideBySideOwnershipOnTeardown(args: {
     }
   }
   return { revoked, kept };
+}
+
+/** What `reconcileSideBySidePortsOnTeardown` did (evidence for logs/tests). */
+export type PortsReconcileAction =
+  | "noop"
+  | "restored-prior"
+  | "restored-prior-narrowed"
+  | "narrowed-current"
+  | "kept-revoked"
+  | "reset-pending";
+
+/**
+ * Reconcile the SHARED host-port grant when a side-by-side version is torn down
+ * (direct failure / batch compensation / boot recovery / explicit uninstall).
+ * PURE orchestration over INJECTED functions — no grant-store/fs/db access of
+ * its own. PRECONDITION: the caller holds `withInstallLock(packageName)` and
+ * `survivorPorts` was recomputed UNDER that lock AFTER this version's row was
+ * removed (journal-gated digest-bound reads — `defaultReadSiblingDeclaredHostPorts`).
+ *
+ * Decision ladder (codex round-0/round-1 order — an admin REVOKE, then the
+ * newest settled-consistent state, then restore-before-reset; a teardown RETRY
+ * can never clobber a newer admin decision, and a restored `approved` row always
+ * COVERS the survivor union — an approved row that under-covers survivors would
+ * be invisible to the pending-only review surface):
+ *  0. current `revoked` → keep it revoked (hash corrected). FIRST, before any
+ *     restore — an explicit admin revoke is NEVER silently un-revoked by a
+ *     teardown, even if a stale captured `approved` prior hashes to the
+ *     survivors (codex round-1: the ordering hole a prior-first ladder had);
+ *  1. current `approved` AND hash == survivor hash → NO-OP (settled-consistent).
+ *     A `pending` row at the survivor hash is NOT settled (conveys no ports) —
+ *     it falls through so branches 2-4 may recover an approval;
+ *  2. captured prior hash == survivor hash → EXACT restore (the LIFO/common
+ *     case: recovers the default's prior grant; the hash guard closes the
+ *     non-LIFO resurrection hole — a stale capture never restores);
+ *  3. prior `approved` and its approved set COVERS the survivor union →
+ *     restore a NARROWED approved survivor set (least-privilege shrink of an
+ *     admin-approved superset; grants nothing new);
+ *  4. current `approved` and its approved set COVERS the survivor union →
+ *     narrow the current approval in place (same shrink, newer approver);
+ *  5. current already requests exactly the survivors (pending) with no approval
+ *     to restore → NO-OP (idempotent; never re-write an already-correct request);
+ *  6. else → re-record the survivor union (resets to `pending` with the
+ *     corrected hash; the re-approval surface picks it up).
+ */
+export async function reconcileSideBySidePortsOnTeardown(args: {
+  packageName: string;
+  orgId: string | null;
+  /** The capsule's captured prior grant state (null = none captured/present). */
+  portsPrior: SideBySidePortsPriorState | null;
+  /** The RECOMPUTED survivor union (journal-gated, post-removal, under lock). */
+  survivorPorts: readonly string[];
+  computeHash: (ports: readonly string[]) => string;
+  readGrantForScope: () => Promise<{
+    status: string;
+    approvedPorts: string[];
+    requestedPortsHash: string;
+    approvedBy: string | null;
+  } | null>;
+  restoreGrant: (input: {
+    status: "pending" | "approved" | "revoked";
+    approvedPorts: string[];
+    requestedPortsHash: string;
+    approvedBy: string | null;
+  }) => Promise<void>;
+  recordRequestedGrant: (ports: string[]) => Promise<void>;
+}): Promise<{ action: PortsReconcileAction }> {
+  const survivors = Array.from(new Set(args.survivorPorts.map((p) => String(p)))).sort();
+  const survivorHash = args.computeHash(survivors);
+  const covers = (approved: readonly string[]): boolean => {
+    const set = new Set(approved);
+    return survivors.every((p) => set.has(p));
+  };
+  const current = await args.readGrantForScope();
+  const prior = args.portsPrior;
+
+  // 0. An explicit admin REVOKE is the NEWEST authoritative state and is NEVER
+  //    un-revoked by a teardown — this MUST precede every restore branch, or a
+  //    stale captured `approved` prior (branch 2) that happens to hash to the
+  //    survivor union would silently resurrect a privilege an admin removed
+  //    (codex round-0 finding). Kept revoked, hash corrected to the survivors.
+  if (current && current.status === "revoked") {
+    if (current.requestedPortsHash === survivorHash) return { action: "noop" };
+    await args.restoreGrant({
+      status: "revoked",
+      approvedPorts: [],
+      requestedPortsHash: survivorHash,
+      approvedBy: current.approvedBy,
+    });
+    return { action: "kept-revoked" };
+  }
+
+  // 1. Already SETTLED-consistent: an APPROVED row at exactly the survivors —
+  //    newest good state, never touch. (A PENDING row at the survivor hash is
+  //    NOT settled — it conveys no ports — so it falls through to the restore
+  //    ladder below, which may recover an approval; codex round-0 finding.)
+  if (current && current.status === "approved" && current.requestedPortsHash === survivorHash) {
+    return { action: "noop" };
+  }
+  // No row and nothing left to request → nothing to reconcile.
+  if (!current && survivors.length === 0 && !(prior && prior.exists)) return { action: "noop" };
+
+  // 2. Exact prior restore — hash-guarded against the recomputed survivors.
+  if (
+    prior &&
+    prior.exists &&
+    prior.requestedPortsHash === survivorHash &&
+    prior.status !== undefined
+  ) {
+    await args.restoreGrant({
+      status: prior.status,
+      approvedPorts: [...(prior.approvedPorts ?? [])],
+      requestedPortsHash: prior.requestedPortsHash,
+      approvedBy: prior.approvedBy ?? null,
+    });
+    return { action: "restored-prior" };
+  }
+
+  // 3. Prior approval covers the survivors → restore narrowed to exactly them.
+  if (
+    prior &&
+    prior.exists &&
+    prior.status === "approved" &&
+    covers(prior.approvedPorts ?? [])
+  ) {
+    await args.restoreGrant({
+      status: "approved",
+      approvedPorts: survivors,
+      requestedPortsHash: survivorHash,
+      approvedBy: prior.approvedBy ?? null,
+    });
+    return { action: "restored-prior-narrowed" };
+  }
+
+  // 4. Current approval covers the survivors → narrow it in place.
+  if (current && current.status === "approved" && covers(current.approvedPorts)) {
+    await args.restoreGrant({
+      status: "approved",
+      approvedPorts: survivors,
+      requestedPortsHash: survivorHash,
+      approvedBy: current.approvedBy,
+    });
+    return { action: "narrowed-current" };
+  }
+
+  // 5. Current already REQUESTS exactly the survivors (a pending row) and no
+  //    approval could be restored above — leave it (idempotent; a teardown
+  //    RETRY never re-writes an already-correct pending request).
+  if (current && current.requestedPortsHash === survivorHash) return { action: "noop" };
+
+  // 6. Correct to pending at the survivor union (fail closed; reviewable).
+  await args.recordRequestedGrant(survivors);
+  return { action: "reset-pending" };
 }
 
 export class SideBySideInstallError extends Error {
@@ -430,6 +774,12 @@ async function runLocked(input: {
   }
 
   // ---- REAL PIPELINE, ROW-BOUND + VERSION-SCOPED --------------------------
+  // cinatra#1391 ports axis: armed INSIDE the ports-union mutation path (BEFORE
+  // the grant write is awaited — the write may commit and then reject); the
+  // catch below runs it to restore the shared grant on DIRECT failure, still
+  // under this install's per-package lock. (Holder object: the assignment
+  // happens inside a deps closure, which TS flow analysis cannot track.)
+  const portsFailure: { restore: (() => Promise<void>) | null } = { restore: null };
   try {
     const { installExtensionFromRegistry, makeDefaultInstallPipelineDeps } = await import(
       "@/lib/extension-install-pipeline"
@@ -440,11 +790,12 @@ async function runLocked(input: {
     const { beginInstallOp } = await import("@/lib/extension-install-ops");
     const base = await makeDefaultInstallPipelineDeps();
 
-    // ---- cinatra#1040 S6: capability-OWNERSHIP grant UNION ------------------
-    // Injected `grantUnion` ENABLES the non-refusing per-key union (a durable
-    // declaration capsule captured BEFORE any mutation + a survivor-aware
-    // unwind); its ABSENCE keeps the S3 DECLARES_OWNERSHIP_KEYS refusal. PORTS
-    // stay refused either way (deferred slice).
+    // ---- cinatra#1040 S6 / cinatra#1391: shared-grant UNIONs ----------------
+    // Injected `grantUnion` ENABLES the non-refusing unions on BOTH axes —
+    // capability-OWNERSHIP (per-key, declaration capsule + survivor-aware
+    // unwind) and host-PORTS (one shared row, prior-state capsule + hash-guarded
+    // reconcile); its ABSENCE keeps the S3 DECLARES_OWNERSHIP_KEYS +
+    // PORTS_NOT_COVERED refusals.
     const grantUnion = input.grantUnion;
     let survivorKeysCache: Promise<Set<string>> | null = null;
     const readSurvivorKeys = (): Promise<Set<string>> =>
@@ -452,6 +803,25 @@ async function runLocked(input: {
         grantUnion?.readSurvivorOwnershipKeys ??
         ((v: string) => defaultReadSurvivorOwnershipKeys(packageName, orgId, v))
       )(version));
+    const readSiblingPorts = (): Promise<string[]> =>
+      (
+        grantUnion?.readSiblingDeclaredPorts ??
+        ((v: string) => defaultReadSiblingDeclaredHostPorts(packageName, orgId, v))
+      )(version);
+    // MERGED capsule accumulation: up to two capture events (ownership keys,
+    // ports prior state) persist the full merged capsule each time — the
+    // durable ledger value is always a superset of what has been mutated so
+    // far; `portsPrior` is first-capture-wins inside the merge.
+    let capsuleAcc: SideBySideGrantCapsule | null = null;
+    const persistMergedCapsule = async (
+      patch: Parameters<typeof mergeSideBySideGrantCapsule>[1],
+    ): Promise<void> => {
+      if (!grantUnion) return;
+      const merged = mergeSideBySideGrantCapsule(capsuleAcc, patch);
+      if (!merged) return;
+      capsuleAcc = merged;
+      await grantUnion.persistCapsule(merged);
+    };
     const ownershipUnionDeps: Partial<typeof base> = grantUnion
       ? {
           // RECORD the per-key union via base's REAL recorder (left untouched
@@ -470,12 +840,12 @@ async function runLocked(input: {
           restoreOwnershipGrant: async () => undefined,
           // Capture the DECLARATION CAPSULE the moment the pipeline reads the
           // declared keys — DURABLE, BEFORE any recordRequestedOwnershipGrant.
+          // Persists the MERGED capsule (the ports axis may capture too).
           readWidgetAuthTokenKeys: async (storeDir) => {
             const keys = base.readWidgetAuthTokenKeys
               ? await base.readWidgetAuthTokenKeys(storeDir)
               : [];
-            const capsule = buildSideBySideGrantCapsule(keys);
-            if (capsule) await grantUnion.persistCapsule(capsule);
+            if (keys.length > 0) await persistMergedCapsule({ declaredTokenKeys: keys });
             return keys;
           },
           // SURVIVOR-AWARE revoke: the pipeline's fresh-install unwind
@@ -516,24 +886,87 @@ async function runLocked(input: {
       // semantics — never the default's anchor).
       beginInstallOp: (b) => beginInstallOp({ ...b, version }).then(() => undefined),
       readInstallOp: (pkg, oid) => readInstallOpForVersion(pkg, oid, version),
-      // SHARED-STATE DISCIPLINE: host-port grants are per (package, org) and
-      // owned by the default install. Empty request → no-op; request covered
-      // by the scope's APPROVED grant → no-op; anything else → refuse (the
-      // grant-union + reset-on-change choreography is the S4/S5 slice).
-      recordRequestedGrant: async (g) => {
-        if (g.requestedPorts.length === 0) return;
-        const grant = await base.readGrantForScope(g.packageName, g.orgId);
-        const approved =
-          grant && grant.status === "approved" ? new Set(grant.approvedPorts) : null;
-        if (approved && g.requestedPorts.every((p) => approved.has(p))) return;
-        throw new SideBySideInstallError(
-          "PORTS_NOT_COVERED",
-          `side-by-side install of ${g.packageName}@${version} refused — it requests host ` +
-            `ports [${g.requestedPorts.join(", ")}] not covered by the scope's approved ` +
-            `grant; the per-scope grant union is a later slice. Approve the ports on the ` +
-            `default install first, then retry.`,
-        );
-      },
+      // SHARED-STATE DISCIPLINE: host-port grants are ONE row per (package,
+      // org), shared with the default install. cinatra#1391: with `grantUnion`
+      // injected the S3 refusal LIFTS into the per-scope UNION — capture the
+      // prior grant state into the DURABLE capsule, then record the union
+      // through the REAL recorder (unchanged hash keeps the approval; a grown
+      // union pends for the union-aware re-approval surface; finalize proceeds
+      // with the grant pending — fail-closed, no runtime port is conveyed
+      // until re-approval). Without hooks the S3 refusal stands.
+      recordRequestedGrant: grantUnion
+        ? async (g) => {
+            if (g.requestedPorts.length === 0) return; // no ports axis → no shared-grant mutation
+            const { computeRequestedPortsHash } = await import(
+              "@/lib/extension-host-port-grants"
+            );
+            const siblingPorts = await readSiblingPorts();
+            const union = Array.from(
+              new Set([...siblingPorts, ...g.requestedPorts.map((p) => String(p))]),
+            ).sort();
+            const prior = await base.readGrantForScope(g.packageName, g.orgId);
+            if (prior && prior.requestedPortsHash === computeRequestedPortsHash(union)) {
+              return; // union already recorded (covered) — no mutation, no capture
+            }
+            const priorState: SideBySidePortsPriorState = prior
+              ? {
+                  exists: true,
+                  status: prior.status as "pending" | "approved" | "revoked",
+                  approvedPorts: [...prior.approvedPorts].sort(),
+                  requestedPortsHash: prior.requestedPortsHash,
+                  approvedBy: prior.approvedBy ?? null,
+                }
+              : { exists: false };
+            // DURABLE capture BEFORE the mutation; the restore hook is armed
+            // BEFORE the write is awaited (the statement may commit and then
+            // reject — the catch must treat it as mutated either way).
+            await persistMergedCapsule({
+              declaredPorts: g.requestedPorts.map((p) => String(p)),
+              portsPrior: priorState,
+            });
+            portsFailure.restore = async () => {
+              if (priorState.exists) {
+                await base.restoreGrant?.({
+                  packageName: g.packageName,
+                  orgId: g.orgId,
+                  status: priorState.status as "pending" | "approved" | "revoked",
+                  approvedPorts: [...(priorState.approvedPorts ?? [])],
+                  requestedPortsHash: priorState.requestedPortsHash as string,
+                  approvedBy: priorState.approvedBy ?? null,
+                });
+              } else {
+                // No prior row to restore — correct the request to the
+                // sibling-only union (a pending row conveys no ports).
+                const survivors = await readSiblingPorts();
+                await base.recordRequestedGrant({
+                  packageName: g.packageName,
+                  orgId: g.orgId,
+                  requestedPorts: survivors,
+                });
+              }
+            };
+            await base.recordRequestedGrant({
+              packageName: g.packageName,
+              orgId: g.orgId,
+              requestedPorts: union,
+            });
+          }
+        : async (g) => {
+            if (g.requestedPorts.length === 0) return;
+            const grant = await base.readGrantForScope(g.packageName, g.orgId);
+            const approved =
+              grant && grant.status === "approved" ? new Set(grant.approvedPorts) : null;
+            if (approved && g.requestedPorts.every((p) => approved.has(p))) return;
+            throw new SideBySideInstallError(
+              "PORTS_NOT_COVERED",
+              `side-by-side install of ${g.packageName}@${version} refused — it requests host ` +
+                `ports [${g.requestedPorts.join(", ")}] not covered by the scope's approved ` +
+                `grant, and no durable grant-union capsule sink was injected. Approve the ` +
+                `ports on the default install first, then retry.`,
+            );
+          },
+      // NEVER auto-approve from a side-by-side install (either axis): a grown
+      // union pends for the union-aware re-approval surface.
       approveGrant: async () => undefined,
       // cinatra#1040 S6: capability-OWNERSHIP grant union (or the preserved S3
       // refusal when no capsule sink is injected). Built above; spread AFTER
@@ -578,6 +1011,25 @@ async function runLocked(input: {
     );
     return { rowId };
   } catch (err) {
+    // cinatra#1391: DIRECT-FAILURE restore of the shared host-port grant —
+    // armed only when this attempt actually reached the union mutation. Still
+    // under this install's per-package lock, so no admin decision or sibling
+    // lifecycle can have interleaved: the exact captured prior state is the
+    // correct restore target. Best-effort — a failure here leaves the durable
+    // capsule on the ledger member for batch-compensation / boot-recovery to
+    // reconcile; never masks the original error.
+    if (portsFailure.restore) {
+      try {
+        await portsFailure.restore();
+      } catch (restoreErr) {
+        console.warn(
+          `[side-by-side-capsule] direct-failure restore of the host-port grant for ` +
+            `${packageName}@${version} failed (the durable capsule remains for ` +
+            `compensation/boot recovery):`,
+          restoreErr instanceof Error ? restoreErr.message : restoreErr,
+        );
+      }
+    }
     // Roll back the placeholder THIS attempt created when the pipeline did not
     // finalize (version-scoped check — the versionless journal signal would see
     // the DEFAULT's finalized op and wrongly protect the placeholder).
@@ -609,16 +1061,25 @@ export async function uninstallExtensionVersionSideBySide(input: {
   packageName: string;
   version: string;
   orgId: string | null;
-  /** cinatra#1040 S6: the DURABLE declaration capsule of the version being torn
-   * down (from the batch ledger member). When present, its declared ownership
-   * keys are reconciled against the survivor set (survivor-check + revoke). A
-   * legacy/absent capsule → no ownership reconcile (nothing was mutated). */
+  /** cinatra#1040 S6 / cinatra#1391: the DURABLE capsule of the version being
+   * torn down (from the batch ledger member; parsed TOLERANTLY here — the
+   * ledger value is untrusted JSONB). Ownership keys reconcile against the
+   * survivor set (survivor-check + revoke); the ports axis reconciles the
+   * shared grant against the recomputed survivor union (hash-guarded prior
+   * restore / narrow / pending ladder). A legacy/absent capsule → live-store
+   * fallback reads decide whether anything needs reconciling. */
   capsule?: SideBySideGrantCapsule | null;
   /** Survivor reader override (tests); defaults to the fs+db reader. */
   readSurvivorOwnershipKeys?: (excludeVersion: string) => Promise<Set<string>>;
   /** Torn-down-version declared-keys reader override (tests) — the capsule-absent
    * fallback; defaults to reading the version's own live store manifest. */
   readTornDownDeclaredKeys?: () => Promise<string[]>;
+  /** Ports survivor-union reader override (tests); defaults to the
+   * journal-gated `defaultReadSiblingDeclaredHostPorts`. */
+  readSurvivorDeclaredPorts?: (excludeVersion: string) => Promise<string[]>;
+  /** Torn-down-version declared-ports reader override (tests) — the
+   * capsule-absent trigger fallback; defaults to the live store manifest. */
+  readTornDownDeclaredPorts?: () => Promise<string[]>;
 }): Promise<{ removed: boolean }> {
   const { withInstallLock } = await import("@cinatra-ai/agents");
   return withInstallLock(input.packageName, async () => {
@@ -677,9 +1138,11 @@ export async function uninstallExtensionVersionSideBySide(input: {
     // (an EXPLICIT uninstall of a committed version whose capsule was released on
     // batch finalize — codex#1391 finding), a LIVE fallback read of the version's
     // own store manifest, so an explicitly-removed version can never orphan a key.
+    // The ledger value is untrusted JSONB → tolerant boundary parse (never a throw).
+    const capsule = parseSideBySideGrantCapsule(input.capsule ?? null);
     try {
-      let declaredTokenKeys: string[] = input.capsule?.declaredTokenKeys ?? [];
-      if (!input.capsule && row) {
+      let declaredTokenKeys: string[] = capsule?.declaredTokenKeys ?? [];
+      if (!capsule && row) {
         declaredTokenKeys = input.readTornDownDeclaredKeys
           ? await input.readTornDownDeclaredKeys()
           : await readTornDownVersionDeclaredKeys(packageName, row);
@@ -715,6 +1178,76 @@ export async function uninstallExtensionVersionSideBySide(input: {
     } catch (err) {
       console.warn(
         `[side-by-side-capsule] ownership reconcile for ${packageName}@${version} teardown failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // ---- cinatra#1391: reconcile the SHARED host-port grant -----------------
+    // A removed side-by-side version must not leave stale union ports on the
+    // shared per-(package, org) row, and the common (LIFO) teardown must
+    // recover the default's approved grant instead of leaving it stuck
+    // `pending`. The survivor union is RECOMPUTED here — under this
+    // per-package lock, AFTER the row teardown above (journal-gated
+    // digest-bound reads) — and the ladder in
+    // `reconcileSideBySidePortsOnTeardown` decides: no-op / hash-guarded exact
+    // prior restore / covered narrow / kept-revoked / corrected pending.
+    // TRIGGER: the capsule's declaredPorts/portsPrior, or (capsule released on
+    // batch finalize — explicit uninstall) a live fallback read of the
+    // version's own store. Best-effort; never masks the teardown result.
+    try {
+      let declaredPorts: string[] = capsule?.declaredPorts ?? [];
+      if ((!capsule || capsule.declaredPorts === undefined) && row) {
+        declaredPorts = input.readTornDownDeclaredPorts
+          ? await input.readTornDownDeclaredPorts()
+          : await readTornDownVersionDeclaredPorts(packageName, row);
+      }
+      const portsPrior = capsule?.portsPrior ?? null;
+      if (declaredPorts.length > 0 || portsPrior) {
+        const readSurvivorPorts =
+          input.readSurvivorDeclaredPorts ??
+          ((v: string) => defaultReadSiblingDeclaredHostPorts(packageName, orgId, v));
+        const survivorPorts = await readSurvivorPorts(version);
+        const grants = await import("@/lib/extension-host-port-grants");
+        const res = await reconcileSideBySidePortsOnTeardown({
+          packageName,
+          orgId,
+          portsPrior,
+          survivorPorts,
+          computeHash: grants.computeRequestedPortsHash,
+          readGrantForScope: async () => {
+            const g = await grants.readGrantForScope({ packageName, orgId });
+            return g
+              ? {
+                  status: g.status,
+                  approvedPorts: g.approvedPorts,
+                  requestedPortsHash: g.requestedPortsHash,
+                  approvedBy: g.approvedBy,
+                }
+              : null;
+          },
+          restoreGrant: (i) =>
+            grants
+              .restoreGrant({ packageName, orgId, ...i })
+              .then(() => undefined),
+          recordRequestedGrant: (ports) =>
+            grants
+              .recordRequestedGrant({
+                packageName,
+                orgId,
+                requestedPorts: ports as unknown as readonly import("@cinatra-ai/sdk-extensions").HostPortName[],
+              })
+              .then(() => undefined),
+        });
+        if (res.action !== "noop") {
+          console.warn(
+            `[side-by-side-capsule] ${packageName}@${version} teardown reconciled the shared ` +
+              `host-port grant: ${res.action}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[side-by-side-capsule] ports reconcile for ${packageName}@${version} teardown failed:`,
         err instanceof Error ? err.message : err,
       );
     }

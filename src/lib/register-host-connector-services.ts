@@ -410,7 +410,7 @@ export function registerHostConnectorServices(): void {
   // for a first-party connector that refresh is only meaningful AFTER the
   // cinatra#161 republish wave (earlier refreshes hit the built-artifacts-
   // only install gate: loud, old digest stays active). Runbook:
-  // docs/extension-server-entry-contract.md ("refreshing a stale digest").
+  // docs/internals/contracts/extension-server-entry-contract.md ("refreshing a stale digest").
 
   register(svc.googleOAuth, {
     getStatus: getGoogleOAuthStatus,

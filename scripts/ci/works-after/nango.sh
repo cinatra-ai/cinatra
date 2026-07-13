@@ -21,7 +21,7 @@ set -euo pipefail
 # nango-SERVER functional contract against a throwaway (fresh) nango-db at
 # NANGO_DB_TAG; it does not prove nango-db's on-disk PGDATA survives a postgres
 # MAJOR bump. That data-migration mechanism (dump/restore into a NEW volume +
-# the same-volume bare-tag-bump refusal — docs/upgrade-track.md §3, which names
+# the same-volume bare-tag-bump refusal — docs/internals/workflows/upgrade-track.md §3, which names
 # the `nango-postgres` volume explicitly) is DATABASE-INSTANCE-AGNOSTIC and is
 # proven generically by the postgres arm (scripts/ci/works-after/postgres.sh) —
 # a nango-db postgres 15→16 bump is the same mechanism the postgres arm gates,

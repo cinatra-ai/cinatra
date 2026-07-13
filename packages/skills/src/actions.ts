@@ -153,7 +153,18 @@ export async function savePersonalSkillAction(formData: FormData) {
   if (parsed.data.skillId) {
     const { getInstalledSkillById } = await import("./skills-registry");
     const existing = await getInstalledSkillById(parsed.data.skillId);
-    if (!existing || existing.level !== "personal") {
+    // DURABLE personal-skill identity (cinatra#1416, AC1): a user-authored skill
+    // is recognized by its persisted `isCustomSkill` flag — NOT by the mutable
+    // (level, scope) tuple, which the access-policy projection rewrites to the
+    // granted locus (team/organization/project/workspace) when the owner
+    // broadens the skill. Gating on `level === "personal"` here would reject the
+    // owner's own metadata edit right after they shared it ("share → edit"
+    // returns not-found). Still reject any non-user-authored (package/team/org)
+    // row so a forged skillId can't downgrade it through the personal path.
+    const isUserAuthored =
+      existing !== null &&
+      (existing.isCustomSkill === true || existing.level === "personal");
+    if (!existing || !isUserAuthored) {
       redirect(`${editorPath}?error=skill-not-found`);
     }
     const { requireResourceAccess, buildSkillResourceRef } = await import("@cinatra-ai/agents/auth-policy");
@@ -164,6 +175,11 @@ export async function savePersonalSkillAction(formData: FormData) {
           id: existing.id,
           level: existing.level,
           scope: existing.scope ?? null,
+          // Durable owner identity (cinatra#1416, AC1): the persisted
+          // ownerUserId, independent of the projected (level, scope) tuple, so
+          // the owner of a BROADENED personal skill still passes the manage
+          // gate (the durable-owner short-circuit) while scope members do not.
+          ownerUserId: existing.ownerUserId ?? null,
         }),
         "manage",
       );
@@ -225,7 +241,14 @@ export async function personalSkillSaveAction(input: {
   if (input.skillId) {
     const { getInstalledSkillById } = await import("./skills-registry");
     const existing = await getInstalledSkillById(input.skillId);
-    if (!existing || existing.level !== "personal") {
+    // DURABLE personal-skill identity (cinatra#1416, AC1): recognize a
+    // user-authored skill by its persisted `isCustomSkill` flag, NOT the mutable
+    // (level, scope) tuple — otherwise the owner's save is rejected right after
+    // they broaden the skill (the projection rewrites `level` to team/org/etc.).
+    const isUserAuthored =
+      existing !== null &&
+      (existing.isCustomSkill === true || existing.level === "personal");
+    if (!existing || !isUserAuthored) {
       throw new Error(`personalSkillSaveAction: skill ${input.skillId} not found.`);
     }
     const { requireResourceAccess, buildSkillResourceRef } = await import("@cinatra-ai/agents/auth-policy");
@@ -236,6 +259,10 @@ export async function personalSkillSaveAction(input: {
           id: existing.id,
           level: existing.level,
           scope: existing.scope ?? null,
+          // Durable owner identity (cinatra#1416, AC1): the persisted ownerUserId,
+          // independent of the projected tuple, so the owner of a BROADENED
+          // personal skill still passes the manage gate while scope members do not.
+          ownerUserId: existing.ownerUserId ?? null,
         }),
         "manage",
       );

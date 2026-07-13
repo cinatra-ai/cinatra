@@ -4,7 +4,7 @@ set -euo pipefail
 #
 # The major-version angle scripts/ci/upgrade-proof.sh does NOT model: the same
 # on-disk PGDATA volume surviving an image-tag MAJOR bump (17→18), which needs a
-# documented dump→restore into a NEW target volume (per docs/upgrade-track.md §3
+# documented dump→restore into a NEW target volume (per docs/internals/workflows/upgrade-track.md §3
 # a bare tag bump makes PG "refuse to start: database files are incompatible").
 #
 # This arm proves, in order (design §1.2):

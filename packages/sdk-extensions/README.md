@@ -236,7 +236,7 @@ exports-map key first, else literal `./`-relative path — to an existing
 is a top-level `register.mjs` with `cinatra.serverEntry: "./register.mjs"`).
 TypeScript source, extensionless, and missing entries are refused at install
 time. Full normative contract, error families, and the operator refresh
-runbook: [`docs/extension-server-entry-contract.md`](../../docs/extension-server-entry-contract.md).
+runbook: [`docs/internals/contracts/extension-server-entry-contract.md`](../../docs/internals/contracts/extension-server-entry-contract.md).
 
 ## Public surface is types-first (the host bus stays fenced)
 

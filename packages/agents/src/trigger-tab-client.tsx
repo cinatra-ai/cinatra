@@ -217,7 +217,7 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
         {props.trigger.triggerType === "scheduled" &&
         props.trigger.scheduledAt ? (
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Scheduled at</span>
+            <span className="text-muted-foreground">Schedule</span>
             <span className="text-foreground">
               {format(new Date(props.trigger.scheduledAt), "PPpp")}
             </span>
