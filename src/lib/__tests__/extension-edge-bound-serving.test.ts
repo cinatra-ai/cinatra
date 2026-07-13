@@ -7,10 +7,17 @@ import {
   dispatchPlannedExtensionMcpTool,
   dispatchVersionedOnlyExtensionMcpTool,
   planExtensionToolDiscovery,
+  planSelfInvokerRetainedUnion,
   EdgeBoundMcpServeRefusal,
   type ResolveEdgeBoundExtensionDeps,
   type RunRowForEdgeBoundServing,
 } from "@/lib/extension-edge-bound-serving";
+import {
+  _resetExtensionMcpForTests,
+  getEffectiveExtensionMcpTool,
+  markEffectiveExtensionMcpTools,
+  unmarkEffectiveExtensionMcpToolCollisions,
+} from "@/lib/extension-mcp-registry";
 import {
   beginVersionKeyedRegistration,
   __resetVersionKeyedServingForTests,
@@ -849,5 +856,81 @@ describe("dispatchPlannedExtensionMcpTool — plan-pinned dispatch (codex round-
         makeDeps({ dependentInstallId: DEP_ID }), // dependent row missing
       ),
     ).rejects.toMatchObject({ code: "EDGE_BOUND_DEPENDENT_MISSING" });
+  });
+});
+
+describe("planSelfInvokerRetainedUnion — collision classes (codex S8 round-2 #1)", () => {
+  const P = "@x/pkg";
+  const retained = (name: string, version: string, pkg = P) => ({
+    packageName: pkg,
+    version,
+    tool: { name, packageName: pkg, handler: async () => "retained" },
+  });
+
+  beforeEach(() => {
+    _resetExtensionMcpForTests();
+  });
+
+  it("default P:x + retained P@v:x → deduped, NOT unmark-worthy; the default's effective attribution SURVIVES", () => {
+    const plan = planSelfInvokerRetainedUnion([retained("x", "0.2.0")], {
+      hostClaimedNames: new Set(),
+      extensionClaimedNames: new Set(["x"]), // the default replay registered P:x
+    });
+    expect(plan.register).toEqual([]);
+    expect(plan.effective).toEqual([]);
+    expect(plan.skippedHostCollisions).toEqual([]);
+    expect(plan.dedupedExtensionNames).toEqual([{ name: "x", packageName: P, version: "0.2.0" }]);
+
+    // The full mark/unmark cycle the self-invoker builder runs: the winning
+    // default attribution must survive (the regression: pushing the dedupe
+    // into the skip list erased it because the packages match, and the
+    // deny-by-default boundary then blocked the registered handler).
+    markEffectiveExtensionMcpTools([{ name: "x", packageName: P }, ...plan.effective]);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("x")).toEqual({ packageName: P });
+  });
+
+  it("two retained versions of P:x → first wins + registers; second deduped; the winner's attribution SURVIVES", () => {
+    const plan = planSelfInvokerRetainedUnion([retained("x", "0.2.0"), retained("x", "0.3.0")], {
+      hostClaimedNames: new Set(),
+      extensionClaimedNames: new Set(), // no default registers the name
+    });
+    expect(plan.register).toEqual([{ name: "x", packageName: P, version: "0.2.0" }]);
+    expect(plan.effective).toEqual([{ name: "x", packageName: P }]);
+    expect(plan.skippedHostCollisions).toEqual([]);
+    expect(plan.dedupedExtensionNames).toEqual([{ name: "x", packageName: P, version: "0.3.0" }]);
+
+    markEffectiveExtensionMcpTools(plan.effective);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("x")).toEqual({ packageName: P });
+  });
+
+  it("cross-package retained collision (P@v:x then Q@w:x) → first wins; loser deduped, winner survives", () => {
+    const Q = "@y/other";
+    const plan = planSelfInvokerRetainedUnion([retained("x", "0.2.0"), retained("x", "1.0.0", Q)], {
+      hostClaimedNames: new Set(),
+      extensionClaimedNames: new Set(),
+    });
+    expect(plan.register).toEqual([{ name: "x", packageName: P, version: "0.2.0" }]);
+    expect(plan.dedupedExtensionNames).toEqual([{ name: "x", packageName: Q, version: "1.0.0" }]);
+
+    markEffectiveExtensionMcpTools(plan.effective);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("x")).toEqual({ packageName: P });
+  });
+
+  it("host/module/reserved collision → unmark-worthy: a stale attribution to the SAME package is erased (round-1 #3 preserved)", () => {
+    const plan = planSelfInvokerRetainedUnion([retained("system_screen_lookup", "0.2.0")], {
+      hostClaimedNames: new Set(["system_screen_lookup"]),
+      extensionClaimedNames: new Set(),
+    });
+    expect(plan.register).toEqual([]);
+    expect(plan.skippedHostCollisions).toEqual([{ name: "system_screen_lookup", packageName: P }]);
+
+    // A stale effective entry attributing the host name to this package (e.g.
+    // from a build before the host claimed the name) must NOT survive.
+    markEffectiveExtensionMcpTools([{ name: "system_screen_lookup", packageName: P }]);
+    unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
+    expect(getEffectiveExtensionMcpTool("system_screen_lookup")).toBeUndefined();
   });
 });

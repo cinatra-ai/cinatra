@@ -855,3 +855,72 @@ export async function planExtensionToolDiscovery(
 
   return { entries, notes };
 }
+
+// ---------------------------------------------------------------------------
+// SELF-INVOKER RETAINED UNION (cinatra#1392 S8; codex round-2 #1)
+// ---------------------------------------------------------------------------
+
+/** One servable retained (non-default) tool, as listed by the version-keyed registry. */
+export type SelfInvokerRetainedTool = {
+  packageName: string;
+  version: string;
+  tool: RetainedVersionKeyedMcpTool;
+};
+
+export type SelfInvokerRetainedUnionPlan = {
+  /** Names to register behind the strict versioned-only dispatch, in input order. */
+  register: Array<{ name: string; packageName: string; version: string }>;
+  /** Effective-set entries for the names actually registered (merge/upsert semantics). */
+  effective: Array<{ name: string; packageName: string }>;
+  /**
+   * HOST-side collisions (platform/module/reserved names) — the ONLY collision
+   * class the caller may UNMARK from the effective set. An extension-extension
+   * dedupe (the default replay or an earlier retained sibling already claimed
+   * the name) is deliberately NOT in this list: the unmark is package-scoped,
+   * so a same-package skip (default `P:x` + retained `P@v:x`, or two retained
+   * versions of `P:x`) would erase the WINNING entry's attribution and the
+   * deny-by-default boundary would then block a legitimately-registered
+   * handler (codex S8 round-2 #1).
+   */
+  skippedHostCollisions: Array<{ name: string; packageName: string }>;
+  /** Diagnostics — extension-extension dedupes (registration skipped, winning attribution preserved). */
+  dedupedExtensionNames: Array<{ name: string; packageName: string; version: string }>;
+};
+
+/**
+ * Classify the retained (non-default) tool names for the self-invoker's
+ * discovery union. Pure and order-preserving: first name wins among retained
+ * entries; a name the extension DEFAULT replay already registered keeps the
+ * default's registration + attribution (the strict versioned-only dispatch is
+ * only for names the default set does not serve).
+ */
+export function planSelfInvokerRetainedUnion(
+  retained: readonly SelfInvokerRetainedTool[],
+  input: {
+    /** Names claimed by host/platform modules or reserved built-ins (unmark-worthy on collision). */
+    hostClaimedNames: ReadonlySet<string>;
+    /** Names the extension DEFAULT replay registered (attribution-preserving dedupe on collision). */
+    extensionClaimedNames: ReadonlySet<string>;
+  },
+): SelfInvokerRetainedUnionPlan {
+  const register: Array<{ name: string; packageName: string; version: string }> = [];
+  const effective: Array<{ name: string; packageName: string }> = [];
+  const skippedHostCollisions: Array<{ name: string; packageName: string }> = [];
+  const dedupedExtensionNames: Array<{ name: string; packageName: string; version: string }> = [];
+  const claimed = new Set(input.extensionClaimedNames);
+  for (const r of retained) {
+    const name = r.tool.name;
+    if (input.hostClaimedNames.has(name)) {
+      skippedHostCollisions.push({ name, packageName: r.packageName });
+      continue;
+    }
+    if (claimed.has(name)) {
+      dedupedExtensionNames.push({ name, packageName: r.packageName, version: r.version });
+      continue;
+    }
+    claimed.add(name);
+    register.push({ name, packageName: r.packageName, version: r.version });
+    effective.push({ name, packageName: r.packageName });
+  }
+  return { register, effective, skippedHostCollisions, dedupedExtensionNames };
+}

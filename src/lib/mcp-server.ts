@@ -63,6 +63,7 @@ import {
   dispatchPlannedExtensionMcpTool,
   dispatchVersionedOnlyExtensionMcpTool,
   planExtensionToolDiscovery,
+  planSelfInvokerRetainedUnion,
 } from "@/lib/extension-edge-bound-serving";
 import { listServableVersionKeyedMcpTools } from "@/lib/extension-version-keyed-serving";
 
@@ -353,9 +354,16 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // so the captured handler shape is uniform with the module-registered ones.
   const unionEffective: { name: string; packageName: string }[] = [];
   const unionSkipped: { name: string; packageName: string }[] = [];
-  const reservedNames = new Set(RESERVED_HOST_TOOL_NAMES);
+  // Names claimed by host/platform modules + reserved built-ins BEFORE the
+  // extension replay. This is the ONLY collision class whose skip may UNMARK
+  // an effective entry (codex S8 round-2 #1): the unmark is package-scoped, so
+  // pushing an extension-extension dedupe into the skip list would erase the
+  // WINNING entry's attribution whenever the packages match (default `P:x` +
+  // retained `P@v:x`, or two retained versions of `P:x`) and the deny-by-
+  // default boundary would then block a legitimately-registered handler.
+  const hostClaimedNames = new Set<string>([...handlers.keys(), ...RESERVED_HOST_TOOL_NAMES]);
   for (const tool of listExtensionMcpTools()) {
-    if (handlers.has(tool.name) || reservedNames.has(tool.name)) {
+    if (hostClaimedNames.has(tool.name)) {
       unionSkipped.push({ name: tool.name, packageName: tool.packageName });
       continue;
     }
@@ -380,22 +388,30 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // is refused with evidence, never served across the pin. First name wins on
   // a cross-version/cross-package collision (the dispatch keys the point lookup
   // on the CALLER's own pinned version, so the winner only fixes which package
-  // the decision is resolved against).
-  for (const retained of listServableVersionKeyedMcpTools()) {
-    if (handlers.has(retained.tool.name) || reservedNames.has(retained.tool.name)) {
-      // A version-only name colliding with a module/host/reserved name is
-      // SKIPPED — and reported so a stale effective attribution to THIS
-      // package cannot survive the collision (codex S8 round-1 #3).
-      unionSkipped.push({ name: retained.tool.name, packageName: retained.packageName });
-      continue;
-    }
-    const target = { packageName: retained.packageName, name: retained.tool.name };
-    handlers.set(retained.tool.name, async (input: unknown) => {
+  // the decision is resolved against). Collision classes are SPLIT (codex S8
+  // round-2 #1): a host/module/reserved collision is unmark-worthy (round-1
+  // #3 — a stale attribution must not survive it); an extension-extension
+  // dedupe (the default replay or an earlier retained sibling already serves
+  // the name) preserves the WINNING registration + attribution.
+  const retainedUnion = planSelfInvokerRetainedUnion(listServableVersionKeyedMcpTools(), {
+    hostClaimedNames,
+    extensionClaimedNames: new Set(unionEffective.map((t) => t.name)),
+  });
+  for (const entry of retainedUnion.register) {
+    const target = { packageName: entry.packageName, name: entry.name };
+    handlers.set(entry.name, async (input: unknown) => {
       const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
       return wrapExtensionToolResult(raw);
     });
-    unionEffective.push({ name: retained.tool.name, packageName: retained.packageName });
   }
+  for (const deduped of retainedUnion.dedupedExtensionNames) {
+    console.debug(
+      `[mcp] self-invoker union: retained ${deduped.packageName}@${deduped.version} tool ` +
+        `"${deduped.name}" already served by the extension replay — deduped (winning attribution preserved)`,
+    );
+  }
+  unionEffective.push(...retainedUnion.effective);
+  unionSkipped.push(...retainedUnion.skippedHostCollisions);
   // The union names must be in the EFFECTIVE set too (merge semantics): the
   // in-process invoker runs the same deny-by-default boundary as the live
   // transport, and an unmarked versioned-only name would be blocked as an
