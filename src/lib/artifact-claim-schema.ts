@@ -160,6 +160,94 @@ $body$` },
     // are the claim system's uninstall archival + replay lineage; kept a
     // separately-exported function below for direct SQL-shape tests.
     ...artifactUninstallOperationSchemaQueries(schemaName),
+    // cinatra#1429: the binding write-path support (quarantine + backfill
+    // checkpoint tables) + the asserted_by='system' CHECK widening ride the
+    // SAME claim-system spread (same ratchet-holding rationale). Spread LAST so
+    // the asserted_by reconcile runs after semantic_assertion exists (created by
+    // semanticAssertionSchemaQueries, spread earlier in buildCreateStoreSchemaQueries);
+    // existing deployments via migration core__0040.
+    ...bindingWritePathSchemaQueries(schemaName),
+  ];
+}
+
+const SYSTEM_CHECK_LIST = "'user','authoring_skill','agent','matcher','system'";
+
+// ---------------------------------------------------------------------------
+// Binding write-path support (cinatra#1429, epic #1424) — the tables the
+// binding reconcile + per-claim activation gate need, plus the asserted_by
+// CHECK widening. Inlined here (zero-import) to ride the single claim-system
+// spread and hold the drizzle-store file-size ratchet.
+//
+//   - object_binding_quarantine  — per-object exclusion set the activation gate
+//     populates when an enrolling type's legacy row fails registered-Zod
+//     validation; the reconcile + backfill sweep SKIP quarantined rows. Keyed
+//     (org_id, object_id); append-idempotent (ON CONFLICT DO NOTHING).
+//   - artifact_binding_backfill_checkpoint — resumable backfill watermark (one
+//     row per scope × object_type_id × generation; cursor_object_id is the
+//     batch watermark), UNIQUE (scope, object_type_id, generation).
+//   - sa_assertedby_chk += 'system' — bindings are asserted_by='system' (the
+//     service principal driving reconciliation). Guarded reconcile: only
+//     re-validates when the constraint is absent or lacks 'system'; existing
+//     rows never carry 'system', so widening never rejects.
+//
+// On an existing deployment these arrive via migration core__0040; on a fresh
+// bootstrap they ship here — the two paths converge (idempotent DDL). Kept a
+// separately-exported function for direct SQL-shape tests.
+// ---------------------------------------------------------------------------
+export function bindingWritePathSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  const l = schemaName.replaceAll("'", "''"); // string literal
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."object_binding_quarantine" (
+      org_id text NOT NULL,
+      object_id text NOT NULL,
+      object_type_id text NOT NULL,
+      quarantined_generation integer,
+      reason text NOT NULL,
+      detail jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT object_binding_quarantine_pk PRIMARY KEY (org_id, object_id)
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS object_binding_quarantine_type_idx
+      ON "${q}"."object_binding_quarantine" (object_type_id)` },
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_binding_backfill_checkpoint" (
+      id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      scope text NOT NULL,
+      object_type_id text NOT NULL,
+      generation integer NOT NULL,
+      cursor_object_id text,
+      processed_count integer NOT NULL DEFAULT 0,
+      inserted_count integer NOT NULL DEFAULT 0,
+      quarantined_skipped integer NOT NULL DEFAULT 0,
+      status text NOT NULL DEFAULT 'running',
+      started_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      completed_at timestamptz,
+      CONSTRAINT abbc_status_chk CHECK (status IN ('running','done')),
+      CONSTRAINT abbc_scope_chk CHECK (scope = 'platform' OR scope LIKE 'org:_%')
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS abbc_one_per_key
+      ON "${q}"."artifact_binding_backfill_checkpoint" (scope, object_type_id, generation)` },
+    // asserted_by CHECK widening — guarded so repeated bootstraps do not re-scan.
+    { text: `DO $abchk$
+DECLARE def text;
+BEGIN
+  SELECT pg_get_constraintdef(c.oid) INTO def
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+   WHERE c.conname = 'sa_assertedby_chk'
+     AND t.relname = 'semantic_assertion'
+     AND n.nspname = '${l}';
+  IF def IS NULL THEN
+    ALTER TABLE "${q}"."semantic_assertion"
+      ADD CONSTRAINT sa_assertedby_chk CHECK (asserted_by IN (${SYSTEM_CHECK_LIST}));
+  ELSIF position('system' IN def) = 0 THEN
+    ALTER TABLE "${q}"."semantic_assertion" DROP CONSTRAINT sa_assertedby_chk;
+    ALTER TABLE "${q}"."semantic_assertion"
+      ADD CONSTRAINT sa_assertedby_chk CHECK (asserted_by IN (${SYSTEM_CHECK_LIST}));
+  END IF;
+END $abchk$` },
   ];
 }
 

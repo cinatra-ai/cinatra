@@ -27,6 +27,7 @@ import {
   resolveDrupalInstanceAdmin,
   resolveWordPressInstanceAdmin,
 } from "@/lib/connector-client-providers";
+import { resolveWordPressWidgetAuth } from "@/lib/widget-auth-provider";
 import { countExternalMcpOAuthClients } from "@/lib/better-auth-oauth-client";
 import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
 import { loadConnectorModule } from "@/lib/connector-modules.server";
@@ -116,6 +117,19 @@ const BUILT_IN_PROBES: Record<string, ConnectorReadinessProbe> = {
   "youtube-connector": async (ctx) => connectedWhen(Boolean(userConnections(ctx)?.youtube)),
   "wordpress-mcp-connector": async () =>
     countReadiness(resolveWordPressInstanceAdmin()?.getAPISettings().instances.length ?? 0),
+  // The WordPress widget connector's OWN readiness is whether its widget
+  // credentials have been generated on this page (the API key + webhook secret
+  // the WP plugin pastes) — the single thing this setup page controls. WordPress
+  // instances belong to the wordpress connector (probed above); this page's own
+  // connection signal is the generated credential pair. `resolveWordPressWidgetAuth`
+  // returns null when the owning connector isn't installed/active or no unique
+  // trusted owner resolves (fail-closed → not connected); `read()` returns null
+  // until credentials are generated. Feeds both the /connectors grid badge and
+  // the host Connection status card on this connector's Setup tab (ask-6).
+  "wordpress-assistant-connector": async () => {
+    const svc = await resolveWordPressWidgetAuth();
+    return connectedWhen(Boolean(svc?.read()));
+  },
   "drupal-mcp-connector": async () =>
     countReadiness(resolveDrupalInstanceAdmin()?.listInstances().length ?? 0),
   "a2a-server-connector": async () => countReadiness(listSavedNangoConnections("a2aServer").length),

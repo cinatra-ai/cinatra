@@ -1,5 +1,5 @@
 // Shared loader + fail-closed resolver for the stateful-service upgrade matrix
-// (docs/architecture/upgrade-matrix.json). This is the CONSUMPTION CONTRACT in
+// (config/upgrade/upgrade-matrix.json). This is the CONSUMPTION CONTRACT in
 // code: cinatra-cli (preflight + `db upgrade-major`) and the cinatra works-after
 // harness resolve every source->target transition through THIS logic, against
 // the SAME matrix revision, so neither can silently act on a different revision.
@@ -12,13 +12,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const MATRIX_PATH = join(HERE, "..", "..", "docs", "architecture", "upgrade-matrix.json");
+export const MATRIX_PATH = join(HERE, "..", "..", "config", "upgrade", "upgrade-matrix.json");
 
 // The revision + schema-major a consumer in THIS tree is built against. A
 // consumer in another repo (cinatra-cli) vendors/reads the matrix and pins its
 // own copy of these two constants; assertMatrixRevision below is how both sides
 // stay fail-closed on skew.
-export const MATRIX_REVISION = 2;
+export const MATRIX_REVISION = 3;
 export const MATRIX_SCHEMA_MAJOR = 1;
 
 /** Load and JSON-parse the matrix (no schema validation — that is the check script's job). */

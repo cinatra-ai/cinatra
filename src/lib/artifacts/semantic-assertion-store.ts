@@ -7,6 +7,10 @@ import { randomUUID } from "node:crypto";
 // leaf-mirror rationale holds; the mirror itself is retired,
 // cinatra#151 Stage 6).
 import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
+// Pure-data leaf (zero server imports) — the generic artifact base type id, the
+// ONE type the default-artifact FLOOR covers besides default-claimed types
+// (cinatra#1429 floor scoping).
+import { GENERIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/objects/effective-identity";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, ensurePostgresSchema, postgresSchema } from "@/lib/database";
 
@@ -118,7 +122,20 @@ WHERE NOT EXISTS (
    WHERE org_id=$1::text AND artifact_id=$2::text AND eligibility='eligible' AND extension <> $3::text)
 AND NOT EXISTS (
   SELECT 1 FROM "${S}"."semantic_assertion"
-   WHERE org_id=$1::text AND artifact_id=$2::text AND extension=$3::text AND eligibility <> 'archived')`,
+   WHERE org_id=$1::text AND artifact_id=$2::text AND extension=$3::text AND eligibility <> 'archived')
+AND EXISTS (
+  -- Floor scoping (cinatra#1429): the default-artifact floor covers ONLY the
+  -- generic artifact type and types carrying an active DEFAULT claim
+  -- (objects:object / approved dynamic). A dedicated-claimed typed row or a
+  -- plain typed object NEVER receives a floor default assertion.
+  SELECT 1 FROM "${S}"."objects" o
+   WHERE o.id=$2::text AND o.org_id=$1::text
+     AND (o.type = '${GENERIC_ARTIFACT_OBJECT_TYPE}'
+          OR EXISTS (
+            SELECT 1 FROM "${S}"."artifact_type_claims" c
+             WHERE c.object_type_id = o.type AND c.claim_kind='default'
+               AND c.status IN ('active','retiring')
+               AND (c.scope='platform' OR c.scope='org:'||$1::text))))`,
       argIdx: { id: 4, src: 5 },
     },
     {
@@ -322,14 +339,19 @@ function buildAssertionOps(input: {
   const newId = randomUUID();
   const ops: Query[] = [
     // archive same-ext active rows the new one supersedes (rank <= newRank),
-    // ONLY if no strictly-higher-rank active same-ext row blocks us.
+    // ONLY if no strictly-higher-rank active same-ext row blocks us. BINDING
+    // rows are EXCLUDED (assertion_basis <> 'binding'): a classic classification
+    // never displaces a binding (epic #1424) — binding lifecycle is owned solely
+    // by the reconcile write-path (cinatra#1429).
     {
       text: `UPDATE "${S}"."semantic_assertion" SET eligibility='archived', archived_at=now()
 WHERE org_id=$1::text AND artifact_id=$2::text AND extension=$3::text AND eligibility <> 'archived'
+AND assertion_basis <> 'binding'
 AND (${RANK_SQL}) <= $4::int
 AND NOT EXISTS (
   SELECT 1 FROM "${S}"."semantic_assertion" s2
    WHERE s2.org_id=$1::text AND s2.artifact_id=$2::text AND s2.extension=$3::text AND s2.eligibility <> 'archived'
+     AND s2.assertion_basis <> 'binding'
      AND (CASE s2.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END) > $4::int)`,
       values: [input.orgId, input.artifactId, input.extension, newRank],
     },
@@ -492,10 +514,12 @@ export function confirmAssertion(input: {
     {
       text: `UPDATE "${S}"."semantic_assertion" SET eligibility='archived', archived_at=now()
 WHERE org_id=$1::text AND artifact_id=$2::text AND extension=$3::text AND eligibility <> 'archived'
+AND assertion_basis <> 'binding'
 AND (${RANK_SQL}) <= $4::int
 AND NOT EXISTS (
   SELECT 1 FROM "${S}"."semantic_assertion" s2
    WHERE s2.org_id=$1::text AND s2.artifact_id=$2::text AND s2.extension=$3::text AND s2.eligibility <> 'archived'
+     AND s2.assertion_basis <> 'binding'
      AND (CASE s2.asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THEN 2 WHEN 'agent' THEN 1 ELSE 0 END) > $4::int)`,
       values: [input.orgId, input.artifactId, input.extension, cRank],
     },

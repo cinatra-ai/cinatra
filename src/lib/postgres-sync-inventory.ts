@@ -206,6 +206,21 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Artifact-extension uninstall-operation store (cinatra#1432): the checkpointed, per-artifact advisory-locked archival of an uninstalled extension's eligible assertions under an operation record, plus the reinstall replay that INSERTs replacement classic assertions for the archived classic subset. A COLD administrative batch path driven by extension uninstall/reinstall lifecycle transitions (not a request-time store); built as a sync leaf mirroring artifact-claim-store.ts so it composes into the synchronous store graph. Migrates to async typed writes with the objects subsystem.",
   },
+  "src/lib/objects/binding-write-path.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Binding-assertion write path (cinatra#1429): the per-artifact advisory-locked reconcile that resolves the live dedicated claim winner in SQL and archives/inserts the artifact's binding assertion. Composed into the object write tx (upsert → reconcile, one held-lock tx) and driven standalone by the reconcile-queue consumer + backfill. Built as a sync leaf mirroring artifact-claim-store.ts so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
+  "src/lib/objects/binding-reconcile-sweep.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Binding reconcile sweep + queue consumer + enrollment backfill (cinatra#1429): a COLD administrative batch path (checkpointed, resumable) that pages a claimed type's object rows and reconciles each binding, plus the drain of the claim registry's winner-change reconcile queue. Driven by claim lifecycle transitions + enrollment, not a request-time store; sync leaf composing into the synchronous store graph. Migrates with the objects subsystem.",
+  },
+  "src/lib/objects/claim-activation-gate.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Per-claim activation gate (cinatra#1429): the pre-activation legacy-row audit that quarantines rows failing registered-Zod validation, plus the quarantine read/write helpers and the active-dedicated-claim probe the write path enforces against. A COLD administrative path driven by claim activation (audit sweep) with a request-time probe on the enforced write path; sync leaf composing into the synchronous store graph. Migrates with the objects subsystem.",
+  },
   "src/lib/skill-lifecycle-store.ts": {
     class: "migratable-request-path",
     justification:
@@ -234,7 +249,12 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/agent-run-skills-used.ts": {
     class: "migratable-request-path",
     justification:
-      "Records skills used during an agent run. Request/run-time write; migratable to async pooled access.",
+      "Records skills used during an agent run — snapshot, exposure telemetry, and per-invocation counting (cinatra#1368). Request/run-time write; migratable to async pooled access.",
+  },
+  "src/lib/skill-efficacy.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Skill efficacy read model (cinatra#1368): the per-skill exposure/invocation rollup join for the skills-admin view plus the admin deprecation-candidate dismiss/reinstate writes. Admin request-time reads/writes; migratable to async pooled access.",
   },
   "src/lib/artifacts/artifact-creation.ts": {
     class: "migratable-request-path",

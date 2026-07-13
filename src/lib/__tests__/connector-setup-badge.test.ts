@@ -1,10 +1,13 @@
-// The connector setup-page dispatch route HOST-injects a
-// connection-status badge top-right on EVERY render branch, reading the SAME
-// readiness signal the /connectors card grid does. Two guarantees:
+// Per the owner ruling (wordpress-assistant-connector#36 ask-6) and
+// design/specs/app-connectors.html §II, the connection-status BADGE no longer
+// sits top-right of any connector setup page — it moved into the right-column
+// "Connection status" card. This file pins two things:
 //   1. `resolveConnectorBadgeState` is the fail-soft probe pipeline (a throwing
-//      or absent probe degrades to "not connected", never throws).
-//   2. The dispatch route renders the shared host badge into all four
-//      host-chromed PageHeader branches AND over the bundled-react branch.
+//      or absent probe degrades to "not connected", never throws) — it now SEEDS
+//      the status cards instead of a header badge.
+//   2. The dispatch route renders NO top-right badge on any branch, and gives
+//      the wp-assistant bundled-react branch the host-owned Connection status
+//      card in a right column (the ask-6 companion to the frozen extension).
 
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -54,7 +57,7 @@ describe("resolveConnectorBadgeState (host badge data)", () => {
   });
 });
 
-describe("dispatch route host-injects the badge on every branch", () => {
+describe("dispatch route: no top-right badge; wp-assistant Setup-tab status card", () => {
   const ROUTE_SRC = readFileSync(
     join(
       __dirname,
@@ -70,29 +73,42 @@ describe("dispatch route host-injects the badge on every branch", () => {
     "utf8",
   );
 
-  it("imports the SHARED ConnectorBadge (host-owned, not extension-owned)", () => {
-    expect(ROUTE_SRC).toContain(
-      'import { ConnectorBadge } from "@cinatra-ai/connectors/connector-badge"',
-    );
+  it("no longer imports or renders the top-right ConnectorBadge", () => {
+    // Owner ruling (wordpress-assistant-connector#36 ask-6) + app-connectors.html
+    // §II: the status badge that once sat top-right is gone from every setup page.
+    // (`resolveConnectorBadgeState` survives to SEED the cards — assert the badge
+    // COMPONENT import + JSX + the `statusBadge` element are gone, precisely.)
+    expect(ROUTE_SRC).not.toContain("@cinatra-ai/connectors/connector-badge");
+    expect(ROUTE_SRC).not.toMatch(/<ConnectorBadge\b/);
+    expect(ROUTE_SRC).not.toMatch(/\bstatusBadge\b/);
   });
 
-  it("resolves the badge state via the card readiness pipeline", () => {
+  it("removes the pointer-events-none overlay from the bundled-react branch", () => {
+    expect(ROUTE_SRC).not.toContain("pointer-events-none");
+  });
+
+  it("carries no header actions on any host-chromed PageHeader branch", () => {
+    // Every fallback branch (probe-less schema-config, invalid-schema-config, the
+    // two requires-rebuild sites) renders a bare <PageHeader> — no actions slot.
+    expect(ROUTE_SRC).not.toMatch(/actions=\{statusBadge\}/);
+  });
+
+  it("still resolves the readiness state to SEED the connection status cards", () => {
+    // badgeState survives only to seed the right-column Connection status card
+    // (Model-A schema-config path + the bundled-react host card below), from the
+    // SAME probe that feeds the /connectors grid badge.
     expect(ROUTE_SRC).toContain("resolveConnectorBadgeState");
-    // Registers the built-in probes (side effect) so the badge matches the card.
     expect(ROUTE_SRC).toContain('import "@/lib/connector-readiness.server"');
   });
 
-  it("passes the badge to every host-chromed PageHeader actions slot", () => {
-    // All four host-chromed branches (schema-config, invalid-schema-config, and
-    // the two requires-rebuild sites) render <PageHeader ... actions={statusBadge} />.
-    const actionsMatches = ROUTE_SRC.match(/actions=\{statusBadge\}/g) ?? [];
-    expect(actionsMatches.length).toBe(4);
-  });
-
-  it("floats the badge top-right over the bundled-react branch, non-interactively", () => {
-    // The bundled-react setup page renders its own chrome, so the host overlays
-    // the badge with pointer-events-none (cannot steal clicks from the
-    // extension's own header controls).
-    expect(ROUTE_SRC).toMatch(/pointer-events-none[\s\S]*?statusBadge/);
+  it("gives the wp-assistant bundled-react branch the host Connection status card", () => {
+    // ask-6 half two: gated to wordpress-assistant-connector, the host wraps the
+    // self-chromed extension page in the shared two-column grid and renders the
+    // host-owned ConnectorStatusProbeCard in the right column (seeded from the
+    // widget-credentials readiness probe). initialConnected comes from badgeState.
+    expect(ROUTE_SRC).toContain('=== "wordpress-assistant-connector"');
+    expect(ROUTE_SRC).toMatch(
+      /ConnectorSetupColumns[\s\S]*?ConnectorStatusProbeCard[\s\S]*?initialConnected=\{badgeState\.connected\}/,
+    );
   });
 });

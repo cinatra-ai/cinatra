@@ -19,7 +19,7 @@
 // This is a DEV/BUMP-time tool: `git ls-remote` is fine here. CI never runs
 // it — pinned sync consumes only the committed locks.
 //
-// Bump recipe (one deliberate PR — see docs/extension-clone-pinning.md):
+// Bump recipe (one deliberate PR — see docs/internals/contracts/extension-clone-pinning.md):
 //   node scripts/extensions/update-dev-extension-lock.mjs   # or --select a,b
 //   node scripts/ci/sync-dev-extensions.mjs --pinned        # re-pin the tree
 //   pnpm install                                            # pnpm-lock.yaml moves WITH the pins
@@ -207,7 +207,7 @@ function main() {
       "CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); " +
       `the prod bootable set is pinned separately in ${REQUIRED_EXTENSIONS_LOCK_FILENAME} (never duplicated here). ` +
       "Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated " +
-      "maps in the SAME PR — see docs/extension-clone-pinning.md.",
+      "maps in the SAME PR — see docs/internals/contracts/extension-clone-pinning.md.",
     schemaVersion: 1,
     packages: result.packages,
   };

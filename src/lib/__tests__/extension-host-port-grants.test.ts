@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   computeRequestedPortsHash,
   recordRequestedGrant,
   approveGrant,
   revokeGrant,
   readApprovedPorts,
+  listGrantsForScopes,
+  countPendingHostPortGrants,
   type HostPortGrantDeps,
 } from "@/lib/extension-host-port-grants";
 
@@ -347,5 +349,93 @@ describe("org-row precedence over global", () => {
       deps(db),
     );
     expect(await readApprovedPorts({ packageName: PKG, orgId: "org-2" }, deps(db))).toEqual(["db"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1391 — the union-aware re-approval surface's read: grant rows at a
+// SET of exact scopes, optionally status-filtered, oldest-first.
+// ---------------------------------------------------------------------------
+
+describe("listGrantsForScopes (cinatra#1391)", () => {
+  it("returns [] WITHOUT querying when no scope is named (no orgs, no global)", async () => {
+    const query = vi.fn();
+    const rows = await listGrantsForScopes({ orgIds: [] }, { query, schema: "cinatra" } as unknown as HostPortGrantDeps);
+    expect(rows).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("builds an ANY(orgIds) OR org_id IS NULL predicate + status filter, oldest-first, and maps created/updated to ISO", async () => {
+    const captured: { text: string; values: unknown[] } = { text: "", values: [] };
+    const query = vi.fn(async (text: string, values: unknown[]) => {
+      captured.text = text;
+      captured.values = values;
+      return [
+        {
+          id: "g1",
+          package_name: PKG,
+          org_id: null,
+          approved_ports: ["p1"],
+          requested_ports_hash: "h",
+          status: "pending",
+          approved_by: null,
+          created_at: new Date("2026-07-13T00:00:00.000Z"), // Date → ISO
+          updated_at: "2026-07-13T01:00:00.000Z", // already-ISO string passthrough
+        },
+      ];
+    });
+    const rows = await listGrantsForScopes(
+      { orgIds: ["o1", null], status: "pending" },
+      { query, schema: "cinatra" } as unknown as HostPortGrantDeps,
+    );
+    expect(captured.text).toMatch(/org_id = ANY\(\$1::text\[\]\)/);
+    expect(captured.text).toMatch(/org_id IS NULL/);
+    expect(captured.text).toMatch(/AND status = \$2/);
+    expect(captured.text).toMatch(/ORDER BY created_at ASC/);
+    expect(captured.values).toEqual([["o1"], "pending"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      packageName: PKG,
+      orgId: null,
+      approvedPorts: ["p1"],
+      status: "pending",
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T01:00:00.000Z",
+    });
+  });
+
+  it("a global-ONLY scope queries with org_id IS NULL and NO ANY clause", async () => {
+    let text = "";
+    const query = vi.fn(async (t: string) => {
+      text = t;
+      return [];
+    });
+    await listGrantsForScopes({ orgIds: [null] }, { query, schema: "cinatra" } as unknown as HostPortGrantDeps);
+    expect(text).toMatch(/org_id IS NULL/);
+    expect(text).not.toMatch(/ANY/);
+  });
+});
+
+describe("countPendingHostPortGrants (cinatra#1391 nav badge read)", () => {
+  it("returns the count of pending grant rows at the scopes", async () => {
+    // A query stub returning two pending rows regardless of the WHERE.
+    const query = vi.fn(async (_text: string, _values?: readonly unknown[]) => [
+      { id: "g1", package_name: PKG, org_id: null, approved_ports: [], requested_ports_hash: "h", status: "pending", approved_by: null, created_at: "t", updated_at: "t" },
+      { id: "g2", package_name: PKG, org_id: "org-1", approved_ports: [], requested_ports_hash: "h", status: "pending", approved_by: null, created_at: "t", updated_at: "t" },
+    ]);
+    const n = await countPendingHostPortGrants(
+      { orgIds: ["org-1", null] },
+      { query, schema: "cinatra" } as unknown as HostPortGrantDeps,
+    );
+    expect(n).toBe(2);
+    // Only pending rows are asked for.
+    expect(query.mock.calls[0]![0]).toMatch(/status = \$/);
+  });
+
+  it("short-circuits to 0 without querying when no scope is named", async () => {
+    const query = vi.fn();
+    const n = await countPendingHostPortGrants({ orgIds: [] }, { query, schema: "cinatra" } as unknown as HostPortGrantDeps);
+    expect(n).toBe(0);
+    expect(query).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,11 @@ import {
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { readSkillLifecycleStates } from "@/lib/database";
 import {
+  recordSkillExposure,
+  incrementSkillInvocation,
+  type SkillKind,
+} from "@/lib/agent-run-skills-used";
+import {
   readAgentRunByContextId,
   readAgentRunById,
   readAgentRunByTokenHash,
@@ -1509,6 +1514,11 @@ export async function POST(req: Request): Promise<Response> {
         // `result.skillSelection` (returned in the JSON response below).
         skillSelectionMode: "general",
         customSkillContent: personalSkill?.content,
+        // S10 efficacy loop (cinatra#1368): carry the personal delta's identity
+        // alongside its content so exposure telemetry can attribute it (the
+        // bridge previously passed content with NO skill id). Recorded as a
+        // NON-attributable personal_inline exposure.
+        customSkillId: (personalSkill as { id?: string } | null | undefined)?.id,
         system: body.system ?? "",
         user: envelope.text,
         maxSteps,
@@ -1546,6 +1556,44 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const text = result.text ?? "";
+
+    // S10 efficacy loop (cinatra#1368). Record this step's skill exposure +
+    // attributable invocations against the vetted run. ONLY a server-resolved
+    // run (`runForPorts`) — the same handle that scopes personal-delta delivery
+    // and OBO minting — keys the ledger; an unattributable call records nothing.
+    // Personal deltas (skill id === the resolved delta's id) are kind 'custom';
+    // every other delivered skill is an installed catalog skill. Best-effort:
+    // ledger writes must never fail a bridge run.
+    if (runForPorts?.id) {
+      const runId = runForPorts.id;
+      const personalDeltaId = (personalSkill as { id?: string } | null | undefined)?.id;
+      try {
+        const exposures = (result.skillExposure ?? []).map((e) => ({
+          skillId: e.skillId,
+          skillKind: (e.skillId === personalDeltaId ? "custom" : "installed") as SkillKind,
+          deliveryMode: e.deliveryMode,
+          invocationAttributable: e.invocationAttributable,
+        }));
+        if (exposures.length > 0) {
+          recordSkillExposure({ runId, exposures });
+        }
+        // invokedSkillIds are attributable OpenAI shell reads — installed
+        // catalog skills, always openai_shell.
+        for (const skillId of result.invokedSkillIds ?? []) {
+          incrementSkillInvocation({
+            runId,
+            skillId,
+            skillKind: "installed",
+            deliveryMode: "openai_shell",
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `[llm-bridge] skill-efficacy ledger write failed for run ${runId}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
 
     // Visible, non-silent surfacing of the general-path rank-and-truncate
     // decision. Set ONLY when the Anthropic delivery actually dropped

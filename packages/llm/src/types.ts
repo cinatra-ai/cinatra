@@ -222,6 +222,41 @@ export type LlmUsageData = {
   cacheCreationInputTokens?: number;
 };
 
+/**
+ * The transport a skill's instructions reached the model through. Each mode
+ * differs in whether a per-skill INVOCATION signal is observable at our
+ * boundary (S10 efficacy loop, cinatra#1368):
+ *
+ * - `"openai_shell"`      — native `type:"shell"` tool; the model reads a named
+ *   `/skills/<slug>/SKILL.md`, so a read IS an attributable invocation signal.
+ * - `"gemini_inline"`     — skill body inlined into the system prompt; no
+ *   per-skill signal → NON-attributable.
+ * - `"anthropic_container"` — pre-synced Custom Skills applied automatically
+ *   inside the code-execution container; no per-skill read at our boundary →
+ *   NON-attributable.
+ * - `"personal_inline"`   — a personal-delta SKILL.md injected as
+ *   system-prompt content (all providers); no per-skill signal → NON-attributable.
+ */
+export type SkillDeliveryMode =
+  | "openai_shell"
+  | "gemini_inline"
+  | "anthropic_container"
+  | "personal_inline";
+
+/**
+ * One skill made available to the model on a single LLM call, carrying its
+ * catalog skill id (INCLUDING personal deltas), the delivery mode it reached
+ * the model through, and whether that mode can attribute a per-skill
+ * invocation. The efficacy loop records these as exposure events; a skill that
+ * is only ever exposed via NON-attributable modes can never become a
+ * deprecation candidate.
+ */
+export type SkillExposureEntry = {
+  skillId: string;
+  deliveryMode: SkillDeliveryMode;
+  invocationAttributable: boolean;
+};
+
 export type LlmResponse = {
   text: string | null;
   status: string | null;
@@ -240,6 +275,21 @@ export type LlmResponse = {
     droppedSkillIds: string[];
     selectionReason: string;
   };
+  /**
+   * Every skill actually delivered to the model on this call, with its
+   * delivery mode + invocation-attributability (S10 efficacy loop). Includes
+   * the personal delta when one was injected. The llm-bridge records these as
+   * exposure events keyed on the run. Absent when no skills were delivered.
+   */
+  skillExposure?: SkillExposureEntry[];
+  /**
+   * Catalog skill ids the model INVOKED on this call via an attributable mode
+   * (today: OpenAI shell reads of a named `/skills/<slug>` file). Deduped,
+   * stable order of first read. Empty/absent when nothing attributable was
+   * invoked (or the only delivery modes were non-attributable). The bridge
+   * increments the per-run invocation ledger for each id.
+   */
+  invokedSkillIds?: string[];
 };
 
 // ---------------------------------------------------------------------------

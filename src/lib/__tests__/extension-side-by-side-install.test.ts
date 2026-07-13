@@ -81,6 +81,10 @@ const installExtensionFromRegistry = vi.fn((input: unknown, deps: never) =>
 );
 const basePreflightMigrations = vi.fn(async () => false);
 const baseReadGrantForScope = vi.fn(async () => null as unknown);
+// cinatra#1391 PORTS AXIS: named base grant spies the side-by-side union path wraps.
+const baseRecordRequestedGrant = vi.fn(async () => undefined);
+const baseApproveGrant = vi.fn(async () => undefined);
+const baseRestoreGrant = vi.fn(async () => undefined);
 // cinatra#1040 S6: base OWNERSHIP hooks the side-by-side union path wraps.
 let baseTokenKeys: string[] = [];
 const baseReadWidgetAuthTokenKeys = vi.fn(async () => baseTokenKeys);
@@ -96,8 +100,9 @@ vi.mock("@/lib/extension-install-pipeline", () => ({
     readRequestedPorts: vi.fn(async () => []),
     preflightMigrations: (...a: unknown[]) => basePreflightMigrations(...(a as [])),
     readGrantForScope: (...a: unknown[]) => baseReadGrantForScope(...(a as [])),
-    recordRequestedGrant: vi.fn(),
-    approveGrant: vi.fn(),
+    recordRequestedGrant: (...a: unknown[]) => baseRecordRequestedGrant(...(a as [])),
+    approveGrant: (...a: unknown[]) => baseApproveGrant(...(a as [])),
+    restoreGrant: (...a: unknown[]) => baseRestoreGrant(...(a as [])),
     readWidgetAuthTokenKeys: (...a: unknown[]) => baseReadWidgetAuthTokenKeys(...(a as [])),
     recordRequestedOwnershipGrant: (...a: unknown[]) =>
       baseRecordRequestedOwnershipGrant(...(a as [])),
@@ -114,6 +119,22 @@ vi.mock("@/lib/extension-capability-ownership-grants", () => ({
   revokeOwnershipGrant: (...a: unknown[]) => ownershipRevoke(...(a as [])),
   readWidgetAuthTokenKeysFromStore: (...a: unknown[]) =>
     readWidgetAuthTokenKeysFromStore(...(a as [])),
+}));
+
+// cinatra#1391 PORTS AXIS: the shared host-port grant store (dynamic-imported by
+// the install-time union path for the hash + by the teardown ports reconcile).
+// Deterministic order-insensitive hash so union/prior/survivor comparisons are
+// assertable without a DB.
+const portsHash = (ports: readonly string[]): string =>
+  `h:${Array.from(new Set(ports.map(String))).sort().join(",")}`;
+const grantsReadGrantForScope = vi.fn(async () => null as unknown);
+const grantsRestoreGrant = vi.fn(async () => undefined);
+const grantsRecordRequestedGrant = vi.fn(async () => undefined);
+vi.mock("@/lib/extension-host-port-grants", () => ({
+  computeRequestedPortsHash: (p: readonly string[]) => portsHash(p),
+  readGrantForScope: (...a: unknown[]) => grantsReadGrantForScope(...(a as [])),
+  restoreGrant: (...a: unknown[]) => grantsRestoreGrant(...(a as [])),
+  recordRequestedGrant: (...a: unknown[]) => grantsRecordRequestedGrant(...(a as [])),
 }));
 
 import {
@@ -413,6 +434,7 @@ async function captureUnionDeps(
   grantUnion: {
     persistCapsule: (c: unknown) => Promise<void>;
     readSurvivorOwnershipKeys?: (v: string) => Promise<Set<string>>;
+    readSiblingDeclaredPorts?: (v: string) => Promise<string[]>;
   },
 ): Promise<Record<string, (...a: never[]) => Promise<unknown>>> {
   let captured: Record<string, (...a: never[]) => Promise<unknown>> = {};
@@ -596,5 +618,224 @@ describe("uninstallExtensionVersionSideBySide — ownership reconcile (S6)", () 
       readSurvivorOwnershipKeys: async () => new Set(["shared_widget_auth"]),
     });
     expect(ownershipRevoke).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// cinatra#1391 — host-PORTS grant UNION + durable capsule (install + teardown)
+// ===========================================================================
+
+describe("installExtensionVersionSideBySide — ports grant UNION (#1391)", () => {
+  it("with a capsule sink: LIFTS PORTS_NOT_COVERED — records the per-scope UNION via base + captures the capsule", async () => {
+    const persistCapsule = vi.fn(async () => {});
+    const deps = await captureUnionDeps({
+      persistCapsule,
+      readSiblingDeclaredPorts: async () => ["p1"], // a surviving sibling declares p1
+    });
+    baseReadGrantForScope.mockResolvedValueOnce(null); // no prior grant row
+    await (deps.recordRequestedGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      requestedPorts: ["p2"],
+    });
+    // Recorded the UNION (sibling ∪ declared) through base's REAL recorder.
+    expect(baseRecordRequestedGrant).toHaveBeenCalledWith({
+      packageName: PKG,
+      orgId: null,
+      requestedPorts: ["p1", "p2"],
+    });
+    // DURABLE capsule captured (declaredPorts + prior=absent) BEFORE the record.
+    expect(persistCapsule).toHaveBeenCalledWith({
+      v: 1,
+      declaredTokenKeys: [],
+      declaredPorts: ["p2"],
+      portsPrior: { exists: false },
+    });
+  });
+
+  it("captures the PRIOR grant state into the capsule when a grant row already exists", async () => {
+    const persistCapsule = vi.fn(async () => {});
+    const deps = await captureUnionDeps({
+      persistCapsule,
+      readSiblingDeclaredPorts: async () => ["p1"],
+    });
+    baseReadGrantForScope.mockResolvedValueOnce({
+      status: "approved",
+      approvedPorts: ["p1"],
+      requestedPortsHash: portsHash(["p1"]),
+      approvedBy: "admin",
+    });
+    await (deps.recordRequestedGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      requestedPorts: ["p2"],
+    });
+    expect(persistCapsule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        declaredPorts: ["p2"],
+        portsPrior: {
+          exists: true,
+          status: "approved",
+          approvedPorts: ["p1"],
+          requestedPortsHash: portsHash(["p1"]),
+          approvedBy: "admin",
+        },
+      }),
+    );
+    expect(baseRecordRequestedGrant).toHaveBeenCalledWith({
+      packageName: PKG,
+      orgId: null,
+      requestedPorts: ["p1", "p2"],
+    });
+  });
+
+  it("union already recorded (the current grant hash covers it) → NO mutation, NO capsule", async () => {
+    const persistCapsule = vi.fn(async () => {});
+    const deps = await captureUnionDeps({
+      persistCapsule,
+      readSiblingDeclaredPorts: async () => ["p1"],
+    });
+    baseReadGrantForScope.mockResolvedValueOnce({
+      status: "approved",
+      approvedPorts: ["p1", "p2"],
+      requestedPortsHash: portsHash(["p1", "p2"]),
+      approvedBy: "admin",
+    });
+    await (deps.recordRequestedGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      requestedPorts: ["p2"],
+    });
+    expect(baseRecordRequestedGrant).not.toHaveBeenCalled();
+    expect(persistCapsule).not.toHaveBeenCalled();
+  });
+
+  it("empty ports request → no shared-grant mutation, no capsule", async () => {
+    const persistCapsule = vi.fn(async () => {});
+    const deps = await captureUnionDeps({
+      persistCapsule,
+      readSiblingDeclaredPorts: async () => ["p1"],
+    });
+    await (deps.recordRequestedGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      requestedPorts: [],
+    });
+    expect(baseRecordRequestedGrant).not.toHaveBeenCalled();
+    expect(persistCapsule).not.toHaveBeenCalled();
+  });
+
+  it("never AUTO-APPROVES the shared grant from a side-by-side install", async () => {
+    const deps = await captureUnionDeps({
+      persistCapsule: vi.fn(async () => {}),
+      readSiblingDeclaredPorts: async () => ["p1"],
+    });
+    await (deps.approveGrant as (g: unknown) => Promise<void>)({
+      packageName: PKG,
+      orgId: null,
+      approvedPorts: ["p1"],
+      requestedPorts: ["p1"],
+      approvedBy: "x",
+    });
+    expect(baseApproveGrant).not.toHaveBeenCalled();
+  });
+
+  it("WITHOUT a capsule sink: the S3 PORTS_NOT_COVERED refusal stands", async () => {
+    let deps: Record<string, (...a: never[]) => Promise<unknown>> = {};
+    pipelineImpl = async (_i, d) => {
+      deps = d as never;
+      versionOps["0.3.0"] = { installOpId: "sbs-op", phase: "finalized" };
+      return {};
+    };
+    await installExtensionVersionSideBySide(INPUT); // no grantUnion
+    baseReadGrantForScope.mockResolvedValueOnce({ status: "approved", approvedPorts: ["p1"] });
+    await expect(
+      (deps.recordRequestedGrant as (g: unknown) => Promise<void>)({
+        packageName: PKG,
+        orgId: null,
+        requestedPorts: ["p1", "p9"],
+      }),
+    ).rejects.toMatchObject({ code: "PORTS_NOT_COVERED" });
+  });
+});
+
+describe("uninstallExtensionVersionSideBySide — ports reconcile (#1391)", () => {
+  beforeEach(() => {
+    canonicalRows = [
+      defaultRow(),
+      defaultRow({ id: "row-sbs", isDefault: false, version: "0.3.0" }),
+    ];
+    versionOps["0.3.0"] = { installOpId: "sbs-op", phase: "finalized" };
+  });
+
+  it("reconciles the shared grant from the capsule — LIFO exact prior restore", async () => {
+    grantsReadGrantForScope.mockResolvedValue({
+      status: "pending",
+      approvedPorts: [],
+      requestedPortsHash: portsHash(["p1", "p2"]), // grown pending union
+      approvedBy: null,
+    });
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      capsule: {
+        v: 1,
+        declaredTokenKeys: [],
+        declaredPorts: ["p2"],
+        portsPrior: {
+          exists: true,
+          status: "approved",
+          approvedPorts: ["p1"],
+          requestedPortsHash: portsHash(["p1"]),
+          approvedBy: "admin",
+        },
+      },
+      readSurvivorDeclaredPorts: async () => ["p1"], // the default survives with p1
+    });
+    expect(grantsRestoreGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        packageName: PKG,
+        orgId: null,
+        status: "approved",
+        approvedPorts: ["p1"],
+        requestedPortsHash: portsHash(["p1"]),
+        approvedBy: "admin",
+      }),
+    );
+    expect(grantsRecordRequestedGrant).not.toHaveBeenCalled();
+  });
+
+  it("capsule-ABSENT explicit uninstall falls back to the live declared ports and corrects to a pending survivor union", async () => {
+    grantsReadGrantForScope.mockResolvedValue({
+      status: "pending",
+      approvedPorts: [],
+      requestedPortsHash: portsHash(["p1", "p2"]),
+      approvedBy: null,
+    });
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      // no capsule (released on batch finalize) → live fallback read of own store
+      readTornDownDeclaredPorts: async () => ["p2"],
+      readSurvivorDeclaredPorts: async () => ["p1"],
+    });
+    expect(grantsRecordRequestedGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: PKG, orgId: null, requestedPorts: ["p1"] }),
+    );
+    expect(grantsRestoreGrant).not.toHaveBeenCalled();
+  });
+
+  it("no capsule + no declared ports (legacy member) → NO ports reconcile", async () => {
+    await uninstallExtensionVersionSideBySide({
+      packageName: PKG,
+      version: "0.3.0",
+      orgId: null,
+      readTornDownDeclaredKeys: async () => [],
+      readTornDownDeclaredPorts: async () => [],
+    });
+    expect(grantsRestoreGrant).not.toHaveBeenCalled();
+    expect(grantsRecordRequestedGrant).not.toHaveBeenCalled();
   });
 });

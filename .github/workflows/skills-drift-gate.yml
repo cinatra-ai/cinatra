@@ -60,7 +60,7 @@ jobs:
     with:
       # assistant-skills pin: points at the commit that carries the skills'
       # `cinatra-watches` declarations. Re-pinned at the release-closeout
-      # skills-drift reconciliation (docs/skills-drift-decisions.md, newest
+      # skills-drift reconciliation (docs/internals/decisions/skills-drift-decisions.md, newest
       # section) to the lock-resolved assistant-skills ref — back in
       # STRICT LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
       # cinatra-required-extensions.lock.json (both e9d5a7e, written into the

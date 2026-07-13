@@ -16,7 +16,7 @@ import {
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
-import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
@@ -2742,7 +2742,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
          AND owner_id <> '__platform__')
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
-    ...artifactClaimSchemaQueries(schemaName), // cinatra#1425: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034
+    ...artifactClaimSchemaQueries(schemaName), // cinatra#1425/#1432/#1429: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034/0037/0040
     ...graphitiProjectionPolicySchemaQueries(schemaName), // cinatra#1427 ACs 4-5: epoch + rebuild journal + outbox epoch stamp (sync leaf, bootstrap-only, no core migration)
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
@@ -4017,7 +4017,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), // cinatra#1041 outcome 3: DDL lives in the pure-strings leaf (file-size-ratchet headroom, the #1317/#1405 pattern)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry (runs late — both agent_run_skills_used and skills already exist)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

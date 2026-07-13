@@ -51,7 +51,7 @@ lockfile ──► canonical PLAN ──► closureHash ──► v2 signature
 | dependency specs | any | PLAIN registry range/tag ONLY — every `npm:` alias refused (plan/v1 carries ONE identity per node: placement name == registry name) |
 | built `register.mjs` + self-check | mandatory (when a serverEntry is declared) | mandatory (when a serverEntry is declared; a closure package with NO serverEntry is legal — the plan alone covers its deps) |
 
-See `docs/extension-server-entry-contract.md` for the full builder contract.
+See `docs/internals/contracts/extension-server-entry-contract.md` for the full builder contract.
 
 ## Plan format `cinatra-materialization-plan/v1`
 

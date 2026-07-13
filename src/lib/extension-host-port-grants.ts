@@ -440,6 +440,57 @@ export async function readGrantForScope(
   return readGrantRow(query, schema, input.packageName, input.orgId);
 }
 
+export type HostPortGrantListRow = HostPortGrant & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+type GrantListRow = GrantRow & { created_at: string | Date; updated_at: string | Date };
+
+/**
+ * Grant rows at a SET of exact scopes (each `null` = the platform/global
+ * scope), optionally filtered to one status — the union-aware re-approval
+ * surface's read (cinatra#1391). No cross-scope fallback: the caller names
+ * every scope it may see (e.g. `[viewer.orgId, null]` for a platform-admin
+ * reviewer). Ordered oldest-first so the review inbox is stable.
+ */
+export async function listGrantsForScopes(
+  input: {
+    orgIds: readonly (string | null)[];
+    status?: HostPortGrant["status"];
+  },
+  deps?: HostPortGrantDeps,
+): Promise<HostPortGrantListRow[]> {
+  const { query, schema } = await resolveDeps(deps);
+  const table = qualifiedTable(schema);
+  const orgIds = Array.from(new Set(input.orgIds.filter((o): o is string => o !== null)));
+  const includeGlobal = input.orgIds.includes(null);
+  if (orgIds.length === 0 && !includeGlobal) return [];
+  const scopeClauses: string[] = [];
+  const values: unknown[] = [];
+  if (orgIds.length > 0) {
+    values.push(orgIds);
+    scopeClauses.push(`org_id = ANY($${values.length}::text[])`);
+  }
+  if (includeGlobal) scopeClauses.push("org_id IS NULL");
+  let where = `(${scopeClauses.join(" OR ")})`;
+  if (input.status) {
+    values.push(input.status);
+    where += ` AND status = $${values.length}`;
+  }
+  const rows = await query<GrantListRow>(
+    `SELECT ${SELECT_COLUMNS}, created_at, updated_at FROM ${table}
+      WHERE ${where}
+      ORDER BY created_at ASC`,
+    values,
+  );
+  return rows.map((r) => ({
+    ...rowToGrant(r),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at),
+  }));
+}
+
 export type RestoreGrantInput = {
   packageName: string;
   orgId: string | null;
@@ -496,61 +547,20 @@ export async function restoreGrant(
   return rowToGrant(rows[0]);
 }
 
-// ---------------------------------------------------------------------------
-// Install-pipeline integration. Extracted VERBATIM from
-// `extension-install-pipeline.ts`'s default factory (the pipeline is a baselined
-// file-size-ratchet bottleneck: cohesive slices move OUT so its ceiling only
-// shrinks — the same treatment as `extension-install-canonical-row-deps.ts`).
-// Behavior-identical: the SAME four grant-lifecycle adapters over this module's
-// own functions.
-// ---------------------------------------------------------------------------
-
 /**
- * The host-port grant lifecycle hooks for `makeDefaultInstallPipelineDeps`.
- * `readGrantForScope` is the hot-UPDATE probe's EXACT-(package, org)-scoped grant
- * ROW (status + approvedPorts + requestedPortsHash), NO global fallback — the
- * SAME exact-scope resolution `resolveInstallAnchor` uses; `restoreGrant` re-pins
- * the OLD grant row on durable rollback.
+ * Count of PENDING grant rows at the given exact scopes — the import-light nav
+ * badge read for the host-port-grants approval source (cinatra#1391). Kept in
+ * THIS store (a pure grant-table module) rather than the union-aware review
+ * backend so the sidebar Approvals badge graph stays off the heavy decide/
+ * render + install surfaces (nav-registry-import-purity / #1283): the review
+ * backend recomputes the live port union (it reaches the install pipeline), so
+ * the nav count MUST NOT go through it. Reuses this module's own
+ * `listGrantsForScopes` — no cross-module import.
  */
-export function makeHostPortGrantInstallDeps(): Pick<
-  import("@/lib/extension-install-pipeline").InstallPipelineDeps,
-  "recordRequestedGrant" | "approveGrant" | "readGrantForScope" | "restoreGrant"
-> {
-  return {
-    recordRequestedGrant: (g) =>
-      recordRequestedGrant({
-        packageName: g.packageName,
-        orgId: g.orgId,
-        requestedPorts: g.requestedPorts as readonly HostPortName[],
-      }).then(() => undefined),
-    approveGrant: (g) =>
-      approveGrant({
-        packageName: g.packageName,
-        orgId: g.orgId,
-        approvedPorts: g.approvedPorts as readonly HostPortName[],
-        requestedPorts: g.requestedPorts as readonly HostPortName[],
-        approvedBy: g.approvedBy,
-      }).then(() => undefined),
-    readGrantForScope: async (packageName, orgId) => {
-      const g = await readGrantForScope({ packageName, orgId });
-      return g
-        ? {
-            orgId: g.orgId,
-            status: g.status,
-            approvedPorts: g.approvedPorts,
-            requestedPortsHash: g.requestedPortsHash,
-            approvedBy: g.approvedBy,
-          }
-        : null;
-    },
-    restoreGrant: (i) =>
-      restoreGrant({
-        packageName: i.packageName,
-        orgId: i.orgId,
-        status: i.status,
-        approvedPorts: i.approvedPorts,
-        requestedPortsHash: i.requestedPortsHash,
-        approvedBy: i.approvedBy,
-      }).then(() => undefined),
-  };
+export async function countPendingHostPortGrants(
+  input: { orgIds: readonly (string | null)[] },
+  deps?: HostPortGrantDeps,
+): Promise<number> {
+  const rows = await listGrantsForScopes({ orgIds: input.orgIds, status: "pending" }, deps);
+  return rows.length;
 }
