@@ -68,6 +68,14 @@ export function artifactUninstallOperationSchemaQueries(schemaName: string): { t
     // the archived rows), so the lineage is exactly-the-archived-set by
     // construction. UNIQUE (operation_id, assertion_id) makes the per-artifact
     // archival step idempotently re-runnable after a checkpoint resume.
+    // `assertion_basis` records whether the archived row was a 'classic' or a
+    // 'binding' assertion. Replay INSERTs replacement CLASSIC assertions ONLY
+    // for the classic lineage; BINDING lineage is NOT replayed — bindings
+    // regenerate from CURRENT claims + the CURRENT object type via the
+    // artifact_binding_reconcile_queue the claim reactivation enqueues.
+    // Replaying a binding as classic would change provenance and, once it wins
+    // the sa_active_unique_idx slot, permanently suppress the authoritative
+    // binding (archived rows can never be un-archived).
     { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_uninstall_operation_assertions" (
       id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
       operation_id text NOT NULL,
@@ -77,7 +85,9 @@ export function artifactUninstallOperationSchemaQueries(schemaName: string): { t
       extension text NOT NULL,
       asserted_by text NOT NULL,
       asserted_by_principal text,
+      assertion_basis text NOT NULL DEFAULT 'classic',
       created_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT artifact_uninstall_operation_assertions_basis_check CHECK (assertion_basis IN ('binding','classic')),
       CONSTRAINT artifact_uninstall_operation_assertions_op_assertion_uq UNIQUE (operation_id, assertion_id)
     )` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_uninstall_operation_assertions_op_idx

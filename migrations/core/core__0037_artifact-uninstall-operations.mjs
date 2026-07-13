@@ -16,7 +16,9 @@
 //     replay (an operation replays at most once).
 //   - artifact_uninstall_operation_assertions  append-only lineage: EXACTLY
 //     the semantic_assertion rows the operation archived, denormalized with
-//     everything replay needs (org/artifact/extension/asserted_by/principal);
+//     everything replay needs (org/artifact/extension/asserted_by/principal +
+//     assertion_basis so replay restores only the CLASSIC subset — BINDING
+//     lineage regenerates from current claims, never replayed as classic);
 //     UNIQUE (operation_id, assertion_id) makes checkpoint-resumed archival
 //     idempotent; BEFORE UPDATE OR DELETE trigger raises (lineage is
 //     immutable history).
@@ -66,7 +68,9 @@ export const artifactUninstallOperationsDdlSql = `
     extension text NOT NULL,
     asserted_by text NOT NULL,
     asserted_by_principal text,
+    assertion_basis text NOT NULL DEFAULT 'classic',
     created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT artifact_uninstall_operation_assertions_basis_check CHECK (assertion_basis IN ('binding','classic')),
     CONSTRAINT artifact_uninstall_operation_assertions_op_assertion_uq UNIQUE (operation_id, assertion_id)
   );
   CREATE INDEX IF NOT EXISTS artifact_uninstall_operation_assertions_op_idx

@@ -70,9 +70,12 @@ describe("buildArchiveArtifactAssertionsWithLineageQuery", () => {
     expect(q.text).toMatch(/SET eligibility = 'archived', archived_at = now\(\)/);
     expect(q.text).toMatch(/WHERE org_id = \$1 AND artifact_id = \$2 AND extension = \$3 AND eligibility = 'eligible'/);
   });
-  it("writes lineage from the archived set, ON CONFLICT DO NOTHING (resume-idempotent)", () => {
+  it("writes lineage from the archived set incl. assertion_basis, ON CONFLICT DO NOTHING (resume-idempotent)", () => {
     expect(q.text).toMatch(/INSERT INTO "cinatra"\."artifact_uninstall_operation_assertions"/);
     expect(q.text).toMatch(/FROM archived a/);
+    // basis is denormalized so replay can restore only the classic subset.
+    expect(q.text).toMatch(/RETURNING id, org_id, artifact_id, extension, asserted_by, asserted_by_principal, assertion_basis/);
+    expect(q.text).toMatch(/a\.assertion_basis/);
     expect(q.text).toMatch(/ON CONFLICT \(operation_id, assertion_id\) DO NOTHING/);
     expect(q.text).toMatch(/RETURNING assertion_id/);
     expect(q.values).toEqual(["o1", "a1", "@v/pkg-artifact", "op1"]);
@@ -127,6 +130,31 @@ describe("runArtifactUninstallArchival", () => {
     expect(checkpointQuery.text).toMatch(/archived_count = archived_count \+ \$3/);
     // $3 is the PER-BATCH delta (2), not a cumulative total.
     expect(checkpointQuery.values[2]).toBe(2);
+  });
+});
+
+describe("replayArtifactUninstallOperation binding exclusion", () => {
+  it("replays CLASSIC lineage but SKIPS binding lineage (bindings regenerate via reconcile, never as classic)", () => {
+    const bindingRow = { assertion_id: "b1", org_id: "o1", artifact_id: "a1", extension: "@v/pkg-artifact", asserted_by: "user", asserted_by_principal: null, assertion_basis: "binding" };
+    const classicRow = { assertion_id: "c1", org_id: "o1", artifact_id: "a2", extension: "@v/pkg-artifact", asserted_by: "user", asserted_by_principal: "u1", assertion_basis: "classic" };
+    runPostgresQueriesSync
+      .mockReturnValueOnce([{ rows: [bindingRow, classicRow], rowCount: 2 }]) // lineage batch (2 < batchSize -> last)
+      .mockReturnValueOnce([{ rows: [], rowCount: 0 }, { rows: [{ id: "new" }], rowCount: 1 }, { rows: [], rowCount: 0 }]) // classic replay tx: lock, insert(1), floor
+      .mockReturnValueOnce([{ rows: [], rowCount: 1 }]); // replayed CAS
+
+    const result = replayArtifactUninstallOperation({ operationId: "op1", installId: "inst-2" });
+    expect(result).toEqual({ insertedAssertions: 1, skipped: 1 });
+
+    // Exactly one per-artifact replay tx ran, and it targeted the CLASSIC row's
+    // artifact (a2) — the binding row (a1) was skipped, never inserted.
+    const calls = runPostgresQueriesSync.mock.calls;
+    const replayTxCalls = calls.filter((c) => {
+      const qs = (c[0] as { queries: { text: string }[] }).queries;
+      return qs.length >= 2 && String(qs[1].text).includes('INSERT INTO "cinatra"."semantic_assertion"');
+    });
+    expect(replayTxCalls).toHaveLength(1);
+    const lockValues = (replayTxCalls[0][0] as { queries: { values: unknown[] }[] }).queries[0].values;
+    expect(lockValues).toEqual(["a2"]);
   });
 });
 

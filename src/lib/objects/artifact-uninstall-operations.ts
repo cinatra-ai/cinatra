@@ -11,17 +11,21 @@
 //   INSERT are ONE data-modifying-CTE statement, so the lineage is
 //   exactly-the-archived-set by construction.
 //
-//   REINSTALL: replay INSERTS replacement CLASSIC assertions for EXACTLY the
-//   set the operation archived (archived rows are never un-archived — the
+//   REINSTALL: replay INSERTS replacement CLASSIC assertions for the CLASSIC
+//   subset of the archived set (archived rows are never un-archived — the
 //   semantic_assertion frozen trigger forbids resurrection; replay is always
 //   a new INSERT). Idempotent + type-changed-while-absent-safe: the insert is
 //   guarded on the artifact still existing and on NO live same-extension
 //   assertion (the sa_active_unique_idx invariant), and the floor rebalance
-//   in the same transaction archives a now-redundant default. Binding-basis
-//   rows are NOT replayed as bindings: bindings always REGENERATE from
-//   current claims + the current object type via the
-//   artifact_binding_reconcile_queue rows the claim activation enqueued
-//   (consumer: the binding write-path sub-issue cinatra#1429).
+//   in the same transaction archives a now-redundant default. BINDING-basis
+//   lineage is NEVER replayed (not as a binding, and NOT as a classic either):
+//   replaying a binding as classic would change provenance and, once it wins
+//   the sa_active_unique_idx slot, permanently suppress the authoritative
+//   binding. Bindings REGENERATE from current claims + the current object type
+//   via the artifact_binding_reconcile_queue rows the reinstall's claim
+//   reactivation enqueues (consumer: the binding write-path sub-issue
+//   cinatra#1429). The lineage denormalizes assertion_basis so replay can tell
+//   the two apart.
 //
 // Interrupted archival RESUMES: the operation row carries a jsonb checkpoint
 // cursor; re-running skips already-archived artifacts (no eligible rows
@@ -129,11 +133,11 @@ export function buildArchiveArtifactAssertionsWithLineageQuery(
         UPDATE "${s}"."semantic_assertion"
         SET eligibility = 'archived', archived_at = now()
         WHERE org_id = $1 AND artifact_id = $2 AND extension = $3 AND eligibility = 'eligible'
-        RETURNING id, org_id, artifact_id, extension, asserted_by, asserted_by_principal
+        RETURNING id, org_id, artifact_id, extension, asserted_by, asserted_by_principal, assertion_basis
       )
       INSERT INTO "${s}"."artifact_uninstall_operation_assertions"
-        (operation_id, assertion_id, org_id, artifact_id, extension, asserted_by, asserted_by_principal)
-      SELECT $4, a.id, a.org_id, a.artifact_id, a.extension, a.asserted_by, a.asserted_by_principal
+        (operation_id, assertion_id, org_id, artifact_id, extension, asserted_by, asserted_by_principal, assertion_basis)
+      SELECT $4, a.id, a.org_id, a.artifact_id, a.extension, a.asserted_by, a.asserted_by_principal, a.assertion_basis
       FROM archived a
       ON CONFLICT (operation_id, assertion_id) DO NOTHING
       RETURNING assertion_id`,
@@ -328,7 +332,7 @@ export function replayArtifactUninstallOperation(input: {
       : "";
     const [batch] = run([
       {
-        text: `SELECT assertion_id, org_id, artifact_id, extension, asserted_by, asserted_by_principal
+        text: `SELECT assertion_id, org_id, artifact_id, extension, asserted_by, asserted_by_principal, assertion_basis
                FROM "${q()}"."artifact_uninstall_operation_assertions"
                WHERE operation_id = $1 ${cursorClause}
                ORDER BY org_id, artifact_id, assertion_id
@@ -343,6 +347,16 @@ export function replayArtifactUninstallOperation(input: {
       const orgId = String(row.org_id);
       const artifactId = String(row.artifact_id);
       const extension = String(row.extension);
+      if (String(row.assertion_basis) === "binding") {
+        // BINDING lineage is NEVER replayed as classic — that would change
+        // provenance and, once it wins the sa_active_unique_idx slot,
+        // permanently suppress the authoritative binding (archived rows can't
+        // be un-archived). Bindings regenerate from CURRENT claims + the
+        // CURRENT object type via the artifact_binding_reconcile_queue that the
+        // reinstall's claim reactivation enqueues (consumer #1429).
+        skipped += 1;
+        continue;
+      }
       if (isDefaultArtifactType(extension)) {
         // Defensive: the floor is owned by the rebalance, never replayed.
         skipped += 1;
