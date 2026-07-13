@@ -9,7 +9,7 @@
  * caller must be justified here.
  *
  * This is the HAND-AUTHORED side. The machine-generated scan (call sites + call
- * counts per file) lives in `docs/architecture/postgres-sync-inventory.json`
+ * counts per file) lives in `config/postgres-sync-inventory.json`
  * (built by `scripts/build-postgres-sync-inventory.mjs`). The inventory ratchet test
  * (`src/lib/__tests__/postgres-sync-inventory.test.ts`) asserts the two stay in
  * lockstep AND that the per-file call count never GROWS — i.e. no NEW direct
@@ -42,7 +42,7 @@ export type SyncCallerClassification = {
 
 /**
  * Per-file classification keyed by repo-relative path. Every file emitted into
- * `docs/architecture/postgres-sync-inventory.json` MUST have an entry here, and
+ * `config/postgres-sync-inventory.json` MUST have an entry here, and
  * vice-versa (the ratchet guard asserts both directions).
  */
 export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassification> = {
@@ -165,6 +165,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     class: "migratable-request-path",
     justification:
       "Projects object-graph state at request time. Migratable to the async pooled layer once the objects subsystem's sync signatures are converted (staged).",
+  },
+  "packages/objects/src/graphiti-projection-policy.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Per-group projection-policy epoch reads/bumps (cinatra#1427 AC-4), a sync leaf composing with graphiti-projector's synchronous store graph. Migrates with the objects subsystem.",
+  },
+  "packages/objects/src/graphiti-rebuild.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Epoch-fenced group-rebuild driver (cinatra#1427 ACs 4-5): journal phase machine + checkpointed replay batches, same sync-leaf pattern as graphiti-projector. Migrates with the objects subsystem.",
   },
   "packages/objects/src/mcp/handlers.ts": {
     class: "migratable-request-path",

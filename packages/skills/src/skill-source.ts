@@ -243,7 +243,7 @@ export function buildSkillSourceForWrite(input: SkillSourceWriteInput): SkillSou
 // Scope (cinatra#1361, epic #1358): lifecycle_state applies to CUSTOM/PERSONAL
 // skills only. Extension skills are DERIVED — their state comes from
 // `installed_extension` via the read-time precedence matrix documented in
-// docs/skills-lifecycle.md — and are NEVER a second lifecycle authority here.
+// docs/internals/architecture/skills-lifecycle.md — and are NEVER a second lifecycle authority here.
 // A custom/personal skill carries a non-null `lifecycle_state`; a null
 // `lifecycle_state` means "derived / not a lifecycle authority".
 // ===========================================================================
@@ -334,7 +334,7 @@ export function isLegalTransition(from: LifecycleState, to: LifecycleState): boo
  *                          lifecycle authority here. The extension install-state
  *                          is the single authority (read-time precedence), so
  *                          this custom/personal gate is a pass-through and never
- *                          becomes a second authority (docs/skills-lifecycle.md).
+ *                          becomes a second authority (docs/internals/architecture/skills-lifecycle.md).
  *   'active'     → true
  *   'deprecated' → true  — still delivered (badging is display-only, not gating)
  *   'draft'      → false — owner-visible only; never runtime-delivered

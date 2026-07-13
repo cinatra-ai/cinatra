@@ -51,6 +51,9 @@ const WRITER_ALLOWLIST = new Set([
   // history event for application-visible state changes — they record
   // projection progress, not data semantics.
   "packages/objects/src/graphiti-projector.ts",
+  // Same class: the epoch-fenced rebuild driver's clearing phase resets the
+  // identical graphiti_* bookkeeping columns group-wide (cinatra#1427 AC-4).
+  "packages/objects/src/graphiti-rebuild.ts",
   // Artifact stores — semantic_artifact, representation, assertion. These
   // are CTE-atomic writers that already keep their own
   // graphiti_projection_outbox row + version bump. Migration to canonical

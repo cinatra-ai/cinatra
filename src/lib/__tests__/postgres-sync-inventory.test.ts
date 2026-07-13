@@ -4,7 +4,7 @@
  * The synchronous Postgres bridge (`runPostgresQueriesSync`) is an exceptional
  * sync-leaf escape hatch, not the default request-time store path. This gate
  * keeps the machine-generated scan
- * (`docs/architecture/postgres-sync-inventory.json`) and the hand-authored
+ * (`config/postgres-sync-inventory.json`) and the hand-authored
  * classification (`src/lib/postgres-sync-inventory.ts`) in lockstep, and — most
  * importantly — RATCHETS the number of direct sync call sites so a NEW direct
  * caller (in an existing file OR a brand-new file) cannot land without an
@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 import { SYNC_CALLER_CLASSIFICATIONS } from "../postgres-sync-inventory";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
-const INVENTORY_PATH = resolve(REPO_ROOT, "docs/architecture/postgres-sync-inventory.json");
+const INVENTORY_PATH = resolve(REPO_ROOT, "config/postgres-sync-inventory.json");
 const BUILDER = resolve(REPO_ROOT, "scripts/build-postgres-sync-inventory.mjs");
 
 type Inventory = {
@@ -96,7 +96,7 @@ describe("postgres sync-bridge inventory", () => {
     if (grew.length > 0) {
       throw new Error(
         "New direct runPostgresQueriesSync call site(s) beyond the committed baseline " +
-          "(docs/architecture/postgres-sync-inventory.json):\n" +
+          "(config/postgres-sync-inventory.json):\n" +
           grew.map((g) => `  - ${g}`).join("\n") +
           "\nIf intentional, run `pnpm sync:inventory`, update the classification in " +
           "src/lib/postgres-sync-inventory.ts, and commit both.",

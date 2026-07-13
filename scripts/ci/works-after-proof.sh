@@ -32,6 +32,12 @@ set -euo pipefail
 #              failure injection + dump/restore fallback + quiesce/sequential
 #              fail-closed negatives.
 #
+#   upgrade-neo4j    UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded
+#              Neo4j store-format path (scripts/upgrade/neo4j-upgrade-major.sh,
+#              explicit OFFLINE `neo4j-admin database migrate` per database on a
+#              CANDIDATE volume) — positive + failure injection + quiesce +
+#              downgrade/unlisted fail-closed negatives.
+#
 # CANDIDATE versions come from per-arm env (REDIS_TAG, PG_TO_TAG, NEO4J_TAG,
 # NANGO_SERVER_IMAGE, VERDACCIO_TAG, PYTHON_TAG, …), defaulting to the CURRENT
 # pins so a bare `bash scripts/ci/works-after-proof.sh` is green on today's main.
@@ -60,7 +66,7 @@ GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 # cheap, upgrade-mariadb boots several MariaDB servers, upgrade-postgres boots
 # several Postgres servers across two transitions (Case A 17->18, Case B nango
 # 15->17).
-ALL_ARMS="redis verdaccio nango wayflow graphiti upgrade-redis upgrade-mariadb upgrade-postgres postgres"
+ALL_ARMS="redis verdaccio nango wayflow graphiti upgrade-redis upgrade-mariadb upgrade-postgres upgrade-neo4j postgres"
 
 # Resolve the selected set from WORKS_AFTER_ONLY (comma/space separated).
 if [ -n "${WORKS_AFTER_ONLY:-}" ]; then
@@ -80,7 +86,7 @@ done
 echo "== works-after proof harness (cinatra#352) =="
 echo "repo: ${REPO_ROOT}"
 echo "arms: ${SELECTED}$([ "$GATE_MODE" = "1" ] && echo '  [GATE MODE: a SKIP is a FAIL]')"
-echo "candidates: REDIS_TAG=${REDIS_TAG:-8-alpine} PG_FROM_TAG=${PG_FROM_TAG:-17-alpine} PG_TO_TAG=${PG_TO_TAG:-18-alpine} NEO4J_TAG=${NEO4J_TAG:-2026.05-community} VERDACCIO_TAG=${VERDACCIO_TAG:-6} PYTHON_TAG=${PYTHON_TAG:-3.14-slim} REDIS_FROM_TAG=${REDIS_FROM_TAG:-7-alpine} REDIS_TO_TAG=${REDIS_TO_TAG:-8-alpine} MARIADB_FROM_TAG=${MARIADB_FROM_TAG:-11.4} MARIADB_TO_TAG=${MARIADB_TO_TAG:-11.8}"
+echo "candidates: REDIS_TAG=${REDIS_TAG:-8-alpine} PG_FROM_TAG=${PG_FROM_TAG:-17-alpine} PG_TO_TAG=${PG_TO_TAG:-18-alpine} NEO4J_TAG=${NEO4J_TAG:-2026.05-community} VERDACCIO_TAG=${VERDACCIO_TAG:-6} PYTHON_TAG=${PYTHON_TAG:-3.14-slim} REDIS_FROM_TAG=${REDIS_FROM_TAG:-7-alpine} REDIS_TO_TAG=${REDIS_TO_TAG:-8-alpine} MARIADB_FROM_TAG=${MARIADB_FROM_TAG:-11.4} MARIADB_TO_TAG=${MARIADB_TO_TAG:-11.8} NEO4J_FROM_TAG=${NEO4J_FROM_TAG:-5.26-community} NEO4J_TO_TAG=${NEO4J_TO_TAG:-2026.05-community}"
 echo ""
 
 # Results accumulators (parallel arrays, bash-3.2 compatible).
@@ -118,6 +124,7 @@ for arm in $SELECTED; do
     upgrade-redis)   run_arm upgrade-redis   "${ARMS_DIR}/upgrade-redis.sh" ;;
     upgrade-mariadb) run_arm upgrade-mariadb "${ARMS_DIR}/upgrade-mariadb.sh" ;;
     upgrade-postgres) run_arm upgrade-postgres "${ARMS_DIR}/upgrade-postgres.sh" ;;
+    upgrade-neo4j)   run_arm upgrade-neo4j   "${ARMS_DIR}/upgrade-neo4j.sh" ;;
     postgres)
       run_arm postgres "${ARMS_DIR}/postgres.sh"
       # Complementary prev-release proof: the previously-unwired upgrade-proof.sh

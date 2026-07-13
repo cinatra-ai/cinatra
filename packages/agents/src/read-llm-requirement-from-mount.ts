@@ -11,7 +11,7 @@ import { OasCinatraLlmSchema, type OasCinatraLlm } from "./llm-provider-policy";
  * `metadata.cinatra.llm` block (`{ preferredProvider?, preferredModel?,
  * capabilityRequired? }`) — from its source `cinatra/oas.json` in the runtime
  * mount. This is the ratified LLM-provider dependency vocabulary
- * (docs/llm-provider-dependency-vocabulary.md, cinatra#1062): the same OAS block
+ * (docs/internals/contracts/llm-provider-dependency-vocabulary.md, cinatra#1062): the same OAS block
  * the runtime `/api/llm-bridge` dispatch consumes, surfaced upstream so the
  * run-enqueue preflight can gate on provider availability BEFORE a run starts.
  *

@@ -5,18 +5,27 @@ import { addEpisode, deleteEpisode, identityHashToUuid } from "./graphiti-client
 import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
 import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
+import { parseClaimDispositions, resolveClaimWinner } from "./claims";
+import { GENERIC_ARTIFACT_OBJECT_TYPE } from "./effective-identity";
+import { deriveProjectionGroupId, readProjectionEpochs } from "./graphiti-projection-policy";
+// Claimed-row projection (#1427 AC-3) resolves the claim winner via the HOST
+// claim store and the row's identity through the ONE effective-identity
+// service (epic #1424: one resolution point for every surface — the projector
+// must not re-derive install/claim semantics).
+import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
+import { resolveArtifactEffectiveIdentity } from "@/lib/objects/effective-identity";
 
 // ---------------------------------------------------------------------------
 // Reads cinatra.graphiti_projection_outbox, calls Graphiti, updates objects
 // row with version-guard SQL. NEVER called synchronously from MCP handlers —
 // invoked exclusively via the GRAPHITI_PROJECTION_REPAIR BullMQ job
-// (background-jobs-registry.ts → processProjectionOutbox). There is currently
-// NO other production caller (a former "graph rebuild CLI" mention here was
-// stale). REBUILD NOTE: the equal-version dedup guard below suppresses
-// same-version re-projection BY DESIGN, so any future whole-graph rebuild
-// tooling must reset `graphiti_projected_version` bookkeeping (or ride the
-// epoch-fenced group rebuild planned in #1427) rather than re-driving rows
-// through this path unchanged.
+// (background-jobs-registry.ts → processGraphitiProjectionCycle in
+// ./graphiti-rebuild, which drains the outbox through processProjectionOutbox
+// below). REBUILD NOTE: the equal-version dedup guard below suppresses
+// same-version re-projection BY DESIGN; whole-group rebuilds therefore ride
+// the epoch-fenced rebuild journal (#1427, ./graphiti-rebuild), whose
+// clearing phase resets the `graphiti_projected_version` bookkeeping before
+// the replay re-drives rows through this path.
 //
 // Exposed via tsconfig sub-path alias `@cinatra-ai/objects/graphiti-projector`
 // (NOT re-exported from packages/objects/src/index.ts) to avoid the
@@ -32,6 +41,11 @@ type OutboxRow = {
   operation: "upsert" | "delete";
   payload_hash: string | null;
   attempts: number;
+  // Rebuild-replay items are stamped with their target projection-policy
+  // epoch (#1427 AC-4); NULL = ordinary write-path item (always processed
+  // under the group's live policy). The worker discards a stamped item whose
+  // epoch is older than the group's current epoch (stale-epoch fencing).
+  projection_epoch: number | null;
 };
 
 type CanonicalRow = {
@@ -52,10 +66,6 @@ type CanonicalRow = {
   source: string | null;
   created_at: string;
 };
-
-function deriveGroupId(orgId: string | null): string {
-  return orgId ? `cinatra-org-${orgId}` : "cinatra-default";
-}
 
 function deriveEntityName(data: Record<string, unknown>, type: string): string {
   const candidate =
@@ -121,6 +131,137 @@ export function projectArtifactSafe(
       typeof excerptRaw === "string"
         ? excerptRaw.slice(0, ARTIFACT_EXCERPT_CAP)
         : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Claimed-row faceted projection (#1427 AC-3). Rows whose `objects.type`
+// carries a WINNING artifact-type claim leave the raw-data projection path:
+// the episode body is the artifact-safe faceted shape — base type + claiming
+// extension + effective identity + a capped excerpt — whitelisted fields
+// ONLY, never a spread of `row.data` (bytes / base64 / storage keys can never
+// reach Graphiti, whatever a claimed type's writer stores). Pure function —
+// the winner/identity reads happen in resolveClaimedRowProjection below.
+// ---------------------------------------------------------------------------
+
+/** Excerpt derivation priority for claimed typed rows: the first non-empty
+ * STRING field wins; capped at ARTIFACT_EXCERPT_CAP. Whitelist-only — an
+ * unlisted field never leaks into the projection. */
+export const CLAIMED_ROW_EXCERPT_FIELDS = [
+  "excerpt",
+  "summary",
+  "description",
+  "subject",
+  "body",
+  "text",
+  "content",
+  "title",
+  "name",
+] as const;
+
+export function deriveClaimedRowExcerpt(data: Record<string, unknown>): string | undefined {
+  for (const field of CLAIMED_ROW_EXCERPT_FIELDS) {
+    const value = data[field];
+    if (typeof value === "string" && value.length > 0) {
+      return value.slice(0, ARTIFACT_EXCERPT_CAP);
+    }
+  }
+  return undefined;
+}
+
+export type ClaimedRowFacetInput = {
+  baseType: string;
+  claimingExtension: string;
+  claimKind: "dedicated" | "default";
+  claimGeneration: number;
+  /** The effective-identity service's resolution — null when the identity is
+   * not an extension identity (floor / plain object). */
+  effectiveExtension: string | null;
+  /** 'binding' | 'classic' | 'catalog' (activation barrier — browse-only) |
+   * 'default-artifact' | 'plain-object'. */
+  identityBasis: string;
+  selectable: boolean;
+  eligibleExtensions: string[];
+};
+
+export function projectClaimedRowFaceted(
+  data: Record<string, unknown>,
+  facet: ClaimedRowFacetInput,
+): Record<string, unknown> {
+  const scalar = (k: string): unknown =>
+    typeof data[k] === "string" || typeof data[k] === "number" ? data[k] : undefined;
+  return {
+    baseType: facet.baseType,
+    claimedBy: facet.claimingExtension,
+    claimKind: facet.claimKind,
+    claimGeneration: facet.claimGeneration,
+    // The effective identity when resolution lands an extension identity;
+    // the claiming extension otherwise (e.g. the pre-binding activation
+    // barrier resolves catalog/browse-only — the claim still names the
+    // library-visible identity).
+    primaryExtension: facet.effectiveExtension ?? facet.claimingExtension,
+    identityBasis: facet.identityBasis,
+    selectable: facet.selectable,
+    eligibleExtensions: facet.eligibleExtensions,
+    title: scalar("title") ?? scalar("name"),
+    excerpt: deriveClaimedRowExcerpt(data),
+  };
+}
+
+type ClaimedRowProjection =
+  | { kind: "skip" }
+  | { kind: "raw" }
+  | { kind: "faceted"; body: Record<string, unknown> };
+
+/**
+ * Resolve how a non-generic typed row projects under the org's claim set:
+ *   - no winning claim        → null (the caller keeps the existing paths)
+ *   - disposition 'none'      → terminal skip (never projected, outbox done)
+ *   - disposition 'raw'       → the raw-data path (an explicit claim opt-in)
+ *   - 'artifact-safe' / no or invalid dispositions → the faceted shape
+ *     (fail-CLOSED: an unparseable dispositions payload can gate DOWN to the
+ *     metadata-only projection, never up to raw).
+ * Identity comes from the effective-identity service — the ONE resolution
+ * point (#1426); read errors propagate (the outbox row retries).
+ */
+function resolveClaimedRowProjection(row: CanonicalRow): ClaimedRowProjection | null {
+  const orgId = row.org_id;
+  if (orgId == null) return null; // claims are org/platform-scoped; no-tenant rows keep the raw path
+  const claims = readArtifactTypeClaimsForOrg(orgId);
+  const winner = resolveClaimWinner(claims, { orgId, objectTypeId: row.type });
+  if (!winner) return null;
+  let projection: "raw" | "artifact-safe" | "none" = "artifact-safe";
+  if (winner.dispositions != null) {
+    const parsed = parseClaimDispositions(winner.dispositions);
+    if (parsed.ok) {
+      projection = parsed.dispositions.projection;
+    } else {
+      console.warn(
+        `[graphiti-projector] invalid dispositions on claim ${winner.id} (${row.type}); ` +
+          `failing closed to artifact-safe projection: ${parsed.errors.join("; ")}`,
+      );
+    }
+  }
+  if (projection === "none") return { kind: "skip" };
+  if (projection === "raw") return { kind: "raw" };
+  const enrichment = resolveArtifactEffectiveIdentity({
+    orgId,
+    artifactId: row.id,
+    baseType: row.type,
+  });
+  const identity = enrichment.identity;
+  return {
+    kind: "faceted",
+    body: projectClaimedRowFaceted(row.data, {
+      baseType: row.type,
+      claimingExtension: winner.extensionPackage,
+      claimKind: winner.claimKind,
+      claimGeneration: winner.generation,
+      effectiveExtension: identity.kind === "extension" ? identity.extension : null,
+      identityBasis: identity.kind === "extension" ? identity.basis : identity.kind,
+      selectable: identity.selectable,
+      eligibleExtensions: enrichment.eligibleExtensions,
+    }),
   };
 }
 
@@ -310,7 +451,25 @@ export async function projectObjectToGraphiti(input: {
     return { episodeUuid: adapterEpisodeUuid };
   }
 
-  const groupId = deriveGroupId(input.orgId ?? row.org_id);
+  // Claimed typed rows leave the raw path (#1427 AC-3). Resolved AFTER
+  // adapter routing on purpose: adapter-owned types (CRM pointer rows) are
+  // never claimed in this epic (#1424 guardrail) and keep adapter ownership
+  // regardless. Generic artifact rows are never claimed either — they keep
+  // the projectArtifactSafe path below.
+  const claimedProjection =
+    row.org_id !== null && row.type !== GENERIC_ARTIFACT_OBJECT_TYPE
+      ? resolveClaimedRowProjection(row)
+      : null;
+  if (claimedProjection?.kind === "skip") {
+    // The winning claim's dispositions say projection: 'none' — terminal
+    // skip: the outbox row settles done, nothing is projected, no retry.
+    console.log(
+      `[graphiti-projector] skipping row ${row.id} (${row.type}): winning claim dispositions set projection='none'`,
+    );
+    return { episodeUuid: null, skipped: true };
+  }
+
+  const groupId = deriveProjectionGroupId(input.orgId ?? row.org_id);
   // EPISODE-UUID-EMPTY: knowledge-graph-mcp 1.0.x add_memory returns only a
   // message string — no uuid in any known response path. We compute a stable
   // deterministic UUID locally for Postgres bookkeeping and delete attempts.
@@ -345,7 +504,15 @@ export async function projectObjectToGraphiti(input: {
     row.type === "@cinatra-ai/artifact:object" && row.org_id !== null
       ? readSemanticIdentityForProjection(row.org_id, row.id)
       : undefined;
-  const projectionData = projectArtifactSafe(row.data, semanticIdentity) ?? row.data;
+  // Precedence: claimed faceted body > claimed explicit-raw opt-in >
+  // generic-artifact safe projection > raw data (unclaimed non-artifact
+  // rows — unchanged pre-#1427 behavior).
+  const projectionData =
+    claimedProjection?.kind === "faceted"
+      ? claimedProjection.body
+      : claimedProjection?.kind === "raw"
+        ? row.data
+        : (projectArtifactSafe(row.data, semanticIdentity) ?? row.data);
   const episodeBody = JSON.stringify({
     ...projectionData,
     cinatra_object_id: row.id,
@@ -450,7 +617,7 @@ export async function processProjectionOutbox(options?: {
                LIMIT $2
                FOR UPDATE SKIP LOCKED
              )
-             RETURNING id, object_id, object_version, org_id, operation, payload_hash, attempts`,
+             RETURNING id, object_id, object_version, org_id, operation, payload_hash, attempts, projection_epoch`,
         values: [maxAttempts, batchSize],
       },
     ],
@@ -460,7 +627,41 @@ export async function processProjectionOutbox(options?: {
   let processed = 0;
   let failed = 0;
 
+  // Stale-epoch fencing (#1427 AC-4): epoch-STAMPED items (rebuild-replay
+  // enqueues) are discarded when the group's projection-policy epoch has
+  // moved past them — a superseded replay must never append episodes into a
+  // group a newer rebuild owns. Ordinary items (NULL stamp) always process
+  // under the live policy. One epoch read per batch.
+  const stampedGroups = Array.from(
+    new Set(
+      rows
+        .filter((r) => r.projection_epoch != null)
+        .map((r) => deriveProjectionGroupId(r.org_id)),
+    ),
+  );
+  const epochByGroup =
+    stampedGroups.length > 0 ? readProjectionEpochs(stampedGroups) : new Map<string, number>();
+
   for (const row of rows) {
+    if (row.projection_epoch != null) {
+      const currentEpoch = epochByGroup.get(deriveProjectionGroupId(row.org_id)) ?? 1;
+      if (row.projection_epoch < currentEpoch) {
+        runPostgresQueriesSync({
+          connectionString: getPostgresConnectionString(),
+          queries: [
+            {
+              text: `UPDATE "${schema}"."graphiti_projection_outbox"
+                 SET status = 'done', processed_at = now(),
+                     last_error = 'stale-epoch item discarded (epoch ' || $1 || ' < ' || $2 || ')'
+                 WHERE id = $3`,
+              values: [String(row.projection_epoch), String(currentEpoch), row.id],
+            },
+          ],
+        });
+        processed += 1;
+        continue;
+      }
+    }
     try {
       if (row.operation === "upsert") {
         await projectObjectToGraphiti({
