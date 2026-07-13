@@ -830,7 +830,7 @@ export function upsertObjectAndEnqueue(
     queries: [
       {
         text: `WITH base_row AS (
-                 SELECT version, row_to_json(o.*)::jsonb AS payload
+                 SELECT version, type AS prev_type, row_to_json(o.*)::jsonb AS payload
                  FROM "${schema}"."objects" o WHERE id = $1
                ),
                upserted AS (
@@ -910,6 +910,43 @@ export function upsertObjectAndEnqueue(
                         upserted.org_id, upserted.project_id, upserted.owner_level, upserted.owner_id, upserted.visibility,
                         $23, $24, now()
                  FROM upserted
+               ),
+               binding_reconcile_enqueue AS (
+                 -- Durable object-side binding reconcile (cinatra#1429, epic
+                 -- #1424). Enqueue a per-artifact 'binding-reconcile-write' row
+                 -- IN THIS transaction (atomic with the object write — never lost
+                 -- to a crash) when a CREATE or a TYPE CHANGE could affect this
+                 -- row's binding: the row's CURRENT type carries a live dedicated
+                 -- claim (a create/type-change INTO a claimed type needs a binding
+                 -- INSERT), OR the artifact still carries an active binding (a
+                 -- type-change AWAY from a claimed / since-retired type needs the
+                 -- stale binding ARCHIVED — no later TYPE sweep can select that
+                 -- row, which is exactly why the object-side axis must be a
+                 -- per-artifact record, not a type sweep). A content-only update
+                 -- (same type) enqueues nothing. A null-org write has no binding
+                 -- surface. The consumer (processBindingReconcileQueue) resolves
+                 -- the live winner under the per-artifact advisory lock at
+                 -- REPEATABLE READ — so this write path never takes that lock nor
+                 -- changes its own isolation, and the reconcile stays crash-safe.
+                 INSERT INTO "${schema}"."artifact_binding_reconcile_queue"
+                   (scope, object_type_id, object_id, org_id, kind, status)
+                 SELECT 'org:' || upserted.org_id, upserted.type, upserted.id, upserted.org_id,
+                        'binding-reconcile-write', 'pending'
+                 FROM upserted
+                 WHERE upserted.org_id IS NOT NULL
+                   AND ((SELECT version FROM base_row) IS NULL
+                        OR (SELECT prev_type FROM base_row) IS DISTINCT FROM upserted.type)
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM "${schema}"."artifact_type_claims" c
+                       WHERE c.object_type_id = upserted.type AND c.claim_kind = 'dedicated'
+                         AND c.status IN ('active','retiring')
+                         AND (c.scope = 'platform' OR c.scope = 'org:' || upserted.org_id))
+                     OR EXISTS (
+                       SELECT 1 FROM "${schema}"."semantic_assertion" sa
+                       WHERE sa.org_id = upserted.org_id AND sa.artifact_id = upserted.id
+                         AND sa.assertion_basis = 'binding' AND sa.eligibility <> 'archived')
+                   )
                )
                SELECT * FROM upserted`,
         values: [
@@ -949,46 +986,14 @@ export function upsertObjectAndEnqueue(
     );
   }
 
-  // Binding write-path composition (cinatra#1429, epic #1424). After the object
-  // row commits, reconcile this artifact's BINDING semantic assertion to its
-  // CURRENT type's live claim winner — a create into a claimed type, or a type
-  // change across / away from a claim. `reconcileArtifactBindingForWrite` is
-  // GATED (one guard SELECT): substrate / plain writes with no claim + no
-  // binding short-circuit; only a claimed-type write or an artifact that already
-  // carries a binding opens the advisory-locked reconcile tx. It resolves the
-  // winner from live DB state under the per-artifact advisory lock and writes
-  // ONLY semantic_assertion (never `objects`).
-  //
-  // ⚠ STOPGAP (NOT merge-ready — cinatra#1429 write-path-composition remainder).
-  // Fired FIRE-AND-FORGET via a dynamic import to avoid growing the REQUIRED
-  // route-graph gate on the /sign-in + MCP/chat routes, which in-flight PR #1473
-  // is concurrently raising in the fenced route-graph-ratchet.baseline.json. But
-  // codex flagged this as a DURABILITY BUG (Q2): a claimed→unclaimed type change
-  // leaves a stale binding that NO later type-sweep can select (the row is no
-  // longer the claimed type), so if the floating reconcile does not flush the
-  // stale binding never converges; and the guard runs OUTSIDE the advisory lock
-  // (Q1 race). The CORRECT design (the issue's own protocol) reconciles IN the
-  // upsert transaction (durable, under the same advisory lock) — which requires
-  // the binding module in this writer's static graph, i.e. the exact route-graph
-  // raise blocked by #1473. This wiring therefore SERIALIZES behind #1473 and
-  // must be reimplemented in-transaction before it ships.
-  const reconcileOrgId = (row.org_id as string | null) ?? input.upsertInput.orgId ?? null;
-  const reconcileArtifactId = String(row.id);
-  const reconcileType = String(row.type);
-  void import("@/lib/objects/binding-write-path")
-    .then(({ reconcileArtifactBindingForWrite }) =>
-      reconcileArtifactBindingForWrite({
-        orgId: reconcileOrgId,
-        artifactId: reconcileArtifactId,
-        type: reconcileType,
-      }),
-    )
-    .catch((err) => {
-      console.warn(
-        `[objects-store] binding reconcile after write for object ${reconcileArtifactId} failed (non-fatal):`,
-        err instanceof Error ? err.message : err,
-      );
-    });
+  // Binding write-path composition (cinatra#1429, epic #1424) rides the upsert
+  // transaction above: the `binding_reconcile_enqueue` CTE arm durably records a
+  // per-artifact 'binding-reconcile-write' reconcile — atomically with the
+  // object write, so a crash never loses it — whenever a create/type-change
+  // could affect this row's binding. The reconcile itself (live-winner
+  // resolution under the per-artifact advisory lock at REPEATABLE READ) is
+  // performed by the queue consumer, keeping this universal writer's hot path
+  // free of both the advisory lock and any isolation-level change.
 
   // Surface the synthetic legacy change-set id so write callers
   // (objects_update → MutationResult) can offer an Undo. Additive spread on
