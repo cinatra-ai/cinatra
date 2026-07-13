@@ -43,7 +43,6 @@ import { SendConfirmationRenderer } from "../send-confirmation-renderer";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaFieldRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
-import { TriggerConfigureFormRenderer } from "../trigger-agent-renderers";
 import { SkillRecommenderRenderer } from "../skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "../email-test-delivery-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
@@ -112,15 +111,13 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/agent-builder:schema-field-fallback", SchemaFieldRenderer as never, 1],
   ["@cinatra-ai/agent-builder:grouped-setup-form", GroupedSetupFormRenderer as never, 50],
   ["@cinatra-ai/auditor-agent:review", AuditorReviewRenderer as never, 80],
-  ["@cinatra-ai/trigger-agent:configure", TriggerConfigureFormRenderer as never, 60],
-  // NOTE: @cinatra-ai/trigger-agent:confirm was intentionally RETIRED, not
-  // regressed. The trigger-agent ships a deterministic single-gate OAS
-  // (configure only); the "confirm" fieldRenderer was a dead binding with no
-  // matching gate — its manifest declaration and generated binding were dropped
-  // upstream, so the id now resolves to null (the trigger-agent is itself slated
-  // for retirement as scheduling becomes platform-default). Only :configure
-  // remains in the parity table. The TriggerConfirmSummaryRenderer component is
-  // still registered host-side, so removing the dead binding is non-breaking.
+  // NOTE: the @cinatra-ai/trigger-agent renderers (:configure / the never-bound
+  // :confirm) were RETIRED with the trigger-agent extension (cinatra#1034).
+  // Scheduling is now a platform default rendered by the host TriggerScreen
+  // (first-step scheduling gate) + the persistent /trigger tab — no agent
+  // declares a trigger renderer, so no trigger id appears in this table. The id
+  // now resolves to null (asserted by "an unknown namespaced id resolves to NO
+  // custom entry" below).
 ];
 
 describe("resolution parity with the retired hand map", () => {
@@ -186,7 +183,7 @@ describe("mid-run HITL classification parity", () => {
 
   it("non-flagged ids do NOT carry the strict classification", () => {
     expect(hasMidRunHitlBinding("@cinatra-ai/email-outreach-agent:cta")).toBe(false);
-    expect(hasMidRunHitlBinding("@cinatra-ai/trigger-agent:configure")).toBe(false);
+    expect(hasMidRunHitlBinding("@cinatra-ai/email-outreach-agent:setup-form")).toBe(false);
   });
 
   it("suffix fallbacks are preserved (endsWith :output et al.)", () => {
