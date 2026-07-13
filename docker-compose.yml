@@ -745,7 +745,7 @@ services:
   #   - MinIO defaults to the immutable dated `RELEASE.2025-09-07T16-13-09Z`
   #     (≡ the `latest` digest at pin time), digest-bound (see plane-minio).
   # Existing `latest`/`stable` volumes have unknown last-writer versions — the
-  # supported source→target rules live in docs/architecture/upgrade-matrix.json
+  # supported source→target rules live in config/upgrade/upgrade-matrix.json
   # (the machine-readable matrix) + docs/internals/architecture/stateful-service-inventory.md.
   # A major must now arrive as a reviewable pin-diff, never absorbed by a pull.
   plane-db:

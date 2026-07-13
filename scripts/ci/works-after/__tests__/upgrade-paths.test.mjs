@@ -77,7 +77,7 @@ test("unsupported hops, downgrades, and unknown services exit fail-closed 3", ()
 
 test("a matrix-revision skew is fail-closed (exit 3), never acted on", () => {
   const dir = mkdtempSync(join(tmpdir(), "uf-matrix-"));
-  const doctored = JSON.parse(readFileSync(resolve(REPO_ROOT, "docs/architecture/upgrade-matrix.json"), "utf8"));
+  const doctored = JSON.parse(readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
   doctored.revision += 1;
   const p = join(dir, "matrix.json");
   writeFileSync(p, JSON.stringify(doctored));

@@ -1,7 +1,7 @@
 {
   "$schema": "./upgrade-matrix.schema.json",
   "schemaVersion": "1.0.0",
-  "revision": 2,
+  "revision": 3,
   "baselineRelease": "0.1.9",
   "generatedNote": "Supported source->target upgrade matrix for every stateful service in docker-compose.yml. Hand-authored source of truth; completeness + pin-drift + schema conformance are gated by scripts/check-upgrade-matrix.mjs (and the vitest suite scripts/ci/__tests__/upgrade-matrix.test.mjs). Human-readable inventory + rationale: docs/internals/architecture/stateful-service-inventory.md. Slice 1 of the upgrade-paths epic (cinatra#1420 / cinatra#1419). This slice defines the DATA; the CLI preflight + `db upgrade-major` (cinatra-cli#128/#129) and the works-after upgrade-from arm (cinatra#1421/#1422) are the consumers.",
   "stateClasses": [
@@ -26,7 +26,7 @@
     "policy": "Any (service, from, to) tuple that is not present as a transition with supported=true, and is not a caseException, resolves to UNSUPPORTED. A consumer (cli preflight, db upgrade-major, works-after upgrade-from arm) MUST refuse to proceed on an unsupported tuple — never fall through to a best-effort attempt. An unrecognised source (a deployed version the ledger cannot classify) is likewise unsupported until a transition or case exception is added."
   },
   "consumptionContract": {
-    "canonicalPath": "docs/architecture/upgrade-matrix.json",
+    "canonicalPath": "config/upgrade/upgrade-matrix.json",
     "loader": "scripts/lib/upgrade-matrix.mjs (loadUpgradeMatrix / resolveTransition / MATRIX_REVISION). cinatra-cli and the harness vendor or read this same file and resolve transitions through the same fail-closed logic.",
     "consumers": [
       { "name": "cinatra-cli preflight", "uses": "deployed-version ledger -> resolveTransition(service, from, to); refuses on unsupported (cinatra-cli#128)" },
