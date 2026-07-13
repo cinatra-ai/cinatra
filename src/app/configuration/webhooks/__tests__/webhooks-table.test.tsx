@@ -85,7 +85,7 @@ describe("WebhooksTable", () => {
     );
     expect(
       hrefs.some((h) =>
-        h?.includes("docs/webhooks/authoring-inbound-webhooks.md"),
+        h?.includes("docs/internals/workflows/webhooks/authoring-inbound-webhooks.md"),
       ),
     ).toBe(true);
     expect(hrefs).toContain("/configuration/marketplace");

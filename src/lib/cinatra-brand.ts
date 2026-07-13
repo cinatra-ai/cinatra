@@ -9,7 +9,7 @@
 // consumers — the dead pre-Option-A /api/{wordpress,drupal}/bundle.js widget
 // routes (cinatra#411 disposition, executed by cinatra#977); the shipped
 // widget source is vendored in the plugin/module repos and carries its own
-// styles (docs/widget-source-of-truth.md).
+// styles (docs/internals/contracts/widget-source-of-truth.md).
 
 export const CINATRA_LOGO = {
   // viewBox crop that frames the hat tightly for the React component

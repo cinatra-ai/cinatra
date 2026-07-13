@@ -158,7 +158,7 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
   // `/api/wordpress/bundle.js` bundle path; cinatra#977 then DELETED the dead
   // pre-Option-A bundle routes together with that exemption (the vendored
   // plugin/module widget copies are the only shipped widget source — see
-  // docs/widget-source-of-truth.md). No `/api/wordpress` public entry of ANY
+  // docs/internals/contracts/widget-source-of-truth.md). No `/api/wordpress` public entry of ANY
   // width may come back: the precise one would exempt a nonexistent route, a
   // broad prefix would expose EVERY WordPress API route unauthenticated. These
   // regressions are a source edit, so a source-text pin (matching this file's

@@ -30,7 +30,7 @@ import { Button } from "@/components/ui/button";
  * so the empty state points authors at the guide + the marketplace.
  */
 const WEBHOOK_AUTHORING_DOCS_HREF =
-  "https://github.com/cinatra-ai/cinatra/blob/main/docs/webhooks/authoring-inbound-webhooks.md";
+  "https://github.com/cinatra-ai/cinatra/blob/main/docs/internals/workflows/webhooks/authoring-inbound-webhooks.md";
 const MARKETPLACE_HREF = "/configuration/marketplace";
 
 /**
