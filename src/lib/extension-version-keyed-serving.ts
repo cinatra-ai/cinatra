@@ -451,6 +451,25 @@ export function resolveVersionKeyedObjectType(
 }
 
 /**
+ * Serve a non-default version's COMPLETE retained object-type set (cinatra#1392
+ * — the object-type serve DISCOVERY union, mirroring `resolveVersionKeyedMcpTools`).
+ * A BULK lookup: fail-closed on the servability axes (UNPINNED / UNKNOWN_VERSION
+ * / NOT_SERVABLE), but a servable version that registered NO object types serves
+ * `[]` — that empty set IS that version's genuine, complete object-type surface
+ * (a dependent pinned to it sees the package contribute no types), not a refusal.
+ * Point resolution stays on `resolveVersionKeyedObjectType` (which DOES refuse an
+ * unregistered id). Retention (registration) order is preserved.
+ */
+export function resolveVersionKeyedObjectTypes(
+  packageName: string,
+  version: string | null | undefined,
+): VersionKeyedServeResult<readonly RetainedVersionKeyedObjectType[]> {
+  const e = resolveServableEntry(packageName, version);
+  if (e.kind === "refuse") return e;
+  return { kind: "serve", value: [...e.value.objectTypes.values()] };
+}
+
+/**
  * Serve a non-default version's ui setup surfaces, fail-closed on the servability
  * axes. A BULK lookup: a servable version with no setup surface serves `[]` (its
  * complete, genuine surface set), NOT a refusal.
@@ -564,3 +583,33 @@ type CapabilityLookupHolder = {
 };
 (globalThis as unknown as CapabilityLookupHolder)[VERSION_KEYED_CAPABILITY_LOOKUP_KEY] =
   resolveVersionKeyedCapabilityProviders;
+
+// OBJECT-TYPE SERVE PORT — PUBLISHED HERE FOR BOOT RELIABILITY (cinatra#1392).
+// The two object-type consumers (`objects_save` / `objects_types_list` in the
+// leaf `packages/objects`) resolve the edge-bound serve off THIS globalThis
+// singleton (no import edge — the route-graph ratchet is shrink-only and those
+// handlers are locked-route-reachable). The port must be present in the process
+// BEFORE any request-time consumer runs, so it is published by THIS module —
+// loaded EAGERLY at boot by the loader's retention wiring — rather than by
+// `extension-edge-bound-serving.ts`, which is reached only lazily on the serve
+// paths (publishing there fails OPEN to the default for an edge-bound caller on a
+// path that had not yet loaded it — codex convergence). The port's two methods
+// LAZY-import the edge-bound serve module (which carries the trusted-identity +
+// DB machinery) on first call; that dynamic import resolves a module that is
+// already reachable from every locked route this registry is reachable from, so
+// it adds no route-graph pressure (verified by the ratchet). Absent (this module
+// never loaded) the consumers serve the default — the S7-consistent fallback.
+const EXTENSION_OBJECT_TYPE_SERVE_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-object-type-serve/v1",
+);
+type ObjectTypeServePortShape = {
+  resolveObjectType(typeId: string): Promise<unknown>;
+  planListing(): Promise<unknown>;
+};
+type ObjectTypeServeHolder = { [k: symbol]: ObjectTypeServePortShape | undefined };
+(globalThis as unknown as ObjectTypeServeHolder)[EXTENSION_OBJECT_TYPE_SERVE_KEY] = {
+  resolveObjectType: async (typeId: string) =>
+    (await import("@/lib/extension-edge-bound-serving")).resolveEdgeBoundObjectType(typeId),
+  planListing: async () =>
+    (await import("@/lib/extension-edge-bound-serving")).planEdgeBoundObjectTypeListing(),
+};

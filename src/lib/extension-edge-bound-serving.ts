@@ -89,8 +89,14 @@ import "server-only";
 // Absent identity / no pins ⇒ the plan is exactly the default replay,
 // byte-identical to the pre-S8 behavior.
 //
-// OUT OF SCOPE (cinatra#1392 stays open for these): the object-type /
-// ui-surface serve surfaces (S9, after the #1443 lane merges).
+// OBJECT-TYPE SERVE (cinatra#1392, this slice). The final positive-serving
+// surface: a dependent edge-bound to a NON-DEFAULT version of an object-type-
+// registering package is served THAT version's retained object-type descriptor
+// (the CONSUME side of `ctx.objects.registerType`) instead of the default's, on
+// the two edge-bound object-type consumers — `objects_save` (a POINT resolve of
+// the classified type) and `objects_types_list` (a per-package substitution of
+// the listed types). See the "OBJECT-TYPE SERVE" section at the foot of this
+// file for the same fail-closed matrix applied to object types.
 
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
@@ -98,7 +104,10 @@ import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types"
 import {
   resolveVersionKeyedMcpTool,
   resolveVersionKeyedMcpTools,
+  resolveVersionKeyedObjectType,
+  resolveVersionKeyedObjectTypes,
   type RetainedVersionKeyedMcpTool,
+  type RetainedVersionKeyedObjectType,
   type VersionKeyedServeResult,
 } from "@/lib/extension-version-keyed-serving";
 import {
@@ -923,4 +932,212 @@ export function planSelfInvokerRetainedUnion(
     effective.push({ name, packageName: r.packageName });
   }
   return { register, effective, skippedHostCollisions, dedupedExtensionNames };
+}
+
+// ---------------------------------------------------------------------------
+// OBJECT-TYPE SERVE (cinatra#1392 — the final positive-serving surface)
+// ---------------------------------------------------------------------------
+//
+// The version-keyed serving registry (#1410) already RETAINS a non-default
+// version's `ctx.objects.registerType` descriptors (keyed by (packageName,
+// version)); the two host object-type CONSUMERS — `objects_save` (classify +
+// persist) and `objects_types_list` (type discovery) in
+// `packages/objects/src/mcp/handlers.ts` — are the missing CONSUME side. Those
+// handlers are a leaf workspace package reachable from the locked routes; the
+// route-graph ratchet is shrink-only, so they must NOT statically (or
+// dynamically — the walker counts literal `import()`s) reach these host serve
+// libs. They therefore read the serve port off the SAME globalThis singleton
+// surface the capability lookup / teardown seams use (published below), and
+// FAIL CLOSED TO THE DEFAULT (their pre-slice behavior) when it is absent — the
+// S7-consistent "no trusted identity ⇒ default serving" outcome.
+//
+// The type's OWNING package is derived from its namespaced id
+// (`@scope/package:local-id` → `@scope/package`); a dynamic id
+// (`@dynamic/types:*`), a legacy first-party dynamic id, or any un-namespaced
+// id has no owning extension package and is therefore never edge-bound (always
+// the default path). The fail-closed matrix is the same as the MCP-tool kind:
+// with a trusted dependent identity that resolves a NON-DEFAULT pin, a
+// version-keyed lookup refusal (UNKNOWN_VERSION / NOT_SERVABLE / NO_SUCH_HANDLER)
+// is a hard refusal carrying evidence — never a silent fall-through to the
+// default's object type.
+
+/** `@scope/package:local-id` → the owning `@scope/package`, or `null`. Inlined
+ *  (mirrors `packages/objects` `OBJECT_TYPE_NAMESPACE_RE` + the dynamic-scope
+ *  prefixes) so this host lib never imports the objects package — that edge would
+ *  add objects modules to every locked route reaching this module (route-graph
+ *  ratchet is shrink-only). A DYNAMIC-type id (the reserved `@dynamic/types:`
+ *  scope, or the legacy first-party `@cinatra-ai/dynamic:` prefix) is NOT an
+ *  extension package's type — it is an LLM-proposed / auto-registered type with
+ *  no owning extension — so it returns `null` (never edge-bound), even though it
+ *  is superficially namespaced. */
+const NAMESPACED_OBJECT_TYPE_RE = /^(@[\w-]+\/[\w-]+):[\w-]+$/;
+const DYNAMIC_OBJECT_TYPE_ID_PREFIXES = ["@dynamic/types:", "@cinatra-ai/dynamic:"] as const;
+
+export function owningPackageOfObjectType(typeId: string): string | null {
+  if (typeof typeId !== "string") return null;
+  if (DYNAMIC_OBJECT_TYPE_ID_PREFIXES.some((p) => typeId.startsWith(p))) return null;
+  const m = NAMESPACED_OBJECT_TYPE_RE.exec(typeId);
+  return m ? m[1] : null;
+}
+
+/** A POINT edge-bound object-type serve decision for a single classified type. */
+export type EdgeBoundObjectTypeDecision =
+  /** Not a namespaced extension type, no trusted identity, or no resolved edge to
+   *  the owning package — the default/global object-type registration governs. */
+  | { kind: "none" }
+  /** The dependent's edge resolves to the DEFAULT install — the global
+   *  registration IS the served type. */
+  | { kind: "default" }
+  /** The dependent's edge pins a NON-DEFAULT version that registered this type —
+   *  serve ITS retained descriptor. */
+  | { kind: "versioned"; version: string; resolvedInstallId: string; descriptor: RetainedVersionKeyedObjectType }
+  /** Fail-closed refusal with evidence — the consumer must HARD-STOP, never
+   *  default-serve the type. */
+  | { kind: "refuse"; code: string; message: string };
+
+/**
+ * Resolve the edge-bound object-type descriptor for `typeId` under the CURRENT
+ * caller (a POINT lookup — `objects_save`'s classified type). Pure over its
+ * injected deps. Fail-closed: a version-keyed lookup refusal for a pinned
+ * non-default version is surfaced as `refuse` (never the default's descriptor).
+ */
+export async function resolveEdgeBoundObjectType(
+  typeId: string,
+  deps: ResolveEdgeBoundExtensionDeps = {},
+): Promise<EdgeBoundObjectTypeDecision> {
+  const packageName = owningPackageOfObjectType(typeId);
+  if (!packageName) return { kind: "none" };
+
+  const decision = await resolveEdgeBoundExtensionVersion({ targetPackageName: packageName }, deps);
+  if (decision.kind === "none") return { kind: "none" };
+  if (decision.kind === "default") return { kind: "default" };
+  if (decision.kind === "refuse") return { kind: "refuse", code: decision.code, message: decision.message };
+
+  const served = resolveVersionKeyedObjectType(packageName, decision.version, typeId);
+  if (served.kind === "refuse") {
+    return {
+      kind: "refuse",
+      code: served.code,
+      message: `edge-bound serving refused for object type "${typeId}" — ${served.message}`,
+    };
+  }
+  return {
+    kind: "versioned",
+    version: decision.version,
+    resolvedInstallId: decision.resolvedInstallId,
+    descriptor: served.value,
+  };
+}
+
+/** A per-package object-type substitution for a caller edge-bound to a
+ *  NON-DEFAULT version (consumed by `objects_types_list`). `retainedTypes` is
+ *  that version's COMPLETE retained object-type set (possibly empty — the
+ *  package then contributes no types for this caller). */
+export type EdgeBoundObjectTypeSubstitution = {
+  packageName: string;
+  version: string;
+  retainedTypes: readonly RetainedVersionKeyedObjectType[];
+};
+
+/** The object-type listing plan for the CURRENT caller. `substitutions` name the
+ *  packages whose DEFAULT-registered types must be REPLACED by a pinned version's
+ *  retained types; `notes` records identity/torn-retention downgrades (kept as
+ *  the default listing — the write path enforces fail-closed, exactly as the S8
+ *  tool discovery union keeps default names advertised on a torn lookup). */
+export type EdgeBoundObjectTypeListing = {
+  substitutions: EdgeBoundObjectTypeSubstitution[];
+  notes: string[];
+};
+
+/**
+ * Plan the per-package object-type substitutions for the CURRENT caller
+ * (`objects_types_list`). Resolves the trusted dependent once, then, for each
+ * resolved-edge target that pins a NON-DEFAULT version, resolves that version's
+ * COMPLETE retained object-type set. Absent identity / no pins ⇒ no
+ * substitutions (byte-identical default listing). A torn retained lookup keeps
+ * the default listing for that package and records a note (discovery posture).
+ */
+export async function planEdgeBoundObjectTypeListing(
+  deps: ResolveEdgeBoundExtensionDeps = {},
+): Promise<EdgeBoundObjectTypeListing> {
+  const notes: string[] = [];
+  const dependent = await resolveEdgeBoundDependent(deps);
+  if (dependent.kind === "none") return { substitutions: [], notes };
+  if (dependent.kind === "refuse") {
+    notes.push(`identity refuse (${dependent.code}) — default types listed; writes will refuse`);
+    return { substitutions: [], notes };
+  }
+
+  const substitutions: EdgeBoundObjectTypeSubstitution[] = [];
+  const targets = (dependent.row.dependencyEdges ?? [])
+    .filter((e) => e.resolvedInstallId != null)
+    .map((e) => e.packageName);
+  const seen = new Set<string>();
+  for (const pkg of targets) {
+    if (seen.has(pkg)) continue;
+    seen.add(pkg);
+    const decision = await decideEdgeBoundVersionForDependent(dependent.row, pkg, deps);
+    if (decision.kind !== "versioned") {
+      if (decision.kind === "refuse") {
+        notes.push(`${pkg}: decision refuse (${decision.code}) — default types listed; writes will refuse`);
+      }
+      continue;
+    }
+    const served = resolveVersionKeyedObjectTypes(pkg, decision.version);
+    if (served.kind === "refuse") {
+      notes.push(
+        `${pkg}@${decision.version}: retained lookup refuse (${served.code}) — default types listed; writes will refuse`,
+      );
+      continue;
+    }
+    // A substitution suppresses the pinned package's OWN default types and adds
+    // its version's types — so only serve retained types this package actually
+    // OWNS (a namespaced id whose owning package is `pkg`). A retained FOREIGN /
+    // dynamic id (a version registering another package's namespace) is dropped:
+    // appending it would list it without suppressing its real owner's default, a
+    // duplicate leak (codex convergence). Its real owner is substituted only via
+    // that owner's own edge, if the caller pins it.
+    const owned = served.value.filter((d) => owningPackageOfObjectType(d.typeId) === pkg);
+    const foreignCount = served.value.length - owned.length;
+    if (foreignCount > 0) {
+      notes.push(
+        `${pkg}@${decision.version}: dropped ${foreignCount} retained object type(s) not owned by ${pkg}`,
+      );
+    }
+    substitutions.push({ packageName: pkg, version: decision.version, retainedTypes: owned });
+  }
+  return { substitutions, notes };
+}
+
+/**
+ * The object-type serve port the `packages/objects` handlers consume off
+ * globalThis (route-graph-safe — no import edge). Both methods are pure over the
+ * live trusted sources; a consumer treats a `refuse` POINT decision as a hard
+ * stop and an absent port as "default serving" (S7-consistent fallback).
+ */
+export type ExtensionObjectTypeServePort = {
+  resolveObjectType(typeId: string): Promise<EdgeBoundObjectTypeDecision>;
+  planListing(): Promise<EdgeBoundObjectTypeListing>;
+};
+
+// The globalThis serve-port key (cross-compilation safe via `Symbol.for`). The
+// PORT IS PUBLISHED by `extension-version-keyed-serving.ts` — NOT here — because
+// that module is loaded EAGERLY at boot (the loader's retention wiring) in the
+// instrumentation compilation, so the port is present in the process before any
+// request-time consumer runs; this module (`extension-edge-bound-serving.ts`) is
+// reached only lazily on the serve paths, so publishing HERE would leave the seam
+// absent (fail-open to the default) for an edge-bound caller on a path that had
+// not yet loaded it (codex convergence). The version-keyed publisher's port
+// methods LAZY-import this module for the two serve functions below.
+const EXTENSION_OBJECT_TYPE_SERVE_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-object-type-serve/v1",
+);
+type ObjectTypeServeHolder = { [k: symbol]: ExtensionObjectTypeServePort | undefined };
+
+/** Read the globalThis-published object-type serve port (or `undefined` when the
+ *  version-keyed publisher was never loaded — the S7-consistent default-serving
+ *  fallback). Used by the `ctx.objects.resolveType` host backing; the leaf
+ *  `packages/objects` handlers inline the identical read to avoid an import edge. */
+export function getPublishedObjectTypeServePort(): ExtensionObjectTypeServePort | undefined {
+  return (globalThis as unknown as ObjectTypeServeHolder)[EXTENSION_OBJECT_TYPE_SERVE_KEY];
 }
