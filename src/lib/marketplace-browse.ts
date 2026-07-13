@@ -25,6 +25,11 @@ import {
 } from "@cinatra-ai/extensions/screens";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { VendorCredentialsMissingError } from "@/lib/marketplace-credentials";
+// The host's generated manifest — the SAME source `/connectors` reads a
+// connector's own logo from (cinatra#1325). For a locally-known package we
+// inject `manifest.logo` (cinatra.logo) as the browse card's FIRST icon tier so
+// the card and `/connectors` resolve the identical connector identity.
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
   emptyRatingSummary,
   normalizeCompatibleUpTo,
@@ -136,6 +141,21 @@ async function loadInstallableRegistryConfigOrNull(): Promise<
 }
 
 /**
+ * The extension's OWN logo (`manifest.logo` = generated from `cinatra.logo`)
+ * for a package the host bundles/knows, else null (cinatra#1325). Read from the
+ * SAME `STATIC_EXTENSION_MANIFEST` `/connectors` uses, so an enriched card and a
+ * `/connectors` row resolve the identical connector identity. The remote
+ * catalog does not carry it; a storefront-only (not-bundled) package returns
+ * null and the card degrades exactly as before. `package_name` is normalized
+ * (trim) before the lookup (codex round-0).
+ */
+function manifestLogoForPackage(rawName: unknown): string | null {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (name.length === 0) return null;
+  return STATIC_EXTENSION_MANIFEST[name]?.logo ?? null;
+}
+
+/**
  * Load the marketplace browse catalog. Pure-ish orchestration over the public
  * catalog client; the field mapping is delegated to the pure mappers in
  * `@cinatra-ai/extensions/screens`.
@@ -143,7 +163,14 @@ async function loadInstallableRegistryConfigOrNull(): Promise<
 export async function loadMarketplaceBrowse(): Promise<MarketplaceBrowseResult> {
   const items = await fetchStorefrontCatalog(fetchPublicMarketplaceExtensionList);
   const cards = items
-    .map(catalogEntryToCardData)
+    // Arrow (NOT a bare `.map(catalogEntryToCardData)`): the mapper is now
+    // 2-arity, so a point-free `.map` would pass the array INDEX as its second
+    // `opts` argument (codex round-0). We inject `manifest.logo` per entry.
+    .map((entry) =>
+      catalogEntryToCardData(entry, {
+        manifestLogo: manifestLogoForPackage(entry.package_name),
+      }),
+    )
     .filter((c): c is MarketplaceCardData => c !== null);
   // `registryConnected` drives the Install/Update CTA + the registry banner.
   // The SOURCE OF TRUTH is whether the registry read-config can ACTUALLY load
