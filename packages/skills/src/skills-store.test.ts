@@ -445,7 +445,7 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
     ).rejects.toThrow(/has no owner identity/);
   });
 
-  it("refuses to update a personal skill row when ownerUserId and scope disagree with the caller", async () => {
+  it("trusts the durable ownerUserId over a drifted scope: admits the owner, rejects a scope-only claimant (cinatra#1416)", async () => {
     // Both owner-identity fields present but the caller matches neither.
     // The presentOwners.some(...) check must reject as soon as ANY present
     // field disagrees with input.ownerUserId.
@@ -492,7 +492,7 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
             isCustom: true,
             level: "personal",
             ownerUserId: "user-a",
-            scope: "user-b",  // drifted from ownerUserId — neither matches the caller below
+            scope: "user-b",  // drifted from ownerUserId (a shared/legacy projection); the DURABLE owner is user-a
           },
         ],
       })),
@@ -517,10 +517,15 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
     });
 
     const { upsertCustomSkill } = await import("./skills-store");
-    // Even if input.ownerUserId === "user-a" (matches ownerUserId), the scope
-    // field still disagrees, so the gate must reject. Same goes for "user-b".
-    await expect(
-      upsertCustomSkill({
+    // cinatra#1416, AC1/AC8: ownership is the DURABLE `ownerUserId`, NOT the
+    // mutable `(level, scope)` tuple — `scope` legitimately drifts to a granted
+    // locus (or a legacy value) once a personal skill is shared. The true owner
+    // (user-a) must stay able to edit their own skill; only a claimant who does
+    // NOT match the durable owner (user-b, who matches merely the drifted scope)
+    // is rejected.
+    let ownerErr: unknown;
+    try {
+      await upsertCustomSkill({
         skillId: "custom:drift-personal-skills:drifted",
         ownerUserId: "user-a",
         agentId: "@cinatra-ai/some-agent",
@@ -530,8 +535,17 @@ describe("level:'personal' scope projection via readSkillsCatalog", () => {
         ownerType: "user",
         ownerId: "user-a",
         createdBy: "user-a",
-      }),
-    ).rejects.toThrow(/not the owner of personal skill/);
+      });
+    } catch (e) {
+      ownerErr = e;
+    }
+    // The durable owner passes the ownership gate; any later failure in the
+    // mocked write chain would be unrelated to ownership.
+    expect(String((ownerErr as Error | undefined)?.message ?? "")).not.toMatch(
+      /not the owner of personal skill/,
+    );
+    // A scope-only claimant (matches the drifted scope but NOT the durable
+    // owner) is still rejected — the anti-forgery protection is preserved.
     await expect(
       upsertCustomSkill({
         skillId: "custom:drift-personal-skills:drifted",

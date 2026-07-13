@@ -303,6 +303,9 @@ export function createSkillsPrimitiveHandlers() {
               id: skill.id ?? skill.name,
               level: skill.level,
               scope: (skill as { scope?: string | null }).scope ?? null,
+              // Durable owner (cinatra#1416, AC7): the owner keeps read/list of
+              // their OWN shared personal skill regardless of the projected tuple.
+              ownerUserId: (skill as { ownerUserId?: string | null }).ownerUserId ?? null,
               // Canonical effective policy (W4): the skill's own accessPolicy
               // else the parent package's. Enforcement reads its union any-match.
               accessPolicy: resolveEffectiveSkillAccessPolicy(skill, catalog.skillPackages ?? []),
@@ -403,6 +406,8 @@ export function createSkillsPrimitiveHandlers() {
                 id: s.id,
                 level: s.level,
                 scope: s.scope ?? null,
+                // Durable owner (cinatra#1416, AC7): owner keeps read of a shared personal skill.
+                ownerUserId: s.ownerUserId ?? null,
                 // Effective policy (W4): skill override else this package's.
                 accessPolicy: resolveEffectiveSkillAccessPolicy(s, [pkg]),
               }));
@@ -530,6 +535,8 @@ export function createSkillsPrimitiveHandlers() {
             id: s.id,
             level: s.level,
             scope: s.scope ?? null,
+            // Durable owner (cinatra#1416, AC7): owner keeps read of a shared personal skill.
+            ownerUserId: s.ownerUserId ?? null,
             // Effective policy (W4): skill override else parent package's.
             accessPolicy: resolveEffectiveSkillAccessPolicy(s, catalog.skillPackages ?? []),
           }));
@@ -579,6 +586,8 @@ export function createSkillsPrimitiveHandlers() {
           id: skill.id,
           level: skill.level,
           scope: skill.scope ?? null,
+          // Durable owner (cinatra#1416, AC7): owner keeps read of a shared personal skill.
+          ownerUserId: skill.ownerUserId ?? null,
           isWidgetChatSkill,
           accessPolicy: effectivePolicy,
         });
@@ -666,6 +675,8 @@ export function createSkillsPrimitiveHandlers() {
           id: skill.id,
           level: skill.level,
           scope: skill.scope ?? null,
+          // Durable owner (cinatra#1416, AC7): owner keeps read/delivery of a shared personal skill.
+          ownerUserId: skill.ownerUserId ?? null,
           accessPolicy: resolveEffectiveSkillAccessPolicy(skill, installedSkillPackages),
         });
         try {
@@ -760,6 +771,8 @@ export function createSkillsPrimitiveHandlers() {
             id: entry.id,
             level: entry.level,
             scope: entry.scope ?? null,
+            // Durable owner (cinatra#1416, AC7): owner keeps read/delivery of a shared personal skill.
+            ownerUserId: entry.ownerUserId ?? null,
             accessPolicy: resolveEffectiveSkillAccessPolicy(entry, resolveSkillPackages),
           }));
           return true;
@@ -781,6 +794,8 @@ export function createSkillsPrimitiveHandlers() {
               id: skill.id,
               level: skill.level,
               scope: skill.scope ?? null,
+              // Durable owner (cinatra#1416, AC7): owner keeps read/delivery of a shared personal skill.
+              ownerUserId: skill.ownerUserId ?? null,
               accessPolicy: resolveEffectiveSkillAccessPolicy(skill, resolveSkillPackages),
             });
             requireResourceAccess(actorCtx, resolveRef);
@@ -876,6 +891,12 @@ export function createSkillsPrimitiveHandlers() {
             id: existing.id,
             level: existing.level,
             scope: existing.scope ?? null,
+            // Durable owner + ownership-keyed MANAGE (cinatra#1416, AC2/AC8): on a
+            // user-authored skill only the owner (or platform_admin) may MUTATE
+            // via skills_installed_upsert; a granted-scope member gets read/use
+            // only. Without ownerUserId the durable-owner short-circuit and the
+            // owned-skill manage denial in requireResourceAccess cannot fire.
+            ownerUserId: existing.ownerUserId ?? null,
             // Effective policy (W4): skill override else parent package's.
             accessPolicy: resolveEffectiveSkillAccessPolicy(
               existing,
