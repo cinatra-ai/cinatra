@@ -180,4 +180,65 @@ describe("setup-route seam pin", () => {
       expect(site).toContain("initialValues={initialValues}");
     }
   });
+
+  it("the route threads the version-keyed resolver + version identity (S9 non-default serve)", () => {
+    expect(pageSource).toContain("resolveActiveInstallForActor");
+    expect(pageSource).toContain("resolveVersionedAction:");
+    expect(pageSource).toContain("resolveVersionKeyedUiAction");
+    expect(pageSource).toContain("isDefault: activeInstall?.isDefault");
+  });
+});
+
+// cinatra#1392 S9 — a NON-DEFAULT addressed install hydrates from ITS version's
+// action (version-keyed), fail-closed to a BLANK form; never the default's.
+describe("resolveSchemaConfigInitialValues — non-default version serve (S9)", () => {
+  const versionedHandler = vi.fn(async () => ({ baseUrl: "https://v014.example", streaming: false }));
+  const versionedDeps = () => ({
+    // The default global resolver must NOT be consulted for a non-default install.
+    resolveAction: vi.fn(() => ({ handler: async () => ({ baseUrl: "https://DEFAULT.leaked" }) })),
+    resolveVersionedAction: vi.fn((pkg: string, ver: string | null | undefined, actionId: string) =>
+      pkg === PKG && ver === "0.1.4" && actionId === "readConfig" ? { handler: versionedHandler } : null,
+    ),
+  });
+
+  it("serves the version-keyed hydrate action for a non-default install (never the default's)", async () => {
+    const d = versionedDeps();
+    const out = await resolveSchemaConfigInitialValues(
+      { surface: hydratingSurface, packageName: PKG, installId: "install-nd", isDefault: false, version: "0.1.4" },
+      d,
+    );
+    expect(out).toEqual({ baseUrl: "https://v014.example", streaming: "false" });
+    expect(d.resolveVersionedAction).toHaveBeenCalledWith(PKG, "0.1.4", "readConfig");
+    expect(d.resolveAction).not.toHaveBeenCalled(); // fail-closed: no default fall-through
+  });
+
+  it("fail-closes to a BLANK form for a non-default install whose version registers no such action", async () => {
+    const d = versionedDeps();
+    const out = await resolveSchemaConfigInitialValues(
+      { surface: hydratingSurface, packageName: PKG, installId: "install-nd", isDefault: false, version: "9.9.9" },
+      d,
+    );
+    expect(out).toEqual({}); // version 9.9.9 has no served action → blank, never the default
+    expect(d.resolveAction).not.toHaveBeenCalled();
+  });
+
+  it("fail-closes to a BLANK form for a non-default install when NO version-keyed resolver is wired", async () => {
+    const resolveAction = vi.fn(() => ({ handler: async () => ({ baseUrl: "https://DEFAULT.leaked" }) }));
+    const out = await resolveSchemaConfigInitialValues(
+      { surface: hydratingSurface, packageName: PKG, installId: "install-nd", isDefault: false, version: "0.1.4" },
+      { resolveAction }, // no resolveVersionedAction
+    );
+    expect(out).toEqual({});
+    expect(resolveAction).not.toHaveBeenCalled();
+  });
+
+  it("a DEFAULT install (isDefault omitted or true) keeps the global path — version-keyed never consulted", async () => {
+    const d = versionedDeps();
+    const out = await resolveSchemaConfigInitialValues(
+      { surface: hydratingSurface, packageName: PKG, installId: "install-1", isDefault: true, version: "1.0.0" },
+      d,
+    );
+    expect(out).toEqual({ baseUrl: "https://DEFAULT.leaked" });
+    expect(d.resolveVersionedAction).not.toHaveBeenCalled();
+  });
 });

@@ -274,6 +274,7 @@ export function ExtensionCardListingBanner({
   accentColor,
   emblem,
   iconUrl,
+  iconRender,
   byline,
   badges,
   className,
@@ -287,6 +288,15 @@ export function ExtensionCardListingBanner({
   accentColor: ExtensionAccent;
   emblem: React.ReactNode;
   iconUrl?: string | null;
+  /**
+   * Fully-resolved icon-tile content (cinatra#1325). When provided it renders
+   * inside the 46×46 tile INSTEAD of the `iconUrl ? <img> : emblem` block — the
+   * caller owns the whole fallback chain (the marketplace card threads its
+   * `manifest.logo → client-icon-map → catalog → vendor → kind-emblem` resolver
+   * through here via `<MarketplaceCardIcon>`). Every other caller omits it and
+   * keeps the single-`iconUrl` path, byte-identical.
+   */
+  iconRender?: React.ReactNode;
   /**
    * The `{Kind} by {Vendor}` byline (design spec 0.5.0 §I/§III/§IV): renders
    * directly BENEATH the name, inside the coloured banner. The caller supplies
@@ -372,7 +382,13 @@ export function ExtensionCardListingBanner({
         )}
         style={muted ? undefined : { color: bg }}
       >
-        {iconUrl ? (
+        {iconRender != null ? (
+          // Caller-owned full icon chain (cinatra#1325: the marketplace card's
+          // manifest.logo → client-icon-map → catalog → vendor → kind-emblem
+          // resolver). The tile styling is unchanged; only the resolution moves
+          // to the caller.
+          iconRender
+        ) : iconUrl ? (
           // An arbitrary remote marketplace asset host; not a build-time-known
           // image, so the Next <Image> loader/allowlist does not apply. The URL
           // is a sanitized hosted asset (the marketplace rasterizes; never a raw

@@ -78,6 +78,7 @@ The eight arms (each a standalone script under `scripts/ci/works-after/`):
 | `verdaccio` | publish → install round-trip (mint a throwaway user via the repo's `createNpmUser`, publish `@works-after/proof`, install it back, assert the sentinel), with the real immutability `config.yaml` mounted | `VERDACCIO_TAG` |
 | `upgrade-redis` | UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded redis 7→8 family path (`scripts/upgrade/redis-upgrade-major.sh`) against a data-bearing prior-version AOF volume — positive commit, pre-commit failure injection (lands on the intact source volume with the source ledger entry), post-commit interruption (pending journal retained), fail-closed downgrade/valkey negatives. Source+target images digest-pinned | `REDIS_FROM_TAG`, `REDIS_TO_TAG` |
 | `upgrade-mariadb` | UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded MariaDB in-place family path (`scripts/upgrade/mariadb-upgrade-major.sh`, explicit `mariadb-upgrade` on a CANDIDATE volume) — positive commit, pre-commit failure injection, dump/restore fallback, quiesce + sequential-only fail-closed negatives. Source+target images digest-pinned | `MARIADB_FROM_TAG`, `MARIADB_TO_TAG` |
+| `upgrade-postgres` | UPGRADE-FROM fixture (cinatra#1422 / cinatra-cli#129): the guarded Postgres logical dump→fresh-target-volume→restore family path (`scripts/upgrade/postgres-upgrade-major.sh`) for the two cinatra#1417 transitions — Case A platform-postgres 17→18 (the pg18 mount-layout move; full battery: negatives, quiesce, pre-commit failure-injection rollback onto the intact source, positive commit, post-commit interruption) and Case B nango-postgres 15→17 (case-scoped exception, skipped major). Target images digest-pinned (the matrix pins); field sources are bare majors | `PG_CASEA_FROM_TAG`, `PG_CASEA_TO_TAG`, `PG_CASEB_FROM_TAG`, `PG_CASEB_TO_TAG` |
 
 Each candidate env defaults to the **current pin**, so a bare run is green on
 today's `main`; the major-upgrade lane runs the same script with the new
@@ -124,6 +125,7 @@ lane's acceptance:
 | redis | `REDIS_TAG=<new> pnpm works-after:gate -- --arms redis` |
 | verdaccio | `VERDACCIO_TAG=<new> pnpm works-after:gate -- --arms verdaccio` |
 | nango | `NANGO_SERVER_IMAGE=<new> pnpm works-after:gate -- --arms nango` |
+| postgres major (upgrade-from) | `PG_CASEA_TO_TAG=<new pin> pnpm works-after:gate -- --arms upgrade-postgres` |
 | full-stack | `<all pins> PREV_IMAGE=… OPENAI_API_KEY=… pnpm works-after:gate -- --arms all` |
 
 Pure stack-layer groups that touch no datastore client (React / Next / TypeScript
