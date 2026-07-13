@@ -188,6 +188,7 @@
     "authz:inventory": "node scripts/build-authz-inventory.mjs",
     "authz:retention": "node --env-file=.env.local --import tsx scripts/enforce-audit-retention.mjs",
     "authz:inventory:check": "node scripts/build-authz-inventory.mjs --check",
+    "ops:run-context-readiness": "node --import tsx scripts/ops/run-context-cutover-readiness.mjs",
     "config:build": "node scripts/config/generate-build-config.mjs",
     "config:build:check": "node scripts/config/generate-build-config.mjs --check",
     "sync:inventory": "node scripts/build-postgres-sync-inventory.mjs",
