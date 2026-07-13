@@ -155,10 +155,10 @@ export function isInstallRowAddressableByActor(
  * of `isInstallRowAddressableByActor` (the shared scope predicate). Returns the
  * first matching live row's id, or null when none exists.
  */
-export function pickActiveInstallId(
-  rows: readonly InstallRowForPick[],
+export function pickActiveInstall<T extends InstallRowForPick>(
+  rows: readonly T[],
   actor: ActorScopeForPick,
-): string | null {
+): T | null {
   const live = rows.filter(
     (row) =>
       LIVE_STATUSES.has(row.status) && isInstallRowAddressableByActor(row, actor),
@@ -175,7 +175,15 @@ export function pickActiveInstallId(
     actor.organizationId !== null &&
     row.organizationId !== actor.organizationId;
   const preferred = live.filter((row) => !isCrossOrg(row));
-  return (preferred[0] ?? live[0]).id;
+  return preferred[0] ?? live[0];
+}
+
+/** Back-compat thin wrapper: the picked row's id, or null (delegates to `pickActiveInstall`). */
+export function pickActiveInstallId(
+  rows: readonly InstallRowForPick[],
+  actor: ActorScopeForPick,
+): string | null {
+  return pickActiveInstall(rows, actor)?.id ?? null;
 }
 
 /**
@@ -187,12 +195,29 @@ export async function resolveActiveInstallIdForActor(
   packageName: string,
   actor: ActorContext | undefined | null,
 ): Promise<string | null> {
+  return (await resolveActiveInstallForActor(packageName, actor))?.id ?? null;
+}
+
+/** The addressable active install's id + VERSION IDENTITY (cinatra#1392 S9).
+ *
+ * The caller (schema-config setup hydration) needs `isDefault`/`version` so a
+ * NON-DEFAULT addressed install is served ITS version's hydrate action — never
+ * the default's (the same edge-bound ui-surface serve the generic action
+ * dispatch route applies). `isDefault` normalizes the optional row flag
+ * (`isDefault !== false` → default). Returns null when no addressable live
+ * install exists (the caller renders the Install / Activate CTA). */
+export async function resolveActiveInstallForActor(
+  packageName: string,
+  actor: ActorContext | undefined | null,
+): Promise<{ id: string; isDefault: boolean; version: string | null } | null> {
   if (!actor) return null;
   const rows = await readInstalledExtensionsByPackageName(packageName);
   // buildActorScopeForPick threads the actor's team memberships AND the
   // admin-standing role fields (platformRole/orgRole) so an admin resolves the
-  // install id of a row they do not personally own.
-  return pickActiveInstallId(rows, buildActorScopeForPick(actor));
+  // install of a row they do not personally own.
+  const row = pickActiveInstall(rows, buildActorScopeForPick(actor));
+  if (!row) return null;
+  return { id: row.id, isDefault: row.isDefault !== false, version: row.version ?? null };
 }
 
 // ---------------------------------------------------------------------------

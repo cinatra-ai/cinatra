@@ -190,6 +190,8 @@ function cardFor(detail: MarketplaceDetailView, kindSlug: MarketplaceCardData["k
         : null,
     detailHref: "#",
     installCount: detail.installCount,
+    manifestLogoUrl: null,
+    iconSlug: null,
     iconUrl: null,
     vendorLogoUrl: null,
     vendor: detail.vendor ? { name: detail.vendor.name, storeUrl: detail.vendor.storeUrl } : null,

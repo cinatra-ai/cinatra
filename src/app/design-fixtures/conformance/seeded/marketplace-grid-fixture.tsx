@@ -35,6 +35,8 @@ function toCardData(seed: SeededGridCard): MarketplaceCardData {
     rating: null,
     detailHref: `/configuration/marketplace/fixtures/${seed.packageName.split("/")[1]}`,
     installCount: null,
+    manifestLogoUrl: null,
+    iconSlug: null,
     iconUrl: null,
     vendorLogoUrl: null,
     sdkAbiRange: "*",

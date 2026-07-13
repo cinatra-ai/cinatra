@@ -85,6 +85,8 @@ export function AgentDetailModal({
     rating: null,
     detailHref,
     installCount: null,
+    manifestLogoUrl: null,
+    iconSlug: null,
     iconUrl: null,
     vendorLogoUrl: null,
     vendor: null,

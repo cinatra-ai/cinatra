@@ -45,10 +45,11 @@ import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 import { chooseConnectorUiRender } from "@/lib/connector-ui-render";
 import {
-  resolveActiveInstallIdForActor,
+  resolveActiveInstallForActor,
   resolveRuntimeConnectorUiRecord,
   resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
+import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
 import { requiresRebuildState } from "@/lib/extension-schema-config";
 import type { SchemaConfigSurface } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
@@ -229,7 +230,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // POST to /api/extensions/{installId}/actions/...; when the connector isn't
     // installed/active for the actor's workspace, show an explicit Install /
     // Activate CTA instead of letting action POSTs 404 opaquely.
-    const installId = await resolveActiveInstallIdForActor(packageId, actor);
+    // Resolve the addressable install WITH its version identity so a NON-DEFAULT
+    // side-by-side install hydrates from ITS version's action, not the default's
+    // (cinatra#1392 S9). `installId` downstream keeps its meaning (the
+    // addressable id for action POST URLs); `isDefault`/`version` only steer the
+    // server-side hydration serve below (no visual change).
+    const activeInstall = await resolveActiveInstallForActor(packageId, actor);
+    const installId = activeInstall?.id ?? null;
     // Model-A applies ONLY to a single-connection connector that declares a real
     // `status-probe` — a connection whose connected/disconnected state the right-
     // column status card can represent (the two key-based connectors openai +
@@ -249,8 +256,22 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // form, never an error page. `installId` is the actor-scoped addressable
     // install resolved above (proof of authorization for this render).
     const initialValues = await resolveSchemaConfigInitialValues(
-      { surface: render.surface, packageName: packageId, installId },
-      { resolveAction: resolveExtensionUiAction },
+      {
+        surface: render.surface,
+        packageName: packageId,
+        installId,
+        isDefault: activeInstall?.isDefault,
+        version: activeInstall?.version,
+      },
+      {
+        resolveAction: resolveExtensionUiAction,
+        // NON-DEFAULT installs hydrate from their version's action, fail-closed
+        // to a blank form (never the default's action).
+        resolveVersionedAction: (pkg, ver, act) => {
+          const served = resolveVersionKeyedUiAction(pkg, ver, act);
+          return served.kind === "serve" ? { handler: served.value.handler } : null;
+        },
+      },
     );
     const statusProbeActionId = findStatusProbeActionId(render.surface);
     // A tabbed surface's tab row is page-header chrome (design §II — "the page

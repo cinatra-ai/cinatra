@@ -70,10 +70,6 @@ import {
   SKILL_SELECTOR_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
-import {
-  TriggerConfigureFormRenderer,
-  TriggerConfirmSummaryRenderer,
-} from "./trigger-agent-renderers";
 import { SkillRecommenderRenderer } from "./skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "./email-test-delivery-form-renderer";
 
@@ -148,8 +144,6 @@ const RENDERER_KIND_TABLE: Record<
   },
   "skill-recommend": { renderer: SkillRecommenderRenderer },
   "test-delivery-input": { renderer: EmailTestDeliveryFormRenderer },
-  "trigger-configure": { renderer: TriggerConfigureFormRenderer },
-  "trigger-confirm": { renderer: TriggerConfirmSummaryRenderer },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
   "wordpress-draft-confirm": { renderer: BlogWordpressDraftConfirmRenderer },
 };

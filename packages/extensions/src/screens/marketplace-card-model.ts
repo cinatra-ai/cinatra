@@ -56,13 +56,35 @@ export interface MarketplaceCardData {
    */
   installCount: number | null;
   /**
-   * Sanitized hosted URL for the extension's own square icon, or null. First
-   * link in the card icon fallback chain (icon → vendor logo → kind emblem).
+   * The extension's OWN self-describing logo — the sanitized inline-SVG data
+   * URI generated from `cinatra.logo` (`manifest.logo`), or null when the
+   * extension declares none / is not locally known. FIRST tier of the card
+   * icon chain, aligned with `/connectors` (cinatra#1325): resolving the card
+   * from the extension's own logo makes a connector card render the identical
+   * connector identity `/connectors` resolves for the same package — instead
+   * of degrading to the generic kind emblem. Same source `/connectors` reads
+   * (`STATIC_EXTENSION_MANIFEST[pkg].logo`), injected by the browse loader.
+   */
+  manifestLogoUrl: string | null;
+  /**
+   * The extension's slug (the scoped npm name minus its scope, e.g.
+   * `@cinatra-ai/youtube-connector` → `youtube-connector`), or null. Keys the
+   * host CLIENT ICON MAP tier (`ICON_BY_SLUG`) — the SECOND tier, the same
+   * brand-mark map `/connectors` falls back to when `manifest.logo` is null
+   * (cinatra#1325). Resolved to a node at render (the pure model stays
+   * React-free); a slug with no mapped brand mark falls through to the catalog
+   * icon tier.
+   */
+  iconSlug: string | null;
+  /**
+   * Sanitized hosted URL for the extension's square icon from the marketplace
+   * CATALOG, or null. THIRD tier of the card icon chain (after the extension's
+   * own `manifest.logo` and the host client-icon map — cinatra#1325).
    */
   iconUrl: string | null;
   /**
-   * Sanitized hosted URL for the vendor brand logo, or null. Second link in the
-   * card icon fallback chain.
+   * Sanitized hosted URL for the vendor brand logo, or null. FOURTH tier of
+   * the card icon chain (before the kind emblem).
    */
   vendorLogoUrl: string | null;
   /**
@@ -126,6 +148,66 @@ function normalizeCatalogAssetUrl(raw: unknown): string | null {
     return normalizeOptionalString((raw as { url?: unknown }).url);
   }
   return null;
+}
+
+/**
+ * Scheme guard for a hosted (remote) card-icon URL: passes ONLY `http(s)`,
+ * matching `safeHttpUrl` on the render side (defence-in-depth on the catalog
+ * icon / vendor-logo tiers, which are arbitrary marketplace-supplied URLs). A
+ * blank / non-string / non-http(s) value degrades to null (the next tier).
+ */
+function safeHostedImageSrc(raw: unknown): string | null {
+  const value = normalizeOptionalString(raw);
+  if (value === null) return null;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// The EXACT inline-logo data-URI form the manifest generator emits — a
+// base64-encoded, sanitized SVG (`scripts/extensions/generate-extension-manifest.mjs`).
+// Bounded ON PURPOSE (codex round-0): a bare `data:` guard would admit any
+// inline payload; the card renders `manifest.logo` in an `<img>`, so only this
+// one sanitizer-produced image form is trusted. Case-insensitive on the media
+// type; the base64 marker is required.
+const MANIFEST_LOGO_DATA_URI_RE = /^data:image\/svg\+xml;base64,[a-z0-9+/]+=*$/i;
+
+/**
+ * Scheme guard for the extension's OWN logo (`manifest.logo`). Unlike the
+ * remote catalog tiers, this is the sanitized inline-SVG DATA URI the manifest
+ * generator emits (the exact value `/connectors` renders directly). It admits
+ * ONLY that bounded `data:image/svg+xml;base64,…` form (never a bare/arbitrary
+ * `data:` payload, never `javascript:`) plus a plain `http(s)` hosted URL;
+ * anything else → null (the next tier). Kept pure + local so the client-safe
+ * model pulls no URL helper across the package boundary.
+ */
+export function safeManifestLogoSrc(raw: unknown): string | null {
+  const value = normalizeOptionalString(raw);
+  if (value === null) return null;
+  if (MANIFEST_LOGO_DATA_URI_RE.test(value)) return value;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive the extension slug that keys the host client-icon map: the scoped npm
+ * name minus its scope (`@cinatra-ai/youtube-connector` → `youtube-connector`),
+ * matching the `/connectors` registry slug + `ICON_BY_SLUG` keys (cinatra#1325).
+ * A bare (unscoped) name is returned as-is; a blank/garbage value → null.
+ */
+export function deriveIconSlug(packageName: string): string | null {
+  const name = normalizeOptionalString(packageName);
+  if (name === null) return null;
+  const slash = name.lastIndexOf("/");
+  const slug = slash >= 0 ? name.slice(slash + 1) : name;
+  return slug.length > 0 ? slug : null;
 }
 
 /**
@@ -238,6 +320,17 @@ export function normalizeCardDescription(
  */
 export function catalogEntryToCardData(
   entry: MarketplaceCatalogEntry,
+  opts?: {
+    /**
+     * The extension's OWN logo (`manifest.logo`) — the sanitized inline-SVG
+     * data URI from `STATIC_EXTENSION_MANIFEST[pkg].logo` — injected by the
+     * server-side browse loader for a locally-known package (cinatra#1325). The
+     * remote catalog does not carry it, so an un-enriched call (or a package the
+     * host does not bundle) leaves the first icon tier empty and the chain
+     * degrades exactly as before. Guarded here (`safeManifestLogoSrc`).
+     */
+    manifestLogo?: string | null;
+  },
 ): MarketplaceCardData | null {
   const packageName = typeof entry.package_name === "string" ? entry.package_name.trim() : "";
   const packageVersion = typeof entry.version === "string" ? entry.version.trim() : "";
@@ -261,11 +354,93 @@ export function catalogEntryToCardData(
     // New OPTIONAL catalog fields — every one degrades gracefully when the
     // marketplace build predates the field (absent → null, no broken UI).
     installCount: normalizeInstallCount(entry.install_count),
+    // cinatra#1325: the extension's OWN logo (cinatra.logo → manifest.logo) is
+    // the FIRST icon tier and its slug keys the host client-icon map (SECOND
+    // tier), so a connector card resolves the same identity `/connectors` does.
+    manifestLogoUrl: safeManifestLogoSrc(opts?.manifestLogo),
+    iconSlug: deriveIconSlug(packageName),
     iconUrl: normalizeCatalogAssetUrl(entry.icon_url),
     vendorLogoUrl: normalizeCatalogAssetUrl(entry.vendor_logo_url),
     sdkAbiRange: normalizeOptionalString(entry.sdk_abi_range),
     vendor: normalizeCardVendor(entry.vendor),
   };
+}
+
+/**
+ * The resolved card-icon chain (cinatra#1325): the ordered list of hosted-image
+ * `<img src>` candidates the tile tries (in order, advancing on load-failure)
+ * and which NODE tier renders once they are exhausted/absent.
+ */
+export interface CardIconChain {
+  /**
+   * Ordered `<img src>` candidates — tried first→last, advancing to the next
+   * on a load failure (the render walks them). Never contains a null/blank.
+   */
+  imageSrcs: string[];
+  /**
+   * The terminal NODE tier, rendered after every `imageSrcs` candidate is
+   * absent or fails to load: the host client-icon-map brand mark
+   * (`"client-icon"`) or the generic kind emblem (`"kind-emblem"`). A React
+   * node always renders, so it is the guaranteed tail of the chain — never a
+   * blank tile (issue AC#4).
+   */
+  emblem: "client-icon" | "kind-emblem";
+}
+
+/**
+ * Resolve the card-icon fallback chain in the explicit order the design spec
+ * (§IV) + `/connectors` share — cinatra#1325:
+ *
+ *   manifest.logo → client icon map → catalog icon_url → vendor logo → kind emblem
+ *
+ * A React SVG node (the client-icon-map brand mark, the kind emblem) ALWAYS
+ * renders — it can never fail to load — so the FIRST node tier reached
+ * terminates the chain. That is why, when the slug HAS a client-icon
+ * (`hasClientIcon`), the catalog-icon + vendor-logo `<img>` tiers are dropped:
+ * the client-icon node sits above them in the order and would always win, so
+ * they are unreachable. This models "client icon beats catalog icon" exactly:
+ *
+ *   - hasClientIcon:  [manifest.logo?] then terminal client-icon
+ *       (manifest.logo shows if present + decodes; on load-failure or absence
+ *        it degrades to the client-icon brand mark — order tiers 1 → 2).
+ *   - else:           [manifest.logo?, catalog?, vendor?] then terminal kind-emblem
+ *       (the legacy chain, now with manifest.logo prepended — tiers 1,3,4 → 5).
+ *
+ * PURE + React-free (the client-safe model): `hasClientIcon` is supplied by the
+ * render, which owns the host client-icon map (a `"use client"` node map that
+ * must not be pulled into this client-safe model). The terminal node itself is
+ * materialized at render from `emblem`.
+ */
+export function resolveCardIconChain(
+  card: Pick<MarketplaceCardData, "manifestLogoUrl" | "iconUrl" | "vendorLogoUrl">,
+  opts: { hasClientIcon: boolean },
+): CardIconChain {
+  const manifestLogo = safeManifestLogoSrc(card.manifestLogoUrl);
+  if (opts.hasClientIcon) {
+    return {
+      imageSrcs: manifestLogo ? [manifestLogo] : [],
+      emblem: "client-icon",
+    };
+  }
+  // DEDUPE while preserving order (codex round-1 BLOCKER): the catalog icon and
+  // vendor logo can be the SAME URL (or equal manifest.logo). The render keys
+  // each `<img>` by its src, so a repeated src → same key + same src → React
+  // reuses the node on advance and the `onError` never re-fires — the chain
+  // would STALL on a shared dead URL and never reach the kind emblem (AC#4). A
+  // deduplicated chain guarantees every advance is a genuinely new `<img>`.
+  const seen = new Set<string>();
+  const imageSrcs: string[] = [];
+  for (const src of [
+    manifestLogo,
+    safeHostedImageSrc(card.iconUrl),
+    safeHostedImageSrc(card.vendorLogoUrl),
+  ]) {
+    if (src !== null && !seen.has(src)) {
+      seen.add(src);
+      imageSrcs.push(src);
+    }
+  }
+  return { imageSrcs, emblem: "kind-emblem" };
 }
 
 /**

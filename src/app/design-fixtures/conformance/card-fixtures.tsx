@@ -64,6 +64,8 @@ function toCardData(
     rating: null,
     detailHref: `/configuration/marketplace/fixtures/${fixture.packageName.split("/")[1]}`,
     installCount: null,
+    manifestLogoUrl: null,
+    iconSlug: null,
     iconUrl: null,
     vendorLogoUrl: null,
     sdkAbiRange: fixture.sdkAbiRange,

@@ -10,6 +10,11 @@ import type {
 } from "@cinatra-ai/extension-types";
 import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
 import { objectTypeRegistry } from "@cinatra-ai/objects";
+import {
+  artifactObjectTypeClaimManifestSchema,
+  validateObjectTypeClaimSchemaSources,
+  type ArtifactObjectTypeClaimManifest,
+} from "@cinatra-ai/objects/claims";
 import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 // Validate the SEMANTIC artifact manifest. An artifact extension declares a
@@ -70,6 +75,14 @@ const artifactDescriptorSchema = z
     // `matcherConfidenceThreshold`. The objects↔extensions import cycle
     // forbids sharing; the parity test pins both copies.
     matcherConfidenceThreshold: z.number().min(0).max(1).optional(),
+    // BEGIN objectTypes-claims-mirror (cinatra#1432) — this block is kept
+    // byte-identical across packages/objects/src/semantic-manifest.ts and
+    // packages/extensions/src/artifact-handler.ts (the established lock-step
+    // convention). The ENTRY schema itself is shared from the pure claims
+    // leaf (@cinatra-ai/objects/claims — both files import it), so only this
+    // block needs the mirror; the mirror test pins it byte-identical.
+    objectTypes: z.array(artifactObjectTypeClaimManifestSchema).min(1).optional(),
+    // END objectTypes-claims-mirror
   })
   .strict();
 // Allowlist the whole `cinatra` block — an artifact extension's manifest may
@@ -256,6 +269,41 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
             `cinatra.artifact descriptor is invalid: ${parsed.error.issues
               .map((i) => `${i.path.join(".") || "<root>"} ${i.message}`)
               .join("; ")}`,
+          );
+        } else if (parsed.data.objectTypes) {
+          // Schema-source rule (cinatra#1432 AC-4, fail-closed): every claimed
+          // type needs an inline JSON Schema, OR the claimant registers the
+          // type itself, OR a declared manifest dependency on the registering
+          // extension (`cinatra.dependencies` — the same edges the production
+          // acquisition lock set carries, so a dependency-registered claimant
+          // brings its registrant along into the lock set by construction).
+          const claims = parsed.data.objectTypes as ArtifactObjectTypeClaimManifest[];
+          const seen = new Set<string>();
+          for (const claim of claims) {
+            if (seen.has(claim.type)) {
+              errors.push(`duplicate objectTypes claim for '${claim.type}'`);
+            }
+            seen.add(claim.type);
+          }
+          const declaredDeps = Array.isArray(
+            (cinatra as { dependencies?: unknown }).dependencies,
+          )
+            ? ((cinatra as { dependencies?: unknown }).dependencies as unknown[])
+                .map((d) =>
+                  d != null &&
+                  typeof d === "object" &&
+                  typeof (d as { packageName?: unknown }).packageName === "string"
+                    ? ((d as { packageName: string }).packageName)
+                    : null,
+                )
+                .filter((n): n is string => n != null)
+            : [];
+          errors.push(
+            ...validateObjectTypeClaimSchemaSources({
+              packageName: typeof s.name === "string" ? s.name : "",
+              claims,
+              dependencyPackageNames: declaredDeps,
+            }),
           );
         }
       }
