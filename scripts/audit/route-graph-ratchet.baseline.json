@@ -2,10 +2,10 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 141,
-    "/api/mcp": 1418,
-    "/chat": 1456,
-    "/api/a2a": 1423,
-    "/api/llm-bridge": 1429
+    "/api/mcp": 1422,
+    "/chat": 1460,
+    "/api/a2a": 1427,
+    "/api/llm-bridge": 1433
   },
   "absorbs": {
     "/sign-in": {
@@ -15,28 +15,28 @@
       "pr": 1466
     },
     "/api/mcp": {
-      "from": 1416,
-      "to": 1418,
-      "reason": "cinatra#1392 S8 (PR #1470) tool discovery union + sync capability-provider substitution. This route gains EXACTLY 2 net-new first-party src/lib leaves: (1) extension-pre-resolved-edges.ts — the loader-published pre-resolved edge maps backing the SYNC HostCapabilitiesPort.resolveProviders substitution (imported by the already route-reachable runtime-package-loader.ts / extension-host-context.ts); (2) extension-ctx-dependent-identity.ts — the ALS frame threading the exact install identity for ctx.mcp.callPrimitive callers (imported by extension-host-context.ts and consumed by the extension-edge-bound-serving.ts identity chain). All four locked routes reach the loader/MCP surface and the CI ratchet measurement on the PR head attributed exactly +2 to each of them (/sign-in reaches neither the loader activation pass nor the MCP chokepoints and gains neither leaf — its count is unchanged). Absorbed raise 1416->1418.",
-      "pr": 1470
+      "from": 1418,
+      "to": 1422,
+      "reason": "cinatra#1391 (PR #1476) host-port grant-union re-approval surface. Registering the extension-host-port-grants ApprovalSource adds EXACTLY 4 net-new first-party modules to the approvals page/MCP + nav graph, which all four non-auth locked routes reach: (1) src/lib/extension-host-port-grant-review.ts (the union-aware re-approval backend, all heavy readers dynamic-imported); (2) src/app/configuration/approvals/sources/host-port-grants.ts (the heavy source); (3) src/app/configuration/approvals/sources/host-port-grants.contract.ts (the import-light nav contract); (4) src/app/configuration/approvals/host-port-grant-decision-actions.tsx (the inline approve control). /sign-in reaches the approvals registry graph via neither the layout nav nor the MCP arm and gains none (unchanged 141). Delta measured clone-independent locally (+4 vs origin/main on each of the four routes); the new modules import no companion extension so the CI ratchet measurement with clones reproduces +4. Absorbed raise 1418->1422.",
+      "pr": 1476
     },
     "/chat": {
-      "from": 1454,
-      "to": 1456,
-      "reason": "cinatra#1392 S8 (PR #1470) tool discovery union + sync capability-provider substitution. This route gains EXACTLY 2 net-new first-party src/lib leaves: (1) extension-pre-resolved-edges.ts — the loader-published pre-resolved edge maps backing the SYNC HostCapabilitiesPort.resolveProviders substitution (imported by the already route-reachable runtime-package-loader.ts / extension-host-context.ts); (2) extension-ctx-dependent-identity.ts — the ALS frame threading the exact install identity for ctx.mcp.callPrimitive callers (imported by extension-host-context.ts and consumed by the extension-edge-bound-serving.ts identity chain). All four locked routes reach the loader/MCP surface and the CI ratchet measurement on the PR head attributed exactly +2 to each of them (/sign-in reaches neither the loader activation pass nor the MCP chokepoints and gains neither leaf — its count is unchanged). Absorbed raise 1454->1456.",
-      "pr": 1470
+      "from": 1456,
+      "to": 1460,
+      "reason": "cinatra#1391 (PR #1476) host-port grant-union re-approval surface. Registering the extension-host-port-grants ApprovalSource adds EXACTLY 4 net-new first-party modules to the approvals page/MCP + nav graph, which all four non-auth locked routes reach: extension-host-port-grant-review.ts, sources/host-port-grants.ts, sources/host-port-grants.contract.ts, host-port-grant-decision-actions.tsx. Delta measured clone-independent locally (+4 vs origin/main); the new modules import no companion extension so the CI ratchet measurement with clones reproduces +4. Absorbed raise 1456->1460.",
+      "pr": 1476
     },
     "/api/a2a": {
-      "from": 1421,
-      "to": 1423,
-      "reason": "cinatra#1392 S8 (PR #1470) tool discovery union + sync capability-provider substitution. This route gains EXACTLY 2 net-new first-party src/lib leaves: (1) extension-pre-resolved-edges.ts — the loader-published pre-resolved edge maps backing the SYNC HostCapabilitiesPort.resolveProviders substitution (imported by the already route-reachable runtime-package-loader.ts / extension-host-context.ts); (2) extension-ctx-dependent-identity.ts — the ALS frame threading the exact install identity for ctx.mcp.callPrimitive callers (imported by extension-host-context.ts and consumed by the extension-edge-bound-serving.ts identity chain). All four locked routes reach the loader/MCP surface and the CI ratchet measurement on the PR head attributed exactly +2 to each of them (/sign-in reaches neither the loader activation pass nor the MCP chokepoints and gains neither leaf — its count is unchanged). Absorbed raise 1421->1423.",
-      "pr": 1470
+      "from": 1423,
+      "to": 1427,
+      "reason": "cinatra#1391 (PR #1476) host-port grant-union re-approval surface. Registering the extension-host-port-grants ApprovalSource adds EXACTLY 4 net-new first-party modules to the approvals page/MCP + nav graph, which all four non-auth locked routes reach: extension-host-port-grant-review.ts, sources/host-port-grants.ts, sources/host-port-grants.contract.ts, host-port-grant-decision-actions.tsx. Delta measured clone-independent locally (+4 vs origin/main); the new modules import no companion extension so the CI ratchet measurement with clones reproduces +4. Absorbed raise 1423->1427.",
+      "pr": 1476
     },
     "/api/llm-bridge": {
-      "from": 1427,
-      "to": 1429,
-      "reason": "cinatra#1392 S8 (PR #1470) tool discovery union + sync capability-provider substitution. This route gains EXACTLY 2 net-new first-party src/lib leaves: (1) extension-pre-resolved-edges.ts — the loader-published pre-resolved edge maps backing the SYNC HostCapabilitiesPort.resolveProviders substitution (imported by the already route-reachable runtime-package-loader.ts / extension-host-context.ts); (2) extension-ctx-dependent-identity.ts — the ALS frame threading the exact install identity for ctx.mcp.callPrimitive callers (imported by extension-host-context.ts and consumed by the extension-edge-bound-serving.ts identity chain). All four locked routes reach the loader/MCP surface and the CI ratchet measurement on the PR head attributed exactly +2 to each of them (/sign-in reaches neither the loader activation pass nor the MCP chokepoints and gains neither leaf — its count is unchanged). Absorbed raise 1427->1429.",
-      "pr": 1470
+      "from": 1429,
+      "to": 1433,
+      "reason": "cinatra#1391 (PR #1476) host-port grant-union re-approval surface. Registering the extension-host-port-grants ApprovalSource adds EXACTLY 4 net-new first-party modules to the approvals page/MCP + nav graph, which all four non-auth locked routes reach: extension-host-port-grant-review.ts, sources/host-port-grants.ts, sources/host-port-grants.contract.ts, host-port-grant-decision-actions.tsx. Delta measured clone-independent locally (+4 vs origin/main); the new modules import no companion extension so the CI ratchet measurement with clones reproduces +4. Absorbed raise 1429->1433.",
+      "pr": 1476
     }
   }
 }
