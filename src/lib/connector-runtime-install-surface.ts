@@ -1,5 +1,8 @@
 import "server-only";
 
+import { getPublishedExtensionSummary } from "@cinatra-ai/registries";
+import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
+
 // The host-side resolver that tells the connector extension handler
 // whether a connector is RUNTIME-INSTALLABLE (model-B / schema-config) or
 // REBUILD-ONLY (bundled-react).
@@ -24,10 +27,8 @@ export async function resolveConnectorUiSurfaceForPackage(
   packageName: string,
   packageVersion?: string,
 ): Promise<"schema-config" | "bundled-react" | null> {
-  const { getPublishedExtensionSummary } = await import("@cinatra-ai/registries");
-  let config: Awaited<ReturnType<typeof import("@/lib/verdaccio-config").loadVerdaccioConfigForReads>> | undefined;
+  let config: Awaited<ReturnType<typeof loadVerdaccioConfigForReads>> | undefined;
   try {
-    const { loadVerdaccioConfigForReads } = await import("@/lib/verdaccio-config");
     config = await loadVerdaccioConfigForReads();
   } catch {
     config = undefined;
