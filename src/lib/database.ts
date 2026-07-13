@@ -48,6 +48,7 @@ import {
   writeMetadataValueIfAbsentInternal,
   writeMetadataValueIfGuardTokenHeldInternal,
   writeMetadataValueInternal,
+  systemGlobalSkillIdsFromCatalog,
 } from "@/lib/database-metadata";
 
 // Connection/schema primitives + schema init moved to SYNC LEAF modules
@@ -1496,20 +1497,7 @@ export function readCustomSkillAssignmentsForAgent(
  * Currently routes through readSkillCatalogFromDatabase + filter on level.
  */
 export function readSystemGlobalSkillIdsForAgent(_agentId: string): string[] {
-  const catalog = readSkillCatalogFromDatabase();
-  return catalog.skills
-    .filter(
-      (skill) =>
-        (skill as { level?: string }).level === "system" &&
-        // SECURITY (cinatra#1416): a user-authored skill (durable ownerUserId)
-        // must NEVER be delivered as a global system skill to every agent run —
-        // the projection guard already prevents an owned skill from being
-        // labelled system; this is the defense-in-depth at the delivery gate,
-        // matching the systemSkillIds filter in agents-store.
-        !(skill as { ownerUserId?: string }).ownerUserId,
-    )
-    .map((skill) => String((skill as { id?: string }).id ?? ""))
-    .filter(Boolean);
+  return systemGlobalSkillIdsFromCatalog(readSkillCatalogFromDatabase().skills);
 }
 
 export function upsertCustomSkillAssignment(input: {

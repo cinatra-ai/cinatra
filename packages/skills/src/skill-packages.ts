@@ -499,3 +499,99 @@ function releaseCatalogRebuildLease(db: DatabaseModule, leaseToken: string): voi
     // Never mask the rebuild result — an unreleased lease self-expires by TTL.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Personal-skill access-configuration + ownership authorization helpers
+// (cinatra#1416). Co-located in this already route-graph-reachable module (the
+// same 0-route-graph-delta pattern the W4/#1073 access helpers above use) so the
+// extraction from skills-store.ts adds ZERO new modules to any route's reachable
+// graph. Behavior is identical to the inline logic these replace — pure
+// decisions over an already-read catalog row, no I/O.
+// ---------------------------------------------------------------------------
+
+/**
+ * Access-configuration preservation on an EXISTING-skill upsert (AC1/AC8): a
+ * metadata / markdown edit of an existing skill must never clobber its canonical
+ * accessPolicy nor the (level, scope) tuple projected from it — otherwise
+ * "share → edit → grants gone" (silent narrowing). When the existing row carries
+ * a canonical policy, carry the policy forward and keep the projected tuple; rows
+ * without a policy keep the legacy write shape.
+ *
+ * `ownerUserId` is persisted separately by the caller as the DURABLE owner
+ * identity; the projected `scope` here stays a legacy label/index hint. For a
+ * personal skill without a policy, requireResourceAccess keys owner identity off
+ * `scope`, so the ownerUserId is projected there too (the read path no longer
+ * relies on the legacy back-fill).
+ */
+export function resolveUpsertAccessConfig(
+  existingSkill: PersistedSkill | undefined,
+  inputType: SkillLevel,
+  isPersonal: boolean,
+  ownerUserId: string | undefined,
+): { accessPolicy: PersistedSkill["accessPolicy"]; level: SkillLevel; scope: string | undefined } {
+  return {
+    accessPolicy: existingSkill?.accessPolicy ?? undefined,
+    level: existingSkill?.accessPolicy ? (existingSkill.level ?? inputType) : inputType,
+    scope: existingSkill?.accessPolicy
+      ? existingSkill.scope
+      : isPersonal
+        ? ownerUserId
+        : undefined,
+  };
+}
+
+/**
+ * Ownership authorization for the personal-skill write path (upsertCustomSkill),
+ * cinatra#1416 AC1. Throws (fail-closed) when the caller may not update the
+ * existing row. `existing` is the already-read catalog row (undefined = create,
+ * always allowed). Defense-in-depth behind the action layer.
+ *
+ * Fail closed in three cases:
+ *   1. The row is NOT user-authored (a package/team/org row) — reassigning it
+ *      through the personal path would silently downgrade its ownership level
+ *      and let an authenticated user claim it via a forged form skillId.
+ *   2. The row is user-authored but carries NO verifiable owner identity.
+ *   3. The row is user-authored but owned by someone other than the caller.
+ */
+export function assertPersonalSkillOwnership(
+  existing: PersistedSkill | undefined,
+  callerUserId: string,
+  skillId: string,
+): void {
+  // DURABLE personal-skill identity: a user-authored skill is recognized by its
+  // persisted `isCustomSkill` flag / `ownerUserId` — NOT by the mutable
+  // (level, scope) tuple, which the access-policy projection rewrites when the
+  // owner broadens the skill (a shared personal skill may carry level
+  // "team"/"organization"/"workspace" while remaining personally owned and
+  // personally editable).
+  const isUserAuthored =
+    existing !== undefined &&
+    (existing.isCustomSkill === true || existing.level === "personal");
+  if (existing && !isUserAuthored) {
+    throw new Error(
+      `upsertCustomSkill: skill ${skillId} is level "${existing.level}", not a personal skill — refusing update through personal-skill code path.`,
+    );
+  }
+  if (existing && isUserAuthored) {
+    // Owner identity: the durable ownerUserId when present; the legacy `scope`
+    // back-fill ONLY for old rows that never persisted ownerUserId (for those,
+    // scope still holds the owner id — the projection never ran on them; consult
+    // scope only when level is still "personal", i.e. the tuple was never projected).
+    const ownerIdentity =
+      typeof existing.ownerUserId === "string" && existing.ownerUserId.length > 0
+        ? existing.ownerUserId
+        : existing.level === "personal" && typeof existing.scope === "string" && existing.scope.length > 0
+          ? existing.scope
+          : null;
+    if (ownerIdentity === null) {
+      throw new Error(
+        `upsertCustomSkill: personal skill ${skillId} has no owner identity — refusing to update.`,
+      );
+    }
+    if (ownerIdentity !== callerUserId) {
+      throw new Error(
+        `upsertCustomSkill: caller ${callerUserId} is not the owner of personal skill ${skillId}.`,
+      );
+    }
+  }
+}

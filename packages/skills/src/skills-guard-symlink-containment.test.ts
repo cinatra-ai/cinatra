@@ -64,9 +64,12 @@ vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: vi.fn(),
 }));
 
-vi.mock("./skill-packages", () => ({
-  installedSkillPackages: [],
-}));
+vi.mock("./skill-packages", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./skill-packages")>();
+  // override only installedSkillPackages so real disk scans do not crowd the
+  // containment assertions; the real access-policy/authz helpers pass through.
+  return { ...actual, installedSkillPackages: [] };
+});
 
 vi.mock("./storage/git-commit", () => ({
   commitSkillChange: vi.fn(async () => undefined),

@@ -287,3 +287,35 @@ export function deleteMetadataByPrefixInternal(prefix: string) {
     queries: [buildDeleteMetadataByPrefixQuery(postgresSchema, prefix)],
   });
 }
+
+// ---------------------------------------------------------------------------
+// Skill-catalog access predicates (cinatra#1416), co-located in this already
+// route-graph-reachable sibling of database.ts so the extraction adds ZERO new
+// modules to any route's reachable graph. Pure row-shape logic over an
+// already-read catalog snapshot — no I/O, no Postgres bridge.
+// ---------------------------------------------------------------------------
+
+/**
+ * A catalog row is a GLOBAL system skill (delivered to every agent run) only
+ * when its level is "system" AND it carries no durable owner identity.
+ *
+ * SECURITY (cinatra#1416): a user-authored skill (durable ownerUserId) must
+ * NEVER be delivered as a global system skill to every agent run — the
+ * projection guard already prevents an owned skill from being labelled system;
+ * this is the defense-in-depth at the delivery gate, matching the systemSkillIds
+ * filter in agents-store.
+ */
+export function isGlobalSystemSkillRow(skill: unknown): boolean {
+  return (
+    (skill as { level?: string }).level === "system" &&
+    !(skill as { ownerUserId?: string }).ownerUserId
+  );
+}
+
+/** Project catalog rows to the ids of the global system skills (see above). */
+export function systemGlobalSkillIdsFromCatalog(skills: readonly unknown[]): string[] {
+  return skills
+    .filter((skill) => isGlobalSystemSkillRow(skill))
+    .map((skill) => String((skill as { id?: string }).id ?? ""))
+    .filter(Boolean);
+}
