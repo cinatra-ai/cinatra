@@ -104,6 +104,7 @@ export const RAW_OBJECT_ACCESS_ALLOWLIST: readonly RawObjectAccessEntry[] = [
   { file: "src/lib/artifacts/artifact-creation.ts",          category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/artifact-retention.ts",         category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/semantic-assertion-store.ts",   category: "substrate", note: "artifacts substrate" },
+  { file: "src/lib/objects/artifact-uninstall-operations.ts", category: "substrate", note: "artifacts claim-system substrate (cinatra#1432) — uninstall archival/reinstall replay; reads the objects table only for the replay existence guard, writes semantic_assertion (not objects)" },
   { file: "src/lib/artifacts/run-context-selections-store.ts", category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/matcher-runtime.ts",            category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/artifact-read.ts",              category: "substrate", note: "artifacts substrate" },
