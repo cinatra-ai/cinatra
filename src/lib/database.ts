@@ -1207,28 +1207,23 @@ export function upsertChatThreadInDatabase(
   options?: {
     orgId?: string | null;
     // Org anchor for the STRUCTURED assistant_threads mirror row (cinatra#1037
-    // P2b). Distinct from `orgId` (which also activates the pin ref-sync) and
-    // NEVER falling back to it — option PRESENCE distinguishes an explicit
-    // null from "unspecified"; set-once SQL keeps an established anchor.
+    // P2b). Distinct from `orgId` and NEVER falling back to it — option PRESENCE
+    // distinguishes explicit null from "unspecified"; set-once SQL keeps it.
     assistantMirrorOrgId?: string | null;
   },
 ) {
   ensurePostgresSchema();
-  // Combine pin-sync + thread JSON upsert into ONE transaction. Either BOTH
-  // commit or NEITHER do. If pin-sync and thread upsert are split across
-  // transactions, a later thread-upsert failure can orphan pin rows
+  // Combine pin-sync + thread JSON upsert into ONE transaction (BOTH commit or
+  // NEITHER) — a split would let a later thread-upsert failure orphan pin rows
   // (referrer_id points at a never-persisted thread).
   const orgId = options?.orgId ?? null;
   let pinQueries: Array<{ text: string; values: unknown[] }> = [];
   if (orgId) {
-    // Lazy require keeps artifact-refs-store out of this module's
-    // import-time graph. SAFE ONLY because artifact-refs-store is a SYNC
-    // LEAF (it imports postgres-config/postgres-schema-init, never this
-    // module — cinatra#104): under Turbopack dev, `require()` of an ASYNC
-    // module (one whose graph reaches `import()`-loaded externals, like
-    // this very file) returns the module's Promise and every named export
-    // reads as `undefined`. The sync-leaf contract is enforced by
-    // src/lib/__tests__/postgres-sync-leaf-imports.test.ts.
+    // Lazy require keeps artifact-refs-store out of this module's import-time
+    // graph. SAFE ONLY because artifact-refs-store is a SYNC LEAF (cinatra#104):
+    // under Turbopack a `require()` of an ASYNC module (one reaching `import()`
+    // externals, like this file) returns its Promise so every named export reads
+    // `undefined`. Enforced by src/lib/__tests__/postgres-sync-leaf-imports.test.ts.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require("@/lib/artifacts/artifact-refs-store") as typeof import("@/lib/artifacts/artifact-refs-store");
     pinQueries = mod.buildArtifactRefSyncQueries({
@@ -1239,15 +1234,13 @@ export function upsertChatThreadInDatabase(
     });
   }
   // Same-transaction projections of the payload write (builders live in
-  // src/lib/project-inheritance.ts so SQL shape + parameter ordering are
-  // unit-tested in isolation from this aliased host module):
-  //  1. chat_threads payload-to-column lockstep — typed project_id/created_at/
-  //     updated_at columns as an indexable projection (sealed-room reads).
-  //  2. cinatra#1037 P2b structured-store mirror — assistant_threads identity
-  //     + assistant_turns per-message METADATA/attribution rows (run_id NULL,
-  //     never fabricated; content never copied — the legacy payload stays the
-  //     single content home until the #1216 S2 cutover). Deterministic
-  //     `legacy:`-namespaced turn ids keep it idempotent + self-backfilling.
+  // src/lib/project-inheritance.ts, unit-tested in isolation): (1) chat_threads
+  // payload-to-column lockstep — typed project_id/created_at/updated_at as an
+  // indexable projection (sealed-room reads); (2) cinatra#1037 P2b structured
+  // mirror — assistant_threads identity + assistant_turns METADATA rows (run_id
+  // NULL, content never copied — legacy payload stays the single content home
+  // until the #1216 S2 cutover). Deterministic `legacy:`-namespaced turn ids
+  // keep it idempotent + self-backfilling.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const inheritance = require("@/lib/project-inheritance") as typeof import("@/lib/project-inheritance");
   runPostgresQueriesSync({
@@ -1274,45 +1267,24 @@ export function upsertChatThreadInDatabase(
     ],
   });
 
-  // Chat-capture detection enqueue (cinatra#1367). Fires AFTER the persist
-  // transaction above committed — "detection is enqueued once the user turn
-  // is persisted". This is the single chokepoint every chat entry point
-  // funnels through (save route, chat server actions, MCP handlers), so the
-  // hook covers all of them without touching any client contract; the #1216
-  // S2 cutover must re-hook the replacement persistence path with the same
-  // semantics (contract test: chat-capture-enqueue-hook.test.ts).
-  // Fire-and-forget by design: a sync caller cannot await it, every failure
-  // degrades to a warn inside maybeEnqueueChatCaptureForThread, and the
-  // dynamic import() keeps BullMQ/Redis out of this module's require() graph
-  // (route-graph ratchet).
-  try {
-    void import("@/lib/chat-capture/enqueue")
-      .then((mod) => mod.maybeEnqueueChatCaptureForThread(thread))
-      .catch((err) => {
-        console.warn(
-          "[chat-capture] enqueue hook failed (thread persist unaffected):",
-          err instanceof Error ? err.message : err,
-        );
-      });
-  } catch (err) {
-    console.warn(
-      "[chat-capture] enqueue hook failed (thread persist unaffected):",
-      err instanceof Error ? err.message : err,
-    );
-  }
+  // Chat-capture detection enqueue (cinatra#1367): fire-and-forget AFTER the
+  // commit (a user turn is enqueued once persisted). The dynamic import keeps
+  // BullMQ/Redis out of this module's route graph, and the enqueue module warns
+  // on its own failures (cutover contract: chat-capture-enqueue-hook.test.ts).
+  void import("@/lib/chat-capture/enqueue")
+    .then((mod) => mod.maybeEnqueueChatCaptureForThread(thread))
+    .catch((err) => console.warn("[chat-capture] enqueue hook failed:", err));
 }
 
-// Attachment refs are extracted from every message (see
-// extractAttachmentRefsFromThreadPayload in artifact-refs-store.ts) so the
-// pin-sync composes into the thread upsert's transaction.
+// Attachment refs are extracted from every message (see artifact-refs-store.ts's
+// extractAttachmentRefsFromThreadPayload) so pin-sync composes into the upsert.
 
 export function deleteChatThreadFromDatabase(
   threadId: string,
   _options?: { orgId?: string | null },
 ) {
-  void _options; // back-compat for prior callers; orgId is no longer
-                 // used because the thread row is global (chat_threads
-                 // has no org_id column).
+  void _options; // back-compat for prior callers; orgId no longer used because
+                 // the thread row is global (chat_threads has no org_id column).
   ensurePostgresSchema();
   // Delete pins GLOBALLY (no org filter) to match the global thread row. If
   // the active org differs from the org that originally pinned the artifact via

@@ -1,8 +1,7 @@
 import { eq, notInArray } from "drizzle-orm";
-// SQL-TEXT-ONLY driver (cinatra#104): pg-proxy builds queries WITHOUT importing
-// `pg`, so this module + every static importer up to database.ts stays SYNC (a `pg`
-// import goes async via Turbopack's dynamic import() and breaks the sync `require()`
-// composition — see postgres-config.ts; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
+// SQL-TEXT-ONLY driver (cinatra#104): pg-proxy builds queries WITHOUT importing `pg`,
+// so this module + every static importer up to database.ts stays SYNC (a `pg` import goes async via Turbopack's dynamic import() and breaks the sync `require()`
+// composition; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
@@ -537,10 +536,9 @@ END $$` },
       UNIQUE (package_name, org_id)
     )` },
     { text: `CREATE INDEX IF NOT EXISTS extension_host_port_grant_pkg_idx ON "${schemaName.replaceAll('"', '""')}"."extension_host_port_grant" (package_name)` },
-    // The table UNIQUE(package_name, org_id) does NOT dedupe GLOBAL grants
-    // (Postgres treats NULLs as distinct), so a concurrent insert could create
-    // two (package, NULL) rows. A partial unique index enforces one global grant
-    // per package.
+    // The table UNIQUE(package_name, org_id) does NOT dedupe GLOBAL grants (Postgres
+    // treats NULLs as distinct), so a concurrent insert could create two (package,
+    // NULL) rows. A partial unique index enforces one global grant per package.
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_host_port_grant_pkg_global_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_host_port_grant" (package_name) WHERE org_id IS NULL` },
     { text: `DO $$
       BEGIN
@@ -559,10 +557,9 @@ END $$` },
     ...widgetStreamMetadataGrantSchemaQueries(schemaName), // widget-stream metadata grant (runtime trust slice 1), additive
     ...chatCaptureSchemaQueries(schemaName), // chat-capture turn ledger (cinatra#1367), additive — mirrors core__0039
 
-    // Runtime installer — snapshot leases. An in-flight run that imports
-    // a digest-pinned package dir holds a lease so the GC reaper never deletes
-    // the <digest> dir out from under it. A lease past expires_at no longer
-    // protects the dir (a crashed holder cannot strand a dir forever).
+    // Runtime installer — snapshot leases. An in-flight run importing a digest-
+    // pinned package dir holds a lease so the GC reaper never deletes the <digest>
+    // dir; a lease past expires_at no longer protects it (a crash can't strand it).
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."extension_snapshot_lease" (
       id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
       package_name text NOT NULL,
