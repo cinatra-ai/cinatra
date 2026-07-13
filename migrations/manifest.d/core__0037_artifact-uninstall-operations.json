@@ -1,0 +1,10 @@
+{
+  "seq": "0037",
+  "file": "core/core__0037_artifact-uninstall-operations.mjs",
+  "summary": "Artifact-extension uninstall-operation records (cinatra#1432, epic #1424). Adds artifact_uninstall_operations — one row per uninstall archival run (scope 'platform'|'org:<id>' × claiming extension), status running→completed (or failed), jsonb checkpoint so an interrupted archival resumes, replayed_at/replayed_install_id set once by the reinstall replay (an operation replays at most once). Adds artifact_uninstall_operation_assertions — append-only lineage of EXACTLY the semantic_assertion rows the operation archived, denormalized with everything replay needs (org/artifact/extension/asserted_by/principal); UNIQUE (operation_id, assertion_id) makes checkpoint-resumed archival idempotent; BEFORE UPDATE OR DELETE trigger raises. No FKs (the artifact_claim_events precedent — operation + lineage survive installed_extension deletion). Additive (brand-new empty tables) — artifact not REQUIRED, shipped to keep fresh-bootstrap and operator-upgrade aligned (core__0034 precedent); mirrors the idempotent bootstrap DDL (buildCreateStoreSchemaQueries → artifactUninstallOperationSchemaQueries). down() drops both tables + trigger/function; operation/lineage rows are deliberately non-recoverable audit state (the floor rebalance keeps every artifact identity-total without replay).",
+  "destructive": false,
+  "tables": [
+    "artifact_uninstall_operations",
+    "artifact_uninstall_operation_assertions"
+  ]
+}

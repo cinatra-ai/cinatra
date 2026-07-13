@@ -19,6 +19,7 @@ import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
 import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
+import { artifactUninstallOperationSchemaQueries } from "@/lib/artifact-uninstall-operation-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
@@ -2743,6 +2744,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     ...artifactClaimSchemaQueries(schemaName), // cinatra#1425: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034
+    ...artifactUninstallOperationSchemaQueries(schemaName), // cinatra#1432: sync leaf, no FKs (operation lineage survives uninstall); existing deployments via core__0037
     // ---------------------------------------------------------------------------
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
