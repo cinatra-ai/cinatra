@@ -30,6 +30,12 @@ describe("graphiti projection-policy schema DDL", () => {
     );
   });
 
+  it("adds the nullable outbox projection_epoch stamp (stale-epoch fencing)", () => {
+    expect(ddl).toMatch(
+      /ALTER\s+TABLE\s+"cinatra"\."graphiti_projection_outbox"\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+projection_epoch\s+integer/i,
+    );
+  });
+
   it("the phase CHECK lists EXACTLY the REBUILD_JOURNAL_PHASES vocabulary", () => {
     const m = ddl.match(/phase\s+IN\s*\(([^)]*)\)/i);
     expect(m).not.toBeNull();

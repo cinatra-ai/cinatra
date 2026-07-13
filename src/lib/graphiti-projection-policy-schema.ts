@@ -29,11 +29,12 @@
 //                                    the epoch mid-rebuild strands the stale
 //                                    driver's writes harmlessly.
 //
-// The outbox epoch column (`graphiti_projection_outbox.projection_epoch`)
-// rides the same additive pass in drizzle-store.ts: rebuild-replay items are
-// STAMPED with their target epoch and discarded by the worker when the
-// group's epoch has moved on (stale-epoch fencing); ordinary write-path items
-// stay NULL and always process under the group's live policy.
+// The outbox epoch column (`graphiti_projection_outbox.projection_epoch`) is
+// the LAST entry below (the outbox table itself pre-exists by the time
+// drizzle-store.ts spreads these queries): rebuild-replay items are STAMPED
+// with their target epoch and discarded by the worker when the group's epoch
+// has moved on (stale-epoch fencing); ordinary write-path items stay NULL and
+// always process under the group's live policy.
 //
 // A pure string builder with ZERO imports — a synchronous leaf, safe for
 // drizzle-store.ts's synchronous require() composition (same contract as
@@ -90,5 +91,11 @@ export function graphitiProjectionPolicySchemaQueries(schemaName: string): { tex
       ON "${q}"."graphiti_rebuild_journal" (group_id) WHERE phase <> 'done'` },
     { text: `CREATE INDEX IF NOT EXISTS graphiti_rebuild_journal_open_idx
       ON "${q}"."graphiti_rebuild_journal" (created_at) WHERE phase <> 'done'` },
+
+    // ---- outbox epoch stamp: stale-epoch fencing for rebuild replays ----
+    // NULL = ordinary write-path item (always processed under the group's
+    // live policy); non-NULL = rebuild-replay item, discarded by the worker
+    // when the group's epoch has moved past it.
+    { text: `ALTER TABLE "${q}"."graphiti_projection_outbox" ADD COLUMN IF NOT EXISTS projection_epoch integer` },
   ];
 }

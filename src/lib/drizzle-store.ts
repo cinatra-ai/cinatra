@@ -2744,18 +2744,10 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     ...artifactClaimSchemaQueries(schemaName), // cinatra#1425: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034
-    // cinatra#1427 ACs 4-5: projection-policy epoch + durable rebuild journal
-    // (sync leaf, purely additive — bootstrap-only, no core migration) plus
-    // the outbox epoch stamp for stale-epoch fencing (NULL = ordinary
-    // write-path item, processed under the group's live policy; non-NULL =
-    // rebuild-replay item, discarded when the group's epoch has moved on).
-    ...graphitiProjectionPolicySchemaQueries(schemaName),
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."graphiti_projection_outbox" ADD COLUMN IF NOT EXISTS projection_epoch integer` },
-    // ---------------------------------------------------------------------------
+    ...graphitiProjectionPolicySchemaQueries(schemaName), // cinatra#1427 ACs 4-5: epoch + rebuild journal + outbox epoch stamp (sync leaf, bootstrap-only, no core migration)
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
     // All entries are idempotent (ADD COLUMN IF NOT EXISTS / CREATE TABLE IF NOT EXISTS).
-    // ---------------------------------------------------------------------------
     // Step 1: Add origin JSONB column to agent_templates.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates"
     ADD COLUMN IF NOT EXISTS origin jsonb` },
