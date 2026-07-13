@@ -27,8 +27,18 @@ vi.mock("../artifact-retention", () => ({
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: vi.fn(),
 }));
-// Service summary enrichment reads from the assertion store; tests drive
-// a stub that returns no rows so summaries get the floor default identity.
+// Service summary enrichment resolves through the effective-identity
+// service (cinatra#1426); the stub returns no enrichment so summaries get
+// the floor default identity.
+vi.mock("@/lib/objects/effective-identity", () => ({
+  resolveArtifactEffectiveIdentities: vi.fn().mockReturnValue(new Map()),
+  resolveArtifactEffectiveIdentity: vi.fn().mockReturnValue({
+    identity: { kind: "default-artifact", selectable: false, assertionId: null },
+    eligibleExtensions: [],
+  }),
+}));
+// The assertion store still backs the extension filter + the MCP semantic
+// primitives; stubbed (registered tools are not invoked here).
 vi.mock("../semantic-assertion-store", () => ({
   listEligibleAssertions: vi.fn().mockReturnValue([]),
   listEligibleAssertionsForArtifacts: vi.fn().mockReturnValue(new Map()),

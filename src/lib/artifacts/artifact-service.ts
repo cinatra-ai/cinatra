@@ -26,12 +26,18 @@ import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 // Generated pure-data floor constant (cinatra#151 Stage 6) — core source
 // never names the floor extension package.
 import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
+import { listArtifactIdsForExtension } from "./semantic-assertion-store";
+// Effective-identity service (cinatra#1426): the ONE resolution point for
+// artifact identity — total over base type × claim × binding × classic
+// assertions × install status. The enrichment below resolves THROUGH it
+// (identity requires an INSTALLED extension; a claim without a landed
+// binding is browse-only).
 import {
-  listEligibleAssertions,
-  listEligibleAssertionsForArtifacts,
-  listArtifactIdsForExtension,
-  primaryExtensionFor,
-} from "./semantic-assertion-store";
+  resolveArtifactEffectiveIdentities,
+  resolveArtifactEffectiveIdentity,
+  type ArtifactIdentityEnrichment,
+  type EffectiveIdentity,
+} from "@/lib/objects/effective-identity";
 
 // The artifact object-types registry is populated only by
 // registerAllObjectTypes() through the artifact extension registration
@@ -69,14 +75,16 @@ export type ArtifactSummary = {
   originKind: string;
   createdAt: string;
   updatedAt: string;
-  // Semantic identity is derived from `semantic_assertion` (read assertions,
-  // not objects.type). Every artifact has at least the default-artifact floor
-  // assertion; classifier-asserted (matcher/agent/authoring_skill/user)
-  // extensions may join. `primaryExtension` is the highest-precedence
-  // non-default eligible extension, falling back to default if none.
-  // `eligibleExtensions` is every active eligible extension (not drafts).
+  // Semantic identity resolves through the effective-identity service
+  // (cinatra#1426): `effectiveIdentity` is the full resolution (extension
+  // identity with its basis + selectability, the default-artifact floor, or
+  // plain object); `primaryExtension` is the summary string derived from it
+  // (the identity's extension, or the floor). Identity requires an INSTALLED
+  // extension — an uninstalled extension's assertions are INACTIVE here.
+  // `eligibleExtensions` stays the raw active eligible set (not drafts).
   eligibleExtensions: string[];
   primaryExtension: string;
+  effectiveIdentity: EffectiveIdentity;
   // Validated "Open in source application" URL for connector-ref artifacts,
   // projected from `objects.data.connectorRef.url` via
   // `connectorRefSourceUrl` (http/https only). Null for every artifact
@@ -160,6 +168,21 @@ function actorPassesObjectAuthz(
   );
 }
 
+/** The summary `primaryExtension` string for a resolved identity: the
+ *  identity's extension when it names one (binding/classic/catalog), else the
+ *  floor. A `plain-object` identity cannot occur for the generic artifact
+ *  base type this surface lists (the floor always covers it) — it maps to the
+ *  floor string defensively; the honest signal is `effectiveIdentity.kind`. */
+function primaryExtensionOf(identity: EffectiveIdentity): string {
+  return identity.kind === "extension" ? identity.extension : DEFAULT_ARTIFACT_EXTENSION;
+}
+
+const FLOOR_IDENTITY_FALLBACK: EffectiveIdentity = {
+  kind: "default-artifact",
+  selectable: false,
+  assertionId: null,
+};
+
 function toSummary(
   rec: {
     id: string;
@@ -168,10 +191,7 @@ function toSummary(
     createdAt?: string;
     updatedAt?: string;
   },
-  semanticIdentity?: {
-    eligibleExtensions: string[];
-    primaryExtension: string;
-  },
+  semanticIdentity?: ArtifactIdentityEnrichment,
 ): ArtifactSummary {
   const d = (rec.data ?? {}) as Partial<ArtifactObjectData>;
   return {
@@ -188,8 +208,10 @@ function toSummary(
     // Default to the floor if the caller didn't enrich (e.g., from a
     // unit test that doesn't drive the assertion store).
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
-    primaryExtension:
-      semanticIdentity?.primaryExtension ?? DEFAULT_ARTIFACT_EXTENSION,
+    primaryExtension: semanticIdentity
+      ? primaryExtensionOf(semanticIdentity.identity)
+      : DEFAULT_ARTIFACT_EXTENSION,
+    effectiveIdentity: semanticIdentity?.identity ?? FLOOR_IDENTITY_FALLBACK,
     sourceUrl: connectorRefSourceUrl(rec.data),
   };
 }
@@ -266,21 +288,18 @@ export function listArtifacts(input: {
     );
   }
   if (extFilter) rawRecs = rawRecs.filter((r) => extFilter.has(r.id));
-  // Batched assertion lookup (avoids N+1 across the page).
-  const assertionsByArtifact =
+  // Batched effective-identity resolution (cinatra#1426; avoids N+1 across
+  // the page — one assertion query + one claim read + one install read).
+  const identityByArtifact =
     input.orgId !== null
-      ? listEligibleAssertionsForArtifacts(
-          input.orgId,
-          rawRecs.map((r) => r.id),
-        )
-      : new Map<string, ReturnType<typeof listEligibleAssertions>>();
-  const out: ArtifactSummary[] = rawRecs.map((r) => {
-    const eligible = assertionsByArtifact.get(r.id) ?? [];
-    return toSummary(r, {
-      eligibleExtensions: eligible.map((a) => a.extension),
-      primaryExtension: primaryExtensionFor(eligible),
-    });
-  });
+      ? resolveArtifactEffectiveIdentities({
+          orgId: input.orgId,
+          rows: rawRecs.map((r) => ({ id: r.id, type: r.type })),
+        })
+      : new Map<string, ArtifactIdentityEnrichment>();
+  const out: ArtifactSummary[] = rawRecs.map((r) =>
+    toSummary(r, identityByArtifact.get(r.id)),
+  );
   out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   return typeof input.limit === "number" ? out.slice(0, input.limit) : out;
 }
@@ -311,16 +330,17 @@ export function getArtifact(input: {
   // the `allowDeleted` pin-override branch, which is a tombstone-visibility
   // carve-out, never an authorization backdoor.
   if (!actorPassesObjectAuthz(rec, input.actor, "object.read")) return null;
-  // Enrich with semantic identity from the assertion store (read assertions,
-  // not objects.type).
-  const eligible =
+  // Enrich through the effective-identity service (cinatra#1426): assertions
+  // × claims × bindings × install status, never objects.type alone.
+  const enrichment =
     input.orgId !== null
-      ? listEligibleAssertions(input.orgId, rec.id)
-      : [];
-  return toSummary(rec, {
-    eligibleExtensions: eligible.map((a) => a.extension),
-    primaryExtension: primaryExtensionFor(eligible),
-  });
+      ? resolveArtifactEffectiveIdentity({
+          orgId: input.orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        })
+      : undefined;
+  return toSummary(rec, enrichment);
 }
 
 /**
