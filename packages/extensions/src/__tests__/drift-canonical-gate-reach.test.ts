@@ -177,6 +177,13 @@ describe("canonical lifecycle status reachability guard", () => {
         // UPDATE/DELETE by design — a migration is the sanctioned schema/data-
         // evolution path). Confined to its own per-test schema.
         "src/lib/__tests__/integration/org-anchor-backfill.test.ts",
+        // Binding write-path integration test (cinatra#1429): its FIXTURE
+        // builds a minimal isolated per-test schema (objects/outbox/
+        // installed_extension) and seeds one live install row so the
+        // effective-identity chain resolves against real SQL — same class as
+        // the two fixture entries above. Confined to its own per-test schema;
+        // the code under test writes only semantic_assertion.
+        "src/lib/objects/__tests__/binding-write-path.integration.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(

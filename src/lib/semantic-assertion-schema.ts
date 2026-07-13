@@ -5,8 +5,12 @@
 //
 // DB-level guards (generalizing the partial-index lesson — service
 // enforcement alone is insufficient against a raw-SQL/MCP bypass):
-//   - asserted_by ∈ user|authoring_skill|agent|matcher; eligibility ∈
-//     eligible|draft|archived (enum CHECKs);
+//   - asserted_by ∈ user|authoring_skill|agent|matcher|system; eligibility ∈
+//     eligible|draft|archived (enum CHECKs). 'system' (cinatra#1429) is the
+//     service/worker principal binding reconciliation writes bindings under —
+//     never a human/agent/skill classification; existing deployments widen the
+//     CHECK via migration core__0040 / the guarded bootstrap reconcile in
+//     bindingWritePathSchemaQueries (src/lib/artifact-claim-schema.ts);
 //   - a `matcher` row may ONLY be draft|archived — NEVER eligible (so a
 //     matcher draft can never become eligible by UPDATE either);
 //   - a non-matcher row is NEVER `draft` (draft is the matcher-pending state
@@ -89,7 +93,7 @@ export function semanticAssertionSchemaQueries(schemaName: string): { text: stri
   assertion_basis       text NOT NULL DEFAULT 'classic',
   binding_claim_id      text,
   binding_generation    integer,
-  CONSTRAINT sa_assertedby_chk CHECK (asserted_by IN ('user','authoring_skill','agent','matcher')),
+  CONSTRAINT sa_assertedby_chk CHECK (asserted_by IN ('user','authoring_skill','agent','matcher','system')),
   CONSTRAINT sa_elig_chk CHECK (eligibility IN ('eligible','draft','archived')),
   CONSTRAINT sa_matcher_draft_chk CHECK (asserted_by <> 'matcher' OR eligibility IN ('draft','archived')),
   CONSTRAINT sa_nonmatcher_nodraft_chk CHECK (asserted_by = 'matcher' OR eligibility <> 'draft'),

@@ -1,0 +1,10 @@
+{
+  "seq": "0040",
+  "file": "core/core__0040_binding-write-path.mjs",
+  "summary": "Binding-assertion write path + per-claim activation gate support (cinatra#1429, epic #1424). Widens sa_assertedby_chk to admit 'system' (binding reconciliation writes bindings as asserted_by='system' — the service/worker principal driving claim reconciliation; guarded reconcile re-validates only when the constraint is absent or lacks 'system', and existing rows never carry 'system' so it never rejects). Adds object_binding_quarantine — the per-object exclusion set the activation gate populates when an enrolling type's legacy row fails registered-Zod validation, so the binding reconcile + backfill sweep skip it (never an `objects` mutation). Adds artifact_binding_backfill_checkpoint — resumable backfill watermark (one row per scope × object_type_id × generation; cursor_object_id is the batch watermark) so an interrupted backfill resumes from the last committed batch and a completed backfill re-runs to zero new rows. Additive (two brand-new empty tables) + a CHECK widening that only admits a new value (no row rejected, no data rewrite); mirrors the idempotent bootstrap (buildCreateStoreSchemaQueries → bindingWritePathSchemaQueries + the semantic_assertion asserted_by reconcile in semantic-assertion-schema.ts). down() archives-then-deletes the asserted_by='system' binding rows (they regenerate from current claims on the next reconcile), narrows the CHECK back, and drops both tables (quarantine + checkpoint rows are non-recoverable operational state).",
+  "destructive": false,
+  "tables": [
+    "object_binding_quarantine",
+    "artifact_binding_backfill_checkpoint"
+  ]
+}
