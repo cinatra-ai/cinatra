@@ -109,6 +109,34 @@ export function loadChatThreadForActorAccess(input: {
 }
 
 /**
+ * Raw payload read for a chat thread by id, WITHOUT authorization — for
+ * SERVER-INTERNAL consumers that already hold a verified identity for the
+ * thread (the chat-capture detection job re-reads the persisted turn text it
+ * was enqueued for, keyed by the ledger-claimed (thread, turn); cinatra#1367).
+ * Never expose through a route without an access decision.
+ */
+export function readChatThreadPayloadById(
+  threadId: string,
+): ({ id: string } & Record<string, unknown>) | null {
+  ensurePostgresSchema();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const [threadRes] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT payload FROM "${schema}"."chat_threads" WHERE id = $1 LIMIT 1`,
+        values: [threadId],
+      },
+    ],
+  });
+  const row = threadRes?.rows?.[0] as { payload?: string } | undefined;
+  if (!row?.payload) return null;
+  const payload = safeParseJson<Record<string, unknown> | null>(row.payload, null);
+  if (!payload || typeof payload.id !== "string") return null;
+  return payload as { id: string } & Record<string, unknown>;
+}
+
+/**
  * Raw ownership-axis lookup for a chat thread by id. Returns the persisted
  * `ownerUserId` / `teamId` (or `null` when the row does not exist) WITHOUT any
  * authorization — the write path (POST /api/chat/save) uses this to decide

@@ -13,17 +13,24 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 const getActorContext = vi.fn<() => Promise<ActorContext | undefined>>();
 const writeSkillAutosaveConfig = vi.fn();
 const logAuditEventStrict = vi.fn();
+const writeSkillAutosaveUserPref = vi.fn();
+const readSkillAutosaveConfig = vi.fn(() => ({
+  enabled: false,
+  userCanConfigure: false,
+  userCanSeeIndicator: true,
+}));
+const readSkillAutosaveUserPref = vi.fn((_userId?: string) => ({
+  chatCaptureEnabled: null as boolean | null,
+}));
 
 vi.mock("@/lib/auth-session", () => ({
   getActorContext: () => getActorContext(),
 }));
 vi.mock("@/lib/skill-autosave", () => ({
-  readSkillAutosaveConfig: () => ({
-    enabled: false,
-    userCanConfigure: false,
-    userCanSeeIndicator: true,
-  }),
+  readSkillAutosaveConfig: () => readSkillAutosaveConfig(),
   writeSkillAutosaveConfig: (...a: unknown[]) => writeSkillAutosaveConfig(...a),
+  readSkillAutosaveUserPref: (...a: unknown[]) => readSkillAutosaveUserPref(...(a as [string])),
+  writeSkillAutosaveUserPref: (...a: unknown[]) => writeSkillAutosaveUserPref(...a),
 }));
 vi.mock("@/lib/authz/audit", async () => {
   const actual = await vi.importActual<typeof import("@/lib/authz/audit")>("@/lib/authz/audit");
@@ -127,5 +134,71 @@ describe("chat/autosave route handler (global config gate)", () => {
     const res = await PATCH(patchReq({ enabled: true }));
     expect(res.status).toBe(503);
     expect(writeSkillAutosaveConfig).not.toHaveBeenCalled();
+  });
+
+  // ---- per-user chat-capture preference arm (cinatra#1367) ----
+
+  it("GET carries the caller's own userChatCaptureEnabled", async () => {
+    getActorContext.mockResolvedValue(orgAdmin());
+    readSkillAutosaveUserPref.mockReturnValueOnce({ chatCaptureEnabled: false });
+    const { GET } = await import("../route");
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { userChatCaptureEnabled: boolean | null };
+    expect(body.userChatCaptureEnabled).toBe(false);
+    expect(readSkillAutosaveUserPref).toHaveBeenCalledWith("user-2");
+  });
+
+  it("PATCH user arm 403 for a non-admin while userCanConfigure is off — pref never written", async () => {
+    getActorContext.mockResolvedValue(orgAdmin());
+    const { PATCH } = await import("../route");
+    const res = await PATCH(patchReq({ userChatCaptureEnabled: false }));
+    expect(res.status).toBe(403);
+    expect(writeSkillAutosaveUserPref).not.toHaveBeenCalled();
+    expect(logAuditEventStrict).not.toHaveBeenCalled();
+  });
+
+  it("PATCH user arm writes the CALLER's own pref when userCanConfigure is on — audited", async () => {
+    getActorContext.mockResolvedValue(orgAdmin());
+    readSkillAutosaveConfig.mockReturnValue({
+      enabled: true,
+      userCanConfigure: true,
+      userCanSeeIndicator: true,
+    });
+    const { PATCH } = await import("../route");
+    const res = await PATCH(patchReq({ userChatCaptureEnabled: false }));
+    expect(res.status).toBe(200);
+    expect(logAuditEventStrict).toHaveBeenCalledTimes(1);
+    expect(writeSkillAutosaveUserPref).toHaveBeenCalledWith("user-2", {
+      chatCaptureEnabled: false,
+    });
+    // Global config untouched by the user arm.
+    expect(writeSkillAutosaveConfig).not.toHaveBeenCalled();
+    readSkillAutosaveConfig.mockReset();
+    readSkillAutosaveConfig.mockImplementation(() => ({
+      enabled: false,
+      userCanConfigure: false,
+      userCanSeeIndicator: true,
+    }));
+  });
+
+  it("PATCH user arm allows a platform admin regardless of userCanConfigure; null resets to follow-default", async () => {
+    getActorContext.mockResolvedValue(platformAdmin());
+    const { PATCH } = await import("../route");
+    const res = await PATCH(patchReq({ userChatCaptureEnabled: null }));
+    expect(res.status).toBe(200);
+    expect(writeSkillAutosaveUserPref).toHaveBeenCalledWith("admin-1", {
+      chatCaptureEnabled: null,
+    });
+  });
+
+  it("PATCH without either arm stays a read — nothing written, nothing audited", async () => {
+    getActorContext.mockResolvedValue(platformAdmin());
+    const { PATCH } = await import("../route");
+    const res = await PATCH(patchReq({}));
+    expect(res.status).toBe(200);
+    expect(writeSkillAutosaveConfig).not.toHaveBeenCalled();
+    expect(writeSkillAutosaveUserPref).not.toHaveBeenCalled();
+    expect(logAuditEventStrict).not.toHaveBeenCalled();
   });
 });

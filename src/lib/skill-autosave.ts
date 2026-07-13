@@ -41,6 +41,63 @@ export function writeSkillAutosaveConfig(value: Partial<SkillAutosaveConfig>): S
   return merged;
 }
 
+// ---------------------------------------------------------------------------
+// Per-user chat-capture preference (cinatra#1367). Sits BENEATH the admin
+// master switch: `null` (unset) follows the admin-configured default (master
+// on ⇒ capture on), an explicit boolean overrides it for that user only.
+// Toggle-off stops FUTURE captures; already-captured skills are never
+// deleted. Stored as one connector_config row per user (no read-modify-write
+// races across users).
+// ---------------------------------------------------------------------------
+
+const SKILL_AUTOSAVE_USER_PREF_KEY_PREFIX = "skill_autosave_user:";
+
+export type SkillAutosaveUserPref = {
+  /** null = follow the admin default. */
+  chatCaptureEnabled: boolean | null;
+};
+
+function userPrefKey(userId: string): string {
+  return `${SKILL_AUTOSAVE_USER_PREF_KEY_PREFIX}${userId}`;
+}
+
+export function readSkillAutosaveUserPref(userId: string): SkillAutosaveUserPref {
+  const stored = readConnectorConfigFromDatabase<Partial<SkillAutosaveUserPref>>(
+    userPrefKey(userId),
+    {},
+  );
+  return {
+    chatCaptureEnabled:
+      typeof stored.chatCaptureEnabled === "boolean" ? stored.chatCaptureEnabled : null,
+  };
+}
+
+export function writeSkillAutosaveUserPref(
+  userId: string,
+  value: SkillAutosaveUserPref,
+): SkillAutosaveUserPref {
+  const normalized: SkillAutosaveUserPref = {
+    chatCaptureEnabled:
+      typeof value.chatCaptureEnabled === "boolean" ? value.chatCaptureEnabled : null,
+  };
+  writeConnectorConfigToDatabase(userPrefKey(userId), normalized);
+  return normalized;
+}
+
+/**
+ * Effective chat-capture enablement for a user: the admin master switch is a
+ * hard gate; beneath it the per-user preference applies, defaulting to the
+ * admin-configured default (enabled) when unset.
+ */
+export function isChatCaptureEnabledForUser(
+  userId: string,
+  config: SkillAutosaveConfig = readSkillAutosaveConfig(),
+): boolean {
+  if (!config.enabled) return false;
+  const pref = readSkillAutosaveUserPref(userId);
+  return pref.chatCaptureEnabled ?? true;
+}
+
 /**
  * Determines whether autosave UI should be visible for a given user role.
  * Admins always see it. Non-admins see it only if `userCanSeeIndicator` is true.

@@ -612,6 +612,22 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       await runSkillPrefillGenerationJob(job.data as { skillIds: string[] }, jobId);
     },
   },
+  // Chat-capture detection (cinatra#1367): one-shot per persisted chat user
+  // turn. The pipeline is idempotent via the chat_capture_turns ledger claim,
+  // so re-deliveries / enqueue-site retries are safe. Lazy-imported to keep
+  // the LLM + skills graph out of the registry's module load.
+  [BACKGROUND_JOB_NAMES.CHAT_CAPTURE_DETECTION]: {
+    payloadSchema: z
+      .object({ threadId: z.string(), turnId: z.string(), ownerUserId: z.string() })
+      .passthrough(),
+    async handle(job, jobId) {
+      const { runChatCaptureDetectionJob } = await import("@/lib/chat-capture/pipeline");
+      await runChatCaptureDetectionJob(
+        job.data as { threadId: string; turnId: string; ownerUserId: string },
+        jobId,
+      );
+    },
+  },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_SKILL]: {
     payloadSchema: z
       .object({ skillId: z.string(), jobStartedAt: z.string() })
