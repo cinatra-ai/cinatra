@@ -2743,7 +2743,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
          AND owner_id <> '__platform__')
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
-    ...artifactClaimSchemaQueries(schemaName), // cinatra#1425: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034
+    ...artifactClaimSchemaQueries(schemaName), // cinatra#1425/#1432/#1429: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034/0037/0040
     ...graphitiProjectionPolicySchemaQueries(schemaName), // cinatra#1427 ACs 4-5: epoch + rebuild journal + outbox epoch stamp (sync leaf, bootstrap-only, no core migration)
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
