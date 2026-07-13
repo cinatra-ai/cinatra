@@ -9,12 +9,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { processProjectionOutboxMock } = vi.hoisted(() => ({
-  processProjectionOutboxMock: vi.fn(async () => ({ processed: 0, failed: 0 })),
+const { processGraphitiProjectionCycleMock } = vi.hoisted(() => ({
+  processGraphitiProjectionCycleMock: vi.fn(async () => ({
+    processed: 0,
+    failed: 0,
+    epochBumps: 0,
+    journalsAdvanced: 0,
+    journalsOpen: 0,
+  })),
 }));
 
-vi.mock("@cinatra-ai/objects/graphiti-projector", () => ({
-  processProjectionOutbox: processProjectionOutboxMock,
+vi.mock("@cinatra-ai/objects/graphiti-rebuild", () => ({
+  processGraphitiProjectionCycle: processGraphitiProjectionCycleMock,
 }));
 
 import {
@@ -38,7 +44,7 @@ function makeJob(name: string, data: unknown = {}, id = "test-job") {
 
 beforeEach(() => {
   __resetCapabilityRegistry();
-  processProjectionOutboxMock.mockClear();
+  processGraphitiProjectionCycleMock.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -86,13 +92,14 @@ describe("TWENTY_POINTER_REPAIR through the crm-pointer-writer capability", () =
 });
 
 describe("GRAPHITI_PROJECTION_REPAIR sync bootstrap through the crm-sync-bootstrap capability", () => {
-  // NOTE on the degraded semantics asserted here: `processProjectionOutbox`
-  // is mocked, so this covers the DISPATCHER's contract (cycle proceeds;
-  // bootstrap ordering). The real projector's behavior with NO adapter
-  // registered is documented at the dispatch site: adapter-owned rows fall
-  // through to the GENERIC projection (terminal, no Twenty hydration) — the
-  // accepted degraded mode for a genuinely absent crm-connector, pinned by
-  // the projector's own routing tests in packages/objects.
+  // NOTE on the degraded semantics asserted here:
+  // `processGraphitiProjectionCycle` is mocked, so this covers the
+  // DISPATCHER's contract (cycle proceeds; bootstrap ordering). The real
+  // cycle's behavior with NO adapter registered is documented at the
+  // dispatch site: adapter-owned rows fall through to the GENERIC
+  // projection (terminal, no Twenty hydration) — the accepted degraded
+  // mode for a genuinely absent crm-connector, pinned by the projector's
+  // own routing tests in packages/objects.
   it("the outbox cycle still runs with no bootstrap registered (degraded, anonymous duplicate dies)", async () => {
     // Non-canonical job id → run once + return (no moveToDelayed path).
     await expect(
@@ -100,7 +107,7 @@ describe("GRAPHITI_PROJECTION_REPAIR sync bootstrap through the crm-sync-bootstr
         makeJob(BACKGROUND_JOB_NAMES.GRAPHITI_PROJECTION_REPAIR, {}, "anonymous-duplicate"),
       ),
     ).resolves.toBeUndefined();
-    expect(processProjectionOutboxMock).toHaveBeenCalledTimes(1);
+    expect(processGraphitiProjectionCycleMock).toHaveBeenCalledTimes(1);
   });
 
   it("invokes the registered sync bootstrap before processing the outbox", async () => {
@@ -109,9 +116,9 @@ describe("GRAPHITI_PROJECTION_REPAIR sync bootstrap through the crm-sync-bootstr
       packageName: "@v/crm-connector",
       impl: { ensureSyncRegistrations: () => calls.push("bootstrap") },
     });
-    processProjectionOutboxMock.mockImplementationOnce(async () => {
+    processGraphitiProjectionCycleMock.mockImplementationOnce(async () => {
       calls.push("outbox");
-      return { processed: 0, failed: 0 };
+      return { processed: 0, failed: 0, epochBumps: 0, journalsAdvanced: 0, journalsOpen: 0 };
     });
     await dispatchBackgroundJob(
       makeJob(BACKGROUND_JOB_NAMES.GRAPHITI_PROJECTION_REPAIR, {}, "anonymous-duplicate"),

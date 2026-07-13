@@ -26,13 +26,27 @@ workflows.
 | `scripts/` | Setup, dev-server, validation, and audit tooling (`setup.sh`, `dev-server.mjs`). |
 | `contracts/` | Cross-surface contract fixtures used by end-to-end tests. |
 | `migrations/` | Versioned migrations for the core store schema: node-pg-migrate code modules under `migrations/core/` (`core__NNNN_description.mjs` + manifest entry, `pgmigrations` ledger); the legacy one-shot `NNNN_description.sql` artifacts are retained append-only. Convention in `migrations/README.md`. |
-| `docs/` | Pointer to the documentation site; the source lives in [`cinatra-ai/docs`](https://github.com/cinatra-ai/docs). |
+| `docs/` | `README.md` points to the documentation site (source: [`cinatra-ai/docs`](https://github.com/cinatra-ai/docs)); `docs/internals/` holds the in-repo engineering/agent documentation — architecture, contracts, decisions, governance, records ([index](docs/internals/README.md)). |
+| `config/` | Machine-consumed config/data (build-config manifest, sync/read inventories) — not documentation. |
 | `docker-compose.yml`, `Makefile` | The local development stack (PostgreSQL, Redis, and optional supporting services) and the dev-loop entry points. |
 | `tests/` (Playwright configs under `tests/e2e/config/`) | End-to-end test suites. Unit tests are package-local. |
 
 Root config of note: `package.json` (workspace + scripts), `pnpm-workspace.yaml`,
 `tsconfig.json` (path aliases), `next.config.ts`, `eslint.config.mjs`,
 `vitest.config.ts`.
+
+### Where files go
+
+- **Product documentation** (user/admin/hosting/developer guides) → the
+  [`cinatra-ai/docs`](https://github.com/cinatra-ai/docs) repository, published
+  at [docs.cinatra.ai](https://docs.cinatra.ai) — never this repo.
+- **In-repo engineering/agent documentation** (architecture, contracts the code
+  enforces, decision/governance records) → `docs/internals/`
+  ([index](docs/internals/README.md)).
+- **Machine-consumed config/data** (inventories, manifests, matrices) →
+  `config/` — not `docs/`.
+- **PR render/screenshot evidence** → an evidence branch, linked by commit-SHA
+  permalink from the PR — NEVER the product tree.
 
 ## Packages
 

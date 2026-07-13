@@ -3,8 +3,8 @@
 **Upgrade-paths epic, slice 1** (cinatra#1420, epic cinatra#1419). This document is the
 human-readable companion to the machine-readable matrix:
 
-- **Matrix (source of truth for consumers):** [`docs/architecture/upgrade-matrix.json`](./upgrade-matrix.json)
-- **Schema:** [`docs/architecture/upgrade-matrix.schema.json`](./upgrade-matrix.schema.json)
+- **Matrix (source of truth for consumers):** [`docs/architecture/upgrade-matrix.json`](../../../docs/architecture/upgrade-matrix.json)
+- **Schema:** [`docs/architecture/upgrade-matrix.schema.json`](../../../docs/architecture/upgrade-matrix.schema.json)
 - **Gate:** `scripts/check-upgrade-matrix.mjs` + `scripts/ci/__tests__/upgrade-matrix.test.mjs`
   (runs in the root Vitest suite). Fail-closed: a new named volume in
   `docker-compose.yml`, a compose pin bump without a matrix update, or a reintroduced

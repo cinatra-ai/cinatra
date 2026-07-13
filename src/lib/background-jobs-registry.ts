@@ -460,12 +460,23 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           // (formerly outside the inner try) skipping moveToDelayed and silently
           // killing the loop until the next reboot re-seeded it.
           ensureCrmSyncRegistrations();
-          const { processProjectionOutbox } = await import(
-            "@cinatra-ai/objects/graphiti-projector"
+          // Full projection cycle (#1427): batch pending claim-set changes
+          // into projection-policy epoch bumps, advance open epoch-fenced
+          // rebuild journals, then drain the outbox (stale-epoch fencing
+          // inside the worker). Same alias pattern as the projector — the
+          // rebuild module is a sub-path export, never the barrel.
+          const { processGraphitiProjectionCycle } = await import(
+            "@cinatra-ai/objects/graphiti-rebuild"
           );
-          const result = await processProjectionOutbox({ batchSize: 20, maxAttempts: 5 });
-          if (result.processed > 0 || result.failed > 0) {
-            console.log("[graphiti-projection-repair] processed:", result);
+          const result = await processGraphitiProjectionCycle({ batchSize: 20, maxAttempts: 5 });
+          if (
+            result.processed > 0 ||
+            result.failed > 0 ||
+            result.epochBumps > 0 ||
+            result.journalsAdvanced > 0 ||
+            result.journalsOpen > 0
+          ) {
+            console.log("[graphiti-projection-repair] cycle:", result);
           }
         },
       });
