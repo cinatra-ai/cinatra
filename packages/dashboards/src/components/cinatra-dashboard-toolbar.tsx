@@ -109,11 +109,11 @@ export function CinatraDashboardToolbar() {
     handleAddPortlet,
   } = useDashboardContext();
 
-  // When the dashboard filter bar renders beneath this toolbar it does so
-  // as a CHILD TOOLBAR (design spec §Nested toolbar — see
+  // When the dashboard filter bar renders beneath this toolbar it stacks as
+  // a flush-aligned secondary toolbar (cinatra#1511 — see
   // `<DashboardFilterBarSlot>` in composed-dashboard.tsx), so the gap
-  // tightens to the 6px stack gap; otherwise keep the regular 16px space
-  // before the grid.
+  // tightens to the 6px stack gap that groups the two bars; otherwise keep
+  // the regular 16px space before the grid.
   const filterBarFollows = useDashboardFilterBarVisible();
 
   const pageActions: readonly DashboardPageAction[] =

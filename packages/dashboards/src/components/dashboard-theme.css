@@ -156,17 +156,18 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
   display: none;
 }
 
-/* Dashboard filter bar as a CHILD TOOLBAR (design spec §Nested toolbar,
- * cinatra#65).
+/* Dashboard filter bar as a flush-aligned SECONDARY TOOLBAR (cinatra#1511;
+ * supersedes the §Nested-toolbar child-toolbar framing of cinatra#65).
  *
  * `<DashboardFilterBarSlot>` (composed-dashboard.tsx) provides the stable
- * host hook `[data-cinatra-dashboard-filter-bar]` plus the nested-toolbar
- * geometry (20px inset; 6px stack gap via the toolbar's own margin). The
- * cube paints every bar/chip color through inline
- * `style={{ … var(--dc-*) … }}`, so the restyle is a SCOPED VARIABLE
- * REDEFINITION — no DC-internal DOM mutation, and the only class-keyed
- * rules below target three single-purpose utility hooks pinned by
- * `__tests__/dc-filter-bar-contract.test.ts`.
+ * host hook `[data-cinatra-dashboard-filter-bar]` and mounts the bar flush
+ * with the primary toolbar (no horizontal inset); the 6px stack gap comes
+ * from the toolbar's own bottom margin. The bar still reads as one level
+ * down via the lighter ground below. The cube paints every bar/chip color
+ * through inline `style={{ … var(--dc-*) … }}`, so the restyle is a SCOPED
+ * VARIABLE REDEFINITION — no DC-internal DOM mutation, and the only
+ * class-keyed rules below target three single-purpose utility hooks pinned
+ * by `__tests__/dc-filter-bar-contract.test.ts`.
  *
  *  - ground   → --toolbar-l2 (one level beneath the primary toolbar)
  *  - borders  → transparent (spec: embedded controls are borderless;

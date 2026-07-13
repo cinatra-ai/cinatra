@@ -52,11 +52,22 @@ import { DcModalA11yScope } from "./dc-modal-a11y-scope";
 
 /**
  * Host wrapper that renders drizzle-cube's `<DashboardFilterBar>` as a
- * CHILD TOOLBAR of `<CinatraDashboardToolbar>` (design spec §Nested
- * toolbar, cinatra#65): inset 20px from the toolbar above (`ml-5`); the
- * 6px stack gap comes from the toolbar tightening its own bottom margin
- * while the bar is visible (see cinatra-dashboard-toolbar.tsx). The
- * `data-cinatra-dashboard-filter-bar` attribute is the STABLE HOOK the
+ * FLUSH-ALIGNED SECONDARY TOOLBAR beneath `<CinatraDashboardToolbar>`
+ * (cinatra#1511): its left/right edges align with the primary toolbar and
+ * the grid content edge below it — no horizontal inset.
+ *
+ * The earlier `ml-5` (design spec §Nested toolbar, cinatra#65) borrowed the
+ * L2 child-toolbar 20px indent, but §Nested toolbar is the geometry for the
+ * sub-controls of a SELECTED parent-toolbar item (single-select lineage —
+ * see `<ToolbarChild>` in ui/toolbar.tsx). The filter bar is a persistent,
+ * edit-mode / saved-filter surface with no such parent-item lineage, so the
+ * lone indent read as accidental misalignment. The two bars still group as
+ * a stack: the filter bar keeps a one-step-lighter ground (`--toolbar-l2`,
+ * via dashboard-theme.css) and the toolbar tightens its bottom margin to the
+ * 6px stack gap while the bar is visible (see cinatra-dashboard-toolbar.tsx)
+ * — the lineage is carried by the lighter ground + tight gap, not an indent.
+ *
+ * The `data-cinatra-dashboard-filter-bar` attribute is the STABLE HOOK the
  * scoped restyle in dashboard-theme.css targets — the cube's internal
  * markup is all inline `style={{ … var(--dc-*) … }}`, so the restyle
  * happens by redefining those vars inside this scope, never by DOM
@@ -66,7 +77,7 @@ function DashboardFilterBarSlot() {
   const visible = useDashboardFilterBarVisible();
   if (!visible) return null;
   return (
-    <div data-cinatra-dashboard-filter-bar="true" className="ml-5">
+    <div data-cinatra-dashboard-filter-bar="true">
       <DashboardFilterBar />
     </div>
   );

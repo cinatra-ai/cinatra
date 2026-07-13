@@ -13,9 +13,9 @@
 //     message alone; the filter bar stays hidden while empty;
 //   - non-empty dashboards mount the Cinatra toolbar (owner labels) and the
 //     real grid surface; the filter bar mounts inside
-//     `<DashboardFilterBarSlot>` — the child-toolbar wrapper (design spec
-//     §Nested toolbar, cinatra#65) — only when upstream's own gating would
-//     paint it (editable AND (edit mode OR saved dashboard filters)).
+//     `<DashboardFilterBarSlot>` — a flush-aligned secondary toolbar
+//     (cinatra#1511) — only when upstream's own gating would paint it
+//     (editable AND (edit mode OR saved dashboard filters)).
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
 //     src/components/__tests__/composed-dashboard.test.tsx
@@ -159,8 +159,8 @@ describe("ComposedDashboard — assembly gating", () => {
   });
 });
 
-describe("ComposedDashboard — DashboardFilterBarSlot (nested-toolbar wrapper, cinatra#65)", () => {
-  test("edit mode mounts the filter bar inside the child-toolbar wrapper; the toolbar tightens to the 6px stack gap", () => {
+describe("ComposedDashboard — DashboardFilterBarSlot (flush-aligned secondary toolbar, cinatra#1511)", () => {
+  test("edit mode mounts the filter bar visible and flush-aligned (no horizontal inset); the toolbar tightens to the 6px stack gap that groups the two bars", () => {
     render(<ComposedDashboard config={ONE_PORTLET_CONFIG} editable />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
@@ -169,12 +169,22 @@ describe("ComposedDashboard — DashboardFilterBarSlot (nested-toolbar wrapper, 
       "[data-cinatra-dashboard-filter-bar]",
     );
     expect(wrapper).not.toBeNull();
-    // 20px child-toolbar inset (spec §Nested toolbar); the stable hook the
-    // dashboard-theme.css scoped restyle targets.
-    expect(wrapper?.className).toContain("ml-5");
+    // The bar renders and carries the stable hook the dashboard-theme.css
+    // scoped restyle targets.
     expect(wrapper?.querySelector("[data-testid='filter-bar']")).toBeTruthy();
 
-    // 6px stack gap while the child bar follows.
+    // cinatra#1511 geometry decision — FLUSH alignment: the wrapper carries
+    // NO horizontal inset (the retired §Nested-toolbar `ml-5` child-toolbar
+    // indent, nor any other left margin/padding). Guards the decision so the
+    // lone indent that read as accidental misalignment cannot creep back.
+    const cls = wrapper?.className ?? "";
+    expect(cls).not.toContain("ml-5");
+    expect(cls).not.toMatch(/\bml-\d/);
+    expect(cls).not.toMatch(/\bpl-\d/);
+
+    // 6px stack gap while the filter bar follows — the two bars stay grouped
+    // as a stack even though they are now flush-aligned (the lineage is the
+    // lighter ground + tight gap, not an indent).
     const toolbar = document.querySelector(
       "[data-cinatra-dashboard-toolbar]",
     );
