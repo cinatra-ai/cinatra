@@ -242,39 +242,54 @@ export function bumpProjectionPolicyEpochsFromClaimChanges(options?: { limit?: n
  * Postgres under the reverted policy restores the prior projection; the epoch
  * number stays monotonic (fencing depends on it).
  */
+/** The rollback bump + fenced-rebuild open, as one atomic statement. Exported
+ * for the SQL-shape / real-DB test. Monotonic: the epoch only moves FORWARD (a
+ * rollback restores the prior PROJECTION via a full replay, never by
+ * decrementing the number). */
+export function buildOpenRollbackRebuildQuery(
+  schemaName: string,
+  input: { groupId: string; orgId: string | null; rolledBackJournalId?: string | null },
+): QueryInput {
+  const q = schemaName.replaceAll('"', '""');
+  return {
+    text: `WITH bumped AS (
+        INSERT INTO "${q}"."graphiti_projection_policy" (group_id, epoch, updated_at)
+        VALUES ($1, 2, now())
+        ON CONFLICT (group_id) DO UPDATE
+          SET epoch = "graphiti_projection_policy".epoch + 1, updated_at = now()
+        RETURNING group_id, epoch
+      )
+      INSERT INTO "${q}"."graphiti_rebuild_journal"
+        (group_id, org_id, from_epoch, to_epoch, phase, checkpoint, reason)
+      SELECT b.group_id, $2, b.epoch - 1, b.epoch, 'clearing', NULL,
+             jsonb_build_object('kind', 'rollback', 'rolledBackJournalId', $3::text)
+      FROM bumped b
+      ON CONFLICT (group_id) WHERE phase <> 'done'
+      DO UPDATE SET
+        to_epoch = EXCLUDED.to_epoch,
+        phase = 'clearing',
+        checkpoint = NULL,
+        stats = NULL,
+        attempts = 0,
+        last_error = NULL,
+        updated_at = now(),
+        reason = EXCLUDED.reason
+      RETURNING group_id, to_epoch`,
+    values: [input.groupId, input.orgId, input.rolledBackJournalId ?? null],
+  };
+}
+
 export function openRollbackRebuild(input: { groupId: string; rolledBackJournalId?: string | null }): {
   groupId: string;
   toEpoch: number;
 } {
   const orgId = orgIdFromProjectionGroupId(input.groupId);
-  const q = s();
   const [result] = run([
-    {
-      text: `WITH bumped AS (
-          INSERT INTO "${q}"."graphiti_projection_policy" (group_id, epoch, updated_at)
-          VALUES ($1, 2, now())
-          ON CONFLICT (group_id) DO UPDATE
-            SET epoch = "graphiti_projection_policy".epoch + 1, updated_at = now()
-          RETURNING group_id, epoch
-        )
-        INSERT INTO "${q}"."graphiti_rebuild_journal"
-          (group_id, org_id, from_epoch, to_epoch, phase, checkpoint, reason)
-        SELECT b.group_id, $2, b.epoch - 1, b.epoch, 'clearing', NULL,
-               jsonb_build_object('kind', 'rollback', 'rolledBackJournalId', $3::text)
-        FROM bumped b
-        ON CONFLICT (group_id) WHERE phase <> 'done'
-        DO UPDATE SET
-          to_epoch = EXCLUDED.to_epoch,
-          phase = 'clearing',
-          checkpoint = NULL,
-          stats = NULL,
-          attempts = 0,
-          last_error = NULL,
-          updated_at = now(),
-          reason = EXCLUDED.reason
-        RETURNING group_id, to_epoch`,
-      values: [input.groupId, orgId, input.rolledBackJournalId ?? null],
-    },
+    buildOpenRollbackRebuildQuery(postgresSchema, {
+      groupId: input.groupId,
+      orgId,
+      rolledBackJournalId: input.rolledBackJournalId ?? null,
+    }),
   ]);
   const row = result?.rows[0] as { group_id?: string; to_epoch?: number } | undefined;
   if (!row) throw new Error(`openRollbackRebuild: no journal row returned for ${input.groupId}`);
