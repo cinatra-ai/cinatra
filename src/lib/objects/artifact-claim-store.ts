@@ -503,6 +503,33 @@ export function readArtifactTypeClaimsForOrg(orgId: string): ArtifactTypeClaimRo
   return result.rows.map(mapClaimRow);
 }
 
+/**
+ * The claims a given extension holds at a scope, all lifecycle states — the
+ * uninstall path's retirement target set (cinatra#1432). Filters by the exact
+ * `(scope, extension_package)`; the caller decides which to retire (typically
+ * the live ones: 'reserved' | 'active' | 'retiring'). Ordered oldest-first for
+ * deterministic retirement.
+ */
+export function readArtifactTypeClaimsForExtension(
+  scope: string,
+  extensionPackage: string,
+): ArtifactTypeClaimRow[] {
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT ${CLAIM_COLUMNS} FROM "${s}"."artifact_type_claims"
+               WHERE scope = $1 AND extension_package = $2
+               ORDER BY created_at ASC`,
+        values: [scope, extensionPackage],
+      },
+    ],
+  });
+  return result.rows.map(mapClaimRow);
+}
+
 export interface ArtifactClaimEventRow {
   id: string;
   claimId: string;

@@ -198,6 +198,10 @@ export function runArtifactUninstallArchival(input: {
       },
     ]);
     if (batch.rows.length === 0) break;
+    // Per-batch delta: `archived_count` is incremented by THIS batch's archived
+    // count only (the running total lives in `archivedAssertions`); passing the
+    // cumulative total here would double-count on every subsequent batch.
+    let batchArchived = 0;
     for (const row of batch.rows) {
       const orgId = String(row.org_id);
       const artifactId = String(row.artifact_id);
@@ -218,9 +222,10 @@ export function runArtifactUninstallArchival(input: {
         ],
         true,
       );
-      archivedAssertions += results[1].rowCount;
+      batchArchived += results[1].rowCount;
       processedArtifacts += 1;
     }
+    archivedAssertions += batchArchived;
     const last = batch.rows[batch.rows.length - 1];
     cursor = { orgId: String(last.org_id), artifactId: String(last.artifact_id) };
     run([
@@ -228,7 +233,7 @@ export function runArtifactUninstallArchival(input: {
         text: `UPDATE "${q()}"."artifact_uninstall_operations"
                SET checkpoint = $2::jsonb, archived_count = archived_count + $3, updated_at = now()
                WHERE id = $1`,
-        values: [input.operationId, JSON.stringify(cursor), archivedAssertions],
+        values: [input.operationId, JSON.stringify(cursor), batchArchived],
       },
     ]);
     if (batch.rows.length < batchSize) break;
