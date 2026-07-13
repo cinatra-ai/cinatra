@@ -440,6 +440,57 @@ export async function readGrantForScope(
   return readGrantRow(query, schema, input.packageName, input.orgId);
 }
 
+export type HostPortGrantListRow = HostPortGrant & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+type GrantListRow = GrantRow & { created_at: string | Date; updated_at: string | Date };
+
+/**
+ * Grant rows at a SET of exact scopes (each `null` = the platform/global
+ * scope), optionally filtered to one status — the union-aware re-approval
+ * surface's read (cinatra#1391). No cross-scope fallback: the caller names
+ * every scope it may see (e.g. `[viewer.orgId, null]` for a platform-admin
+ * reviewer). Ordered oldest-first so the review inbox is stable.
+ */
+export async function listGrantsForScopes(
+  input: {
+    orgIds: readonly (string | null)[];
+    status?: HostPortGrant["status"];
+  },
+  deps?: HostPortGrantDeps,
+): Promise<HostPortGrantListRow[]> {
+  const { query, schema } = await resolveDeps(deps);
+  const table = qualifiedTable(schema);
+  const orgIds = Array.from(new Set(input.orgIds.filter((o): o is string => o !== null)));
+  const includeGlobal = input.orgIds.includes(null);
+  if (orgIds.length === 0 && !includeGlobal) return [];
+  const scopeClauses: string[] = [];
+  const values: unknown[] = [];
+  if (orgIds.length > 0) {
+    values.push(orgIds);
+    scopeClauses.push(`org_id = ANY($${values.length}::text[])`);
+  }
+  if (includeGlobal) scopeClauses.push("org_id IS NULL");
+  let where = `(${scopeClauses.join(" OR ")})`;
+  if (input.status) {
+    values.push(input.status);
+    where += ` AND status = $${values.length}`;
+  }
+  const rows = await query<GrantListRow>(
+    `SELECT ${SELECT_COLUMNS}, created_at, updated_at FROM ${table}
+      WHERE ${where}
+      ORDER BY created_at ASC`,
+    values,
+  );
+  return rows.map((r) => ({
+    ...rowToGrant(r),
+    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+    updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at),
+  }));
+}
+
 export type RestoreGrantInput = {
   packageName: string;
   orgId: string | null;

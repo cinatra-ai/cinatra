@@ -522,9 +522,11 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         // the PLATFORM scope, next to that default.
         orgId: member.scopeOrgId,
         actorUserId: actor.userId ?? null,
-        // cinatra#1040 S6: inject the durable capsule sink → ENABLES the
-        // ownership grant union (absent → the S3 DECLARES_OWNERSHIP_KEYS
-        // refusal stands). The default survivor reader (fs+db) is used.
+        // cinatra#1040 S6 / cinatra#1391: inject the durable capsule sink →
+        // ENABLES BOTH shared-grant unions — capability-ownership AND host-ports
+        // (absent → the S3 DECLARES_OWNERSHIP_KEYS + PORTS_NOT_COVERED refusals
+        // both stand). The default survivor/sibling readers (fs+db, journal-
+        // gated) are used; the merged capsule carries both axes' state.
         ...(member.persistCapsule
           ? { grantUnion: { persistCapsule: member.persistCapsule } }
           : {}),
@@ -538,7 +540,8 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         packageName: member.packageName,
         version: member.version,
         orgId: member.scopeOrgId,
-        // cinatra#1040 S6: reconcile the shared ownership grant on teardown.
+        // cinatra#1040 S6 / cinatra#1391: reconcile the shared ownership AND host-
+        // port grants on teardown (the capsule carries both axes).
         capsule: member.capsule ?? null,
       });
     },
@@ -1236,7 +1239,8 @@ export async function sweepStaleInstallBatches(
         packageName: member.packageName,
         version: member.version,
         orgId: member.orgId,
-        // cinatra#1040 S6: reconcile the shared ownership grant on boot teardown.
+        // cinatra#1040 S6 / cinatra#1391: reconcile the shared ownership AND host-
+        // port grants on boot teardown (the capsule carries both axes).
         capsule: member.capsule ?? null,
       });
     });
@@ -1345,6 +1349,25 @@ export async function gcOrphanedSideBySideCapsules(depsOverride?: {
   for (const b of batches) {
     for (const m of b.members) {
       if (m.action !== "install-side-by-side" || !m.grantCapsule) continue;
+      // PROVEN-SPENT ONLY (cinatra#1391 / codex round-0): a capsule is cleared
+      // when its member COMMITTED on a finalized batch (no teardown will ever
+      // consume it) or was COMPENSATED (the teardown already reconciled from
+      // it). A `failed` / `compensation-failed` member — or an `installed`
+      // member stranded on a failed batch by a mid-compensation crash — keeps
+      // its capsule: it is the ONLY durable record of the shared-grant prior
+      // state, and clearing it would destroy the recovery evidence.
+      const spent =
+        m.status === "compensated" ||
+        (b.phase === "finalized" &&
+          (m.status === "installed" || m.status === "already-installed"));
+      if (!spent) {
+        console.warn(
+          `[side-by-side-capsule] orphan-GC KEPT an unproven capsule: ${m.packageName}@${m.version} ` +
+            `on terminal batch ${b.batchId} (phase=${b.phase}, member=${m.status}) — needs ` +
+            `manual reconcile/review before release`,
+        );
+        continue;
+      }
       const ok = await updateMember(b.batchId, m.packageName, { grantCapsule: null })
         .then(() => true)
         .catch((err) => {
