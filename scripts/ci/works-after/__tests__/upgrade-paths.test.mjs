@@ -291,3 +291,73 @@ test("upgrade-postgres fixture: digest-bound TARGET pins, bare-major sources, dr
   }
   assert.match(src, /scripts\/upgrade\/postgres-upgrade-major\.sh/, "must drive the committed pg family path");
 });
+
+// ── neo4j family (cinatra#1421) ──────────────────────────────────────────────
+// The one non-Postgres stateful family whose supported hop is a real
+// DATA-MIGRATING transition (the semver->CalVer store-format upgrade). The LIVE
+// guarded behaviour (offline `neo4j-admin database migrate`, rollback, cutover,
+// failure injection) is proven by the docker-driving upgrade-neo4j arm; these
+// pin the container-free invariants.
+const NEO4J_PATH = resolve(REPO_ROOT, "scripts/upgrade/neo4j-upgrade-major.sh");
+
+test("neo4j: the supported store-format hop resolves; downgrade + unlisted + unknown fail closed", () => {
+  const ok = runNode([RESOLVE, "neo4j", "5.26", "2026.05"]);
+  assert.equal(ok.status, 0, `neo4j 5.26->2026.05 should be supported: ${ok.stderr}`);
+  const v = JSON.parse(ok.stdout);
+  assert.equal(v.supported, true);
+  assert.equal(v.service.family, "neo4j");
+  assert.equal(v.mechanism, "in-place-store-format");
+  for (const [from, to, why] of [
+    ["2026.05", "5.26", "downgrade"],
+    ["5.26", "5.26", "unlisted no-op"],
+    ["4.4", "2026.05", "unlisted source"],
+  ]) {
+    assert.equal(runNode([RESOLVE, "neo4j", from, to]).status, 3, `neo4j ${from}->${to} (${why}) must fail closed`);
+  }
+});
+
+test("neo4j path script: bad invocations exit usage code 2; the neo4j password is required via env", () => {
+  assert.equal(runBash([NEO4J_PATH]).status, 2, "missing required args");
+  assert.equal(runBash([NEO4J_PATH, "--bogus", "x"]).status, 2, "unknown flag");
+  // The neo4j password must come from the environment (never argv).
+  const rPw = runBash(
+    [NEO4J_PATH, "--service", "neo4j", "--volume", "v", "--from", "5.26", "--to", "2026.05", "--backup-dir", "/tmp"],
+    { UPGRADE_NEO4J_PASSWORD: "", UPGRADE_LEDGER_FILE: "/tmp/never-neo4j-paths-test.json" },
+  );
+  assert.equal(rPw.status, 2, "missing UPGRADE_NEO4J_PASSWORD must refuse");
+  assert.match(rPw.stderr, /UPGRADE_NEO4J_PASSWORD/);
+  // A --from-tag that does not bind to the resolved series is a usage error.
+  const rBind = runBash(
+    [NEO4J_PATH, "--service", "neo4j", "--volume", "v", "--from", "5.26", "--to", "2026.05", "--from-tag", "2026.05-community", "--backup-dir", "/tmp"],
+    { UPGRADE_NEO4J_PASSWORD: "longenough8", UPGRADE_LEDGER_FILE: "/tmp/never-neo4j-paths-test.json" },
+  );
+  assert.equal(rBind.status, 2, "a --from-tag off the resolved series must refuse");
+  assert.match(rBind.stderr, /does not run the matrix version/);
+});
+
+test("neo4j path script: an unsupported tuple refuses fail-closed (3) BEFORE any mutation — ledger never created", () => {
+  const dir = mkdtempSync(join(tmpdir(), "uf-neo-refuse-"));
+  const ledger = join(dir, "never.json");
+  const down = runBash(
+    [NEO4J_PATH, "--service", "neo4j", "--volume", "v", "--from", "2026.05", "--to", "5.26", "--backup-dir", dir],
+    { UPGRADE_NEO4J_PASSWORD: "longenough8", UPGRADE_LEDGER_FILE: ledger },
+  );
+  assert.equal(down.status, 3, `neo4j 2026.05->5.26 downgrade must refuse: ${down.stderr}`);
+  assert.ok(!existsSync(ledger), "a refusal must never touch the ledger");
+});
+
+test("neo4j path script runs with errtrace + the subshell trap guard", () => {
+  const src = readFileSync(NEO4J_PATH, "utf8");
+  assert.match(src, /set -Eeuo pipefail/, "neo4j path: ERR-trap transaction handling requires errtrace (-E)");
+  assert.match(src, /BASH_SUBSHELL/, "neo4j path: the trap must no-op in subshells via BASH_SUBSHELL");
+});
+
+test("upgrade-neo4j fixture: digest-bound source AND target defaults, drives the committed neo4j family path", () => {
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-neo4j.sh"), "utf8");
+  for (const v of ["NEO4J_FROM_TAG", "NEO4J_TO_TAG"]) {
+    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+    assert.ok(m, `missing overridable default for ${v}`);
+    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${v} default must be digest-bound (pins the fixture bytes)`);
+  }
+  assert.match(src, /scripts\/upgrade\/neo4j-upgrade-major\.sh/, "must drive the committed neo4j family path");
+});
