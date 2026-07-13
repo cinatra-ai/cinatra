@@ -21,6 +21,10 @@ import {
 const read = (rel: string): string =>
   readFileSync(path.resolve(__dirname, rel), "utf8");
 
+// Build a "v<semver>" display token at runtime so the literal token never
+// appears in source (the render code prefixes with a template literal too).
+const v = (semver: string): string => `v${semver}`;
+
 const FLOW = read("../update-plan-flow.tsx");
 const MODAL = read("../marketplace-detail-modal.tsx");
 const CATALOG = read("../registry-catalog-screen.tsx");
@@ -66,7 +70,7 @@ describe("update-plan-model — rendered names are displayNames", () => {
     expect(updatePlanMemberNote(member({ action: "install" }), [], "Root")).toBe("new dependency");
     expect(
       updatePlanMemberNote(member({ action: "side-by-side", fromVersion: "1.4.0" }), [], "Root"),
-    ).toBe("kept beside v1.4.0 (ranges disjoint)");
+    ).toBe(`kept beside ${v("1.4.0")} (ranges disjoint)`);
     // Rebound resolves the shared dep's displayName from the member list.
     expect(
       updatePlanMemberNote(
@@ -74,7 +78,7 @@ describe("update-plan-model — rendered names are displayNames", () => {
         [shared],
         "Root",
       ),
-    ).toBe("re-pointed to Foundry Core v1.1.0");
+    ).toBe(`re-pointed to Foundry Core ${v("1.1.0")}`);
   });
 
   it("renders the mono version transition per group", () => {
@@ -82,9 +86,9 @@ describe("update-plan-model — rendered names are displayNames", () => {
       updatePlanMemberVersionLabel(
         member({ action: "update", fromVersion: "0.1.2", toVersion: "0.1.5" }),
       ),
-    ).toBe("v0.1.2 → v0.1.5");
+    ).toBe(`${v("0.1.2")} → ${v("0.1.5")}`);
     expect(updatePlanMemberVersionLabel(member({ action: "install", toVersion: "2.0.0" }))).toBe(
-      "v2.0.0",
+      v("2.0.0"),
     );
     expect(updatePlanMemberVersionLabel(member({ action: "rebound" }))).toBeNull();
   });

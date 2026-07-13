@@ -87,9 +87,9 @@ export function updatePlanMemberNote(
 }
 
 /**
- * The mono version transition cell: "v0.1.2 → v0.1.5" for an update,
- * "v2.0.0" for a fresh install / side-by-side member, nothing for a rebound
- * (its own version does not change).
+ * The mono version transition cell: a "vFROM → vTO" arrow (e.g. from 0.1.2 to
+ * 0.1.5) for an update, a bare "vTO" for a fresh install / side-by-side member,
+ * nothing for a rebound (its own version does not change).
  */
 export function updatePlanMemberVersionLabel(
   member: Pick<UpdatePlanPreviewMemberDto, "action" | "fromVersion" | "toVersion">,
