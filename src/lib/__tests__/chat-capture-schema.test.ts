@@ -4,11 +4,11 @@ import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import { CHAT_CAPTURE_TURN_STATUSES } from "@/lib/chat-capture/ledger";
 // The migration module is plain ESM with no runtime deps — import the DDL
 // constant directly so bootstrap and upgrade paths are pinned to each other.
-import { chatCaptureLedgerDdlSql } from "../../../migrations/core/core__0037_chat-capture-ledger.mjs";
+import { chatCaptureLedgerDdlSql } from "../../../migrations/core/core__0039_chat-capture-ledger.mjs";
 
 // ---------------------------------------------------------------------------
 // Status-vocabulary + DDL sync pins (cinatra#1367): the CHECK constraint in
-// the bootstrap leaf, the core__0037 migration, and the TypeScript status
+// the bootstrap leaf, the core__0039 migration, and the TypeScript status
 // list in the ledger module must never drift from each other.
 // ---------------------------------------------------------------------------
 
@@ -27,7 +27,7 @@ describe("chat-capture schema sync", () => {
     expect(extractStatusCheckList(bootstrapSql)).toEqual([...CHAT_CAPTURE_TURN_STATUSES]);
   });
 
-  it("core__0037 migration CHECK matches CHAT_CAPTURE_TURN_STATUSES exactly", () => {
+  it("core__0039 migration CHECK matches CHAT_CAPTURE_TURN_STATUSES exactly", () => {
     expect(extractStatusCheckList(chatCaptureLedgerDdlSql)).toEqual([
       ...CHAT_CAPTURE_TURN_STATUSES,
     ]);

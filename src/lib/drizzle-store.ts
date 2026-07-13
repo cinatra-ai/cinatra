@@ -557,7 +557,7 @@ END $$` },
       END $$;` },
     ...capabilityOwnershipGrantSchemaQueries(schemaName), // capability-ownership grant (S0), additive
     ...widgetStreamMetadataGrantSchemaQueries(schemaName), // widget-stream metadata grant (runtime trust slice 1), additive
-    ...chatCaptureSchemaQueries(schemaName), // chat-capture turn ledger (cinatra#1367), additive — mirrors core__0037
+    ...chatCaptureSchemaQueries(schemaName), // chat-capture turn ledger (cinatra#1367), additive — mirrors core__0039
 
     // Runtime installer — snapshot leases. An in-flight run that imports
     // a digest-pinned package dir holds a lease so the GC reaper never deletes
