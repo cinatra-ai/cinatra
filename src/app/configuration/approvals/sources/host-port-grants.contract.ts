@@ -1,6 +1,6 @@
 import "server-only";
 
-import { countPendingHostPortGrants } from "@/lib/extension-host-port-grant-review";
+import { countPendingHostPortGrants } from "@/lib/extension-host-port-grants";
 
 import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./types";
 
@@ -8,12 +8,14 @@ import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./types";
 // IMPORT-LIGHT nav contract for the extension host-port-grants source
 // (cinatra#1391, pattern per cinatra#1283).
 //
-// Holds ONLY availability / appliesTo / counts. It imports the review
-// backend's COUNT read (a single grant-table query) — never the heavy source's
-// rowRenderer / decide surface or the React client decision component — so the
-// root layout that consumes it via `nav-registry` stays light. The heavy
-// `host-port-grants.ts` source SPREADS this object (same function references;
-// enforced by `registry-parity.test.ts`).
+// Holds ONLY availability / appliesTo / counts. The count is a single pending-
+// grant-table query from the PURE grant STORE — NEVER the union-aware review
+// backend (which recomputes the live port union and so reaches the install
+// pipeline / MCP registry), the heavy source's rowRenderer / decide surface, or
+// the React client decision component — so the root layout that consumes it via
+// `nav-registry` stays off the heavy graph (nav-registry-import-purity /
+// cinatra#1283). The heavy `host-port-grants.ts` source SPREADS this object
+// (same function references; enforced by `registry-parity.test.ts`).
 // ---------------------------------------------------------------------------
 
 export const HOST_PORT_GRANTS_SOURCE_ID = "extension-host-port-grants";

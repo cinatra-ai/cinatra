@@ -6,6 +6,7 @@ import {
   revokeGrant,
   readApprovedPorts,
   listGrantsForScopes,
+  countPendingHostPortGrants,
   type HostPortGrantDeps,
 } from "@/lib/extension-host-port-grants";
 
@@ -412,5 +413,29 @@ describe("listGrantsForScopes (cinatra#1391)", () => {
     await listGrantsForScopes({ orgIds: [null] }, { query, schema: "cinatra" } as unknown as HostPortGrantDeps);
     expect(text).toMatch(/org_id IS NULL/);
     expect(text).not.toMatch(/ANY/);
+  });
+});
+
+describe("countPendingHostPortGrants (cinatra#1391 nav badge read)", () => {
+  it("returns the count of pending grant rows at the scopes", async () => {
+    // A query stub returning two pending rows regardless of the WHERE.
+    const query = vi.fn(async (_text: string, _values?: readonly unknown[]) => [
+      { id: "g1", package_name: PKG, org_id: null, approved_ports: [], requested_ports_hash: "h", status: "pending", approved_by: null, created_at: "t", updated_at: "t" },
+      { id: "g2", package_name: PKG, org_id: "org-1", approved_ports: [], requested_ports_hash: "h", status: "pending", approved_by: null, created_at: "t", updated_at: "t" },
+    ]);
+    const n = await countPendingHostPortGrants(
+      { orgIds: ["org-1", null] },
+      { query, schema: "cinatra" } as unknown as HostPortGrantDeps,
+    );
+    expect(n).toBe(2);
+    // Only pending rows are asked for.
+    expect(query.mock.calls[0]![0]).toMatch(/status = \$/);
+  });
+
+  it("short-circuits to 0 without querying when no scope is named", async () => {
+    const query = vi.fn();
+    const n = await countPendingHostPortGrants({ orgIds: [] }, { query, schema: "cinatra" } as unknown as HostPortGrantDeps);
+    expect(n).toBe(0);
+    expect(query).not.toHaveBeenCalled();
   });
 });

@@ -8,11 +8,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const listHostPortGrantReviewRows = vi.fn();
 const approveHostPortGrantUnion = vi.fn();
-const countPendingHostPortGrants = vi.fn(async () => 0);
 vi.mock("@/lib/extension-host-port-grant-review", () => ({
   listHostPortGrantReviewRows: (...a: unknown[]) => listHostPortGrantReviewRows(...(a as [])),
   approveHostPortGrantUnion: (...a: unknown[]) => approveHostPortGrantUnion(...(a as [])),
-  countPendingHostPortGrants: (...a: unknown[]) => countPendingHostPortGrants(...(a as [])),
+}));
+// The nav count lives in the pure grant store (cinatra#1391 import-purity); the
+// contract's `counts()` is not exercised by these tests, but stub it so
+// importing the contract never opens a DB pool in the unit env.
+vi.mock("@/lib/extension-host-port-grants", () => ({
+  countPendingHostPortGrants: vi.fn(async () => 0),
 }));
 
 // Stub the client component + Badge to inert nodes — the row-render assertions
@@ -57,7 +61,6 @@ function reviewRow(over: Partial<HostPortGrantReviewRow> = {}): HostPortGrantRev
 
 beforeEach(() => {
   vi.clearAllMocks();
-  countPendingHostPortGrants.mockResolvedValue(0);
 });
 
 describe("row-id scope encoding", () => {

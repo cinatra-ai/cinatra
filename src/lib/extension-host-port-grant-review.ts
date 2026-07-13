@@ -313,13 +313,3 @@ export async function approveHostPortGrantUnion(
     return { ok: true };
   });
 }
-
-/** Count of pending grant rows at the given scopes (the nav badge read). */
-export async function countPendingHostPortGrants(
-  input: { orgIds: readonly (string | null)[] },
-  depsOverride?: HostPortGrantReviewDeps,
-): Promise<number> {
-  const deps = await resolveDeps(depsOverride);
-  const pending = await deps.listGrantsForScopes({ orgIds: input.orgIds, status: "pending" });
-  return pending.length;
-}

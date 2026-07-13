@@ -8,7 +8,6 @@ import { describe, it, expect, vi } from "vitest";
 import {
   approveHostPortGrantUnion,
   listHostPortGrantReviewRows,
-  countPendingHostPortGrants,
   type HostPortGrantReviewDeps,
 } from "@/lib/extension-host-port-grant-review";
 
@@ -84,12 +83,6 @@ describe("listHostPortGrantReviewRows / countPendingHostPortGrants", () => {
     expect(row!.stale).toBe(true);
   });
 
-  it("countPendingHostPortGrants returns the pending row count at the scopes", async () => {
-    const d = deps({
-      listGrantsForScopes: vi.fn(async () => [grant(), grant({ orgId: "org-1" })]) as never,
-    });
-    expect(await countPendingHostPortGrants({ orgIds: ["org-1", null] }, d)).toBe(2);
-  });
 });
 
 describe("approveHostPortGrantUnion — anti-stale approval ladder", () => {
