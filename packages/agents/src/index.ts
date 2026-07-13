@@ -411,12 +411,6 @@ export {
   COMPILER_AGENTIC_SKILL_ID,
 } from "./agent-builder-ids";
 
-// Trigger-agent HITL renderers.
-export {
-  TriggerConfigureFormRenderer,
-  TriggerConfirmSummaryRenderer,
-} from "./trigger-agent-renderers";
-
 // Skill-recommender-agent HITL renderer.
 export { SkillRecommenderRenderer } from "./skill-recommender-agent-renderers";
 

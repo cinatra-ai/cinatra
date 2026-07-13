@@ -4,6 +4,7 @@ import { resolveExtensionActorContext } from "@/lib/extension-host-actor";
 import {
   resolveExtensionUiAction,
 } from "@/lib/extension-ui-registry";
+import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
 import { dispatchExtensionUiAction } from "@/lib/extension-action-dispatch";
 import { readInstalledExtensionById } from "@cinatra-ai/extensions/canonical-store";
 import { canExtensionAccess } from "@cinatra-ai/extensions/enforce-extension-access";
@@ -61,7 +62,18 @@ export async function POST(
     {
       resolveInstall: async (id) => {
         const row = await loadRow(id);
-        return row ? { packageName: row.packageName, status: row.status } : null;
+        // Thread `isDefault`/`version` so a NON-DEFAULT addressed install is
+        // served its OWN version's retained ui action, not the default's
+        // (cinatra#1392 S9). `isDefault !== false` (default/legacy) keeps the
+        // global registry path.
+        return row
+          ? {
+              packageName: row.packageName,
+              status: row.status,
+              isDefault: row.isDefault,
+              version: row.version,
+            }
+          : null;
       },
       // Enforce the uniform extension access policy ("use"-tier) for the actor
       // against the install's owner context — cross-org / no-access → false.
@@ -85,6 +97,14 @@ export async function POST(
       },
       resolveAction: (packageName, action) =>
         resolveExtensionUiAction(packageName, action),
+      // NON-DEFAULT installs serve their version-keyed retained action,
+      // fail-closed (a refuse never falls through to the default's action).
+      resolveVersionedAction: (packageName, version, action) => {
+        const served = resolveVersionKeyedUiAction(packageName, version, action);
+        return served.kind === "serve"
+          ? { kind: "serve", handler: served.value.handler }
+          : { kind: "refuse", code: served.code, message: served.message };
+      },
     },
   );
 

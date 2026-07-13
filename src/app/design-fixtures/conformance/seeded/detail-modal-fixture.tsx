@@ -45,6 +45,8 @@ const CARD: MarketplaceCardData = {
   rating: null,
   detailHref: "#",
   installCount: null,
+  manifestLogoUrl: null,
+  iconSlug: null,
   iconUrl: null,
   vendorLogoUrl: null,
   sdkAbiRange: "*",
