@@ -166,6 +166,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Projects object-graph state at request time. Migratable to the async pooled layer once the objects subsystem's sync signatures are converted (staged).",
   },
+  "packages/objects/src/graphiti-projection-policy.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Per-group projection-policy epoch reads/bumps (cinatra#1427 AC-4), a sync leaf composing with graphiti-projector's synchronous store graph. Migrates with the objects subsystem.",
+  },
+  "packages/objects/src/graphiti-rebuild.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Epoch-fenced group-rebuild driver (cinatra#1427 ACs 4-5): journal phase machine + checkpointed replay batches, same sync-leaf pattern as graphiti-projector. Migrates with the objects subsystem.",
+  },
   "packages/objects/src/mcp/handlers.ts": {
     class: "migratable-request-path",
     justification:

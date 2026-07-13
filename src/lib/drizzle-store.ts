@@ -19,6 +19,7 @@ import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
 import { skillLifecycleSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
+import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
   skillPackageCoOwnerConstraintQueries,
@@ -2743,11 +2744,10 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     ...artifactClaimSchemaQueries(schemaName), // cinatra#1425: sync leaf, no FKs (claims/events survive uninstall); existing deployments via core__0034
-    // ---------------------------------------------------------------------------
+    ...graphitiProjectionPolicySchemaQueries(schemaName), // cinatra#1427 ACs 4-5: epoch + rebuild journal + outbox epoch stamp (sync leaf, bootstrap-only, no core migration)
     // origin JSONB column on agent_templates + skill_packages,
     // extension_destinations credential store, and grandfather backfill.
     // All entries are idempotent (ADD COLUMN IF NOT EXISTS / CREATE TABLE IF NOT EXISTS).
-    // ---------------------------------------------------------------------------
     // Step 1: Add origin JSONB column to agent_templates.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates"
     ADD COLUMN IF NOT EXISTS origin jsonb` },

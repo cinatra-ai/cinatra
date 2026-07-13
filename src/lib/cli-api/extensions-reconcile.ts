@@ -32,12 +32,14 @@ import "server-only";
 // executes and never writes an audit row, so a plan is structurally incapable of
 // a write; the selected set IS the plan's candidate set.
 //
-// READ-MODEL-UNWIRED (honest reason): the persistent update read-model store
-// adapter is not yet wired on this deployment (its resolver returns null — see
-// `extension-auto-update.ts`). Selection then reports `readModelWired:false` and
-// skips every scanned row as `read-model-unwired`. This module surfaces that
-// VERBATIM as `readModelStatus:"unwired"` with per-row `read-model-unwired`
-// skips — it NEVER invents an empty (falsely "up to date") plan.
+// READ-MODEL-UNWIRED (honest reason): the default resolver now wires the
+// persistent DB-backed adapter (#1041/#1310 — the #1042 wire-up slice), so a
+// production plan reads `readModelStatus:"wired"`. The unwired path is KEPT
+// fail-honest for a deployment whose resolver yields null: selection reports
+// `readModelWired:false` and skips every scanned row as `read-model-unwired`,
+// and this module surfaces that VERBATIM as `readModelStatus:"unwired"` with
+// per-row `read-model-unwired` skips — it NEVER invents an empty (falsely
+// "up to date") plan.
 //
 // TRANSPORT CONTRACT (served here; consumed by cinatra-cli
 // src/extensions-reconcile.mjs — that client is the contract source):
