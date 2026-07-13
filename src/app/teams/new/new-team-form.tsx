@@ -38,7 +38,7 @@ export function NewTeamForm({ organizations, initialError }: NewTeamFormProps) {
   const [organizationId, setOrganizationId] = useState(organizations[0]?.id ?? "");
 
   return (
-    <form action={createTeamAction} className="soft-panel max-w-2xl p-6">
+    <form action={createTeamAction} className="soft-panel rounded-panel max-w-2xl p-6">
       <FieldGroup>
         <Field>
           <FieldLabel htmlFor="team-name">Team name</FieldLabel>
