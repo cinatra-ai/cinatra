@@ -16,6 +16,33 @@ export type SideBySideGrantCapsule = {
   readonly v: 1;
   /** The widget-auth token ownership keys the version DECLARED (sorted/de-duped). */
   readonly declaredTokenKeys: string[];
+  /**
+   * cinatra#1391 PORTS AXIS: the host ports the version DECLARED (sorted/
+   * de-duped). Evidence + the teardown-reconcile trigger; the survivor union is
+   * always RECOMPUTED from live journal-gated stores, never from this list.
+   * Absent on ownership-only capsules (pre-ports rows).
+   */
+  readonly declaredPorts?: string[];
+  /**
+   * cinatra#1391 PORTS AXIS: the EXACT prior host-port grant row state at the
+   * install scope, captured BEFORE the union request mutated the shared
+   * per-(package, org) grant. UNLIKE the declaration-only ownership fields this
+   * IS a prior-state capture — the ports grant is ONE shared row, so a
+   * direct-failure / compensation / boot-recovery teardown restores it — but a
+   * restore is HASH-GUARDED against the recomputed survivor union (a stale
+   * capture never clobbers a newer state; see
+   * `reconcileSideBySidePortsOnTeardown`). `exists:false` = no row existed.
+   */
+  readonly portsPrior?: SideBySidePortsPriorState | null;
+};
+
+/** The captured prior host-port grant row state (see `portsPrior`). */
+export type SideBySidePortsPriorState = {
+  readonly exists: boolean;
+  readonly status?: "pending" | "approved" | "revoked";
+  readonly approvedPorts?: string[];
+  readonly requestedPortsHash?: string;
+  readonly approvedBy?: string | null;
 };
 
 // Install-BATCH ledger store (#180 PR-2).
