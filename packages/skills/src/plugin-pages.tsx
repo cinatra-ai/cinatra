@@ -129,6 +129,10 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
         id: s.id,
         level: s.level,
         scope: s.scope ?? null,
+        // Durable owner identity (cinatra#1416): a shared personal skill stays
+        // visible to its owner even when the projected scope names a locus the
+        // owner is not a member of.
+        ownerUserId: s.ownerUserId ?? null,
         // Canonical effective policy (W4): skill override else parent package's.
         accessPolicy: resolveEffectiveSkillAccessPolicy(s, listSkillPackages),
       }));
@@ -380,6 +384,9 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
       id: skill.id,
       level: skill.level,
       scope: skill.scope ?? null,
+      // Durable owner identity (cinatra#1416): the owner of a shared personal
+      // skill keeps read access regardless of the projected tuple.
+      ownerUserId: skill.ownerUserId ?? null,
       accessPolicy: resolveEffectiveSkillAccessPolicy(
         skill,
         (await readSkillsCatalog()).skillPackages ?? [],
@@ -390,16 +397,24 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
   }
 
   const userId = session?.user?.id ?? null;
-  // canEdit kept for the read-only-banner branch above; PermissionsForm
-  // computes its own canEdit from the parent-package gate via the loader.
-  const ownsPersonalSkill = skill.level === "personal" && skill.scope === userId;
-  void (isAdmin || ownsPersonalSkill);
-  void userId;
+  // DURABLE ownership (cinatra#1416, AC1): a personal skill is owned via the
+  // persisted ownerUserId, never via the mutable (level, scope) tuple —
+  // broadening the skill's access must not hide the owner's Edit affordance.
+  // Legacy rows that never persisted ownerUserId fall back to the
+  // level/scope pair (their tuple was never projected).
+  const ownsPersonalSkill =
+    skill.isCustomSkill === true && skill.ownerUserId
+      ? skill.ownerUserId === userId
+      : skill.level === "personal" && skill.scope === userId;
 
   // Load the per-skill permissions context up front. Falls through to the
-  // parent package's policy when the skill row
-  // has no override (loader semantics). Result is null only when the skill
-  // is not found, which is short-circuited by the notFound() above.
+  // parent package's policy when a package-shipped skill row has no override;
+  // personal skills anchor on their own durable ownership (loader semantics).
+  // Result is null when the skill is not found (short-circuited by the
+  // notFound() above) OR when a package-shipped row has no parent package.
+  // The panel mounts ONLY for authorized managers (canRead — owner /
+  // skill co-owners / platform admin): granted-scope readers see the skill
+  // but no access panel (the AC5 mounting matrix).
   const skillPermissions = await loadSkillPermissionsContext(skill.id);
 
   return (
@@ -464,13 +479,16 @@ export async function SkillDetailPage({ params }: SkillDetailPageProps) {
           </pre>
         </Card>
 
-        {/* The generic PermissionsForm lets operators override the parent
-            package's policy and add per-skill co-owners. The form's Save click
-            also projects to the (level, scope) tuple so matching and
-            visibility readers stay correct. SkillAccessClient and
-            skill-access-actions remain in the tree for dependent readers, but
-            are not mounted here. */}
-        {skillPermissions ? (
+        {/* The generic PermissionsForm (shared checkbox multi-scope picker,
+            #1069) lets authorized managers configure access + co-owners for
+            BOTH package-shipped and personal skills (cinatra#1416). The form's
+            Save click also projects to the (level, scope) tuple so matching
+            and visibility readers stay correct. Mounted ONLY when canRead —
+            owner / skill co-owners / platform admin (AC5 matrix): granted-
+            scope readers see the skill page without the panel.
+            SkillAccessClient and skill-access-actions remain in the tree for
+            dependent readers, but are not mounted here. */}
+        {skillPermissions?.canRead ? (
           <ExtensionPermissionsClient
             kind="skill"
             resourceId={skillPermissions.skillId}
@@ -512,6 +530,8 @@ export async function CreateFromSkillPage({ params }: CreateFromSkillPageProps) 
       id: skill.id,
       level: skill.level,
       scope: skill.scope ?? null,
+      // Durable owner identity (cinatra#1416).
+      ownerUserId: skill.ownerUserId ?? null,
       accessPolicy: resolveEffectiveSkillAccessPolicy(
         skill,
         (await readSkillsCatalog()).skillPackages ?? [],
@@ -739,6 +759,20 @@ export async function EditSkillPage({ params }: EditSkillPageProps) {
             </Label>
 
             <SkillMarkdownEditor name="content" defaultValue={skill.content} label="SKILL.md content" />
+
+            {/* Access configuration has ONE home (cinatra#1416, AC5): the
+                skill detail page's permissions panel. This page deliberately
+                does not duplicate the picker. */}
+            <p className="text-xs text-muted-foreground">
+              Access &amp; sharing is managed on the{" "}
+              <Link
+                href={`/skills/${encodeURIComponent(skill.id)}`}
+                className="font-medium underline-offset-4 underline hover:text-foreground"
+              >
+                skill page
+              </Link>
+              .
+            </p>
 
             <div className="flex flex-wrap gap-3">
               <Button type="submit">Save changes</Button>

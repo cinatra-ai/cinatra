@@ -334,19 +334,120 @@ async function skillHooks(): Promise<ExtensionKindHooks> {
       return catalog.skills.some((s) => s.id === id);
     },
     extraEditors: async (id) => {
-      // Skills inherit edit rights from their parent skill_package's
-      // installer + co-owners. The parent lookup goes through the
-      // polymorphic table.
       const catalog = await readSkillsCatalogSnapshot();
       const skill = catalog.skills.find((s) => s.id === id);
-      if (!skill?.packageId) return [];
+      if (!skill) return [];
 
+      // USER-AUTHORED (personal/custom) skills (cinatra#1416): the durable
+      // `ownerUserId` is the implicit editor — ownership is a persisted
+      // attribute, independent of the mutable (level, scope) tuple, so the
+      // owner keeps manage after broadening the skill's access. The shared
+      // "Custom Skills" pseudo-package (custom:personal-skills) is a storage
+      // bucket, NOT an ownership anchor: its installer/co-owners must never
+      // gain manage over other users' personal skills, so the parent-package
+      // inheritance below is deliberately skipped for these rows.
+      if (skill.isCustomSkill === true && typeof skill.ownerUserId === "string") {
+        return [skill.ownerUserId];
+      }
+
+      // Package-shipped skills inherit edit rights from their parent
+      // skill_package's installer + co-owners. The parent lookup goes through
+      // the polymorphic table.
+      if (!skill.packageId) return [];
       const { readExtensionInstalledBy, readExtensionCoOwners } = await import("./permissions-store");
       const parentInstaller = await readExtensionInstalledBy("skill_package", skill.packageId);
       const parentCoOwners = await readExtensionCoOwners("skill_package", skill.packageId);
       const extras = parentCoOwners.map((c) => c.userId);
       if (parentInstaller) extras.push(parentInstaller);
       return extras;
+    },
+    // Server-side grantability on the DIFF (cinatra#1416, AC3 — the #1069
+    // predicate: the ability to READ a scope never implies authority to share
+    // into it; UI filtering is not authorization). Newly ADDED tokens are each
+    // re-validated against the saving actor's REAL memberships (forged or
+    // stale scope ids are rejected with the typed "invalid_locus");
+    // RETAINED and REMOVED pre-existing tokens are always permitted, so a
+    // full-array update can never strand or silently drop an existing grant a
+    // manager could not re-grant today. Platform admins bypass (they can
+    // share into any scope). Workspace grants respect the existing
+    // canGrantWorkspace rule (platform admin / org_owner / org_admin).
+    validatePolicyWrite: async (id, policy, ctx) => {
+      if (ctx.actor?.platformRole === "platform_admin") return null;
+
+      const { readExtensionAccessPolicy } = await import("./permissions-store");
+      const catalog = await readSkillsCatalogSnapshot();
+      const skill = catalog.skills.find((s) => s.id === id);
+      const persisted =
+        (await readExtensionAccessPolicy("skill", id)) ?? skill?.accessPolicy ?? null;
+      const previousTokens = new Set<string>(
+        persisted
+          ? [
+              ...persisted.runListVisibility,
+              ...persisted.runDataVisibility,
+              ...persisted.runExecuteVisibility,
+            ]
+          : [],
+      );
+      const proposed = [
+        ...new Set<AgentAuthPolicyVisibility>([
+          ...policy.runListVisibility,
+          ...policy.runDataVisibility,
+          ...policy.runExecuteVisibility,
+        ]),
+      ];
+      const added = proposed.filter((t) => !previousTokens.has(t));
+      if (added.length === 0) return null;
+
+      // Owner is always grantable (narrowing back to the personal baseline);
+      // `admin` only ever NARROWS visibility to platform admins — no scope is
+      // being shared into, so any authorized manager may set it.
+      const collective = added.filter((t) => t !== "owner" && t !== "admin");
+      if (collective.length === 0) return null;
+
+      const needsMemberships = collective.some(
+        (t) => t.startsWith("org:") || t.startsWith("team:") || t.startsWith("project:"),
+      );
+      let actorOrgs: Array<{ id: string; teams: Array<{ id: string }> }> = [];
+      let actorProjectIds = new Set<string>();
+      if (needsMemberships) {
+        const { readOrgsWithTeamsForUser, readProjectsForUser } = await import(
+          "@/lib/better-auth-db"
+        );
+        actorOrgs = await readOrgsWithTeamsForUser(ctx.userId);
+        const activeOrgId = ctx.actor?.organizationId ?? null;
+        if (activeOrgId) {
+          actorProjectIds = new Set(
+            (await readProjectsForUser(ctx.userId, activeOrgId)).map((p) => p.id),
+          );
+        }
+      }
+      for (const t of collective) {
+        if (t === "workspace") {
+          // canGrantWorkspace rule (platform admin returned above).
+          const orgRole = ctx.actor?.orgRole;
+          if (orgRole !== "org_owner" && orgRole !== "org_admin") return "invalid_locus";
+          continue;
+        }
+        if (t === "org") return "invalid_locus"; // legacy bare token — never a grantable locus
+        if (t.startsWith("org:")) {
+          const orgId = t.slice("org:".length);
+          if (!actorOrgs.some((o) => o.id === orgId)) return "invalid_locus";
+          continue;
+        }
+        if (t.startsWith("team:")) {
+          const teamId = t.slice("team:".length);
+          if (!actorOrgs.some((o) => o.teams.some((tm) => tm.id === teamId))) {
+            return "invalid_locus";
+          }
+          continue;
+        }
+        if (t.startsWith("project:")) {
+          if (!actorProjectIds.has(t.slice("project:".length))) return "invalid_locus";
+          continue;
+        }
+        return "invalid_locus"; // unknown token shape — fail closed
+      }
+      return null;
     },
     afterPolicyWrite: async (id, policy) => {
       // Compatibility projection — keep the legacy (level, scope) tuple in

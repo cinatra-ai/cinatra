@@ -203,10 +203,21 @@ export async function loadSkillPackagePermissionsContext(
 // ---------------------------------------------------------------------------
 // Per-skill permissions context loader.
 //
-// Falls back to the parent package's accessPolicy when the skill row has no
-// override, so the read-side default matches what an operator visiting the
-// skill detail page expects. Auth gate (canEdit) is keyed on the parent
-// package's installer/co-owner/admin set (skills aren't user-authored).
+// Two ownership anchors, dispatched on the skill row's DURABLE identity:
+//
+//   • USER-AUTHORED (personal/custom) skills — `isCustomSkill === true` with a
+//     persisted `ownerUserId` (cinatra#1416). Authority is the skill's OWN
+//     ownership set: owner + skill-level co-owners + platform admin. The
+//     shared "Custom Skills" pseudo-package (custom:personal-skills) is a
+//     storage bucket, NOT an ownership anchor — its installer/co-owners must
+//     never gain manage over other users' personal skills.
+//
+//   • PACKAGE-SHIPPED skills — authority keys on the parent package's
+//     installer/co-owner/admin set, plus skill-level co-owners. Falls back to
+//     the parent package's accessPolicy when the skill row has no override.
+//
+// Returns null only when the skill row cannot be anchored at all: not found,
+// or a package-shipped row with no parent package.
 // ---------------------------------------------------------------------------
 
 import {
@@ -214,15 +225,71 @@ import {
   readSkillCoOwners,
   readSkillPackageIdFor,
 } from "./skills-store";
+import { readSkillsCatalogSnapshot } from "./skill-packages";
 
 export type SkillPermissionsContext = SkillPackagePermissionsContext & {
   /** Override target — the skill id. Distinct from `packageId` (parent). */
   skillId: string;
 };
 
+/**
+ * Default policy for a skill that has no persisted override: personal skills
+ * default to owner-only (the personal baseline — nothing is ever
+ * auto-promoted); package skills inherit via the package loader instead.
+ */
+function buildOwnerOnlyPolicy(): AgentAuthPolicy {
+  return buildDefaultPolicy();
+}
+
+/**
+ * ONE ownership model for the loader AND the policy-write actions
+ * (cinatra#1416, AC2): may `actorUserId` manage this skill's access
+ * configuration? platform admin ∨ durable owner (user-authored rows) ∨
+ * skill-level co-owner ∨ (package-shipped rows only) parent-package
+ * installer / co-owner. `saveSkillVisibility` and the permissions loader both
+ * call this, so the UI can never mount an editable panel whose save then
+ * fails. The generic extension actions' gate (canEditExtension +
+ * skill kind hooks) mirrors the same set through the polymorphic tables,
+ * which the dual-write hooks keep in sync with these legacy mirrors.
+ */
+export async function canManageSkillAccess(
+  actorUserId: string | null,
+  isAdmin: boolean,
+  skill: {
+    id: string;
+    isCustomSkill?: boolean;
+    ownerUserId?: string;
+    packageId?: string;
+  },
+): Promise<boolean> {
+  if (isAdmin) return true;
+  if (!actorUserId) return false;
+  const isUserAuthored = skill.isCustomSkill === true && typeof skill.ownerUserId === "string";
+  if (isUserAuthored && skill.ownerUserId === actorUserId) return true;
+  const skillCoOwners = await readSkillCoOwners(skill.id);
+  if (skillCoOwners.some((c) => c.userId === actorUserId)) return true;
+  if (isUserAuthored) return false; // pseudo-package never anchors manage
+  if (!skill.packageId) return false;
+  const installedBy = await readSkillPackageInstalledBy(skill.packageId);
+  if (installedBy === actorUserId) return true;
+  const packageCoOwners = await readSkillPackageCoOwners(skill.packageId);
+  return packageCoOwners.some((c) => c.userId === actorUserId);
+}
+
 export async function loadSkillPermissionsContext(
   skillId: string,
 ): Promise<SkillPermissionsContext | null> {
+  // Durable-identity dispatch (cinatra#1416): resolve the row first. A
+  // user-authored skill anchors on its own ownership regardless of the
+  // (level, scope) tuple OR the pseudo-package it is bucketed under.
+  const catalog = await readSkillsCatalogSnapshot();
+  const skillRow = catalog.skills.find((s) => s.id === skillId);
+  if (!skillRow) return null;
+
+  if (skillRow.isCustomSkill === true && typeof skillRow.ownerUserId === "string") {
+    return loadPersonalSkillPermissionsContext(skillId, skillRow);
+  }
+
   const packageId = await readSkillPackageIdFor(skillId);
   if (!packageId) return null;
 
@@ -313,4 +380,121 @@ export async function loadSkillPermissionsContext(
     // non-existent target.
     owner: null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Personal-skill permissions context (cinatra#1416).
+//
+// Same context shape as the package path so the SAME ExtensionPermissionsClient
+// mounts unchanged (the shared checkbox multi-scope picker, #1069). Authority
+// derives from the ONE ownership model (`canManageSkillAccess`): durable owner
+// + skill-level co-owners + platform admin. Strict read: canRead === canEdit —
+// the access panel is management config; granted-scope READERS of the skill
+// see the skill page but no panel (the AC5 mounting matrix).
+// ---------------------------------------------------------------------------
+
+async function loadPersonalSkillPermissionsContext(
+  skillId: string,
+  skillRow: {
+    id: string;
+    packageId?: string;
+    isCustomSkill?: boolean;
+    ownerUserId?: string;
+  },
+): Promise<SkillPermissionsContext> {
+  const session = await requireAuthSession();
+  const actorUserId = session.user?.id ?? null;
+  const isAdmin = isPlatformAdmin(session);
+
+  const canEdit = await canManageSkillAccess(actorUserId, isAdmin, skillRow);
+  const canRead = canEdit;
+
+  const base = {
+    packageId: skillRow.packageId ?? "",
+    skillId,
+    isAdmin,
+    currentUserId: actorUserId,
+  };
+
+  if (!canRead) {
+    // Strict-read short-circuit: no policy / owner / co-owner views past the
+    // gate — the caller MUST check canRead before mounting the panel.
+    return {
+      ...base,
+      canRead: false,
+      canEdit: false,
+      initialPolicy: buildOwnerOnlyPolicy(),
+      owner: null,
+      coOwners: [],
+      availableScopes: { orgs: [], projects: [], canGrantWorkspace: false },
+    };
+  }
+
+  const owner = await resolveOwnerView(skillRow.ownerUserId ?? null);
+  const skillCoOwnerRows = await readSkillCoOwners(skillId);
+  const coOwners = await resolveUserViews(skillCoOwnerRows.map((r) => r.userId));
+  const accessPolicy = await readSkillAccessPolicy(skillId);
+
+  // Offered scopes = the manager's REAL memberships (readOrgsWithTeamsForUser /
+  // readProjectsForUser) — the same assembly the package loader uses. The
+  // server-side grantability re-validation on save is the enforcement
+  // (#1069 predicate, diff-based); this list is the affordance.
+  const orgs = actorUserId ? await readOrgsWithTeamsForUser(actorUserId) : [];
+  const activeOrgId = session.session?.activeOrganizationId ?? null;
+  const projects =
+    actorUserId && activeOrgId
+      ? await readProjectsForUser(actorUserId, activeOrgId)
+      : [];
+  const orgRole = actorUserId
+    ? await resolveOrgRoleForSession({
+        user: { id: actorUserId },
+        session: session.session,
+      })
+    : undefined;
+  const canGrantWorkspace =
+    isAdmin || orgRole === "org_owner" || orgRole === "org_admin";
+
+  return {
+    ...base,
+    canRead,
+    canEdit,
+    // DEFAULT stays personal (owner-only) — broadening is always an explicit
+    // manager action, never automatic.
+    initialPolicy: accessPolicy ?? buildOwnerOnlyPolicy(),
+    // The durable owner renders as the primary owner row (no removeOwner
+    // action is wired for skills, so the row is display-only — ownership is
+    // never destabilized by sharing).
+    owner,
+    coOwners,
+    availableScopes: { orgs, projects, canGrantWorkspace },
+  };
+}
+
+/** Resolve a list of user ids to OwnerViews via the shared BetterAuth lookup. */
+async function resolveUserViews(
+  userIds: string[],
+): Promise<SkillPackagePermissionsOwnerView[]> {
+  if (userIds.length === 0) return [];
+  const userRows = await betterAuthDb
+    .select({
+      id: betterAuthUsers.id,
+      name: betterAuthUsers.name,
+      email: betterAuthUsers.email,
+      image: betterAuthUsers.image,
+    })
+    .from(betterAuthUsers)
+    .where(inArray(betterAuthUsers.id, userIds));
+  const byId = new Map(userRows.map((u) => [u.id, u]));
+  return userIds
+    .map((id) => {
+      const u = byId.get(id);
+      if (!u) return null;
+      return {
+        userId: u.id,
+        name: u.name ?? u.email ?? "Unknown",
+        email: u.email ?? "",
+        image: u.image,
+      } satisfies SkillPackagePermissionsOwnerView;
+    })
+    .filter((x): x is SkillPackagePermissionsOwnerView => x !== null);
 }

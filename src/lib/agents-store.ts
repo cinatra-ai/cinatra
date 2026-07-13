@@ -1078,6 +1078,10 @@ export async function getAssignedSkillIdsForAgent(
       scope?: string;
       packageId?: string;
       accessPolicy?: import("@cinatra-ai/agents/auth-policy").AgentAuthPolicy | null;
+      /** Durable owner of user-authored skills (cinatra#1416). */
+      ownerUserId?: string;
+      /** True for user-authored (personal/custom) skills. */
+      isCustomSkill?: boolean;
     }>;
     skillPackages?: Array<{
       id?: string;
@@ -1147,6 +1151,9 @@ export async function getAssignedSkillIdsForAgent(
       // Canonical effective policy (W4): skill override else parent package's.
       // When present the visibility filter enforces its union any-match.
       accessPolicy: resolveEffectiveSkillAccessPolicy(skill, catalog.skillPackages ?? []),
+      // Durable owner identity (cinatra#1416): the owner of a shared personal
+      // skill keeps delivery regardless of the projected tuple/policy union.
+      ownerUserId: skill.ownerUserId,
     });
   }
 

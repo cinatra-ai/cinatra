@@ -7,7 +7,7 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 // installedSkillPackages + the canonical access-policy helpers (W4, #1073) live in
 // ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
-import { installedSkillPackages, normalizeStoredAccessPolicy, readSkillsCatalogSnapshot, visibilityToLevelScope } from "./skill-packages";
+import { installedSkillPackages, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
@@ -1304,11 +1304,23 @@ export async function upsertSkill(input: {
     isCustomSkill: isPersonal || undefined,
     ownerUserId: input.ownerUserId,
     agentId: input.agentId,
-    level: input.type,
+    // Access-configuration preservation (cinatra#1416, AC1/AC8): a metadata /
+    // markdown edit of an EXISTING skill must never clobber its canonical
+    // accessPolicy nor the (level, scope) tuple projected from it — otherwise
+    // "share → edit → grants gone" (silent narrowing). When the existing row
+    // carries a canonical policy, carry the policy forward and keep the
+    // projected tuple; rows without a policy keep the legacy write shape.
+    accessPolicy: existingSkill?.accessPolicy ?? undefined,
+    level: existingSkill?.accessPolicy ? (existingSkill.level ?? input.type) : input.type,
     // requireResourceAccess keys owner identity off `scope` for personal
     // skills; persist ownerUserId as the explicit scope so the read path no
-    // longer has to rely on the legacy back-fill.
-    scope: isPersonal ? input.ownerUserId : undefined,
+    // longer has to rely on the legacy back-fill. (`ownerUserId` above stays
+    // the DURABLE owner identity regardless of the projected scope.)
+    scope: existingSkill?.accessPolicy
+      ? existingSkill.scope
+      : isPersonal
+        ? input.ownerUserId
+        : undefined,
     basedOnSkillId: input.basedOnSkillId ?? existingSkill?.basedOnSkillId,
     basedOnSkillIds: input.basedOnSkillIds ?? existingSkill?.basedOnSkillIds,
     prefillText: input.prefillText ?? existingSkill?.prefillText,
@@ -1424,28 +1436,45 @@ export async function upsertCustomSkill(input: {
   if (input.skillId && input.ownerUserId) {
     const currentCatalog = await readSkillsCatalog();
     const existing = currentCatalog.skills.find((entry) => entry.id === input.skillId);
-    if (existing && existing.level !== "personal") {
-      // upsertCustomSkill is the personal-skill code path. A non-personal
+    // DURABLE personal-skill identity (cinatra#1416, AC1): a user-authored
+    // skill is recognized by its persisted `isCustomSkill` flag / `ownerUserId`
+    // — NOT by the mutable `(level, scope)` tuple, which the access-policy
+    // projection rewrites when the owner broadens the skill (a shared personal
+    // skill may carry level "team"/"organization"/"workspace" while remaining
+    // personally owned and personally editable).
+    const isUserAuthored =
+      existing !== undefined &&
+      (existing.isCustomSkill === true || existing.level === "personal");
+    if (existing && !isUserAuthored) {
+      // upsertCustomSkill is the personal-skill code path. A package/team/org
       // row must NOT be reassigned through it — that would silently
       // downgrade the row's ownership level and let an authenticated user
-      // claim a team/org/workspace/project skill via a forged form skillId.
+      // claim a non-personal skill via a forged form skillId.
       // The action layer should catch this before the call; the store gate
       // is defense-in-depth.
       throw new Error(
-        `upsertCustomSkill: skill ${input.skillId} is level "${existing.level}", not personal — refusing update through personal-skill code path.`,
+        `upsertCustomSkill: skill ${input.skillId} is level "${existing.level}", not a personal skill — refusing update through personal-skill code path.`,
       );
     }
-    if (existing && existing.level === "personal") {
-      const ownerFields: Array<string | undefined | null> = [existing.ownerUserId, existing.scope];
-      const presentOwners = ownerFields.filter(
-        (v): v is string => typeof v === "string" && v.length > 0,
-      );
-      if (presentOwners.length === 0) {
+    if (existing && isUserAuthored) {
+      // Owner identity: the durable ownerUserId when present; the legacy
+      // `scope` back-fill ONLY for old rows that never persisted ownerUserId
+      // (for those, scope still holds the owner id — the projection never ran
+      // on them, since projection requires a canonical policy write which
+      // stamps no row without ownerUserId... defensive: consult scope only
+      // when level is still "personal", i.e. the tuple was never projected).
+      const ownerIdentity =
+        typeof existing.ownerUserId === "string" && existing.ownerUserId.length > 0
+          ? existing.ownerUserId
+          : existing.level === "personal" && typeof existing.scope === "string" && existing.scope.length > 0
+            ? existing.scope
+            : null;
+      if (ownerIdentity === null) {
         throw new Error(
           `upsertCustomSkill: personal skill ${input.skillId} has no owner identity — refusing to update.`,
         );
       }
-      if (presentOwners.some((owner) => owner !== input.ownerUserId)) {
+      if (ownerIdentity !== input.ownerUserId) {
         throw new Error(
           `upsertCustomSkill: caller ${input.ownerUserId} is not the owner of personal skill ${input.skillId}.`,
         );
@@ -2738,8 +2767,13 @@ export async function writeSkillAccessPolicy(
     // Compatibility projection — write legacy (level, scope) so readers that
     // still consume those fields stay correct until they migrate to
     // accessPolicy. Locksteps with the access-form save path.
-    const { level, scope } = visibilityToLevelScope(
-      policy.runListVisibility[0], // W1: first token (single-token until the W3 picker)
+    // Multi-token rule (cinatra#1416, AC1): the single BROADEST granted level
+    // wins (workspace > organization > team > project > personal); ties break
+    // on a stable canonical sort; an owner-only selection restores
+    // level="personal", scope=ownerUserId. The tuple stays a label/index hint
+    // under the #1073 contract — never an enforcement source.
+    const { level, scope } = projectSelectionToLevelScope(
+      policy.runListVisibility,
       existing.ownerUserId,
     );
     updated.level = level;

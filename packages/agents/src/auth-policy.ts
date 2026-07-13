@@ -147,6 +147,19 @@ export type SkillResourceRef = {
   organizationId?: string;
   ownerId?: string;
   /**
+   * DURABLE owner identity for user-authored (personal/custom) skills
+   * (cinatra#1416, AC1). Unlike `ownerId` — which mirrors the MUTABLE
+   * `(level, scope)` tuple's scope and is overwritten by the compatibility
+   * projection when the skill's access is broadened — this field carries the
+   * persisted `ownerUserId` and never changes with the visibility tuple.
+   * When set, the owner is admitted for read AND manage BEFORE the policy
+   * union runs (broadening a personal skill must never lock its owner out),
+   * and `manage` on such a resource is ownership-keyed: scope grants convey
+   * read/use only (the AC2/AC5 matrix). Absent for package-shipped skills —
+   * every legacy branch is unchanged for those.
+   */
+  ownerUserId?: string;
+  /**
    * CANONICAL enforcement source (multi-scope access W4, #1073). The effective
    * access-policy visibility union for this skill — the skill's own
    * `accessPolicy.runListVisibility` when set, else the parent package's
@@ -219,6 +232,14 @@ export function buildSkillResourceRef(
      * bypassed. Omitted / null ⇒ the transitional `(level, scope)` fallback.
      */
     accessPolicy?: AgentAuthPolicy | null;
+    /**
+     * DURABLE owner user id for user-authored (personal/custom) skills
+     * (cinatra#1416, AC1) — the persisted `ownerUserId` catalog field, NOT the
+     * tuple's `scope`. Thread it for every catalog-row-backed ref so the owner
+     * keeps read+manage after the skill's access is broadened (the projection
+     * rewrites `scope` to the granted locus). Omit/null for package skills.
+     */
+    ownerUserId?: string | null;
   },
 ): SkillResourceRef {
   return {
@@ -226,6 +247,7 @@ export function buildSkillResourceRef(
     resourceId: skill.id,
     level: skill.level,
     ownerId: skill.scope ?? undefined,
+    ownerUserId: skill.ownerUserId ?? undefined,
     // The single non-tautological field: for org-scoped rows the policy
     // compares against the skill's owning org. For every other level the
     // policy branch ignores this field — undefined makes that explicit.
@@ -281,6 +303,16 @@ export function requireResourceAccess(
   if (resource.level === "system") {
     throw new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." });
   }
+  // DURABLE-owner short-circuit for user-authored skills (cinatra#1416, AC1).
+  // Ownership is a persisted attribute (`ownerUserId`), independent of the
+  // mutable `(level, scope)` tuple AND of the policy union below: broadening a
+  // personal skill to `[team:t1]` strips the redundant `owner` token
+  // (normalizeVisibilitySelection) and rewrites the tuple's scope to the
+  // granted locus, so without this check the owner would be locked out of
+  // their own skill. The owner is admitted for read AND manage. Runs AFTER the
+  // OBO ceiling containment (a delegated actor stays confined even when the
+  // invoking user owns the resource) — mirroring the platform_admin ordering.
+  if (resource.ownerUserId && actor.principalId === resource.ownerUserId) return;
   // Canonical multi-scope enforcement (W4, #1073). When the ref carries an
   // effective access policy, the visibility union is the SOLE membership
   // decision: admit on ANY matching token (OR-visibility), else deny. This
@@ -291,6 +323,16 @@ export function requireResourceAccess(
   // available above (system-hidden, OBO facets) and inside the workspace/owner
   // token predicates as structural hints — never as the union decision here.
   if (resource.policy && resource.policy.length > 0) {
+    // Ownership-keyed manage for user-authored skills (cinatra#1416, AC2/AC5):
+    // on a resource with a durable owner, a scope grant conveys read/use ONLY.
+    // The owner already returned above and platform_admin before that; every
+    // other principal — including members of granted scopes — is denied
+    // manage here. (Skill co-owners are admitted by the co-owner-aware action
+    // gates, which never route through this tuple/union path for manage.)
+    // Package-shipped skills (no ownerUserId) keep the legacy union semantics.
+    if (mode === "manage" && resource.ownerUserId) {
+      throw new AuthzError({ statusCode: 403, reason: "forbidden", message: "Access denied." });
+    }
     for (const token of resource.policy) {
       if (matchSkillAccessToken(token, actor, resource, mode)) return;
     }
@@ -426,6 +468,10 @@ function matchSkillAccessToken(
     return Boolean(actor.projectIds?.includes(token.slice("project:".length)));
   }
   if (token === "owner") {
+    // Durable owner identity first (user-authored skills, cinatra#1416): the
+    // tuple's `ownerId`/scope is a projection that stops naming the owner once
+    // access is broadened. Fall back to the tuple for package-era refs.
+    if (resource.ownerUserId) return actor.principalId === resource.ownerUserId;
     return Boolean(resource.ownerId) && actor.principalId === resource.ownerId;
   }
   // `admin` = platform-admin-only for skills (legacy `level:"system"` gate).

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SkillPackageDefinition } from "@cinatra-ai/sdk-extensions";
 import { AgentAuthPolicySchema } from "@cinatra-ai/agents/auth-policy";
-import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "@cinatra-ai/agents/auth-policy";
 // Type-only (erased at runtime, so no import cycle with skills-store).
 import type { PersistedSkill, PersistedSkillPackage, SkillLevel } from "./skills-store";
 
@@ -92,6 +92,62 @@ export function visibilityToLevelScope(
   if (visibility === "admin") return { level: "system", scope: undefined };
   // Fallback — keep personal
   return { level: "personal", scope: ownerUserId };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-token (level, scope) projection (cinatra#1416, AC1).
+// ---------------------------------------------------------------------------
+
+/** Level-precedence rank for the tuple projection. `admin` deliberately ranks
+ * BELOW every positive grant: mixed with real grants it adds nothing the
+ * platform_admin bypass doesn't already give, so it never drives the label. */
+function projectionRank(token: AgentAuthPolicyVisibility): number {
+  if (token === "workspace") return 5;
+  if (token === "org" || token.startsWith("org:")) return 4;
+  if (token.startsWith("team:")) return 3;
+  if (token.startsWith("project:")) return 2;
+  if (token === "owner") return 1;
+  return 0; // admin / unrecognized
+}
+
+/**
+ * Project a canonical visibility SELECTION (the multi-scope token array) onto
+ * the legacy `(level, scope)` tuple — the #1073 contract keeps the tuple a
+ * deterministic LABEL/INDEX HINT, never an enforcement source.
+ *
+ * Rules (cinatra#1416, AC1):
+ *   - the single BROADEST granted level wins, by the precedence
+ *     workspace > organization > team > project > personal;
+ *   - when several tokens share the broadest level, `scope` comes from the
+ *     FIRST token in a stable canonical sort (lexicographic ascending on the
+ *     token string — deterministic across writers);
+ *   - removing every grant (an owner-only selection) restores
+ *     `level="personal", scope=ownerUserId`;
+ *   - a selection of EXACTLY `["admin"]` keeps the legacy `system` projection;
+ *     `admin` mixed with real grants never drives the label.
+ *
+ * Single-token selections reproduce `visibilityToLevelScope` exactly, so every
+ * pre-multi-scope writer is behaviour-identical through this function.
+ */
+export function projectSelectionToLevelScope(
+  selection: readonly AgentAuthPolicyVisibility[],
+  ownerUserId: string | undefined,
+): { level: SkillLevel; scope: string | undefined } {
+  const ranked = [...selection].filter((t) => projectionRank(t) > 0);
+  if (ranked.length === 0) {
+    // No positive grant tokens. An admin-only selection keeps the legacy
+    // `system` projection; anything else (empty / unrecognized) restores the
+    // personal baseline.
+    if (selection.length > 0 && selection.every((t) => t === "admin")) {
+      return visibilityToLevelScope("admin", ownerUserId);
+    }
+    return { level: "personal", scope: ownerUserId };
+  }
+  const best = Math.max(...ranked.map(projectionRank));
+  const candidates = ranked
+    .filter((t) => projectionRank(t) === best)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return visibilityToLevelScope(candidates[0]!, ownerUserId);
 }
 
 // ---------------------------------------------------------------------------
