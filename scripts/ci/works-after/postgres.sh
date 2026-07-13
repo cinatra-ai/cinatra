@@ -28,6 +28,16 @@ set -euo pipefail
 # run by the orchestrator's `postgres` arm too when PREV_IMAGE is supplied) +
 # this on-disk-volume major-bump proof — complementary failure modes.
 #
+# GUARDED UPGRADE-FROM proof: this arm models the raw dump/restore-into-a-new-
+# volume SURVIVAL mechanism + the same-mount bare-bump refusal. The GUARDED
+# TRANSACTION around it (matrix-gated eligibility, the ledger begin/commit/
+# rollback, failure injection at each step, the intact-source rollback and the
+# fail-closed interrupted state) — for the concrete cinatra#1417 transitions
+# platform-postgres 17→18 and nango-postgres 15→17 — is the `upgrade-postgres`
+# arm (scripts/ci/works-after/upgrade-postgres.sh), the coordinated pair of
+# scripts/upgrade/postgres-upgrade-major.sh and `cinatra instance db
+# upgrade-major` (cinatra#1422 / cinatra-cli#129).
+#
 # Env: PG_FROM_TAG (default 17-alpine), PG_TO_TAG (default 18-alpine),
 #      SUPABASE_SCHEMA (default cinatra). Uses the candidate-checkout cinatra CLI
 #      from node_modules (@cinatra-ai/cinatra), same as upgrade-proof.sh.

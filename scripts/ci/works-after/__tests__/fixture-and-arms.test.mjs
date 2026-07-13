@@ -72,21 +72,21 @@ test("committed published marker's oasSha256 matches the OAS bytes", () => {
   assert.equal(marker.packageName, "@cinatra-works-after/echo-proof");
 });
 
-test("orchestrator declares exactly the eight designed arms", () => {
+test("orchestrator declares exactly the nine designed arms", () => {
   const orch = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after-proof.sh"), "utf8");
   const m = orch.match(/ALL_ARMS="([^"]+)"/);
   assert.ok(m, "could not find ALL_ARMS in the orchestrator");
   const arms = m[1].split(/\s+/).sort();
-  // six fresh-init arms (cinatra#352) + the two upgrade-from arms (cinatra#1421/#1422)
+  // six fresh-init arms (cinatra#352) + the three upgrade-from arms (cinatra#1421/#1422)
   assert.deepEqual(
     arms,
-    ["graphiti", "nango", "postgres", "redis", "verdaccio", "wayflow", "upgrade-redis", "upgrade-mariadb"].sort(),
+    ["graphiti", "nango", "postgres", "redis", "verdaccio", "wayflow", "upgrade-redis", "upgrade-mariadb", "upgrade-postgres"].sort(),
   );
 });
 
 test("each arm script exists and is referenced by the orchestrator", () => {
   const armsDir = resolve(REPO_ROOT, "scripts/ci/works-after");
-  for (const arm of ["redis", "verdaccio", "nango", "wayflow", "graphiti", "postgres", "upgrade-redis", "upgrade-mariadb"]) {
+  for (const arm of ["redis", "verdaccio", "nango", "wayflow", "graphiti", "postgres", "upgrade-redis", "upgrade-mariadb", "upgrade-postgres"]) {
     assert.ok(existsSync(resolve(armsDir, `${arm}.sh`)), `missing arm script ${arm}.sh`);
   }
 });
