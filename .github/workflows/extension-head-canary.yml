@@ -6,7 +6,7 @@
 # commits. This workflow is the deliberate counterweight: it tracks the
 # companion repos' branch TIPS on a schedule and surfaces upcoming breakage
 # EARLY — a red run here means "land a dev-lock bump PR soon"
-# (docs/extension-clone-pinning.md), never "main is broken".
+# (docs/internals/contracts/extension-clone-pinning.md), never "main is broken".
 #
 # NON-GATING BY DESIGN: not a required status check, runs on a schedule (plus
 # manual dispatch) against the default branch — it must never block a merge.

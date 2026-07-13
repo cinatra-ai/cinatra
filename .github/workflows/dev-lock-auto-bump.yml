@@ -2,7 +2,7 @@
 #
 # The floating-HEAD canary (extension-head-canary.yml) only REPORTS when
 # companion tips drift past the committed pins; landing the bump used to be a
-# purely manual one-PR recipe (docs/extension-clone-pinning.md). This workflow
+# purely manual one-PR recipe (docs/internals/contracts/extension-clone-pinning.md). This workflow
 # runs that exact recipe on a schedule and maintains ONE rolling bump PR:
 #   1. regenerate cinatra-dev-extensions.lock.json — the NON-required universe
 #      only; cinatra-required-extensions.lock.json stays a deliberate human
@@ -223,7 +223,7 @@ jobs:
           git checkout -B auto/dev-lock-bump
           xargs git add -- < /tmp/recipe-files.txt
           git commit -m "$title" \
-            -m "$(printf 'Scheduled re-pin of the non-required companion universe to current branch tips (docs/extension-clone-pinning.md). The full bump recipe in one commit: dev lock + pnpm-lock.yaml + regenerated maps.\n\nPin changes:\n%s' "$(cat /tmp/pin-changes.md)")"
+            -m "$(printf 'Scheduled re-pin of the non-required companion universe to current branch tips (docs/internals/contracts/extension-clone-pinning.md). The full bump recipe in one commit: dev lock + pnpm-lock.yaml + regenerated maps.\n\nPin changes:\n%s' "$(cat /tmp/pin-changes.md)")"
 
           # Idempotency: if the remote rolling branch already holds this
           # exact TREE (identical pins + lockfile + maps + everything else),
@@ -242,7 +242,7 @@ jobs:
           fi
 
           {
-            echo "Automated rolling dev-lock bump, opened by \`.github/workflows/dev-lock-auto-bump.yml\` — see \`docs/extension-clone-pinning.md\` for the recipe and the lock partition."
+            echo "Automated rolling dev-lock bump, opened by \`.github/workflows/dev-lock-auto-bump.yml\` — see \`docs/internals/contracts/extension-clone-pinning.md\` for the recipe and the lock partition."
             echo ""
             echo "The full bump recipe in one commit: \`cinatra-dev-extensions.lock.json\` + \`pnpm-lock.yaml\` + regenerated \`src/lib/generated\` maps. This PR's own CI run is the integration test for the new pins. The branch is force-updated from the current main head on each scheduled run while the PR is open — review and merge it like any deliberate bump PR."
             echo ""

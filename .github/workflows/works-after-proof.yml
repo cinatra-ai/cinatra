@@ -116,7 +116,7 @@ jobs:
               - 'docker-compose.dev.yml'
               - 'Dockerfile'
               - 'docker/**'
-              - 'docs/upgrade-track.md'
+              - 'docs/internals/workflows/upgrade-track.md'
               - 'pnpm-workspace.yaml'
               - 'pnpm-lock.yaml'
               - 'package.json'

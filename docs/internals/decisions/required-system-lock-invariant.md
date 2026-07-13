@@ -41,7 +41,7 @@ What is the law, and what is incidental:
   set — one pinned entry per `extensions` package — so prod can acquire
   every required package from SHA-pinned source. The two locks are a disjoint
   partition (the dev lock must never carry a required package); see
-  [extension-clone-pinning.md](../../extension-clone-pinning.md).
+  [extension-clone-pinning.md](../contracts/extension-clone-pinning.md).
 - **INCIDENTAL (true today, may change):** that `systemExtensions` happens to
   *equal* (not merely be a subset of) `extensions`, and that both equal
   **8**. The first required-but-not-system extension makes the sets diverge in

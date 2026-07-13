@@ -22,7 +22,7 @@
 # WAYFLOWCORE_VERSION=<next>) and run the works-after wayflow proof against it.
 # The DEFAULTS are the current production pins, so a plain `docker build` matches
 # what main ships and is green on the works-after wayflow proof. See
-# docs/upgrade-track.md.
+# docs/internals/workflows/upgrade-track.md.
 #
 # Wayflow major-upgrade lane (cinatra#354): bumped the Python runtime major
 # 3.11→3.14-slim and moved the wayflow deps to the current upstream release
