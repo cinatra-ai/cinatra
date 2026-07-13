@@ -34,6 +34,13 @@ vi.mock("@/lib/better-auth-oauth-client", () => ({
 vi.mock("@cinatra-ai/google-oauth-connection", () => ({
   getGoogleOAuthStatus: vi.fn(async () => ({ status: "connected" })),
 }));
+// The WordPress widget-auth host service (its read() returns the generated
+// credential pair or null; the resolver returns null when the owning connector
+// is not installed/active). Mocked so the readiness import stays light and each
+// test can drive the credential state.
+vi.mock("@/lib/widget-auth-provider", () => ({
+  resolveWordPressWidgetAuth: vi.fn(async () => null),
+}));
 
 // Manifest-resolved connector modules — the probe consumes each module's
 // status export through the generated entry-module map.
@@ -54,6 +61,7 @@ import {
   getConnectorRegistryEntryBySlug,
   listConnectorRegistryEntries,
 } from "@/lib/connectors-registry.server";
+import { resolveWordPressWidgetAuth } from "@/lib/widget-auth-provider";
 
 const CTX = { userId: "user-1" };
 
@@ -93,6 +101,31 @@ describe("built-in connector readiness probes", () => {
       connected: false,
       connectedLabel: undefined,
     });
+  });
+
+  it("the wordpress-assistant widget probe reflects generated credentials", async () => {
+    // ask-6: this connector's OWN readiness is whether its widget credentials
+    // (API key + webhook secret) have been generated — the one thing its Setup
+    // tab controls. It seeds both the /connectors grid badge and the host
+    // Connection status card on the Setup tab.
+    const wp = getConnectorRegistryEntryBySlug("wordpress-assistant-connector");
+    expect(wp).toBeDefined();
+    const mocked = vi.mocked(resolveWordPressWidgetAuth);
+
+    // credentials generated → connected
+    mocked.mockResolvedValueOnce({
+      read: () => ({ apiKey: "k", webhookSecret: "s", generatedAt: "t" }),
+      generate: vi.fn(),
+    });
+    await expect(wp!.readinessProbe(CTX)).resolves.toEqual({ connected: true });
+
+    // no credentials yet → not connected
+    mocked.mockResolvedValueOnce({ read: () => null, generate: vi.fn() });
+    await expect(wp!.readinessProbe(CTX)).resolves.toEqual({ connected: false });
+
+    // connector not installed / no unique trusted owner (resolver null) → not connected
+    mocked.mockResolvedValueOnce(null);
+    await expect(wp!.readinessProbe(CTX)).resolves.toEqual({ connected: false });
   });
 
   it("every registry entry carries a manifest-resolved vendor + setup href", () => {
