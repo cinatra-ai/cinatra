@@ -94,7 +94,13 @@ export function NewProjectForm({ teams, organizations, action, initialError }: N
         if (statusCode === 403) {
           toast.error("You don't have permission to create a project at this ownership level.");
         } else {
-          toast.error("Could not create project. Try again — if it keeps failing, the database may be unreachable.");
+          // Known server-action failures (validation, team/org membership,
+          // permission-denied) arrive via a `?error=` redirect and are surfaced
+          // from `initialError` on mount with accurate copy — they never reach
+          // this catch. What lands here is an UNEXPECTED server-side throw, so
+          // keep the copy generic and mention connectivity only as a
+          // possibility, not a diagnosis.
+          toast.error("Could not create the project. Please try again — if it keeps failing, the service may be temporarily unavailable.");
         }
       }
     });

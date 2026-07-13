@@ -64,6 +64,16 @@ describe("NewProjectForm client component", () => {
     expect(typeof Mod.NewProjectForm).toBe("function");
   });
 
+  it("reserves DB-unreachable phrasing for genuine failures — no definitive DB claim in the catch (cinatra#1499 AC5)", () => {
+    // The old copy asserted "the database may be unreachable" as the diagnosis
+    // for ANY server-action throw — including the #1499 column error. Known
+    // failures now route through a `?error=` redirect (accurate copy); the
+    // catch-path fallback must not diagnose a DB outage it cannot verify.
+    expect(SOURCE).not.toContain("the database may be unreachable");
+    // Permission denials still get an accurate, permission-specific message.
+    expect(SOURCE).toContain("You don't have permission to create a project at this ownership level.");
+  });
+
   it("contains the required copy strings verbatim", () => {
     expect(SOURCE).toContain("Project name");
     expect(SOURCE).toContain("Description");
