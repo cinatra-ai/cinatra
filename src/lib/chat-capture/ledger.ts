@@ -13,7 +13,7 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
-/** Mirrored by the CHECK constraint in chat-capture-schema.ts / core__0039
+/** Mirrored by the CHECK constraint in chat-capture-schema.ts / core__0042
  * (sync pinned by chat-capture-schema.test.ts). */
 export const CHAT_CAPTURE_TURN_STATUSES = [
   "claimed",

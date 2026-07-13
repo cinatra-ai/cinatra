@@ -1,4 +1,4 @@
-// core__0039 — chat-capture turn ledger (cinatra#1367, epic #1358 S9 —
+// core__0042 — chat-capture turn ledger (cinatra#1367, epic #1358 S9 —
 // lifecycle-only slice; the assistant→agent target-mapping arm is deferred to
 // the assistants epic #1037).
 //
@@ -18,7 +18,7 @@
 // Nonterminal/re-claimable: 'claimed', 'classifying', 'error'; terminal:
 // every 'skipped_*' + 'captured'.
 //
-// SEQ COORDINATION: renumbered to core__0039 — 0037 landed as artifact-uninstall (#1474), 0038 is claimed by
+// SEQ COORDINATION: renumbered to core__0042 — 0037 landed as artifact-uninstall (#1474), 0038 is claimed by
 // concurrently-open sibling lanes at authoring time; the runner tolerates
 // sequence gaps (the 0021/0023 precedent) if either lane lands elsewhere.
 //
