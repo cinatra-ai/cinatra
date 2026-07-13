@@ -43,15 +43,6 @@ import { Badge } from "@/components/ui/badge";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { SettingsTabNav } from "@/components/settings-tab-nav";
-// Connector-contributed skills-settings tabs resolve from the generated
-// manifest map (lazy/guarded host-access cutover) — presence-
-// aware, generator-classified loaders; an absent/degraded entry renders an
-// "extension unavailable" note instead of the tab content.
-import {
-  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,
-} from "@/lib/generated/connector-setup-pages";
-import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
-import type { ComponentType } from "react";
 
 export const metadata: Metadata = { title: "Skills Administration" };
 
@@ -59,7 +50,6 @@ const TABS = [
   { value: "library", label: "Library" },
   { value: "autosave", label: "Autosave" },
   { value: "matches", label: "Matches" },
-  { value: "shell", label: "Shell" },
 ];
 
 type Props = {
@@ -79,7 +69,7 @@ export default async function SettingsSkillsPage({ searchParams }: Props) {
     <Main className="min-h-screen">
       <PageHeader
         title="Skills"
-        description="Configure local storage, GitHub sync, autosave, and the sandboxed shell runtime for skill execution."
+        description="Configure local storage, GitHub sync, and autosave for skill execution."
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
@@ -88,18 +78,6 @@ export default async function SettingsSkillsPage({ searchParams }: Props) {
         {tab === "library" && <LibraryTabContent />}
         {tab === "autosave" && <AutosaveTabContent />}
         {tab === "matches" && <MatchesTabContent searchParams={resolved} />}
-        {tab === "shell" && (
-          <>
-            <p className="max-w-[64ch] text-sm leading-[1.55] text-pretty text-muted-foreground">
-              The shell runtime mounts installed skill packages into a sandboxed Docker container that OpenAI can
-              invoke as tools. Each skill exposes a
-              <code className="mx-1 font-mono text-xs">SKILL.md</code>
-              that the model reads to understand its inputs and behavior. Configure the container image, workspace
-              path, and which skills to mount here.
-            </p>
-            <ConnectorSkillsSettingsTabs />
-          </>
-        )}
       </PageContent>
     </Main>
   );
@@ -433,48 +411,5 @@ async function AutosaveTabContent() {
       </p>
       <SkillAutosaveForm initialConfig={autosaveConfig} />
     </div>
-  );
-}
-
-// Render every connector-contributed skills-settings tab from the generated
-// map. Convention: the module exports `SkillsSettingsTabContent` (a server
-// component). Degraded/absent entries (post-build uninstall) render a loud
-// note; a PRESENT module missing the conventional export is a contract bug
-// and throws (fail-loud, mirroring connector-mcp-registration).
-async function ConnectorSkillsSettingsTabs() {
-  const sections = await Promise.all(
-    Object.entries(GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS).map(async ([slug, entry]) => {
-      const loaded = await entry.load();
-      if (isDegradedExtensionLoad(loaded)) {
-        console.warn(
-          `[skills-settings-tabs] "${slug}": optional connector module is absent post-build — ` +
-            `rendering the unavailable note (${loaded.reason})`,
-        );
-        return { slug, Content: null };
-      }
-      const Content = (loaded as { SkillsSettingsTabContent?: ComponentType }).SkillsSettingsTabContent;
-      if (typeof Content !== "function") {
-        throw new Error(
-          `[skills-settings-tabs] "${slug}": module exports no SkillsSettingsTabContent component`,
-        );
-      }
-      return { slug, Content };
-    }),
-  );
-  return (
-    <>
-      {sections.map(({ slug, Content }) =>
-        Content ? (
-          <Content key={slug} />
-        ) : (
-          <Alert key={slug}>
-            <AlertDescription>
-              The {slug} extension is unavailable in this build — its shell settings cannot be
-              shown. Reinstall/rebuild the extension to manage these settings.
-            </AlertDescription>
-          </Alert>
-        ),
-      )}
-    </>
   );
 }

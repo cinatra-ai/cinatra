@@ -32,6 +32,8 @@ set -euo pipefail
 #   redis major:           --arms redis     REDIS_TAG=8-alpine
 #   verdaccio major:       --arms verdaccio VERDACCIO_TAG=…
 #   nango major:           --arms nango     NANGO_SERVER_IMAGE=…
+#   redis engine major (upgrade-from):   --arms upgrade-redis   REDIS_FROM_TAG=… REDIS_TO_TAG=…
+#   mariadb engine major (upgrade-from): --arms upgrade-mariadb MARIADB_FROM_TAG=… MARIADB_TO_TAG=…
 #   full-stack major:      --arms all       <all pins> PREV_IMAGE=… OPENAI_API_KEY=…
 #
 # EXIT CODES
@@ -54,7 +56,7 @@ ORCH="${SCRIPT_DIR}/works-after-proof.sh"
 
 # Keep this list in lockstep with ALL_ARMS in works-after-proof.sh (asserted by
 # the works-after:test static invariants).
-ALL_ARMS="redis verdaccio nango wayflow graphiti postgres"
+ALL_ARMS="redis verdaccio nango wayflow graphiti upgrade-redis upgrade-mariadb postgres"
 
 ARMS="${WORKS_AFTER_GATE_ARMS:-}"
 while [ $# -gt 0 ]; do

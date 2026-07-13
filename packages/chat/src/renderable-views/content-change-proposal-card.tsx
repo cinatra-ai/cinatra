@@ -8,9 +8,17 @@
 // `dangerouslySetInnerHTML` — so a `<script>`-bearing value is inert by
 // construction (the XSS defense this family requires).
 //
-// DISPLAY-ONLY in this slice: the no-reload APPLY (a surface-registered apply
-// capability writing through the CMS MCP integration under OBO) is out of scope
-// (#1214 / #1037 P4.1), so there is no Accept button wired to a write here.
+// APPLY SEMANTICS (Option A — owner decision 2026-07-10, recorded on #1220):
+// the agent already saved the change as a DRAFT during the run through the CMS
+// MCP integration (#1214), so accepting performs NO server write — it refreshes
+// the editor in place to the saved draft. When the payload carries the
+// correlation ids (`proposalId` / `changeSetId`) linking it to that draft, this
+// card shows the applied/refresh affordance: a "draft saved" badge + the
+// refresh explanation, with the ids exposed as data attributes for the S5
+// editor-patch consumer (#1221) to key on. DISPLAY-ONLY here: no interactive
+// control is wired on this surface — the refresh executor lives in the CMS
+// widgets (S5), exactly like the change_history card's display-only `undoable`
+// badge.
 // ---------------------------------------------------------------------------
 
 import type { ContentChangeProposalView } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -29,6 +37,10 @@ export function ContentChangeProposalCard({
   const heading =
     view.title ?? (view.fields.length > 0 ? "Proposed changes" : "Content update");
   const target = targetLabel(view);
+  // Option A: a correlation id means the agent already saved this change as a
+  // draft during the run — show the applied/refresh affordance.
+  const draftCorrelated =
+    view.proposalId !== undefined || view.changeSetId !== undefined;
 
   return (
     <div
@@ -68,6 +80,23 @@ export function ContentChangeProposalCard({
             </li>
           ))}
         </ul>
+      )}
+
+      {draftCorrelated && (
+        <div
+          className="mt-3 flex items-center gap-2 border-t border-line pt-2"
+          data-affordance="applied-refresh"
+          data-proposal-id={view.proposalId}
+          data-change-set-id={view.changeSetId}
+        >
+          <span className="shrink-0 rounded border border-line px-1.5 py-0.5 text-badge-2xs uppercase tracking-wide text-muted-foreground">
+            draft saved
+          </span>
+          <span className="text-xs text-muted-foreground">
+            Already saved as a draft — applying refreshes the editor to it. No
+            additional write is performed.
+          </span>
+        </div>
       )}
     </div>
   );

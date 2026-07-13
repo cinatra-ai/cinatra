@@ -349,6 +349,7 @@
       "@cinatra-ai/asset-transcript/plugin": ["./packages/asset-transcript/src/plugin/definition.ts"],
       "@cinatra-ai/skills": ["./packages/skills/src/index.ts"],
       "@cinatra-ai/skills/actions": ["./packages/skills/src/actions.ts"],
+      "@cinatra-ai/skills/skill-packages": ["./packages/skills/src/skill-packages.ts"],
       "@cinatra-ai/skills/store": ["./packages/skills/src/skills-store.ts"],
       "@cinatra-ai/skills/pages": ["./packages/skills/src/plugin-pages.tsx"],
       "@cinatra-ai/gemini-connector": ["./extensions/cinatra-ai/gemini-connector/src/index.ts"],

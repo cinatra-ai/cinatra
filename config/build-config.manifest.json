@@ -337,6 +337,7 @@
     { "alias": "@cinatra-ai/asset-transcript/plugin", "target": "./packages/asset-transcript/src/plugin/definition.ts" },
     { "alias": "@cinatra-ai/skills", "target": "./packages/skills/src/index.ts" },
     { "alias": "@cinatra-ai/skills/actions", "target": "./packages/skills/src/actions.ts" },
+    { "alias": "@cinatra-ai/skills/skill-packages", "target": "./packages/skills/src/skill-packages.ts" },
     { "alias": "@cinatra-ai/skills/store", "target": "./packages/skills/src/skills-store.ts" },
     { "alias": "@cinatra-ai/skills/pages", "target": "./packages/skills/src/plugin-pages.tsx" },
     { "alias": "@cinatra-ai/gemini-connector", "target": "./extensions/cinatra-ai/gemini-connector/src/index.ts" },

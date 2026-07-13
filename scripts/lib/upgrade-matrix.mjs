@@ -18,7 +18,7 @@ export const MATRIX_PATH = join(HERE, "..", "..", "docs", "architecture", "upgra
 // consumer in another repo (cinatra-cli) vendors/reads the matrix and pins its
 // own copy of these two constants; assertMatrixRevision below is how both sides
 // stay fail-closed on skew.
-export const MATRIX_REVISION = 1;
+export const MATRIX_REVISION = 2;
 export const MATRIX_SCHEMA_MAJOR = 1;
 
 /** Load and JSON-parse the matrix (no schema validation — that is the check script's job). */

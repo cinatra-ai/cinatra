@@ -66,9 +66,12 @@ const innerHandlersMock = vi.hoisted(() => ({
 }));
 vi.mock("../mcp/handlers", () => innerHandlersMock);
 
-// Mock the store import for slug-collision check.
+// Mock the store import for the slug-collision check AND the post-publish
+// template-id lookup (cinatra#1327 — approveAndPublishCreationRequest resolves
+// the published template's id so the app layer can persist the access scope).
 const storeReadMock = vi.hoisted(() => ({
   readAgentTemplates: vi.fn(async () => ({ items: [], total: 0 })),
+  readAgentTemplateByPackageName: vi.fn(async () => ({ id: "tmpl-1" })),
 }));
 vi.mock("../store", () => storeReadMock);
 
@@ -224,11 +227,26 @@ describe("agent_creation_request handlers", () => {
     it("rejects a non-admin caller with Unauthorized", async () => {
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           NON_ADMIN),
       )) as { error?: string };
       expect(out.error).toMatch(/Unauthorized.*admin/i);
       expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+    });
+
+    it("cinatra#1327 — an approve WITHOUT an access scope is refused BEFORE any state read / CAS / publish (fail-closed, no-bypass)", async () => {
+      // The structural guarantee: no approve-publish path can reach the CAS /
+      // publish without the access decision. Enforced ahead of the state read,
+      // so not even the DB row is loaded. (A reject needs no scope.)
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/access scope is required/i);
+      expect(storeMock.readAgentCreationRequestById).not.toHaveBeenCalled();
+      expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
     });
 
     it("rejects self-approval by default when another admin exists (SoD)", async () => {
@@ -240,7 +258,7 @@ describe("agent_creation_request handlers", () => {
       });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toMatch(/self-approval is disallowed/i);
@@ -264,7 +282,7 @@ describe("agent_creation_request handlers", () => {
       storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toBeUndefined();
@@ -282,7 +300,7 @@ describe("agent_creation_request handlers", () => {
       });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toMatch(/self-approval is disallowed/i);
@@ -303,7 +321,7 @@ describe("agent_creation_request handlers", () => {
       storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toBeUndefined();
@@ -324,7 +342,7 @@ describe("agent_creation_request handlers", () => {
       storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toBeUndefined();
@@ -341,7 +359,7 @@ describe("agent_creation_request handlers", () => {
       });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "OLD-HASH" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "OLD-HASH", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toMatch(/stale/i);
@@ -394,7 +412,7 @@ describe("agent_creation_request handlers", () => {
 
       await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       );
       expect(handlerMap.agent_source_write).toHaveBeenCalled();
@@ -431,7 +449,7 @@ describe("agent_creation_request handlers", () => {
       } as any);
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toMatch(/package-name collision/i);
@@ -511,7 +529,7 @@ describe("agent_creation_request handlers", () => {
       } as any);
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
-          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
           ADMIN),
       )) as { error?: string };
       expect(out.error).toMatch(/compile/i);

@@ -10,6 +10,8 @@ import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
 import { installSkillPackageFromGitHub } from "./github";
 import { installSkillPackageFromVerdaccio } from "./verdaccio";
 import { uninstallSkillPackage } from "./skills-store";
+// Explicit catalog rebuild at skill-extension lifecycle points (cinatra#1364).
+import { rebuildSkillsCatalog } from "./skill-packages";
 import { resolveSkillPackageSource } from "./skill-package-source";
 import { listInstalledSkills, type SkillManifest } from "./skills-registry";
 import {
@@ -137,6 +139,9 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
           orgId: actor.orgId ?? null,
         });
       }
+      // Explicit lifecycle rebuild (cinatra#1364) BEFORE matching, so matching
+      // evaluates the just-installed package's merged catalog rows.
+      await rebuildSkillsCatalog({ reason: "skill-extension-install" });
       await matchAgentsToSkills();
     },
 
@@ -152,12 +157,16 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
           orgId: actor.orgId ?? null,
         });
       }
+      await rebuildSkillsCatalog({ reason: "skill-extension-update" });
       await matchAgentsToSkills();
     },
 
     async uninstall(ref: PackageRef, _actor: Actor): Promise<void> {
       const source = resolveSkillPackageSource(ref);
       await uninstallSkillPackage(source.packageId);
+      // Explicit lifecycle rebuild (cinatra#1364): reconcile the catalog after
+      // the uninstall's disk + row removal.
+      await rebuildSkillsCatalog({ reason: "skill-extension-uninstall" });
       const { matches } = await readAgentSkillMatches();
       // trailing colon prevents partial-name collision (e.g. github:owner/repo vs github:owner/repo-fork)
       const filtered = matches.filter(

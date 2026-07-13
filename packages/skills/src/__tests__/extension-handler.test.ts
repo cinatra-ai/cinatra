@@ -13,11 +13,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Hoisted mocks — registered BEFORE module-under-test imports
 // ---------------------------------------------------------------------------
 
-const { installMock, matchMock, uninstallMock, readMatchesMock, saveMatchesMock } =
+const { installMock, matchMock, uninstallMock, rebuildMock, readMatchesMock, saveMatchesMock } =
   vi.hoisted(() => ({
     installMock: vi.fn().mockResolvedValue(undefined),
     matchMock: vi.fn().mockResolvedValue(undefined),
     uninstallMock: vi.fn().mockResolvedValue(undefined),
+    rebuildMock: vi.fn().mockResolvedValue({ skillPackages: [], skills: [] }),
     readMatchesMock: vi.fn().mockResolvedValue({
       matches: [
         {
@@ -43,6 +44,10 @@ const { installMock, matchMock, uninstallMock, readMatchesMock, saveMatchesMock 
 vi.mock("server-only", () => ({}));
 vi.mock("../github", () => ({ installSkillPackageFromGitHub: installMock }));
 vi.mock("../skills-store", () => ({ uninstallSkillPackage: uninstallMock }));
+// Explicit catalog rebuild at lifecycle points (cinatra#1364). Mocked so the
+// handler tests stay focused on dispatch; the real rebuild's lock/fence
+// behavior is pinned by __tests__/catalog-rebuild-lock.test.ts.
+vi.mock("../skill-packages", () => ({ rebuildSkillsCatalog: rebuildMock }));
 vi.mock("@/lib/agents-store", () => ({
   matchAgentsToSkills: matchMock,
   readAgentSkillMatches: readMatchesMock,
@@ -88,6 +93,15 @@ describe("createSkillExtensionHandler", () => {
     expect(installMock.mock.invocationCallOrder[0]).toBeLessThan(
       matchMock.mock.invocationCallOrder[0]
     );
+    // Explicit catalog rebuild (cinatra#1364): after the install, BEFORE
+    // matching, so matching evaluates the merged catalog rows.
+    expect(rebuildMock).toHaveBeenCalledTimes(1);
+    expect(rebuildMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      installMock.mock.invocationCallOrder[0]
+    );
+    expect(rebuildMock.mock.invocationCallOrder[0]).toBeLessThan(
+      matchMock.mock.invocationCallOrder[0]
+    );
   });
 
   it("update() calls installSkillPackageFromGitHub (upsert) and then matchAgentsToSkills", async () => {
@@ -114,6 +128,11 @@ describe("createSkillExtensionHandler", () => {
     // uninstall must remove catalog entries before reconciling the matches blob
     expect(uninstallMock.mock.invocationCallOrder[0]).toBeLessThan(
       saveMatchesMock.mock.invocationCallOrder[0]
+    );
+    // Explicit catalog rebuild (cinatra#1364) after the uninstall's removal.
+    expect(rebuildMock).toHaveBeenCalledTimes(1);
+    expect(rebuildMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      uninstallMock.mock.invocationCallOrder[0]
     );
   });
 });

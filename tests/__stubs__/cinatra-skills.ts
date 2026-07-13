@@ -74,3 +74,20 @@ export function readLocalPackageSkillContent(
 
   return null;
 }
+
+// Catalog read/rebuild split (cinatra#1364): src/lib/extensions-dev-watcher.ts
+// (and other boot wiring) imports the explicit rebuild + pure snapshot from
+// the barrel. No-op stubs — tests that assert rebuild behavior vi.mock the
+// package themselves.
+export async function rebuildSkillsCatalog(_options?: {
+  reason?: string;
+}): Promise<{ skillPackages: unknown[]; skills: unknown[] }> {
+  return { skillPackages: [], skills: [] };
+}
+
+export async function readSkillsCatalogSnapshot(): Promise<{
+  skillPackages: unknown[];
+  skills: unknown[];
+}> {
+  return { skillPackages: [], skills: [] };
+}

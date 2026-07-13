@@ -13,6 +13,10 @@ export const validRenderableViewFixtures = {
     schemaVersion: 1,
     surface: "wordpress",
     postId: "42",
+    // Option A correlation ids: the draft is already saved when the card
+    // appears; the ids link the card to that draft (applied/refresh affordance).
+    proposalId: "wp-42-prop-1",
+    changeSetId: "rev-311",
     rich: false,
     fields: [
       { field: "title", before: "Old title", after: "New title" },

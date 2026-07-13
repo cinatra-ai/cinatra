@@ -73,6 +73,14 @@ wa_host_port() {
   docker port "$1" "$2/tcp" 2>/dev/null | head -1 | sed -E 's/.*:([0-9]+)$/\1/'
 }
 
+# wa_volume_digest <volume> — deterministic content digest of a named volume
+# taken COLD (read-only mount, no server): sorted per-file sha256 plus the
+# sorted entry list, folded once more. The upgrade-from arms use it to prove
+# byte-level "the source volume was not touched" across an injected failure.
+wa_volume_digest() {
+  docker run --rm -v "$1:/wa-vol:ro" alpine     sh -ec 'cd /wa-vol && { find . -type f | sort | xargs -r sha256sum; find . | sort; } | sha256sum' | awk '{print $1}'
+}
+
 # wa_throwaway_b64key — a 32-byte base64 key minted per call (Nango/Neo4j/etc.).
 # NEVER an ops secret; the harness mints its own throwaway crypto material.
 wa_throwaway_b64key() { node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))'; }
