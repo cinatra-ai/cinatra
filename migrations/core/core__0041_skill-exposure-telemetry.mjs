@@ -1,4 +1,4 @@
-// core__0038 — skill exposure telemetry + deprecation-candidate flag
+// core__0041 — skill exposure telemetry + deprecation-candidate flag
 // (cinatra#1368, epic #1358 — S10 efficacy loop).
 //
 // Additive, ledger-recorded so the operator-upgrade path stays aligned with the
