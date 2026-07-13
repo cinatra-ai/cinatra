@@ -89,9 +89,14 @@ export type UpdatePlanPreviewDeps = {
     rootAction: "update";
   }) => Promise<DependencyInstallPlan>;
   /**
-   * Best-effort display metadata for one exact pin (packument read on the
-   * dev/non-gatekept path). Null on any failure — the preview then falls back
-   * to the package name; a cosmetic read must never fail the dry-run.
+   * Display + ABI metadata for one exact pin (packument read on the
+   * dev/non-gatekept path). Returns `null` ONLY when the read FAILED; a
+   * successful read of a range-less / name-less manifest returns an object with
+   * the missing fields `null`. The two callers treat the `null` (failed-read)
+   * case differently by design: the ROOT ABI read fails CLOSED on it (an
+   * unreadable manifest cannot be proven ABI-compatible — see the ABI gate
+   * below), whereas the per-member DISPLAY reads stay cosmetic (a null there
+   * falls back to the package name and never fails the dry-run).
    */
   fetchDisplayInfo: (
     packageName: string,
@@ -135,11 +140,22 @@ function resolveLiveRow(
       (r.status === "active" || r.status === "locked") &&
       r.isDefault !== false,
   );
-  return (
-    live.find((r) => (r.organizationId ?? null) === (orgId ?? null)) ??
-    live.find((r) => (r.organizationId ?? null) === null) ??
-    null
-  );
+  // Fail CLOSED on cross-owner ambiguity exactly like the planner's
+  // `defaultLiveRow` (extension-dependency-plan.ts): MORE THAN ONE default at a
+  // scope tier is not a row this preview may pick arbitrarily — the apply path
+  // returns null and refuses on that ambiguity, so the preview must too or it
+  // would report an arbitrary owner's `fromVersion` and succeed where apply
+  // refuses (codex round-3 — preview↔apply row-identity parity). Only a scope
+  // tier with EXACTLY one default resolves; an empty org tier falls through to
+  // the platform tier, an AMBIGUOUS one does not.
+  const pickExactlyOne = (candidates: InstalledExtension[]): InstalledExtension | null =>
+    candidates.length === 1 ? candidates[0]! : null;
+  const orgKey = orgId ?? null;
+  if (orgKey !== null) {
+    const atOrg = live.filter((r) => (r.organizationId ?? null) === orgKey);
+    if (atOrg.length > 0) return pickExactlyOne(atOrg);
+  }
+  return pickExactlyOne(live.filter((r) => (r.organizationId ?? null) === null));
 }
 
 /**
@@ -290,7 +306,11 @@ async function makeDefaultDeps(): Promise<UpdatePlanPreviewDeps> {
           typeof cinatra?.sdkAbiRange === "string" ? cinatra.sdkAbiRange : null;
         return { displayName, sdkAbiRange };
       } catch {
-        return null; // cosmetic — never fail the dry-run over a display read
+        // Signal a FAILED read (distinct from a successful read of a
+        // range-less manifest, which returns fields set to null): the ROOT ABI
+        // gate fails closed on this, the per-member display reads fall back to
+        // the package name.
+        return null;
       }
     },
     checkRequiredPin: (input) => checkRequiredExtensionVersionPin(input),
@@ -372,9 +392,24 @@ export async function computeExtensionUpdatePlanPreview(
           `gatekept deployment — refusing (no ABI verdict available)`,
       );
     }
+    // Dev path: read the target's DECLARED ABI from its packument. A `null`
+    // return means the read FAILED — never a genuine "no range" (a successful
+    // read of a range-less manifest returns an object with `sdkAbiRange: null`).
+    // The ABI gate FAILS CLOSED on an unreadable manifest: an "unknown"
+    // fallthrough would let an incompatible target pass the preview while apply
+    // reads the materialized manifest and fails closed (codex round-3 —
+    // preview↔apply ABI parity). A genuine undeclared range (`sdkAbiRange:null`)
+    // still reads "unknown" → lenient, exactly like the activation gate.
     const info = await deps.fetchDisplayInfo(packageName, target);
-    abiRange = info?.sdkAbiRange ?? null;
-    fetchedRootDisplay = info?.displayName ?? null;
+    if (info === null) {
+      throw new UpdatePlanRefusal(
+        "unavailable-version",
+        `update-plan: could not read ${packageName}@${target} manifest to verify ABI ` +
+          `compatibility — refusing (fail closed rather than assume compatible)`,
+      );
+    }
+    abiRange = info.sdkAbiRange;
+    fetchedRootDisplay = info.displayName;
   }
   if (deriveExtensionCompatState(abiRange) === "incompatible") {
     throw new UpdatePlanRefusal(

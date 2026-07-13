@@ -321,4 +321,38 @@ describe("computeExtensionUpdatePlanPreview — guards (outcomes 4/5)", () => {
       root: { packageName: ROOT, version: "0.1.9" },
     });
   });
+
+  it("dev path: FAILS CLOSED when the target manifest ABI read fails (info null) — outcome 5", async () => {
+    // Explicit target NOT covered by the read model → abiRange undefined → the
+    // dev-path packument read decides ABI; a null (failed) read must refuse,
+    // never assume compatible (would diverge from apply, which fails closed).
+    const deps = makeDeps({ fetchDisplayInfo: async () => null });
+    await expectRefusal(deps, "unavailable-version", { targetVersion: "0.1.9" });
+    expect(deps.plan).not.toHaveBeenCalled();
+  });
+
+  it("dev path: a genuine UNDECLARED range (info present, sdkAbiRange null) stays lenient — plans", async () => {
+    // A successful read of a range-less manifest is "unknown" → allowed exactly
+    // like the activation gate; it must NOT be conflated with the failed read.
+    const deps = makeDeps({
+      fetchDisplayInfo: async () => ({ displayName: "Research Assistant", sdkAbiRange: null }),
+    });
+    const preview = await computeExtensionUpdatePlanPreview(
+      { packageName: ROOT, targetVersion: "0.1.9", orgId: null },
+      deps,
+    );
+    expect(deps.plan).toHaveBeenCalledTimes(1);
+    expect(preview.toVersion).toBe("0.1.9");
+  });
+
+  it("refuses an AMBIGUOUS live default (two defaults at one scope) — matches the planner's fail-closed row resolution", async () => {
+    // The apply path's `defaultLiveRow` returns null (refuses) on >1 default at
+    // a scope tier; the preview must not pick an arbitrary owner's fromVersion
+    // and succeed where apply refuses (preview↔apply row-identity parity).
+    const deps = makeDeps({
+      readInstalledRows: async () => [row(ROOT, "0.1.2"), row(ROOT, "0.1.3")],
+    });
+    await expectRefusal(deps, "unrecoverable");
+    expect(deps.plan).not.toHaveBeenCalled();
+  });
 });
