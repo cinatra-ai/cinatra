@@ -296,7 +296,7 @@ END $$` },
     // Skill lifecycle (cinatra#1361, epic #1358). Custom/personal skills gain
     // typed lifecycle columns on the EXISTING `skills` table; extension skills
     // stay DERIVED (NULL lifecycle_state — precedence matrix in
-    // docs/skills-lifecycle.md; no second authority). The ADD CONSTRAINT
+    // docs/internals/architecture/skills-lifecycle.md; no second authority). The ADD CONSTRAINT
     // statements are written as literal guarded SQL (not via the helper) so the
     // schema-migration gate SEES the destructive constraint change and demands
     // the core__0029 artifact. Idempotent + additive-safe on a populated table:

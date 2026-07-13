@@ -7,12 +7,12 @@ store, and defines who may drive a transition.
 
 The machine-readable authority is the pure policy — co-located in the
 already-reachable skill-source leaf
-[`packages/skills/src/skill-source.ts`](../packages/skills/src/skill-source.ts)
+[`packages/skills/src/skill-source.ts`](../../../packages/skills/src/skill-source.ts)
 (the "Skill lifecycle policy" section), with the DB-writing transition mechanism
-in [`packages/skills/src/lifecycle-store.ts`](../packages/skills/src/lifecycle-store.ts)
+in [`packages/skills/src/lifecycle-store.ts`](../../../packages/skills/src/lifecycle-store.ts)
 — the tables below document it; the code is the source of truth. The DDL lives in
 `buildCreateStoreSchemaQueries` (the `skills` columns) +
-[`src/lib/skill-lifecycle-schema.ts`](../src/lib/skill-lifecycle-schema.ts) (the
+[`src/lib/skill-lifecycle-schema.ts`](../../../src/lib/skill-lifecycle-schema.ts) (the
 new tables + immutability trigger), with the migration artifact
 `migrations/core/core__0029_skill-lifecycle.mjs`.
 
@@ -126,13 +126,13 @@ single mutable `skills.active_revision_id` pointer. A1 recorded a revision's
 content **digest** but not the content itself; A2 adds the durable
 **authoritative content** and a first-class **rollback** revision. The code is
 the source of truth — the pure builders in
-[`packages/skills/src/skill-source.ts`](../packages/skills/src/skill-source.ts),
+[`packages/skills/src/skill-source.ts`](../../../packages/skills/src/skill-source.ts),
 the DB write primitives in
-[`src/lib/skill-lifecycle-store.ts`](../src/lib/skill-lifecycle-store.ts) +
+[`src/lib/skill-lifecycle-store.ts`](../../../src/lib/skill-lifecycle-store.ts) +
 `applySkillRollbackInDatabase` in
-[`src/lib/database.ts`](../src/lib/database.ts), and the orchestrator
+[`src/lib/database.ts`](../../../src/lib/database.ts), and the orchestrator
 `rollbackCustomSkill` in
-[`packages/skills/src/skills-store.ts`](../packages/skills/src/skills-store.ts).
+[`packages/skills/src/skills-store.ts`](../../../packages/skills/src/skills-store.ts).
 
 ## The authority contract
 
@@ -277,7 +277,7 @@ engine itself reaches (github auto-sync, scanner, prefill enqueue) — the
 single-flight would deadlock on its own promise.
 
 **Incremental migration.** Call sites move to the snapshot read one by one,
-tracked per site in `docs/architecture/skills-catalog-read-inventory.json`
+tracked per site in `config/skills-catalog-read-inventory.json`
 (update it in the same PR as any migration). Read-merge-REPLACE write flows and
 the hot bridge/matching paths stay on the legacy read until their own slices;
 deleting the legacy path is S8's parity-gated last step. The A2 stale-clobber

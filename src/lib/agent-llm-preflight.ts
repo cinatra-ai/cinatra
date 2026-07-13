@@ -2,7 +2,7 @@ import "server-only";
 
 // Run-enqueue LLM-provider availability preflight (cinatra#1062, wave 7 of
 // #1055). The ratified LLM-provider dependency vocabulary is the OAS
-// `metadata.cinatra.llm` block (docs/llm-provider-dependency-vocabulary.md); this
+// `metadata.cinatra.llm` block (docs/internals/contracts/llm-provider-dependency-vocabulary.md); this
 // module surfaces an agent's declared provider requirement at run-enqueue,
 // before the run reaches its `/api/llm-bridge` step.
 //

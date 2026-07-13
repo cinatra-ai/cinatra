@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cinatra.ai/schemas/upgrade-matrix-1.json",
   "title": "Cinatra stateful-service upgrade matrix",
-  "description": "Machine-readable, versioned source->target upgrade matrix for every stateful service in docker-compose.yml. Single source of truth shared by cinatra-cli (preflight + `db upgrade-major`) and the cinatra works-after harness (upgrade-from arm). See docs/architecture/stateful-service-inventory.md for the human-readable inventory and rationale. Generated/checked by scripts/check-upgrade-matrix.mjs against the live compose file (fail-closed completeness).",
+  "description": "Machine-readable, versioned source->target upgrade matrix for every stateful service in docker-compose.yml. Single source of truth shared by cinatra-cli (preflight + `db upgrade-major`) and the cinatra works-after harness (upgrade-from arm). See docs/internals/architecture/stateful-service-inventory.md for the human-readable inventory and rationale. Generated/checked by scripts/check-upgrade-matrix.mjs against the live compose file (fail-closed completeness).",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(import.meta.url), "../..");
 const ROOTS = ["src", "packages"];
-const OUT = join(ROOT, "docs/architecture/postgres-sync-inventory.json");
+const OUT = join(ROOT, "config/postgres-sync-inventory.json");
 
 // Direct call sites only (not the import, not the definition's `export function`).
 const CALL_RE = /runPostgresQueriesSync\s*\(/g;

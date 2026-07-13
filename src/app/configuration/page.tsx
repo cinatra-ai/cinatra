@@ -83,7 +83,7 @@ const administrationSections = [
     links: [
       {
         label: "Authoring guide",
-        href: "https://github.com/cinatra-ai/cinatra/blob/main/docs/webhooks/authoring-inbound-webhooks.md",
+        href: "https://github.com/cinatra-ai/cinatra/blob/main/docs/internals/workflows/webhooks/authoring-inbound-webhooks.md",
       },
     ],
   },
