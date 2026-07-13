@@ -66,7 +66,7 @@ pnpm works-after:test                        # the fast service-free unit tests
 PYTHON_TAG=3.15-slim pnpm works-after:gate -- --arms wayflow   # e.g. an agent-runtime major
 ```
 
-The six arms (each a standalone script under `scripts/ci/works-after/`):
+The eight arms (each a standalone script under `scripts/ci/works-after/`):
 
 | Arm | What it asserts | Candidate env |
 | --- | --- | --- |
@@ -76,6 +76,8 @@ The six arms (each a standalone script under `scripts/ci/works-after/`):
 | `graphiti` | object projection → store → search round-trip through `graphiti-client.ts`. **Needs a real `OPENAI_API_KEY`** (graphiti does LLM extraction before the Neo4j write, and the image doesn't honor a custom LLM base-URL) — so it is NOT secret-free: it runs in the major lane / `workflow_dispatch` with a key, and SKIPs otherwise | `NEO4J_TAG`, `GRAPHITI_IMAGE`, `OPENAI_API_KEY` |
 | `wayflow` | agent execution over A2A (`message/send` → `completed` task, nonce surfaced) using a committed no-LLM echo-flow fixture, building `docker/wayflow` at candidate pins. (The candidate wayflow runtime is blocking-only — its A2A server does not implement `message/stream`; the SSE streaming surface is a node/stack-layer concern proven by full CI, not this docker arm) | `PYTHON_TAG`, `WAYFLOWCORE_VERSION`, `PYAGENTSPEC_VERSION` |
 | `verdaccio` | publish → install round-trip (mint a throwaway user via the repo's `createNpmUser`, publish `@works-after/proof`, install it back, assert the sentinel), with the real immutability `config.yaml` mounted | `VERDACCIO_TAG` |
+| `upgrade-redis` | UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded redis 7→8 family path (`scripts/upgrade/redis-upgrade-major.sh`) against a data-bearing prior-version AOF volume — positive commit, pre-commit failure injection (lands on the intact source volume with the source ledger entry), post-commit interruption (pending journal retained), fail-closed downgrade/valkey negatives. Source+target images digest-pinned | `REDIS_FROM_TAG`, `REDIS_TO_TAG` |
+| `upgrade-mariadb` | UPGRADE-FROM fixture (cinatra#1421/#1422): the guarded MariaDB in-place family path (`scripts/upgrade/mariadb-upgrade-major.sh`, explicit `mariadb-upgrade` on a CANDIDATE volume) — positive commit, pre-commit failure injection, dump/restore fallback, quiesce + sequential-only fail-closed negatives. Source+target images digest-pinned | `MARIADB_FROM_TAG`, `MARIADB_TO_TAG` |
 
 Each candidate env defaults to the **current pin**, so a bare run is green on
 today's `main`; the major-upgrade lane runs the same script with the new
@@ -84,7 +86,7 @@ green when a gate run can't actually exercise an arm). Throwaway crypto/users ar
 minted per run — **no ops secret, no external OAuth, no private data**.
 
 The harness is wired as a required check via
-`.github/workflows/works-after-proof.yml`, which runs the real six-service job
+`.github/workflows/works-after-proof.yml`, which runs the real multi-arm job
 only when an upgrade-relevant path changed (an internal `detect` paths-filter)
 and reports a green stub otherwise — so the same required context concludes
 `success` on every PR. It is deliberately NOT a `closeout-suite.mjs` member
