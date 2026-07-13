@@ -44,6 +44,7 @@
     "./screens/marketplace-install-form": "./src/screens/marketplace-install-form.tsx",
     "./screens/marketplace-card-model": "./src/screens/marketplace-card-model.ts",
     "./screens/marketplace-failure-copy": "./src/screens/marketplace-failure-copy.ts",
+    "./screens/update-plan-model": "./src/screens/update-plan-model.ts",
     "./screens/extensions-marketplace-client": "./src/screens/extensions-marketplace-client.tsx",
     "./screens/installed-empty-states": "./src/screens/installed-empty-states.tsx",
     "./mcp-module": "./src/mcp/module.ts",

@@ -280,6 +280,7 @@
       "@cinatra-ai/extensions/screens/marketplace-install-form": ["./packages/extensions/src/screens/marketplace-install-form.tsx"],
       "@cinatra-ai/extensions/screens/marketplace-card-model": ["./packages/extensions/src/screens/marketplace-card-model.ts"],
       "@cinatra-ai/extensions/screens/marketplace-failure-copy": ["./packages/extensions/src/screens/marketplace-failure-copy.ts"],
+      "@cinatra-ai/extensions/screens/update-plan-model": ["./packages/extensions/src/screens/update-plan-model.ts"],
       "@cinatra-ai/extensions/screens/extensions-marketplace-client": ["./packages/extensions/src/screens/extensions-marketplace-client.tsx"],
       "@cinatra-ai/extensions/screens/installed-empty-states": ["./packages/extensions/src/screens/installed-empty-states.tsx"],
       "@cinatra-ai/extensions/screens/extension-settings-view": ["./packages/extensions/src/screens/extension-settings-view.tsx"],

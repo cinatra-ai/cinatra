@@ -20,6 +20,10 @@ import {
   rowKey,
   type InstalledCardRow,
 } from "./installed-rows";
+// §II modal-footer update flow (cinatra#1041 outcome 2): the dry-run planner
+// action + the batch-routed apply, bound per row for the update-available state.
+import { updateExtensionPackageFormAction } from "../actions";
+import { planExtensionUpdateFormAction } from "./update-plan-action";
 import { Button } from "@/components/ui/button";
 import {
   Toolbar,
@@ -79,6 +83,11 @@ export async function RegistryCatalogScreen({
   // URL-driven tab selection. Server-side narrowing: only "archived" is
   // accepted; any other value falls through to "active".
   const tab = resolvedSearchParams?.tab === "archived" ? "archived" : "active";
+  // §V settings-row deep link (cinatra#1041): `?update=<packageName>` opens the
+  // matching row's detail modal directly (its footer carries the update flow
+  // when one is available — otherwise the modal opens details-only, graceful).
+  const openUpdateFor =
+    typeof resolvedSearchParams?.update === "string" ? resolvedSearchParams.update : null;
   const queryValue = resolvedSearchParams?.q;
   const query =
     typeof queryValue === "string"
@@ -256,17 +265,41 @@ export async function RegistryCatalogScreen({
       vendor: null,
       sdkAbiRange: null,
     };
+    // §II modal-footer update flow (cinatra#1041 outcome 2): ONLY the
+    // update-available state wires a footer — "Update now" dry-runs the
+    // resolver, the admin confirms the rendered plan, and the apply rides the
+    // planner/batch path (progress on this page's InstallBatchPanel). Every
+    // other state keeps the details-only modal (no footer bar) — the update
+    // runs ONLY from this footer; the card's actions stay exactly Settings +
+    // More details.
+    const { state, latestVersion } = updateInfoFor(row);
+    const updatable = !isArchived && state === "update-available" && latestVersion != null;
     return (
       <MarketplaceDetailModal
         card={modalCard}
         // §VI actions panel: More details is a real <a> (never a button) — the
         // active row's underlined indigo `.btn.link`; the archived row's
-        // muted, non-underlined `.btn.ghost`. No footer props are passed, so
-        // the modal is details-only with no footer bar.
+        // muted, non-underlined `.btn.ghost`.
         linkTrigger={{
           variant: isArchived ? "ghost" : "link",
           href: modalCard.detailHref,
         }}
+        // §V settings-row deep link: `?update=<pkg>` opens this row's modal on
+        // mount (details-only when no update is available — graceful).
+        defaultOpen={openUpdateFor === row.packageName}
+        {...(updatable
+          ? {
+              cta: { state: "update" as const, disabled: false },
+              updateAction: updateExtensionPackageFormAction.bind(null, {
+                packageName: row.packageName,
+                packageVersion: latestVersion,
+              }),
+              planUpdateAction: planExtensionUpdateFormAction.bind(null, {
+                packageName: row.packageName,
+                targetVersion: latestVersion,
+              }),
+            }
+          : {})}
       />
     );
   };
@@ -303,15 +336,23 @@ export async function RegistryCatalogScreen({
   // owner direction 2026-07-12): the explanatory per-state wordings surface on
   // the §V settings page's Maintenance · Update row, never here.
   // Only ACTIVE rows carry it — an archived (fully greyed) card shows no chip.
-  const updateAffordanceFor = (row: InstalledCardRow, isArchived: boolean) => {
-    if (isArchived) return {} as const;
+  // The row's update verdict — ONE derivation feeding both the §III chip and
+  // the §II modal-footer flow, so the two can never disagree (cinatra#1041).
+  const updateInfoFor = (row: InstalledCardRow) => {
     const readout = updateReadoutByName.get(row.packageName) ?? null;
+    const latestVersion = readout?.entry?.latestVersion ?? null;
     const state = deriveInstalledUpdateChipState({
       installedVersion: row.rawVersion,
-      latestVersion: readout?.entry?.latestVersion ?? null,
+      latestVersion,
       latestCompat: deriveExtensionCompatState(readout?.entry?.latestSdkAbiRange),
       stale: readout?.stale ?? true,
     });
+    return { state, latestVersion };
+  };
+
+  const updateAffordanceFor = (row: InstalledCardRow, isArchived: boolean) => {
+    if (isArchived) return {} as const;
+    const { state } = updateInfoFor(row);
     switch (state) {
       case "update-available":
         return { updateChip: <UpdateAvailableChip /> } as const;

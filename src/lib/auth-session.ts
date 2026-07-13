@@ -222,8 +222,9 @@ import type { ActorContext, ProjectGrant } from "@/lib/authz/actor-context";
 import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db";
 
 /**
- * Resolve the canonical project grants for a session, threaded into
- * `buildActorContext` via `opts.projectGrants`.
+ * Resolve the canonical project grants AND the caller's active-organization
+ * team memberships for a session, in a SINGLE team read, threaded into
+ * `buildActorContext` via `opts.projectGrants` + `opts.teamIds`.
  *
  * Project resolution in the session lineage gives chat actions / skills pages
  * via `requireActorContext` project visibility. Existing callers that ignore
@@ -233,7 +234,11 @@ import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db
  * Hints available in the session lineage:
  *  - `orgRole`  — via `resolveOrgRoleForSession` (active-org-scoped).
  *  - `teamIds`  — via `readTeamsForUser` (active-org-scoped). Needed for
- *    Source 2's `principal_team_id = ANY(teamIds)` UNION branch.
+ *    Source 2's `principal_team_id = ANY(teamIds)` UNION branch AND for the
+ *    actor's own `teamIds` axis so a #1069 `team:<uuid>` visibility token can
+ *    match in `requireResourceAccess` (#1486; fences #1416 AC7). The SAME
+ *    `readTeamsForUser` result feeds both — a session actor resolution
+ *    performs exactly ONE team read, no duplicate query.
  *  - `teamRoles` — NOT resolvable: `public."teamMember"` has no `role`
  *    column (Better Auth team plugin stores no per-team role; verified in
  *    better-auth-db.ts:93). Missing teamRoles degrade a team-owned implicit
@@ -241,26 +246,33 @@ import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db
  *    binary projectIds back-compat (the project still appears in projectGrants
  *    → projectIds).
  *
- * Always returns an array (possibly `[]` = "resolved, none"). The caller
- * passes it as `opts.projectGrants` so `buildActorContext` marks the context
- * RESOLVED. When the session has no userId/activeOrganizationId we still
- * return `[]` (resolved-empty) — the session lineage is a human path that
- * should be marked resolved, just with no grants.
+ * Cross-org isolation: `readTeamsForUser(userId, orgId)` filters on
+ * `team.organizationId = activeOrg`, so a membership in ANOTHER organization
+ * can never enter `teamIds`.
+ *
+ * Always returns arrays (possibly `[]` = "resolved, none", NEVER `undefined`).
+ * The caller passes them as `opts.projectGrants` / `opts.teamIds` so
+ * `buildActorContext` marks the context RESOLVED. When the session has no
+ * userId/activeOrganizationId we still return `{ projectGrants: [], teamIds:
+ * [] }` (resolved-empty) — the session lineage is a human path that should be
+ * marked resolved, just with no grants/teams.
  */
-async function resolveProjectGrantsForSession(
+async function resolveSessionGrantsAndTeams(
   session: { user?: { id?: string | null } | null; session?: { activeOrganizationId?: string | null } | null },
-): Promise<ProjectGrant[]> {
+): Promise<{ projectGrants: ProjectGrant[]; teamIds: string[] }> {
   const userId = session.user?.id ?? null;
   const orgId = session.session?.activeOrganizationId ?? null;
-  if (!userId || !orgId) return [];
+  if (!userId || !orgId) return { projectGrants: [], teamIds: [] };
   const orgRole = await resolveOrgRoleForSession(
     session as SessionWithUserAndActiveOrg,
   );
   const teams = await readTeamsForUser(userId, orgId);
-  return readProjectGrantsForUser(userId, orgId, {
-    teamIds: teams.map((t) => t.id),
+  const teamIds = teams.map((t) => t.id);
+  const projectGrants = await readProjectGrantsForUser(userId, orgId, {
+    teamIds,
     ...(orgRole ? { orgRole } : {}),
   });
+  return { projectGrants, teamIds };
 }
 
 /**
@@ -271,8 +283,9 @@ export async function getActorContext(): Promise<ActorContext | undefined> {
   const session = await getAuthSession();
   if (!session) return undefined;
   const orgRole = await resolveOrgRoleForSession(session);
-  const projectGrants = await resolveProjectGrantsForSession(session);
+  const { projectGrants, teamIds } = await resolveSessionGrantsAndTeams(session);
   return buildActorContext(session, {
+    teamIds,
     ...(orgRole ? { orgRole } : {}),
     projectGrants,
   });
@@ -285,8 +298,9 @@ export async function getActorContext(): Promise<ActorContext | undefined> {
 export async function requireActorContext(): Promise<ActorContext> {
   const session = await requireAuthSession();
   const orgRole = await resolveOrgRoleForSession(session);
-  const projectGrants = await resolveProjectGrantsForSession(session);
+  const { projectGrants, teamIds } = await resolveSessionGrantsAndTeams(session);
   return buildActorContext(session, {
+    teamIds,
     ...(orgRole ? { orgRole } : {}),
     projectGrants,
   });
