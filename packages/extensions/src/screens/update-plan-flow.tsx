@@ -99,7 +99,7 @@ export function ModalUpdatePlanFlow({
     } catch (error) {
       // Auth redirect sentinel (the plan action is admin-gated; this page is
       // session-gated) — re-throw so Next.js navigates to /not-authorized
-      // instead of masking authorization as a retryable failure (codex r2).
+      // instead of masking authorization as a retryable failure.
       if (isRedirectError(error)) throw error;
       // A thrown server-action failure is masked in production — default copy.
       toast.error(defaultFailureMessage);

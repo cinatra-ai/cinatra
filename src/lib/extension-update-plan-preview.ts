@@ -130,7 +130,7 @@ function registryVersionOfRow(row: InstalledExtension): string | null {
  *  the same fallback the batch's pre-state reads use. Side-by-side siblings
  *  (`isDefault === false`, cinatra#1040 S1) are NEVER the row a dedupe-upward
  *  updates, so they are excluded here — otherwise a sibling's version could
- *  masquerade as the "from" version (codex round-1). */
+ *  masquerade as the "from" version. */
 function resolveLiveRow(
   rows: InstalledExtension[],
   packageName: string,
@@ -138,8 +138,8 @@ function resolveLiveRow(
 ): InstalledExtension | null {
   // Mirror the planner's row resolution EXACTLY (extension-dependency-plan.ts
   // `findLiveRowsInScope` + `defaultLiveRow`) so the preview never resolves a
-  // row the apply path would refuse (codex round-4 — preview↔apply row-identity
-  // parity). Two steps, in the planner's order:
+  // row the apply path would refuse (preview↔apply row-identity parity). Two
+  // steps, in the planner's order:
   //   (1) pick the scope LEVEL by whether it holds ANY live (active|locked)
   //       row — DEFAULT OR NOT: the org level wins when it holds any such row,
   //       else the platform level. A non-default side-by-side sibling at the
@@ -210,8 +210,8 @@ export function buildUpdatePlanPreviewMembers(input: {
       });
       if (!isRoot) {
         // REBOUND dependents: live rows whose install-blocking edge binds THE
-        // row being upgraded — row IDENTITY, not just the package name (codex
-        // round-1): a dependent pinned to an untouched side-by-side sibling is
+        // row being upgraded — row IDENTITY, not just the package name: a
+        // dependent pinned to an untouched side-by-side sibling is
         // NOT rebound. A persisted resolution must point at the updated
         // default row; an unresolved edge binds via the dependent's own scoped
         // lookup, which must also land on that row (the same identity rule
@@ -388,7 +388,7 @@ export async function computeExtensionUpdatePlanPreview(
   // Trust the cached ABI ONLY from a NON-stale readout whose entry is the very
   // target (a specific version's declared range is immutable, but a stale
   // readout may not be trusted at all — the dev path then falls through to the
-  // fresh packument read, the gatekept path refuses; codex round-4).
+  // fresh packument read, the gatekept path refuses).
   let abiRange: string | null | undefined =
     readout && !readout.stale && readout.entry?.latestVersion === target
       ? readout.entry.latestSdkAbiRange
@@ -407,8 +407,8 @@ export async function computeExtensionUpdatePlanPreview(
     // read of a range-less manifest returns an object with `sdkAbiRange: null`).
     // The ABI gate FAILS CLOSED on an unreadable manifest: an "unknown"
     // fallthrough would let an incompatible target pass the preview while apply
-    // reads the materialized manifest and fails closed (codex round-3 —
-    // preview↔apply ABI parity). A genuine undeclared range (`sdkAbiRange:null`)
+    // reads the materialized manifest and fails closed (preview↔apply ABI
+    // parity). A genuine undeclared range (`sdkAbiRange:null`)
     // still reads "unknown" → lenient, exactly like the activation gate.
     const info = await deps.fetchDisplayInfo(packageName, target);
     if (info === null) {
@@ -442,8 +442,8 @@ export async function computeExtensionUpdatePlanPreview(
   // path runs `assertUpdateDoesNotBreakDependents` for the root at write time
   // (packages/extensions index.ts "UPDATE GATE") and refuses. Run the SAME gate
   // here (read-only, same args) so the preview refuses in lockstep instead of
-  // rendering a plan the admin confirms and the apply then rejects (codex
-  // round-4 — preview↔apply root-fence parity). Same compatibility-constraint
+  // rendering a plan the admin confirms and the apply then rejects
+  // (preview↔apply root-fence parity). Same compatibility-constraint
   // family as the required-pin refusal above → `denied-entitlement`; the named
   // dependents stay server-side (#685).
   try {
