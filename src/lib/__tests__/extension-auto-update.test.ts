@@ -36,9 +36,26 @@ vi.mock("@cinatra-ai/extensions", () => ({
   extensionRegistry: { update: registryUpdateMock },
 }));
 
+// #1042 wire-up: the default deps lazily import the persistent (#1310)
+// read-model store module — mock it with a sentinel so the wiring is
+// assertable without dragging the pooled-DB import graph into the test.
+const { persistentStoreSentinel, getExtensionUpdateReadModelStoreMock } = vi.hoisted(
+  () => {
+    const persistentStoreSentinel = { read: vi.fn(), upsert: vi.fn() };
+    return {
+      persistentStoreSentinel,
+      getExtensionUpdateReadModelStoreMock: vi.fn(() => persistentStoreSentinel),
+    };
+  },
+);
+vi.mock("@/lib/extension-update-read-model-store", () => ({
+  getExtensionUpdateReadModelStore: getExtensionUpdateReadModelStoreMock,
+}));
+
 import {
   runExtensionAutoUpdateCycle,
   defaultExecuteUpdate,
+  buildDefaultExtensionAutoUpdateDeps,
   buildExtensionAutoUpdateActor,
   evaluateCandidateRecheck,
   isExtensionAutoUpdateEnabled,
@@ -664,6 +681,21 @@ describe("defaultExecuteUpdate — the manual-update dispatch mirror", () => {
       { expectedInstalledVersion: "1.0.0" },
     );
     expect(installExtensionWithDependenciesMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1042 wire-up slice — the default deps resolve the PERSISTENT (#1310)
+// DB-backed read-model store, ending the dormant (`read-model-unwired`) era.
+// The null path stays covered above ("read model gates") for deployments whose
+// injected resolver yields no store — fail-honest, never falsely "up to date".
+// ---------------------------------------------------------------------------
+describe("#1042 wire-up: default read-model resolver", () => {
+  it("resolves the process-cached DB-backed store (the #1310 adapter), not null", async () => {
+    const deps = buildDefaultExtensionAutoUpdateDeps();
+    const store = await deps.resolveUpdateReadModelStore();
+    expect(getExtensionUpdateReadModelStoreMock).toHaveBeenCalledTimes(1);
+    expect(store).toBe(persistentStoreSentinel);
   });
 });
 
