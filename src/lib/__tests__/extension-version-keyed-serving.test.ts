@@ -16,6 +16,7 @@ import {
   resolveVersionKeyedUiSetupSurfaces,
   resolveVersionKeyedUiSettingsSurfaces,
   resolveVersionKeyedUiActions,
+  resolveVersionKeyedUiAction,
   isVersionKeyedServable,
   __resetVersionKeyedServingForTests,
 } from "@/lib/extension-version-keyed-serving";
@@ -62,6 +63,38 @@ describe("retain → commit → serve (positive path)", () => {
     const actions = resolveVersionKeyedUiActions(PKG, V);
     expect(actions.kind).toBe("serve");
     if (actions.kind === "serve") expect(actions.value).toHaveLength(1);
+  });
+
+  it("resolveVersionKeyedUiAction (S9 point lookup): serves by id, refuses an unknown id, LAST-registration-wins", () => {
+    const sink = beginVersionKeyedRegistration(PKG, V);
+    const first = async () => ({ which: "first" });
+    const last = async () => ({ which: "last" });
+    sink.retainUiAction({ id: "act", handler: first });
+    sink.retainUiAction({ id: "other", handler: async () => ({}) });
+    sink.retainUiAction({ id: "act", handler: last }); // re-register same id
+    sink.commit();
+
+    const served = resolveVersionKeyedUiAction(PKG, V, "act");
+    expect(served.kind).toBe("serve");
+    // LAST wins (matches the global ui registry's replace-by-id Map).
+    if (served.kind === "serve") expect(served.value.handler).toBe(last);
+
+    const missing = resolveVersionKeyedUiAction(PKG, V, "nope");
+    expect(missing.kind).toBe("refuse");
+    if (missing.kind === "refuse") expect(missing.code).toBe("NO_SUCH_HANDLER");
+  });
+
+  it("resolveVersionKeyedUiAction is fail-closed on the servability axes (unpinned / unknown / not-servable)", () => {
+    // Unpinned.
+    expect(resolveVersionKeyedUiAction(PKG, null, "act").kind).toBe("refuse");
+    // Unknown version (never retained).
+    expect(resolveVersionKeyedUiAction(PKG, "0.0.0", "act").kind).toBe("refuse");
+    // Retained but not committed (pre-commit → NOT_SERVABLE).
+    const sink = beginVersionKeyedRegistration(PKG, V);
+    sink.retainUiAction({ id: "act", handler: async () => ({}) });
+    const r = resolveVersionKeyedUiAction(PKG, V, "act");
+    expect(r.kind).toBe("refuse");
+    if (r.kind === "refuse") expect(r.code).toBe("NOT_SERVABLE");
   });
 
   it("a committed version with NO ui surface serves an EMPTY list (bulk kind), not a refusal", () => {
