@@ -417,6 +417,8 @@
       "@cinatra-ai/objects/graphiti-client": ["./packages/objects/src/graphiti-client.ts"],
       "@cinatra-ai/objects/register-artifact-extensions": ["./packages/objects/src/integration/register-artifact-extensions.ts"],
       "@cinatra-ai/objects/graphiti-projector": ["./packages/objects/src/graphiti-projector.ts"],
+      "@cinatra-ai/objects/graphiti-rebuild": ["./packages/objects/src/graphiti-rebuild.ts"],
+      "@cinatra-ai/objects/graphiti-projection-policy": ["./packages/objects/src/graphiti-projection-policy.ts"],
       "@cinatra-ai/objects/artifact-floor": ["./packages/objects/src/generated/artifact-floor.ts"],
       "@cinatra-ai/objects/mcp-handlers": ["./packages/objects/src/mcp/handlers.ts"],
       "@cinatra-ai/objects/classifier-signals": ["./packages/objects/src/classifier-signals.ts"],

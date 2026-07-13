@@ -405,6 +405,8 @@
     { "alias": "@cinatra-ai/objects/graphiti-client", "target": "./packages/objects/src/graphiti-client.ts" },
     { "alias": "@cinatra-ai/objects/register-artifact-extensions", "target": "./packages/objects/src/integration/register-artifact-extensions.ts" },
     { "alias": "@cinatra-ai/objects/graphiti-projector", "target": "./packages/objects/src/graphiti-projector.ts" },
+    { "alias": "@cinatra-ai/objects/graphiti-rebuild", "target": "./packages/objects/src/graphiti-rebuild.ts" },
+    { "alias": "@cinatra-ai/objects/graphiti-projection-policy", "target": "./packages/objects/src/graphiti-projection-policy.ts" },
     { "alias": "@cinatra-ai/objects/artifact-floor", "target": "./packages/objects/src/generated/artifact-floor.ts" },
     { "alias": "@cinatra-ai/objects/mcp-handlers", "target": "./packages/objects/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/objects/classifier-signals", "target": "./packages/objects/src/classifier-signals.ts" },

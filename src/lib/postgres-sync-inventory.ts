@@ -166,6 +166,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Projects object-graph state at request time. Migratable to the async pooled layer once the objects subsystem's sync signatures are converted (staged).",
   },
+  "packages/objects/src/graphiti-projection-policy.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Per-group projection-policy epoch reads/bumps (cinatra#1427 AC-4), a sync leaf composing with graphiti-projector's synchronous store graph. Migrates with the objects subsystem.",
+  },
+  "packages/objects/src/graphiti-rebuild.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Epoch-fenced group-rebuild driver (cinatra#1427 ACs 4-5): journal phase machine + checkpointed replay batches, same sync-leaf pattern as graphiti-projector. Migrates with the objects subsystem.",
+  },
   "packages/objects/src/mcp/handlers.ts": {
     class: "migratable-request-path",
     justification:
@@ -185,6 +195,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     class: "migratable-request-path",
     justification:
       "Artifact-claim registry DB primitives (cinatra#1425): reserve/activate/retire claim transitions (advisory-locked, CTE-atomic with their claim events + reconcile-queue rows) plus the org scope-chain reads the effective-type-catalog resolver consumes. Built as a sync leaf mirroring skill-lifecycle-store.ts's pattern so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
+  "src/lib/objects/artifact-uninstall-operations.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Artifact-extension uninstall-operation store (cinatra#1432): the checkpointed, per-artifact advisory-locked archival of an uninstalled extension's eligible assertions under an operation record, plus the reinstall replay that INSERTs replacement classic assertions for the archived classic subset. A COLD administrative batch path driven by extension uninstall/reinstall lifecycle transitions (not a request-time store); built as a sync leaf mirroring artifact-claim-store.ts so it composes into the synchronous store graph. Migrates to async typed writes with the objects subsystem.",
   },
   "src/lib/skill-lifecycle-store.ts": {
     class: "migratable-request-path",

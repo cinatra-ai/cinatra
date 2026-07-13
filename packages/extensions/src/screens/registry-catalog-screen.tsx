@@ -252,6 +252,11 @@ export async function RegistryCatalogScreen({
       rating: null,
       detailHref: marketplaceDetailHref(row.packageName),
       installCount: null,
+      // cinatra#1325 icon-chain tiers — the §VI installed-detail shell resolves
+      // its emblem from the row's kind; the manifest-logo / client-icon-map
+      // tiers are the marketplace-browse card's concern.
+      manifestLogoUrl: null,
+      iconSlug: null,
       iconUrl: null,
       vendorLogoUrl: null,
       // Storefront-owned like the assets above (#1003 added the publisher ref
