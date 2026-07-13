@@ -154,7 +154,7 @@ export function ModalUpdatePlanFlow({
   if (phase === "failed") {
     return (
       <div data-slot="update-plan-failed" className="flex w-full flex-col gap-2.25">
-        <div className="font-mono text-badge-2xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+        <div className="font-mono text-badge-2xs font-bold uppercase tracking-kicker-wide text-muted-foreground">
           <span className="text-foreground">Failed</span> · category-mapped, compensated
         </div>
         <div className="flex flex-col gap-2.25 rounded-[8px] border border-line bg-surface-strong px-4 py-3.5">
@@ -185,7 +185,7 @@ export function ModalUpdatePlanFlow({
   return (
     <div data-slot="update-plan" className="flex w-full flex-col gap-2.25">
       {/* §II eyebrow: the mono-uppercase state label above the plan panel. */}
-      <div className="font-mono text-badge-2xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
+      <div className="font-mono text-badge-2xs font-bold uppercase tracking-kicker-wide text-muted-foreground">
         <span className="text-foreground">Update</span> · dry-run plan, confirm before apply
       </div>
       <div
