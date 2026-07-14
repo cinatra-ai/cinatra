@@ -1,0 +1,21 @@
+{
+  "name": "@cinatra-ai/memory",
+  "description": "Filesystem side of the memory subsystem for coding agents: a pure library + local CLI for OKF 0.1 bundles (Markdown + YAML frontmatter). Bundle identity (bundle.yaml), spec-strict parse/serialize/walk with structured diagnostics, deterministic index.md regeneration, atomic writes with realpath containment and caps, and a content-hash manifest that the sync layer builds its ledger on. No server-only imports, no LLM calls \u2014 everything here runs offline against the local filesystem.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "bin": {
+    "memory": "./bin/memory.mjs"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}
