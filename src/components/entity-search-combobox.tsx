@@ -132,7 +132,7 @@ export function mergeEntityPages<T extends { id: string }>(
 ): T[] {
   const seen = new Set(prev.map((r) => r.id));
   const additions = next.filter((r) => !seen.has(r.id));
-  return additions.length > 0 ? [...prev, ...additions] : [...prev];
+  return additions.length > 0 ? [...prev, ...additions] : (prev as T[]);
 }
 
 /** Drop excluded ids (already-selected / already-granted rows) client-side so
@@ -256,6 +256,14 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
     }
   };
 
+  // The latest onSearch is read via ref inside the debounce timeout: a new
+  // callback identity (e.g. an inline prop) on an unrelated parent re-render
+  // must not restart the timer or bump the epoch.
+  const onSearchRef = useRef(onSearch);
+  useEffect(() => {
+    onSearchRef.current = onSearch;
+  }, [onSearch]);
+
   // Immediate-on-open + debounced typeahead. A `cancelled` flag ignores stale /
   // out-of-order responses so a late reply to an old query never overwrites the
   // current one (§3.4). A rejection sets the explicit error state (§3.4).
@@ -270,7 +278,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
       setSearching(true);
       setError(false);
       try {
-        const result = await onSearch(query, { offset: 0, limit: pageSize });
+        const result = await onSearchRef.current(query, { offset: 0, limit: pageSize });
         if (cancelled) return;
         setResults(result.results);
         setHasMore(result.hasMore ?? false);
@@ -287,7 +295,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [open, query, onSearch, pageSize]);
+  }, [open, query, pageSize]);
 
   const handleListScroll = (event: React.UIEvent<HTMLDivElement>) => {
     if (!hasMore || loadingMore || searching) return;
@@ -303,6 +311,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
         if (epochRef.current !== epoch) return; // stale page — query changed / closed
         setResults((prev) => mergeEntityPages(prev, result.results));
         setHasMore(result.hasMore ?? false);
+        setError(false); // a successful retry clears the load-more hint
       })
       .catch(() => {
         setLoadingMore(false);
@@ -423,8 +432,11 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
             onScroll={handleListScroll}
             className="max-h-72 bg-surface-strong"
           >
-            {/* Explicit error state — distinct from empty (§3.4). */}
-            {error && (
+            {/* Explicit error state — distinct from empty (§3.4). Full-card
+                only when there is nothing to show; a failed load-more keeps
+                the already-fetched rows and degrades to an inline hint below
+                the list. */}
+            {error && visibleResults.length === 0 && (
               <div className="px-3 py-2 text-sm text-destructive">
                 Couldn&apos;t search — try again.
               </div>
@@ -437,7 +449,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
                 <Loader2 className="size-4 animate-spin mr-2" /> Searching…
               </CommandItem>
             )}
-            {!error && !searching && visibleResults.length > 0 && (
+            {!searching && visibleResults.length > 0 && (
               <CommandGroup className="p-0">
                 {visibleResults.map((r) => (
                   <CommandItem
@@ -456,6 +468,11 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
                   </CommandItem>
                 ))}
               </CommandGroup>
+            )}
+            {error && !loadingMore && visibleResults.length > 0 && (
+              <div className="px-3 py-2 text-xs text-destructive">
+                Couldn&apos;t load more — scroll to retry.
+              </div>
             )}
             {loadingMore && (
               <div className="flex items-center justify-center gap-2 px-3 py-2 text-xs italic text-muted-foreground">

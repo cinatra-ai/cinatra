@@ -114,6 +114,68 @@ describe("EntitySearchCombobox open-only click (finding 3)", () => {
   });
 });
 
+describe("EntitySearchCombobox debounce stability", () => {
+  it("a new onSearch identity does not restart the search generation", async () => {
+    const first = vi.fn(async () => ({ results: USERS }));
+    const second = vi.fn(async () => ({ results: USERS }));
+    const { rerender } = render(
+      <EntitySearchCombobox onSearch={first} onPick={() => {}} />,
+    );
+
+    const input = screen.getByRole("combobox");
+    fireEvent.click(input);
+    await screen.findByText("Ada Lovelace");
+    expect(first).toHaveBeenCalledTimes(1);
+
+    // An unrelated parent re-render swaps in a new inline callback identity —
+    // the effect must NOT refire (no epoch bump, no duplicate search).
+    rerender(<EntitySearchCombobox onSearch={second} onPick={() => {}} />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(second).not.toHaveBeenCalled();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+  });
+});
+
+describe("EntitySearchCombobox load-more failure", () => {
+  it("keeps the fetched rows and degrades to an inline hint when page 2 fails", async () => {
+    let rejectPage2: ((e: Error) => void) | null = null;
+    const onSearch = vi.fn(
+      (_query: string, page: { offset: number; limit: number }) => {
+        if (page.offset > 0) {
+          return new Promise<EntitySearchResult<EntitySearchItem>>(
+            (_resolve, reject) => {
+              rejectPage2 = reject;
+            },
+          );
+        }
+        return Promise.resolve<EntitySearchResult<EntitySearchItem>>({
+          results: [USERS[0]],
+          hasMore: true,
+        });
+      },
+    );
+    render(<EntitySearchCombobox onSearch={onSearch} onPick={() => {}} />);
+
+    const input = screen.getByRole("combobox");
+    fireEvent.click(input);
+    await screen.findByText("Ada Lovelace");
+    fireEvent.scroll(screen.getByRole("listbox"));
+    expect(rejectPage2).not.toBeNull();
+
+    await act(async () => {
+      rejectPage2!(new Error("page 2 boom"));
+    });
+    // Page 1 stays visible; the failure is an inline hint, never the
+    // full-card error that would wipe valid rows.
+    expect(screen.getByText("Ada Lovelace")).toBeTruthy();
+    expect(screen.getByText(/Couldn't load more/)).toBeTruthy();
+    expect(screen.queryByText(/Couldn't search/)).toBeNull();
+  });
+});
+
 describe("EntitySearchCombobox stale pagination guard (finding 2)", () => {
   it("drops a second-page response that resolves after the query changed", async () => {
     let resolvePage2: ((r: EntitySearchResult<EntitySearchItem>) => void) | null = null;

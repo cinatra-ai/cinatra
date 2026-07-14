@@ -32,11 +32,13 @@ describe("mergeEntityPages", () => {
     expect(mergeEntityPages([a, b], [b, c])).toEqual([a, b, c]);
   });
 
-  it("returns a copy of prev when the next page adds nothing new", () => {
+  it("returns prev itself when the next page adds nothing new", () => {
     const prev = [a, b];
     const merged = mergeEntityPages(prev, [a, b]);
     expect(merged).toEqual([a, b]);
-    expect(merged).not.toBe(prev); // a fresh array, never a mutation of prev
+    // Same reference — a setResults((prev) => merge(...)) caller skips the
+    // state write (and the re-render) when nothing was added.
+    expect(merged).toBe(prev);
   });
 
   it("handles an empty existing set and an empty next page", () => {
