@@ -64,6 +64,11 @@ export default defineConfig({
       // stub locally via vi.mock.
       "@/lib/project-writable": path.join(__dirname, "src/__tests__/__stubs__/project-writable.ts"),
       "@/lib/resource-project-move": path.join(__dirname, "src/__tests__/__stubs__/resource-project-move.ts"),
+      // Memory-recall team-lane resolver (cinatra#1379 AC4). handlers.ts imports
+      // `readTeamsForUser` from here; the real module builds a pg Pool / drizzle
+      // bridge at import. Route to a no-teams stub so every handler test loads;
+      // the recall test vi.mocks it locally to assert the entitled lane set.
+      "@/lib/better-auth-db": path.join(__dirname, "src/__tests__/__stubs__/better-auth-db.ts"),
       // Alias the authz sub-files used by the objects handlers so vitest can
       // resolve them. The barrel (`@/lib/authz`) is also aliased for tests that
       // vi.mock it.
