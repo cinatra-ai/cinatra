@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   resolveCubeIdFromQuery,
   resolveAndValidateCubeId,
+  collectQueryCubeIds,
+  humanizeCubeId,
+  describeCrossCubeQuery,
   checkUnsupportedAnalysisType,
   checkUnsupportedQueryFeature,
   findUnknownFilterMembers,
@@ -107,6 +110,94 @@ describe("resolveAndValidateCubeId — full validation", () => {
     } as unknown as CubeJsWireQuery);
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.cubeId).toBe("teams");
+  });
+  // cinatra#1512: the error arms carry human-readable copy (`userMessage`).
+  // drizzle-cube's CubeClient throws `new Error(body.error)` and the portlet
+  // error card renders `error.message` verbatim, so the route sends
+  // `userMessage` as the wire `error` — it must read as product language, not
+  // a machine code.
+  it("cube_id_ambiguous userMessage names every mixed data source in product language", () => {
+    const out = resolveAndValidateCubeId({
+      measures: ["agent_runs.count", "teams.count", "projects.count"],
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.userMessage).toBe(
+        "This portlet mixes fields from Agent Runs, Teams, and Projects. " +
+          "Choose fields from one data source. Edit this card to change its " +
+          "fields — retrying will not fix an invalid configuration.",
+      );
+    }
+  });
+  it("cube_id_required userMessage explains the missing-fields recovery", () => {
+    const out = resolveAndValidateCubeId({});
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.userMessage).toContain("doesn't reference any data source fields");
+      expect(out.userMessage).toContain("Edit this card");
+    }
+  });
+});
+
+describe("collectQueryCubeIds — distinct cube prefixes across all member surfaces", () => {
+  it("collects from measures, dimensions, and segments in first-seen order", () => {
+    expect(
+      collectQueryCubeIds({
+        measures: ["agent_runs.count", "teams.count"],
+        dimensions: ["projects.name"],
+        segments: ["agent_runs.completed"],
+      }),
+    ).toEqual(["agent_runs", "teams", "projects"]);
+  });
+  it("collects from timeDimensions, object order keys, and filter members", () => {
+    expect(
+      collectQueryCubeIds({
+        timeDimensions: [{ dimension: "agent_runs.created_at" }],
+        order: { "teams.count": "desc" },
+        filters: [{ member: "projects.id", operator: "equals", values: ["p1"] }],
+      }),
+    ).toEqual(["agent_runs", "teams", "projects"]);
+  });
+  it("collects from the legacy tuple-array order form", () => {
+    expect(
+      collectQueryCubeIds({ order: [["teams.count", "desc"]] }),
+    ).toEqual(["teams"]);
+  });
+  it("dedupes a cube referenced through several surfaces", () => {
+    expect(
+      collectQueryCubeIds({
+        measures: ["agent_runs.count"],
+        dimensions: ["agent_runs.status"],
+        order: { "agent_runs.count": "desc" },
+      }),
+    ).toEqual(["agent_runs"]);
+  });
+  it("tolerates malformed shapes (non-object, bare members, junk entries)", () => {
+    expect(collectQueryCubeIds(null)).toEqual([]);
+    expect(collectQueryCubeIds("measures")).toEqual([]);
+    expect(
+      collectQueryCubeIds({
+        measures: ["count", 42, null],
+        filters: [null, { operator: "equals" }],
+        timeDimensions: [null, {}],
+        order: 7,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("humanizeCubeId / describeCrossCubeQuery — error copy", () => {
+  it("title-cases snake_case cube ids", () => {
+    expect(humanizeCubeId("agent_runs")).toBe("Agent Runs");
+    expect(humanizeCubeId("teams")).toBe("Teams");
+  });
+  it("formats two cubes with 'and', three-plus with an Oxford comma", () => {
+    expect(describeCrossCubeQuery(["agent_runs", "teams"])).toBe(
+      "This portlet mixes fields from Agent Runs and Teams. Choose fields from one data source.",
+    );
+    expect(describeCrossCubeQuery(["agent_runs", "teams", "projects"])).toBe(
+      "This portlet mixes fields from Agent Runs, Teams, and Projects. Choose fields from one data source.",
+    );
   });
 });
 
