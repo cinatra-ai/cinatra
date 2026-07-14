@@ -117,13 +117,12 @@ function resolveActorAndOrg(): {
     teamIds: a2a?.teamIds,
     projectIds: a2a?.projectIds,
   }) as unknown as ActorContext;
-  // Carry the transport-verified agent-run OBO scope-ceiling onto the actor
-  // (codex finding on the #1430 MCP capture wiring): buildOwnershipFilter
-  // AND-s the ceiling over the visibility OR-set, so the capture composition
-  // and the resolver both stay inside a delegated run's ceiling — without it
-  // a delegated caller could mint/return org-visible claimed rows outside
-  // its user/team/project scope. Mirrors the REST reference
-  // (context-route-io.ts), which attaches the ceiling to its actor.
+  // Carry the transport-verified agent-run OBO scope-ceiling onto the actor:
+  // buildOwnershipFilter AND-s the ceiling over the visibility OR-set, so the
+  // capture composition and the resolver both stay inside a delegated run's
+  // ceiling — without it a delegated caller could mint/return org-visible
+  // claimed rows outside its user/team/project scope. Mirrors the REST
+  // reference (context-route-io.ts), which attaches the ceiling to its actor.
   // Narrow-only: absent ceiling (chat/session/machine callers) = unchanged.
   if (ctx?.oboCeiling) actor.oboCeiling = ctx.oboCeiling;
   return { orgId, userId, actor };
