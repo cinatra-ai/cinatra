@@ -1928,7 +1928,7 @@ $body$` },
     // ---- object_content_snapshots keying table (cinatra#1430) ----
     // In the same artifact-claim-schema.ts leaf (the #1429
     // bindingWritePathSchemaQueries accretion precedent). Existing deployments
-    // also converge via migration core__0045.
+    // also converge via migration core__0047.
     ...objectContentSnapshotSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 

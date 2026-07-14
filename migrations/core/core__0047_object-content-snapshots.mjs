@@ -1,4 +1,4 @@
-// core__0045 — policy-aware content snapshots for claimed typed object rows
+// core__0047 — policy-aware content snapshots for claimed typed object rows
 // (cinatra#1430, epic #1424).
 //
 // A typed object row (`@cinatra-ai/campaigns:*`, `@cinatra-ai/email:*`, …)

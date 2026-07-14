@@ -27,7 +27,7 @@ import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 // The snapshot IS a real `representation` revision over a real `blob`
 // `resource` — the same substrate an uploaded file artifact uses — so the
 // existing retention / GC / serve machinery handles it with no special case.
-// The `object_content_snapshots` keying table (core__0045) content-addresses
+// The `object_content_snapshots` keying table (core__0047) content-addresses
 // each snapshot by its full policy key:
 //   (objectId, contentDigest, effectiveBaseType, snapshotSchemaVersion,
 //    claim/disposition fingerprint)

@@ -449,7 +449,7 @@ $body$`,
 //     claim_disposition_fingerprint) mints a FRESH snapshot — a new claimant
 //     never reuses another claimant's snapshot.
 //
-// Mirrors migration core__0045 (existing deployments converge there; fresh
+// Mirrors migration core__0047 (existing deployments converge there; fresh
 // bootstraps here — idempotent both ways). Bytes never live in
 // `objects.data`: the snapshot's bytes live on the blob store like any other
 // representation (`src/lib/artifacts/object-content-snapshot.ts` enforces the
