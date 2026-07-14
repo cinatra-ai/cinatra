@@ -32,10 +32,35 @@ import {
   pickServerDerivedOrgId,
   orgMembershipExists,
   composeBearerActorContext,
+  resolveSoleOrgMembership,
+  decodeBearerSub,
 } from "../actor-identity";
 
 function makeRequest(host: string = "localhost"): Request {
   return new Request(`http://${host}/api/mcp`, { method: "POST" });
+}
+
+/** base64url-encode a JS value (JWT segment). */
+function b64url(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+/**
+ * Build a `Bearer <jwt>` header carrying the given claims. Signature-free
+ * (the transport verifies BEFORE this decode runs; the tests exercise the
+ * post-verify claim decode only). `authorization_code` tokens carry a `sub`
+ * (the real user id) AND `azp` (the OAuth client) — both are set by default so
+ * a test can assert the sub-arm wins over the azp/service-account arm.
+ */
+function bearerWithClaims(claims: Record<string, unknown>): string {
+  const header = b64url({ alg: "none", typ: "JWT" });
+  const payload = b64url(claims);
+  return `Bearer ${header}.${payload}.sig`;
+}
+
+/** An authorization_code-shaped header: a human `sub` AND a client `azp`. */
+function humanBearer(sub: string, azp = "human-oauth-client"): string {
+  return bearerWithClaims({ sub, azp, scope: "openid" });
 }
 
 describe("resolveActorIdentity composition", () => {
@@ -190,6 +215,130 @@ describe("resolveActorIdentity composition", () => {
     });
     expect(identity).toEqual({ userId: null, orgId: null });
   });
+
+  // --- #1592: human authorization_code Bearer arm (sub-present) ------------
+
+  it("composes { sub, sole-org } for a human authorization_code Bearer with EXACTLY ONE live membership (#1592)", async () => {
+    // The sole-membership lookup finds exactly one `public.member` row.
+    queryMock.mockResolvedValueOnce({ rows: [{ organizationId: "org-solo" }] });
+    const readServiceAccount = vi.fn(async () => null);
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: "human-oauth-client", // azp — must NOT drive resolution
+      authHeader: humanBearer("human-user-1"),
+      request: makeRequest("example.com"),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: false,
+      readServiceAccount: readServiceAccount as never,
+      pool: { query: queryMock as never },
+    });
+    // userId is the verified `sub`; org is the sole live membership.
+    expect(identity).toEqual({ userId: "human-user-1", orgId: "org-solo" });
+    // The sub arm runs BEFORE the service-account arm: azp lookup never fires.
+    expect(readServiceAccount).not.toHaveBeenCalled();
+    // Exactly one query: the sole-membership lookup (LIMIT 2, WHERE userId).
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining('public."member"'),
+      ["human-user-1"],
+    );
+  });
+
+  it("stays org-less for a human Bearer with ZERO memberships (fail-closed, #1592)", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: undefined,
+      authHeader: humanBearer("human-nomember"),
+      request: makeRequest("example.com"),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: false,
+      readServiceAccount: async () => null,
+      pool: { query: queryMock as never },
+    });
+    // userId still carried (audit); org-less → boundary denies not_org_member.
+    expect(identity).toEqual({ userId: "human-nomember", orgId: null });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays org-less for a human Bearer with MULTIPLE memberships — no silent first-of-many pick (#1592)", async () => {
+    // >1 row: an ambiguous multi-org identity with no cookieless active-org
+    // signal → org-less (mirrors the #1545 pickServerDerivedOrgId doctrine).
+    queryMock.mockResolvedValueOnce({
+      rows: [{ organizationId: "org-a" }, { organizationId: "org-b" }],
+    });
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: undefined,
+      authHeader: humanBearer("human-multi"),
+      request: makeRequest("example.com"),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: false,
+      readServiceAccount: async () => null,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: "human-multi", orgId: null });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed to org-less when the human sole-membership query throws (#1592)", async () => {
+    queryMock.mockRejectedValueOnce(new Error("db down"));
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: undefined,
+      authHeader: humanBearer("human-dberr"),
+      request: makeRequest("example.com"),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: false,
+      readServiceAccount: async () => null,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: "human-dberr", orgId: null });
+  });
+
+  it("routes a token carrying BOTH azp and sub to the human arm, never the service-account arm (#1592)", async () => {
+    // The real authorization_code shape: azp (OAuth client) AND sub (user id).
+    // Guards against the CLI verified-bearer branch-order defect (azp-first).
+    queryMock.mockResolvedValueOnce({ rows: [{ organizationId: "org-solo" }] });
+    const readServiceAccount = vi.fn(async () => ({
+      userId: "SHOULD-NOT-BE-USED",
+      organizationId: "SA-ORG-SHOULD-NOT-BE-USED",
+    }));
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: "human-oauth-client", // the azp — a valid client id
+      authHeader: humanBearer("human-both", "human-oauth-client"),
+      request: makeRequest("example.com"),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: false,
+      readServiceAccount: readServiceAccount as never,
+      pool: { query: queryMock as never },
+    });
+    expect(identity).toEqual({ userId: "human-both", orgId: "org-solo" });
+    expect(readServiceAccount).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the service-account arm when the token has NO sub (client_credentials unaffected, #1592)", async () => {
+    // A client_credentials JWT carries azp but no sub → the human arm is skipped
+    // and the existing service-account resolution is unchanged.
+    queryMock.mockResolvedValueOnce({ rows: [{ one: 1 }] });
+    const identity = await resolveActorIdentity({
+      sessionUser: undefined,
+      requestClientId: "machine-client",
+      authHeader: bearerWithClaims({ azp: "machine-client", scope: "mcp" }),
+      request: makeRequest("example.com"),
+      env: { A2A_DEV_BYPASS: "false" },
+      isLocalhost: false,
+      readServiceAccount: async () => ({ userId: "sa-user", organizationId: "sa-org" }),
+      pool: { query: queryMock as never },
+    });
+    // Resolved via the service-account arm (created_by + membership-gated org).
+    expect(identity).toEqual({ userId: "sa-user", orgId: "sa-org" });
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining('public."member"'),
+      ["sa-org", "sa-user"],
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -289,6 +438,97 @@ describe("orgMembershipExists live-membership gate", () => {
     expect(
       await orgMembershipExists({ orgId: "org-1", userId: "user-1", pool: { query: q as never } }),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveSoleOrgMembership — the human arm's server-derived org (#1592).
+// Composes the org ONLY on EXACTLY ONE live `public.member` row (deterministic
+// sole membership); 0 or >1 rows → org-less (no silent first-of-many pick);
+// fails CLOSED on error. Queries by userId with LIMIT 2 (enough to detect >1).
+// ---------------------------------------------------------------------------
+describe("resolveSoleOrgMembership sole-membership gate", () => {
+  const q = vi.fn();
+  beforeEach(() => q.mockReset());
+
+  it("returns the org when EXACTLY one membership row exists (queries userId, LIMIT 2)", async () => {
+    q.mockResolvedValueOnce({ rows: [{ organizationId: "org-solo" }] });
+    const org = await resolveSoleOrgMembership({
+      userId: "user-1",
+      pool: { query: q as never },
+    });
+    expect(org).toBe("org-solo");
+    expect(q).toHaveBeenCalledWith(
+      expect.stringContaining('public."member"'),
+      ["user-1"],
+    );
+    expect(q).toHaveBeenCalledWith(expect.stringContaining("LIMIT 2"), ["user-1"]);
+  });
+
+  it("returns null when NO membership row exists (0 rows)", async () => {
+    q.mockResolvedValueOnce({ rows: [] });
+    expect(
+      await resolveSoleOrgMembership({ userId: "gone", pool: { query: q as never } }),
+    ).toBeNull();
+  });
+
+  it("returns null when MULTIPLE membership rows exist (no silent pick)", async () => {
+    q.mockResolvedValueOnce({
+      rows: [{ organizationId: "org-a" }, { organizationId: "org-b" }],
+    });
+    expect(
+      await resolveSoleOrgMembership({ userId: "multi", pool: { query: q as never } }),
+    ).toBeNull();
+  });
+
+  it("returns null when the sole row has a null organizationId", async () => {
+    q.mockResolvedValueOnce({ rows: [{ organizationId: null }] });
+    expect(
+      await resolveSoleOrgMembership({ userId: "user-1", pool: { query: q as never } }),
+    ).toBeNull();
+  });
+
+  it("fails closed (null) when the query throws", async () => {
+    q.mockRejectedValueOnce(new Error("db down"));
+    expect(
+      await resolveSoleOrgMembership({ userId: "user-1", pool: { query: q as never } }),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decodeBearerSub — the grant-type discriminator (#1592). Returns the `sub`
+// claim (the human user id) ONLY; undefined for a client_credentials token
+// (no sub) or any malformed input. `azp` is deliberately NOT consulted (it is
+// set for BOTH grants and cannot discriminate).
+// ---------------------------------------------------------------------------
+describe("decodeBearerSub", () => {
+  it("returns the sub claim for a human authorization_code token (with azp present)", () => {
+    expect(decodeBearerSub(humanBearer("human-1", "some-client"))).toBe("human-1");
+  });
+
+  it("returns the sub even without the `Bearer ` prefix", () => {
+    const withPrefix = humanBearer("human-2");
+    expect(decodeBearerSub(withPrefix.slice("Bearer ".length))).toBe("human-2");
+  });
+
+  it("returns undefined for a client_credentials token (azp only, no sub)", () => {
+    expect(decodeBearerSub(bearerWithClaims({ azp: "machine", scope: "mcp" }))).toBeUndefined();
+  });
+
+  it("returns undefined when sub is not a string", () => {
+    expect(decodeBearerSub(bearerWithClaims({ sub: 12345 }))).toBeUndefined();
+  });
+
+  it("returns undefined for a non-3-part token", () => {
+    expect(decodeBearerSub("Bearer not.a.jwt.token")).toBeUndefined();
+    expect(decodeBearerSub("Bearer opaque-token")).toBeUndefined();
+  });
+
+  it("returns undefined for null / undefined / empty header", () => {
+    expect(decodeBearerSub(null)).toBeUndefined();
+    expect(decodeBearerSub(undefined)).toBeUndefined();
+    expect(decodeBearerSub("Bearer ")).toBeUndefined();
   });
 });
 
@@ -397,6 +637,66 @@ describe("composeBearerActorContext", () => {
       pool: { query: queryMock as never },
     });
     expect(ctx).toEqual({ resolvedUserId: null, resolvedOrgId: null });
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  // --- #1592: human authorization_code composition through the same gate ----
+
+  it("composes the human authorization_code { sub, sole-org } through pickServerDerivedOrgId (#1592)", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ organizationId: "org-solo" }] });
+    const ctx = await composeBearerActorContext({
+      currentOrgId: null,
+      delegatedUserId: null,
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: "human-oauth-client",
+      authHeader: humanBearer("human-user-1"),
+      request: makeRequest("example.com"),
+      a2aDevBypass: "false",
+      isLocalhost: false,
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: "human-user-1", resolvedOrgId: "org-solo" });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never overrides a higher-precedence org for a human Bearer (cookie/OBO org wins; #1592)", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ organizationId: "org-solo" }] });
+    const ctx = await composeBearerActorContext({
+      currentOrgId: "cookie-active-org", // precedence #2 already set
+      delegatedUserId: null,
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: "human-oauth-client",
+      authHeader: humanBearer("human-user-1"),
+      request: makeRequest("example.com"),
+      a2aDevBypass: "false",
+      isLocalhost: false,
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    // userId comes from the human sub; org stays the higher-precedence one.
+    expect(ctx).toEqual({ resolvedUserId: "human-user-1", resolvedOrgId: "cookie-active-org" });
+  });
+
+  it("suppresses the human arm for a delegated OBO caller — no DB read, OBO identity wins (#1592)", async () => {
+    // The transport passes authHeader:null for a delegated token; even if a raw
+    // header leaked through, delegatedUserId short-circuits resolveActorIdentity.
+    const ctx = await composeBearerActorContext({
+      currentOrgId: "obo-org",
+      delegatedUserId: "human-chat-user",
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: undefined,
+      authHeader: null,
+      request: makeRequest(),
+      a2aDevBypass: "false",
+      isLocalhost: false,
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: "human-chat-user", resolvedOrgId: "obo-org" });
     expect(queryMock).not.toHaveBeenCalled();
   });
 });

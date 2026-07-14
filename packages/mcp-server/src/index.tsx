@@ -1167,6 +1167,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         trustedDevAdminUserId,
         sessionUser,
         requestClientId,
+        authHeader: delegatedActor ? null : authHeader,
         request,
         a2aDevBypass: process.env.A2A_DEV_BYPASS,
         isLocalhost: isLocalhostRequest(request),
