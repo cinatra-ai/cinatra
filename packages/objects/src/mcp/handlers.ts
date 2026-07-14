@@ -449,9 +449,18 @@ const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
  * it is unconditional and fail-closed: no claim probe, no org-context skip,
  * no kill-switch — memory files are untrusted input end-to-end, and a
  * memory-typed write whose schema cannot be resolved is refused outright.
+ *
+ * Returns the data TO PERSIST. For a valid memory envelope this is the input
+ * with the schema's `okfVersion` default ("0.1") materialized when the caller
+ * omitted it — the parsed output itself is NOT stored because Zod's strip
+ * mode would drop unknown top-level keys (the system-injected
+ * `cinatraAgentRunId`). Non-memory types pass through untouched.
  */
-function enforceMemoryConceptEnvelope(objectTypeId: string, data: unknown): void {
-  if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return;
+function enforceMemoryConceptEnvelope(
+  objectTypeId: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return data;
   const def = objectTypeRegistry.resolve(objectTypeId);
   if (!def) {
     // Fail closed: a memory-typed write with no static registration has no
@@ -469,6 +478,11 @@ function enforceMemoryConceptEnvelope(objectTypeId: string, data: unknown): void
       `[objects:memory-concept] invalid memory concept envelope: ${issues}`,
     );
   }
+  if (data.okfVersion === undefined) {
+    const parsedOkfVersion = (parsed.data as { okfVersion?: unknown }).okfVersion;
+    return { ...data, okfVersion: parsedOkfVersion ?? "0.1" };
+  }
+  return data;
 }
 
 export function createObjectsPrimitiveHandlers() {
@@ -621,8 +635,12 @@ export function createObjectsPrimitiveHandlers() {
       await enforceActivatedTypePayload(classification.type, orgId, enrichedData);
       // Memory-envelope gate (cinatra#1376): validates the SAME enriched
       // shape that gets stored, so the system-injected `cinatraAgentRunId`
-      // is tolerated and what is validated is exactly what persists.
-      enforceMemoryConceptEnvelope(classification.type, enrichedData);
+      // is tolerated and what is validated is exactly what persists (plus
+      // the materialized `okfVersion` default when the caller omitted it).
+      const dataForWrite = enforceMemoryConceptEnvelope(
+        classification.type,
+        enrichedData,
+      );
 
       const record = upsertObjectAndEnqueue({
         upsertInput: {
@@ -630,7 +648,7 @@ export function createObjectsPrimitiveHandlers() {
           type: classification.type,
           parentId: input.parentId ?? null,
           parentType: null,
-          data: enrichedData,
+          data: dataForWrite,
           createdBy: actorExt.userId,
           orgId,
           source: actorExt.source ?? null,
@@ -933,7 +951,7 @@ export function createObjectsPrimitiveHandlers() {
       // existing row's type.
       const incomingData =
         (input.data as Record<string, unknown> | undefined) ?? {};
-      const mergedData = {
+      let mergedData: Record<string, unknown> = {
         ...((existing.data as Record<string, unknown> | null) ?? {}),
         ...incomingData,
       };
@@ -942,8 +960,9 @@ export function createObjectsPrimitiveHandlers() {
         // Memory-envelope gate (cinatra#1376): a partial update of a memory
         // row must still yield a VALID merged envelope — rejected before any
         // commit (ahead of the project-move branch below, mirroring the
-        // activation gate's ordering rationale).
-        enforceMemoryConceptEnvelope(existing.type, mergedData);
+        // activation gate's ordering rationale). The gate returns the data to
+        // persist (`okfVersion` default materialized when absent).
+        mergedData = enforceMemoryConceptEnvelope(existing.type, mergedData);
       }
 
       const wantsProjectMove =

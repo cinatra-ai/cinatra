@@ -157,6 +157,17 @@ describe("objects_save — memory concept static path (AC1)", () => {
     expect(stored.externalId).toBe(computeMemoryConceptExternalId(BUNDLE_ID, CONCEPT_ID));
   });
 
+  it("materializes the okfVersion default into the STORED payload when omitted", async () => {
+    const { okfVersion: _drop, ...withoutVersion } = makeEnvelope();
+    await save(withoutVersion);
+    const stored = mockUpsert.mock.calls[0][0].upsertInput.data as Record<string, unknown>;
+    expect(stored.okfVersion).toBe("0.1");
+    // ...and never clobbers an explicit value.
+    await save(makeEnvelope({ okfVersion: "0.1-custom" }));
+    const stored2 = mockUpsert.mock.calls[1][0].upsertInput.data as Record<string, unknown>;
+    expect(stored2.okfVersion).toBe("0.1-custom");
+  });
+
   it("derives identity from the envelope's externalId (stable id across re-syncs)", async () => {
     await save(makeEnvelope());
     const first = mockUpsert.mock.calls[0][0].upsertInput.id;
