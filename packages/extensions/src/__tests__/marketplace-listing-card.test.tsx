@@ -92,7 +92,11 @@ describe("MarketplaceListingCard — footer-meta compat verdict is plain text, n
   it("renders the Unknown state (no declared ABI range) as the same plain anatomy, never green", () => {
     const html = renderCard({ sdkAbiRange: null });
     expect(html).toContain('data-compat-state="unknown"');
-    expect(html).toContain(">Unknown<");
+    // The neutral CompatMeta label names its subject ("Compatibility unknown"),
+    // so the row is self-describing without the neighbouring icon/column
+    // (cinatra#1540) — and the bare, ambiguous "Unknown" is gone.
+    expect(html).toContain(">Compatibility unknown<");
+    expect(html).not.toContain(">Unknown<");
     expect(html).toContain("text-badge-xs");
     expect(html).not.toContain('data-slot="badge"');
   });
