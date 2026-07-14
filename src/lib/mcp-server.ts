@@ -14,6 +14,7 @@ import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
 import { createApprovalsMcpModule } from "@/app/configuration/approvals/approvals-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
+import { createAssistantMcpModule } from "@/lib/assistant-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
 import { createBlogContentModule } from "@/lib/blog/integration/module";
 import { createDashboardsModule } from "@cinatra-ai/dashboards/module";
@@ -107,6 +108,12 @@ const postConnectorPlatformModules = [
   // project_instantiate / project_tick_context / project_dispatch_worker as
   // run-token-authenticated MCP tools offered to the PM seat's own agent run.
   createProjectSeamMcpModule(),
+  // Generalized assistant MCP surface (cinatra#1037 P5.5): assistant_send /
+  // assistant_thread_list / assistant_thread_get — registry-driven,
+  // handle-generic tools over the STRUCTURED assistant_threads/assistant_turns
+  // store. The legacy chat_thread_* set (createChatModule below) stays
+  // registered untouched; its teardown is P5.6.
+  createAssistantMcpModule(),
   createExtensionsModule(),
   createChatModule(),
   createTriggerModule(),
