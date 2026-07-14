@@ -1,26 +1,45 @@
 import "server-only";
 /**
  * §V Types & approvals — the type registry, relocated under the admin side
- * (cinatra#1431, spec design@4c6799db §V; formerly `/data/types`).
+ * (cinatra#1431, spec design@4c6799db §V; formerly `/data/types`, including its
+ * proposed-type approval feed — issue AC: "`/data/types` administration
+ * (static + dynamic registry views incl. the proposed-type approval feed) …
+ * relocate under the admin side").
  *
- * Two registers:
+ * Three registers, two distinct approval axes:
  *   - STATIC — the built-in row types + artifact-extension descriptors from
  *     the process registry, read-only;
- *   - DYNAMIC — every ACTIVE dynamic type with its ORG-SCOPED artifact-
- *     visibility approval state (the landed #1433 machinery). A dynamic type
- *     reaches an active registration through MCP registration / an install
- *     path WITHOUT any approval (`objects_type_register` mints `status='active'`
- *     directly) — that alone does NOT make its rows artifacts. Artifact
- *     visibility is granted only by the admin Approve action here, which writes
- *     the org-scoped approval RECORD (an org-scoped default claim held by the
- *     floor extension — explicitly NOT a status flip). A row therefore reads
- *     Approved (carries the approval record; joins default-artifact coverage)
- *     or Proposed (active + mintable, but its rows are plain objects). A
- *     dedicated claim makes default coverage dormant while the record persists.
+ *   - PROPOSED — dynamic types the classifier proposed but has NOT yet
+ *     activated (`status='proposed'`). A proposed type is not offered to the
+ *     classifier as a valid target until an admin PROMOTES it to active (the
+ *     global type-lifecycle decision), or archives it. This is the relocated
+ *     proposed-type approval feed; its Promote/Archive act on the type
+ *     LIFECYCLE (`approveDynamicObjectType` / `archiveDynamicObjectType`),
+ *     which is a different axis from artifact visibility below;
+ *   - DYNAMIC (active) — every ACTIVE dynamic type with its ORG-SCOPED
+ *     artifact-visibility approval state (the landed #1433 machinery). A
+ *     dynamic type reaches an active registration through promotion here, or
+ *     through MCP registration / an install path WITHOUT any approval
+ *     (`objects_type_register` mints `status='active'` directly) — that alone
+ *     does NOT make its rows artifacts. Artifact visibility is granted only by
+ *     the admin Approve action here, which writes the org-scoped approval
+ *     RECORD (an org-scoped default claim held by the floor extension —
+ *     explicitly NOT a status flip). A row therefore reads Approved (carries
+ *     the approval record; joins default-artifact coverage) or Proposed
+ *     (active + mintable, but its rows are plain objects). A dedicated claim
+ *     makes default coverage dormant while the record persists. Archive here
+ *     retires the active type via the same lifecycle action.
  */
-import { Braces, FileText, Rows } from "lucide-react";
+import { Braces, FileText, Rows, Sparkles } from "lucide-react";
 
-import { objectTypeRegistry } from "@cinatra-ai/objects";
+import {
+  objectTypeRegistry,
+  readAllDynamicObjectTypes,
+  approveDynamicObjectTypeAction,
+  archiveDynamicObjectTypeAction,
+  type DynamicObjectTypeRecord,
+} from "@cinatra-ai/objects";
+import { Button } from "@/components/ui/button";
 import {
   listDynamicTypeVisibilityReviewRows,
   approvalAwaitsDecision,
@@ -28,9 +47,18 @@ import {
 } from "@/lib/objects/artifact-visibility-approval";
 
 import { TypesApprovalsApproveButton } from "./types-approvals-approve-button";
+import { ArchiveTypeButton } from "./archive-type-button";
 
 export async function TypesApprovalsMode({ orgId }: { orgId: string | null }) {
   const staticTypes = objectTypeRegistry.list();
+
+  // Proposed dynamic types awaiting the admin lifecycle decision (promote to
+  // active — which admits the type into the classifier catalog and lets it gain
+  // artifact visibility — or archive to dismiss). Oldest first so the longest-
+  // waiting proposal surfaces at the top.
+  const proposedTypes = (await readAllDynamicObjectTypes())
+    .filter((t) => t.status === "proposed")
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
   // Every ACTIVE dynamic type with its org approval record (null ⇒ Proposed).
   // Awaiting-decision rows (no record, or a stranded 'reserved' claim) sort
@@ -91,6 +119,47 @@ export async function TypesApprovalsMode({ orgId }: { orgId: string | null }) {
                 </li>
               );
             })}
+          </ul>
+        )}
+      </section>
+
+      {/* Proposed types — the relocated proposed-type approval feed. Promote
+          admits the type into the classifier catalog; Archive dismisses it. */}
+      <section className="rounded-lg border border-line bg-surface-strong p-5">
+        <h2 className="mb-1 text-base font-semibold text-foreground">
+          Proposed types
+        </h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          The classifier proposes a new type when it can&apos;t confidently
+          categorize a saved object. A proposed type is NOT offered to the
+          classifier until an admin promotes it. Promote to activate it, or
+          archive to dismiss it.
+        </p>
+        {proposedTypes.length === 0 ? (
+          <div
+            className="flex flex-col items-center gap-2 py-8 text-center"
+            data-testid="artifacts-proposed-types"
+            data-conformance-id="artifacts-proposed-types"
+            data-state="empty"
+          >
+            <Sparkles aria-hidden className="size-8 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              No types awaiting promotion.
+            </p>
+          </div>
+        ) : (
+          <ul
+            className="overflow-hidden rounded-lg border border-line"
+            data-testid="artifacts-proposed-types"
+            data-conformance-id="artifacts-proposed-types"
+          >
+            {proposedTypes.map((row, i) => (
+              <ProposedTypeRow
+                key={row.type}
+                row={row}
+                isLast={i === proposedTypes.length - 1}
+              />
+            ))}
           </ul>
         )}
       </section>
@@ -173,6 +242,51 @@ function DynamicTypeRow({
         ) : (
           <TypesApprovalsApproveButton objectTypeId={row.objectTypeId} />
         )}
+        {/* Type-lifecycle archive (distinct from artifact visibility): retires
+            the active dynamic type, preserved from the former /data/types.
+            Confirmed — there is no in-app un-archive. */}
+        <ArchiveTypeButton
+          objectTypeId={row.objectTypeId}
+          action={archiveDynamicObjectTypeAction}
+        />
+      </div>
+    </li>
+  );
+}
+
+// Proposed-type approval feed row (relocated from /data/types). Promote runs
+// the global type-lifecycle promotion (proposed → active); Archive dismisses
+// the proposal. Both are a different axis from the artifact-visibility approval
+// above (which acts only on already-active types).
+function ProposedTypeRow({
+  row,
+  isLast,
+}: {
+  row: DynamicObjectTypeRecord;
+  isLast: boolean;
+}) {
+  return (
+    <li
+      className={
+        "flex items-center gap-3 px-3.5 py-3" + (isLast ? "" : " border-b border-line")
+      }
+    >
+      <div className="min-w-0 flex-1">
+        <span className="font-mono text-xs text-foreground">{row.type}</span>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {row.inferredName || "—"}
+          {row.inferredCategory ? ` · ${row.inferredCategory}` : ""}
+          {row.source ? ` · via ${row.source}` : ""}
+          {row.confidence ? ` · ${row.confidence} confidence` : ""}
+        </p>
+      </div>
+      <div className="flex flex-none items-center gap-2">
+        <form action={approveDynamicObjectTypeAction.bind(null, row.type)}>
+          <Button type="submit" size="sm" data-action="promote-type -> active">
+            Promote
+          </Button>
+        </form>
+        <ArchiveTypeButton objectTypeId={row.type} action={archiveDynamicObjectTypeAction} />
       </div>
     </li>
   );

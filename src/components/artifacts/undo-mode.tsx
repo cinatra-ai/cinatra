@@ -9,6 +9,11 @@ import "server-only";
  * each Undo reuses the exact `restoreChangeSetAction` path the former change-
  * set detail page used, which independently re-checks per-object authorization
  * on confirm. This is an admin-only mode (server-gated by the surface).
+ *
+ * `openRestore` carries a change-set id (the retired detail route's
+ * `?openRestore` deep-link, preserved by `undoDeepLink`): the matching row's
+ * restore modal auto-opens, but only when that change-set is actually
+ * restorable — the same guard the former detail route applied.
  */
 import { formatDistanceToNow } from "date-fns";
 import { Undo2 } from "lucide-react";
@@ -23,7 +28,13 @@ import { restoreChangeSetAction } from "@/components/data-safety/restore-change-
 
 const UNDO_LIST_LIMIT = 25;
 
-export function UndoMode({ orgId }: { orgId: string | null }) {
+export function UndoMode({
+  orgId,
+  openRestore,
+}: {
+  orgId: string | null;
+  openRestore?: string;
+}) {
   if (!orgId) return <UndoEmptyState />;
 
   let changeSets: ReturnType<typeof listChangeSets>;
@@ -113,6 +124,7 @@ export function UndoMode({ orgId }: { orgId: string | null }) {
               affectedObjectCount={r.objectCount}
               diffLines={r.diffLines}
               action={restoreChangeSetAction}
+              defaultOpen={openRestore === r.id && r.restorable}
             />
           </div>
         </li>

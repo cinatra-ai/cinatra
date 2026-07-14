@@ -15,8 +15,12 @@ vi.mock("@/lib/cinatra-toast", () => ({ toast: toastMock }));
 import { showUndoToast, undoDeepLink } from "../undo-toast";
 
 describe("undoDeepLink", () => {
-  it("lands on the consolidated undo surface (the per-change-set route was retired in cinatra#1431 §VII)", () => {
-    expect(undoDeepLink("cs_9")).toBe("/artifacts?mode=undo");
+  it("lands on the consolidated undo surface AND carries the change-set id so that row's restore modal auto-opens (the per-change-set route was retired in cinatra#1431 §VII)", () => {
+    expect(undoDeepLink("cs_9")).toBe("/artifacts?mode=undo&openRestore=cs_9");
+  });
+
+  it("url-encodes the change-set id", () => {
+    expect(undoDeepLink("cs/9 a")).toBe("/artifacts?mode=undo&openRestore=cs%2F9%20a");
   });
 });
 

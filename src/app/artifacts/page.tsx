@@ -40,6 +40,8 @@ type PageProps = {
     mode?: string;
     q?: string;
     facet?: string;
+    /** Undo deep-link (§VI): the change-set id whose restore modal auto-opens. */
+    openRestore?: string;
   }>;
 };
 
@@ -91,7 +93,7 @@ export default async function ArtifactsPage({ searchParams }: PageProps) {
           ) : activeMode === "types" ? (
             <TypesApprovalsMode orgId={orgId} />
           ) : activeMode === "undo" ? (
-            <UndoMode orgId={orgId} />
+            <UndoMode orgId={orgId} openRestore={sp.openRestore} />
           ) : (
             <MergeProposalsMode orgId={orgId} />
           )}
