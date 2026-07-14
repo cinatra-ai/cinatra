@@ -23,7 +23,16 @@ const h = vi.hoisted(() => {
   };
   const betterAuthMembers = { userId: "members.userId", organizationId: "members.organizationId" };
   const whereCalls: Array<{ table: unknown; filter: unknown }> = [];
-  const state: { rows: unknown[]; callerMembership: unknown[] } = { rows: [], callerMembership: [] };
+  // `handles` = the assistant handle registry (assistantUserId -> handle) the
+  // route reads via lookupAssistantHandlesByIds. The honest picker surfaces an
+  // assistant ONLY when it has a registry handle.
+  const state: { rows: unknown[]; callerMembership: unknown[]; handles: Record<string, string> } = {
+    rows: [],
+    callerMembership: [],
+    handles: {},
+  };
+  const lookupAssistantHandlesByIds = (ids: string[]) =>
+    Promise.resolve(new Map(ids.filter((id) => id in state.handles).map((id) => [id, state.handles[id]])));
   const betterAuthDb = {
     select: () => ({
       from: (table: unknown) => ({
@@ -44,7 +53,7 @@ const h = vi.hoisted(() => {
     }),
   };
   const getSession = vi.fn();
-  return { betterAuthUsers, betterAuthMembers, betterAuthDb, whereCalls, state, getSession };
+  return { betterAuthUsers, betterAuthMembers, betterAuthDb, lookupAssistantHandlesByIds, whereCalls, state, getSession };
 });
 
 vi.mock("next/headers", () => ({ headers: () => Promise.resolve(new Headers()) }));
@@ -53,6 +62,7 @@ vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: h.betterAuthDb,
   betterAuthMembers: h.betterAuthMembers,
   betterAuthUsers: h.betterAuthUsers,
+  lookupAssistantHandlesByIds: (ids: string[]) => h.lookupAssistantHandlesByIds(ids),
 }));
 vi.mock("drizzle-orm", () => ({
   and: (...args: unknown[]) => ({ __op: "and", args }),
@@ -68,6 +78,7 @@ describe("GET /api/assistants/list", () => {
     h.whereCalls.length = 0;
     h.state.rows = [];
     h.state.callerMembership = [];
+    h.state.handles = {};
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -89,6 +100,7 @@ describe("GET /api/assistants/list", () => {
       { id: "u-2", name: "Bob", userType: null },
       { id: "asst", username: "cinatra", userType: "assistant" },
     ];
+    h.state.handles = { asst: "cinatra" }; // registry handle → picker surfaces the assistant
 
     const res = await GET();
     expect(res.status).toBe(200);
@@ -134,6 +146,7 @@ describe("GET /api/assistants/list", () => {
     });
     h.state.callerMembership = []; // caller is NOT a current member of org-ghost
     h.state.rows = [{ id: "asst", username: "cinatra", userType: "assistant" }];
+    h.state.handles = { asst: "cinatra" };
 
     const res = await GET();
     expect(res.status).toBe(200);
@@ -154,6 +167,7 @@ describe("GET /api/assistants/list", () => {
   it("returns assistants only when the caller has no active org", async () => {
     h.getSession.mockResolvedValue({ user: { id: "u-self" }, session: {} });
     h.state.rows = [{ id: "asst", username: "cinatra", userType: "assistant" }];
+    h.state.handles = { asst: "cinatra" };
 
     const res = await GET();
     expect(res.status).toBe(200);
@@ -163,5 +177,20 @@ describe("GET /api/assistants/list", () => {
     expect(userCall?.filter).toEqual({ __op: "eq", col: "users.userType", val: "assistant" });
     const body = (await res.json()) as { assistants: Array<{ id: string }> };
     expect(body.assistants.map((a) => a.id)).toEqual(["asst"]);
+  });
+
+  it("omits an assistant that has no registry handle (never advertises a non-resolving handle)", async () => {
+    h.getSession.mockResolvedValue({ user: { id: "u-self" }, session: {} });
+    h.state.rows = [
+      { id: "asst", username: "cinatra", userType: "assistant" },
+      { id: "asst-new", username: "freshbot", userType: "assistant" },
+    ];
+    h.state.handles = { asst: "cinatra" }; // asst-new not yet backfilled
+
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { assistants: Array<{ id: string; handle: string }> };
+    expect(body.assistants.map((a) => a.id)).toEqual(["asst"]);
+    expect(body.assistants[0].handle).toBe("cinatra");
   });
 });

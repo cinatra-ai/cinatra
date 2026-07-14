@@ -1,0 +1,9 @@
+{
+  "seq": "0046",
+  "file": "core/core__0046_assistant-handle-registry.mjs",
+  "summary": "Assistant handle registry (cinatra#1037 P1.2 / P5.1 substrate). Adds assistant_handles: the normalized, platform-unique handle an assistant PRINCIPAL is mentioned by (assistant_user_id PRIMARY KEY, handle NOT NULL + a UNIQUE index, is_override flag, timestamps) — the forward replacement for mention resolution's dependency on the un-normalized raw-lowercase public.\"user\".username. assistant_user_id is a bare text column (no cross-schema FK to the Better Auth public.\"user\" table, exactly like assistant_threads.assistant_user_id). up() creates the table + unique index (idempotent). STRUCTURAL ONLY: handles are populated by the runtime boot backfill (backfillMissingAssistantHandles, ensureAssistantBootstrap — which runs AFTER migrations) as the SOLE collision-correct code path, mirroring the built-in @cinatra seed (identity minted at boot, not by a migration); no SQL backfill, so no SQL-vs-runtime divergence and no re-run PK hazard. Gate class NON-destructive (additive): a NEW table + a unique index on that NEW table — no change to existing tables, no NOT NULL on existing data, no tightened constraint, no data rewrite. Mirrors the idempotent bootstrap DDL in src/lib/assistant-thread-schema.ts (assistantHandleSchemaQueries, spread into buildCreateStoreSchemaQueries) so fresh-bootstrap and operator-upgrade stay aligned (core__0026/core__0034 precedent). down() drops the unique index then the table (the registry is re-minted idempotently on the next boot / mention resolve). SEQ IS PROVISIONAL: assigned at merge; 0044 is claimed by open PR #1384 and 0045 by the in-flight #1430 branch, so this builds as 0046 — renumber-at-merge is normal.",
+  "destructive": false,
+  "tables": [
+    "assistant_handles"
+  ]
+}
