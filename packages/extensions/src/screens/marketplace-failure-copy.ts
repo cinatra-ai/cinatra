@@ -309,50 +309,92 @@ export function classifyMarketplaceFailure(error: unknown): MarketplaceFailureCa
 // true cause. These extractors return that raw signal for the SANITIZED
 // operator log ONLY — they read the SAME public coarse code / status the
 // classifier already sees (no new oracle), and they never surface a response
-// body, secret, or per-dependency detail. `extractContractCode` returns the
-// FIRST `cinatra.<code>` token (or explicit code field) found, WITHOUT the
-// `cinatra.` prefix — even a code we do not (yet) map to a category, so the
-// operator sees the true contract code the app fell safe on.
+// body, secret, or per-dependency detail.
+//
+// `extractContractCode` returns the contract code that EXPLAINS the logged
+// category, so an operator reading a `code=… category=…` line never sees a
+// mismatch:
+//  - if the classifier resolved a concrete category, it returns the FIRST
+//    MAPPED code in the classifier's own walk order — i.e. the exact code that
+//    produced that category, SKIPPING an earlier as-yet-UNMAPPED token exactly
+//    as `classifyMarketplaceFailure`'s `probe` does (so a new PHP-taxonomy code
+//    the TS map has not caught up with, sitting ahead of a mapped code in the
+//    same error, can never be logged as the cause of a category it did not
+//    produce);
+//  - only when NO code in the chain maps to a category (the classifier fell
+//    SAFE to `unrecoverable`) does it return the first coarse code SEEN — the
+//    unmapped code the app fell safe on, which is precisely what the operator
+//    needs to see to notice the drift;
+//  - `null` when no coarse code is present at all.
+// Codes are returned WITHOUT the `cinatra.` prefix and length-bounded.
 // ---------------------------------------------------------------------------
 
 // A contract code is a bounded token; cap the extracted length so an adversarial
 // giant token can never bloat an operator log line (real codes are < 64 chars).
 const MAX_CONTRACT_CODE_LEN = 64;
 
-/** Walk the error chain for the first public coarse code (bare, unprefixed). */
-export function extractContractCode(error: unknown, depth = 0): string | null {
+// Single walk over the error chain (message → responseBody → explicit code
+// field → cause — the SAME order `probe` / `classifyMarketplaceFailure` uses),
+// returning the first coarse code that satisfies `accept`. Bounded depth so a
+// cyclic cause chain can never loop forever. `extractContractCode` runs it twice
+// — first demanding a MAPPED code, then (only if none) accepting any code — so
+// the extracted code always agrees with the classifier's category decision.
+function walkContractCode(
+  error: unknown,
+  depth: number,
+  accept: (bareCode: string) => boolean,
+): string | null {
   if (depth > 6 || error == null) return null;
   if (typeof error === "string") {
     COARSE_CODE_RE.lastIndex = 0;
-    const m = COARSE_CODE_RE.exec(error);
-    return m ? m[1].toLowerCase().slice(0, MAX_CONTRACT_CODE_LEN) : null;
+    let m: RegExpExecArray | null;
+    while ((m = COARSE_CODE_RE.exec(error)) !== null) {
+      const bare = m[1].toLowerCase();
+      if (accept(bare)) return bare.slice(0, MAX_CONTRACT_CODE_LEN);
+    }
+    return null;
   }
   if (typeof error !== "object") return null;
   const obj = error as Record<string, unknown>;
   if (typeof obj.message === "string") {
-    const c = extractContractCode(obj.message, depth + 1);
+    const c = walkContractCode(obj.message, depth + 1, accept);
     if (c) return c;
   }
   if (typeof obj.responseBody === "string") {
-    const c = extractContractCode(obj.responseBody, depth + 1);
+    const c = walkContractCode(obj.responseBody, depth + 1, accept);
     if (c) return c;
   }
   for (const key of ["code", "error_code", "errorCode"]) {
     const v = obj[key];
     if (typeof v === "string") {
-      // Mirror the classifier's explicit-code-field handling exactly: strip a
-      // LEADING `cinatra.` (a bare code is accepted too) and take the bounded
-      // token. This keeps `{ code: "install_not_found" }` — which the classifier
-      // classifies — from extracting as `null` (the two must agree).
+      // Mirror the classifier's explicit-code-field handling: strip a LEADING
+      // `cinatra.` (a bare code is accepted too) and take the bounded token, so
+      // `{ code: "install_not_found" }` — which the classifier classifies —
+      // never extracts as `null` (the two must agree).
       const bare = v.toLowerCase().replace(/^cinatra\./, "").trim();
-      if (/^[a-z0-9_]+$/.test(bare)) return bare.slice(0, MAX_CONTRACT_CODE_LEN);
+      if (/^[a-z0-9_]+$/.test(bare) && accept(bare)) {
+        return bare.slice(0, MAX_CONTRACT_CODE_LEN);
+      }
     }
   }
   if ("cause" in obj) {
-    const c = extractContractCode(obj.cause, depth + 1);
+    const c = walkContractCode(obj.cause, depth + 1, accept);
     if (c) return c;
   }
   return null;
+}
+
+/**
+ * Walk the error chain for the contract code that explains the classifier's
+ * category (see the header above). First pass demands a MAPPED code (the exact
+ * code the classifier resolved on); the fallback pass accepts the first coarse
+ * code seen (the code the classifier fell safe on). Bare, unprefixed, bounded.
+ */
+export function extractContractCode(error: unknown): string | null {
+  return (
+    walkContractCode(error, 0, (code) => copyCategoryForCode(code) !== undefined) ??
+    walkContractCode(error, 0, () => true)
+  );
 }
 
 /** Walk the error chain for the first HTTP status number (raw, any status). */

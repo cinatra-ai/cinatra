@@ -330,6 +330,31 @@ describe("extractContractCode / extractHttpStatus — sanitized operator diagnos
     expect(extractContractCode(new Error("cinatra.some_future_code"))).toBe("some_future_code");
   });
 
+  it("logs the code that PRODUCED the category, skipping an earlier UNMAPPED token (#1539)", () => {
+    // Drift shape: a new PHP-taxonomy code the TS map has not caught up with
+    // (`cinatra.some_future_code`) sits AHEAD of a mapped code in the SAME
+    // string. The classifier skips the unmapped token and classifies from the
+    // mapped one — so the operator `code=` MUST be the mapped code that produced
+    // the category, never the earlier unmapped token (that would be exactly the
+    // misleading `code=X category=<from a different code>` diagnostic #1539 is
+    // about). Same requirement when the two tokens are split across fields.
+    const oneString = new Error("cinatra.some_future_code then cinatra.install_not_found");
+    expect(classifyMarketplaceFailure(oneString)).toBe("unavailable-version");
+    expect(extractContractCode(oneString)).toBe("install_not_found");
+
+    const splitFields = Object.assign(new Error("boom cinatra.some_future_code"), {
+      responseBody: JSON.stringify({ code: "cinatra.install_not_entitled" }),
+    });
+    expect(classifyMarketplaceFailure(splitFields)).toBe("denied-entitlement");
+    expect(extractContractCode(splitFields)).toBe("install_not_entitled");
+
+    // When NO code maps (the classifier truly fell safe), the operator still
+    // sees the first unmapped code — the drift signal is not swallowed.
+    const allUnmapped = new Error("cinatra.some_future_code and cinatra.another_future_code");
+    expect(classifyMarketplaceFailure(allUnmapped)).toBe("unrecoverable");
+    expect(extractContractCode(allUnmapped)).toBe("some_future_code");
+  });
+
   it("returns null when no coarse code is present (a bare 404)", () => {
     expect(extractContractCode(Object.assign(new Error("not found"), { httpStatus: 404 }))).toBe(
       null,
