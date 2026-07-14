@@ -6,7 +6,6 @@ import Link from "next/link";
 import {
   requireAdminSession,
   requireAuthSession,
-  getAuthSession,
   buildCanDoOptsFromSession,
   isPlatformAdmin,
   resolveOrgRoleForSession,
@@ -189,9 +188,14 @@ export async function AgentApprovalDetailScreen({
 }: {
   id: string;
 }) {
-  await requireAdminSession();
-  const session = await getAuthSession();
-  const orgId = session?.session?.activeOrganizationId ?? null;
+  // The outer route gate (page.tsx) only requires an authenticated session;
+  // the author-or-admin decision has to live HERE, where the request row (and
+  // thus its authorId) is read. Mirrors the MCP read predicate in
+  // mcp/agent-creation-request-handlers.ts (admin OR the row's own author may
+  // read; only an admin may decide).
+  const session = await requireAuthSession();
+  const isAdmin = isPlatformAdmin(session);
+  const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
     return (
       <Main className="min-h-screen">
@@ -210,7 +214,11 @@ export async function AgentApprovalDetailScreen({
     "@/lib/agent-creation-requests-store"
   );
   const req = readAgentCreationRequestById(id, orgId);
-  if (!req) {
+  // A non-admin who is not the request's author gets the SAME response as a
+  // non-existent id — the 404-hide must not let a caller distinguish
+  // "exists but not yours" from "does not exist".
+  const isAuthor = !!req && req.authorId === session.user.id;
+  if (!req || (!isAdmin && !isAuthor)) {
     return (
       <Main className="min-h-screen">
         <PageContent className="flex flex-col gap-6 pb-8">
@@ -273,9 +281,9 @@ export async function AgentApprovalDetailScreen({
           </pre>
         </div>
 
-        {isPending ? (
+        {isAdmin && isPending ? (
           <ApprovalDecisionForm requestId={req.id} snapshotHash={req.snapshotHash} />
-        ) : req.status === "approved" ? (
+        ) : isAdmin && req.status === "approved" ? (
           // Stuck-approved state: CAS to approved succeeded but materialize+
           // publish errored. Admin can retry without re-deciding.
           <ApprovalDecisionForm
@@ -284,8 +292,14 @@ export async function AgentApprovalDetailScreen({
             stuckApproved
           />
         ) : (
+          // Non-admin author (read-only) sees no decide affordances — only an
+          // honest status line. Admins fall here only for a terminal status.
           <div className="soft-panel rounded-card px-6 py-4 text-sm text-muted-foreground">
-            This request is no longer pending (status: {req.status}).
+            {isPending ? (
+              "This request is awaiting an administrator's decision."
+            ) : (
+              <>This request is no longer pending (status: {req.status}).</>
+            )}
             {req.decidedBy ? <> Decided by {req.decidedBy}.</> : null}
           </div>
         )}

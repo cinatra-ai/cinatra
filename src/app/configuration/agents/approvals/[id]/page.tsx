@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { requireAdminSession } from "@/lib/auth-session";
+import { requireAuthSession } from "@/lib/auth-session";
 import { AgentApprovalDetailScreen } from "@cinatra-ai/agents/screens";
 import { SearchParamToast } from "@/components/search-param-toast";
 import { APPROVAL_DECISION_TOASTS } from "./approval-decision-flash";
@@ -12,7 +12,11 @@ export default async function ApprovalDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireAdminSession();
+  // Author-or-admin authorization is enforced inside AgentApprovalDetailScreen,
+  // where the request row (and thus its authorId) is read; this outer gate can
+  // only require an authenticated session. An unauthenticated caller is still
+  // redirected to /sign-in by requireAuthSession().
+  await requireAuthSession();
   const { id } = await params;
   // The post-decision redirect result (?status=/?error=) surfaces via the
   // codes-only <SearchParamToast> island mounted HERE (cinatra#391 → toast

@@ -93,6 +93,7 @@ vi.mock("@cinatra-ai/notifications/server", () => notificationsMock);
 import {
   handleAgentCreationRequestPropose,
   handleAgentCreationRequestDecide,
+  handleAgentCreationRequestGet,
 } from "../mcp/agent-creation-request-handlers";
 
 function req(name: string, input: Record<string, unknown>, actor: Record<string, unknown>) {
@@ -454,6 +455,68 @@ describe("agent_creation_request handlers", () => {
       )) as { error?: string };
       expect(out.error).toMatch(/package-name collision/i);
       expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Author-or-admin READ RULE (admin OR the row's own author may read —
+  // `!admin && row.authorId !== userId`). #1552 brings the WEB detail route's
+  // ACCESS RULE to this same predicate; that is the axis on which the two
+  // surfaces are "at parity".
+  //
+  // They CURRENTLY DIVERGE on existence-hiding, and these tests CHARACTERIZE
+  // (not endorse) that divergence: the web route 404-hides a non-author (a
+  // missing id and an existing-but-not-yours id are byte-identical), whereas
+  // this token-gated MCP handler returns a DISTINGUISHABLE "forbidden — not your
+  // request" vs "not found" — i.e. the MCP surface is a weak existence oracle
+  // for an org member who can already reach the (org-scoped) primitive. That is
+  // a KNOWN, out-of-#1552-scope property of a platform-authz-reviewed carve-out
+  // (see src/lib/authz/carve-out.ts → agent_creation_request_get, risk=low);
+  // hardening the MCP surface to also 404-hide is a separate platform-authz
+  // decision, deliberately NOT taken here (the handler source is untouched by
+  // #1552). If it is later hardened, `non-author-deny` below flips from
+  // "forbidden — not your request" to "not found" and must be updated with it —
+  // this assertion is the tripwire, not a guarantee the leak is desirable.
+  // -------------------------------------------------------------------------
+  describe("get — author-or-admin read RULE (#1552 parity is on the RULE, not existence-hiding)", () => {
+    const OWN_ROW = {
+      id: "req-1", orgId: "org-1", authorId: "user-author", status: "proposed",
+      snapshotHash: "fakehash", packageName: "@test/test-agent", packageSlug: "test-agent",
+      packageVersion: "0.1.0", proposalSnapshot: SAMPLE_INPUT,
+    };
+    const OTHERS_ROW = { ...OWN_ROW, authorId: "user-other" };
+
+    it("author-read-allow: a non-admin author reads THEIR OWN request (org-scoped read)", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(OWN_ROW);
+      const out = (await handleAgentCreationRequestGet(
+        req("agent_creation_request_get", { id: "req-1" }, NON_ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+      expect(storeMock.readAgentCreationRequestById).toHaveBeenCalledWith("req-1", "org-1");
+    });
+
+    it("non-author-deny: a non-admin who is not the author is refused (forbidden — not your request)", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(OTHERS_ROW);
+      const out = (await handleAgentCreationRequestGet(
+        req("agent_creation_request_get", { id: "req-1" }, NON_ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/forbidden.*not your request/i);
+    });
+
+    it("admin-reads-any: an admin reads a request authored by someone else", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(OTHERS_ROW);
+      const out = (await handleAgentCreationRequestGet(
+        req("agent_creation_request_get", { id: "req-1" }, ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+    });
+
+    it("missing id → not found (never leaks another org's row)", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(undefined);
+      const out = (await handleAgentCreationRequestGet(
+        req("agent_creation_request_get", { id: "nope" }, NON_ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/not found/i);
     });
   });
 
