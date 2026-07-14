@@ -159,7 +159,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/assistant-thread-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b.",
+      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b. P5.5 adds one call site: the per-actor visibility-predicate list read (listAssistantThreadsForOrgVisibleTo) backing the assistant_thread_list MCP tool — same class, same table, same migration path.",
   },
   "src/lib/chat-capture/ledger.ts": {
     class: "migratable-request-path",
@@ -214,7 +214,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/objects/binding-reconcile-sweep.ts": {
     class: "migratable-background-setup",
     justification:
-      "Binding reconcile sweep + queue consumer + enrollment backfill (cinatra#1429): a COLD administrative batch path (checkpointed, resumable) that pages a claimed type's object rows and reconciles each binding, plus the drain of the claim registry's winner-change reconcile queue. Driven by claim lifecycle transitions + enrollment, not a request-time store; sync leaf composing into the synchronous store graph. Migrates with the objects subsystem.",
+      "Binding reconcile sweep + queue consumer + enrollment backfill (cinatra#1429): a COLD administrative batch path (checkpointed, resumable) that pages a claimed type's object rows and reconciles each binding, plus the drain of the claim registry's winner-change reconcile queue. cinatra#1433 adds the guarded per-row default-coverage floor reconcile (one guard SELECT + a conditional advisory-locked rebalance tx) to the same cold sweep/drain. Driven by claim lifecycle transitions + enrollment, not a request-time store; sync leaf composing into the synchronous store graph. Migrates with the objects subsystem.",
   },
   "src/lib/objects/claim-activation-gate.ts": {
     class: "migratable-background-setup",

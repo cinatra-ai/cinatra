@@ -51,6 +51,10 @@ const MODULE_TO_HANDLERS: Record<string, string> = {
   createMetricUsageMcpModule: "packages/metric-usage-api/src/mcp/handlers.ts",
   createAgentsModule: "packages/agents/src/mcp/handlers.ts",
   createApprovalsMcpModule: "src/app/configuration/approvals/approvals-mcp.ts",
+  // Direct server.registerTool style (3 tools each) — the key:async() scan
+  // counts 0 from these; the names are covered by the authz inventory instead.
+  createProjectSeamMcpModule: "src/lib/project-seam-mcp.ts",
+  createAssistantMcpModule: "src/lib/assistant-mcp.ts",
   createExtensionsModule: "packages/extensions/src/mcp/handlers.ts",
   createChatModule: "packages/chat/src/mcp/handlers.ts",
   createTriggerModule: "packages/trigger/src/mcp/handlers.ts",

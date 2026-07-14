@@ -207,18 +207,115 @@ export function resolveCubeIdFromQuery(q: CubeJsWireQuery): string | null {
   return dot > 0 ? firstMember.slice(0, dot) : null;
 }
 
+// ─── Human-readable cube-scope messages (cinatra#1512) ─────────────────
+
+/**
+ * Distinct `<cube>.` prefixes referenced anywhere in a query-LIKE object, in
+ * first-seen order. Walks the same member surfaces `resolveCubeIdFromQuery` /
+ * cube-guard resolve cube ids from: measures, dimensions, segments,
+ * timeDimensions[].dimension, order keys (object or legacy tuple-array form),
+ * filters[].member. Tolerant of unknown/partial shapes (persisted portlet
+ * configs are opaque to Zod) — anything non-conforming is skipped, so this is
+ * safe to run on untrusted `analysisConfig.query` blobs at save time.
+ */
+export function collectQueryCubeIds(query: unknown): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (member: unknown): void => {
+    if (typeof member !== "string") return;
+    const dot = member.indexOf(".");
+    if (dot <= 0) return;
+    const cube = member.slice(0, dot);
+    if (!seen.has(cube)) {
+      seen.add(cube);
+      out.push(cube);
+    }
+  };
+  if (typeof query !== "object" || query === null) return out;
+  const q = query as Record<string, unknown>;
+  for (const key of ["measures", "dimensions", "segments"]) {
+    const arr = q[key];
+    if (Array.isArray(arr)) for (const m of arr) push(m);
+  }
+  if (Array.isArray(q.timeDimensions)) {
+    for (const td of q.timeDimensions) {
+      push((td as Record<string, unknown> | null)?.dimension);
+    }
+  }
+  if (Array.isArray(q.order)) {
+    // Legacy tuple-array order: [["<cube>.<member>", "asc"], …]
+    for (const entry of q.order) {
+      if (Array.isArray(entry)) push(entry[0]);
+    }
+  } else if (q.order && typeof q.order === "object") {
+    for (const key of Object.keys(q.order)) push(key);
+  }
+  if (Array.isArray(q.filters)) {
+    for (const f of q.filters) {
+      push((f as Record<string, unknown> | null)?.member);
+    }
+  }
+  return out;
+}
+
+/**
+ * Cube id → display-ish name for error copy ("agent_runs" → "Agent Runs").
+ * Deterministic title-casing so error paths never need async cube metadata;
+ * acronym cubes (e.g. "llm_usage" → "Llm Usage") stay readable enough for an
+ * error message.
+ */
+export function humanizeCubeId(cubeId: string): string {
+  return cubeId
+    .split(/[_-]+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** "A" / "A and B" / "A, B, and C" — for cube-name lists in error copy. */
+function formatNameList(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+/**
+ * The product copy for a single query that mixes fields from several cubes
+ * (issue #1512 acceptance copy). Shared by the query endpoint's
+ * `cube_id_ambiguous` message and the dashboards save-path validation so the
+ * user reads the SAME explanation at save time and on a rendered error card.
+ */
+export function describeCrossCubeQuery(cubeIds: readonly string[]): string {
+  const names = formatNameList(cubeIds.map(humanizeCubeId));
+  return `This portlet mixes fields from ${names}. Choose fields from one data source.`;
+}
+
 /**
  * Assert all member references in `q` share the same `<cube>.` prefix.
  * Returns the prefix on success, or an error code on ambiguity / missing.
+ * The error arm carries a human-readable `userMessage` (rendered verbatim by
+ * drizzle-cube's error card, which throws `new Error(body.error)`) alongside
+ * the machine `code`/`details`.
  */
 export function resolveAndValidateCubeId(
   q: CubeJsWireQuery,
 ):
   | { ok: true; cubeId: string }
-  | { ok: false; code: "cube_id_required" | "cube_id_ambiguous"; details: Readonly<Record<string, unknown>> } {
+  | {
+      ok: false;
+      code: "cube_id_required" | "cube_id_ambiguous";
+      userMessage: string;
+      details: Readonly<Record<string, unknown>>;
+    } {
   const cubeId = resolveCubeIdFromQuery(q);
   if (!cubeId) {
-    return { ok: false, code: "cube_id_required", details: { reason: "no fully-qualified members in query" } };
+    return {
+      ok: false,
+      code: "cube_id_required",
+      userMessage:
+        "This card's query doesn't reference any data source fields. Edit this card and pick at least one measure or dimension.",
+      details: { reason: "no fully-qualified members in query" },
+    };
   }
   const allMembers: string[] = [
     ...(q.measures ?? []),
@@ -233,9 +330,18 @@ export function resolveAndValidateCubeId(
   const prefix = `${cubeId}.`;
   const foreign = allMembers.filter((m) => !m.startsWith(prefix));
   if (foreign.length > 0) {
+    // Multiple qualified cubes → name them all; otherwise the "foreign"
+    // members are bare (`count`, not `<cube>.count`) and naming a single cube
+    // as a mix would read wrong — name the offending fields instead.
+    const cubes = collectQueryCubeIds(q);
+    const explanation =
+      cubes.length > 1
+        ? describeCrossCubeQuery(cubes)
+        : `Some fields in this card's query don't belong to the ${humanizeCubeId(cubeId)} data source (${foreign.join(", ")}). Choose fields from one data source.`;
     return {
       ok: false,
       code: "cube_id_ambiguous",
+      userMessage: `${explanation} Edit this card to change its fields — retrying will not fix an invalid configuration.`,
       details: { resolved: cubeId, foreignMembers: foreign },
     };
   }

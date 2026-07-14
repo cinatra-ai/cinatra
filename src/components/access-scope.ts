@@ -23,6 +23,53 @@ export type AvailableScopes = {
   canGrantWorkspace: boolean;
 };
 
+// ---------------------------------------------------------------------------
+// Unknown-entity fallback — the ONE shared source of truth for BOTH pickers
+// (cinatra#1509 §4.0-a). Replaces every silent `id.slice(-6)` fallback so an
+// unresolvable scope id NEVER leaks a truncated id into a human label. Both the
+// hierarchical `resolveAccessParts` (below) AND the flat picker's local
+// `resolveAccessLabel` (src/components/access-combobox.tsx) delegate here, so
+// the "Unknown team" / "Unknown project" / … contract (§3.2) has a single
+// definition instead of two copies that drift (cinatra#1508's `Team: 288b9a`).
+// ---------------------------------------------------------------------------
+
+export type ScopeEntityKind = "team" | "project" | "user" | "org" | "template";
+
+const UNKNOWN_SCOPE_ENTITY_LABEL: Record<ScopeEntityKind, string> = {
+  team: "Unknown team",
+  project: "Unknown project",
+  user: "Unknown user",
+  org: "Unknown organization",
+  template: "Unknown template",
+};
+
+/**
+ * The explicit "Unknown <kind>" label shown when an entity id cannot be
+ * resolved to a name. NEVER contains the id — an unresolved scope reads as
+ * "Unknown team", not a truncated id suffix (§3.2). Callers relegate the raw id
+ * to a tooltip / secondary `font-mono` line, never into this label.
+ */
+export function unknownScopeEntityName(kind: ScopeEntityKind): string {
+  return UNKNOWN_SCOPE_ENTITY_LABEL[kind];
+}
+
+/**
+ * Resolve an entity id to a display name: the resolved name when present and
+ * non-empty, otherwise the explicit "Unknown <kind>" fallback. The `id` is
+ * accepted so callers pass the full (kind, id, name?) triple, but is
+ * DELIBERATELY never leaked into the returned label (cinatra#1508 — the
+ * previous `id.slice(-6)` fallbacks surfaced a raw id as if it were a name).
+ */
+export function resolveScopeEntityName(
+  kind: ScopeEntityKind,
+  id: string,
+  resolvedName?: string | null,
+): string {
+  void id; // accepted for a stable call shape; never interpolated into the label.
+  const trimmed = resolvedName?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : unknownScopeEntityName(kind);
+}
+
 /**
  * Resolve a visibility token to (type, name) for rendering. The closed trigger
  * shows `<type>: <name>`; dropdown rows reuse the same decomposition so the
@@ -47,12 +94,17 @@ export function resolveAccessParts(
     const id = visibility.slice("team:".length);
     const owner = scopes.orgs.find((o) => o.teams.some((t) => t.id === id));
     const team = owner?.teams.find((t) => t.id === id);
-    return { type: "Team", name: owner && team ? `${owner.name} - ${team.name}` : id.slice(-6) };
+    return {
+      type: "Team",
+      name: resolveScopeEntityName("team", id, owner && team ? `${owner.name} - ${team.name}` : undefined),
+    };
   }
   if (typeof visibility === "string" && visibility.startsWith("project:")) {
     const id = visibility.slice("project:".length);
-    const name = scopes.projects.find((p) => p.id === id)?.name ?? `Project ${id.slice(-6)}`;
-    return { type: "Project", name };
+    return {
+      type: "Project",
+      name: resolveScopeEntityName("project", id, scopes.projects.find((p) => p.id === id)?.name),
+    };
   }
   return { type: null, name: visibility };
 }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// recipient-policy.ts reaches Postgres and the project schema name through
-// injected NotificationsHostAdapters. We register a mock adapter via
+// recipient-policy.ts reaches Postgres through injected
+// NotificationsHostAdapters. We register a mock adapter via
 // `setNotificationsHostAdapters` (the /server ergonomic re-export — correct
 // for NON-boot test callers). These tests cover pure routing logic + the
 // resolver fallback paths; DB-backed resolution is integration-tested
@@ -23,8 +23,8 @@ beforeEach(() => {
   setNotificationsHostAdapters({
     getPostgresConnectionString: () => "postgres://stub",
     ensurePostgresSchema: vi.fn(),
-    // `postgresSchema` supplies the schema name used by
-    // resolveProjectMemberUserIds.
+    // `postgresSchema` satisfies the adapter contract; not exercised by the
+    // remaining recipient-policy routing paths.
     postgresSchema: "cinatra",
     runPostgresQueriesSync: runQueriesMock,
     getAuthSession: async () => null,
@@ -41,9 +41,6 @@ describe("topicForRecipient", () => {
     expect(
       topicForRecipient({ kind: "organization", organizationId: "o-1" }),
     ).toBe("organization:o-1");
-    expect(
-      topicForRecipient({ kind: "project", projectId: "p-1" }),
-    ).toBe("project:p-1");
     expect(topicForRecipient({ kind: "admins" })).toBe("admins");
   });
 });
@@ -241,7 +238,7 @@ describe("resolveRecipientToUserIds", () => {
     ).toEqual([]);
   });
 
-  it("returns [] for empty team/org/project ids (no DB query)", async () => {
+  it("returns [] for empty team/org ids (no DB query)", async () => {
     expect(
       await resolveRecipientToUserIds({ kind: "team", teamId: "" }),
     ).toEqual([]);
@@ -251,12 +248,9 @@ describe("resolveRecipientToUserIds", () => {
         organizationId: "",
       }),
     ).toEqual([]);
-    expect(
-      await resolveRecipientToUserIds({ kind: "project", projectId: "" }),
-    ).toEqual([]);
   });
 
-  it("delegates to the mocked query runner for admin / team / org / project (no rows in stub)", async () => {
+  it("delegates to the mocked query runner for admin / team / org (no rows in stub)", async () => {
     expect(await resolveRecipientToUserIds({ kind: "admins" })).toEqual([]);
     expect(
       await resolveRecipientToUserIds({ kind: "team", teamId: "t-1" }),
@@ -267,24 +261,5 @@ describe("resolveRecipientToUserIds", () => {
         organizationId: "o-1",
       }),
     ).toEqual([]);
-    expect(
-      await resolveRecipientToUserIds({ kind: "project", projectId: "p-1" }),
-    ).toEqual([]);
-  });
-
-  it("resolveProjectMemberUserIds uses the injected postgresSchema", async () => {
-    runQueriesMock.mockReturnValueOnce([{ rows: [{ id: "u-co" }] }]);
-    const out = await resolveRecipientToUserIds({
-      kind: "project",
-      projectId: "p-9",
-    });
-    expect(out).toEqual(["u-co"]);
-    const calls = runQueriesMock.mock.calls;
-    const lastInput = calls[calls.length - 1]![0];
-    // The adapter's postgresSchema ("cinatra") is interpolated into the
-    // project_co_owners query.
-    expect(lastInput.queries[0]!.text).toContain(
-      '"cinatra"."project_co_owners"',
-    );
   });
 });

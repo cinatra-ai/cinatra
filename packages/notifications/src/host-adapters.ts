@@ -71,8 +71,8 @@ export type ActorContext = Principal & {
  * - `getPostgresConnectionString` / `ensurePostgresSchema` / `postgresSchema`
  *   are the three `@/lib/database` symbols service.ts / recipient-policy.ts /
  *   realtime.ts use. `postgresSchema` is the injected replacement for the
- *   `process.env.SUPABASE_SCHEMA` read at recipient-policy.ts:133
- *   (that line is an ENV READ, not just an import).
+ *   former `@/lib/database` `postgresSchema` constant, consumed by
+ *   service.ts's `schemaQualified()` for every notifications-table query.
  * - `runPostgresQueriesSync` is the `@/lib/postgres-sync` symbol.
  * - `getAuthSession` / `buildActorContext` are ASYNC wrappers so the host
  *   can dynamic-import @/lib/auth-session / @/lib/authz/enforce LAZILY

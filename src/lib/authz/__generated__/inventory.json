@@ -333,6 +333,21 @@
       "line": 262
     },
     {
+      "primitiveName": "assistant_send",
+      "file": "src/lib/assistant-mcp.ts",
+      "line": 876
+    },
+    {
+      "primitiveName": "assistant_thread_get",
+      "file": "src/lib/assistant-mcp.ts",
+      "line": 886
+    },
+    {
+      "primitiveName": "assistant_thread_list",
+      "file": "src/lib/assistant-mcp.ts",
+      "line": 881
+    },
+    {
       "primitiveName": "blog_connector_list",
       "file": "extensions/cinatra-ai/blog-connector/src/mcp/module.ts",
       "line": 28
@@ -505,12 +520,12 @@
     {
       "primitiveName": "context_list_eligible_assertions",
       "file": "src/lib/artifacts/context-mcp.ts",
-      "line": 268
+      "line": 294
     },
     {
       "primitiveName": "context_resolve",
       "file": "src/lib/artifacts/context-mcp.ts",
-      "line": 246
+      "line": 255
     },
     {
       "primitiveName": "crm_account_create",

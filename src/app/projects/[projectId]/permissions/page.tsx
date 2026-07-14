@@ -6,6 +6,7 @@ const { requireAuthSession } = authSession;
 import {
   readOrgsWithTeamsForUser,
   readProjectsForUser,
+  readTeamsByIdsForOrg,
 } from "@/lib/better-auth-db";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
@@ -18,12 +19,17 @@ import { readProjectById, readProjectCoOwners } from "@/lib/projects-store";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { ProjectSubnav } from "@/components/project-subnav";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import type { AccessComboboxProps } from "@/components/access-combobox";
 
 type AvailableScopes = AccessComboboxProps["availableScopes"];
 
 import { AccessVsOwnershipNote } from "@/components/access-vs-ownership-note";
+import {
+  collectAccessStateTeamIds,
+  mergeResolvedTeams,
+} from "./access-team-hydration";
 import { ProjectPermissionsTabClient } from "./permissions-tab-client";
 import {
   readProjectOwnerViews,
@@ -136,12 +142,7 @@ export default async function ProjectPermissionsPage({ params }: Props) {
       : [];
   // Active org's teams + name for the access-combobox shape.
   const activeOrg = orgs.find((o) => o.id === orgId) ?? orgs[0];
-  const availableScopes: AvailableScopes = {
-    teams: activeOrg?.teams ?? [],
-    projects: projectScopes,
-    orgName: activeOrg?.name ?? "",
-    workspaceExposed: isAdmin,
-  };
+  const viewerTeams = activeOrg?.teams ?? [];
 
   // Owner short-circuit drives canEdit.
   const canEdit = isAdmin || project.ownerId === userId;
@@ -164,6 +165,39 @@ export default async function ProjectPermissionsPage({ params }: Props) {
     return "owner";
   })();
 
+  // Selection hydration (cinatra#1508 / #1509 §4.1, codex F5): `viewerTeams`
+  // only carries the VIEWER's memberships, so a team referenced by the
+  // project's stored access state would render as "Unknown team" for
+  // non-members. Resolve names server-side for exactly that CLOSED,
+  // server-derived id set (access expression + project_access rows — never a
+  // client-supplied id), bounded by the PROJECT's own org. The viewer already
+  // passed `project.read` above, so naming a team that is already attached to
+  // this project's access state inside its own org discloses nothing new. Ids
+  // failing the org check (or deleted teams) stay unresolved and keep the
+  // explicit "Unknown team" fallback. Defensive catch: a Better Auth outage
+  // degrades to the unhydrated view rather than 500ing the page.
+  const accessStateTeamIds = collectAccessStateTeamIds(
+    initialAccess,
+    projectAccessRows,
+  );
+  const unresolvedTeamIds = accessStateTeamIds.filter(
+    (id) => !viewerTeams.some((t) => t.id === id),
+  );
+  // An org-less project has no boundary to resolve within — skip and keep the
+  // "Unknown team" fallback (fail closed, never widen the lookup).
+  const projectOrgId = project.organizationId;
+  const resolvedAccessTeams =
+    unresolvedTeamIds.length > 0 && projectOrgId
+      ? await readTeamsByIdsForOrg(unresolvedTeamIds, projectOrgId).catch(() => [])
+      : [];
+
+  const availableScopes: AvailableScopes = {
+    teams: mergeResolvedTeams(viewerTeams, resolvedAccessTeams),
+    projects: projectScopes,
+    orgName: activeOrg?.name ?? "",
+    workspaceExposed: isAdmin,
+  };
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -174,7 +208,9 @@ export default async function ProjectPermissionsPage({ params }: Props) {
             <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
           </span>
         }
+        divider={false}
       />
+      <ProjectSubnav projectId={project.id} activeSection="permissions" />
       <PageContent className="flex flex-col gap-6 pb-8">
         {/* Clarify ownership vs access. */}
         <AccessVsOwnershipNote />

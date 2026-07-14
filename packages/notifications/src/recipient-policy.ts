@@ -6,7 +6,7 @@ import { getNotificationsHostAdapters } from "./host-adapters";
 // ---------------------------------------------------------------------------
 // Recipient resolution
 //
-// Topic / admin / team / org / project recipients fan out to per-user rows
+// Topic / admin / team / org recipients fan out to per-user rows
 // at write time. Recipient rows always target concrete users; there is no
 // nullable user_id fallback or join table. Resolution helpers MUST be
 // defensive — they read from public."user" (better-auth) and from scope-tables.
@@ -18,13 +18,9 @@ import { getNotificationsHostAdapters } from "./host-adapters";
 //
 // HOST-SCHEMA-AWARE BY DESIGN: this module legitimately encodes host schema
 // knowledge — it queries Better Auth `public."user"` /
-// `public."teamMember"` / `public."member"` and the host's
-// `{schema}."project_co_owners"` table. The SQL strings stay HERE (they are
-// the policy). Only the DB *access primitives* (connection string + sync
-// query runner) and the project schema *name* are injected via
-// `getNotificationsHostAdapters()`; the host adapter provides the same
-// `process.env.SUPABASE_SCHEMA?.trim() || "cinatra"` schema resolution used
-// by the application.
+// `public."teamMember"` / `public."member"`. The SQL strings stay HERE (they
+// are the policy). Only the DB *access primitives* (connection string + sync
+// query runner) are injected via `getNotificationsHostAdapters()`.
 // ---------------------------------------------------------------------------
 
 export function topicForRecipient(recipient: NotificationRecipient): string {
@@ -35,8 +31,6 @@ export function topicForRecipient(recipient: NotificationRecipient): string {
       return `team:${recipient.teamId}`;
     case "organization":
       return `organization:${recipient.organizationId}`;
-    case "project":
-      return `project:${recipient.projectId}`;
     case "admins":
       return "admins";
   }
@@ -55,8 +49,6 @@ export async function resolveRecipientToUserIds(
       return resolveTeamMemberUserIds(recipient.teamId);
     case "organization":
       return resolveOrganizationMemberUserIds(recipient.organizationId);
-    case "project":
-      return resolveProjectMemberUserIds(recipient.projectId);
   }
 }
 
@@ -118,36 +110,6 @@ function resolveOrganizationMemberUserIds(organizationId: string): string[] {
         {
           text: `SELECT "userId" AS id FROM public."member" WHERE "organizationId" = $1`,
           values: [organizationId],
-        },
-      ],
-    });
-    const rows = (result?.rows ?? []) as Array<{ id: string }>;
-    return rows.map((r) => r.id).filter((id) => typeof id === "string");
-  } catch {
-    return [];
-  }
-}
-
-function resolveProjectMemberUserIds(projectId: string): string[] {
-  if (!projectId) return [];
-  try {
-    // project_co_owners lives in the cinatra schema; owner_id on the project
-    // row itself is implicit and may map to user/team/org. This resolver fans
-    // out explicit co-owner shares. Owner-level fanout should be added when
-    // project ownership routing lands.
-    //
-    // The project schema name is the host-injected `postgresSchema` adapter
-    // field. The host sets the adapter to
-    // `process.env.SUPABASE_SCHEMA?.trim() || "cinatra"`, so the resolved SQL
-    // matches the application schema selection.
-    const host = getNotificationsHostAdapters();
-    const schema = host.postgresSchema;
-    const [result] = host.runPostgresQueriesSync({
-      connectionString: host.getPostgresConnectionString(),
-      queries: [
-        {
-          text: `SELECT user_id AS id FROM "${schema.replaceAll('"', '""')}"."project_co_owners" WHERE project_id = $1`,
-          values: [projectId],
         },
       ],
     });

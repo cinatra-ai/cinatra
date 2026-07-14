@@ -22,6 +22,7 @@ import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-boot
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
 import { insertOAuthClientWithTx } from "@/lib/better-auth-oauth-client";
+import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
 
 const authBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 const authSecret = process.env.BETTER_AUTH_SECRET;
@@ -247,6 +248,16 @@ const authPlugins: CinatraRuntimeBetterAuthPlugins = [
           .map((value) => value.trim())
           .filter(Boolean);
         return roles.includes("admin");
+      },
+      // teams.enabled is on, so Better Auth creates a default team during org
+      // creation but omits the slug — and public.team.slug is NOT NULL. Supply
+      // a CHECK-conforming, unique-per-org slug so the create-organization
+      // request no longer 500s / leaves a partial org (cinatra#1494). The hook
+      // is fill-only-when-absent: it never overrides a caller-supplied slug
+      // (beforeCreateTeam also fires on the public create-team endpoint, where
+      // the returned data would otherwise clobber it). See better-auth-org-hooks.
+      organizationHooks: {
+        beforeCreateTeam: beforeCreateTeamEnsureSlug,
       },
     },
     mcpAuthPlugins: mcpServerAuthPlugins,
