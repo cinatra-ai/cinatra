@@ -119,6 +119,58 @@ export function resolveVendorToken(): string | undefined {
   }
 }
 
+/**
+ * Strict, LOCAL-only (no network) vendor-REGISTRATION predicate. True ONLY when
+ * this instance holds a GENUINE, RECORDED vendor-track attachment — distinct
+ * both from a mere `consumerAttachment` (which {@link hasVendorToken} /
+ * {@link resolveVendorToken} already treat as a usable bearer) AND from a bare
+ * registry publish credential. This is the gate the owner ruling requires: no
+ * vendor-application row (moderation queue OR this instance's own status) and no
+ * vendor-identifying copy renders unless the instance is a registered vendor.
+ *
+ * Registered means `vendorState` is one of `applied` / `approved` / `rejected`
+ * — the instance has a RECORDED engagement with the vendor-application track (a
+ * `rejected` applicant is still a genuine vendor-track attachment, so its own
+ * status section may reflect the rejection). `none` and absent (`undefined`)
+ * are NOT registered.
+ *
+ * A populated top-level `tokenCiphertext` is DELIBERATELY NOT accepted as proof
+ * of registration. That slot is the instance's REGISTRY publish bearer, written
+ * at setup by EVERY provisioning mode — including the pre-provisioned
+ * private-registry and anonymous self-registration modes that have no relation
+ * to the marketplace vendor program (see `src/app/setup/name/actions.ts`) — and
+ * never cleared afterward. Its only corrective, the boot-time `vendorState`
+ * reconcile in `ensureMarketplaceAttachment` (src/lib/marketplace-attach.ts), is
+ * permanently skipped whenever `MARKETPLACE_INSTANCE_TOKEN` is set, so a
+ * lingering `tokenCiphertext` cannot distinguish a genuine vendor from a
+ * non-vendor registry-token holder. Trusting it here would let a non-vendor
+ * instance that also holds a moderator token disclose OTHER vendors'
+ * applications — exactly the admin-token-alone leak this predicate exists to
+ * close. `getEffectiveViewerScope` (src/lib/marketplace-credentials.ts) does
+ * still accept that legacy slot, but ONLY to surface an instance's OWN namespace
+ * scope, where the looseness is benign; that precedent does not transfer to a
+ * cross-vendor gate.
+ *
+ * FAIL-CLOSED: the check is shape-based on the local identity row and decrypts
+ * nothing. An indeterminate `vendorState` (`undefined`) is treated as NOT
+ * registered, and any error from the identity read itself — a DB failure or a
+ * malformed / unreadable row — is caught and returns `false`.
+ *
+ * Additive: this is used ONLY for the gate decision (section visibility, counts,
+ * row production), NEVER for credential resolution — {@link hasVendorToken} /
+ * {@link resolveVendorToken} keep authenticating the network call unchanged.
+ */
+export function isRegisteredVendor(): boolean {
+  try {
+    const identity = readInstanceIdentity();
+    if (!identity) return false;
+    const { vendorState } = identity;
+    return vendorState === "applied" || vendorState === "approved" || vendorState === "rejected";
+  } catch {
+    return false;
+  }
+}
+
 /** True when ANY marketplace credential resolves. When false the whole
  *  marketplace group collapses to one "not connected" state and fires no remote
  *  calls. (An instance token implies a vendor token, but all three are checked

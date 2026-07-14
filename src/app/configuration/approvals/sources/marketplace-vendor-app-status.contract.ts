@@ -4,6 +4,7 @@ import {
   createMarketplaceClient,
   MARKETPLACE_VENDOR_APP_STATUS_SOURCE_ID,
   guardedCount,
+  isRegisteredVendor,
   marketplaceAvailability,
   resolveVendorToken,
 } from "./marketplace-shared";
@@ -26,8 +27,12 @@ export const marketplaceVendorAppStatusContract = {
   appliesTo: (viewer: ApprovalViewer, direction) => viewer.isAdmin && direction === "mine",
 
   async counts(viewer: ApprovalViewer): Promise<SourceCounts> {
-    // The instance's application is "in flight" only while `applied`.
-    const mine = await guardedCount(viewer, resolveVendorToken(), `${SOURCE_ID}:mine`, async (token) => {
+    // The instance's application is "in flight" only while `applied`. Gate the
+    // badge count on the strict registration predicate too — a non-registered
+    // (e.g. consumer-only) instance contributes 0, not just when its token is
+    // absent (owner ruling: no vendor info unless a registered vendor).
+    const sectionToken = isRegisteredVendor() ? resolveVendorToken() : undefined;
+    const mine = await guardedCount(viewer, sectionToken, `${SOURCE_ID}:mine`, async (token) => {
       const client = createMarketplaceClient(token);
       const status = await client.vendorApplicationStatus();
       return status.state === "applied" ? 1 : 0;

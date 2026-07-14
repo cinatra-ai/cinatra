@@ -18,10 +18,17 @@ const h = vi.hoisted(() => ({
   adminToken: undefined as string | undefined,
   hasVendor: false,
   vendorToken: undefined as string | undefined,
+  // Settable instance-identity row so each vendor-registration state can be
+  // constructed; `identityThrows` exercises the fail-closed catch.
+  identity: null as Record<string, unknown> | null,
+  identityThrows: false,
 }));
 
 vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(() => null),
+  readInstanceIdentity: vi.fn(() => {
+    if (h.identityThrows) throw new Error("identity read failed (corrupted row)");
+    return h.identity;
+  }),
 }));
 vi.mock("@/lib/marketplace-credentials", () => ({
   resolveMarketplaceAdminToken: vi.fn(() => {
@@ -44,6 +51,7 @@ import {
   hasInstanceToken,
   hasVendorToken,
   invalidateMarketplaceApprovalCounts,
+  isRegisteredVendor,
   parseMarketplaceErrorCode,
   REMOTE_COUNT_CAP,
   resolveAdminToken,
@@ -62,6 +70,8 @@ beforeEach(() => {
   h.adminToken = undefined;
   h.hasVendor = false;
   h.vendorToken = undefined;
+  h.identity = null;
+  h.identityThrows = false;
   invalidateMarketplaceApprovalCounts();
 });
 
@@ -189,6 +199,66 @@ describe("credential predicates (local, no network)", () => {
     h.adminToken = undefined;
     h.hasVendor = true;
     expect(anyMarketplaceCredential()).toBe(true);
+  });
+});
+
+describe("isRegisteredVendor (strict, local, fail-closed) — #1551", () => {
+  it("returns false when there is no identity row", () => {
+    h.identity = null;
+    expect(isRegisteredVendor()).toBe(false);
+  });
+
+  it("returns false for a consumer-only attachment (resolves a token but is NOT a registered vendor)", () => {
+    h.identity = {
+      instanceNamespace: "acme",
+      consumerAttachment: { marketplaceTokenCiphertext: "cipher" },
+    };
+    // A consumer attachment makes hasVendorToken() true, but registration is a
+    // DISTINCT gate — the whole point of the predicate.
+    h.hasVendor = true;
+    expect(hasVendorToken()).toBe(true);
+    expect(isRegisteredVendor()).toBe(false);
+  });
+
+  it("returns false for vendorState 'none'", () => {
+    h.identity = { instanceNamespace: "acme", vendorState: "none" };
+    expect(isRegisteredVendor()).toBe(false);
+  });
+
+  it("returns true for each genuine vendor-track state (applied / approved / rejected)", () => {
+    for (const vendorState of ["applied", "approved", "rejected"]) {
+      h.identity = { instanceNamespace: "acme", vendorState };
+      expect(isRegisteredVendor()).toBe(true);
+    }
+  });
+
+  it("returns false for a bare registry publish token (tokenCiphertext) with no recorded vendorState — a private-registry / self-registration setup is NOT a marketplace vendor", () => {
+    // The top-level `tokenCiphertext` is the REGISTRY publish bearer, written at
+    // setup by EVERY provisioning mode (including non-marketplace ones) and never
+    // cleared; it is NOT a vendor marker. Only a recorded vendorState is. Trusting
+    // a lingering token here would re-open the admin-token-alone disclosure for a
+    // non-vendor whose vendorState was never reconciled (e.g. MARKETPLACE_INSTANCE_TOKEN set).
+    h.identity = { instanceNamespace: "acme", tokenCiphertext: "registry-cipher" };
+    expect(isRegisteredVendor()).toBe(false);
+    h.identity = { instanceNamespace: "acme", tokenCiphertext: "" };
+    expect(isRegisteredVendor()).toBe(false);
+    h.identity = { instanceNamespace: "acme" };
+    expect(isRegisteredVendor()).toBe(false);
+  });
+
+  it("a genuine vendor-track marker wins even alongside a consumer attachment (distinct gates)", () => {
+    h.identity = {
+      instanceNamespace: "acme",
+      consumerAttachment: { marketplaceTokenCiphertext: "cipher" },
+      vendorState: "approved",
+    };
+    expect(isRegisteredVendor()).toBe(true);
+  });
+
+  it("FAIL-CLOSED: a corrupted / failing identity read returns false and never throws", () => {
+    h.identityThrows = true;
+    expect(() => isRegisteredVendor()).not.toThrow();
+    expect(isRegisteredVendor()).toBe(false);
   });
 });
 

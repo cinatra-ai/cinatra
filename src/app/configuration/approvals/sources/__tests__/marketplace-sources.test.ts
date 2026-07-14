@@ -17,9 +17,11 @@ const h = vi.hoisted(() => ({
   vendorRows: [] as Record<string, unknown>[],
   selfSubs: [] as Record<string, unknown>[],
   vendorStatus: { state: "none" } as Record<string, unknown>,
+  // Settable instance-identity row driving the #1551 strict-registration gate.
+  identity: null as Record<string, unknown> | null,
 }));
 
-vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: vi.fn(() => null) }));
+vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: vi.fn(() => h.identity) }));
 vi.mock("@/lib/marketplace-credentials", () => ({
   resolveMarketplaceAdminToken: vi.fn(() => {
     if (!h.adminToken) throw new Error("MARKETPLACE_ADMIN_TOKEN_MISSING");
@@ -52,7 +54,7 @@ import { marketplaceVendorAppModerationSource } from "../marketplace-vendor-app-
 import { marketplaceMySubmissionsSource } from "../marketplace-my-submissions";
 import { marketplaceVendorAppStatusSource } from "../marketplace-vendor-app-status";
 import { invalidateMarketplaceApprovalCounts } from "../marketplace-shared";
-import type { ApprovalViewer } from "../types";
+import type { ApprovalRow, ApprovalViewer } from "../types";
 
 const admin: ApprovalViewer = { userId: "a", orgId: "o", isAdmin: true };
 const member: ApprovalViewer = { userId: "m", orgId: "o", isAdmin: false };
@@ -74,9 +76,33 @@ beforeEach(() => {
   h.vendorRows = [];
   h.selfSubs = [];
   h.vendorStatus = { state: "none" };
+  h.identity = null;
   invalidateMarketplaceApprovalCounts();
   mockClient.mockClear();
 });
+
+// A genuinely registered-vendor identity row (owner ruling: only this state
+// renders vendor-app rows). A consumer-only row resolves a vendor token but is
+// NOT a registered vendor — the #1551 gate must distinguish the two.
+const VENDOR_IDENTITY: Record<string, unknown> = { instanceNamespace: "acme", vendorState: "approved" };
+const CONSUMER_IDENTITY: Record<string, unknown> = {
+  instanceNamespace: "acme",
+  consumerAttachment: { marketplaceTokenCiphertext: "cipher" },
+};
+
+function vendorAppRow(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    application_id: "va1",
+    display_name: "Acme Inc",
+    scope: "@acme",
+    status: "applied",
+    applied_at: new Date().toISOString(),
+    tier: "commercial",
+    repair_stuck_at: null,
+    recovery_attempts: 0,
+    ...over,
+  };
+}
 afterEach(() => {
   for (const k of ENV) {
     if (savedEnv[k] === undefined) delete process.env[k];
@@ -121,8 +147,9 @@ describe("availability + appliesTo + sectionConfigured", () => {
     expect(marketplaceVendorAppStatusSource.appliesTo(member, "mine")).toBe(false);
   });
 
-  it("sectionConfigured tracks each adapter's OWN credential", () => {
-    // extension-submission MODERATION → admin token (#1224)
+  it("sectionConfigured tracks each adapter's OWN credential; vendor-app sources ALSO require registration (#1551)", () => {
+    // extension-submission MODERATION → admin token (#1224). NOT registration-
+    // gated — only its vendor-identifying copy is swept, never its section gate.
     expect(marketplaceSubmissionModerationSource.sectionConfigured?.(admin, "inbox")).toBe(false);
     h.adminToken = "admin";
     expect(marketplaceSubmissionModerationSource.sectionConfigured?.(admin, "inbox")).toBe(true);
@@ -130,11 +157,17 @@ describe("availability + appliesTo + sectionConfigured", () => {
     expect(marketplaceMySubmissionsSource.sectionConfigured?.(admin, "mine")).toBe(false);
     process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
     expect(marketplaceMySubmissionsSource.sectionConfigured?.(admin, "mine")).toBe(true);
-    // vendor-app moderation → admin token (already set above)
+    // vendor-app moderation → admin token ALONE is NO LONGER sufficient (#1551):
+    // the instance must ALSO be a registered vendor. (This assertion flipped.)
+    expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(false);
+    h.identity = VENDOR_IDENTITY;
     expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(true);
-    // vendor-app status → vendor token
-    expect(marketplaceVendorAppStatusSource.sectionConfigured?.(admin, "mine")).toBe(false);
+    // vendor-app status → a consumer token that is NOT a registered vendor is
+    // insufficient; BOTH the vendor token AND registration must hold.
     h.hasVendor = true;
+    h.identity = CONSUMER_IDENTITY;
+    expect(marketplaceVendorAppStatusSource.sectionConfigured?.(admin, "mine")).toBe(false);
+    h.identity = VENDOR_IDENTITY;
     expect(marketplaceVendorAppStatusSource.sectionConfigured?.(admin, "mine")).toBe(true);
   });
 });
@@ -204,24 +237,21 @@ describe("capped counts + zero-remote-when-disconnected", () => {
 });
 
 describe("vendor-application moderation (admin token, inbox)", () => {
-  it("ready → maps rows; requires the admin token specifically", async () => {
+  it("ready → maps rows; requires the admin token AND vendor registration (#1551)", async () => {
+    h.identity = VENDOR_IDENTITY;
     // instance token present but NOT admin token → this section is not_configured
     process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
     expect((await marketplaceVendorAppModerationSource.fetchInbox(admin)).availability).toBe("not_configured");
 
     h.adminToken = "admin";
-    h.vendorRows = [
-      {
-        application_id: "va1",
-        display_name: "Acme Inc",
-        scope: "@acme",
-        status: "applied",
-        applied_at: new Date().toISOString(),
-        tier: "commercial",
-        repair_stuck_at: null,
-        recovery_attempts: 0,
-      },
-    ];
+    // admin token present but NOT a registered vendor → STILL not_configured (the
+    // #1551 row-production gate short-circuits before the remote call).
+    h.identity = null;
+    expect((await marketplaceVendorAppModerationSource.fetchInbox(admin)).availability).toBe("not_configured");
+    expect(mockClient).not.toHaveBeenCalled();
+
+    h.identity = VENDOR_IDENTITY;
+    h.vendorRows = [vendorAppRow()];
     const env = await marketplaceVendorAppModerationSource.fetchInbox(admin);
     expect(env.availability).toBe("ready");
     expect(env.rows[0]).toMatchObject({ id: "va1", title: "Acme Inc", subtitle: "@acme", status: "applied" });
@@ -247,6 +277,7 @@ describe("vendor-application status (vendor token, mine, read-only)", () => {
   it("state=none → empty section; state=applied → one row + mine count 1", async () => {
     h.vendorToken = "vtok";
     h.hasVendor = true;
+    h.identity = VENDOR_IDENTITY; // registered — otherwise the #1551 gate hides it
     h.vendorStatus = { state: "none" };
     expect((await marketplaceVendorAppStatusSource.fetchMine(admin)).rows).toHaveLength(0);
     expect((await marketplaceVendorAppStatusSource.counts(admin)).mine).toBe(0);
@@ -265,5 +296,113 @@ describe("vendor-application status (vendor token, mine, read-only)", () => {
       admin,
     );
     expect(r).toMatchObject({ ok: false, kind: "refused", code: "not_supported" });
+  });
+});
+
+describe("strict vendor-registration gate (#1551) — 4-state matrix; only a registered vendor renders vendor-app rows", () => {
+  it("state 1 — no credential: both vendor-app sources hidden, {0,0} counts, zero rows, no remote call", async () => {
+    for (const s of [marketplaceVendorAppModerationSource, marketplaceVendorAppStatusSource]) {
+      const dir = s === marketplaceVendorAppModerationSource ? "inbox" : "mine";
+      expect(s.sectionConfigured?.(admin, dir as never)).toBe(false);
+    }
+    expect(await marketplaceVendorAppModerationSource.counts(admin)).toEqual({ inbox: 0, mine: 0 });
+    expect(await marketplaceVendorAppStatusSource.counts(admin)).toEqual({ inbox: 0, mine: 0 });
+    expect((await marketplaceVendorAppModerationSource.fetchInbox(admin)).rows).toHaveLength(0);
+    expect((await marketplaceVendorAppStatusSource.fetchMine(admin)).rows).toHaveLength(0);
+    expect(mockClient).not.toHaveBeenCalled();
+  });
+
+  it("state 2 — consumer-only (vendor token resolves, NOT registered): status source hidden, 0 count, zero rows, gated BEFORE the remote call", async () => {
+    h.hasVendor = true;
+    h.vendorToken = "vtok";
+    h.identity = CONSUMER_IDENTITY;
+    // Even a live 'applied' status is never fetched — the gate short-circuits.
+    h.vendorStatus = { state: "applied", scope: "@acme", tier: "commercial", application_id: "va9" };
+    expect(marketplaceVendorAppStatusSource.sectionConfigured?.(admin, "mine")).toBe(false);
+    expect((await marketplaceVendorAppStatusSource.counts(admin)).mine).toBe(0);
+    const env = await marketplaceVendorAppStatusSource.fetchMine(admin);
+    expect(env.availability).toBe("not_configured");
+    expect(env.rows).toHaveLength(0);
+    expect(mockClient).not.toHaveBeenCalled();
+  });
+
+  it("state 3 — admin-token-only (no vendor attachment): moderation source hidden, 0 count, zero rows, gated BEFORE the remote call", async () => {
+    h.adminToken = "admin";
+    h.identity = null; // admin/moderator token, but this instance is not a vendor
+    h.vendorRows = [vendorAppRow()];
+    expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(false);
+    expect((await marketplaceVendorAppModerationSource.counts(admin)).inbox).toBe(0);
+    const env = await marketplaceVendorAppModerationSource.fetchInbox(admin);
+    expect(env.availability).toBe("not_configured");
+    expect(env.rows).toHaveLength(0);
+    expect(mockClient).not.toHaveBeenCalled();
+  });
+
+  it("state 3 (leak-shape regression) — admin token + an identity carrying ONLY a top-level tokenCiphertext (a bare registry publish token, vendorState never recorded) still discloses NOTHING", async () => {
+    // This is the exact shape that a non-marketplace-vendor instance holds after
+    // ANY setup mode when its vendorState was never reconciled (e.g.
+    // MARKETPLACE_INSTANCE_TOKEN set → boot reconcile skipped). It must NOT be
+    // treated as a registered vendor: gate short-circuits before the admin client.
+    h.adminToken = "admin";
+    h.identity = { instanceNamespace: "acme", tokenCiphertext: "registry-cipher" };
+    h.vendorRows = [vendorAppRow()];
+    expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(false);
+    expect((await marketplaceVendorAppModerationSource.counts(admin)).inbox).toBe(0);
+    const env = await marketplaceVendorAppModerationSource.fetchInbox(admin);
+    expect(env.availability).toBe("not_configured");
+    expect(env.rows).toHaveLength(0);
+    expect(mockClient).not.toHaveBeenCalled();
+  });
+
+  it("state 4 — vendor-registered: BOTH sources render rows + non-zero counts (unchanged happy path)", async () => {
+    h.adminToken = "admin";
+    h.hasVendor = true;
+    h.vendorToken = "vtok";
+    h.identity = VENDOR_IDENTITY;
+    h.vendorRows = [vendorAppRow()];
+    h.vendorStatus = { state: "applied", scope: "@acme", tier: "commercial", application_id: "va9" };
+
+    expect(marketplaceVendorAppModerationSource.sectionConfigured?.(admin, "inbox")).toBe(true);
+    expect(marketplaceVendorAppStatusSource.sectionConfigured?.(admin, "mine")).toBe(true);
+
+    const modEnv = await marketplaceVendorAppModerationSource.fetchInbox(admin);
+    expect(modEnv.availability).toBe("ready");
+    expect(modEnv.rows).toHaveLength(1);
+    expect((await marketplaceVendorAppModerationSource.counts(admin)).inbox).toBe(1);
+
+    const statEnv = await marketplaceVendorAppStatusSource.fetchMine(admin);
+    expect(statEnv.availability).toBe("ready");
+    expect(statEnv.rows).toHaveLength(1);
+    expect((await marketplaceVendorAppStatusSource.counts(admin)).mine).toBe(1);
+  });
+});
+
+describe("submission-moderation vendor-copy sweep (#1551 AC10)", () => {
+  const metaOf = (row: ApprovalRow): string => {
+    const el = marketplaceSubmissionModerationSource.rowRenderer(row, { direction: "inbox" }) as unknown as {
+      props: { meta: string };
+    };
+    return el.props.meta;
+  };
+
+  it("redacts the `vendor #N` subtitle/meta unless the instance is a registered vendor; the row itself still renders", async () => {
+    h.adminToken = "admin";
+    h.adminSubs = [adminSub({ vendor_id: 7 })];
+
+    // NOT registered → row produced, but the vendor-identifying subtitle (which
+    // flows to the approvals_* MCP tools via toPublicRow) is dropped, and the
+    // rendered meta carries no `vendor #` prefix.
+    h.identity = null;
+    const hidden = await marketplaceSubmissionModerationSource.fetchInbox(admin);
+    expect(hidden.rows).toHaveLength(1);
+    expect(hidden.rows[0].subtitle).toBeUndefined();
+    expect(metaOf(hidden.rows[0])).not.toContain("vendor #");
+    expect(metaOf(hidden.rows[0])).toContain("submitted");
+
+    // Registered → the vendor copy is present again.
+    h.identity = VENDOR_IDENTITY;
+    const shown = await marketplaceSubmissionModerationSource.fetchInbox(admin);
+    expect(shown.rows[0].subtitle).toBe("vendor #7");
+    expect(metaOf(shown.rows[0])).toContain("vendor #7");
   });
 });

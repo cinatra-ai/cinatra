@@ -17,6 +17,7 @@ import {
   MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID,
   guardedFetch,
   hasAdminToken,
+  isRegisteredVendor,
   resolveAdminToken,
   toRowEligibility,
 } from "./marketplace-shared";
@@ -88,11 +89,19 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
 
   viewAllHref: (dir) => (dir === "inbox" ? MARKETPLACE_VENDOR_APPS_ADMIN_HREF : undefined),
 
-  // Per-direction credential gate — its own `MARKETPLACE_ADMIN_TOKEN`.
-  sectionConfigured: () => hasAdminToken(),
+  // Per-direction credential gate — its own `MARKETPLACE_ADMIN_TOKEN` — AND the
+  // strict vendor-registration gate. Closes the issue's stated bug that vendor-
+  // app moderation was "additionally gated only on the admin token": an admin-
+  // token instance that is not itself a registered vendor sees no vendor rows.
+  sectionConfigured: () => hasAdminToken() && isRegisteredVendor(),
 
   async fetchInbox(viewer) {
-    return guardedFetch(viewer, resolveAdminToken(), MODERATE_ACTIONS, async (token) => {
+    // Gate ROW production on the registration predicate too — the `approvals_*`
+    // MCP tools reach this fetch without consulting `sectionConfigured`, so a
+    // non-registered instance resolves to `not_configured` (no remote call, zero
+    // rows) on every consumer of the source, not just the page.
+    const sectionToken = isRegisteredVendor() ? resolveAdminToken() : undefined;
+    return guardedFetch(viewer, sectionToken, MODERATE_ACTIONS, async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const out = await client.vendorApplicationListAdmin({ status: ["applied"], limit: LIST_LIMIT });
       return out.rows.map(toRow);

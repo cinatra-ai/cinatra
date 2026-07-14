@@ -13,6 +13,7 @@ import {
   MARKETPLACE_VENDOR_APP_STATUS_SOURCE_ID,
   guardedFetch,
   hasVendorToken,
+  isRegisteredVendor,
   resolveVendorToken,
 } from "./marketplace-shared";
 import type { ApprovalRow, ApprovalSource } from "./types";
@@ -61,14 +62,22 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
 
   viewAllHref: (dir) => (dir === "mine" ? MARKETPLACE_VENDOR_APP_STATUS_HREF : undefined),
 
-  sectionConfigured: () => hasVendorToken(),
+  // BOTH the credential gate AND the strict vendor-registration gate must hold —
+  // a consumer attachment resolves a vendor token but is NOT a registered vendor
+  // (owner ruling: no vendor info unless the instance is a registered vendor).
+  sectionConfigured: () => hasVendorToken() && isRegisteredVendor(),
 
   async fetchInbox() {
     return { availability: "ready", rows: [], actions: [] };
   },
 
   async fetchMine(viewer) {
-    return guardedFetch(viewer, resolveVendorToken(), [], async (token) => {
+    // Gate ROW production on the registration predicate too — the `approvals_*`
+    // MCP tools federate over this source without consulting `sectionConfigured`,
+    // so a non-registered instance must resolve to `not_configured` here (no
+    // remote call, zero rows) on EVERY consumer of the source, not just the page.
+    const sectionToken = isRegisteredVendor() ? resolveVendorToken() : undefined;
+    return guardedFetch(viewer, sectionToken, [], async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const status = await client.vendorApplicationStatus();
       // "none" = no application row exists for this instance → empty section.

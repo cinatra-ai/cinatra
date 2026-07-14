@@ -15,6 +15,7 @@ import {
   MARKETPLACE_SUBMISSIONS_ADMIN_HREF,
   guardedFetch,
   hasAdminToken,
+  isRegisteredVendor,
   resolveAdminToken,
   toRowEligibility,
 } from "./marketplace-shared";
@@ -60,13 +61,19 @@ function statusVariant(status: string): MarketplaceBadgeVariant {
   }
 }
 
-function toRow(s: MarketplaceAdminSubmission): ApprovalRow {
+// `showVendorCopy` gates the vendor-identifying `vendor #N` copy behind the
+// strict vendor-registration predicate (owner ruling: no vendor info unless the
+// instance is a registered vendor). Row PRODUCTION is unaffected — this is the
+// extension-submission queue, not one of the two vendor-app sources — only the
+// vendor-labelled `subtitle` (which flows to the `approvals_*` MCP tools via
+// `toPublicRow`) is redacted.
+function toRow(s: MarketplaceAdminSubmission, showVendorCopy: boolean): ApprovalRow {
   const raw: SubmissionRaw = { vendorId: s.vendor_id, promotionState: s.promotion_state };
   return {
     id: s.submission_id,
     sourceId: SOURCE_ID,
     title: s.target_final_identity,
-    subtitle: `vendor #${s.vendor_id}`,
+    ...(showVendorCopy ? { subtitle: `vendor #${s.vendor_id}` } : {}),
     status: s.status,
     createdAt: s.submitted_at,
     eligibility: toRowEligibility(s.eligibility),
@@ -88,10 +95,13 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
   sectionConfigured: () => hasAdminToken(),
 
   async fetchInbox(viewer) {
+    // The vendor-identifying `vendor #N` copy is gated on the registration
+    // predicate; the rows themselves still render (admin moderation is unchanged).
+    const showVendorCopy = isRegisteredVendor();
     return guardedFetch(viewer, resolveAdminToken(), MODERATE_ACTIONS, async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const out = await client.extensionSubmissionListAdmin({ status: "pending", limit: LIST_LIMIT });
-      return out.submissions.map(toRow);
+      return out.submissions.map((s) => toRow(s, showVendorCopy));
     });
   },
 
@@ -105,12 +115,16 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
     const submitted = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
     const promo =
       raw.promotionState && raw.promotionState !== "none" ? ` · promotion ${raw.promotionState}` : "";
+    // Suppress the vendor-identifying `vendor #N` prefix unless this instance is
+    // a registered vendor (owner ruling); the submission itself still renders.
+    const submittedMeta = `submitted ${submitted}${promo}`;
+    const meta = isRegisteredVendor() ? `vendor #${raw.vendorId} · ${submittedMeta}` : submittedMeta;
     return (
       <MarketplaceRowView
         title={row.title}
         statusLabel={row.status}
         statusVariant={statusVariant(row.status)}
-        meta={`vendor #${raw.vendorId} · submitted ${submitted}${promo}`}
+        meta={meta}
         right={
           <MarketplaceDecisionActions
             sourceId={SOURCE_ID}
