@@ -25,6 +25,7 @@ import {
 } from "@cinatra-ai/mcp-server/obo-ceiling";
 import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db";
 import { resolveContextSlot } from "./context-resolver";
+import { captureSnapshotsForContextSlot } from "./object-content-snapshot";
 import { getInstalledExtensionDescriptors } from "./context-mcp";
 import {
   ContextRouteError,
@@ -463,17 +464,34 @@ export async function deriveContextRouteContext(
 }
 
 /** Resolve candidates for a slot via the existing resolver + server-side
- *  installed-extension discovery. */
-export function resolveCandidates(input: {
+ *  installed-extension discovery.
+ *
+ *  cinatra#1430 "capture at RESOLUTION time": BEFORE resolving, capture (or
+ *  keyed-reuse) content snapshots for the actor-visible CLAIMED typed rows
+ *  matching the slot — a typed row only becomes a candidate WITH a concrete
+ *  representation revision id, which its snapshot provides. Capture is
+ *  fail-soft per row (a redaction-blocked/oversized row is skipped, never
+ *  fails the resolution) and idempotent (unchanged rows reuse). */
+export async function resolveCandidates(input: {
   actor: ActorContext;
   slot: AgentContextSlot;
   projectId: string | undefined;
-}): ContextCandidate[] {
+}): Promise<ContextCandidate[]> {
+  const installedExtensions = getInstalledExtensionDescriptors();
+  const capture = await captureSnapshotsForContextSlot({
+    actor: input.actor,
+    slot: input.slot,
+    projectId: input.projectId,
+    installedExtensions,
+  });
   const refs = resolveContextSlot({
     actor: input.actor,
     slot: input.slot,
     projectId: input.projectId,
-    installedExtensions: getInstalledExtensionDescriptors(),
+    installedExtensions,
+    // Claimed rows resolve ONLY through the snapshots pinned at THIS
+    // resolution (never "latest revision") — see ResolveContextSlotInput.
+    snapshotPins: capture.pins,
   });
   return refs as ContextCandidate[];
 }

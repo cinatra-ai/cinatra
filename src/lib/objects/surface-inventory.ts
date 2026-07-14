@@ -111,6 +111,8 @@ export const RAW_OBJECT_ACCESS_ALLOWLIST: readonly RawObjectAccessEntry[] = [
   { file: "src/lib/artifacts/run-context-selections-store.ts", category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/matcher-runtime.ts",            category: "substrate", note: "artifacts substrate" },
   { file: "src/lib/artifacts/artifact-read.ts",              category: "substrate", note: "artifacts substrate" },
+  { file: "src/lib/artifacts/object-content-snapshot.ts", category: "substrate", note: "artifacts substrate (cinatra#1430) — policy-aware content snapshot capture; READS the object row (+ its binding/claim) for the candidate and the under-lock re-read, writes resource/artifact_blobs/representation/object_content_snapshots (never objects)" },
+  { file: "src/lib/artifacts/context-selection-finalize.ts", category: "substrate", note: "artifacts substrate (cinatra#1430) — GC-serialized selection finalization; READS objects only in the coherence gate, writes run_context_selections + artifact_refs (never objects)" },
   // No live entity-bypass remains; the raw-objects-table scan re-asserts this.
 ];
 

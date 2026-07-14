@@ -6,7 +6,6 @@ import {
   parseUserResponseEnvelope,
   revalidateSelectedRefs,
   buildSelectionRows,
-  computeSelectionKey,
   ContextRouteError,
 } from "@/lib/artifacts/context-route-support";
 import {
@@ -20,7 +19,11 @@ import {
   recordContextRouteRejection,
   recordContextRouteSuccess,
 } from "@/lib/artifacts/context-route-observability";
-import { writeRunContextSelectionsBatchIdempotent } from "@/lib/artifacts/run-context-selections-store";
+import {
+  finalizeContextSelectionPinsAtomic,
+  MissingRepresentationError,
+  SelectionCoherenceError,
+} from "@/lib/artifacts/context-selection-finalize";
 
 // ---------------------------------------------------------------------------
 // POST /api/context-finalize
@@ -104,7 +107,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     // Re-resolve the trusted candidate set and revalidate the submission.
-    const candidates = resolveCandidates({
+    const candidates = await resolveCandidates({
       actor: ctx.actor,
       slot,
       projectId: ctx.projectId,
@@ -115,7 +118,13 @@ export async function POST(req: Request): Promise<Response> {
       slot,
     });
 
-    // Content-addressed idempotent write (trusted package + slot mode).
+    // cinatra#1430 finalization: ONE ATOMIC GC-serialized transaction across
+    // ALL selected refs = coherence re-validation + the append-only
+    // run_context_selections audit rows + REAL artifact_refs retention pins
+    // (referrer = this agent run). All-or-nothing: the append-only audit
+    // cannot be compensated after a partial commit, so any incoherent ref
+    // aborts the whole selection. Idempotent: each ref's deterministic
+    // selection id and the pin's natural key make an exact replay a no-op.
     const rows = buildSelectionRows({
       orgId: ctx.run.orgId!,
       parentRunId: ctx.run.id,
@@ -124,14 +133,31 @@ export async function POST(req: Request): Promise<Response> {
       selectionMode,
       trusted,
     });
-    const selectionKey = computeSelectionKey({
-      parentRunId: ctx.run.id,
-      parentPackageName: ctx.trustedPackageName,
-      slotId: body.slotId,
-      selectionMode,
-      refs: trusted,
-    });
-    const writeResult = writeRunContextSelectionsBatchIdempotent(rows, selectionKey);
+    let wroteAny = false;
+    try {
+      const results = finalizeContextSelectionPinsAtomic(
+        rows.map((row) => ({
+          selection: row,
+          referrerKind: "agent_run" as const,
+          referrerId: ctx!.run.id,
+          createdBy: ctx!.run.runBy ?? null,
+        })),
+      );
+      wroteAny = results.some((r) => r.selectionWritten);
+    } catch (err) {
+      if (
+        err instanceof SelectionCoherenceError ||
+        err instanceof MissingRepresentationError
+      ) {
+        // A candidate went incoherent between re-resolve and finalize
+        // (tombstone / reclassification / GC-reclaimed snapshot resource).
+        // NOTHING was committed (atomic batch); stable-code rejection; the
+        // caller re-resolves.
+        throw new ContextRouteError(409, "selection_incoherent", err.message);
+      }
+      throw err;
+    }
+    const writeResult = { wrote: wroteAny };
 
     // #1197: debug-level lifecycle trace + per-kind ok counter.
     recordContextRouteSuccess({

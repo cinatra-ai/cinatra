@@ -69,7 +69,7 @@ export async function POST(req: Request): Promise<Response> {
       ctx.trustedSlotPackageName,
       parsed.data.slotId,
     );
-    const candidates = resolveCandidates({
+    const candidates = await resolveCandidates({
       actor: ctx.actor,
       slot,
       projectId: ctx.projectId,

@@ -363,3 +363,126 @@ $body$` },
     { text: `CREATE TRIGGER trg_artifact_uninstall_op_assertions_append_only BEFORE UPDATE OR DELETE ON "${q}"."artifact_uninstall_operation_assertions" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_artifact_uninstall_op_assertions_append_only"()` },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Bootstrap DDL for `run_context_selections` — the append-only context
+// selection audit — EXTRACTED from drizzle-store.ts into THIS existing leaf
+// (cinatra#1430 vertical slice; the extract-leaf pattern that holds the
+// drizzle-store file-size ratchet, hosted here rather than a new module so the
+// locked route graphs gain no module — the #1429 bindingWritePathSchemaQueries
+// accretion precedent). Byte-identical DDL to the block it replaces — no
+// semantic change.
+//
+// Append-only audit row written by the context-agent at every selection.
+// PINS the replay-safe triple (artifact_id, representation_revision_id,
+// semantic_assertion_id) so future replays of the parent run resolve to the
+// EXACT artifact version + the EXACT extension classification that was
+// selected at run-time, even if the artifact gets re-classified or the
+// representation gets a newer revision later.
+//
+// Replay-safety guard: like semantic_assertion this table is append-only —
+// never UPDATE or DELETE (the BEFORE trigger enforces it). A correction is a
+// NEW row, not a mutation.
+export function runContextSelectionsSchemaQueries(
+  schemaName: string,
+): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."run_context_selections" (
+  id                          text PRIMARY KEY,
+  org_id                      text NOT NULL,
+  parent_run_id               text NOT NULL,
+  parent_package_name         text NOT NULL,
+  slot_id                     text NOT NULL,
+  artifact_id                 text NOT NULL,
+  representation_revision_id  text NOT NULL,
+  semantic_assertion_id       text NOT NULL,
+  extension                   text NOT NULL,
+  source_scope                text NOT NULL,
+  selected_by                 text NOT NULL,
+  selection_mode              text NOT NULL,
+  selected_at                 timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT rcs_source_chk CHECK (source_scope IN ('user','team','organization','workspace','project')),
+  CONSTRAINT rcs_selectedby_chk CHECK (selected_by IN ('user','agent','autonomous')),
+  CONSTRAINT rcs_selmode_chk CHECK (selection_mode IN ('interactive','autonomous'))
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS rcs_run_idx ON "${q}"."run_context_selections" (org_id, parent_run_id, selected_at)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS rcs_artifact_idx ON "${q}"."run_context_selections" (org_id, artifact_id)`,
+    },
+    {
+      text: `CREATE OR REPLACE FUNCTION "${q}"."fn_run_context_selections_append_only"() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE EXCEPTION 'run_context_selections is append-only: % forbidden — write a NEW audit row to correct a prior selection', TG_OP;
+END;
+$body$`,
+    },
+    {
+      text: `DROP TRIGGER IF EXISTS trg_run_context_selections_append_only ON "${q}"."run_context_selections"`,
+    },
+    {
+      text: `CREATE TRIGGER trg_run_context_selections_append_only BEFORE UPDATE OR DELETE ON "${q}"."run_context_selections" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_run_context_selections_append_only"()`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap DDL for `object_content_snapshots` — the policy-aware content
+// snapshot keying table (cinatra#1430, epic #1424) — hosted in THIS existing
+// leaf rather than a new module so the locked route graphs gain no module
+// (the #1429 bindingWritePathSchemaQueries accretion precedent).
+//
+// Policy-aware content snapshots for CLAIMED typed object rows. A typed row
+// (`@cinatra-ai/campaigns:*`, `@cinatra-ai/email:*`, …) becomes
+// context-pinnable by minting an IMMUTABLE JSON snapshot of its normalized
+// data at RESOLUTION time. The snapshot itself is a real `representation`
+// revision over a real `blob` `resource` (so the existing retention/GC/serve
+// machinery handles it uniformly); THIS table content-addresses the snapshot
+// by its full policy key so capture can reuse-vs-mint deterministically:
+//   - identical content re-pinned under the same claim/disposition REUSES the
+//     existing representation revision (keyed reuse — the UNIQUE index);
+//   - a data change (new content_digest) OR a claimant change (new
+//     claim_disposition_fingerprint) mints a FRESH snapshot — a new claimant
+//     never reuses another claimant's snapshot.
+//
+// Mirrors migration core__0045 (existing deployments converge there; fresh
+// bootstraps here — idempotent both ways). Bytes never live in
+// `objects.data`: the snapshot's bytes live on the blob store like any other
+// representation (`src/lib/artifacts/object-content-snapshot.ts` enforces the
+// invariant at the write path).
+export function objectContentSnapshotSchemaQueries(
+  schemaName: string,
+): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."object_content_snapshots" (
+  id                             text PRIMARY KEY,
+  org_id                         text NOT NULL,
+  object_id                      text NOT NULL,
+  content_digest                 text NOT NULL,
+  effective_base_type            text NOT NULL,
+  snapshot_schema_version        integer NOT NULL,
+  claim_disposition_fingerprint  text NOT NULL,
+  representation_revision_id     text NOT NULL,
+  resource_id                    text NOT NULL,
+  size_bytes                     bigint NOT NULL,
+  created_by                     text,
+  created_at                     timestamptz NOT NULL DEFAULT now()
+)`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS object_content_snapshots_key_idx ON "${q}"."object_content_snapshots" (org_id, object_id, content_digest, effective_base_type, snapshot_schema_version, claim_disposition_fingerprint)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS object_content_snapshots_object_idx ON "${q}"."object_content_snapshots" (org_id, object_id)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS object_content_snapshots_resource_idx ON "${q}"."object_content_snapshots" (org_id, resource_id)`,
+    },
+  ];
+}
