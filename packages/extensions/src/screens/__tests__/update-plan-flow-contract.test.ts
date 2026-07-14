@@ -142,8 +142,11 @@ describe("§II flow source contract — dry-run first, confirm before apply", ()
   it("renders the §II Failed tile — red pill over category-mapped copy, batch compensated", () => {
     expect(FLOW).toContain('data-slot="update-plan-failed"');
     expect(FLOW).toContain("bg-destructive");
-    // The apply failure sets the panel state from the category map only.
-    expect(FLOW).toContain("setFailureCopy(failureCopyByCategory[result.category] ?? defaultFailureMessage)");
+    // The apply failure sets the panel state from the category map, with the
+    // #1539 diagnostic reference appended (non-technical, admin-citable).
+    expect(FLOW).toContain("failureCopyByCategory[result.category] ?? defaultFailureMessage");
+    expect(FLOW).toContain("appendDiagnosticReference(");
+    expect(FLOW).toContain("result.reference");
   });
 });
 

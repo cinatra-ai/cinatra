@@ -22,6 +22,8 @@ import {
 } from "./utils";
 import {
   classifyMarketplaceFailure,
+  extractContractCode,
+  extractHttpStatus,
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
 } from "./screens/marketplace-failure-copy";
@@ -74,6 +76,100 @@ function logMarketplaceFailureForOperator(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Operator diagnostics at the classification chokepoint (cinatra#1539).
+//
+// This dispatch boundary is the ONLY place that still holds the RAW error
+// object (its `cause` chain / MarketplaceMcpError `responseBody` + `httpStatus`)
+// before it is stringified — so it is the only place that can record the true
+// contract code + HTTP status. The incident that motivated #1539 was
+// UNDIAGNOSED precisely because the existing operator log carried only the
+// app-facing category, not the underlying code/status. Every classified failure
+// now emits ONE STRICTLY-SANITIZED structured line here, tagged with an opaque
+// diagnostic reference that ALSO travels to the user (in the failure toast) so
+// an admin can cite it and an operator can grep for it.
+//
+// STRICTLY SANITIZED — the structured line carries ONLY bounded, non-secret
+// fields: the coarse contract code (extracted, `[a-z0-9_]+`), the numeric HTTP
+// status, the app category, and the opaque reference. It DELIBERATELY does NOT
+// include the raw error message/stack: a MarketplaceMcpError embeds the upstream
+// response `detail` into its message, so logging it here would risk a CWE-532
+// leak. The full technical error, if needed, stays in the pre-existing
+// `logMarketplaceFailureForOperator` / install-batch operator logs. The
+// user-controlled `packageName`/`packageVersion` are newline/control-stripped
+// (CWE-117 log-injection) and pass as %s args, never into the format position
+// (CWE-134).
+// ---------------------------------------------------------------------------
+
+// Opaque, non-technical correlation id. crypto.randomUUID is always present in
+// the Node server runtime this "use server" module executes in. Uppercased hex
+// so it reads as an id ("REF-1A2B3C4D"), never leaks anything, and carries no
+// operator jargon in the user-facing toast.
+function newDiagnosticReference(): string {
+  const hex = globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  return `REF-${hex.toUpperCase()}`;
+}
+
+// Bound a user-controlled value for a single log line: replace CR/LF + other
+// C0 control chars and DEL (CWE-117 log injection) with a space, then cap the
+// length. Char-code filtered (no regex) so no control char lives in source.
+function sanitizeForLog(value: string): string {
+  let out = "";
+  for (const ch of value.slice(0, 200)) {
+    const code = ch.codePointAt(0) ?? 0;
+    out += code < 0x20 || code === 0x7f ? " " : ch;
+  }
+  return out;
+}
+
+// Classify + emit the strictly-sanitized structured chokepoint log, and mint the
+// diagnostic reference that correlates the log line with the user's toast.
+// Returns both so the caller can thread the reference back to the client.
+function classifyAndLogInstallFailure(
+  operation: string,
+  packageName: string,
+  packageVersion: string,
+  err: unknown,
+): { category: MarketplaceFailureCategory; reference: string } {
+  const category = classifyMarketplaceFailure(err);
+  const contractCode = extractContractCode(err);
+  const httpStatus = extractHttpStatus(err);
+  const reference = newDiagnosticReference();
+  // CONSTANT format string with %s placeholders; every value is bounded/sanitized
+  // (see the header). NO raw error message/stack — that would risk leaking the
+  // upstream response detail embedded in a MarketplaceMcpError message.
+  console.error(
+    "[marketplace-install] %s classify-failed pkg=%s version=%s category=%s code=%s httpStatus=%s ref=%s",
+    operation,
+    sanitizeForLog(packageName),
+    packageVersion ? sanitizeForLog(packageVersion) : "(none)",
+    category,
+    contractCode ?? "none",
+    httpStatus ?? "none",
+    reference,
+  );
+  return { category, reference };
+}
+
+// A missing/empty version is rejected BEFORE any install request is made
+// (cinatra#1539 AC6): the request cannot succeed, and the resulting contract
+// error would be a bad-input (`invalid_version`) that must not surface as a
+// "gone version". Logged like a chokepoint failure (with a reference) but
+// without a network round-trip. `unrecoverable` → generic, non-"gone" copy.
+function rejectEmptyInstallVersion(
+  operation: string,
+  packageName: string,
+): { category: MarketplaceFailureCategory; reference: string } {
+  const reference = newDiagnosticReference();
+  console.error(
+    "[marketplace-install] %s rejected pkg=%s reason=empty-version ref=%s",
+    operation,
+    sanitizeForLog(packageName),
+    reference,
+  );
+  return { category: "unrecoverable", reference };
+}
+
 // cinatra#1061 sibling of the above for REMOVAL (uninstall/archive). The user
 // sees only the reason-derived, non-technical copy (which for `dependents` names
 // the blocking installed extensions); the FULL technical error stays here for
@@ -110,9 +206,26 @@ export async function installExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string; failureCategory?: MarketplaceFailureCategory }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  failureCategory?: MarketplaceFailureCategory;
+  reference?: string;
+}> {
   "use server";
   await requireAdminSession();
+  // #1539 AC6: reject a missing/empty version BEFORE the install request is
+  // made — it cannot succeed and its contract error (`invalid_version`) must not
+  // surface as a "gone version". Non-"gone" generic copy + a diagnostic ref.
+  if (packageVersion == null || packageVersion.trim() === "") {
+    const { category, reference } = rejectEmptyInstallVersion("install", packageName);
+    return {
+      success: false,
+      error: "missing package version",
+      failureCategory: category,
+      reference,
+    };
+  }
   try {
     // DEPENDENCY-BATCH entry (#180): authorize-once → plan (manifest-edge
     // walk, auto-installable edges only) → install missing dependencies
@@ -131,11 +244,19 @@ export async function installExtensionPackage(
     // Classify from the REAL error object here, BEFORE it is stringified — this
     // is the only place that still has the `cause` chain / MarketplaceMcpError
     // `responseBody` + `httpStatus` the taxonomy classifier reads (cinatra#685).
-    const failureCategory = classifyMarketplaceFailure(err);
+    // #1539: the chokepoint also emits the sanitized structured diagnostics
+    // (raw contract code + HTTP status) and mints the correlating reference.
+    const { category, reference } = classifyAndLogInstallFailure(
+      "install",
+      packageName,
+      packageVersion,
+      err,
+    );
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
-      failureCategory,
+      failureCategory: category,
+      reference,
     };
   }
 }
@@ -144,9 +265,25 @@ export async function updateExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string; failureCategory?: MarketplaceFailureCategory }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  failureCategory?: MarketplaceFailureCategory;
+  reference?: string;
+}> {
   "use server";
   await requireAdminSession();
+  // #1539 AC6 (symmetry with install): reject a missing/empty version before any
+  // update request — it cannot succeed and must not surface as a "gone version".
+  if (packageVersion == null || packageVersion.trim() === "") {
+    const { category, reference } = rejectEmptyInstallVersion("update", packageName);
+    return {
+      success: false,
+      error: "missing package version",
+      failureCategory: category,
+      reference,
+    };
+  }
   try {
     // #1039 Option B (update-time slice): on the dev/non-gatekept path route the
     // update THROUGH the dependency planner/batch (rootAction:'update') instead
@@ -179,12 +316,19 @@ export async function updateExtensionPackage(
     }
     return { success: true };
   } catch (err) {
-    // Classify from the real error before stringification (cinatra#685).
-    const failureCategory = classifyMarketplaceFailure(err);
+    // Classify from the real error before stringification (cinatra#685); emit
+    // the #1539 sanitized chokepoint diagnostics + correlating reference.
+    const { category, reference } = classifyAndLogInstallFailure(
+      "update",
+      packageName,
+      packageVersion,
+      err,
+    );
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
-      failureCategory,
+      failureCategory: category,
+      reference,
     };
   }
 }
@@ -535,7 +679,8 @@ export async function installExtensionPackageFormAction(input: {
             category,
             result.error,
           );
-          return { ok: false, category };
+          // #1539: carry the chokepoint diagnostic reference to the client toast.
+          return { ok: false, category, reference: result.reference };
         }
 
         try {
@@ -615,7 +760,8 @@ export async function installExtensionPackageFormAction(input: {
       // raw technical error stays operator-side (logs), never in the user toast.
       const category = result.failureCategory ?? "unrecoverable";
       logMarketplaceFailureForOperator("install", input.packageName, category, result.error);
-      return { ok: false, category };
+      // #1539: carry the chokepoint diagnostic reference to the client toast.
+      return { ok: false, category, reference: result.reference };
     }
   }
 
@@ -641,7 +787,8 @@ export async function updateExtensionPackageFormAction(input: {
     // cinatra#685: return the classified category (see install action note).
     const category = result.failureCategory ?? "unrecoverable";
     logMarketplaceFailureForOperator("update", input.packageName, category, result.error);
-    return { ok: false, category };
+    // #1539: carry the chokepoint diagnostic reference to the client toast.
+    return { ok: false, category, reference: result.reference };
   }
   redirect("/configuration/extensions");
 }
