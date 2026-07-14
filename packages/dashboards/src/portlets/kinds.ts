@@ -10,6 +10,8 @@
 // { fromInstanceId, key } using these generic keys, distinguished by
 // instanceId — NOT instance-specific output names. Launcher kinds set
 // allowsArbitraryInputs (dynamic prefill keys).
+import { collectQueryCubeIds, describeCrossCubeQuery } from "@cinatra-ai/sdk-dashboard";
+
 import { registerPortletKind, type PortletConfigError, type PortletInstanceForValidation } from "./registry";
 import { DashboardConfigV1_1Schema } from "../store/dashboard-config";
 
@@ -65,13 +67,103 @@ export function hostBundledPortletKinds(): string[] {
   return [...PORTLET_KINDS_WITH_BUNDLED_COMPONENT];
 }
 
+/**
+ * The single-query cube-scope check (cinatra#1512): a drizzle-cube portlet's
+ * executable single query must reference exactly one cube — the query
+ * endpoint rejects mixed-cube queries with `cube_id_ambiguous`, so letting one
+ * persist yields a portlet that can never render (the AnalysisBuilder editor
+ * happily emits one, and its KPI preview only queries the yAxis measure, so
+ * the mix isn't caught client-side). Enumerates the query object(s) the
+ * embedded portlet would actually EXECUTE:
+ *   - `analysisConfig` present → only its `query`, and only for the "query"
+ *     analysis type (funnel/flow/retention carry different query DSLs the v1
+ *     endpoint rejects wholesale as `unsupported_analysis_type`);
+ *   - otherwise the legacy top-level `query` field (object, or the legacy DC
+ *     JSON-string form) — mirroring drizzle-cube's `ensureAnalysisConfig`
+ *     precedence.
+ * A multi-query config (`queries[]` — the explicitly-supported multi-query
+ * mode) is checked PER SUB-QUERY: each sub-query hits /load (or a /batch item)
+ * individually and must itself be single-cube; spanning cubes ACROSS
+ * sub-queries stays allowed.
+ */
+function embeddedExecutableQueries(dcPortlet: Record<string, unknown>): unknown[] {
+  const out: unknown[] = [];
+  const pushQueryOrMulti = (q: unknown): void => {
+    if (typeof q !== "object" || q === null) return;
+    const queries = (q as Record<string, unknown>).queries;
+    if (Array.isArray(queries)) {
+      for (const sub of queries) {
+        if (typeof sub === "object" && sub !== null) out.push(sub);
+      }
+      return;
+    }
+    out.push(q);
+  };
+  const ac = dcPortlet.analysisConfig;
+  if (typeof ac === "object" && ac !== null) {
+    const analysis = ac as Record<string, unknown>;
+    if (analysis.analysisType === undefined || analysis.analysisType === "query") {
+      pushQueryOrMulti(analysis.query);
+    }
+    return out;
+  }
+  const legacy = dcPortlet.query;
+  if (typeof legacy === "string") {
+    // Legacy DC portlets persist the query as a JSON string; an unparseable
+    // string is left to drizzle-cube's own invalid-JSON handling.
+    try {
+      pushQueryOrMulti(JSON.parse(legacy));
+    } catch {
+      /* not JSON — nothing to check */
+    }
+  } else {
+    pushQueryOrMulti(legacy);
+  }
+  return out;
+}
+
+/**
+ * The chart type an embedded DC portlet renders with — `charts[analysisType]
+ * .chartType` when an `analysisConfig` is present (the shape PortletContainer
+ * reads), else the legacy top-level `chartType`. Undefined when neither is a
+ * string.
+ */
+function embeddedChartType(dcPortlet: Record<string, unknown>): string | undefined {
+  const ac = dcPortlet.analysisConfig;
+  if (typeof ac === "object" && ac !== null) {
+    const analysis = ac as Record<string, unknown>;
+    const analysisType =
+      typeof analysis.analysisType === "string" ? analysis.analysisType : "query";
+    const charts = analysis.charts;
+    const mode =
+      typeof charts === "object" && charts !== null
+        ? (charts as Record<string, unknown>)[analysisType]
+        : undefined;
+    const chartType =
+      typeof mode === "object" && mode !== null
+        ? (mode as Record<string, unknown>).chartType
+        : undefined;
+    return typeof chartType === "string" ? chartType : undefined;
+  }
+  return typeof dcPortlet.chartType === "string" ? dcPortlet.chartType : undefined;
+}
+
 /** Install-time validation for the analytics kind: `config.dashboard` must be a
  *  structurally-valid drizzle-cube DashboardConfig (the 1.1 shape, which is the
  *  embedded format). The 1.1 schema is `.passthrough()`, so future DC fields are
  *  tolerated; deep chart semantics stay DC-owned (mirrors how 1.1 keeps
  *  `analysisConfig` opaque). Codex round-0: tightened from a loose "object with
  *  portlets array" to the real 1.1 schema so a malformed embedded config fails
- *  closed at materialization. */
+ *  closed at materialization.
+ *
+ *  On top of the structural parse, each embedded portlet's executable single
+ *  queries must be cube-scoped (cinatra#1512) — see
+ *  `embeddedExecutableQueries`. This runs ONLY on the write path (every save
+ *  funnels through the mutation service's registry validation); the READ path
+ *  (`readDcConfigFromRow`) deliberately keeps the plain 1.1 schema so a
+ *  pre-existing row with a mixed-cube portlet still renders (with the
+ *  endpoint's human-readable error card) instead of being swapped for the
+ *  empty seed. */
 function validateAnalyticsPortletConfig(p: PortletInstanceForValidation): PortletConfigError[] {
   const dashboard = p.config.dashboard;
   if (typeof dashboard !== "object" || dashboard === null) {
@@ -88,7 +180,48 @@ function validateAnalyticsPortletConfig(p: PortletInstanceForValidation): Portle
       },
     ];
   }
-  return [];
+  const errors: PortletConfigError[] = [];
+  for (const dcPortlet of res.data.portlets) {
+    const dp = dcPortlet as Record<string, unknown>;
+    const queries = embeddedExecutableQueries(dp);
+    const chartType = embeddedChartType(dp);
+    // KPI charts (kpiNumber/kpiDelta/kpiText) render ONE value from ONE data
+    // source, so the whole portlet — across ALL sub-queries of a multi-query
+    // config — must stay on a single cube (issue #1512 acceptance: "constrain
+    // selectable measures to one cube or create separate KPI portlets per
+    // cube"). Other chart types only need each individual query to be
+    // single-cube; a multi-query config may span cubes ACROSS sub-queries.
+    const isKpiChart = typeof chartType === "string" && chartType.startsWith("kpi");
+    if (isKpiChart) {
+      const union: string[] = [];
+      const seen = new Set<string>();
+      for (const query of queries) {
+        for (const cubeId of collectQueryCubeIds(query)) {
+          if (!seen.has(cubeId)) {
+            seen.add(cubeId);
+            union.push(cubeId);
+          }
+        }
+      }
+      if (union.length > 1) {
+        errors.push({
+          code: "port_analytics_cross_cube_query",
+          message: `card "${dcPortlet.title}": ${describeCrossCubeQuery(union)} A KPI reads from a single data source — create a separate KPI card per data source instead.`,
+        });
+      }
+    } else {
+      for (const query of queries) {
+        const cubeIds = collectQueryCubeIds(query);
+        if (cubeIds.length > 1) {
+          errors.push({
+            code: "port_analytics_cross_cube_query",
+            message: `card "${dcPortlet.title}": ${describeCrossCubeQuery(cubeIds)}`,
+          });
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 function reqConfigString(portlet: PortletInstanceForValidation, key: string, code: string): PortletConfigError[] {

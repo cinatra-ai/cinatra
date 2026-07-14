@@ -22,6 +22,9 @@ export {
 export {
   resolveCubeIdFromQuery,
   resolveAndValidateCubeId,
+  collectQueryCubeIds,
+  humanizeCubeId,
+  describeCrossCubeQuery,
   checkUnsupportedAnalysisType,
   checkUnsupportedQueryFeature,
   findUnknownFilterMembers,
