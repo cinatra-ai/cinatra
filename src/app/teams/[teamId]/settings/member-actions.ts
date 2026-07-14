@@ -81,6 +81,20 @@ async function assertTeamMemberAuthority(teamId: string): Promise<{
   return { team };
 }
 
+/**
+ * Serialize ALL membership mutations for one team on a transaction-scoped
+ * advisory lock (the `pg_advisory_xact_lock` precedent of auth.ts /
+ * skill-lifecycle-store). `public."teamMember"` has no (teamId, userId)
+ * unique constraint (Better Auth owns that schema), so statement-level
+ * guards alone race under READ COMMITTED — the lock makes add's duplicate
+ * check and remove's last-member count authoritative: a competing mutation
+ * for the SAME team commits either before the lock is granted (the fresh
+ * per-statement snapshot then sees it) or after this transaction releases it.
+ */
+function takeTeamMembershipLock(teamId: string) {
+  return sql`SELECT pg_advisory_xact_lock(hashtext('cinatra-team-members'), hashtext(${teamId}))`;
+}
+
 export type TeamMemberActionResult =
   | { ok: true }
   | {
@@ -122,21 +136,26 @@ export async function addTeamMemberAction(
     }
 
     // Duplicate-safe insert: `public."teamMember"` has no (teamId, userId)
-    // unique constraint, so guard in the statement itself. (A concurrent
-    // duplicate add can still race under READ COMMITTED; a duplicate row is
-    // benign — remove deletes all rows for the pair.)
-    const inserted = await betterAuthDb.execute<{ id: string }>(sql`
-      INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
-      SELECT ${randomUUID()}, ${team.id}, ${targetUserId}, ${new Date()}
-      WHERE NOT EXISTS (
-        SELECT 1 FROM public."teamMember"
-         WHERE "teamId" = ${team.id} AND "userId" = ${targetUserId}
-      )
-      RETURNING id
-    `);
-    if ((inserted.rows?.length ?? 0) === 0) {
-      return { ok: false, error: "already_member" };
-    }
+    // unique constraint, so serialize on the per-team advisory lock and
+    // guard in the statement — after the lock is granted, the NOT EXISTS
+    // runs on a fresh snapshot that sees any competing add that got there
+    // first (codex 1567-r1: WHERE NOT EXISTS alone raced).
+    const result = await betterAuthDb.transaction(async (tx) => {
+      await tx.execute(takeTeamMembershipLock(team.id));
+      const inserted = await tx.execute<{ id: string }>(sql`
+        INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
+        SELECT ${randomUUID()}, ${team.id}, ${targetUserId}, ${new Date()}
+        WHERE NOT EXISTS (
+          SELECT 1 FROM public."teamMember"
+           WHERE "teamId" = ${team.id} AND "userId" = ${targetUserId}
+        )
+        RETURNING id
+      `);
+      return (inserted.rows?.length ?? 0) > 0
+        ? { ok: true as const }
+        : { ok: false as const, error: "already_member" as const };
+    });
+    if (!result.ok) return result;
 
     revalidatePath(`/teams/${team.id}/settings`);
     return { ok: true };
@@ -153,9 +172,9 @@ export async function addTeamMemberAction(
 // through this action. An empty team would stay visible only via the org
 // admin widening and could still hold grants/skills with nobody on it, so
 // removal of the final member is refused (`last_member`) — mirroring the
-// last-platform-admin guard (`countOtherPlatformAdmins`). The lock-then-count
-// transaction makes two concurrent removals of the final two members
-// serialize instead of racing to an empty team.
+// last-platform-admin guard (`countOtherPlatformAdmins`). The per-team
+// advisory lock makes two concurrent removals of the final two members (and
+// remove-vs-add interleavings) serialize instead of racing to an empty team.
 // ---------------------------------------------------------------------------
 export async function removeTeamMemberAction(
   teamId: string,
@@ -167,14 +186,15 @@ export async function removeTeamMemberAction(
     if (!targetUserId) return { ok: false, error: "invalid_user" };
 
     const result = await betterAuthDb.transaction(async (tx) => {
-      // Lock the team's membership rows: concurrent removes serialize here,
-      // so the count below is authoritative for this transaction.
-      const locked = await tx.execute<{ userId: string }>(sql`
+      // Serialize on the per-team advisory lock: the membership read below
+      // then runs on a fresh snapshot, so its count is authoritative for
+      // this transaction.
+      await tx.execute(takeTeamMembershipLock(team.id));
+      const current = await tx.execute<{ userId: string }>(sql`
         SELECT "userId" FROM public."teamMember"
          WHERE "teamId" = ${team.id}
-         FOR UPDATE
       `);
-      const memberUserIds = (locked.rows ?? []).map((r) => r.userId);
+      const memberUserIds = (current.rows ?? []).map((r) => r.userId);
       if (!memberUserIds.includes(targetUserId)) {
         return { ok: false as const, error: "not_a_member" as const };
       }

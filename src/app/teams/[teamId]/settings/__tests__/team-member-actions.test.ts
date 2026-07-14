@@ -10,6 +10,8 @@
  *  - add: the target must be a member of the team's org (`user_not_in_org`),
  *    a duplicate is `already_member`, success inserts a ROLELESS
  *    `public."teamMember"` row (no role column — #1566 owns that decision);
+ *  - BOTH mutations serialize on the per-team `pg_advisory_xact_lock`
+ *    (no (teamId,userId) unique constraint exists — codex 1567-r1);
  *  - remove: the LAST member is protected (`last_member`) inside a
  *    lock-then-count transaction; a non-member is `not_a_member`;
  *  - the candidate search is bounded by the team's organizationId, escapes
@@ -156,7 +158,7 @@ describe("authority gate", () => {
 
   it("resolves the org role against the TEAM's org, never the viewer's active org", async () => {
     primeManagerSession({ orgRole: "org_admin" });
-    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [{ id: "tm-new" }]];
+    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [], [{ id: "tm-new" }]];
     await addTeamMemberAction("team-1", "user-2");
     expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-of-team", "caller-1");
     expect(resolveOrgRoleForUser).not.toHaveBeenCalledWith(
@@ -168,7 +170,7 @@ describe("authority gate", () => {
   it("platform admin passes without an org role lookup", async () => {
     primeManagerSession({ platformAdmin: true });
     resolveOrgRoleForUser.mockResolvedValue(undefined);
-    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [{ id: "tm-new" }]];
+    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [], [{ id: "tm-new" }]];
     const r = await addTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: true });
     expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
@@ -198,18 +200,23 @@ describe("addTeamMemberAction", () => {
 
   it("returns already_member when the guarded insert matches an existing row", async () => {
     primeManagerSession();
-    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], []]; // insert returned nothing
+    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [], []]; // lock, then insert returned nothing
     const r = await addTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: false, error: "already_member" });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("inserts a ROLELESS teamMember row and revalidates the settings page", async () => {
+  it("serializes on the per-team advisory lock, then inserts a ROLELESS row and revalidates", async () => {
     primeManagerSession();
-    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [{ id: "tm-new" }]];
+    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [], [{ id: "tm-new" }]];
     const r = await addTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: true });
-    const insert = executed[2]!.sql;
+    // the guarded insert runs inside the advisory-locked transaction
+    expect(transaction).toHaveBeenCalledTimes(1);
+    const lock = executed[2]!.sql;
+    expect(sqlText(lock)).toContain("pg_advisory_xact_lock");
+    expect(containsValue(lock, "team-1")).toBe(true);
+    const insert = executed[3]!.sql;
     const text = sqlText(insert);
     expect(text).toContain('INSERT INTO public."teamMember"');
     // roleless membership — the statement must not touch a role column
@@ -234,7 +241,7 @@ describe("addTeamMemberAction", () => {
 describe("removeTeamMemberAction", () => {
   it("refuses to remove the LAST member (last_member) without deleting", async () => {
     primeManagerSession();
-    queuedRows = [[TEAM_ROW], [{ userId: "user-2" }]]; // lock: sole member
+    queuedRows = [[TEAM_ROW], [], [{ userId: "user-2" }]]; // lock, then: sole member
     const r = await removeTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: false, error: "last_member" });
     const texts = executed.map((c) => sqlText(c.sql));
@@ -242,21 +249,24 @@ describe("removeTeamMemberAction", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("locks the membership rows before counting (FOR UPDATE serializes racers)", async () => {
+  it("takes the per-team advisory lock before counting (racers serialize)", async () => {
     primeManagerSession();
     queuedRows = [
       [TEAM_ROW],
+      [],
       [{ userId: "user-2" }, { userId: "user-3" }],
       [],
     ];
     await removeTeamMemberAction("team-1", "user-2");
     expect(transaction).toHaveBeenCalledTimes(1);
-    expect(sqlText(executed[1]!.sql)).toContain("FOR UPDATE");
+    const lock = executed[1]!.sql;
+    expect(sqlText(lock)).toContain("pg_advisory_xact_lock");
+    expect(containsValue(lock, "team-1")).toBe(true);
   });
 
   it("returns not_a_member for a user without a membership row", async () => {
     primeManagerSession();
-    queuedRows = [[TEAM_ROW], [{ userId: "user-3" }]];
+    queuedRows = [[TEAM_ROW], [], [{ userId: "user-3" }]];
     const r = await removeTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: false, error: "not_a_member" });
   });
@@ -265,12 +275,13 @@ describe("removeTeamMemberAction", () => {
     primeManagerSession();
     queuedRows = [
       [TEAM_ROW],
+      [],
       [{ userId: "user-2" }, { userId: "user-3" }],
       [],
     ];
     const r = await removeTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: true });
-    const del = executed[2]!.sql;
+    const del = executed[3]!.sql;
     expect(sqlText(del)).toContain('DELETE FROM public."teamMember"');
     expect(containsValue(del, "team-1")).toBe(true);
     expect(containsValue(del, "user-2")).toBe(true);
