@@ -132,27 +132,59 @@ $body$` },
     { text: `DROP TRIGGER IF EXISTS trg_artifact_claim_events_append_only ON "${q}"."artifact_claim_events"` },
     { text: `CREATE TRIGGER trg_artifact_claim_events_append_only BEFORE UPDATE OR DELETE ON "${q}"."artifact_claim_events" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_artifact_claim_events_append_only"()` },
 
-    // ---- artifact_binding_reconcile_queue: winner-change work queue ----
-    // Written in the SAME transaction as the winner transition (one
-    // 'binding-reconcile' + one 're-projection' row per change). The consumer
-    // lands with the binding write-path sub-issue; until then rows accumulate
-    // as durable, idempotently-consumable work.
+    // ---- artifact_binding_reconcile_queue: reconcile work queue ----
+    // Two axes of durable, idempotently-consumable work:
+    //   - CLAIM-side (kind 'binding-reconcile' | 're-projection'): one row per
+    //     winner change, written in the SAME transaction as the winner
+    //     transition, keyed by (scope, object_type_id, claim_event_id).
+    //   - OBJECT-side (kind 'binding-reconcile-write', cinatra#1493): one
+    //     per-artifact row written in the SAME transaction as the object write
+    //     (upsertObjectAndEnqueue) whenever a create / type-change could affect
+    //     the row's binding. It carries the concrete (org_id, object_id) so the
+    //     consumer reconciles exactly that artifact — the durable record that
+    //     makes the write-path reconcile crash-safe (a type-change AWAY from a
+    //     claimed type leaves a stale binding no later TYPE sweep can select, so
+    //     the object-side axis cannot be a type sweep). claim_event_id is NULL
+    //     for a write-driven row (there is no claim event); the shape CHECK
+    //     keeps each kind's required columns honest.
     { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_binding_reconcile_queue" (
       id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
       scope text NOT NULL,
       object_type_id text NOT NULL,
-      claim_event_id text NOT NULL,
+      claim_event_id text,
+      object_id text,
+      org_id text,
       kind text NOT NULL,
       status text NOT NULL DEFAULT 'pending',
       attempts integer NOT NULL DEFAULT 0,
       last_error text,
       created_at timestamptz NOT NULL DEFAULT now(),
       processed_at timestamptz,
-      CONSTRAINT artifact_binding_reconcile_queue_kind_check CHECK (kind IN ('binding-reconcile','re-projection')),
-      CONSTRAINT artifact_binding_reconcile_queue_status_check CHECK (status IN ('pending','done','failed'))
+      CONSTRAINT artifact_binding_reconcile_queue_kind_check CHECK (kind IN ('binding-reconcile','re-projection','binding-reconcile-write')),
+      CONSTRAINT artifact_binding_reconcile_queue_status_check CHECK (status IN ('pending','done','failed')),
+      CONSTRAINT artifact_binding_reconcile_queue_shape_check CHECK (
+        CASE WHEN kind = 'binding-reconcile-write'
+             THEN object_id IS NOT NULL AND org_id IS NOT NULL
+             ELSE claim_event_id IS NOT NULL END)
     )` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_binding_reconcile_queue_pending_idx
       ON "${q}"."artifact_binding_reconcile_queue" (status, created_at)` },
+    // Self-heal (cinatra#1493): an operator DB whose queue table was created by
+    // the core__0034 bootstrap converges here on boot — a fresh CREATE above
+    // already carries these; migration core__0043 is the node-pg-migrate
+    // operator path. Every statement is a no-op on a bootstrap-seeded schema.
+    { text: `ALTER TABLE "${q}"."artifact_binding_reconcile_queue" ADD COLUMN IF NOT EXISTS object_id text` },
+    { text: `ALTER TABLE "${q}"."artifact_binding_reconcile_queue" ADD COLUMN IF NOT EXISTS org_id text` },
+    { text: `ALTER TABLE "${q}"."artifact_binding_reconcile_queue" ALTER COLUMN claim_event_id DROP NOT NULL` },
+    { text: `DO $reconcile_queue_kind$ BEGIN
+      ALTER TABLE "${q}"."artifact_binding_reconcile_queue" DROP CONSTRAINT IF EXISTS artifact_binding_reconcile_queue_kind_check;
+      ALTER TABLE "${q}"."artifact_binding_reconcile_queue" ADD CONSTRAINT artifact_binding_reconcile_queue_kind_check CHECK (kind IN ('binding-reconcile','re-projection','binding-reconcile-write'));
+      ALTER TABLE "${q}"."artifact_binding_reconcile_queue" DROP CONSTRAINT IF EXISTS artifact_binding_reconcile_queue_shape_check;
+      ALTER TABLE "${q}"."artifact_binding_reconcile_queue" ADD CONSTRAINT artifact_binding_reconcile_queue_shape_check CHECK (
+        CASE WHEN kind = 'binding-reconcile-write'
+             THEN object_id IS NOT NULL AND org_id IS NOT NULL
+             ELSE claim_event_id IS NOT NULL END);
+    END $reconcile_queue_kind$` },
     // cinatra#1432: the uninstall-operation lineage tables ride THIS claim-system
     // schema leaf so the drizzle-store bootstrap wires the whole claim system
     // through the single existing spread call — holding the drizzle-store

@@ -244,3 +244,67 @@ describe("registerArtifactExtensions — live extensions tree", () => {
     objectTypeRegistry._clearForTests();
   });
 });
+
+// cinatra#1429 — per-claim JSON-Schema → Zod validator registration. The
+// activation gate (objects_save / objects_update) resolves a claimed type's
+// validator from objectTypeRegistry; before this it only found the permissive
+// `${pkg}:artifact` umbrella, so enforcement was INERT. The bridge now compiles
+// each objectTypes claim's inline JSON Schema into a real validator registered
+// under the CLAIMED type id — resolvable + enforcing, but validation-only (NOT
+// added to listArtifacts, which stays one-generic-type-per-package).
+describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "artifact-claim-validator-"));
+    objectTypeRegistry._clearForTests();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+  });
+
+  it("compiles an objectTypes inline JSON Schema into an enforcing validator under the claimed type id", () => {
+    writeExt(root, "invoice-artifact", {
+      name: "@cinatra-ai/invoice-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/invoice-artifact:invoice",
+              claim: "dedicated",
+              schema: {
+                type: "object",
+                required: ["amount"],
+                properties: { amount: { type: "number" } },
+                additionalProperties: true,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+
+    const def = objectTypeRegistry.resolve("@cinatra-ai/invoice-artifact:invoice");
+    expect(def).not.toBeNull();
+    // The registered schema ENFORCES the declared shape (no longer permissive).
+    expect(def!.schema.safeParse({ amount: 42 }).success).toBe(true);
+    expect(def!.schema.safeParse({ amount: "not-a-number" }).success).toBe(false);
+    expect(def!.schema.safeParse({}).success).toBe(false); // missing required 'amount'
+
+    // Validation-only: the per-claim type is NOT surfaced as an artifact — the
+    // serving/library surface stays one-generic-type-per-package.
+    const listed = objectTypeRegistry.listArtifacts().map((d) => d.type);
+    expect(listed).toContain("@cinatra-ai/invoice-artifact:artifact"); // the umbrella
+    expect(listed).not.toContain("@cinatra-ai/invoice-artifact:invoice");
+
+    // Teardown reaps the per-claim validator via provenance (like the umbrella).
+    const removed = objectTypeRegistry.removeByPackage("@cinatra-ai/invoice-artifact");
+    expect(removed).toContain("@cinatra-ai/invoice-artifact:invoice");
+    expect(objectTypeRegistry.resolve("@cinatra-ai/invoice-artifact:invoice")).toBeNull();
+  });
+});

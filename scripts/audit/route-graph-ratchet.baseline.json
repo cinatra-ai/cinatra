@@ -2,10 +2,10 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 147,
-    "/api/mcp": 1433,
-    "/chat": 1471,
-    "/api/a2a": 1438,
-    "/api/llm-bridge": 1444
+    "/api/mcp": 1436,
+    "/chat": 1474,
+    "/api/a2a": 1441,
+    "/api/llm-bridge": 1447
   },
   "absorbs": {
     "/sign-in": {
@@ -15,28 +15,28 @@
       "pr": 1473
     },
     "/api/mcp": {
-      "from": 1425,
-      "to": 1433,
-      "reason": "cinatra#1367 (PR #1473) chat-capture autosave detection graph, RE-MEASURED on the merged tree (origin/main d26fe7a0 contained in HEAD) with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET; module overlap between the enqueue and pipeline subgraphs makes per-edge contributions non-additive). The chat-capture feature becomes reachable from all locked routes at the request-time persistence chokepoint via THREE new edges (the route-graph walker counts dynamic import()): (1) src/lib/drizzle-store.ts STATICALLY imports @/lib/chat-capture-schema, a pure SQL-strings import-free schema leaf; (2) src/lib/background-jobs-registry.ts DYNAMIC-imports @/lib/chat-capture/pipeline (the two-stage detection pipeline detector -> redact -> classifier -> ledger), reachable here via the background-jobs registry; (3) src/lib/database.ts DYNAMIC-imports @/lib/chat-capture/enqueue (the fire-and-forget enqueue hook fired after thread persistence; pinned by chat-capture-enqueue-hook.test.ts). Ablating exactly these three edges returns every locked route to its exact origin/main ceiling, so the entire growth is attributable to this feature and nothing else. Net measured raise on this route: EXACTLY +8. Absorbed raise 1425->1433.",
-      "pr": 1473
+      "from": 1433,
+      "to": 1436,
+      "reason": "cinatra#1493 (PR #1520) durable binding-reconcile composition, MEASURED in the PR worktree on origin/main b38c4d6d with the companion extension repos cloned pinned (missingCount 0) — never arithmetic. Exactly three feature modules become reachable on each grown route (diffed reachable-module sets vs origin/main): (1) src/lib/objects/claim-activation-gate.ts (write-path enforcement, reached via the packages/objects handlers); (2) src/lib/objects/binding-reconcile-sweep.ts (the durable drain, reached via src/lib/background-jobs-registry.ts); (3) src/lib/objects/binding-write-path.ts (the #1490 reconcile primitive, reached via the sweep). /sign-in is flat — it reaches neither the objects handlers nor the jobs registry.",
+      "pr": 1520
     },
     "/chat": {
-      "from": 1463,
-      "to": 1471,
-      "reason": "cinatra#1367 (PR #1473) chat-capture autosave detection graph, RE-MEASURED on the merged tree (origin/main d26fe7a0 contained in HEAD) with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET; module overlap between the enqueue and pipeline subgraphs makes per-edge contributions non-additive). The chat-capture feature becomes reachable from all locked routes at the request-time persistence chokepoint via THREE new edges (the route-graph walker counts dynamic import()): (1) src/lib/drizzle-store.ts STATICALLY imports @/lib/chat-capture-schema, a pure SQL-strings import-free schema leaf; (2) src/lib/background-jobs-registry.ts DYNAMIC-imports @/lib/chat-capture/pipeline (the two-stage detection pipeline detector -> redact -> classifier -> ledger), reachable here via the background-jobs registry; (3) src/lib/database.ts DYNAMIC-imports @/lib/chat-capture/enqueue (the fire-and-forget enqueue hook fired after thread persistence; pinned by chat-capture-enqueue-hook.test.ts). Ablating exactly these three edges returns every locked route to its exact origin/main ceiling, so the entire growth is attributable to this feature and nothing else. Net measured raise on this route: EXACTLY +8. Absorbed raise 1463->1471.",
-      "pr": 1473
+      "from": 1471,
+      "to": 1474,
+      "reason": "cinatra#1493 (PR #1520) durable binding-reconcile composition, MEASURED in the PR worktree on origin/main b38c4d6d with the companion extension repos cloned pinned (missingCount 0) — never arithmetic. Exactly three feature modules become reachable on each grown route (diffed reachable-module sets vs origin/main): (1) src/lib/objects/claim-activation-gate.ts (write-path enforcement, reached via the packages/objects handlers); (2) src/lib/objects/binding-reconcile-sweep.ts (the durable drain, reached via src/lib/background-jobs-registry.ts); (3) src/lib/objects/binding-write-path.ts (the #1490 reconcile primitive, reached via the sweep). /sign-in is flat — it reaches neither the objects handlers nor the jobs registry.",
+      "pr": 1520
     },
     "/api/a2a": {
-      "from": 1430,
-      "to": 1438,
-      "reason": "cinatra#1367 (PR #1473) chat-capture autosave detection graph, RE-MEASURED on the merged tree (origin/main d26fe7a0 contained in HEAD) with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET; module overlap between the enqueue and pipeline subgraphs makes per-edge contributions non-additive). The chat-capture feature becomes reachable from all locked routes at the request-time persistence chokepoint via THREE new edges (the route-graph walker counts dynamic import()): (1) src/lib/drizzle-store.ts STATICALLY imports @/lib/chat-capture-schema, a pure SQL-strings import-free schema leaf; (2) src/lib/background-jobs-registry.ts DYNAMIC-imports @/lib/chat-capture/pipeline (the two-stage detection pipeline detector -> redact -> classifier -> ledger), reachable here via the background-jobs registry; (3) src/lib/database.ts DYNAMIC-imports @/lib/chat-capture/enqueue (the fire-and-forget enqueue hook fired after thread persistence; pinned by chat-capture-enqueue-hook.test.ts). Ablating exactly these three edges returns every locked route to its exact origin/main ceiling, so the entire growth is attributable to this feature and nothing else. Net measured raise on this route: EXACTLY +8. Absorbed raise 1430->1438.",
-      "pr": 1473
+      "from": 1438,
+      "to": 1441,
+      "reason": "cinatra#1493 (PR #1520) durable binding-reconcile composition, MEASURED in the PR worktree on origin/main b38c4d6d with the companion extension repos cloned pinned (missingCount 0) — never arithmetic. Exactly three feature modules become reachable on each grown route (diffed reachable-module sets vs origin/main): (1) src/lib/objects/claim-activation-gate.ts (write-path enforcement, reached via the packages/objects handlers); (2) src/lib/objects/binding-reconcile-sweep.ts (the durable drain, reached via src/lib/background-jobs-registry.ts); (3) src/lib/objects/binding-write-path.ts (the #1490 reconcile primitive, reached via the sweep). /sign-in is flat — it reaches neither the objects handlers nor the jobs registry.",
+      "pr": 1520
     },
     "/api/llm-bridge": {
-      "from": 1436,
-      "to": 1444,
-      "reason": "cinatra#1367 (PR #1473) chat-capture autosave detection graph, RE-MEASURED on the merged tree (origin/main d26fe7a0 contained in HEAD) with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET; module overlap between the enqueue and pipeline subgraphs makes per-edge contributions non-additive). The chat-capture feature becomes reachable from all locked routes at the request-time persistence chokepoint via THREE new edges (the route-graph walker counts dynamic import()): (1) src/lib/drizzle-store.ts STATICALLY imports @/lib/chat-capture-schema, a pure SQL-strings import-free schema leaf; (2) src/lib/background-jobs-registry.ts DYNAMIC-imports @/lib/chat-capture/pipeline (the two-stage detection pipeline detector -> redact -> classifier -> ledger), reachable here via the background-jobs registry; (3) src/lib/database.ts DYNAMIC-imports @/lib/chat-capture/enqueue (the fire-and-forget enqueue hook fired after thread persistence; pinned by chat-capture-enqueue-hook.test.ts). Ablating exactly these three edges returns every locked route to its exact origin/main ceiling, so the entire growth is attributable to this feature and nothing else. Net measured raise on this route: EXACTLY +8. Absorbed raise 1436->1444.",
-      "pr": 1473
+      "from": 1444,
+      "to": 1447,
+      "reason": "cinatra#1493 (PR #1520) durable binding-reconcile composition, MEASURED in the PR worktree on origin/main b38c4d6d with the companion extension repos cloned pinned (missingCount 0) — never arithmetic. Exactly three feature modules become reachable on each grown route (diffed reachable-module sets vs origin/main): (1) src/lib/objects/claim-activation-gate.ts (write-path enforcement, reached via the packages/objects handlers); (2) src/lib/objects/binding-reconcile-sweep.ts (the durable drain, reached via src/lib/background-jobs-registry.ts); (3) src/lib/objects/binding-write-path.ts (the #1490 reconcile primitive, reached via the sweep). /sign-in is flat — it reaches neither the objects handlers nor the jobs registry.",
+      "pr": 1520
     }
   }
 }

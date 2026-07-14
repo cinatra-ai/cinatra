@@ -386,6 +386,47 @@ function deriveSaveDefaults(
   };
 }
 
+/**
+ * Per-claim activation gate — NEW-write enforcement (cinatra#1429, epic #1424).
+ * On the `objects_save` / `objects_update` write paths: when the resolved object
+ * type carries an active DEDICATED claim AND a registered Zod schema, a write of
+ * an invalid payload is REJECTED (`InvalidActivatedTypePayloadError`). No-op for
+ * unclaimed types or types with no registered schema (substrate behavior
+ * preserved) — the type's LEGACY rows are handled by the pre-activation
+ * audit/quarantine, not here. The kill-switch
+ * `CINATRA_DISABLE_ACTIVATED_TYPE_ENFORCEMENT=true` disables it for emergency
+ * operability without a code change (default: enforced/on).
+ *
+ * The registered-schema lookup gates the claim DB probe: an unregistered type
+ * can never carry a validator, so it short-circuits WITHOUT the
+ * `typeHasActiveDedicatedClaim` query — only a registered type pays the probe.
+ */
+async function enforceActivatedTypePayload(
+  objectTypeId: string,
+  orgId: string | null,
+  data: unknown,
+): Promise<void> {
+  // No org context (the A2A_DEV_BYPASS sessionless-model path) → no scope to
+  // resolve an org/platform claim against; the dev bypass is already a trusted
+  // write path, so skip enforcement rather than probe with a null scope.
+  if (orgId == null) return;
+  if (process.env.CINATRA_DISABLE_ACTIVATED_TYPE_ENFORCEMENT === "true") return;
+  const def = objectTypeRegistry.resolve(objectTypeId);
+  if (!def) return;
+  // Lazy-import the app-layer gate so the objects_save handler graph gains NO
+  // static edge to it — the route-graph budgets (and the in-flight #1473
+  // route-graph baseline) stay untouched. Cached after first load; the
+  // enforcement is still AWAITED before the write, so it can reject.
+  const { assertActivatedTypePayloadValid, typeHasActiveDedicatedClaim } =
+    await import("@/lib/objects/claim-activation-gate");
+  assertActivatedTypePayloadValid({
+    objectTypeId,
+    data,
+    hasActiveClaim: typeHasActiveDedicatedClaim(orgId, objectTypeId),
+    validate: (d) => def.schema.safeParse(d).success,
+  });
+}
+
 export function createObjectsPrimitiveHandlers() {
   return {
     "objects_save": async (request: PrimitiveInvocationRequest<unknown>) => {
@@ -527,6 +568,14 @@ export function createObjectsPrimitiveHandlers() {
       // object's stable id) but are not passed to Graphiti from this hot
       // path.
       void groupId;
+
+      // Per-claim activation gate (cinatra#1429): reject a NEW write of an
+      // invalid payload for an activated (dedicated-claimed + registered-schema)
+      // type BEFORE it is persisted. Validates the SAME shape that gets stored
+      // (enrichedData) so a NEW-write rejection is consistent with the
+      // legacy-row activation audit (which validates the stored `data`).
+      await enforceActivatedTypePayload(classification.type, orgId, enrichedData);
+
       const record = upsertObjectAndEnqueue({
         upsertInput: {
           id: objectId,
@@ -827,6 +876,23 @@ export function createObjectsPrimitiveHandlers() {
       //     above) and target authz (assertProjectWritable when moving to a
       //     non-null project), then transactional cascade (UPDATE
       //     objects.project_id + INSERT resource_project_moves audit).
+      // Per-claim activation gate (cinatra#1429): an update is also a NEW write
+      // of a payload for the row's (possibly activated) type. Compute the merged
+      // payload and reject an invalid one for a dedicated-claimed +
+      // registered-schema type BEFORE ANY commit — so the project-move below
+      // cannot commit ahead of a data rejection (codex Q3). Skipped for a
+      // move-only update (input.data undefined). The type is fixed to the
+      // existing row's type.
+      const incomingData =
+        (input.data as Record<string, unknown> | undefined) ?? {};
+      const mergedData = {
+        ...((existing.data as Record<string, unknown> | null) ?? {}),
+        ...incomingData,
+      };
+      if (input.data !== undefined) {
+        await enforceActivatedTypePayload(existing.type, orgId, mergedData);
+      }
+
       const wantsProjectMove =
         input.projectId !== undefined &&
         (input.projectId ?? null) !== (existing.projectId ?? null);
@@ -869,13 +935,6 @@ export function createObjectsPrimitiveHandlers() {
           return { ok: true as const };
         }
       }
-
-      const incomingData =
-        (input.data as Record<string, unknown> | undefined) ?? {};
-      const mergedData = {
-        ...((existing.data as Record<string, unknown> | null) ?? {}),
-        ...incomingData,
-      };
 
       const updated = upsertObjectAndEnqueue({
         upsertInput: {
