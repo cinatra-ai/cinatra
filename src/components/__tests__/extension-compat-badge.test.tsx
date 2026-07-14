@@ -32,7 +32,9 @@ describe("ExtensionCompatBadge", () => {
     const html = render(null);
     expect(html).toContain('data-compat-state="unknown"');
     expect(html).toContain('data-variant="outline"');
-    expect(html).toContain("Unknown");
+    // The neutral label names its subject ("Compatibility unknown"), never the
+    // bare, ambiguous "Unknown" (cinatra#1540).
+    expect(html).toContain("Compatibility unknown");
   });
 
   it.each([null, undefined, "", "   "])(

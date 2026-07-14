@@ -179,8 +179,8 @@ export type AgentCreationReviewInput = {
    *
    * IMPORTANT: only `runId` is caller-supplied. The recipient is ALWAYS
    * server-derived from `request.actor.principalId` — callers MUST NOT
-   * be able to fan notifications out to admins, teams, orgs, projects,
-   * or other users via the MCP transport.
+   * be able to fan notifications out to admins, teams, orgs, or
+   * other users via the MCP transport.
    *
    * Unset → all milestone emits are no-ops, preserving byte-for-byte
    * behaviour for every existing primitive caller.
