@@ -168,20 +168,27 @@ async function resolveDiscoverableInstallable(
 
 /**
  * Whether the actor's ORG already carries an install row for the package (any
- * lifecycle status), or a workspace-level (org-less) row. Status-agnostic and
- * org-anchored so an inactive / archived / pending / differently-owned install
- * in the actor's org is correctly treated as "installed" (not genuinely absent),
- * per AC3. Only the DEFAULT-version rows carry the package's unversioned global
- * identity (`isDefault !== false`), mirroring `isConnectorInstalledForActor`.
+ * lifecycle status), or a workspace-level (org-less) row. `canonicalPackageName`
+ * is the catalog's canonical name (the exact-case key install rows are stored
+ * under), NOT the route-derived name — the store read is a case-sensitive `eq()`.
+ * Status-agnostic and org-anchored so an inactive / archived / pending /
+ * differently-owned install in the actor's org is correctly treated as
+ * "installed" (not genuinely absent), per AC3. Deliberately ORG-anchored, NOT the
+ * admin-standing `isInstallRowAddressableByActor` predicate: a platform admin has
+ * standing over every org's row, so mirroring that would suppress the redirect
+ * whenever ANY org holds the connector — a cross-org-only install is genuinely
+ * absent for THIS actor's org and must still redirect (AC3). Only the
+ * DEFAULT-version rows carry the package's unversioned global identity
+ * (`isDefault !== false`), mirroring `isConnectorInstalledForActor`'s row filter.
  */
 async function resolveHasOrgScopedInstall(
-  packageName: string,
+  canonicalPackageName: string,
   actor: ActorContext | undefined | null,
   deps: ConnectorSetupRedirectDeps,
 ): Promise<boolean> {
   const readRows = deps.readRows ?? readInstalledExtensionsByPackageName;
   const orgId = actor?.organizationId ?? null;
-  const rows = (await readRows(packageName)).filter((r) => r.isDefault !== false);
+  const rows = (await readRows(canonicalPackageName)).filter((r) => r.isDefault !== false);
   return rows.some((r) => r.organizationId == null || r.organizationId === orgId);
 }
 
@@ -211,8 +218,13 @@ export async function resolveConnectorSetupRedirect(
     const { discoverableInstallable, canonicalPackageName } =
       await resolveDiscoverableInstallable(input.packageName, deps);
     if (!discoverableInstallable) return { kind: "none" };
+    // Use the CANONICAL catalog package name (not the raw route-derived one) for
+    // the install-row lookup: `resolveDiscoverableInstallable` matched the card
+    // case-insensitively and the store read is an exact-case `eq()`, so a route
+    // whose casing differs from the catalog's canonical name would otherwise miss
+    // an install the actor's org genuinely has and redirect as if it were absent.
     const hasOrgScopedInstall = await resolveHasOrgScopedInstall(
-      input.packageName,
+      canonicalPackageName,
       input.actor,
       deps,
     );

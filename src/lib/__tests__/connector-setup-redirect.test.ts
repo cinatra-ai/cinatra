@@ -288,4 +288,23 @@ describe("resolveConnectorSetupRedirect (state → decision)", () => {
     );
     expect(decision).toEqual({ kind: "redirect", target: REDIRECT_TARGET });
   });
+
+  it("NOT a redirect: route casing differs, but the actor's org HAS it installed under the canonical name — the org-scoped lookup uses the canonical (exact-case) name", async () => {
+    // The install store read is a case-sensitive `eq()`. The route-derived name
+    // (`@vendor-x/...`) differs in case from the catalog's canonical name
+    // (`@Vendor-X/...`), under which the actor's org actually holds the install.
+    // The org-scoped check must query the CANONICAL name (as the redirect target
+    // does), or it misses the install and wrongly redirects a connector the org
+    // already has (AC3). `readRows` mimics the real exact-case store read.
+    const CANON = "@Vendor-X/Some-Connector";
+    const decision = await resolveConnectorSetupRedirect(
+      { packageName: "@vendor-x/some-connector", subroute: "setup", actor: adminActor() },
+      {
+        loadBrowse: async () => browse([card(CANON)]),
+        readRows: async (name) =>
+          name === CANON ? [installRow({ organizationId: ORG })] : [],
+      },
+    );
+    expect(decision).toEqual({ kind: "none" });
+  });
 });
