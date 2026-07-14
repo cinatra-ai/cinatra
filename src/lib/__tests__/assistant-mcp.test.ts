@@ -15,8 +15,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     404-hide; owner / participant / admin pass);
 //   * the assistant-level mcp.enabled/restriction target policy gates
 //     addressability input-time;
-//   * runtime-config resolution is handle-generic and fails CLOSED (structured
-//     code) for a principal with no linked config (P1.3 not landed);
+//   * runtime-config resolution is handle-generic and fails CLOSED as the
+//     sealed-room NOT_FOUND for a principal with no linked config (P1.3 not
+//     landed) — never a distinguishable code (no handle-existence oracle);
+//   * EVERY agent-run OBO caller (any oboCeiling on the frame, org floor
+//     included, platform-admin included) is refused (defense-in-depth twin of
+//     the boundary's cannot-express "assistant" class — this surface can honor
+//     neither a sub-org bound nor the org floor, nor propagate the ceiling);
 //   * assistant_send is REAL bounded-wait (timeout → running + runId +
 //     streamRef; the turn still finalizes server-side);
 //   * no raw exception text ever reaches the envelope (guarded/sanitize);
@@ -115,6 +120,7 @@ type Frame = {
   orgId?: string | null;
   platformRole?: "platform_admin" | "member";
   delegatedRestricted?: boolean;
+  oboCeiling?: Array<{ tier: string; id: string }>;
 };
 
 async function call(tool: string, input: unknown, frame: Frame | null): Promise<Record<string, unknown>> {
@@ -261,6 +267,42 @@ describe("caller identity", () => {
     expect(out.code).toBe("AUTH_REQUIRED");
   });
 
+  it("refuses EVERY agent-run OBO caller on all three tools — sub-org AND org-only (this surface cannot honor the ceiling)", async () => {
+    const ceilings: Array<Array<{ tier: string; id: string }>> = [
+      // sub-org
+      [
+        { tier: "project", id: "p1" },
+        { tier: "organization", id: ORG },
+      ],
+      // org-only (the mandatory floor is STILL unhonorable here: the admin
+      // thread-access allow ignores it and the nested turn escapes it)
+      [{ tier: "organization", id: ORG }],
+    ];
+    for (const oboCeiling of ceilings) {
+      for (const [tool, input] of [
+        ["assistant_send", { handle: "cinatra", message: "hi" }],
+        ["assistant_thread_list", {}],
+        ["assistant_thread_get", { threadId: "thread-1" }],
+      ] as const) {
+        const out = await call(tool, input, { ...memberFrame, oboCeiling });
+        expect(out.status).toBe("rejected");
+        expect(out.code).toBe("AUTH_REQUIRED");
+      }
+    }
+    expect(mocks.runAssistantTurn).not.toHaveBeenCalled();
+    expect(mocks.createAssistantThread).not.toHaveBeenCalled();
+  });
+
+  it("refuses an agent-run OBO platform-admin too (the admin bypass never nullifies the ceiling here)", async () => {
+    const out = await call(
+      "assistant_thread_get",
+      { threadId: "thread-1" },
+      { ...adminFrame, oboCeiling: [{ tier: "organization", id: ORG }] },
+    );
+    expect(out.status).toBe("rejected");
+    expect(out.code).toBe("AUTH_REQUIRED");
+  });
+
   it("REFUSES a spoofed identity operand in tool input (no self-assertion carried forward)", async () => {
     for (const spoof of [
       { assistantClientId: "attacker-client" },
@@ -356,11 +398,14 @@ describe("assistant-level MCP target policy", () => {
 // ── handle-generic config resolution (P1.3 not landed) ───────────────────────
 
 describe("runtime-config resolution", () => {
-  it("fails CLOSED with a structured code for a resolvable handle with no linked config", async () => {
-    const out = await call("assistant_send", { handle: "helper", message: "hi" }, memberFrame);
-    expect(out.status).toBe("failed");
-    expect(out.code).toBe("ASSISTANT_CONFIG_UNAVAILABLE");
+  it("404-hides a resolvable handle with no linked config, BYTE-IDENTICAL with an unresolvable one (no handle-existence oracle)", async () => {
+    const noConfig = await call("assistant_send", { handle: "helper", message: "hi" }, memberFrame);
+    const unknown = await call("assistant_send", { handle: "nope", message: "hi" }, memberFrame);
+    expect(noConfig).toEqual(unknown);
+    expect(noConfig.status).toBe("rejected");
+    expect(noConfig.code).toBe("NOT_FOUND");
     expect(mocks.runAssistantTurn).not.toHaveBeenCalled();
+    expect(mocks.createAssistantThread).not.toHaveBeenCalled();
   });
 
   it("resolves the built-in Cinatra principal through the reference config", async () => {
@@ -471,6 +516,28 @@ describe("assistant_send", () => {
     expect(errorFrames).toHaveLength(1);
     expect(JSON.stringify(errorFrames[0][1])).not.toContain("sk-UPSTREAM-SECRET");
     expect(mocks.updateAssistantTurn).toHaveBeenCalledWith("turn-2", { status: "error" });
+  });
+
+  it("a runtime 'error' EVENT after PARTIAL text completes with the streamed text, logs the raw error server-side, and never surfaces it", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      mocks.runAssistantTurn.mockImplementation(async (_cfg: unknown, args: { send: (e: string, d: unknown) => void }) => {
+        args.send("text", { content: "partial answer" });
+        args.send("error", { message: "503 upstream sk-LATE-SECRET" });
+      });
+      const out = await call("assistant_send", { handle: "cinatra", message: "hi" }, memberFrame);
+      expect(out.status).toBe("completed");
+      expect(out.finalMessage).toBe("partial answer");
+      expect(JSON.stringify(out)).not.toContain("sk-LATE-SECRET");
+      // The raw error is NOT dropped silently: it lands in the server-side log…
+      expect(warnSpy.mock.calls.some((c) => c.join(" ").includes("sk-LATE-SECRET"))).toBe(true);
+      // …and never in the durable event log (the terminal frame is the final text).
+      const frames = mocks.xaddRunEvent.mock.calls.map((c) => JSON.stringify(c[1])).join("|");
+      expect(frames).not.toContain("sk-LATE-SECRET");
+      expect(mocks.updateAssistantTurn).toHaveBeenCalledWith("turn-2", { status: "completed" });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("finalizes the turn row as error when a PRE-DRIVE fault occurs after the running row exists", async () => {

@@ -75,8 +75,23 @@ import { resolveUserContextForUserId } from "@/lib/auth-session";
 // RUNTIME BINDING is handle-generic: handle -> assistantUserId -> attempt the
 // template-linked config (P1.3 — NOT landed, see the seam below) -> the
 // built-in Cinatra reference config for the built-in principal -> otherwise
-// fail CLOSED with a structured code. Nothing here re-hardcodes Cinatra as
-// "the" assistant; it is the only principal with a resolvable config today.
+// fail CLOSED as the sealed-room NOT_FOUND (a config-less principal is not an
+// addressable target, and a distinguishable code would make assistant_send a
+// handle-existence oracle over the platform-global registry; the real reason
+// is logged server-side). Nothing here re-hardcodes Cinatra as "the"
+// assistant; it is the only principal with a resolvable config today.
+//
+// AGENT-RUN OBO CEILING: assistant threads carry ORG scoping only, a sent turn
+// runs with the target user's FULL server-resolved context, the platform-admin
+// thread-access allow fires BEFORE the org seal, and driveTurn drives a NESTED
+// turn under a fresh ceiling-less delegation token (the runtime mints
+// `delegation:"chat"`). So this surface can honor NEITHER a sub-organization
+// bound NOR the org floor itself, and it cannot propagate the ceiling into the
+// nested turn. Fail-closed posture: EVERY agent-run OBO delegation (any
+// `oboCeiling` on the frame) is denied on the whole surface until the ceiling
+// can be expressed AND propagated. The MCP boundary's cannot-express gate
+// (src/lib/authz/mcp-boundary.ts, surface "assistant") denies at the coarse
+// boundary; resolveCaller() enforces the same handler-side as defense-in-depth.
 //
 // DELEGATED-CHAT POLICY (the epic's explicitly-open decision, resolved here):
 // `assistant_send` keeps its name; its "send" verb token IS on
@@ -105,10 +120,11 @@ export const ASSISTANT_SEND_MAX_WAIT_MS = 120_000;
  *  durable event log on a get/history read (bounded Redis fan-out). */
 const TURN_TEXT_RECOVERY_LIMIT = 10;
 
-/** The ONE 404-hide envelope. An unresolvable handle, a disabled/restricted
- *  target, a missing thread, a cross-org/cross-user/ownerless-denied thread,
- *  and a thread bound to a different assistant are all BYTE-IDENTICAL — the
- *  sealed-room contract forbids a distinguishing error. */
+/** The ONE 404-hide envelope. An unresolvable handle, a registered handle with
+ *  no runnable config, a disabled/restricted target, a missing thread, a
+ *  cross-org/cross-user/ownerless-denied thread, and a thread bound to a
+ *  different assistant are all BYTE-IDENTICAL — the sealed-room contract
+ *  forbids a distinguishing error. */
 const NOT_FOUND_CODE = "NOT_FOUND";
 const NOT_FOUND_MESSAGE = "assistant thread or handle not found";
 
@@ -228,7 +244,11 @@ type CallerResolution =
  * assistantClientId self-assertion path is NOT carried forward). Fail-closed:
  * no verified userId+orgId → refused; the delegated-chat restricted perimeter
  * is refused explicitly too (defense-in-depth — the tool policy already denies
- * these tools there).
+ * these tools there); ANY agent-run OBO caller (an `oboCeiling` on the frame —
+ * present iff `delegation === "agent_run"`) is refused likewise, org floor
+ * included (defense-in-depth — the boundary's cannot-express "assistant" gate
+ * denies it first; this surface can neither express nor propagate the ceiling,
+ * see the module header).
  */
 function resolveCaller(): CallerResolution {
   const ctx = mcpRequestContextStorage.getStore();
@@ -237,6 +257,14 @@ function resolveCaller(): CallerResolution {
       ok: false,
       code: "AUTH_REQUIRED",
       message: "a restricted delegated caller cannot use the assistant tools (fail-closed)",
+    };
+  }
+  if (ctx?.oboCeiling && ctx.oboCeiling.length > 0) {
+    return {
+      ok: false,
+      code: "AUTH_REQUIRED",
+      message:
+        "an agent-run caller cannot use the assistant tools — this surface cannot honor the OBO scope ceiling (fail-closed)",
     };
   }
   const userId = (ctx?.userId ?? "").trim();
@@ -478,10 +506,14 @@ async function handleSend(input: unknown) {
   // Handle-generic runtime binding (fail-closed for a config-less principal).
   const configRes = await resolveRuntimeConfigForTarget(target);
   if (!configRes.ok) {
-    return failed(
-      configRes.code,
-      "this assistant has no runnable configuration on this deployment",
-    );
+    // A registered handle with NO runnable config is not an ADDRESSABLE
+    // target — 404-hide it, byte-identical with an unresolvable handle. A
+    // distinguishable code here would make assistant_send a platform-global
+    // handle-existence oracle (the registry is global; the caller may have no
+    // relationship to the owning principal). The real reason is logged
+    // server-side for operators.
+    sanitize(`config resolution(${target.handle})`, configRes.code, "");
+    return notFound();
   }
 
   // Resolve or create the structured thread (owner = the verified caller).
@@ -642,15 +674,22 @@ async function driveTurn(args: {
     return { ok: false, code: "TURN_FAILED", message: generic };
   }
 
-  if (runtimeError && !text) {
-    // Runtime 'error' events can carry upstream provider/SDK text (the LLM
-    // stream error path forwards err.message) — treat them as server-side
-    // detail like every other raw fault: log verbatim, surface + persist ONLY
-    // the generic message (codex round-0 #3). The structured code is the
-    // caller's actionable signal.
-    const generic = sanitize(`runtime error(${runId})`, runtimeError, "the assistant turn failed");
-    await finalizeTurn(runId, turnId, { error: generic });
-    return { ok: false, code: "TURN_FAILED", message: generic };
+  if (runtimeError) {
+    if (!text) {
+      // Runtime 'error' events can carry upstream provider/SDK text (the LLM
+      // stream error path forwards err.message) — treat them as server-side
+      // detail like every other raw fault: log verbatim, surface + persist ONLY
+      // the generic message (codex round-0 #3). The structured code is the
+      // caller's actionable signal.
+      const generic = sanitize(`runtime error(${runId})`, runtimeError, "the assistant turn failed");
+      await finalizeTurn(runId, turnId, { error: generic });
+      return { ok: false, code: "TURN_FAILED", message: generic };
+    }
+    // Partial text followed by a runtime error: the turn completes with the
+    // streamed text (matching the legacy send path), but the raw error must
+    // not vanish — log it server-side like every other raw fault (it is
+    // still never surfaced to the caller or the durable log).
+    sanitize(`runtime error(${runId}) after partial text`, runtimeError, "");
   }
 
   await finalizeTurn(runId, turnId, { text });
