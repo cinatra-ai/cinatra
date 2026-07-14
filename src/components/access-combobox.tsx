@@ -101,15 +101,32 @@ export function resolveAccessLabel(
   if (value === "admin") return { type: null, name: "Admins only" };
   if (value === "workspace") return { type: null, name: "Whole Workspace" };
   // Multi-scope W1 retired the bare `"org"` token for the id-carrying
-  // `org:<id>`; the bare form is still ACCEPTED here for read-compatibility
-  // with any persisted legacy value (AgentAuthPolicyVisibilitySchema still
-  // validates the literal "org"). The picker only ever scopes the active org,
-  // so both forms — and any malformed / stale / cross-org `org:<id>` — resolve
-  // to the active org's name; a well-formed org token therefore never reaches
-  // the raw-value fallback, and no raw token leaks into the label.
-  if (value === "org" || value.startsWith("org:")) {
+  // `org:<id>`. The bare form is still ACCEPTED for read-compatibility with any
+  // persisted legacy value (AgentAuthPolicyVisibilitySchema still validates the
+  // literal "org"); it denotes the active org by definition, so it resolves to
+  // the active org's name.
+  if (value === "org") {
     const orgName = availableScopes.orgName || "your organization";
     return { type: null, name: `Anyone in ${orgName}` };
+  }
+  // An id-carrying `org:<id>` token: assert the active org's NAME only when the
+  // token is CONFIRMED to scope the active org (its embedded id equals the
+  // supplied `orgId`). On the install surfaces the value is always
+  // `org:<activeOrgId>`, so it always resolves to the name. But this component
+  // also renders the read-only project Permissions tab, where the value is the
+  // PROJECT's own owning-org token (`org:<projectOwnerOrgId>`) while `orgName`
+  // is the VIEWER's active org — a co-owner viewing a project owned by ANOTHER
+  // org (the co-owner short-circuit grants read across the cross-org guard)
+  // would otherwise be shown the WRONG org's name on a permissions-review
+  // surface. When the id is unconfirmed (no `orgId` supplied, or a different
+  // id), fall back to a neutral, id-free label rather than a possibly-wrong
+  // specific name — and never leak the raw token.
+  if (value.startsWith("org:")) {
+    const { orgId, orgName } = availableScopes;
+    if (orgId && value.slice("org:".length) === orgId) {
+      return { type: null, name: `Anyone in ${orgName || "your organization"}` };
+    }
+    return { type: null, name: "Anyone in the organization" };
   }
   if (value.startsWith("team:")) {
     const id = value.slice("team:".length);

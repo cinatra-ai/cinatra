@@ -11,10 +11,17 @@
  *    fallback.
  *  - The bare `"org"` form is still ACCEPTED (read-compat with any persisted
  *    legacy value — AgentAuthPolicyVisibilitySchema still validates it).
- *  - Malformed / stale / cross-org `org:<id>` degrade safely: the active org
- *    name, no raw-token leak.
- *  - The generic fallback ("your organization") renders ONLY when the org has
- *    no name.
+ *  - An id-carrying `org:<id>` token resolves to the active org's NAME only
+ *    when its embedded id is CONFIRMED to equal the supplied active `orgId`.
+ *    An unconfirmed token — no `orgId` supplied (the read-only Permissions tab,
+ *    whose value is the PROJECT's own owning-org token), a different id
+ *    (cross-org), or a malformed empty tail — degrades to a neutral, id-free
+ *    label ("Anyone in the organization"): never the raw token, and never a
+ *    possibly-WRONG specific org name on a permissions-review surface
+ *    (cinatra#1526 review — a co-owner of a project owned by another org must
+ *    not be shown the viewer's own active-org name for that project's scope).
+ *  - The generic fallback ("your organization") renders ONLY when the confirmed
+ *    active org has no name.
  *  - The flyout org row emits the id-carrying `org:${orgId}` token (never a
  *    hardcoded bare `"org"`), degrading to bare `"org"` only when no org id is
  *    supplied.
@@ -77,17 +84,39 @@ describe("resolveAccessLabel — org token contract (cinatra#1526)", () => {
     expect(nameless.name).not.toContain(ORG_ID);
   });
 
-  it("degrades a stale / cross-org org:<id> safely — no raw-token leak (AC6)", () => {
+  it("a cross-org org:<id> does NOT claim the active org's name — neutral label (cinatra#1526 review)", () => {
+    // The token scopes a DIFFERENT org than the supplied active `orgId`; the
+    // active org's name would be a WRONG, confidently-rendered label on a
+    // permissions surface. Degrade to a neutral, id-free label instead.
     const label = resolveAccessLabel(`org:${OTHER_ORG_ID}`, namedScopes);
     expect(label.type).toBeNull();
-    expect(label.name).toBe("Anyone in Acme Corp");
+    expect(label.name).toBe("Anyone in the organization");
+    expect(label.name).not.toContain("Acme Corp");
+    expect(label.name).not.toContain(OTHER_ORG_ID);
+  });
+
+  it("an id-carrying org:<id> with NO active orgId supplied does NOT claim a specific name (Permissions-tab / cinatra#1526 review)", () => {
+    // Reproduces the read-only project Permissions tab: `orgName` is the
+    // VIEWER's active org, but the value is the PROJECT's own owning-org token
+    // and no `orgId` is supplied, so the id cannot be confirmed. It must NOT be
+    // labelled with the (possibly-foreign) active org's name.
+    const noOrgIdScopes = {
+      projects: [],
+      teams: [],
+      orgName: "Acme Corp",
+      workspaceExposed: false,
+    };
+    const label = resolveAccessLabel(`org:${OTHER_ORG_ID}`, noOrgIdScopes);
+    expect(label.type).toBeNull();
+    expect(label.name).toBe("Anyone in the organization");
+    expect(label.name).not.toContain("Acme Corp");
     expect(label.name).not.toContain(OTHER_ORG_ID);
   });
 
   it("degrades a malformed org: (empty tail) safely — no raw-token leak (AC6)", () => {
     const label = resolveAccessLabel("org:", namedScopes);
     expect(label.type).toBeNull();
-    expect(label.name).toBe("Anyone in Acme Corp");
+    expect(label.name).toBe("Anyone in the organization");
     expect(label.name).not.toBe("org:");
   });
 
