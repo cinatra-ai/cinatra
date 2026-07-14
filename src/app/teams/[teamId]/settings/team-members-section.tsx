@@ -1,0 +1,244 @@
+"use client";
+
+// ---------------------------------------------------------------------------
+// TeamMembersSection — member list + roleless add/remove (cinatra#1567).
+//
+// The interim members surface on /teams/[teamId]/settings. The eventual home
+// is the #704 team-detail Permissions tab (tablist epic #699); this section
+// moves there wholesale when that lands. Membership is roleless add/remove —
+// per-member roles are deferred to the #1566 role-model decision.
+//
+// Mount pattern projected from the grant form (permissions-tab-client.tsx):
+//   - user search via the shared EntitySearchCombobox fed by a dedicated
+//     authority-gated server action bounded by the TEAM's org (never the
+//     viewer's own scopes);
+//   - pick → selected chip + explicit "Add member" button (no add-on-pick);
+//   - remove is confirmed via AlertDialog (destructive, resource-ownership-
+//     panel precedent) and blocked server-side for the last member.
+// The controls render only for `canManage` viewers; the server actions
+// re-enforce the same authority regardless.
+// ---------------------------------------------------------------------------
+
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { EntitySearchCombobox } from "@/components/entity-search-combobox";
+import { toast } from "@/lib/cinatra-toast";
+
+import {
+  addTeamMemberAction,
+  removeTeamMemberAction,
+  searchTeamMemberCandidates,
+  type TeamMemberActionResult,
+} from "./member-actions";
+
+export type TeamMemberView = {
+  userId: string;
+  name: string;
+  email: string;
+};
+
+const REMOVE_ERROR_COPY: Record<
+  Extract<TeamMemberActionResult, { ok: false }>["error"],
+  string
+> = {
+  forbidden: "Only an org owner/admin (or platform admin) can manage members.",
+  invalid_user: "Invalid user.",
+  user_not_in_org: "That user is not a member of this team's organization.",
+  already_member: "Already a member of this team.",
+  not_a_member: "Not a member of this team.",
+  last_member: "A team keeps at least one member — add someone else first.",
+  unknown_error: "Something went wrong. Try again.",
+};
+
+export function TeamMembersSection({
+  teamId,
+  members,
+  canManage,
+}: {
+  teamId: string;
+  members: TeamMemberView[];
+  canManage: boolean;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [selectedUser, setSelectedUser] = useState<TeamMemberView | null>(null);
+  const [removalTarget, setRemovalTarget] = useState<TeamMemberView | null>(null);
+
+  const memberIds = members.map((m) => m.userId);
+
+  const handleAdd = () => {
+    const user = selectedUser;
+    if (!user) return;
+    startTransition(async () => {
+      const result = await addTeamMemberAction(teamId, user.userId);
+      if (result.ok) {
+        toast.success(`Added ${user.name} to the team.`);
+        setSelectedUser(null);
+        router.refresh();
+      } else {
+        toast.error(REMOVE_ERROR_COPY[result.error]);
+      }
+    });
+  };
+
+  const handleRemove = (user: TeamMemberView) => {
+    startTransition(async () => {
+      const result = await removeTeamMemberAction(teamId, user.userId);
+      if (result.ok) {
+        toast.success(`Removed ${user.name} from the team.`);
+        router.refresh();
+      } else {
+        toast.error(REMOVE_ERROR_COPY[result.error]);
+      }
+    });
+  };
+
+  return (
+    <div data-testid="team-members-section" className="flex flex-col gap-4">
+      {members.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No members yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {members.map((member) => (
+            <li
+              key={member.userId}
+              className="soft-panel flex items-center justify-between gap-3 px-4 py-2"
+            >
+              <div className="flex min-w-0 items-baseline gap-2">
+                <span className="truncate text-sm text-foreground">{member.name}</span>
+                {member.email ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {member.email}
+                  </span>
+                ) : null}
+              </div>
+              {canManage && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => setRemovalTarget(member)}
+                >
+                  Remove
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canManage && (
+        <div className="flex max-w-md flex-col gap-1">
+          <Label htmlFor="team-member-candidate">Add a member</Label>
+          {selectedUser ? (
+            <div className="flex h-8 items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong px-2.5 text-sm">
+              <span className="truncate text-foreground">
+                {selectedUser.name}
+                {selectedUser.email ? (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {selectedUser.email}
+                  </span>
+                ) : null}
+              </span>
+              {/* The interactive element in the selected state carries the
+                  field id so the Label stays associated (a11y — the grant
+                  form's selected-chip pattern). */}
+              <Button
+                id="team-member-candidate"
+                type="button"
+                variant="link"
+                size="xs"
+                className="shrink-0 px-0 text-muted-foreground hover:text-foreground"
+                onClick={() => setSelectedUser(null)}
+                disabled={pending}
+              >
+                Change
+              </Button>
+            </div>
+          ) : (
+            <EntitySearchCombobox
+              id="team-member-candidate"
+              placeholder="Search users by name or email…"
+              disabled={pending}
+              excludeIds={memberIds}
+              onSearch={async (query) => {
+                const r = await searchTeamMemberCandidates(teamId, query);
+                if (!r.ok) throw new Error(r.error);
+                return {
+                  results: r.results.map((u) => ({
+                    id: u.id,
+                    name: u.name,
+                    secondary: u.email,
+                    email: u.email,
+                  })),
+                };
+              }}
+              onPick={(u) =>
+                setSelectedUser({ userId: u.id, name: u.name, email: u.email ?? "" })
+              }
+            />
+          )}
+          <div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={pending || !selectedUser}
+              onClick={handleAdd}
+            >
+              {pending ? "Adding…" : "Add member"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Members are added without a role — per-member team roles are a
+            pending product decision.
+          </p>
+        </div>
+      )}
+
+      <AlertDialog
+        open={removalTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemovalTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from this team?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removalTarget
+                ? `${removalTarget.name} will lose access to everything shared with this team. You can add them back later.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const target = removalTarget;
+                if (!target) return;
+                setRemovalTarget(null);
+                handleRemove(target);
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

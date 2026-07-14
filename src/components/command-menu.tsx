@@ -29,8 +29,8 @@ export const navGroups = [
       { title: "New agent", href: "/chat?mode=create-agent" },
       { title: "Skills", href: "/skills" },
       { title: "Connectors", href: "/connectors" },
-      { title: "Data — History", href: "/data-safety/change-sets" },
-      { title: "Data — Merge", href: "/data-safety/merge-proposals" },
+      { title: "Artifacts — Undo", href: "/artifacts?mode=undo" },
+      { title: "Artifacts — Merge proposals", href: "/artifacts?mode=merge" },
     ],
   },
   {

@@ -2,7 +2,11 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 
-import { requireAuthSession } from "@/lib/auth-session";
+import {
+  isPlatformAdmin,
+  requireAuthSession,
+  resolveOrgRoleForUser,
+} from "@/lib/auth-session";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -10,6 +14,8 @@ import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { TeamSettingsForm } from "./team-settings-form";
+import { TeamMembersSection, type TeamMemberView } from "./team-members-section";
+import { canManageTeamMembers } from "./team-member-authority";
 
 export const metadata: Metadata = { title: "Team settings" };
 
@@ -50,7 +56,37 @@ export default async function TeamSettingsPage({
   `);
   const team = rows.rows?.[0];
   if (!team) notFound();
-  if (!team.is_member) redirect("/not-authorized");
+
+  // Page gate (cinatra#1567): team members keep their access; org
+  // owners/admins of the TEAM's org (and platform admins) are additionally
+  // let in so they can manage membership — the same widening the teams
+  // dashboard visibility applies (`team-visibility.ts`), decided by the
+  // named interim predicate pending the #1566 team role model.
+  const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
+  const canManage = canManageTeamMembers({
+    platformAdmin: isPlatformAdmin(session),
+    orgRole,
+  });
+  if (!team.is_member && !canManage) redirect("/not-authorized");
+
+  // Members list (roleless — `public."teamMember"` has no role column;
+  // per-member roles are #1566's decision).
+  const memberRows = await betterAuthDb.execute<{
+    userId: string;
+    name: string | null;
+    email: string | null;
+  }>(sql`
+    SELECT tm."userId", u.name, u.email
+      FROM public."teamMember" tm
+      JOIN public."user" u ON u.id = tm."userId"
+     WHERE tm."teamId" = ${team.id}
+     ORDER BY u.name, tm."userId"
+  `);
+  const members: TeamMemberView[] = (memberRows.rows ?? []).map((row) => ({
+    userId: row.userId,
+    name: row.name ?? row.email ?? "Unknown",
+    email: row.email ?? "",
+  }));
 
   return (
     <Main className="min-h-screen">
@@ -73,6 +109,23 @@ export default async function TeamSettingsPage({
           </CardHeader>
           <CardContent>
             <TeamSettingsForm teamId={team.id} currentSlug={team.slug ?? ""} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Members</CardTitle>
+            <CardDescription>
+              {canManage
+                ? "People on this team. Add members from this organization or remove them — a team keeps at least one member."
+                : "People on this team. Ask an organization owner or admin to add or remove members."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TeamMembersSection
+              teamId={team.id}
+              members={members}
+              canManage={canManage}
+            />
           </CardContent>
         </Card>
       </PageContent>

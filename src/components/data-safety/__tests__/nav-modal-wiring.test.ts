@@ -40,30 +40,8 @@ describe("RestoreModal URL-addressable open", () => {
   });
 });
 
-describe("change-set detail bidirectional nav", () => {
-  const SRC = "src/app/data-safety/change-sets/[changeSetId]/page.tsx";
-
-  it("uses partitionEventsByReadAccess to get per-event read verdicts", () => {
-    const src = read(SRC);
-    expect(src).toMatch(/partitionEventsByReadAccess/);
-    expect(src).toMatch(/canReadByEventId/);
-  });
-
-  it("renders the object deep-link ONLY for readable events (redacted = omitted)", () => {
-    const src = read(SRC);
-    expect(src).toMatch(/canReadByEventId\.get\(event\.id\)\s*\?/);
-    expect(src).toMatch(/href=\{`\/data\/\$\{event\.objectId\}\?focus=history`\}/);
-  });
-
-  it("auto-opens the restore modal only when restorable + eligible + actor passes per-event restore authz", () => {
-    const src = read(SRC);
-    expect(src).toMatch(/defaultOpen=\{/);
-    expect(src).toMatch(/sp\.openRestore === "1"/);
-    expect(src).toMatch(/loaded\.changeSet\.restorable/);
-    expect(src).toMatch(/eligibility\.eligible/);
-    // The actor must pass the SAME per-event restore authz the confirm path
-    // runs before auto-open.
-    expect(src).toMatch(/actorCanRestore/);
-    expect(src).toMatch(/canActorRestoreChangeSet\(/);
-  });
-});
+// The former `/data-safety/change-sets/[changeSetId]` detail route (with its
+// per-event read redaction + auto-open restore) was retired in cinatra#1431
+// §VII: undo is now the flat, admin-only `/artifacts?mode=undo` list, whose
+// per-row RestoreModal re-checks per-object authorization on confirm. There is
+// no longer a change-set detail page to assert here.

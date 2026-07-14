@@ -12,7 +12,8 @@ import { recentUndoableChangeSetForRunAction } from "./undo-actions";
 // Bounded polling: a mount check plus a few
 // short retries within the undo window — NOT a live/tight loop. When a recent
 // CLOSED restorable change-set produced by the run appears, render a link to
-// the URL-addressable restore modal (?openRestore=1),
+// the consolidated undo surface via `undoDeepLink` (carrying the change-set id
+// in ?openRestore so THAT change-set's restore modal auto-opens),
 // which runs the existing restore confirm + per-event authz on open/confirm.
 const POLL_DELAYS_MS = [0, 3000, 6000]; // mount, +3s, +6s, then stop.
 

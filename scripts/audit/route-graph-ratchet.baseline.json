@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 149,
-    "/api/mcp": 1454,
-    "/chat": 1492,
-    "/api/a2a": 1459,
-    "/api/llm-bridge": 1465
+    "/sign-in": 150,
+    "/api/mcp": 1458,
+    "/chat": 1496,
+    "/api/a2a": 1463,
+    "/api/llm-bridge": 1469
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1455,
-      "to": 1459,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1455->1459 (NET +4).",
-      "pr": 1573
+      "from": 1462,
+      "to": 1463,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1459->1460 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     },
     "/api/llm-bridge": {
-      "from": 1461,
-      "to": 1465,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1461->1465 (NET +4).",
-      "pr": 1573
+      "from": 1468,
+      "to": 1469,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1465->1466 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     },
     "/api/mcp": {
-      "from": 1450,
-      "to": 1454,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1450->1454 (NET +4).",
-      "pr": 1573
+      "from": 1457,
+      "to": 1458,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1454->1455 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     },
     "/chat": {
-      "from": 1488,
-      "to": 1492,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1488->1492 (NET +4).",
-      "pr": 1573
+      "from": 1495,
+      "to": 1496,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1492->1493 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     },
     "/sign-in": {
-      "from": 147,
-      "to": 149,
-      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: the auth config (src/lib/auth.ts, reachable from /sign-in) gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports (src/app/teams/new/team-slug) — MEASURED in the PR worktree at merge commit 15640bba vs origin/main 53ab28b7; /sign-in's first-party graph resolved fully in the measurement (the four companion-extension-dependent routes are untouched by this PR). NET +2 (149 = measured reachable count, not arithmetic). RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 — CI re-verifies on the merged tree).",
-      "pr": 1517
+      "from": 149,
+      "to": 150,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 149->150 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     }
   }
 }

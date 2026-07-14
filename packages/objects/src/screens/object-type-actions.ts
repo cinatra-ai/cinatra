@@ -16,7 +16,9 @@ export async function approveDynamicObjectTypeAction(typeId: string): Promise<vo
   "use server";
   await requireAdminSession();
   await approveDynamicObjectType(typeId);
-  revalidatePath("/data/types");
+  // The former `/data/types` registry route was retired into the consolidated
+  // `/artifacts` surface (cinatra#1431 §V/§VII); revalidate its live home.
+  revalidatePath("/artifacts");
 }
 
 /**
@@ -27,5 +29,7 @@ export async function archiveDynamicObjectTypeAction(typeId: string): Promise<vo
   "use server";
   await requireAdminSession();
   await archiveDynamicObjectType(typeId);
-  revalidatePath("/data/types");
+  // The former `/data/types` registry route was retired into the consolidated
+  // `/artifacts` surface (cinatra#1431 §V/§VII); revalidate its live home.
+  revalidatePath("/artifacts");
 }

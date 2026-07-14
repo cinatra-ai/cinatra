@@ -154,12 +154,11 @@ export { DEFAULT_HITL_CONFIDENCE_THRESHOLD } from "./automap/policy";
 export type { DispatchDecision, ExistingObject, DecideDispatchInput } from "./automap/dispatcher";
 export { decideDispatch } from "./automap/dispatcher";
 
-// Admin screens.
-export { ObjectsBrowserScreen } from "./screens/objects-browser";
-export { ObjectDetailPage } from "./screens/object-detail-page";
-
-// Object Type Registry admin screen + actions.
-export { ObjectTypesScreen } from "./screens/object-types-screen";
+// Object Type Registry admin actions. The registry screen, the raw objects
+// browser and the raw object-detail screen were consolidated into the
+// `/artifacts` surface (Types & approvals / Raw objects modes) and their route
+// trees retired (cinatra#1431 §IV/§V/§VII); the lifecycle actions remain and
+// are now driven from the Types & approvals mode.
 export {
   approveDynamicObjectTypeAction,
   archiveDynamicObjectTypeAction,

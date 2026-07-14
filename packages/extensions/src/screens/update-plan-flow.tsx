@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/lib/cinatra-toast";
 import { isRedirectError } from "./is-redirect-error";
 import { MarketplaceInstallSubmit } from "./marketplace-install-form";
+import { appendDiagnosticReference } from "./marketplace-failure-copy";
 import type {
   MarketplaceFailureCategory,
   MarketplaceInstallActionResult,
@@ -115,7 +116,13 @@ export function ModalUpdatePlanFlow({
     try {
       const result = await updateAction();
       if (result && result.ok === false) {
-        setFailureCopy(failureCopyByCategory[result.category] ?? defaultFailureMessage);
+        // #1539: surface the diagnostic reference in the §II Failed tile too.
+        setFailureCopy(
+          appendDiagnosticReference(
+            failureCopyByCategory[result.category] ?? defaultFailureMessage,
+            result.reference,
+          ),
+        );
         setPhase("failed");
       }
     } catch (error) {

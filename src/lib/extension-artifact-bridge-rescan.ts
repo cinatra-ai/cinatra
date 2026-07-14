@@ -93,6 +93,10 @@ export type RescanArtifactBridgeOptions = {
 export type RescanArtifactBridgeResult = {
   /** The package names whose artifact object type was (re)registered. */
   registered: string[];
+  /** The registered packages WITH their anchor-vetted store dir — the input the
+   *  boot claim-activation backstop needs (cinatra#1493): same order as
+   *  `registered`, one record per registered package. */
+  registeredRecords: Array<{ packageName: string; storeDir: string }>;
   /** The package names found in the store as `kind:"artifact"` but SKIPPED
    *  because their install row is archived/absent-and-governed (fail-closed). */
   skippedNotActive: string[];
@@ -115,6 +119,7 @@ export async function rescanArtifactBridgeFromStore(
   const storeRoot =
     opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const registered: string[] = [];
+  const registeredRecords: Array<{ packageName: string; storeDir: string }> = [];
   const skippedNotActive: string[] = [];
 
   const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
@@ -128,7 +133,7 @@ export async function rescanArtifactBridgeFromStore(
       "[artifact-bridge-rescan] store discovery failed — skipping rescan:",
       err instanceof Error ? err.message : err,
     );
-    return { registered, skippedNotActive };
+    return { registered, registeredRecords, skippedNotActive };
   }
 
   // cinatra#792 — MULTI-DIGEST NARROWING + UNIFORM ANCHOR KIND BINDING: with
@@ -243,6 +248,7 @@ export async function rescanArtifactBridgeFromStore(
     try {
       if (registerArtifactExtensionDir(rec.storeDir)) {
         registered.push(rec.packageName);
+        registeredRecords.push({ packageName: rec.packageName, storeDir: rec.storeDir });
       }
     } catch (err) {
       console.warn(
@@ -258,5 +264,5 @@ export async function rescanArtifactBridgeFromStore(
         (skippedNotActive.length ? ` skipped(not-active)=[${skippedNotActive.join(", ")}]` : ""),
     );
   }
-  return { registered, skippedNotActive };
+  return { registered, registeredRecords, skippedNotActive };
 }

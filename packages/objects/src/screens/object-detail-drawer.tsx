@@ -82,7 +82,7 @@ export async function ObjectDetailDrawer({ object, onCloseHref }: { object: Obje
                 recent actions.
               </p>
               <Button asChild variant="outline" size="sm">
-                <Link href={`/data/${object.id}?focus=history`}>
+                <Link href="/artifacts?mode=undo">
                   <History data-icon="inline-start" />
                   Open full history
                 </Link>

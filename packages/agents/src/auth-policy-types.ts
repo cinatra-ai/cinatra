@@ -307,7 +307,9 @@ export function agentApprovalAccessPolicy(
 /**
  * Map an AccessCombobox picker value to the {level, id} target, or null when the
  * value is not a selectable target (owner / admin / workspace / empty / an empty
- * prefixed id like "team:"). `activeOrgId` backs the legacy bare "org" token.
+ * prefixed id like "team:"). `activeOrgId` backs the legacy bare "org" token —
+ * but with NO active org (activeOrgId === "") the bare token cannot resolve to a
+ * real target, so it too returns null rather than forwarding an empty id.
  */
 export function pickerValueToTarget(
   value: string,
@@ -317,7 +319,8 @@ export function pickerValueToTarget(
     const id = value.slice("org:".length);
     return id ? { level: "organization", id } : null;
   }
-  if (value === "org") return { level: "organization", id: activeOrgId };
+  if (value === "org")
+    return activeOrgId ? { level: "organization", id: activeOrgId } : null;
   if (value.startsWith("team:")) {
     const id = value.slice("team:".length);
     return id ? { level: "team", id } : null;
