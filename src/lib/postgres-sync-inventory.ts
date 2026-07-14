@@ -326,6 +326,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Append-only run-context selection audit written by the context-agent at request time. Migratable to async pooled access; pre-flight coherence reads convert together with the writer.",
   },
+  "src/lib/artifacts/object-content-snapshot.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Policy-aware content snapshots for claimed typed object rows (cinatra#1430): captures an immutable JSON snapshot of a typed row's normalized data at resolution time as a representation revision over a blob resource, keyed for reuse in object_content_snapshots. Composed at context-resolution request time; the write branch runs under a per-artifact advisory-locked transaction (re-read under the lock). Sync leaf mirroring representation-store/resource-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
+  "src/lib/artifacts/context-selection-finalize.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Context-selection finalization (cinatra#1430): one transaction that re-validates the selection triple's coherence in SQL, appends the run_context_selections audit row, and writes a real artifact_refs retention pin — all under the SAME resource-level advisory lock the resource GC takes, closing the pin-vs-GC race. Request-time (context-agent) finalization; sync leaf composing into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/semantic-assertion-store.ts": {
     class: "migratable-request-path",
     justification:

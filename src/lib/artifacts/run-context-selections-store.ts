@@ -62,27 +62,34 @@ function validateTripleCoherence(
   schema: string,
   input: Omit<RunContextSelectionRow, "id">,
 ): string | null {
-  // Also verify the artifact OBJECT is live (not tombstoned, correct
-  // semantic-artifact type). Mirrors the resolver's pre-flight
-  // (objects.type = SEMANTIC_ARTIFACT_OBJECT_TYPE AND
-  // objects.deleted_at IS NULL). Without this, a coherent triple could
-  // still pin a tombstoned-but-retained artifact OR a wrong-typed
-  // object (e.g. a generic objects.id whose type doesn't match the
-  // semantic-artifact substrate) — neither would replay cleanly.
+  // Also verify the artifact OBJECT is live (not tombstoned) AND is an
+  // admissible context substrate. Mirrors the resolver's pre-flight. cinatra#1430:
+  // admissible = the generic semantic-artifact type OR a CLAIMED typed row that
+  // carries an eligible BINDING assertion (its snapshot representation makes it
+  // context-pinnable). Without this a coherent triple could still pin a
+  // tombstoned-but-retained artifact OR an arbitrary unclaimed object row —
+  // neither would replay cleanly.
   const [obj] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
       {
-        text: `SELECT 1 FROM "${schema}"."objects"
-WHERE id = $1 AND org_id = $2
-  AND type = $3 AND deleted_at IS NULL
+        text: `SELECT 1 FROM "${schema}"."objects" o
+WHERE o.id = $1 AND o.org_id = $2 AND o.deleted_at IS NULL
+  AND (
+    o.type = $3
+    OR EXISTS (
+      SELECT 1 FROM "${schema}"."semantic_assertion" b
+      WHERE b.org_id = o.org_id AND b.artifact_id = o.id
+        AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
+    )
+  )
 LIMIT 1`,
         values: [input.artifactId, input.orgId, SEMANTIC_ARTIFACT_OBJECT_TYPE],
       },
     ],
   });
   if ((obj?.rows ?? []).length === 0) {
-    return `artifact ${input.artifactId} is not a live semantic artifact in org ${input.orgId} (tombstoned, wrong type, or missing)`;
+    return `artifact ${input.artifactId} is not a live context artifact in org ${input.orgId} (tombstoned, unclaimed non-artifact type, or missing)`;
   }
   const [rep] = runPostgresQueriesSync({
     connectionString: conn(),
