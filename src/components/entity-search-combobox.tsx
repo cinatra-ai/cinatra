@@ -443,7 +443,13 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
                   <CommandItem
                     key={r.id}
                     value={r.id}
-                    onSelect={() => onPick(r)}
+                    onSelect={() => {
+                      onPick(r);
+                      // Selection closes the list (§3.4 contract: close =
+                      // Escape / outside click / selection); focus stays on
+                      // the input via handleOpenChange's focus restore.
+                      handleOpenChange(false);
+                    }}
                     className="text-sm rounded-none px-3 py-2 bg-surface-strong hover:bg-surface-muted data-[selected=true]:bg-surface-muted"
                   >
                     {row(r)}

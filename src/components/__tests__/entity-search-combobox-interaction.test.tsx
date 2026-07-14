@@ -69,10 +69,14 @@ describe("EntitySearchCombobox keyboard + a11y (§3.4)", () => {
     expect(secondActive).not.toBe(firstActive);
     expect(document.getElementById(secondActive!)?.textContent).toContain("Ben Cortado");
 
-    // Enter selects the ACTIVE row.
+    // Enter selects the ACTIVE row — and selection CLOSES the list
+    // (§3.4: close = Escape / outside click / selection), focus retained.
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onPick).toHaveBeenCalledTimes(1);
     expect(onPick).toHaveBeenCalledWith(USERS[1]);
+    await act(async () => {});
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 
   it("ArrowDown on a CLOSED input opens the list; Escape closes and focus stays in the input", async () => {
