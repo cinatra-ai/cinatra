@@ -20,6 +20,12 @@ import {
 import { AuthzError } from "@/lib/authz/errors";
 import type { ProjectGrant } from "@/lib/authz/actor-context";
 import { handlers as projectsHandlers } from "@cinatra-ai/projects";
+import { readAgentsForSkillMatching } from "@/lib/agents-store";
+import {
+  hasProjectBindAuthority,
+  toBindableTemplates,
+  type BindableAgentTemplate,
+} from "./bindable-templates";
 
 type BindingVisibility = "visible" | "hidden" | "project-private";
 
@@ -89,6 +95,67 @@ export async function listProjectAgentTemplateBindingsAction(
       mode: "deterministic",
     })) as { items: ProjectAgentTemplateBinding[] };
     return { ok: true, items: result.items };
+  } catch (err) {
+    if (err instanceof AuthzError) return { ok: false, error: err.reason };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "unknown_error",
+    };
+  }
+}
+
+/**
+ * Installed agent templates the bind picker can offer for this project
+ * (cinatra#1503, design cinatra#1509 §4.4): the canonical installed-agents
+ * catalog (`readAgentsForSkillMatching` — DB-installed templates unioned with
+ * provider-declared on-disk agents; the enumeration honors the operator's own
+ * vendor dir per cinatra#538) minus the templates the project already binds.
+ *
+ * Authority: gated on the SAME authority as the bind action —
+ * `project_agent_template_bindings_create` requires a `write`-rank project
+ * grant (platform_admin bypass), so the candidate enumeration pre-gates on
+ * that via `hasProjectBindAuthority`. The list handler call before it re-runs
+ * the existence (404 hidden) + read gate server-side and yields the bound-id
+ * set from the single authoritative source. The create handler stays the
+ * final authority on any actual bind.
+ */
+export async function listBindableAgentTemplatesAction(
+  projectId: string,
+): Promise<
+  | { ok: true; items: BindableAgentTemplate[] }
+  | { ok: false; error: string }
+> {
+  try {
+    const { actor } = await buildBindingsActor();
+    const result = (await projectsHandlers[
+      "project_agent_template_bindings_list"
+    ]({
+      primitiveName: "project_agent_template_bindings_list",
+      input: { projectId },
+      actor: actor as unknown as Parameters<
+        typeof projectsHandlers["project_agent_template_bindings_list"]
+      >[0]["actor"],
+      mode: "deterministic",
+    })) as { items: ProjectAgentTemplateBinding[] };
+
+    if (
+      !hasProjectBindAuthority({
+        platformAdmin: actor.platformRole === "platform_admin",
+        projectGrants: (actor.projectGrants as ProjectGrant[] | undefined) ?? [],
+        projectId,
+      })
+    ) {
+      return { ok: false, error: "forbidden" };
+    }
+
+    const installed = await readAgentsForSkillMatching();
+    return {
+      ok: true,
+      items: toBindableTemplates(
+        installed,
+        result.items.map((b) => b.agentTemplateId),
+      ),
+    };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: err.reason };
     return {
