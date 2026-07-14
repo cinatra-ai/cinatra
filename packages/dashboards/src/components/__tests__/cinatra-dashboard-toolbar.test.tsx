@@ -261,6 +261,17 @@ describe("CinatraDashboardToolbar — route-scoped page actions", () => {
     ]);
   });
 
+  test("organizations: renders exactly one New organization action", () => {
+    renderToolbar({ pageAnchor: "organizations" });
+    expect(actionAnchors()).toEqual([
+      {
+        id: "new-organization",
+        href: "/organizations/new",
+        text: "New organization",
+      },
+    ]);
+  });
+
   test("no page anchor: renders no actions (guards against leaking into other dashboards)", () => {
     renderToolbar();
     expect(actionAnchors()).toEqual([]);
