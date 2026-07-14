@@ -5,16 +5,19 @@
 //
 // Replicates the canonical Permissions card pattern from
 // `packages/agent-builder/src/permissions-tab-client.tsx`:
-// single .soft-panel border-line rounded-card cream-bg card with an Access
-// section on top, an Ownership section below, and a single Save button at
-// the bottom. shadcn primitives + semantic tokens only — no inline palette,
-// no parallel layout.
+// single .soft-panel border-line rounded-card cream-bg card with a read-only
+// Access section on top and an Ownership section below. shadcn primitives +
+// semantic tokens only — no inline palette, no parallel layout.
+//
+// The Access section is GENUINELY read-only (cinatra#1509 §4.1, codex F4):
+// the legacy ownership-ratchet save path is retired server-side, so the
+// combobox renders `disabled` unconditionally as a display of the current
+// visibility — no form, no no-op Save. Grants are managed via the Project
+// access section below. Full removal of the section is an owner decision
+// (design Open Decision 3), so it stays visible for context.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState, useTransition } from "react";
-import { useForm, Controller } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
 
 import { toast } from "@/lib/cinatra-toast";
 import { Button } from "@/components/ui/button";
@@ -35,7 +38,6 @@ import {
   addProjectCoOwnerAction,
   removeProjectCoOwnerAction,
   searchWorkspaceUsersForProject,
-  updateProjectScopeAction,
   grantProjectAccessAction,
   revokeProjectAccessAction,
   type ProjectAccessRow,
@@ -60,7 +62,10 @@ export type ProjectPermissionsTabClientProps = {
   activeOrgId: string | null;
   projectId: string;
   projectName: string;
-  /** Current visibility expression for the AccessCombobox. */
+  /**
+   * Current visibility expression displayed (read-only) by the
+   * AccessCombobox.
+   */
   initialAccess: string;
   /** Whether the viewing actor may edit ownership / co-owners. */
   canEdit: boolean;
@@ -76,11 +81,6 @@ export type ProjectPermissionsTabClientProps = {
   projectAccessRows: ProjectAccessRow[];
 };
 
-// Permissive schema mirroring the runs Permissions tab — the canonical
-// validation gate is server-side (assertScopeRatchet + AgentAuthPolicySchema).
-const AccessFormSchema = z.object({ access: z.string() });
-type AccessFormValues = z.infer<typeof AccessFormSchema>;
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -88,7 +88,8 @@ type AccessFormValues = z.infer<typeof AccessFormSchema>;
 export function ProjectPermissionsTabClient({
   activeOrgId,
   projectId,
-  projectName,
+  // `projectName` stays in the props type (the page passes it; useful to any
+  // future copy) but is not destructured — the read-only caption is static.
   initialAccess,
   canEdit,
   availableScopes,
@@ -97,7 +98,6 @@ export function ProjectPermissionsTabClient({
   currentUserId,
   projectAccessRows,
 }: ProjectPermissionsTabClientProps) {
-  const [isPending, startTransition] = useTransition();
   // Defer mounting the ownership panel until after hydration. The panel
   // calls `useRouter()` which requires the App Router context — that
   // context isn't present in pure server-side `renderToStaticMarkup`
@@ -109,55 +109,25 @@ export function ProjectPermissionsTabClient({
     setMounted(true);
   }, []);
 
-  const { control, handleSubmit } = useForm<AccessFormValues>({
-    resolver: zodResolver(AccessFormSchema),
-    defaultValues: { access: initialAccess },
-  });
-
-  // The legacy "ratchet" Access form is retired; the server action throws.
-  // The combobox stays visible read-only for context; submitting the form is
-  // a no-op explanatory toast pointing the user at the project_access section
-  // below. The
-  // `updateProjectScopeAction` import is kept so the type checker still
-  // catches accidental call-site regressions.
-  void updateProjectScopeAction;
-
-  const onSubmit = (_values: AccessFormValues) => {
-    startTransition(async () => {
-      toast.message(
-        "Project ownership transfer is retired — use the Project access section to grant or revoke roles.",
-      );
-    });
-  };
-
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="rounded-card border border-line px-6 py-5 flex flex-col gap-6 bg-surface"
-    >
-      {/* Access section ------------------------------------------------- */}
+    <div className="rounded-card border border-line px-6 py-5 flex flex-col gap-6 bg-surface">
+      {/* Access section --------------------------------------------------
+          Read-only display of the current visibility (cinatra#1509 §4.1,
+          codex F4). The legacy ratchet save path is retired server-side
+          (its server action throws), so the combobox is disabled
+          unconditionally — no form, no no-op submit/toast. Visibility is
+          managed through the Project access section below. */}
       <div data-testid="access-combobox" className="flex flex-col gap-4">
         <h2 className="text-base font-semibold text-foreground">Access</h2>
         <p className="text-xs text-muted-foreground -mt-2">
-          Choose who can find and view <span className="font-medium">{projectName}</span>.
+          Current visibility — managed via Project access below.
         </p>
-        {!canEdit && (
-          <p className="text-xs text-muted-foreground">
-            You can view this project&apos;s access but cannot edit it.
-          </p>
-        )}
-        <Controller
-          control={control}
-          name="access"
-          render={({ field: f }) => (
-            <AccessCombobox
-              value={f.value}
-              onValueChange={f.onChange}
-              availableScopes={availableScopes}
-              isAdmin={availableScopes.workspaceExposed}
-              disabled={!canEdit || isPending}
-            />
-          )}
+        <AccessCombobox
+          value={initialAccess}
+          onValueChange={() => {}}
+          availableScopes={availableScopes}
+          isAdmin={availableScopes.workspaceExposed}
+          disabled
         />
       </div>
 
@@ -195,16 +165,7 @@ export function ProjectPermissionsTabClient({
         canEdit={canEdit}
         rows={projectAccessRows}
       />
-
-      {/* Save -------------------------------------------------------- */}
-      {canEdit && (
-        <div className="flex justify-end">
-          <Button type="submit" disabled={isPending}>
-            {isPending ? "Saving…" : "Save changes"}
-          </Button>
-        </div>
-      )}
-    </form>
+    </div>
   );
 }
 
