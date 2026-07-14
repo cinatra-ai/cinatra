@@ -427,6 +427,50 @@ async function enforceActivatedTypePayload(
   });
 }
 
+// The `@cinatra-ai/memory:concept` type id, inlined as a literal on purpose:
+// importing it from `../integration/register-types` would add a static edge
+// to the locked-route-reachable objects_save handler graph (same route-graph-
+// budget reasoning as the lazy claim-gate import above). The source of truth
+// is `MEMORY_CONCEPT_TYPE_ID` in
+// `packages/objects/src/integration/register-types.ts`; the registration +
+// handler tests exercise this literal against that constant.
+const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
+
+/**
+ * Memory-envelope enforcement (cinatra#1376, epic #1373). Memory rows take
+ * the deterministic static-type path; this gate wires the type's REGISTERED
+ * Zod schema (defined in `integration/register-types.ts`, resolved via the
+ * registry — no new import edge) into the objects_save / objects_update write
+ * paths so an invalid envelope is rejected BEFORE any commit.
+ *
+ * Scoped to `@cinatra-ai/memory:concept` in this slice (generalizing
+ * registered-schema enforcement to other static types is separate follow-up
+ * work — cinatra#1376 scope note). Unlike the per-claim activation gate above
+ * it is unconditional and fail-closed: no claim probe, no org-context skip,
+ * no kill-switch — memory files are untrusted input end-to-end, and a
+ * memory-typed write whose schema cannot be resolved is refused outright.
+ */
+function enforceMemoryConceptEnvelope(objectTypeId: string, data: unknown): void {
+  if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return;
+  const def = objectTypeRegistry.resolve(objectTypeId);
+  if (!def) {
+    // Fail closed: a memory-typed write with no static registration has no
+    // enforceable envelope schema — refuse rather than persist unvalidated.
+    throw new Error(
+      `[objects:memory-concept] refusing to write "${objectTypeId}": the static type is not registered, so its envelope schema cannot be enforced`,
+    );
+  }
+  const parsed = def.schema.safeParse(data);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    throw new Error(
+      `[objects:memory-concept] invalid memory concept envelope: ${issues}`,
+    );
+  }
+}
+
 export function createObjectsPrimitiveHandlers() {
   return {
     "objects_save": async (request: PrimitiveInvocationRequest<unknown>) => {
@@ -575,6 +619,10 @@ export function createObjectsPrimitiveHandlers() {
       // (enrichedData) so a NEW-write rejection is consistent with the
       // legacy-row activation audit (which validates the stored `data`).
       await enforceActivatedTypePayload(classification.type, orgId, enrichedData);
+      // Memory-envelope gate (cinatra#1376): validates the SAME enriched
+      // shape that gets stored, so the system-injected `cinatraAgentRunId`
+      // is tolerated and what is validated is exactly what persists.
+      enforceMemoryConceptEnvelope(classification.type, enrichedData);
 
       const record = upsertObjectAndEnqueue({
         upsertInput: {
@@ -891,6 +939,11 @@ export function createObjectsPrimitiveHandlers() {
       };
       if (input.data !== undefined) {
         await enforceActivatedTypePayload(existing.type, orgId, mergedData);
+        // Memory-envelope gate (cinatra#1376): a partial update of a memory
+        // row must still yield a VALID merged envelope — rejected before any
+        // commit (ahead of the project-move branch below, mirroring the
+        // activation gate's ordering rationale).
+        enforceMemoryConceptEnvelope(existing.type, mergedData);
       }
 
       const wantsProjectMove =
