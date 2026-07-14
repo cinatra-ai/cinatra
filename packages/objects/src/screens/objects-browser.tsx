@@ -61,7 +61,7 @@ function EmptyState({ isFiltered }: { isFiltered: boolean }) {
           Try a different type, category, or clear the search.
         </p>
         <Button variant="outline" asChild>
-          <Link href="/data">Clear filters</Link>
+          <Link href="/artifacts?mode=raw">Clear filters</Link>
         </Button>
       </div>
     );
@@ -198,7 +198,7 @@ export async function ObjectsBrowserScreen({ searchParams }: { searchParams: Sea
 
             <Button type="submit">Apply filters</Button>
             <Button type="reset" variant="ghost" asChild>
-              <Link href="/data">Clear</Link>
+              <Link href="/artifacts?mode=raw">Clear</Link>
             </Button>
           </form>
         </section>
@@ -219,7 +219,7 @@ export async function ObjectsBrowserScreen({ searchParams }: { searchParams: Sea
               {filtered.map((row) => (
                 <Link
                   key={row.id}
-                  href={`/data/${row.id}`}
+                  href="/artifacts?mode=raw"
                   className="flex h-12 items-center gap-4 px-2 hover:bg-surface-muted"
                   aria-label="View object details"
                 >

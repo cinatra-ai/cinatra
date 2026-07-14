@@ -75,6 +75,12 @@ export type ArtifactSummary = {
   originKind: string;
   createdAt: string;
   updatedAt: string;
+  // Canonical ownership/visibility projection (read-only) for the library
+  // surface's meta line (cinatra#1431 §II) — the SAME column model the raw
+  // objects browser (§IV) shows. Projected straight from the object row; no
+  // new query, no write.
+  ownerLevel: "user" | "team" | "organization" | "workspace";
+  visibility: "private" | "team" | "organization" | "public";
   // Semantic identity resolves through the effective-identity service
   // (cinatra#1426): `effectiveIdentity` is the full resolution (extension
   // identity with its basis + selectability, the default-artifact floor, or
@@ -190,6 +196,8 @@ function toSummary(
     data: unknown;
     createdAt?: string;
     updatedAt?: string;
+    ownerLevel?: "user" | "team" | "organization" | "workspace" | null;
+    visibility?: "private" | "team" | "organization" | "public" | null;
   },
   semanticIdentity?: ArtifactIdentityEnrichment,
 ): ArtifactSummary {
@@ -205,6 +213,8 @@ function toSummary(
     originKind: d.originKind ?? "upload",
     createdAt: rec.createdAt ?? "",
     updatedAt: rec.updatedAt ?? "",
+    ownerLevel: rec.ownerLevel ?? "organization",
+    visibility: rec.visibility ?? "organization",
     // Default to the floor if the caller didn't enrich (e.g., from a
     // unit test that doesn't drive the assertion store).
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
@@ -341,6 +351,55 @@ export function getArtifact(input: {
         })
       : undefined;
   return toSummary(rec, enrichment);
+}
+
+/**
+ * Detail-page access outcome (cinatra#1431 §III). The consolidated `/artifacts`
+ * detail route must DISTINGUISH the two nulls `getArtifact` collapses:
+ *   - `not-found` — the row is absent, not an artifact type, or the actor's
+ *     ownership filter would not even LIST it (the store returns null). The
+ *     detail route 404s (existence stays hidden — never revealed to a caller
+ *     who cannot list it).
+ *   - `denied` — the row IS an artifact the actor can list, but the canonical
+ *     `object.read` decision refuses it. Per spec §III ("a row the viewer may
+ *     list but not read opens to a not-authorized panel, never to its bytes")
+ *     the detail route renders the not-authorized panel, NOT a 404.
+ */
+export type ArtifactDetailAccess =
+  | { kind: "ok"; artifact: ArtifactSummary }
+  | { kind: "not-found" }
+  | { kind: "denied" };
+
+/**
+ * Resolve one artifact for the detail route, splitting not-found from
+ * read-denied. Mirrors {@link getArtifact}'s two gates but reports which gate
+ * refused: the actor-scoped ownership filter (`getObjectById(actor)` → null ⇒
+ * not-found / 404-hidden) versus the canonical `object.read` kernel decision
+ * (⇒ denied). Live rows only — a tombstone reads as not-found.
+ */
+export function readArtifactForDetail(input: {
+  artifactId: string;
+  orgId: string | null;
+  actor?: ActorContext;
+}): ArtifactDetailAccess {
+  const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor);
+  if (!rec) return { kind: "not-found" };
+  ensureArtifactRegistry();
+  if (!artifactObjectTypeIds().has(rec.type)) return { kind: "not-found" };
+  // Ownership filter passed (the actor CAN list this row); a canonical
+  // `object.read` refusal here is the spec's "may list but not read" case.
+  if (!actorPassesObjectAuthz(rec, input.actor, "object.read")) {
+    return { kind: "denied" };
+  }
+  const enrichment =
+    input.orgId !== null
+      ? resolveArtifactEffectiveIdentity({
+          orgId: input.orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        })
+      : undefined;
+  return { kind: "ok", artifact: toSummary(rec, enrichment) };
 }
 
 /**

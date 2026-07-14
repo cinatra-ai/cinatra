@@ -7,6 +7,7 @@ import { ArrowLeft, GitMerge } from "lucide-react";
 import {
   requireAuthSession,
   resolveOrgRoleForSession,
+  isPlatformAdmin,
 } from "@/lib/auth-session";
 import { readMergeProposalById } from "@/lib/object-history";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
@@ -35,6 +36,10 @@ export default async function MergeProposalDetailPage({ params }: Props) {
 
   // Fail-closed when no active org.
   if (!orgId) notFound();
+  // Relocated under the /artifacts admin side (cinatra#1431): admin-gated like
+  // the other admin modes (the per-object `object.read`/`object.update` authz
+  // below stays as defense-in-depth). A non-admin 404s — existence hidden.
+  if (!isPlatformAdmin(session)) notFound();
   const proposal = readMergeProposalById(proposalId, { orgId });
   if (!proposal) notFound();
 
@@ -77,7 +82,7 @@ export default async function MergeProposalDetailPage({ params }: Props) {
         actions={
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" asChild>
-              <Link href="/data-safety/merge-proposals">
+              <Link href="/artifacts?mode=merge">
                 <ArrowLeft className="size-4 mr-1.5" />
                 Back
               </Link>

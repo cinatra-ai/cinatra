@@ -15,10 +15,8 @@ vi.mock("@/lib/cinatra-toast", () => ({ toast: toastMock }));
 import { showUndoToast, undoDeepLink } from "../undo-toast";
 
 describe("undoDeepLink", () => {
-  it("builds the change-set restore deep-link", () => {
-    expect(undoDeepLink("cs_9")).toBe(
-      "/data-safety/change-sets/cs_9?openRestore=1",
-    );
+  it("lands on the consolidated undo surface (the per-change-set route was retired in cinatra#1431 §VII)", () => {
+    expect(undoDeepLink("cs_9")).toBe("/artifacts?mode=undo");
   });
 });
 

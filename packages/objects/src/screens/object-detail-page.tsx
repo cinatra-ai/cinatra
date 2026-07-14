@@ -87,7 +87,7 @@ export async function ObjectDetailPage({ id, focus }: ObjectDetailPageProps) {
           description={`No data with id "${id}" exists or it has been deleted.`}
           actions={
             <Button variant="outline" asChild>
-              <Link href="/data">
+              <Link href="/artifacts?mode=raw">
                 <ChevronLeft data-icon="inline-start" />
                 Back to Data
               </Link>
@@ -140,7 +140,7 @@ export async function ObjectDetailPage({ id, focus }: ObjectDetailPageProps) {
         description={row.type}
         actions={
           <Button variant="outline" asChild>
-            <Link href="/data">
+            <Link href="/artifacts?mode=raw">
               <ChevronLeft data-icon="inline-start" />
               Back to Data
             </Link>

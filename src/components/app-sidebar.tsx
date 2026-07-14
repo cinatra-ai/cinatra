@@ -107,19 +107,12 @@ function buildSidebarData(_opts: SidebarOpts) {
   groups.push({
     title: "Information",
     items: [
+      // The former "Data" group (All data / Data types / History / Merge)
+      // folded into the consolidated /artifacts surface (cinatra#1431 §VII):
+      // Raw objects, Types & approvals, Undo and Merge proposals are admin
+      // sub-views INSIDE /artifacts, reached from its in-page mode control —
+      // not the sidebar. Only the top-level Artifacts entry remains.
       { title: "Artifacts", url: "/artifacts", icon: domainIcons.artifacts },
-      {
-        title: "Data",
-        icon: domainIcons.data,
-        items: [
-          { title: "All data",   url: "/data" },
-          { title: "Data types", url: "/data/types" },
-          // History + Merge live under Data; the underlying URL paths point at
-          // the data-safety change-sets and merge-proposals surfaces.
-          { title: "History", url: "/data-safety/change-sets" },
-          { title: "Merge",   url: "/data-safety/merge-proposals" },
-        ],
-      },
       {
         title: "Analytics",
         icon: domainIcons.metrics,
