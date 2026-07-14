@@ -27,7 +27,12 @@ vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: {},
 }));
 
-import { resolveActorIdentity, pickServerDerivedOrgId, orgMembershipExists } from "../actor-identity";
+import {
+  resolveActorIdentity,
+  pickServerDerivedOrgId,
+  orgMembershipExists,
+  composeBearerActorContext,
+} from "../actor-identity";
 
 function makeRequest(host: string = "localhost"): Request {
   return new Request(`http://${host}/api/mcp`, { method: "POST" });
@@ -284,5 +289,114 @@ describe("orgMembershipExists live-membership gate", () => {
     expect(
       await orgMembershipExists({ orgId: "org-1", userId: "user-1", pool: { query: q as never } }),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// composeBearerActorContext — the transport-level composition (#1545). Wraps
+// resolveActorIdentity + pickServerDerivedOrgId and preserves the exact
+// delegated/trusted-dev short-circuit (no DB read for those callers), so the
+// Bearer service-account org is only consulted when neither applies and never
+// overrides a higher-precedence org.
+// ---------------------------------------------------------------------------
+describe("composeBearerActorContext", () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+  });
+
+  it("short-circuits on a delegated OBO userId — no DB read, higher-precedence org preserved", async () => {
+    const readServiceAccount = vi.fn(async () => ({ userId: "sa", organizationId: "sa-org" }));
+    const ctx = await composeBearerActorContext({
+      currentOrgId: "obo-org", // delegated OBO org already resolved (precedence #1)
+      delegatedUserId: "human-chat-user",
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: "client-xyz",
+      request: makeRequest(),
+      a2aDevBypass: "false",
+      isLocalhost: false,
+      readServiceAccount: readServiceAccount as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: "human-chat-user", resolvedOrgId: "obo-org" });
+    // resolveActorIdentity is NOT consulted for a delegated caller.
+    expect(readServiceAccount).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits on a trusted-dev admin userId — no DB read, coherent org preserved", async () => {
+    const readServiceAccount = vi.fn(async () => null);
+    const ctx = await composeBearerActorContext({
+      currentOrgId: "trusted-dev-org", // trusted-dev coherent pair already set (precedence #3)
+      delegatedUserId: null,
+      trustedDevAdminUserId: "dev-admin",
+      sessionUser: undefined,
+      requestClientId: undefined,
+      request: makeRequest(),
+      a2aDevBypass: "true",
+      isLocalhost: true,
+      readServiceAccount: readServiceAccount as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: "dev-admin", resolvedOrgId: "trusted-dev-org" });
+    expect(readServiceAccount).not.toHaveBeenCalled();
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("composes the verified-Bearer service-account org when no higher-precedence org and creator is a live member (the #1545 fix)", async () => {
+    // Live-membership gate finds a public.member row for {org_id, created_by}.
+    queryMock.mockResolvedValueOnce({ rows: [{ one: 1 }] });
+    const ctx = await composeBearerActorContext({
+      currentOrgId: null,
+      delegatedUserId: null,
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: "client-xyz",
+      request: makeRequest("example.com"),
+      a2aDevBypass: "false",
+      isLocalhost: false,
+      readServiceAccount: (async () => ({ userId: "sa-user-42", organizationId: "sa-org-7" })) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: "sa-user-42", resolvedOrgId: "sa-org-7" });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never overrides a higher-precedence org even when the service-account arm resolves one", async () => {
+    // No delegated/trusted-dev, so resolveActorIdentity IS consulted and would
+    // resolve sa-org-7 — but a cookie/OBO org already occupies currentOrgId.
+    queryMock.mockResolvedValueOnce({ rows: [{ one: 1 }] });
+    const ctx = await composeBearerActorContext({
+      currentOrgId: "cookie-active-org", // precedence #2 already set
+      delegatedUserId: null,
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: "client-xyz",
+      request: makeRequest("example.com"),
+      a2aDevBypass: "false",
+      isLocalhost: false,
+      readServiceAccount: (async () => ({ userId: "sa-user-42", organizationId: "sa-org-7" })) as never,
+      pool: { query: queryMock as never },
+    });
+    // userId comes from the resolved service-account identity; org stays the
+    // higher-precedence one (server-derived Bearer org never overrides it).
+    expect(ctx).toEqual({ resolvedUserId: "sa-user-42", resolvedOrgId: "cookie-active-org" });
+  });
+
+  it("stays fully org-less + user-less for an unauthenticated caller (fail-closed)", async () => {
+    const ctx = await composeBearerActorContext({
+      currentOrgId: null,
+      delegatedUserId: null,
+      trustedDevAdminUserId: null,
+      sessionUser: undefined,
+      requestClientId: undefined,
+      request: makeRequest("example.com"),
+      a2aDevBypass: "true",
+      isLocalhost: false, // not localhost — dev fallback must not fire
+      readServiceAccount: (async () => null) as never,
+      pool: { query: queryMock as never },
+    });
+    expect(ctx).toEqual({ resolvedUserId: null, resolvedOrgId: null });
+    expect(queryMock).not.toHaveBeenCalled();
   });
 });

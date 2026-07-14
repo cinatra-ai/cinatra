@@ -215,6 +215,86 @@ export function pickServerDerivedOrgId(input: {
 }
 
 // ---------------------------------------------------------------------------
+// composeBearerActorContext
+//
+// The transport-level composition the MCP handler applies ONCE, BEFORE its
+// dev-only A2A first-org fallbacks, so a verified Bearer caller's SERVER-DERIVED
+// org (the matched service_accounts row's `org_id`) takes precedence over the
+// dev first-org fallback (#1545). It consults `resolveActorIdentity` ONLY when
+// neither a delegated OBO token nor the trusted-dev coherent pair already
+// resolved a userId — preserving the exact prior `userId` short-circuit (no
+// extra DB read for delegated/trusted-dev callers) — then applies
+// `pickServerDerivedOrgId` to stamp the server-derived org.
+//
+// Bearer org composition precedence (#1545), SERVER-DERIVED ONLY — no arm reads
+// a caller-suppliable org operand:
+//   1. delegated OBO `orgId`                    (caller's `currentOrgId`)
+//   2. cookie `session.activeOrganizationId`    (caller's `currentOrgId`)
+//   3. trusted-dev coherent `{userId, orgId}`   (dev only; caller's inputs)
+//   4. verified-Bearer service-account `org_id` (← this composition; the fix)
+//   5. A2A_DEV_BYPASS first-org                 (dev only; caller, iff still null)
+// A Bearer identity with no server-derivable org yields `resolvedOrgId: null`;
+// in production (no dev bypass) the boundary then denies `not_org_member`
+// (fail-closed, unchanged). There is deliberately NO silent first-membership
+// pick for a multi-org identity: the service-account arm carries exactly its
+// row's `org_id` (behind the live-membership gate above), and no arm enumerates
+// memberships to guess one.
+// ---------------------------------------------------------------------------
+export async function composeBearerActorContext(input: {
+  /** Org already resolved by a higher-precedence source (delegated OBO / cookie / trusted-dev), or null. */
+  currentOrgId: string | null;
+  /** Delegated OBO token userId (the human chat user), or null/undefined when absent. */
+  delegatedUserId: string | null | undefined;
+  /** Trusted-dev coherent-pair admin userId, or null/undefined when absent. */
+  trustedDevAdminUserId: string | null | undefined;
+  sessionUser: { id?: string | null } | undefined;
+  requestClientId: string | undefined;
+  request: Request;
+  /** `process.env.A2A_DEV_BYPASS`, threaded through for testability. */
+  a2aDevBypass: string | undefined;
+  isLocalhost: boolean;
+  readServiceAccount: (
+    clientId: string,
+  ) => Promise<ServiceAccountActorIdentity | null>;
+  pool: ActorIdentityPool;
+}): Promise<{ resolvedUserId: string | null; resolvedOrgId: string | null }> {
+  const {
+    currentOrgId,
+    delegatedUserId,
+    trustedDevAdminUserId,
+    sessionUser,
+    requestClientId,
+    request,
+    a2aDevBypass,
+    isLocalhost,
+    readServiceAccount,
+    pool,
+  } = input;
+  // Consult resolveActorIdentity (a DB read) ONLY when neither delegated nor
+  // trusted-dev already resolved a userId — the exact prior short-circuit.
+  const actorIdentity =
+    delegatedUserId || trustedDevAdminUserId
+      ? null
+      : await resolveActorIdentity({
+          sessionUser,
+          requestClientId,
+          request,
+          env: { A2A_DEV_BYPASS: a2aDevBypass },
+          isLocalhost,
+          readServiceAccount,
+          pool,
+        });
+  const resolvedUserId =
+    delegatedUserId ?? trustedDevAdminUserId ?? actorIdentity?.userId ?? null;
+  const resolvedOrgId = pickServerDerivedOrgId({
+    currentOrgId,
+    actorIdentity,
+    resolvedUserId,
+  });
+  return { resolvedUserId, resolvedOrgId };
+}
+
+// ---------------------------------------------------------------------------
 // resolveOrgRoleFromMembership
 //
 // Resolves the caller's role in the active organization ONCE at transport
