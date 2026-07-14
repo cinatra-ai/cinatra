@@ -322,9 +322,15 @@ export function classifyMarketplaceFailure(error: unknown): MarketplaceFailureCa
 //    same error, can never be logged as the cause of a category it did not
 //    produce);
 //  - only when NO code in the chain maps to a category (the classifier fell
-//    SAFE to `unrecoverable`) does it return the first coarse code SEEN — the
-//    unmapped code the app fell safe on, which is precisely what the operator
-//    needs to see to notice the drift;
+//    SAFE to `unrecoverable`) does it return the first RECOGNIZED-SHAPE
+//    (`cinatra.`-prefixed) coarse code SEEN — the unmapped contract code the app
+//    fell safe on, which is precisely what the operator needs to see to notice
+//    the drift. A BARE, unprefixed code field is deliberately NOT reported in
+//    this fallback: the classifier does not treat a bare unmapped field as a
+//    contract signal (it classifies from the HTTP status instead — its
+//    `sawUnmapped` gate fires only for a `cinatra.`-prefixed field), so logging
+//    it would read `code=<bare> category=<from status>`, the exact misleading
+//    `code=X category=<from a different signal>` diagnostic #1539 eliminates;
 //  - `null` when no coarse code is present at all.
 // Codes are returned WITHOUT the `cinatra.` prefix and length-bounded.
 // ---------------------------------------------------------------------------
@@ -335,14 +341,17 @@ const MAX_CONTRACT_CODE_LEN = 64;
 
 // Single walk over the error chain (message → responseBody → explicit code
 // field → cause — the SAME order `probe` / `classifyMarketplaceFailure` uses),
-// returning the first coarse code that satisfies `accept`. Bounded depth so a
-// cyclic cause chain can never loop forever. `extractContractCode` runs it twice
-// — first demanding a MAPPED code, then (only if none) accepting any code — so
-// the extracted code always agrees with the classifier's category decision.
+// returning the first coarse code that satisfies `accept`. `accept` also receives
+// whether the code was RECOGNIZED-SHAPE (a `cinatra.`-prefixed token — the same
+// gate the classifier's `probe` uses to treat an UNMAPPED code as a contract
+// signal). Bounded depth so a cyclic cause chain can never loop forever.
+// `extractContractCode` runs it twice — first demanding a MAPPED code, then (only
+// if none) accepting the first RECOGNIZED-SHAPE code — so the extracted code
+// always agrees with the classifier's category decision.
 function walkContractCode(
   error: unknown,
   depth: number,
-  accept: (bareCode: string) => boolean,
+  accept: (bareCode: string, recognizedShape: boolean) => boolean,
 ): string | null {
   if (depth > 6 || error == null) return null;
   if (typeof error === "string") {
@@ -350,7 +359,9 @@ function walkContractCode(
     let m: RegExpExecArray | null;
     while ((m = COARSE_CODE_RE.exec(error)) !== null) {
       const bare = m[1].toLowerCase();
-      if (accept(bare)) return bare.slice(0, MAX_CONTRACT_CODE_LEN);
+      // A string token is matched ONLY via the `cinatra.`-prefixed regex, so it
+      // is always a recognized-shape contract code.
+      if (accept(bare, true)) return bare.slice(0, MAX_CONTRACT_CODE_LEN);
     }
     return null;
   }
@@ -367,12 +378,22 @@ function walkContractCode(
   for (const key of ["code", "error_code", "errorCode"]) {
     const v = obj[key];
     if (typeof v === "string") {
-      // Mirror the classifier's explicit-code-field handling: strip a LEADING
-      // `cinatra.` (a bare code is accepted too) and take the bounded token, so
-      // `{ code: "install_not_found" }` — which the classifier classifies —
-      // never extracts as `null` (the two must agree).
-      const bare = v.toLowerCase().replace(/^cinatra\./, "").trim();
-      if (/^[a-z0-9_]+$/.test(bare) && accept(bare)) {
+      // Parse the field EXACTLY as the classifier's `probe` does — lower-case and
+      // strip a LEADING `cinatra.`, WITHOUT trimming (probe does not trim, and the
+      // map is keyed on untrimmed tokens). Trimming ONLY here would let a
+      // whitespace-padded token (e.g. `"install_not_found "`) MAP in the extractor
+      // while the classifier leaves it unmapped and classifies from the HTTP
+      // status — logging `code=install_not_found category=retryable`, the exact
+      // provenance bug #1539 forbids. `recognizedShape` is the classifier's
+      // `sawUnmapped` gate byte-for-byte (`/^cinatra\./i.test(v)`): a bare field is
+      // a contract signal ONLY when it maps (first pass); an UNMAPPED bare field is
+      // not reported by the fallback. The extra `[a-z0-9_]+` guard only bounds the
+      // LOGGED value — a malformed prefixed token still forces the classifier SAFE
+      // to `unrecoverable`, and reporting `code=null` for it never misattributes a
+      // code to a category.
+      const recognizedShape = /^cinatra\./i.test(v);
+      const bare = v.toLowerCase().replace(/^cinatra\./, "");
+      if (/^[a-z0-9_]+$/.test(bare) && accept(bare, recognizedShape)) {
         return bare.slice(0, MAX_CONTRACT_CODE_LEN);
       }
     }
@@ -387,13 +408,15 @@ function walkContractCode(
 /**
  * Walk the error chain for the contract code that explains the classifier's
  * category (see the header above). First pass demands a MAPPED code (the exact
- * code the classifier resolved on); the fallback pass accepts the first coarse
- * code seen (the code the classifier fell safe on). Bare, unprefixed, bounded.
+ * code the classifier resolved on); the fallback pass returns the first
+ * RECOGNIZED-SHAPE (`cinatra.`-prefixed) code the classifier fell safe on — never
+ * a bare, unprefixed field the classifier classified AROUND (via the HTTP status),
+ * which would log `code=<bare> category=<from status>`. Bare, unprefixed, bounded.
  */
 export function extractContractCode(error: unknown): string | null {
   return (
     walkContractCode(error, 0, (code) => copyCategoryForCode(code) !== undefined) ??
-    walkContractCode(error, 0, () => true)
+    walkContractCode(error, 0, (_code, recognizedShape) => recognizedShape)
   );
 }
 

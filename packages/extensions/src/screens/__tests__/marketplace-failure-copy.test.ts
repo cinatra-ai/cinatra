@@ -355,6 +355,60 @@ describe("extractContractCode / extractHttpStatus — sanitized operator diagnos
     expect(extractContractCode(allUnmapped)).toBe("some_future_code");
   });
 
+  it("does NOT log a BARE, unprefixed unmapped code the classifier classified AROUND (#1539 AC7)", () => {
+    // A bare (non-`cinatra.`) code field the TS map does not know is NOT a
+    // contract signal to the classifier: `probe`'s `sawUnmapped` gate fires only
+    // for a `cinatra.`-prefixed field, so with a classifiable HTTP status present
+    // the classifier classifies from the STATUS (retryable) and ignores the bare
+    // code entirely. The operator log must therefore NOT carry that code, or it
+    // would read `code=<bare> category=retryable` — implying a cause the code
+    // never produced, the exact misleading diagnostic #1539 eliminates.
+    const bareUnmappedWithStatus = Object.assign(new Error("boom"), {
+      code: "future_taxonomy_code",
+      httpStatus: 503,
+    });
+    expect(classifyMarketplaceFailure(bareUnmappedWithStatus)).toBe("retryable");
+    expect(extractContractCode(bareUnmappedWithStatus)).toBe(null);
+
+    // A RECOGNIZED-SHAPE (`cinatra.`-prefixed) unmapped code, by contrast, IS a
+    // contract signal: it forces the classifier SAFE to `unrecoverable` (a
+    // contract code it does not map yet, NOT an HTTP-status guess) and MUST still
+    // be logged so PHP-taxonomy drift stays visible — and it agrees with the
+    // category it produced.
+    const prefixedUnmappedWithStatus = Object.assign(new Error("boom"), {
+      code: "cinatra.future_taxonomy_code",
+      httpStatus: 503,
+    });
+    expect(classifyMarketplaceFailure(prefixedUnmappedWithStatus)).toBe("unrecoverable");
+    expect(extractContractCode(prefixedUnmappedWithStatus)).toBe("future_taxonomy_code");
+  });
+
+  it("does NOT trim-then-map a whitespace-padded code the classifier leaves unmapped (#1539 AC7)", () => {
+    // The classifier's `probe` does NOT trim an explicit code field (it mirrors
+    // the PHP contract, whose map is keyed on untrimmed tokens), so a padded
+    // token like `"install_not_found "` is UNMAPPED there and — with a
+    // classifiable status present — classified from the STATUS. The extractor
+    // must parse identically (no trim) so it does not map-then-report the padded
+    // token, which would log `code=install_not_found category=retryable` — the
+    // same provenance mismatch under a whitespace normalization difference.
+    const paddedMappedWithStatus = Object.assign(new Error("boom"), {
+      code: "install_not_found ",
+      httpStatus: 503,
+    });
+    expect(classifyMarketplaceFailure(paddedMappedWithStatus)).toBe("retryable");
+    expect(extractContractCode(paddedMappedWithStatus)).toBe(null);
+
+    // A padded `cinatra.`-prefixed token is recognized-shape (forces the
+    // classifier SAFE to `unrecoverable`) but is malformed as a logged value, so
+    // it is reported as `code=null` — never misattributing a code to a category.
+    const paddedPrefixedWithStatus = Object.assign(new Error("boom"), {
+      code: "cinatra.install_not_found ",
+      httpStatus: 503,
+    });
+    expect(classifyMarketplaceFailure(paddedPrefixedWithStatus)).toBe("unrecoverable");
+    expect(extractContractCode(paddedPrefixedWithStatus)).toBe(null);
+  });
+
   it("returns null when no coarse code is present (a bare 404)", () => {
     expect(extractContractCode(Object.assign(new Error("not found"), { httpStatus: 404 }))).toBe(
       null,
