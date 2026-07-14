@@ -82,6 +82,17 @@ export type CinatraOrganizationPluginOptions = {
   allowUserToCreateOrganization?: (
     user: Record<string, unknown>,
   ) => Promise<boolean> | boolean;
+  /**
+   * Runtime-only Better Auth organization lifecycle hooks. BEHAVIORAL, not
+   * schema-bearing: the bootstrap migration never creates organizations, so it
+   * omits them, and they do not affect `getSchema()` (the drift-guard test).
+   * Threaded through the shared factory so `organization()` keeps exactly one
+   * construction site. cinatra#1494 injects `beforeCreateTeam` here to give
+   * Better Auth's default team a slug (`public.team.slug` is NOT NULL).
+   */
+  organizationHooks?: NonNullable<
+    Parameters<typeof organization>[0]
+  >["organizationHooks"];
 };
 
 /**
@@ -110,6 +121,9 @@ export function buildCinatraOrganizationPlugin(
     ...cinatraOrganizationOptions,
     ...(opts.allowUserToCreateOrganization
       ? { allowUserToCreateOrganization: opts.allowUserToCreateOrganization }
+      : {}),
+    ...(opts.organizationHooks
+      ? { organizationHooks: opts.organizationHooks }
       : {}),
   });
 }
