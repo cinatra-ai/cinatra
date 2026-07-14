@@ -58,27 +58,40 @@ import {
 // Server-action prop type — the dialog accepts the action as a prop instead
 // of importing it directly (importing "../actions" would pull server-only
 // modules into the client bundle). The server component passes it down.
+type InstallTargetLevel =
+  | "organization"
+  | "team"
+  | "project"
+  | "workspace"
+  | "admin";
+
 type ExtensionInstallAction = (input: {
   packageName: string;
   packageVersion: string;
-  accessTarget: { level: "organization" | "team" | "project"; id: string };
+  accessTarget: { level: InstallTargetLevel; id: string };
 }) => Promise<MarketplaceInstallActionResult | void>;
 
 // ---------------------------------------------------------------------------
 // Value → target adapter (same rules as the agent dialog's
-// pickerValueToTarget). owner / admin / workspace are NOT install targets —
-// the defensive guard returns null so a stray value cannot reach the server
-// action with a malformed target.
+// pickerValueToTarget). "owner" is NOT an install target — the guard returns
+// null. "workspace" / "admin" (cinatra#1527) ARE install targets: they carry
+// the active-org id as the tenant/workspace anchor, but the server re-derives
+// it canonically and never trusts this client value (issue AC3), so a forged id
+// cannot cross tenants.
 // ---------------------------------------------------------------------------
 function pickerValueToTarget(
   value: string,
   activeOrgId: string,
-): { level: "organization" | "team" | "project"; id: string } | null {
+): { level: InstallTargetLevel; id: string } | null {
   // Multi-scope W1: the picker now emits the id-carrying "org:<id>" token; the
   // bare "org" branch is kept as a defensive fallback (matchers still accept it).
   // An empty tail ("org:" / "team:" / "project:") is NOT a target — the guard
   // returns null so a stray value cannot reach the server action with an empty
   // id (matches the canonical adapter in auth-policy-types.ts).
+  if (value === "workspace")
+    return activeOrgId ? { level: "workspace", id: activeOrgId } : null;
+  if (value === "admin")
+    return activeOrgId ? { level: "admin", id: activeOrgId } : null;
   if (value.startsWith("org:")) {
     const id = value.slice("org:".length);
     return id ? { level: "organization", id } : null;
@@ -153,6 +166,13 @@ export function ExtensionInstallScopeDialog({
     orgId: activeOrgId,
     workspaceExposed: false,
   };
+  // cinatra#1527: render the always-offered workspace scopes only when the
+  // server actually emitted them (extension picker → yes; the shared agent
+  // picker → no). Keyed off the server-computed rows so a row can never appear
+  // without its server-decided disabled/reason state.
+  const installWorkspaceScopes = installTargets.some(
+    (t) => t.level === "workspace" || t.level === "admin",
+  );
   const disabledScopes = installTargets
     .filter((t) => t.disabled)
     .map((t) => t.value);
@@ -166,10 +186,12 @@ export function ExtensionInstallScopeDialog({
 
   // Human-readable scope fragment for the success toast.
   const scopeLabelFor = (
-    target: { level: "organization" | "team" | "project" },
+    target: { level: InstallTargetLevel },
     pickerValue: string,
   ): string => {
     const entityName = ownerEntityNames[pickerValue];
+    if (target.level === "workspace") return "the whole workspace";
+    if (target.level === "admin") return "platform admins";
     if (target.level === "team") return entityName ? `team ${entityName}` : "team";
     if (target.level === "project") {
       return entityName ? `project ${entityName}` : "project";
@@ -196,7 +218,7 @@ export function ExtensionInstallScopeDialog({
     const target = pickerValueToTarget(value, activeOrgId);
     if (!target) {
       setErrorMessage(
-        "Selected value is not a valid install target. Please pick organization, team, or project.",
+        "Selected value is not a valid install target. Please pick a scope from the list.",
       );
       return;
     }
@@ -266,9 +288,11 @@ export function ExtensionInstallScopeDialog({
               isAdmin={false}
               disabledScopes={disabledScopes}
               disabledReasons={disabledReasons}
-              // Hide owner / admin / workspace rows; only org / team:* /
-              // project:* are valid install targets.
+              // Hide the "owner" row (not an install target). The two workspace
+              // scopes (cinatra#1527) ARE offered — server-driven disabled/reason
+              // state — because installWorkspaceScopes is set.
               installMode
+              installWorkspaceScopes={installWorkspaceScopes}
             />
             <p className="text-sm text-muted-foreground">
               Targets you cannot install at are disabled.

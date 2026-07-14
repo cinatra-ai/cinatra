@@ -22,7 +22,14 @@ import { readProjectCoOwners } from "@/lib/project-co-owners-store";
 import { readTeamForOrg } from "@/lib/better-auth-db";
 
 export type InstallScopeTarget = {
-  level: "organization" | "team" | "project";
+  // "workspace" / "admin" are extension-install audience scopes (cinatra#1527):
+  // both are platform-admin-only to install. They are NOT valid targets for the
+  // agent at-scope install path (installRegistryPackageAtScope), whose Zod
+  // schema still restricts to organization/team/project — a widened SHARED type
+  // lets this one gate reason about all five while each caller's own schema
+  // decides which levels it will admit. The workspace itself is derived
+  // canonically from the authenticated tenant, never a client-supplied id.
+  level: "organization" | "team" | "project" | "workspace" | "admin";
   id: string;
 };
 
@@ -50,6 +57,10 @@ export type ProjectOwnershipContext = {
  *          (plain org_admin DENIES — they must be team_admin of THIS team)
  *  - project: platform_admin OR project owner/co-owner OR
  *             team_admin of the project's owning team
+ *  - workspace / admin (cinatra#1527): platform_admin ONLY. Every other role —
+ *             org_owner, org_admin, team_admin, member — is DENIED. (Install
+ *             AUTHORITY only; the post-install AUDIENCE is a separate decision
+ *             carried by the mapped AgentAuthPolicy visibility tokens.)
  */
 export async function assertCanInstallAtTarget(
   actor: InstallActorRoleBag,
@@ -61,6 +72,22 @@ export async function assertCanInstallAtTarget(
 ): Promise<void> {
   const isPlatformAdmin = actor.platformRole === "platform_admin";
   if (isPlatformAdmin) return; // short-circuit
+
+  // Workspace / admin install authority is platform-admin-only (cinatra#1527).
+  // platform_admin already returned above, so any actor reaching here at these
+  // levels is a non-platform-admin and MUST be denied — an EXPLICIT fail-closed
+  // branch (never fall through to the project-ownership block, which would
+  // deny with the wrong message).
+  if (target.level === "workspace" || target.level === "admin") {
+    throw new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message:
+        target.level === "workspace"
+          ? "Install at whole-workspace scope requires platform admin."
+          : "Install at admins-only scope requires platform admin.",
+    });
+  }
 
   if (target.level === "organization") {
     if (actor.orgRole === "org_admin" || actor.orgRole === "org_owner") return;
@@ -130,6 +157,17 @@ export async function assertTargetBelongsToActiveOrg(
   target: InstallScopeTarget,
   activeOrgId: string,
 ): Promise<{ projectOwnership?: ProjectOwnershipContext }> {
+  // Workspace / admin (cinatra#1527): the audience IS the authenticated tenant
+  // itself. There is nothing to look up and — crucially — NO client-supplied id
+  // to trust (a client-supplied workspace is a cross-tenant risk, issue AC3).
+  // The canonical workspace is derived by the caller from the session's active
+  // org; this tenant gate is a no-op that neither reads nor validates
+  // target.id. Install AUTHORITY (platform-admin-only) is enforced separately
+  // by assertCanInstallAtTarget.
+  if (target.level === "workspace" || target.level === "admin") {
+    return {};
+  }
+
   if (target.level === "organization") {
     if (target.id !== activeOrgId) {
       throw new AuthzError({
