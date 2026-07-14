@@ -23,6 +23,7 @@ import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstr
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
 import { insertOAuthClientWithTx } from "@/lib/better-auth-oauth-client";
 import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
+import { buildInvitationAcceptUrl, buildInvitationEmail } from "@/lib/org-invitation-email";
 
 const authBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 const authSecret = process.env.BETTER_AUTH_SECRET;
@@ -258,6 +259,31 @@ const authPlugins: CinatraRuntimeBetterAuthPlugins = [
       // the returned data would otherwise clobber it). See better-auth-org-hooks.
       organizationHooks: {
         beforeCreateTeam: beforeCreateTeamEnsureSlug,
+      },
+      // cinatra#1565: dispatch the org member-invitation accept link through the
+      // SAME platform-email path as reset/verify (dispatchPlatformEmail →
+      // sendPlatformEmail). Better Auth ships NO default invitation sender, so
+      // without this callback `inviteMember` created a `public.invitation` row
+      // but sent nothing — while the invite dialog claimed an email was sent.
+      // Fire-and-forget like the other callbacks (Better Auth also wraps this in
+      // runInBackgroundOrAwait), and the mailer inherits the same "platform"
+      // purpose gating: an unconfigured provider logs and never throws, exactly
+      // like sendResetPassword / sendVerificationEmail. The link points at
+      // better-auth-ui's accept-invitation card (see buildInvitationAcceptUrl).
+      sendInvitationEmail: async (data) => {
+        const acceptUrl = buildInvitationAcceptUrl(authBaseUrl, data.id);
+        const { subject, text } = buildInvitationEmail({
+          organizationName: data.organization?.name,
+          inviterLabel: data.inviter?.user?.name || data.inviter?.user?.email,
+          role: data.role,
+          acceptUrl,
+        });
+        dispatchPlatformEmail({
+          to: data.email,
+          subject,
+          text,
+          context: "sendInvitationEmail",
+        });
       },
     },
     mcpAuthPlugins: mcpServerAuthPlugins,
