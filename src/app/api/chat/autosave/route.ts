@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { readSkillAutosaveConfig, writeSkillAutosaveConfig } from "@/lib/skill-autosave";
+import {
+  readSkillAutosaveConfig,
+  writeSkillAutosaveConfig,
+  readSkillAutosaveUserPref,
+  writeSkillAutosaveUserPref,
+} from "@/lib/skill-autosave";
 import { getActorContext } from "@/lib/auth-session";
 import { rejectCrossOrigin } from "@/lib/admin-origin-guard";
 import { can } from "@/lib/authz";
@@ -29,17 +34,31 @@ function jsonError(status: number, error: string): Response {
 
 // GET: requires an authenticated session (the config drives admin/user UI).
 // No session -> 401 (do NOT redirect an API call).
+// The response carries the caller's OWN per-user chat-capture preference
+// (cinatra#1367) alongside the global config — additive, so existing
+// consumers of the config shape are unaffected.
 export async function GET() {
   const actor = await getActorContext();
   if (!actor) return jsonError(401, "Authentication required.");
-  return Response.json(readSkillAutosaveConfig());
+  const config = readSkillAutosaveConfig();
+  const userPref = readSkillAutosaveUserPref(actor.principalId);
+  return Response.json({
+    ...config,
+    userChatCaptureEnabled: userPref.chatCaptureEnabled,
+  });
 }
 
-// PATCH: mutates the app-wide config. Same-origin + platform-admin only +
-// strict pre-write audit.
+// PATCH: two arms.
+//   - `enabled` (app-wide master switch): same-origin + platform-admin only +
+//     strict pre-write audit (unchanged behavior).
+//   - `userChatCaptureEnabled` (cinatra#1367, SELF-scoped per-user preference,
+//     boolean | null where null = follow the admin default): same-origin +
+//     authenticated; allowed for platform admins always, for other users only
+//     while the admin `userCanConfigure` flag is on. Writes ONLY the caller's
+//     own preference — there is deliberately no path to another user's row.
 export async function PATCH(request: Request) {
   // 1. Same-origin enforcement (CSRF defense-in-depth for this cookie-backed,
-  //    global-settings-mutating route).
+  //    settings-mutating route).
   const crossOrigin = rejectCrossOrigin(request);
   if (crossOrigin) return crossOrigin;
 
@@ -47,36 +66,82 @@ export async function PATCH(request: Request) {
   const actor = await getActorContext();
   if (!actor) return jsonError(401, "Authentication required.");
 
-  // 3. Authorize — platform-admin only (org-less administration resource).
-  if (!can(actor, "settings.update", ADMINISTRATION_RESOURCE)) {
-    return jsonError(403, "Administrator authorization required.");
+  const body = (await request.json()) as {
+    enabled?: boolean;
+    userChatCaptureEnabled?: boolean | null;
+  };
+  const isPlatformAdminActor = can(actor, "settings.update", ADMINISTRATION_RESOURCE);
+  const hasAdminArm = typeof body.enabled === "boolean";
+  const hasUserArm =
+    typeof body.userChatCaptureEnabled === "boolean" || body.userChatCaptureEnabled === null;
+
+  // 3a. Admin arm — platform-admin only (org-less administration resource).
+  if (hasAdminArm) {
+    if (!isPlatformAdminActor) {
+      return jsonError(403, "Administrator authorization required.");
+    }
+
+    // Strict pre-write audit — a write failure aborts before the mutation.
+    try {
+      await logAuditEventStrict({
+        actorPrincipalId: actor.principalId,
+        actorPrincipalType: "human",
+        authSource: "route",
+        organizationId: actor.organizationId,
+        resourceType: "administration",
+        resourceId: "skill_autosave",
+        operation: "settings.skill_autosave.update",
+        decision: "allowed",
+        policyVersion: actor.policyVersion,
+        requestId: request.headers.get("x-request-id") ?? randomUUID(),
+        metadata: { enabled: body.enabled },
+      });
+    } catch {
+      return jsonError(503, "audit write failed");
+    }
+
+    writeSkillAutosaveConfig({ enabled: body.enabled });
   }
 
-  const body = (await request.json()) as { enabled?: boolean };
-  if (typeof body.enabled !== "boolean") {
-    // Nothing to write — return current config without an audit/mutation.
-    return Response.json(readSkillAutosaveConfig());
-  }
+  // 3b. Self arm — the caller's own chat-capture preference. Gated by the
+  // admin `userCanConfigure` flag for non-admins (the same lever that governs
+  // the per-prompt-field autosave toggle). Toggling off stops FUTURE captures
+  // only; captured skills are never touched from here.
+  if (hasUserArm) {
+    const config = readSkillAutosaveConfig();
+    if (!isPlatformAdminActor && !config.userCanConfigure) {
+      return jsonError(403, "User configuration of autosave is disabled.");
+    }
 
-  // 4. Strict pre-write audit — a write failure aborts before the mutation.
-  try {
-    await logAuditEventStrict({
-      actorPrincipalId: actor.principalId,
-      actorPrincipalType: "human",
-      authSource: "route",
-      organizationId: actor.organizationId,
-      resourceType: "administration",
-      resourceId: "skill_autosave",
-      operation: "settings.skill_autosave.update",
-      decision: "allowed",
-      policyVersion: actor.policyVersion,
-      requestId: request.headers.get("x-request-id") ?? randomUUID(),
-      metadata: { enabled: body.enabled },
+    try {
+      await logAuditEventStrict({
+        actorPrincipalId: actor.principalId,
+        actorPrincipalType: "human",
+        authSource: "route",
+        organizationId: actor.organizationId,
+        resourceType: "administration",
+        resourceId: "skill_autosave_user",
+        operation: "settings.skill_autosave.user_chat_capture.update",
+        decision: "allowed",
+        policyVersion: actor.policyVersion,
+        requestId: request.headers.get("x-request-id") ?? randomUUID(),
+        metadata: { userChatCaptureEnabled: body.userChatCaptureEnabled },
+      });
+    } catch {
+      return jsonError(503, "audit write failed");
+    }
+
+    writeSkillAutosaveUserPref(actor.principalId, {
+      chatCaptureEnabled: body.userChatCaptureEnabled ?? null,
     });
-  } catch {
-    return jsonError(503, "audit write failed");
   }
 
-  writeSkillAutosaveConfig({ enabled: body.enabled });
-  return Response.json(readSkillAutosaveConfig());
+  // Response mirrors GET so callers can re-sync rendered state (with or
+  // without a mutation — a bodiless PATCH remains a read, as before).
+  const config = readSkillAutosaveConfig();
+  const userPref = readSkillAutosaveUserPref(actor.principalId);
+  return Response.json({
+    ...config,
+    userChatCaptureEnabled: userPref.chatCaptureEnabled,
+  });
 }

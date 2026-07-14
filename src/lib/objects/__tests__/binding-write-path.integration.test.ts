@@ -27,6 +27,7 @@ import {
 } from "@/lib/objects/artifact-claim-store";
 import {
   reconcileArtifactBinding,
+  reconcileArtifactBindingForWrite,
   readActiveBinding,
 } from "@/lib/objects/binding-write-path";
 import {
@@ -499,6 +500,156 @@ describe("cinatra#1429 — binding write path (real DB)", () => {
     expect(rerun.processed).toBe(5);
     expect(rerun.inserted).toBe(0);
     for (const id of ids) expect(activeBindingCount(orgId, id)).toBe(1);
+  });
+});
+
+describe("cinatra#1429 — write-path composition (reconcileArtifactBindingForWrite, real DB)", () => {
+  it("a write of a claimed-type row INSERTs the winner's binding (has_claim gate)", () => {
+    const orgId = nextId("org");
+    const type = `@vendor/${nextId("pkg")}:thing`;
+    const pkg = "@vendor/compose-a-artifact";
+    const artifactId = nextId("obj");
+    seedObject({ id: artifactId, type, orgId });
+    const claim = seedDedicatedClaim({ scope: `org:${orgId}`, type, pkg });
+
+    const res = reconcileArtifactBindingForWrite({ orgId, artifactId, type });
+    expect(res.inserted).toBe(1);
+    expect(res.changed).toBe(true);
+    const b = readActiveBinding(orgId, artifactId);
+    expect(b?.bindingClaimId).toBe(claim.id);
+    // Idempotent on a second write of the same row (matching binding ⇒ no-op).
+    const again = reconcileArtifactBindingForWrite({ orgId, artifactId, type });
+    expect(again.inserted).toBe(0);
+    expect(again.archived).toBe(0);
+    expect(again.changed).toBe(false);
+    expect(activeBindingCount(orgId, artifactId)).toBe(1);
+  });
+
+  it("a substrate write (no claim, no binding) short-circuits to a no-op", () => {
+    const orgId = nextId("org");
+    const type = "@cinatra-ai/artifact:object"; // generic — never dedicated-claimed
+    const artifactId = nextId("obj");
+    seedObject({ id: artifactId, type, orgId });
+
+    const res = reconcileArtifactBindingForWrite({ orgId, artifactId, type });
+    expect(res).toEqual({ archived: 0, inserted: 0, changed: false });
+    expect(activeBindingCount(orgId, artifactId)).toBe(0);
+  });
+
+  it("a type change AWAY from a claimed type ARCHIVEs the stale binding (has_binding gate)", () => {
+    const orgId = nextId("org");
+    const claimedType = `@vendor/${nextId("pkg")}:thing`;
+    const pkg = "@vendor/compose-b-artifact";
+    const artifactId = nextId("obj");
+    seedObject({ id: artifactId, type: claimedType, orgId });
+    seedDedicatedClaim({ scope: `org:${orgId}`, type: claimedType, pkg });
+    // First write: binding lands.
+    expect(reconcileArtifactBindingForWrite({ orgId, artifactId, type: claimedType }).inserted).toBe(1);
+    expect(activeBindingCount(orgId, artifactId)).toBe(1);
+
+    // Now the row's type changes to an UNCLAIMED type. The new type has no
+    // dedicated claim (has_claim=false) but the artifact still carries the stale
+    // binding (has_binding=true) → the guard opens the reconcile → archive.
+    const plainType = "@cinatra-ai/artifact:object";
+    setObjectType(artifactId, plainType);
+    const res = reconcileArtifactBindingForWrite({ orgId, artifactId, type: plainType });
+    expect(res.archived).toBe(1);
+    expect(res.inserted).toBe(0);
+    expect(res.changed).toBe(true);
+    expect(activeBindingCount(orgId, artifactId)).toBe(0);
+  });
+
+  it("a null-org write short-circuits (no binding surface)", () => {
+    const res = reconcileArtifactBindingForWrite({
+      orgId: null,
+      artifactId: nextId("obj"),
+      type: "@vendor/whatever:thing",
+    });
+    expect(res).toEqual({ archived: 0, inserted: 0, changed: false });
+  });
+});
+
+describe("cinatra#1493 — durable write-driven binding-reconcile queue (real DB)", () => {
+  function enqueueWriteRow(orgId: string, artifactId: string, type: string): string {
+    const id = nextId("rq");
+    sql(
+      `INSERT INTO "${S()}"."artifact_binding_reconcile_queue"
+         (id, scope, object_type_id, object_id, org_id, kind, status)
+       VALUES ($1, 'org:' || $2, $3, $4, $2, 'binding-reconcile-write', 'pending')`,
+      [id, orgId, type, artifactId],
+    );
+    return id;
+  }
+  function queueStatus(id: string): string {
+    return String(
+      sql(`SELECT status FROM "${S()}"."artifact_binding_reconcile_queue" WHERE id=$1`, [id])
+        .rows[0].status,
+    );
+  }
+
+  it("drains a write-driven row: a create into a claimed type INSERTs the winner's binding; row → done", () => {
+    const orgId = nextId("org");
+    const type = `@vendor/${nextId("pkg")}:thing`;
+    const artifactId = nextId("obj");
+    seedObject({ id: artifactId, type, orgId });
+    const claim = seedDedicatedClaim({ scope: `org:${orgId}`, type, pkg: "@vendor/wq-a-artifact" });
+    const rowId = enqueueWriteRow(orgId, artifactId, type);
+
+    const res = processBindingReconcileQueue({ limit: 50 });
+    expect(res.failed).toBe(0);
+    expect(readActiveBinding(orgId, artifactId)?.bindingClaimId).toBe(claim.id);
+    expect(queueStatus(rowId)).toBe("done");
+  });
+
+  it("durability (codex Q2): a type-change AWAY from a claimed type converges the STALE binding via the per-artifact write-driven row — a TYPE sweep of the claimed type could NEVER select this row", () => {
+    const orgId = nextId("org");
+    const claimedType = `@vendor/${nextId("pkg")}:thing`;
+    const artifactId = nextId("obj");
+    seedObject({ id: artifactId, type: claimedType, orgId });
+    seedDedicatedClaim({ scope: `org:${orgId}`, type: claimedType, pkg: "@vendor/wq-b-artifact" });
+    // Binding lands for the claimed type.
+    expect(reconcileArtifactBindingForWrite({ orgId, artifactId, type: claimedType }).inserted).toBe(1);
+    expect(activeBindingCount(orgId, artifactId)).toBe(1);
+
+    // The row's type moves to an UNCLAIMED type. The claimed type's sweep no
+    // longer selects this row (it is not that type anymore); only the durable
+    // per-artifact write-driven record converges the stale binding.
+    const plainType = "@cinatra-ai/artifact:object";
+    setObjectType(artifactId, plainType);
+    const rowId = enqueueWriteRow(orgId, artifactId, plainType);
+
+    const res = processBindingReconcileQueue({ limit: 50 });
+    expect(res.failed).toBe(0);
+    expect(activeBindingCount(orgId, artifactId)).toBe(0); // stale binding archived
+    expect(queueStatus(rowId)).toBe("done");
+  });
+
+  it("a write-driven row for a substrate object (no claim, no binding) is a safe no-op; row → done", () => {
+    const orgId = nextId("org");
+    const type = "@cinatra-ai/artifact:object";
+    const artifactId = nextId("obj");
+    seedObject({ id: artifactId, type, orgId });
+    const rowId = enqueueWriteRow(orgId, artifactId, type);
+
+    const res = processBindingReconcileQueue({ limit: 50 });
+    expect(res.failed).toBe(0);
+    expect(activeBindingCount(orgId, artifactId)).toBe(0);
+    expect(queueStatus(rowId)).toBe("done");
+  });
+
+  it("the shape CHECK rejects a write-driven row that omits object_id / org_id (each kind's required columns stay honest)", () => {
+    let threw = false;
+    try {
+      sql(
+        `INSERT INTO "${S()}"."artifact_binding_reconcile_queue"
+           (id, scope, object_type_id, kind, status)
+         VALUES ($1, 'org:x', '@v/p:t', 'binding-reconcile-write', 'pending')`,
+        [nextId("rq")],
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
   });
 });
 

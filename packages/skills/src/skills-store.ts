@@ -5,18 +5,15 @@ import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
-// installedSkillPackages + the canonical access-policy helpers (W4, #1073) live in
-// ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
+// installedSkillPackages + canonical access-policy helpers (W4, #1073) live in ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
 import { assertPersonalSkillOwnership, installedSkillPackages, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, resolveUpsertAccessConfig, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
-import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
+import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type RevisionSource, type SkillSource } from "./skill-source";
 import { assertSafePathSegment } from "@cinatra-ai/registries";
 // Agent-bound skill identity / path derivation (cinatra#537) — extracted to a
-// sibling module to keep this file under the file-size ratchet (behavior
-// identical). The shared `parsePackageId`/`isSafePathSegment` guard lives inside
-// those helpers; only `assertSafePathSegment` is still called directly here (the
-// belt-and-suspenders join guard in getSkillDiskDir).
+// sibling module to keep this file under the ratchet (behavior identical); only
+// `assertSafePathSegment` is still called directly here (getSkillDiskDir join guard).
 import {
   deriveAgentBindingVendorPackage,
   deriveAgentDiskVendorPackage,
@@ -1116,6 +1113,8 @@ export async function upsertSkill(input: {
    * `path.join`, so a slash naturally produces a nested directory.
    */
   storagePackagePath?: string;
+  // Provenance on the atomic skill_revisions row (cinatra#1361 vocab); defaults "manual", chat-capture pipeline passes "chat-capture" (cinatra#1367).
+  revisionSource?: RevisionSource;
 }): Promise<PersistedSkill> {
   const existingCatalog = await readSkillsCatalog();
   const updatedAt = new Date().toISOString();
@@ -1337,7 +1336,7 @@ export async function upsertSkill(input: {
   replaceSkillCatalogInDatabase({
     skillPackages: nextCatalog.skillPackages,
     skills: nextCatalog.skills,
-    lifecycleWrites: [buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId)], // atomic revision (cinatra#1361)
+    lifecycleWrites: [buildUpsertRevisionWrite(skillRecord, isPersonal, input.ownerUserId, input.revisionSource)], // atomic revision (cinatra#1361; source threaded per cinatra#1367)
   });
 
   // Write SKILL.md to disk so the local path is available to the LLM shell tool.

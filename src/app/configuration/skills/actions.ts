@@ -12,7 +12,6 @@ import {
   readAgentSkillExclusions,
   readAgentSkillMatches,
   saveAgentSkillExclusions,
-  saveAgentSkillMatches,
   syncInstalledAgentsToDatabase,
   writeManualSkillMatchAdd,
   writeManualSkillMatchRemove,
@@ -174,7 +173,10 @@ export async function addAgentSkillMatchAction(formData: FormData) {
   }
 
   const [matchState, exclusionState, skills] = await Promise.all([
-    readAgentSkillMatches(),
+    // Fail-closed: this is the per-agent max-skills mutation guard. A transient
+    // upstream read must abort the add rather than count a false-empty set and
+    // let the canonical write push past the limit.
+    readAgentSkillMatches({ throwOnError: true }),
     readAgentSkillExclusions(),
     listInstalledSkills(),
   ]);
@@ -189,18 +191,6 @@ export async function addAgentSkillMatchAction(formData: FormData) {
     throw new Error("Each agent can have a maximum of 5 skills.");
   }
 
-  const nextMatches = [
-    ...withoutSkill,
-    {
-      id: `${agentId}:${skillId}`,
-      agentId,
-      skillId,
-      score: 100,
-      rationale: "Manually assigned.",
-    },
-  ].sort((left, right) => left.agentId.localeCompare(right.agentId) || right.score - left.score || left.skillId.localeCompare(right.skillId));
-
-  await saveAgentSkillMatches(nextMatches);
   await saveAgentSkillExclusions(
     exclusionState.exclusions.filter((entry) => !(entry.agentId === agentId && entry.skillId === skillId)),
   );
@@ -244,9 +234,7 @@ export async function removeAgentSkillMatchAction(formData: FormData) {
     throw new Error("Unable to remove that assignment.");
   }
 
-  const [matchState, exclusionState] = await Promise.all([readAgentSkillMatches(), readAgentSkillExclusions()]);
-  const nextMatches = matchState.matches.filter((entry) => !(entry.agentId === agentId && entry.skillId === skillId));
-  await saveAgentSkillMatches(nextMatches);
+  const exclusionState = await readAgentSkillExclusions();
   const exclusionId = `${agentId}:${skillId}`;
   await saveAgentSkillExclusions(
     [

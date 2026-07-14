@@ -315,6 +315,35 @@ describe("S8 additions — bulk tool lookup, servable listing, isSettled", () =>
   });
 });
 
+// cinatra#1392 object-type serve — the BULK object-type lister mirrors the bulk
+// tool lookup: fail-closed on the servability axes, [] is a valid serve, and the
+// POINT lookup keeps refusing an unregistered id.
+describe("object-type serve — bulk lister (resolveVersionKeyedObjectTypes)", () => {
+  it("is BULK: fail-closed on servability axes, [] a valid serve, registration order preserved", async () => {
+    const { resolveVersionKeyedObjectTypes } = await import("@/lib/extension-version-keyed-serving");
+    expect(resolveVersionKeyedObjectTypes(PKG, undefined)).toMatchObject({ kind: "refuse", code: "UNPINNED" });
+    expect(resolveVersionKeyedObjectTypes(PKG, V)).toMatchObject({ kind: "refuse", code: "UNKNOWN_VERSION" });
+    const empty = beginVersionKeyedRegistration(PKG, V);
+    expect(resolveVersionKeyedObjectTypes(PKG, V)).toMatchObject({ kind: "refuse", code: "NOT_SERVABLE" });
+    empty.commit();
+    // A servable version that registered NO object types serves its complete (empty) set.
+    expect(resolveVersionKeyedObjectTypes(PKG, V)).toEqual({ kind: "serve", value: [] });
+
+    const sink = beginVersionKeyedRegistration(PKG, "9.9.9");
+    sink.retainObjectType({ typeId: `${PKG}:alpha`, category: "data" });
+    sink.retainObjectType({ typeId: `${PKG}:beta` });
+    sink.commit();
+    const served = resolveVersionKeyedObjectTypes(PKG, "9.9.9");
+    if (served.kind !== "serve") throw new Error("expected serve");
+    expect(served.value.map((d) => d.typeId)).toEqual([`${PKG}:alpha`, `${PKG}:beta`]);
+    // POINT lookup still refuses an unregistered id (never an empty serve).
+    expect(resolveVersionKeyedObjectType(PKG, "9.9.9", `${PKG}:ghost`)).toMatchObject({
+      kind: "refuse",
+      code: "NO_SUCH_HANDLER",
+    });
+  });
+});
+
 // codex S8 round-1 #4 — a SUPERSEDED attempt's commit never reports committed.
 describe("isCommitted — ownership-guarded (round-1)", () => {
   it("a superseded attempt's commit is not committed (its entry never became servable)", () => {

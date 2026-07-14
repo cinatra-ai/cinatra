@@ -2,9 +2,10 @@ import "server-only";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { Validator } from "@cfworker/json-schema";
 import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import { objectTypeRegistry } from "../registry";
-import type { SemanticArtifactManifest } from "../types";
+import type { ArtifactObjectTypeClaim, SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources } from "../claims";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import {
@@ -39,6 +40,78 @@ import {
 // `@cinatra-ai/sdk-extensions/artifact-contract` (a leaf package outside the
 // objects↔extensions cycle, cinatra#979) instead of each keeping their own
 // literal.
+
+// Per-claim JSON-Schema → Zod validator (cinatra#1429, epic #1424). The generic
+// artifact umbrella (`${pkg}:artifact`) registered below carries a permissive
+// `z.record` schema, so the objects_save / objects_update activation gate is
+// INERT for a bridge-registered claimed type. Compile each manifest
+// `objectTypes` claim's INLINE JSON Schema into a real validator and register it
+// under the CLAIMED type id, so the gate's `resolve(type).schema.safeParse`
+// actually enforces the declared shape once the claim activates. A z.custom
+// wrapper delegates to a `@cfworker/json-schema` validator (a fast, standards
+// JSON-Schema validator already vendored in the monorepo). A malformed inline
+// schema compiles to null → the type is left unregistered here, so the
+// pre-activation gate (assertClaimActivatable) fail-closes and the claim cannot
+// activate — never a silently-permissive validator.
+function compileClaimValidator(jsonSchema: Record<string, unknown>): z.ZodType<unknown> | null {
+  let validator: Validator;
+  try {
+    validator = new Validator(jsonSchema as ConstructorParameters<typeof Validator>[0]);
+  } catch {
+    return null;
+  }
+  return z.custom<unknown>((data) => {
+    try {
+      return validator.validate(data).valid;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Register a per-claim VALIDATOR-ONLY object type for each inline-schema claim.
+// Deliberately WITHOUT `isArtifact` — `listArtifacts()` (the serving / library /
+// MCP surface) must stay one-generic-type-per-package; these entries exist so
+// the activation gate can `resolve()` a real schema, nothing more. Provenance is
+// threaded so the teardown hook (`removeByPackage`) reaps them on
+// archive/uninstall exactly like the umbrella. Claims with no inline schema are
+// self- or dependency-registered — their owning package registers the validator
+// (the bridge already fail-closed such claims via
+// validateObjectTypeClaimSchemaSources before reaching here).
+function registerClaimValidators(
+  claims: readonly ArtifactObjectTypeClaim[],
+  umbrellaType: string,
+  packageName: string,
+): void {
+  for (const claim of claims) {
+    if (!claim.schema) continue;
+    if (claim.type === umbrellaType) continue; // never clobber the umbrella
+    const schema = compileClaimValidator(claim.schema);
+    if (!schema) {
+      console.warn(
+        `[artifacts:bridge] ${packageName} claim '${claim.type}' has an uncompilable inline JSON Schema — per-claim validation skipped (the claim cannot activate)`,
+      );
+      continue;
+    }
+    objectTypeRegistry.register(
+      {
+        type: claim.type,
+        category: "report",
+        schema,
+        lifecycle: {
+          sources: ["agent", "user", "import"],
+          mutableBy: ["agent", "user"],
+        },
+        renderers: {
+          listRow: GenericObjectListRow,
+          card: GenericObjectCard,
+          detail: GenericObjectDetail,
+        },
+      },
+      packageName,
+    );
+  }
+}
 
 function registerOneArtifactDir(dir: string): boolean {
   const pkgPath = path.join(dir, "package.json");
@@ -129,6 +202,11 @@ function registerOneArtifactDir(dir: string): boolean {
     // they stay provenance-less and are NEVER reaped by `removeByPackage`.
     pkg.name,
   );
+  // Per-claim validators (cinatra#1429): make the activation gate enforce each
+  // claimed type's declared inline schema (the umbrella above is permissive).
+  if (descriptor.objectTypes && descriptor.objectTypes.length > 0) {
+    registerClaimValidators(descriptor.objectTypes, `${pkg.name}:artifact`, pkg.name);
+  }
   return true;
 }
 

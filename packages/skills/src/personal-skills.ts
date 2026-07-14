@@ -17,7 +17,7 @@ type SavedDraftUpdatePrompt = {
   savedAt: string;
 };
 import { getInstalledSkillById, listInstalledSkills } from "./skills-registry";
-import { getCustomSkillForAgent, listCustomSkills, listCustomSkillsForAgent, upsertCustomSkill, resolveCustomSkillOwner, getAgentOwnership } from "./skills-store";
+import { getCustomSkillForAgent, listCustomSkills, listCustomSkillsForAgent, upsertCustomSkill, upsertSkill, resolveCustomSkillOwner, getAgentOwnership } from "./skills-store";
 
 // Re-export the dev-bypass constant via the barrel form so static analysis
 // correctly classifies this file as having no production references to
@@ -448,3 +448,154 @@ export async function createOrUpdateCustomSkillForAgent(input: {
 
 /** @deprecated Use createOrUpdateCustomSkillForAgent instead. */
 export const createOrUpdatePersonalSkillForAgent = createOrUpdateCustomSkillForAgent;
+
+// ---------------------------------------------------------------------------
+// Chat capture (cinatra#1367) — the CHAT-SHAPED distillation entry.
+//
+// The run-autosave entry above is run-specific: it requires an INSTALLED
+// agentId and at least one matched base skill (it throws otherwise). Chat has
+// neither today — the Cinatra assistant is not an agent_templates row until
+// the #1037 P1 bootstrap lands — so chat capture distills into ONE standalone
+// per-user personal skill: no installed-agent requirement, no matched-skills
+// requirement (this is the issue's graceful no-matched-skills path applied to
+// the whole chat target). When #1037 lands the target mapping, the
+// (user, agent)-scoped delta arm composes on top; this standalone skill stays
+// valid as the assistant-agnostic layer.
+//
+// Uniqueness contract: the skill id is DETERMINISTIC per user (hash-based —
+// slugified user ids can collide across distinct raw ids), so "creation
+// happens at most once per (user, target)" holds structurally: every capture
+// upserts the same id, amending in place. Callers serialize concurrent
+// captures per user (the pipeline's per-user lock); a duplicate would require
+// two writers to mint DIFFERENT ids for one user, which the deterministic id
+// makes impossible.
+// ---------------------------------------------------------------------------
+
+const CHAT_CAPTURE_SKILL_NAME = "Chat capture — personal instructions";
+
+/** Deterministic per-user chat-capture skill id. */
+export function buildChatCaptureSkillId(ownerUserId: string): string {
+  // Lazy import keeps node:crypto out of any client bundle that pulls the
+  // barrel (this module is server-side, but stay conservative).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createHash } = require("node:crypto") as typeof import("node:crypto");
+  const hash = createHash("sha256").update(ownerUserId).digest("hex").slice(0, 12);
+  return `custom:personal-skills:chat-capture-${hash}`;
+}
+
+/**
+ * Distill a captured durable instruction into the owner's standalone
+ * chat-capture personal skill (create on first capture, amend in place after).
+ *
+ * `instruction` MUST already be redacted by the caller — this function
+ * forwards it into an LLM prompt and persists the result (the #1367 redaction
+ * guarantee covers classifier AND distiller inputs).
+ */
+export async function createOrUpdateChatCaptureSkill(input: {
+  ownerUserId: string;
+  /** Redacted, classifier-restated durable instruction. */
+  instruction: string;
+  /** Recorded in the skill body's provenance line — thread/turn traceability
+   * additional to the skill_revisions row + the chat_capture_turns ledger. */
+  provenance: { threadId: string; turnId: string };
+}) {
+  const ownerUserId = String(input.ownerUserId ?? "").trim();
+  if (!ownerUserId) {
+    throw new Error("createOrUpdateChatCaptureSkill: ownerUserId is required.");
+  }
+  const instruction = String(input.instruction ?? "").trim();
+  if (!instruction) {
+    throw new Error("createOrUpdateChatCaptureSkill: instruction is required.");
+  }
+
+  const skillId = buildChatCaptureSkillId(ownerUserId);
+  const existingSkills = await listCustomSkills(ownerUserId);
+  const existing = existingSkills.find((skill) => skill.id === skillId) ?? null;
+  // Owner guard (defense-in-depth — the id embeds the owner hash, but a
+  // catalog row is authoritative): never amend a row owned by someone else.
+  if (existing && existing.ownerUserId && existing.ownerUserId !== ownerUserId) {
+    throw new Error(
+      `createOrUpdateChatCaptureSkill: skill ${skillId} is not owned by ${ownerUserId}.`,
+    );
+  }
+
+  const outputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["description", "content"],
+    properties: {
+      description: { type: "string" },
+      content: { type: "string" },
+    },
+  } as const;
+
+  const system = [
+    "You maintain a personal SKILL.md capturing a user's durable instructions to their AI assistant.",
+    "You receive the CURRENT skill (possibly none) and ONE new durable instruction.",
+    "Merge the instruction into the skill: add it, or amend/replace an existing entry it supersedes or contradicts (newest instruction wins).",
+    "Keep the skill concise and deduplicated — one bullet per durable rule, grouped under ## Preferences / ## Rules / ## Corrections as appropriate.",
+    "Preserve [REDACTED] placeholders verbatim; never invent redacted content.",
+    "The content field must be the full SKILL.md text: YAML frontmatter (identifier, display_name, description, keywords) followed by the markdown body.",
+    "Return only valid JSON matching the schema.",
+  ].join("\n");
+  const user = [
+    existing?.content
+      ? ["Current skill content:", existing.content].join("\n")
+      : "There is no existing skill yet — create it.",
+    "",
+    "New durable instruction to merge:",
+    instruction,
+    "",
+    `Provenance (record under a final "## Provenance" section as a bullet, appending to any existing bullets): captured from chat thread ${input.provenance.threadId}, turn ${input.provenance.turnId}.`,
+  ].join("\n");
+
+  const runtime = await resolveConfiguredLlmRuntime();
+  if (!runtime) {
+    throw new Error("No LLM provider configured for chat-capture distillation.");
+  }
+
+  const runRequest = async (attempt: 1 | 2) =>
+    runResolvedDeterministicLlmTask({
+      runtime,
+      system:
+        attempt === 1
+          ? system
+          : [
+              system,
+              "Your first response did not contain a usable SKILL.md definition.",
+              "On this retry, ensure content is the complete SKILL.md string with frontmatter and markdown body.",
+            ].join("\n\n"),
+      user,
+      outputSchema,
+      maxOutputTokens: attempt === 1 ? 3000 : 4000,
+      reasoningEffort: "low",
+      logLabel: `chat-capture-distill${attempt === 1 ? "" : "-retry"}`,
+    });
+
+  let response = await runRequest(1);
+  let parsed = extractPersonalSkillResponse(response?.text) ?? extractPersonalSkillResponse(response?.rawBody);
+  if (!String(parsed?.content ?? "").trim()) {
+    response = await runRequest(2);
+    parsed = extractPersonalSkillResponse(response?.text) ?? extractPersonalSkillResponse(response?.rawBody);
+  }
+  const content = String(parsed?.content ?? "").trim();
+  if (!content) {
+    throw new Error("The LLM provider did not return a chat-capture skill definition.");
+  }
+
+  const description =
+    String(parsed?.description ?? "").trim() ||
+    existing?.description ||
+    "Durable personal instructions captured from chat conversations.";
+
+  return upsertSkill({
+    type: "personal",
+    packageName: "Custom Skills",
+    skillId,
+    ownerUserId,
+    name: existing?.name ?? CHAT_CAPTURE_SKILL_NAME,
+    description,
+    content: syncSkillContentName(content, existing?.name ?? CHAT_CAPTURE_SKILL_NAME),
+    revisionSource: "chat-capture",
+  });
+}

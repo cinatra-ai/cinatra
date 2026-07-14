@@ -14,11 +14,7 @@ import { uninstallSkillPackage } from "./skills-store";
 import { rebuildSkillsCatalog } from "./skill-packages";
 import { resolveSkillPackageSource } from "./skill-package-source";
 import { listInstalledSkills, type SkillManifest } from "./skills-registry";
-import {
-  matchAgentsToSkills,
-  readAgentSkillMatches,
-  saveAgentSkillMatches,
-} from "@/lib/agents-store";
+import { matchAgentsToSkills } from "@/lib/agents-store";
 
 // Row-level visibility for a single skill descriptor against the actor's
 // resolved discovery scope. This is the per-row authority the reader facet
@@ -165,14 +161,12 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
       const source = resolveSkillPackageSource(ref);
       await uninstallSkillPackage(source.packageId);
       // Explicit lifecycle rebuild (cinatra#1364): reconcile the catalog after
-      // the uninstall's disk + row removal.
+      // the uninstall's disk + row removal. The Matches tab / registry read the
+      // canonical `skill_matches` projection through `readAgentSkillMatches()`,
+      // whose defensive filter drops rows for skills no longer in the rebuilt
+      // catalog — so the uninstalled package's matches disappear with no extra
+      // match-store reconcile pass here.
       await rebuildSkillsCatalog({ reason: "skill-extension-uninstall" });
-      const { matches } = await readAgentSkillMatches();
-      // trailing colon prevents partial-name collision (e.g. github:owner/repo vs github:owner/repo-fork)
-      const filtered = matches.filter(
-        (m) => !m.skillId.startsWith(`${source.packageId}:`)
-      );
-      await saveAgentSkillMatches(filtered);
     },
 
     // The per-kind skill_packages.extension_lifecycle_status column is dropped;

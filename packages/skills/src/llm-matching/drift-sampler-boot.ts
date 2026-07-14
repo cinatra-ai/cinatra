@@ -143,62 +143,11 @@ export async function unregisterSkillMatchMaintenance(): Promise<void> {
  * size-ratcheted module unchanged. Each registration is independently
  * try/caught so one failure never blocks the others.
  */
-// ---------------------------------------------------------------------------
-// Agent/skill-match parity observation boot (cinatra #1366 / S8). Env-gated
-// (SKILL_MATCH_PARITY_CRON). The scheduler registration is colocated here with
-// the sibling match-store boots so the host boot module needs no new call site;
-// the parity HANDLER itself is host-side (src/lib/agents-store.ts).
-// ---------------------------------------------------------------------------
-
-const AGENT_SKILL_MATCH_PARITY_SCHEDULER_ID = "agent-skill-match-parity-observe" as const;
-const SKILL_MATCH_PARITY_CRON_ENV = "SKILL_MATCH_PARITY_CRON" as const;
-
-/** Read + validate the parity cron env (opt-in gate). Exported for unit tests. */
-export function resolveParityCron(
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  const raw = (env[SKILL_MATCH_PARITY_CRON_ENV] ?? "").trim();
-  if (raw.length === 0) return null;
-  if (!isValidCronExpression(raw)) {
-    console.warn(
-      `[background-jobs] ${SKILL_MATCH_PARITY_CRON_ENV}="${raw}" is not a valid 5- or 6-field cron pattern — parity observation disabled.`,
-    );
-    return null;
-  }
-  return raw;
-}
-
-export async function registerAgentSkillMatchParityAtBoot(): Promise<void> {
-  const pattern = resolveParityCron();
-  const runtime = await ensureBackgroundJobRuntime();
-  if (pattern === null) {
-    await runtime.queue.removeJobScheduler(AGENT_SKILL_MATCH_PARITY_SCHEDULER_ID).catch(() => {});
-    return;
-  }
-  await runtime.queue.upsertJobScheduler(
-    AGENT_SKILL_MATCH_PARITY_SCHEDULER_ID,
-    { pattern, tz: "UTC" },
-    {
-      name: BACKGROUND_JOB_NAMES.SKILL_MATCH_PARITY_OBSERVE,
-      data: { invokedBy: "scheduler" },
-      opts: { attempts: 1, backoff: { type: "exponential", delay: 5_000 } },
-    },
-  );
-}
-
-export async function unregisterAgentSkillMatchParity(): Promise<void> {
-  const runtime = await ensureBackgroundJobRuntime();
-  await runtime.queue.removeJobScheduler(AGENT_SKILL_MATCH_PARITY_SCHEDULER_ID).catch(() => {});
-}
-
 export async function registerSkillMatchSchedulersAtBoot(): Promise<void> {
   await registerSkillMatchDriftSamplerAtBoot().catch((err) =>
     console.warn("[background-jobs] skill-match drift sampler registration failed:", err),
   );
   await registerSkillMatchMaintenanceAtBoot().catch((err) =>
     console.warn("[background-jobs] skill-match maintenance registration failed:", err),
-  );
-  await registerAgentSkillMatchParityAtBoot().catch((err) =>
-    console.warn("[background-jobs] agent/skill-match parity registration failed:", err),
   );
 }

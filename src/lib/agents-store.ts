@@ -3,15 +3,11 @@ import path from "path";
 import {
   readAgentCatalogFromDatabase,
   readAgentSkillExclusionsFromDatabase,
-  readAgentSkillMatchesFromDatabase,
-  readConnectorConfigFromDatabase,
   readCustomSkillAssignmentsForAgent,
   readSkillLifecycleStates,
   readSystemGlobalSkillIdsForAgent,
   replaceAgentCatalogInDatabase,
   replaceAgentSkillExclusionsInDatabase,
-  replaceAgentSkillMatchesInDatabase,
-  writeConnectorConfigToDatabase,
 } from "@/lib/database";
 
 // Actor filter shape used by the read-path union below.
@@ -342,26 +338,6 @@ function normalizeStoredAgent(record: Record<string, unknown>): PersistedAgent |
     content: record.content,
     sourcePath: record.sourcePath,
     keywords: Array.isArray(record.keywords) ? record.keywords.filter((entry): entry is string => typeof entry === "string") : [],
-  };
-}
-
-function normalizeStoredMatch(record: Record<string, unknown>): AgentSkillMatch | null {
-  if (
-    typeof record.id !== "string" ||
-    typeof record.agentId !== "string" ||
-    typeof record.skillId !== "string" ||
-    typeof record.score !== "number" ||
-    typeof record.rationale !== "string"
-  ) {
-    return null;
-  }
-
-  return {
-    id: record.id,
-    agentId: record.agentId,
-    skillId: record.skillId,
-    score: record.score,
-    rationale: record.rationale,
   };
 }
 
@@ -745,13 +721,12 @@ export async function readAgentsForSkillMatching(
 }
 
 /**
- * Project canonical `skill_matches` rows into the legacy `AgentSkillMatch`
- * compatibility shape. Pure — no reads, no writes — so both
- * `matchAgentsToSkills()` (which mirror-writes the projection into the
- * `agent_skill_matches` connector-config key) and the observed-parity job
- * (#1366, read-only) derive the projection from EXACTLY the same logic:
- * the same defensive filter (drop rows whose agent or skill left the catalog),
- * the same packageId→slug remap, and the same 0.000-1.000 → 0-100 score scale.
+ * Project canonical `skill_matches` rows into the `AgentSkillMatch`
+ * compatibility shape. Pure — no reads, no writes — and the single source of
+ * the projection for both `matchAgentsToSkills()` and the compatibility reader
+ * `readAgentSkillMatches()`: the same defensive filter (drop rows whose agent
+ * or skill left the catalog), the same packageId→slug remap, and the same
+ * 0.000-1.000 → 0-100 score scale.
  */
 export function projectMatchedRowsToAgentSkillMatches(
   agents: ReadonlyArray<{ packageId: string; id: string }>,
@@ -801,16 +776,9 @@ export async function matchAgentsToSkills() {
   // Workspace-package scans and draft templates are
   // excluded via `readAgentsForSkillMatching()`. Orphan rows whose agent_id is
   // not in the live catalog are dropped by the defensive filter below.
-  // The matcher write path must fail closed on any upstream read error.
-  // Returning [] from either the
-  // agents reader OR the skill_matches reader would cause
-  // replaceAgentSkillMatchesInDatabase() at the end of this function to
-  // clobber the compatibility projection (admin Matches tab + readAgentSkillMatches
-  // consumers) with derived-self-only or empty data. The canonical
-  // skill_matches table is unaffected, but the user-visible projection is
-  // clobbered until the next successful refresh — which would be confusing.
-  // Both reads now throw; the matcher caller (cron + admin-triggered job)
-  // must surface the error rather than persist a misleading snapshot.
+  // The matcher path fails closed on any upstream read error so a false-empty
+  // read does not surface a derived-self-only or empty projection to callers;
+  // both reads throw and the caller (cron + admin-triggered job) surfaces it.
   const [agents, skillCatalog, matchedRows] = await Promise.all([
     readAgentsForSkillMatching({ throwOnError: true }),
     readSkillsCatalog(),
@@ -831,7 +799,7 @@ export async function matchAgentsToSkills() {
   // behavior is unchanged — only the user-facing projection is affected.
 
   // Project skill_matches rows into the compatibility AgentSkillMatch shape via
-  // the shared pure projector (also used read-only by the #1366 parity job).
+  // the shared pure projector.
   const { matches, mostRecentEvaluatedAt } = projectMatchedRowsToAgentSkillMatches(
     allAgents,
     liveSkillIds,
@@ -842,36 +810,47 @@ export async function matchAgentsToSkills() {
     ? mostRecentEvaluatedAt.toISOString()
     : new Date().toISOString();
 
-  // Mirror into the compatibility in-memory store so callers that still read
-  // through `readAgentSkillMatches()` see the canonical projection.
-  replaceAgentSkillMatchesInDatabase({
-    matches,
-    matchedAt,
-  });
-
   return { matches, matchedAt };
 }
 
-export async function readAgentSkillMatches() {
-  const stored = readAgentSkillMatchesFromDatabase();
-  return {
-    matches: Array.isArray(stored.matches)
-      ? stored.matches.map((entry) => normalizeStoredMatch(entry)).filter((entry): entry is AgentSkillMatch => entry !== null)
-      : [],
-    matchedAt: typeof stored.matchedAt === "string" ? stored.matchedAt : "",
-  };
-}
-
-export async function saveAgentSkillMatches(matches: AgentSkillMatch[]) {
-  replaceAgentSkillMatchesInDatabase({
-    matches,
-    matchedAt: new Date().toISOString(),
-  });
-
-  return {
-    matches,
-    matchedAt: new Date().toISOString(),
-  };
+/**
+ * Compatibility reader used by the admin Matches tab and the skills registry.
+ * Serves the SAME AgentSkillMatch projection as `matchAgentsToSkills()` — read
+ * straight from the canonical `skill_matches` table via the shared pure
+ * projector — with no separate backing store.
+ *
+ * Default is fail-OPEN: ANY upstream read error (agent discovery, skills
+ * catalog, or skill_matches) yields an empty projection rather than crashing a
+ * read-only surface, matching the old KV reader's non-throwing contract.
+ *
+ * A mutation guard (e.g. the per-agent max-skills check in
+ * `addAgentSkillMatchAction`) MUST pass `{ throwOnError: true }` so a transient
+ * read failure aborts the mutation instead of counting a false-empty set and
+ * writing past the limit.
+ */
+export async function readAgentSkillMatches(
+  options: { throwOnError?: boolean } = {},
+): Promise<{ matches: AgentSkillMatch[]; matchedAt: string }> {
+  try {
+    const [agents, skillCatalog, matchedRows] = await Promise.all([
+      readAgentsForSkillMatching(options),
+      readSkillsCatalog(),
+      skillMatchesStore.readAllMatched(),
+    ]);
+    const liveSkillIds = new Set(skillCatalog.skills.map((s) => s.id));
+    const { matches, mostRecentEvaluatedAt } = projectMatchedRowsToAgentSkillMatches(
+      agents,
+      liveSkillIds,
+      matchedRows,
+    );
+    return {
+      matches,
+      matchedAt: mostRecentEvaluatedAt ? mostRecentEvaluatedAt.toISOString() : "",
+    };
+  } catch (err) {
+    if (options.throwOnError) throw err;
+    return { matches: [], matchedAt: "" };
+  }
 }
 
 export async function readAgentSkillExclusions() {
@@ -1250,247 +1229,4 @@ export async function getAssignedSkillIdsForAgent(
   // /archived/unknown-state skills are withheld from EVERY tier (fail-closed);
   // derived (NULL) and active/deprecated skills pass.
   return filterToRuntimeDeliverableSkillIds(result);
-}
-
-// ===========================================================================
-// Observed-parity instrumentation for the dual match store (cinatra #1366 / S8)
-// — the OBSERVATION half only. Colocated here (rather than a new module) so it
-// derives the canonical projection from the same projectMatchedRowsToAgentSkillMatches
-// above and adds no new route-reachable module. It records a report + emits
-// divergence telemetry; it NEVER retires, deletes, or removes a dual-write.
-// ===========================================================================
-
-const PARITY_REPORT_KEY = "agent_skill_match_parity_report";
-
-/** Bound the persisted sample so the report blob stays small. */
-const PARITY_SAMPLE_CAP = 50;
-
-const PAIR_SEP = String.fromCharCode(0);
-function pairKey(agentId: string, skillId: string): string {
-  return `${agentId}${PAIR_SEP}${skillId}`;
-}
-
-export type ParityDiffKind = "missing_in_legacy" | "extra_in_legacy" | "score_mismatch";
-
-export type ParityDiff = {
-  agentId: string;
-  skillId: string;
-  kind: ParityDiffKind;
-  canonicalScore: number | null;
-  legacyScore: number | null;
-};
-
-export type ParityDiffSummary = {
-  canonicalCount: number;
-  legacyCount: number;
-  /** Pairs present in canonical but absent from the legacy snapshot. */
-  missingInLegacy: number;
-  /** Pairs present in the legacy snapshot but absent from canonical. */
-  extraInLegacy: number;
-  /** Pairs present in both whose projected score differs. */
-  scoreMismatch: number;
-  totalDiffs: number;
-  /** Capped sample of concrete diffs for the operator surface. */
-  sampleDiffs: ParityDiff[];
-};
-
-export type ParityReport = ParityDiffSummary & {
-  ranAt: string;
-  /**
-   * Distinct UTC calendar dates (YYYY-MM-DD) observed zero-diff since the last
-   * non-zero run. Tracking DATES (not run counts) makes the close condition
-   * "7 consecutive days" independent of how often the cron fires.
-   */
-  zeroDiffDates: string[];
-  /** Longest consecutive-day run of zero-diff dates ending at the latest one. */
-  consecutiveZeroDiffDays: number;
-  /** ISO timestamp of the last run that observed any divergence, else null. */
-  lastNonZeroAt: string | null;
-};
-
-/**
- * Pure diff. Structured (agentId, skillId) keying — a rename intentionally
- * surfaces as a missing+extra pair, which is a real divergence to observe.
- */
-export function buildParityDiff(
-  canonical: ReadonlyArray<AgentSkillMatch>,
-  legacy: ReadonlyArray<AgentSkillMatch>,
-): ParityDiffSummary {
-  const canonicalByKey = new Map(canonical.map((m) => [pairKey(m.agentId, m.skillId), m]));
-  const legacyByKey = new Map(legacy.map((m) => [pairKey(m.agentId, m.skillId), m]));
-
-  let missingInLegacy = 0;
-  let extraInLegacy = 0;
-  let scoreMismatch = 0;
-  const sampleDiffs: ParityDiff[] = [];
-  const pushSample = (d: ParityDiff) => {
-    if (sampleDiffs.length < PARITY_SAMPLE_CAP) sampleDiffs.push(d);
-  };
-
-  for (const [key, c] of canonicalByKey) {
-    const l = legacyByKey.get(key);
-    if (!l) {
-      missingInLegacy += 1;
-      pushSample({ agentId: c.agentId, skillId: c.skillId, kind: "missing_in_legacy", canonicalScore: c.score, legacyScore: null });
-      continue;
-    }
-    if (c.score !== l.score) {
-      scoreMismatch += 1;
-      pushSample({ agentId: c.agentId, skillId: c.skillId, kind: "score_mismatch", canonicalScore: c.score, legacyScore: l.score });
-    }
-  }
-  for (const [key, l] of legacyByKey) {
-    if (!canonicalByKey.has(key)) {
-      extraInLegacy += 1;
-      pushSample({ agentId: l.agentId, skillId: l.skillId, kind: "extra_in_legacy", canonicalScore: null, legacyScore: l.score });
-    }
-  }
-
-  const totalDiffs = missingInLegacy + extraInLegacy + scoreMismatch;
-  return {
-    canonicalCount: canonical.length,
-    legacyCount: legacy.length,
-    missingInLegacy,
-    extraInLegacy,
-    scoreMismatch,
-    totalDiffs,
-    sampleDiffs,
-  };
-}
-
-function utcDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** Longest consecutive-day run ending at the latest date in a sorted set. */
-function consecutiveDaysEndingAtLatest(sortedDates: string[]): number {
-  if (sortedDates.length === 0) return 0;
-  const DAY_MS = 86_400_000;
-  let run = 1;
-  for (let i = sortedDates.length - 1; i > 0; i -= 1) {
-    const cur = Date.parse(`${sortedDates[i]}T00:00:00Z`);
-    const prev = Date.parse(`${sortedDates[i - 1]}T00:00:00Z`);
-    if (cur - prev === DAY_MS) run += 1;
-    else break;
-  }
-  return run;
-}
-
-/**
- * Pure streak reducer. A zero-diff run adds today's UTC date to the set (dedup)
- * and recomputes the consecutive-day streak; any divergence clears the set and
- * stamps `lastNonZeroAt`.
- */
-export function computeZeroDiffStreak(
-  prior: { zeroDiffDates: string[]; lastNonZeroAt: string | null },
-  totalDiffs: number,
-  now: Date,
-): { zeroDiffDates: string[]; consecutiveZeroDiffDays: number; lastNonZeroAt: string | null } {
-  if (totalDiffs > 0) {
-    return { zeroDiffDates: [], consecutiveZeroDiffDays: 0, lastNonZeroAt: now.toISOString() };
-  }
-  const set = new Set(prior.zeroDiffDates);
-  set.add(utcDate(now));
-  const zeroDiffDates = [...set].sort();
-  return {
-    zeroDiffDates,
-    consecutiveZeroDiffDays: consecutiveDaysEndingAtLatest(zeroDiffDates),
-    lastNonZeroAt: prior.lastNonZeroAt,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Persistence (connector_config KV — no migration)
-// ---------------------------------------------------------------------------
-
-export function readParityReport(): ParityReport | null {
-  return readConnectorConfigFromDatabase<{ report: ParityReport | null }>(PARITY_REPORT_KEY, {
-    report: null,
-  }).report;
-}
-
-function writeParityReport(report: ParityReport): void {
-  writeConnectorConfigToDatabase(PARITY_REPORT_KEY, { report });
-}
-
-// ---------------------------------------------------------------------------
-// Job runner
-// ---------------------------------------------------------------------------
-
-export type ParityObservationDeps = {
-  /** Fresh canonical projection (read-only; never mirror-written). */
-  loadCanonical?: () => Promise<AgentSkillMatch[]>;
-  /** The persisted legacy snapshot. */
-  loadLegacy?: () => Promise<AgentSkillMatch[]>;
-  readReport?: () => ParityReport | null;
-  writeReport?: (report: ParityReport) => void;
-  now?: () => Date;
-};
-
-/**
- * Compute the FRESH canonical projection from the same inputs
- * `matchAgentsToSkills()` uses — WITHOUT the mirror write. Fail closed: a
- * false-empty read would report the whole legacy store as divergent, so the
- * agents reader throws on error.
- */
-async function defaultLoadCanonical(): Promise<AgentSkillMatch[]> {
-  const [agents, skillCatalog, matchedRows] = await Promise.all([
-    readAgentsForSkillMatching({ throwOnError: true }),
-    readSkillsCatalog(),
-    skillMatchesStore.readAllMatched(),
-  ]);
-  const liveSkillIds = new Set(skillCatalog.skills.map((s) => s.id));
-  return projectMatchedRowsToAgentSkillMatches(agents, liveSkillIds, matchedRows).matches;
-}
-
-async function defaultLoadLegacy(): Promise<AgentSkillMatch[]> {
-  return (await readAgentSkillMatches()).matches;
-}
-
-/**
- * Run one parity observation: compute the fresh canonical projection, read the
- * legacy snapshot, diff them, update the zero-diff-day streak, persist the
- * report, and emit divergence telemetry. Returns the report. Observation only —
- * never retires or deletes anything.
- */
-export async function runAgentSkillMatchParityObservation(
-  deps: ParityObservationDeps = {},
-): Promise<ParityReport> {
-  const now = deps.now ?? (() => new Date());
-  const loadCanonical = deps.loadCanonical ?? defaultLoadCanonical;
-  const loadLegacy = deps.loadLegacy ?? defaultLoadLegacy;
-  const readReport = deps.readReport ?? readParityReport;
-  const writeReport = deps.writeReport ?? writeParityReport;
-
-  const [canonical, legacy] = await Promise.all([loadCanonical(), loadLegacy()]);
-  const summary = buildParityDiff(canonical, legacy);
-  const nowDate = now();
-  const prior = readReport();
-  const streak = computeZeroDiffStreak(
-    { zeroDiffDates: prior?.zeroDiffDates ?? [], lastNonZeroAt: prior?.lastNonZeroAt ?? null },
-    summary.totalDiffs,
-    nowDate,
-  );
-
-  const report: ParityReport = { ...summary, ranAt: nowDate.toISOString(), ...streak };
-  writeReport(report);
-
-  // Divergence telemetry — mirrors the maintenance / drift structured log
-  // events so parity rides the same log-scrape pipeline. warn on divergence,
-  // info on a clean run (so progress toward the close condition is visible).
-  const payload = JSON.stringify({
-    event: "agent-skill-match-parity",
-    ranAt: report.ranAt,
-    canonicalCount: report.canonicalCount,
-    legacyCount: report.legacyCount,
-    missingInLegacy: report.missingInLegacy,
-    extraInLegacy: report.extraInLegacy,
-    scoreMismatch: report.scoreMismatch,
-    totalDiffs: report.totalDiffs,
-    consecutiveZeroDiffDays: report.consecutiveZeroDiffDays,
-  });
-  if (report.totalDiffs > 0) console.warn(payload);
-  else console.info(payload);
-
-  return report;
 }

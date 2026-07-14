@@ -61,11 +61,15 @@ export const BACKGROUND_JOB_NAMES = {
   // var (no schedule-row column, so no migration); the boot hook is a no-op
   // until the operator sets it.
   SKILL_MATCH_MAINTENANCE_TICK: "skill-match-maintenance-tick",
-  // Agent/skill-match parity observation (cinatra #1366): compares the canonical
-  // skill_matches projection against the legacy agent_skill_matches snapshot and
-  // records an operator-visible parity report + divergence telemetry.
-  // Observation only — no retirement. Opt-in via SKILL_MATCH_PARITY_CRON.
-  SKILL_MATCH_PARITY_OBSERVE: "skill-match-parity-observe",
+  // Chat-capture detection (cinatra #1367): one job per persisted chat USER
+  // turn, enqueued fire-and-forget from the thread-persistence chokepoint
+  // (upsertChatThreadInDatabase) with a deterministic per-(thread, turn)
+  // jobId. The handler runs the two-stage detection pipeline (lexical
+  // pre-filter → redaction → LLM classifier → distillation into the owner's
+  // standalone chat-capture personal skill), idempotent + provenance-recorded
+  // via the chat_capture_turns ledger. One-shot per enqueue (retries via the
+  // enqueue-site attempts/backoff), NOT self-rescheduling.
+  CHAT_CAPTURE_DETECTION: "chat-capture-detection",
   // Production scheduler for the provider-file ref-cache eviction sweep.
   // Iterates (orgId, provider) pairs and drives `evictExpiredProviderFiles`
   // so the cache (`artifact_provider_cache`) does not accumulate expired rows

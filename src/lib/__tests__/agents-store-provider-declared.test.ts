@@ -480,8 +480,8 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     warn.mockRestore();
 
     // throwOnError must surface the parse failure to the matcher write path
-    // so the legacy `agent_skill_matches` projection cannot be clobbered
-    // with a partial / misleading snapshot on a transient corruption.
+    // (`matchAgentsToSkills`, fail-closed) so a transient corruption cannot
+    // yield a partial / misleading canonical projection to callers.
     expect(() => readProviderDeclaredAgents({ throwOnError: true })).toThrow(
       /failed to parse OAS source at .*broken-agent/,
     );
