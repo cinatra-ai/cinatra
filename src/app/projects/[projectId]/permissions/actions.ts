@@ -21,6 +21,7 @@ import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import {
   betterAuthDb,
   betterAuthMembers,
+  betterAuthOrganizations,
   betterAuthUsers,
 } from "@/lib/better-auth-db";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
@@ -44,10 +45,12 @@ import {
   handlers as projectsHandlers,
 } from "@cinatra-ai/projects";
 import {
+  listTeamsForOrg,
   readProjectGrantsForUser,
   readTeamsForUser,
 } from "@/lib/better-auth-db";
 import { resolveOrgRoleForSession } from "@/lib/auth-session";
+import { toIlikePattern } from "./grant-candidates";
 import type {
   ProjectGrant,
   ProjectRole,
@@ -456,6 +459,206 @@ export async function listProjectAccessAction(
       mode: "deterministic",
     })) as { items: ProjectAccessRow[] };
     return { ok: true, items: result.items };
+  } catch (err) {
+    if (err instanceof AuthzError) return { ok: false, error: err.reason };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "unknown_error",
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Grant-candidate actions for the ProjectAccessSection pickers
+// (cinatra#1505 / #1509 §4.2).
+//
+// Candidates are NEVER derived from the viewer's own memberships
+// (`availableScopes` — the codex F6 trap: a project admin who is not in a
+// team could never grant to it). Instead every candidate action is
+//   - gated on the SAME authority as `grantProjectAccessAction` (project
+//     admin/owner via projectGrants, or platform admin — the
+//     `assertProjectAdmin` precedent in customers/actions.ts), and
+//   - bounded by the PROJECT's `organizationId`, never the viewer's org
+//     memberships.
+// The pickers these feed are affordances only — final authority stays
+// server-side in `grantProjectAccessAction` (project_access_grant handler).
+// ---------------------------------------------------------------------------
+
+/**
+ * Authority gate for the grant-candidate reads: project admin/owner
+ * (effectiveRole via projectGrants) or platform admin — the same authority
+ * `project_access_grant` enforces, resolved the same way `buildProjectActor`
+ * stamps it. Throws AuthzError("forbidden") otherwise.
+ *
+ * Fails closed WITHOUT an existence oracle: a missing project and missing
+ * authority raise the identical error, so probing ids reveals nothing.
+ */
+async function assertProjectGrantAuthority(projectId: string): Promise<{
+  project: NonNullable<Awaited<ReturnType<typeof readProjectById>>>;
+}> {
+  const forbidden = () =>
+    new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message: "Project admin required.",
+    });
+
+  const session = await requireAuthSession();
+  const userId = session.user.id;
+
+  const project = projectId ? await readProjectById(projectId) : null;
+  if (!project) throw forbidden();
+
+  // Platform admin is an INDEPENDENT authority (buildProjectActor stamps
+  // `platformRole` for the grant handler with or without an active org), so
+  // it is checked before the active-org requirement — the org is only needed
+  // to resolve the projectGrants branch below (codex 1505-r1 High).
+  if (isPlatformAdmin(session)) return { project };
+
+  const orgId =
+    (session.session as { activeOrganizationId?: string | null } | undefined)
+      ?.activeOrganizationId ?? null;
+  if (!orgId) throw forbidden();
+
+  const teamRows = await readTeamsForUser(userId, orgId).catch(() => []);
+  const orgRole = await resolveOrgRoleForSession(session).catch(() => null);
+  const grants = await readProjectGrantsForUser(userId, orgId, {
+    teamIds: teamRows.map((t) => t.id),
+    ...(orgRole ? { orgRole } : {}),
+  }).catch(() => []);
+  const here = grants.find((g) => g.projectId === projectId);
+  if (!here || (here.effectiveRole !== "admin" && here.effectiveRole !== "owner")) {
+    throw forbidden();
+  }
+  return { project };
+}
+
+export type GrantUserCandidate = {
+  id: string;
+  name: string;
+  email: string;
+  image: string | null;
+};
+
+/**
+ * User candidates for a project access grant. Clone-basis:
+ * `searchWorkspaceUsersForProject` (org-boundary join, ILIKE escaping,
+ * limit 20) with two deliberate differences (§4.2):
+ *   - NO owner/co-owner/self exclusion — they are legitimate grant
+ *     principals; already-granted principals (which include the implicit
+ *     owner row) are excluded client-side from `projectAccessRows`;
+ *   - the boundary is the PROJECT's `organizationId`, not the caller's
+ *     active org.
+ * An org-less project has no boundary to search within — fail closed to an
+ * empty candidate list (the manual-ID escape hatch remains available).
+ */
+export async function searchProjectGrantUserCandidates(
+  projectId: string,
+  query: string,
+): Promise<{ ok: true; results: GrantUserCandidate[] } | { ok: false; error: string }> {
+  try {
+    const { project } = await assertProjectGrantAuthority(projectId);
+    const boundaryOrgId = project.organizationId ?? null;
+    if (!boundaryOrgId) return { ok: true, results: [] };
+
+    const like = toIlikePattern(query);
+    const rows = await betterAuthDb
+      .select({
+        id: betterAuthUsers.id,
+        name: betterAuthUsers.name,
+        email: betterAuthUsers.email,
+        image: betterAuthUsers.image,
+      })
+      .from(betterAuthUsers)
+      .innerJoin(
+        betterAuthMembers,
+        and(
+          eq(betterAuthMembers.userId, betterAuthUsers.id),
+          eq(betterAuthMembers.organizationId, boundaryOrgId),
+        ),
+      )
+      .where(
+        like !== null
+          ? or(ilike(betterAuthUsers.name, like), ilike(betterAuthUsers.email, like))
+          : undefined,
+      )
+      .orderBy(betterAuthUsers.name)
+      .limit(20);
+
+    return {
+      ok: true,
+      results: rows.map((r) => ({
+        id: r.id,
+        name: r.name ?? r.email ?? "Unknown",
+        email: r.email ?? "",
+        image: r.image ?? null,
+      })),
+    };
+  } catch (err) {
+    if (err instanceof AuthzError) return { ok: false, error: err.reason };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "unknown_error",
+    };
+  }
+}
+
+export type GrantTeamCandidate = { id: string; name: string };
+
+/**
+ * Team candidates for a project access grant: EVERY team in the project's
+ * org, server-listed (§4.2 — deliberately NOT the viewer's memberships).
+ * `listTeamsForOrg` ignores caller memberships by design and requires a role
+ * gate — `assertProjectGrantAuthority` is that gate.
+ */
+export async function listProjectGrantTeamCandidates(
+  projectId: string,
+): Promise<{ ok: true; teams: GrantTeamCandidate[] } | { ok: false; error: string }> {
+  try {
+    const { project } = await assertProjectGrantAuthority(projectId);
+    if (!project.organizationId) return { ok: true, teams: [] };
+    const teams = await listTeamsForOrg(project.organizationId);
+    return { ok: true, teams };
+  } catch (err) {
+    if (err instanceof AuthzError) return { ok: false, error: err.reason };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "unknown_error",
+    };
+  }
+}
+
+export type GrantOrgCandidate = { id: string; name: string };
+
+/**
+ * The fixed organization-level candidate: the PROJECT's own org, by name
+ * (§4.2). `organization: null` for an org-less project — the level then has
+ * nothing to grant to (fail closed; manual-ID escape hatch remains).
+ */
+export async function readProjectGrantOrgCandidate(
+  projectId: string,
+): Promise<
+  { ok: true; organization: GrantOrgCandidate | null } | { ok: false; error: string }
+> {
+  try {
+    const { project } = await assertProjectGrantAuthority(projectId);
+    if (!project.organizationId) return { ok: true, organization: null };
+    const rows = await betterAuthDb
+      .select({
+        id: betterAuthOrganizations.id,
+        name: betterAuthOrganizations.name,
+      })
+      .from(betterAuthOrganizations)
+      .where(eq(betterAuthOrganizations.id, project.organizationId))
+      .limit(1);
+    const org = rows[0];
+    return {
+      ok: true,
+      organization: org
+        ? // §3.2 unknown-entity fallback — never an empty/raw-id rendering.
+          { id: org.id, name: org.name ?? "Unknown organization" }
+        : null,
+    };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: err.reason };
     return {
