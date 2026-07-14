@@ -6,6 +6,16 @@ import { createBlogContentPrimitiveHandlers } from "@/lib/blog/mcp/handlers";
 // passthrough returns 404 "Tool ... has no registered handler", so published
 // runs can fail at execution.
 import { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers";
+// cinatra#1392 object-type serve — SIDE-EFFECT import. Loading the version-keyed
+// serving registry publishes the edge-bound object-type serve port on its
+// globalThis singleton at module load. This in-process primitive registry is the
+// mount point for the NON-MCP dispatch paths (e.g. /api/agents/passthrough) that
+// do NOT transitively load `@/lib/mcp-server` (which publishes the port on the
+// MCP transport path). Importing it here makes the port present before an
+// `objects_save` / `objects_types_list` invocation on those paths can run —
+// independent of whether the runtime loader's activation ran or was skipped — so
+// an edge-bound caller is served fail-closed rather than silently defaulting.
+import "@/lib/extension-version-keyed-serving";
 import { createSkillsPrimitiveHandlers } from "@cinatra-ai/skills/mcp-handlers";
 // Connector primitive handlers are NOT imported here. They are captured from
 // the generated extension manifest (a connector opts in by exporting a

@@ -9,6 +9,10 @@ import {
   planExtensionToolDiscovery,
   planSelfInvokerRetainedUnion,
   EdgeBoundMcpServeRefusal,
+  owningPackageOfObjectType,
+  resolveEdgeBoundObjectType,
+  planEdgeBoundObjectTypeListing,
+  getPublishedObjectTypeServePort,
   type ResolveEdgeBoundExtensionDeps,
   type RunRowForEdgeBoundServing,
 } from "@/lib/extension-edge-bound-serving";
@@ -932,5 +936,234 @@ describe("planSelfInvokerRetainedUnion — collision classes (codex S8 round-2 #
     markEffectiveExtensionMcpTools([{ name: "system_screen_lookup", packageName: P }]);
     unmarkEffectiveExtensionMcpToolCollisions(plan.skippedHostCollisions);
     expect(getEffectiveExtensionMcpTool("system_screen_lookup")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1392 OBJECT-TYPE SERVE — the final positive-serving surface.
+// The CONSUME side of `ctx.objects.registerType`, edge-bound + fail-closed, on
+// the two object-type consumers (objects_save POINT resolve, objects_types_list
+// per-package substitution). Same fail-closed matrix as the MCP-tool kind.
+// ---------------------------------------------------------------------------
+
+function retainObjectTypeVersion(pkg: string, ver: string, typeIds: string[]) {
+  const sink = beginVersionKeyedRegistration(pkg, ver);
+  for (const typeId of typeIds) sink.retainObjectType({ typeId, category: "data" });
+  sink.commit();
+}
+
+describe("owningPackageOfObjectType", () => {
+  it("extracts the owning package from a namespaced id; null otherwise", () => {
+    expect(owningPackageOfObjectType("@x/target:event")).toBe("@x/target");
+    expect(owningPackageOfObjectType("@cinatra-ai/pkg-name:local-id")).toBe("@cinatra-ai/pkg-name");
+    // Dynamic / legacy-dynamic / un-namespaced → NO owning extension package
+    // (an LLM-proposed / auto-registered type is never edge-bound to a package).
+    expect(owningPackageOfObjectType("@dynamic/types:invoice")).toBeNull();
+    expect(owningPackageOfObjectType("@cinatra-ai/dynamic:invoice")).toBeNull();
+    expect(owningPackageOfObjectType("plain-type")).toBeNull();
+    expect(owningPackageOfObjectType("")).toBeNull();
+    expect(owningPackageOfObjectType(undefined as never)).toBeNull();
+  });
+});
+
+describe("resolveEdgeBoundObjectType — POINT serve (objects_save)", () => {
+  const TYPE = `${TARGET}:event`;
+
+  it("un-namespaced type → none (no owning package to edge-bind)", async () => {
+    const d = await resolveEdgeBoundObjectType("plain-type", makeDeps({ dependentInstallId: DEP_ID }));
+    expect(d).toEqual({ kind: "none" });
+  });
+
+  it("edge resolves to the DEFAULT install → default (global type governs)", async () => {
+    const d = await resolveEdgeBoundObjectType(
+      TYPE,
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-default")],
+          }),
+          "install-target-default": row({ id: "install-target-default", isDefault: true }),
+        },
+      }),
+    );
+    expect(d).toEqual({ kind: "default" });
+  });
+
+  it("edge pins a NON-DEFAULT version that registered the type → versioned serve", async () => {
+    retainObjectTypeVersion(TARGET, V, [TYPE]);
+    const d = await resolveEdgeBoundObjectType(
+      TYPE,
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-v")],
+          }),
+          "install-target-v": row({ id: "install-target-v", isDefault: false, version: V }),
+        },
+      }),
+    );
+    expect(d).toMatchObject({ kind: "versioned", version: V, resolvedInstallId: "install-target-v" });
+    if (d.kind !== "versioned") throw new Error("expected versioned");
+    expect(d.descriptor.typeId).toBe(TYPE);
+  });
+
+  it("edge pins a NON-DEFAULT version that did NOT register the type → refuse (never the default's type)", async () => {
+    retainObjectTypeVersion(TARGET, V, [`${TARGET}:other`]); // registers a DIFFERENT type
+    const d = await resolveEdgeBoundObjectType(
+      TYPE,
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-v")],
+          }),
+          "install-target-v": row({ id: "install-target-v", isDefault: false, version: V }),
+        },
+      }),
+    );
+    expect(d).toMatchObject({ kind: "refuse", code: "NO_SUCH_HANDLER" });
+  });
+
+  it("edge pins a NON-DEFAULT version with NO retained entry (torn) → refuse UNKNOWN_VERSION", async () => {
+    const d = await resolveEdgeBoundObjectType(
+      TYPE,
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-v")],
+          }),
+          "install-target-v": row({ id: "install-target-v", isDefault: false, version: V }),
+        },
+      }),
+    );
+    expect(d).toMatchObject({ kind: "refuse", code: "UNKNOWN_VERSION" });
+  });
+
+  it("an identity refuse (dangling resolved edge) propagates as a refuse", async () => {
+    const d = await resolveEdgeBoundObjectType(
+      TYPE,
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-gone")],
+          }),
+          // resolved row missing → EDGE_BOUND_RESOLVED_MISSING
+        },
+      }),
+    );
+    expect(d).toMatchObject({ kind: "refuse", code: "EDGE_BOUND_RESOLVED_MISSING" });
+  });
+});
+
+describe("planEdgeBoundObjectTypeListing — DISCOVERY substitution (objects_types_list)", () => {
+  it("no trusted identity → no substitutions (byte-identical default listing)", async () => {
+    const listing = await planEdgeBoundObjectTypeListing(makeDeps({}));
+    expect(listing.substitutions).toEqual([]);
+  });
+
+  it("versioned pin → substitution carrying that version's COMPLETE retained set", async () => {
+    retainObjectTypeVersion(TARGET, V, [`${TARGET}:alpha`, `${TARGET}:beta`]);
+    const listing = await planEdgeBoundObjectTypeListing(
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-v")],
+          }),
+          "install-target-v": row({ id: "install-target-v", isDefault: false, version: V }),
+        },
+      }),
+    );
+    expect(listing.substitutions).toHaveLength(1);
+    expect(listing.substitutions[0]).toMatchObject({ packageName: TARGET, version: V });
+    expect(listing.substitutions[0].retainedTypes.map((d) => d.typeId)).toEqual([
+      `${TARGET}:alpha`,
+      `${TARGET}:beta`,
+    ]);
+  });
+
+  it("drops retained object types NOT owned by the pinned package (no foreign/dynamic leak)", async () => {
+    // The pinned version registers one OWNED type + one FOREIGN type + one
+    // DYNAMIC id. Only the owned type may substitute; the foreign/dynamic ids
+    // must NOT be appended (they would list without suppressing their real
+    // owner's default — codex convergence).
+    retainObjectTypeVersion(TARGET, V, [
+      `${TARGET}:owned`,
+      "@x/other:foreign",
+      "@dynamic/types:auto",
+    ]);
+    const listing = await planEdgeBoundObjectTypeListing(
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-v")],
+          }),
+          "install-target-v": row({ id: "install-target-v", isDefault: false, version: V }),
+        },
+      }),
+    );
+    expect(listing.substitutions).toHaveLength(1);
+    expect(listing.substitutions[0].retainedTypes.map((d) => d.typeId)).toEqual([`${TARGET}:owned`]);
+    expect(listing.notes.join(" ")).toMatch(/dropped 2 retained object type/);
+  });
+
+  it("a torn retained lookup keeps the default listing (no substitution) + records a note", async () => {
+    // Edge pins TARGET@V but nothing was retained for it → torn.
+    const listing = await planEdgeBoundObjectTypeListing(
+      makeDeps({
+        dependentInstallId: DEP_ID,
+        rows: {
+          [DEP_ID]: row({
+            id: DEP_ID,
+            packageName: "@x/dependent",
+            dependencyEdges: [edgeTo(TARGET, "install-target-v")],
+          }),
+          "install-target-v": row({ id: "install-target-v", isDefault: false, version: V }),
+        },
+      }),
+    );
+    expect(listing.substitutions).toEqual([]);
+    expect(listing.notes.join(" ")).toMatch(/UNKNOWN_VERSION/);
+  });
+
+  it("an identity refuse keeps the default listing + records a note (writes will refuse)", async () => {
+    const listing = await planEdgeBoundObjectTypeListing(
+      makeDeps({ verifiedRunId: "run-gone" }), // no run row → EDGE_BOUND_RUN_MISSING
+    );
+    expect(listing.substitutions).toEqual([]);
+    expect(listing.notes.join(" ")).toMatch(/identity refuse/);
+  });
+});
+
+describe("object-type serve port — globalThis publish", () => {
+  it("is published on the globalThis singleton and delegates the two serve methods", async () => {
+    const port = getPublishedObjectTypeServePort();
+    expect(port).toBeDefined();
+    expect(typeof port!.resolveObjectType).toBe("function");
+    expect(typeof port!.planListing).toBe("function");
+    // With no ambient trusted identity (no ALS frame in the test env), the port's
+    // live-deps resolution is compatibility-preserving: a POINT resolve of an
+    // un-namespaced type is `none`, and the listing carries no substitutions.
+    await expect(port!.resolveObjectType("plain-type")).resolves.toEqual({ kind: "none" });
+    await expect(port!.planListing()).resolves.toMatchObject({ substitutions: [] });
   });
 });

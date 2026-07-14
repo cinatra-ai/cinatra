@@ -66,6 +66,72 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // sealed-room path is independent of that resolver boundary.
 import { assertProjectReadAccess } from "@/lib/sealed-room";
 
+// ---------------------------------------------------------------------------
+// Edge-bound object-type serve (cinatra#1392) — the CONSUME side.
+//
+// A dependent edge-bound to a NON-DEFAULT side-by-side version of an object-
+// type-registering extension package must be served THAT version's retained
+// object types instead of the default's, fail-closed. The serve machinery
+// (trusted-identity resolution + version-keyed retention lookup) lives in the
+// host lib `extension-edge-bound-serving.ts`, which publishes an
+// `ExtensionObjectTypeServePort` on a globalThis singleton (via `Symbol.for`).
+// This leaf package reads it OFF globalThis rather than importing it: the
+// route-graph ratchet is shrink-only and these MCP handlers are reachable from
+// the locked routes, so a static (or literal-dynamic) import of that host
+// subgraph would grow those routes' reachable-module counts. Absent the port
+// (its serve module never loaded — e.g. an in-process deterministic caller with
+// no edge to bind anyway) BOTH consumers fall back to the DEFAULT behavior,
+// which is the S7-consistent "no trusted identity ⇒ default serving" outcome.
+// The Symbol key + these minimal shapes MUST match the publisher's port type.
+const OBJECT_TYPE_SERVE_KEY = Symbol.for("@cinatra-ai/host:extension-object-type-serve/v1");
+
+type RetainedObjectTypeDescriptor = { typeId: string; ioSpec?: unknown; [k: string]: unknown };
+
+type EdgeBoundObjectTypePointDecision =
+  | { kind: "none" }
+  | { kind: "default" }
+  | { kind: "versioned"; version: string; descriptor: RetainedObjectTypeDescriptor }
+  | { kind: "refuse"; code: string; message: string };
+
+type ObjectTypeServePort = {
+  resolveObjectType(typeId: string): Promise<EdgeBoundObjectTypePointDecision>;
+  planListing(): Promise<{
+    substitutions: Array<{
+      packageName: string;
+      version: string;
+      retainedTypes: readonly RetainedObjectTypeDescriptor[];
+    }>;
+    notes: string[];
+  }>;
+};
+
+function readObjectTypeServePort(): ObjectTypeServePort | undefined {
+  return (globalThis as unknown as { [k: symbol]: ObjectTypeServePort | undefined })[
+    OBJECT_TYPE_SERVE_KEY
+  ];
+}
+
+/**
+ * Resolve the edge-bound object-type serve for a classified type on the SAVE
+ * path (a POINT lookup). Returns the served NON-DEFAULT version when the caller
+ * is edge-bound to it, else `null` (default / no pin / absent seam). FAIL-CLOSED:
+ * a torn edge-bound retention (the caller pins a non-default version whose
+ * serving state is unknown / not-servable, or that version registered no such
+ * type) THROWS with evidence — the save never silently persists against the
+ * default version's type.
+ */
+async function resolveEdgeBoundObjectTypeForSave(
+  typeId: string,
+): Promise<{ version: string } | null> {
+  const port = readObjectTypeServePort();
+  if (!port) return null;
+  const decision = await port.resolveObjectType(typeId);
+  if (decision.kind === "refuse") {
+    throw new Error(`objects_save refused — edge-bound object-type serving: ${decision.message}`);
+  }
+  return decision.kind === "versioned" ? { version: decision.version } : null;
+}
+
 function resolveGroupId(orgId: string | null): string {
   return orgId ? `cinatra-org-${orgId}` : "cinatra-default";
 }
@@ -412,6 +478,16 @@ export function createObjectsPrimitiveHandlers() {
       const classificationModel = readObjectsClassificationModelFromDatabase();
       const classification = await classifyObject(rawData, input.typeHint, { model: classificationModel });
 
+      // 1b. Edge-bound object-type serve (cinatra#1392). When the caller is
+      // edge-bound to a NON-DEFAULT version of the classified type's owning
+      // extension package, that version's retained object-type registration
+      // governs this save. Fail-closed: a torn edge-bound retention (the pinned
+      // version registered no such type, or its serving state is torn) THROWS
+      // rather than persisting against the default version's type. A non-
+      // namespaced / dynamic type, an unpinned caller, or an absent serve seam
+      // leaves the classification untouched (default serving).
+      const servedObjectType = await resolveEdgeBoundObjectTypeForSave(classification.type);
+
       // 2. Auto-register dynamic type whenever the resolved type is a dynamic
       // ID (regardless of confidence / isNewType flag — the LLM may return high confidence
       // for a well-understood new type that simply has no static registration).
@@ -537,6 +613,11 @@ export function createObjectsPrimitiveHandlers() {
         // canonical writer) so UI create actions can offer an Undo
         // (MutationResult).
         changeSetId: record.changeSetId,
+        // Conditionally surface the edge-bound served object-type version
+        // (cinatra#1392) — present ONLY when a NON-DEFAULT version's retained
+        // type governed this save, so a default (non-edge-bound) caller's
+        // response shape stays byte-identical.
+        ...(servedObjectType ? { objectTypeServedVersion: servedObjectType.version } : {}),
       };
     },
 
@@ -958,7 +1039,41 @@ export function createObjectsPrimitiveHandlers() {
         description: `Auto-registered dynamic type (${t.inferredName}) — status: ${t.status}`,
         identityKey: t.identityKey ?? undefined,
       }));
-      return { types: [...staticTypes, ...dynamicTypes] };
+
+      // Edge-bound object-type serve (cinatra#1392) — type DISCOVERY. When the
+      // caller is edge-bound to a NON-DEFAULT version of an object-type-
+      // registering package, list THAT version's retained types for the package
+      // instead of the default's. Absent seam / no pins ⇒ byte-identical default
+      // listing. A torn retained lookup keeps the default listing for that
+      // package (a note is recorded serve-side) — the write path (objects_save)
+      // is where fail-closed enforcement bites, mirroring the S8 tool-discovery
+      // union that keeps default names advertised on a torn lookup.
+      const servePort = readObjectTypeServePort();
+      if (!servePort) return { types: [...staticTypes, ...dynamicTypes] };
+      const { substitutions } = await servePort.planListing();
+      if (substitutions.length === 0) return { types: [...staticTypes, ...dynamicTypes] };
+
+      // Suppress the DEFAULT-registered types of every pinned package (by
+      // registration provenance) and append the pinned versions' retained types.
+      const suppressedTypeIds = new Set<string>();
+      for (const sub of substitutions) {
+        for (const typeId of objectTypeRegistry.getTypesForPackage(sub.packageName)) {
+          suppressedTypeIds.add(typeId);
+        }
+      }
+      const baseStatic = staticTypes.filter((t) => !suppressedTypeIds.has(t.type));
+      const servedTypes = substitutions.flatMap((sub) =>
+        sub.retainedTypes.map((d) => ({
+          type: String(d.typeId),
+          category:
+            (d.category as string | undefined) ??
+            (d.inferredCategory as string | undefined) ??
+            null,
+          description: `Edge-bound served from ${sub.packageName}@${sub.version}`,
+          identityKey: d.identityKey ? "fn" : undefined,
+        })),
+      );
+      return { types: [...baseStatic, ...servedTypes, ...dynamicTypes] };
     },
 
     // `objects_type_register` deliberately registers a new dynamic object type

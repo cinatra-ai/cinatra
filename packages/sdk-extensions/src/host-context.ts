@@ -349,12 +349,35 @@ export type HostMcpPort = {
 };
 
 /**
- * Object-type registration + object store + version history. `ioSpec` is kept
- * opaque (`unknown`) so the SDK contract does not depend on `@cinatra-ai/objects`
- * — the concrete `AgentIOSpec` shape is validated host-side at registration.
+ * An object-type descriptor — the shape `registerType` records and `resolveType`
+ * returns. `ioSpec` (and any extra field) is kept opaque (`unknown`) so the SDK
+ * contract does not depend on `@cinatra-ai/objects`; the concrete `AgentIOSpec`
+ * shape is validated host-side at registration.
+ */
+export type HostObjectTypeDescriptor = { typeId: string; ioSpec?: unknown; [k: string]: unknown };
+
+/**
+ * Object-type registration + object store + version history.
  */
 export type HostObjectsPort = {
-  registerType(descriptor: { typeId: string; ioSpec?: unknown; [k: string]: unknown }): void;
+  registerType(descriptor: HostObjectTypeDescriptor): void;
+  /**
+   * Resolve a registered object-type descriptor by id — the CONSUME side of
+   * `registerType`, EDGE-BOUND (cinatra#1392). When the CURRENT caller's
+   * resolved dependency edge pins a NON-DEFAULT side-by-side version of the
+   * type's owning package, the descriptor returned is THAT version's retained
+   * registration; otherwise the default/global registration (or `null` when no
+   * such type is registered). FAIL-CLOSED: a torn edge-bound retention (the
+   * caller pins a non-default version whose serving state is unknown / not-yet-
+   * servable, or that version registered no such type) REJECTS with evidence
+   * rather than silently falling through to the default's descriptor.
+   *
+   * ADDITIVE, OPTIONAL port method (minimum-minor SDK ABI evolution — 2.4.0; see
+   * `register.ts`'s ABI changelog): no new port, no ABI major. An extension that
+   * declares an older `sdkAbiRange` reads it null-safe; a host pinned to an older
+   * minor still type-checks.
+   */
+  resolveType?(typeId: string): Promise<HostObjectTypeDescriptor | null>;
   read<T = unknown>(typeId: string, id: string): Promise<T | null>;
   write<T = unknown>(typeId: string, value: T): Promise<{ id: string }>;
   history(typeId: string, id: string): Promise<unknown[]>;
