@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import Link from "next/link";
 
 import { requireAuthSession } from "@/lib/auth-session";
 import { readProjectById } from "@/lib/projects-store-dao";
@@ -13,7 +12,7 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { Button } from "@/components/ui/button";
+import { ProjectSubnav } from "@/components/project-subnav";
 
 import { ProjectAgentBindingsClient } from "./bindings-client";
 import {
@@ -82,17 +81,9 @@ export default async function ProjectAgentsPage({ params }: Props) {
       <PageHeader
         title={project.name}
         description="Pin agent templates to this project. Templates stay ambient; bindings curate which agents appear, optional pinned versions, and per-project context overrides."
-        actions={
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/projects/${project.id}`}>Overview</Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/projects/${project.id}/permissions`}>Permissions</Link>
-            </Button>
-          </div>
-        }
+        divider={false}
       />
+      <ProjectSubnav projectId={project.id} activeSection="agents" />
       <PageContent className="flex flex-col gap-6 pb-8">
         <ProjectAgentBindingsClient
           projectId={project.id}

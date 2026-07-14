@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import Link from "next/link";
 import { format } from "date-fns";
 import { eq, sql } from "drizzle-orm";
 
@@ -16,8 +15,8 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { ProjectSubnav } from "@/components/project-subnav";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
-import { Button } from "@/components/ui/button";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import {
   Card,
@@ -182,18 +181,11 @@ export default async function ProjectDetailPage({ params }: Props) {
           <div className="flex items-center gap-2">
             {isArchived && <LifecycleBadge status="archived" />}
             <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/projects/${project.id}/permissions`}>Permissions</Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/projects/${project.id}/agents`}>Agents</Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/projects/${project.id}/customers`}>Customers</Link>
-            </Button>
           </div>
         }
+        divider={false}
       />
+      <ProjectSubnav projectId={project.id} activeSection="overview" />
       <PageContent className="flex flex-col gap-6 pb-8">
         {isArchived && (
           <div className="soft-panel border-line bg-surface-muted px-4 py-3 text-xs text-muted-foreground">
