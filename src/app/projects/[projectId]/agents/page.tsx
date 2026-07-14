@@ -75,24 +75,6 @@ export default async function ProjectAgentsPage({ params, searchParams }: Props)
   let bindings: ProjectAgentTemplateBindingView[] = [];
   const result = await listProjectAgentTemplateBindingsAction(project.id);
 
-  // Resolve template display names in ONE batched catalog read (the same
-  // installed-agents reader the bind picker's candidate action uses, so names
-  // and candidates can never drift). The reader is defensive by default — a
-  // failed read degrades every name to the "Unknown template" fallback.
-  const installed = await readAgentsForSkillMatching();
-  const templateNameById = new Map<string, string>();
-  for (const agent of installed) {
-    if (agent.packageId) {
-      templateNameById.set(agent.packageId, agent.humanReadableName);
-    }
-  }
-  if (result.ok) {
-    bindings = result.items.map((b) => ({
-      ...b,
-      templateName: templateNameById.get(b.agentTemplateId) ?? null,
-    }));
-  }
-
   // canEdit mirrors the permissions page heuristic — the underlying
   // create/update/delete handlers reject when the actor lacks the `write`
   // grant, so this is purely a UX hint. Platform admin + project owner
@@ -103,14 +85,37 @@ export default async function ProjectAgentsPage({ params, searchParams }: Props)
   const canEdit = isAdmin || project.ownerId === userId;
 
   // ?bindTemplate=<id> deep link (§4.4 return/preselect): preselect the
-  // template in the bind picker for editors. Display-name resolution happens
-  // here (server-side, from the same catalog map); an unlisted id keeps a
-  // null name and renders via the "Unknown template" fallback.
+  // template in the bind picker for editors only. Display-name resolution
+  // happens server-side, from the same catalog map as the bound rows; an
+  // unlisted id keeps a null name and renders via the "Unknown template"
+  // fallback.
   const { bindTemplate } = await searchParams;
   const preselectId =
     canEdit && typeof bindTemplate === "string" && bindTemplate.trim().length > 0
       ? bindTemplate.trim()
       : null;
+
+  // Resolve template display names in ONE batched catalog read (the same
+  // installed-agents reader the bind picker's candidate action uses, so names
+  // and candidates can never drift). Skipped entirely when nothing needs a
+  // name (no bound rows and no preselect — e.g. a degraded bindings read);
+  // the reader is defensive by default, so a failed read degrades every name
+  // to the "Unknown template" fallback.
+  const templateNameById = new Map<string, string>();
+  if ((result.ok && result.items.length > 0) || preselectId !== null) {
+    const installed = await readAgentsForSkillMatching();
+    for (const agent of installed) {
+      if (agent.packageId) {
+        templateNameById.set(agent.packageId, agent.humanReadableName);
+      }
+    }
+  }
+  if (result.ok) {
+    bindings = result.items.map((b) => ({
+      ...b,
+      templateName: templateNameById.get(b.agentTemplateId) ?? null,
+    }));
+  }
   const initialTemplate = preselectId
     ? { id: preselectId, name: templateNameById.get(preselectId) ?? null }
     : null;
