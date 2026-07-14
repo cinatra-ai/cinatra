@@ -49,6 +49,7 @@ import { toast } from "@/lib/cinatra-toast";
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 import { isRedirectError } from "./is-redirect-error";
 import {
+  appendDiagnosticReference,
   installAccessStageFailureCopy,
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
@@ -75,15 +76,22 @@ function pickerValueToTarget(
 ): { level: "organization" | "team" | "project"; id: string } | null {
   // Multi-scope W1: the picker now emits the id-carrying "org:<id>" token; the
   // bare "org" branch is kept as a defensive fallback (matchers still accept it).
+  // An empty tail ("org:" / "team:" / "project:") is NOT a target — the guard
+  // returns null so a stray value cannot reach the server action with an empty
+  // id (matches the canonical adapter in auth-policy-types.ts).
   if (value.startsWith("org:")) {
-    return { level: "organization", id: value.slice("org:".length) };
+    const id = value.slice("org:".length);
+    return id ? { level: "organization", id } : null;
   }
-  if (value === "org") return { level: "organization", id: activeOrgId };
+  if (value === "org")
+    return activeOrgId ? { level: "organization", id: activeOrgId } : null;
   if (value.startsWith("team:")) {
-    return { level: "team", id: value.slice("team:".length) };
+    const id = value.slice("team:".length);
+    return id ? { level: "team", id } : null;
   }
   if (value.startsWith("project:")) {
-    return { level: "project", id: value.slice("project:".length) };
+    const id = value.slice("project:".length);
+    return id ? { level: "project", id } : null;
   }
   return null;
 }
@@ -137,7 +145,12 @@ export function ExtensionInstallScopeDialog({
     projects: installTargets
       .filter((t) => t.level === "project")
       .map((t) => ({ id: t.id, name: ownerEntityNames[t.value] ?? t.label })),
-    orgName: ownerEntityNames["org"] ?? "Organization",
+    // Multi-scope W1: ownerEntityNames is keyed by the id-carrying `org:<id>`
+    // token (the bare "org" key was retired). Fall through to the empty string
+    // so the combobox renders its own "Your organization" fallback ONLY when
+    // the org genuinely has no name — no hardcoded "Organization".
+    orgName: ownerEntityNames[`org:${activeOrgId}`] ?? "",
+    orgId: activeOrgId,
     workspaceExposed: false,
   };
   const disabledScopes = installTargets
@@ -170,7 +183,11 @@ export function ExtensionInstallScopeDialog({
     if (result.stage === "access" || result.stage === "access-partial") {
       return installAccessStageFailureCopy(result.stage, name);
     }
-    return failureCopyByCategory[result.category] ?? defaultFailureMessage;
+    // #1539: surface the diagnostic reference on the access-scoped install path.
+    return appendDiagnosticReference(
+      failureCopyByCategory[result.category] ?? defaultFailureMessage,
+      result.reference,
+    );
   };
 
   // Internal <form action> — the NEXT_REDIRECT sentinel is re-thrown so

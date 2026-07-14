@@ -38,6 +38,15 @@ export type AccessComboboxProps = {
     projects: { id: string; name: string }[];
     teams: { id: string; name: string }[];
     orgName: string;
+    /**
+     * Active organization id. Multi-scope W1 retired the bare `"org"` token in
+     * favour of the id-carrying `org:<id>`; the org row emits `org:${orgId}` so
+     * its value, selected-state, and disabled-scope lookup line up with the
+     * server-built install-target rows. Optional: when absent (no active org),
+     * the row degrades to the legacy bare `"org"` token rather than emit a
+     * malformed `org:` with an empty tail.
+     */
+    orgId?: string;
     workspaceExposed: boolean;
   };
   isAdmin: boolean;
@@ -91,9 +100,33 @@ export function resolveAccessLabel(
   if (value === "owner") return { type: null, name: "Only me" };
   if (value === "admin") return { type: null, name: "Admins only" };
   if (value === "workspace") return { type: null, name: "Whole Workspace" };
+  // Multi-scope W1 retired the bare `"org"` token for the id-carrying
+  // `org:<id>`. The bare form is still ACCEPTED for read-compatibility with any
+  // persisted legacy value (AgentAuthPolicyVisibilitySchema still validates the
+  // literal "org"); it denotes the active org by definition, so it resolves to
+  // the active org's name.
   if (value === "org") {
     const orgName = availableScopes.orgName || "your organization";
     return { type: null, name: `Anyone in ${orgName}` };
+  }
+  // An id-carrying `org:<id>` token: assert the active org's NAME only when the
+  // token is CONFIRMED to scope the active org (its embedded id equals the
+  // supplied `orgId`). On the install surfaces the value is always
+  // `org:<activeOrgId>`, so it always resolves to the name. But this component
+  // also renders the read-only project Permissions tab, where the value is the
+  // PROJECT's own owning-org token (`org:<projectOwnerOrgId>`) while `orgName`
+  // is the VIEWER's active org — a co-owner viewing a project owned by ANOTHER
+  // org (the co-owner short-circuit grants read across the cross-org guard)
+  // would otherwise be shown the WRONG org's name on a permissions-review
+  // surface. When the id is unconfirmed (no `orgId` supplied, or a different
+  // id), fall back to a neutral, id-free label rather than a possibly-wrong
+  // specific name — and never leak the raw token.
+  if (value.startsWith("org:")) {
+    const { orgId, orgName } = availableScopes;
+    if (orgId && value.slice("org:".length) === orgId) {
+      return { type: null, name: `Anyone in ${orgName || "your organization"}` };
+    }
+    return { type: null, name: "Anyone in the organization" };
   }
   if (value.startsWith("team:")) {
     const id = value.slice("team:".length);
@@ -140,8 +173,17 @@ export function AccessCombobox({
 }: AccessComboboxProps) {
   const [open, setOpen] = useState(false);
 
-  const { projects, teams, orgName } = availableScopes;
+  const { projects, teams, orgName, orgId } = availableScopes;
   const resolvedOrgName = orgName || "Your organization";
+  // Org row value: the id-carrying `org:<id>` token (multi-scope W1), matched to
+  // the server-built install-target row value `org:<activeOrgId>` EXACTLY so the
+  // selected-state, checkmark, and disabledScopes lookup line up — including the
+  // no-active-org case, where the server emits `org:` (empty tail) and the row
+  // must key on the same token or the disabled-scope membership check would miss.
+  // Falls back to the legacy bare `"org"` only when no org id is SUPPLIED at all
+  // (`orgId` undefined — e.g. the read-only Permissions tab, popover disabled).
+  // A stray empty-tail `org:` click is rejected by the value→target adapter guard.
+  const orgRowValue = orgId != null ? `org:${orgId}` : "org";
 
   const selected = resolveAccessLabel(value, availableScopes);
 
@@ -394,22 +436,24 @@ export function AccessCombobox({
                   </span>
                 }
               >
-                {/* Org item — disabledScopes?.includes gate via renderTargetRow */}
+                {/* Org item — id-carrying `org:<id>` value (multi-scope W1) so
+                    the selected-state, checkmark, and disabledScopes lookup all
+                    match the server-built install-target rows. */}
                 {renderTargetRow(
-                  "org",
+                  orgRowValue,
                   <CommandItem
-                    value="org"
+                    value={orgRowValue}
                     onSelect={() => {
-                      onValueChange("org");
+                      onValueChange(orgRowValue);
                       setOpen(false);
                     }}
-                    className={itemClass("org")}
+                    className={itemClass(orgRowValue)}
                   >
                     <div className="flex items-center w-full">
                       <span className="text-foreground whitespace-nowrap">
                         Anyone in {resolvedOrgName}
                       </span>
-                      {renderCheckmark("org")}
+                      {renderCheckmark(orgRowValue)}
                     </div>
                   </CommandItem>,
                 )}

@@ -47,6 +47,8 @@ const FLAT_SEED_SCOPES: AccessComboboxProps["availableScopes"] = {
     { id: "team-eng", name: "Engineering" },
   ],
   orgName: "Acme Corp",
+  // Multi-scope W1: the org row emits the id-carrying `org:<id>` token.
+  orgId: "org-acme",
   workspaceExposed: true,
 };
 
