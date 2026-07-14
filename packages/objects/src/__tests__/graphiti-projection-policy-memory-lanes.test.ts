@@ -52,14 +52,20 @@ describe("deriveMemoryConceptLane — AC1 derivation table (memory rows only)", 
     expect(d).toEqual({ kind: "lane", groupId: `${BASE}-team-team-7` });
   });
 
-  it("team via visibility=team alone (ownerLevel not team) still lands the team lane", () => {
+  it("visibility=team but USER-owned lands the OWNING USER's lane, not a phantom team-<userId> lane", () => {
+    // buildOwnershipFilter reads a user-owned row (owner_level='user') only for
+    // the owning user — a visibility='team' row that is NOT team-owned is
+    // readable by no team. The lane must be one the owner's entitlement names
+    // (`-user-<ownerId>`); routing to `-team-<userId>` would make the concept
+    // unrecallable (deriveEntitledMemoryLanes builds team lanes from real
+    // teamIds only, never a user id).
     const d = deriveMemoryConceptLane(ORG, {
       ownerLevel: "user",
       ownerId: "u-9",
       visibility: "team",
       projectId: null,
     });
-    expect(d).toEqual({ kind: "lane", groupId: `${BASE}-team-u-9` });
+    expect(d).toEqual({ kind: "lane", groupId: `${BASE}-user-u-9` });
   });
 
   it("org (visibility=organization) -> the ambient <org-lane>", () => {

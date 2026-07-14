@@ -41,11 +41,20 @@ export function deriveProjectionGroupId(orgId: string | null): string {
 // the recall handler both compute it here from persisted scope, so the two can
 // never diverge.
 //
-// Derivation table (memory rows only):
-//   visibility='public'                                    -> terminal skip
-//   ownerLevel='user'  AND visibility='private'            -> <org-lane>-user-<ownerId>
-//   ownerLevel='team'  OR  visibility='team'               -> <org-lane>-team-<ownerId>
-//   visibility='organization' OR ownerLevel in {org,ws}    -> <org-lane>          (ambient)
+// Derivation table (memory rows only) — mirrors buildOwnershipFilter's read
+// axes so a row lands in a lane its authorized readers are actually entitled to:
+//   visibility='public'                                     -> terminal skip
+//   ownerLevel='user' AND visibility in {private,team}      -> <org-lane>-user-<ownerId>
+//   ownerLevel='team'                                       -> <org-lane>-team-<ownerId>
+//   visibility='organization' OR ownerLevel in {org,ws}     -> <org-lane>          (ambient)
+// The team lane is gated on the OWNER axis (ownerLevel='team' + a real team
+// ownerId), NOT on `visibility='team'` alone: buildOwnershipFilter admits a
+// visibility='team' row ONLY through `owner_level='team' AND owner_id ∈ teamIds`
+// ("visibility='team' rows are team-owned by construction"), so a visibility=
+// 'team' row that is NOT team-owned is readable by no team — only by its owning
+// principal via the owner axis. A user-owned such row therefore nests in the
+// OWNING USER's lane (which deriveEntitledMemoryLanes actually names), never a
+// phantom `-team-<userId>` lane no actor's entitlement set could ever reach.
 // Project axis (orthogonal): any base lane for a row carrying project_id is
 // suffixed `-proj-<projectId>`; rows without a project stay in the ambient base
 // lane. Public is checked FIRST (a public row is never projected regardless of
@@ -93,16 +102,26 @@ export function deriveMemoryConceptLane(
   }
   const base = deriveProjectionGroupId(orgId);
 
-  // user-private: a per-user lane. Requires a concrete ownerId (the user id).
-  if (scope.ownerLevel === "user" && scope.visibility === "private") {
+  // user lane: a per-user lane. Requires a concrete ownerId (the user id).
+  // Covers visibility='private' (the default human/agent memory scope) AND a
+  // user-owned visibility='team' row: buildOwnershipFilter reads a user-owned
+  // row for the owning user regardless of its visibility axis, and the owning
+  // user's entitlement includes exactly this `-user-<ownerId>` lane — whereas a
+  // `-team-<userId>` lane would be unrecallable (no actor's teamIds names it).
+  if (
+    scope.ownerLevel === "user" &&
+    (scope.visibility === "private" || scope.visibility === "team")
+  ) {
     if (!scope.ownerId) {
-      return { kind: "skip", reason: "user-private memory concept has no ownerId — cannot form a user lane" };
+      return { kind: "skip", reason: "user memory concept has no ownerId — cannot form a user lane" };
     }
     return { kind: "lane", groupId: withProjectAxis(`${base}-user-${scope.ownerId}`, scope.projectId) };
   }
 
-  // team: a per-team lane. Requires a concrete ownerId (the team id).
-  if (scope.ownerLevel === "team" || scope.visibility === "team") {
+  // team lane: gated on the OWNER axis alone (ownerLevel='team' + a real team
+  // ownerId) — NOT `visibility==='team'`, which a user-owned row can carry
+  // without being team-readable (see the derivation-table note above).
+  if (scope.ownerLevel === "team") {
     if (!scope.ownerId) {
       return { kind: "skip", reason: "team memory concept has no ownerId — cannot form a team lane" };
     }
