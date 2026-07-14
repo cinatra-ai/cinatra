@@ -89,6 +89,52 @@ const SOURCE_GATE_SQL = `(o.source IS NULL OR o.source IN ('agent','ui','route')
 /** SQL fragment: rows belonging to journal alias j's group. */
 const GROUP_MATCH_SQL = `((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = j.org_id)`;
 
+// The `@cinatra-ai/memory:concept` type id, inlined as a literal (NOT imported)
+// for the same worker-dispatch / route-graph reason as graphiti-projector.ts —
+// the source of truth is MEMORY_CONCEPT_TYPE_ID in ../integration/register-types.
+//
+// A rebuild journal rebuilds ONE ambient org GROUP (`cinatra-org-<id>` /
+// `cinatra-default`): its clearGraph + getEpisodes both scope to that single
+// `group_id`. A memory-concept row projects into a per-scope lane derived by
+// deriveMemoryConceptLane, which is the ambient base lane for ONLY the
+// org/workspace class; every other class is either a per-scope NESTED lane
+// (user / team / any project-suffixed) the single-group clear/count never touch,
+// or a terminal SKIP (public / unclassifiable scope → the projector writes no
+// episode at all). The ambient-group rebuild must operate on ONLY the
+// ambient-base-lane memory rows (their episode IS in this group), and exclude
+// every other memory row:
+//   - a NESTED-lane memory row replayed here would append a duplicate episode
+//     into its uncleared nested lane;
+//   - a SKIP memory row counted here inflates `expected` with no matching
+//     `projected`/episode;
+// either way verification (ambient episode count vs projected-row count) would
+// diverge forever. Conversely, ambient-scoped memory rows MUST stay in the
+// rebuild — excluding them would strand the episode clearGraph just deleted,
+// unprojected. The nested/skip rows' lifecycle is the write-path projector's.
+const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
+
+/** SQL predicate: a memory-concept row whose episode is NOT in the ambient base
+ * lane this journal rebuilds — i.e. any memory row deriveMemoryConceptLane does
+ * NOT route to the bare `deriveProjectionGroupId(orgId)` lane (a NESTED user /
+ * team / project-suffixed lane, OR a terminal public/unclassifiable skip).
+ *
+ * Written as the NULL-safe complement of the ambient-base classification (the
+ * exact org/workspace branch of deriveMemoryConceptLane): a row is ambient-base
+ * iff it is not public, not team-owned, is org-visible OR org/workspace-owned,
+ * and carries no project refinement. `(...) IS NOT TRUE` folds both FALSE and
+ * NULL (missing/legacy scope) into "exclude", so a partially-populated scope
+ * fails closed to exclusion rather than a wrong ambient count. `a` is the table
+ * alias; splices only hardcoded constants (no user input). Non-memory rows never
+ * match (the `type =` guard), so they always stay in the ambient rebuild. */
+function nonAmbientMemorySql(a: string): string {
+  return `(${a}.type = '${MEMORY_CONCEPT_TYPE_ID}' AND (
+        ${a}.visibility IS DISTINCT FROM 'public'
+        AND ${a}.owner_level IS DISTINCT FROM 'team'
+        AND (${a}.visibility = 'organization' OR ${a}.owner_level IN ('organization', 'workspace'))
+        AND ${a}.project_id IS NULL
+      ) IS NOT TRUE)`;
+}
+
 export interface RebuildJournalRow {
   id: string;
   groupId: string;
@@ -412,8 +458,15 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
   if (!owned || owned.phase !== "clearing" || owned.toEpoch !== journal.toEpoch) return false;
 
   // Terminally settle superseded pending/failed items for the group: the full
-  // replay below delivers every row's CURRENT state, so pre-bump items (both
-  // ordinary NULL-epoch items and older-epoch replay leftovers) are obsolete.
+  // replay below delivers every AMBIENT row's CURRENT state, so pre-bump items
+  // (both ordinary NULL-epoch items and older-epoch replay leftovers) are
+  // obsolete. EXCLUDE items for NESTED-lane memory rows: the replay below does
+  // NOT re-deliver them (their episodes live in nested lanes this ambient
+  // rebuild does not own), so superseding a pending nested-memory write-path
+  // item here would drop it with no re-enqueue — the concept would never
+  // project. Those items are left to the write-path projector (NULL-epoch) / the
+  // stale-epoch fence (any old epoch-stamped leftover). Ambient-scoped memory
+  // items ARE re-delivered by the replay, so they supersede like any ambient row.
   run([
     {
       text: `UPDATE "${q}"."graphiti_projection_outbox" o
@@ -422,7 +475,11 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
              FROM (SELECT $1::text AS org_id) j
              WHERE ((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = j.org_id)
                AND o.status IN ('pending', 'failed')
-               AND (o.projection_epoch IS NULL OR o.projection_epoch < $3)`,
+               AND (o.projection_epoch IS NULL OR o.projection_epoch < $3)
+               AND NOT EXISTS (
+                 SELECT 1 FROM "${q}"."objects" om
+                 WHERE om.id = o.object_id AND ${nonAmbientMemorySql("om")}
+               )`,
       values: [journal.orgId, String(journal.toEpoch), journal.toEpoch],
     },
   ]);
@@ -434,7 +491,12 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
 
   // Reset per-row bookkeeping: the S1 equal-version dedup guard suppresses
   // same-version re-projection by design, so the replay only lands if the
-  // projected-version watermark is cleared.
+  // projected-version watermark is cleared. EXCLUDE NESTED-lane memory rows —
+  // their episode lives in a nested lane this ambient clear never touched, so
+  // nulling their watermark (while the replay below skips them) would strand a
+  // live nested-lane episode as "unprojected" forever. Ambient-scoped memory
+  // rows ARE reset (their ambient episode was just cleared; the replay re-drives
+  // them) exactly like any ambient row.
   run([
     {
       text: `UPDATE "${q}"."objects" o
@@ -446,6 +508,7 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
              FROM (SELECT $1::text AS org_id) j
              WHERE ((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = j.org_id)
                AND o.deleted_at IS NULL
+               AND NOT ${nonAmbientMemorySql("o")}
                AND (o.graphiti_projected_version IS NOT NULL
                     OR o.graphiti_episode_uuid IS NOT NULL
                     OR o.graphiti_sync_status <> 'pending')`,
@@ -487,6 +550,7 @@ export function buildReplayBatchQuery(schemaName: string, input: { journalId: st
         WHERE ${GROUP_MATCH_SQL}
           AND o.deleted_at IS NULL
           AND ${SOURCE_GATE_SQL}
+          AND NOT ${nonAmbientMemorySql("o")}
           AND (j.last_id IS NULL OR o.id > j.last_id)
         ORDER BY o.id
         LIMIT $3
@@ -538,6 +602,7 @@ function runReplayingPhase(journal: RebuildJournalRow, options?: DriveRebuildOpt
                    WHERE ${GROUP_MATCH_SQL}
                      AND o.deleted_at IS NULL
                      AND ${SOURCE_GATE_SQL}
+                     AND NOT ${nonAmbientMemorySql("o")}
                      AND (j.last_id IS NULL OR o.id > j.last_id)
                  )`,
         values: [journal.id, journal.toEpoch],
@@ -629,6 +694,14 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
   }
 
   const excludedTypes = readPolicyExcludedTypes(journal.orgId);
+  // NESTED-lane memory rows (#1379) project into per-scope lanes, NOT this
+  // journal's single ambient group. `episodes` below is fetched from the ambient
+  // group_id ONLY, so counting them in the expected/projected totals would make
+  // the episode-vs-projected comparison permanently diverge (episodes.length
+  // undercounts by every nested memory episode → the journal never reaches
+  // 'done'). Exclude them from every ambient count + the recall sample; their
+  // nested-lane hygiene is the write-path projector's. Ambient-scoped memory
+  // rows (episode in THIS group) are counted like any ambient row.
   const [counts] = run([
     {
       text: `SELECT
@@ -638,7 +711,8 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
              JOIN (SELECT $1::text AS org_id) j ON TRUE
              WHERE ((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = j.org_id)
                AND o.deleted_at IS NULL
-               AND ${SOURCE_GATE_SQL}`,
+               AND ${SOURCE_GATE_SQL}
+               AND NOT ${nonAmbientMemorySql("o")}`,
       values: [journal.orgId, excludedTypes],
     },
   ]);
@@ -680,6 +754,7 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
                AND ${SOURCE_GATE_SQL}
                AND o.graphiti_projected_version IS NOT NULL
                AND o.type <> ALL($2::text[])
+               AND NOT ${nonAmbientMemorySql("o")}
              ORDER BY o.id LIMIT 3`,
       values: [journal.orgId, [...excludedTypes, ...adapterTypes]],
     },
