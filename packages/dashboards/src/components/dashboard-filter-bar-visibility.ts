@@ -10,12 +10,13 @@
  *   - `if (!isEditMode && dashboardFilters.length === 0) return null`
  *
  * Two host pieces need the SAME answer:
- *   - `<DashboardFilterBarSlot>` (composed-dashboard.tsx) — renders the
- *     child-toolbar wrapper only when the bar will actually paint, so the
- *     20px inset / 6px stack-gap geometry never floats around an empty bar;
+ *   - `<DashboardFilterBarSlot>` (composed-dashboard.tsx) — mounts the
+ *     flush-aligned secondary-toolbar wrapper only when the bar will
+ *     actually paint, so the stack-gap geometry never floats around an
+ *     empty bar;
  *   - `<CinatraDashboardToolbar>` — tightens its bottom margin to the
- *     6px nested-toolbar stack gap when a child bar follows (design spec
- *     §Nested toolbar), keeping the regular 16px gap otherwise.
+ *     6px stack gap when the filter bar follows (cinatra#1511), keeping
+ *     the regular 16px gap otherwise.
  *
  * The duplication of upstream's two-line gating is deliberate and is
  * pinned against the installed bundle by
