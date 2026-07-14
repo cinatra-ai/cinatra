@@ -1,7 +1,12 @@
 import "server-only";
 
 import { and, eq } from "drizzle-orm";
-import { betterAuthDb, betterAuthUsers } from "@/lib/better-auth-db";
+import {
+  betterAuthDb,
+  betterAuthUsers,
+  assistantHandles,
+  registerAssistantHandle,
+} from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
 import {
   deleteOAuthClientByClientId,
@@ -86,6 +91,21 @@ export async function createAssistantUser(params: {
     });
   });
 
+  // Mint the principal's mention handle in the registry (cinatra#1037 P1.2).
+  // Best-effort: a registry hiccup must not fail assistant creation (the user +
+  // oauth rows already committed) — the boot backfill (backfillMissingAssistantHandles)
+  // is the self-healing safety net, and the picker/list omits a handle-less
+  // assistant rather than advertising a non-resolving one, so the state stays
+  // consistent (just not-yet-mentionable) until then.
+  try {
+    await registerAssistantHandle(userId, { desired: params.username });
+  } catch (err) {
+    console.warn(
+      `[assistant-users] could not mint handle for ${params.username}; boot backfill will retry:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   return { id: userId, username: params.username, email, clientId, userType: "assistant", clientSecret };
 }
 
@@ -103,12 +123,18 @@ export async function deleteAssistantUser(id: string): Promise<void> {
 
   const clientId = row[0]?.clientId;
 
-  // 2. Delete OAuth client
+  // 2. Release the registry handle FIRST (cinatra#1037 P1.2), before the
+  //    principal — so a mid-delete failure leaves the principal WITHOUT a handle
+  //    (not mentionable; re-minted by the boot backfill) rather than an ORPHAN
+  //    handle that resolution would still return as a live assistant.
+  await betterAuthDb.delete(assistantHandles).where(eq(assistantHandles.assistantUserId, id));
+
+  // 3. Delete OAuth client
   if (clientId) {
     await deleteOAuthClientByClientId(clientId);
   }
 
-  // 3. Delete user row
+  // 4. Delete user row
   await betterAuthDb.execute(sql`
     DELETE FROM public."user" WHERE id = ${id} AND "userType" = 'assistant'
   `);

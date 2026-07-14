@@ -89,6 +89,17 @@ export const DASHBOARD_PAGE_ACTIONS: Readonly<
       icon: Plus,
     },
   ],
+  // cinatra#1496: the organizations screen passes its anchor only when the
+  // viewer may create organizations (single-org mode off + the
+  // `organization.create` permission), so this entry renders gated.
+  organizations: [
+    {
+      id: "new-organization",
+      href: "/organizations/new",
+      label: "New organization",
+      icon: Plus,
+    },
+  ],
   projects: [
     { id: "new-project", href: "/projects/new", label: "New project", icon: Plus },
   ],
@@ -109,11 +120,11 @@ export function CinatraDashboardToolbar() {
     handleAddPortlet,
   } = useDashboardContext();
 
-  // When the dashboard filter bar renders beneath this toolbar it does so
-  // as a CHILD TOOLBAR (design spec §Nested toolbar — see
+  // When the dashboard filter bar renders beneath this toolbar it stacks as
+  // a flush-aligned secondary toolbar (cinatra#1511 — see
   // `<DashboardFilterBarSlot>` in composed-dashboard.tsx), so the gap
-  // tightens to the 6px stack gap; otherwise keep the regular 16px space
-  // before the grid.
+  // tightens to the 6px stack gap that groups the two bars; otherwise keep
+  // the regular 16px space before the grid.
   const filterBarFollows = useDashboardFilterBarVisible();
 
   const pageActions: readonly DashboardPageAction[] =

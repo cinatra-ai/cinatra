@@ -62,7 +62,21 @@ JOIN "${schema}"."objects" o
   ON o.id = rep.artifact_id AND o.org_id = rep.org_id
 WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
   AND r.kind = 'blob'
-  AND o.type = $4
+  AND (
+    o.type = $4
+    -- cinatra#1430: a typed row's CONTENT SNAPSHOT representation serves by
+    -- its IMMUTABLE object_content_snapshots row — never by the row's
+    -- CURRENT binding state. Replay-safety: a pinned selection must keep
+    -- serving after binding retirement/reclassification (the pin +
+    -- retention machinery governs lifetime), and a REPLACEMENT binding
+    -- must not indiscriminately admit another claimant's snapshots — the
+    -- admission is per-representation, keyed to the exact snapshot row.
+    OR EXISTS (
+      SELECT 1 FROM "${schema}"."object_content_snapshots" snap
+      WHERE snap.org_id = rep.org_id AND snap.object_id = rep.artifact_id
+        AND snap.representation_revision_id = rep.id
+    )
+  )
   AND (
     o.deleted_at IS NULL
     ${input.liveOnly ? "" : `OR EXISTS (

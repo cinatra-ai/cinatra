@@ -184,6 +184,15 @@ describe("canonical lifecycle status reachability guard", () => {
         // the two fixture entries above. Confined to its own per-test schema;
         // the code under test writes only semantic_assertion.
         "src/lib/objects/__tests__/binding-write-path.integration.test.ts",
+        // Content-snapshot integration test (cinatra#1430): its FIXTURE
+        // provisions an isolated per-test schema from the CANONICAL
+        // buildCreateStoreSchemaQueries DDL and seeds live install rows with
+        // raw INSERTs so claim/binding/effective-identity resolution runs
+        // against real SQL — the same fixture class as the entries above.
+        // Confined to its own per-test schema; the code under test writes
+        // resource/representation/artifact_blobs/object_content_snapshots/
+        // run_context_selections/artifact_refs — never installed_extension.
+        "src/lib/artifacts/__tests__/object-content-snapshot.integration.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(

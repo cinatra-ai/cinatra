@@ -16,7 +16,11 @@ import { createContext, useContext, type ReactNode } from "react";
  * entry in `DASHBOARD_PAGE_ACTIONS` (`cinatra-dashboard-toolbar.tsx`) —
  * single registry, no parallel per-surface wiring.
  */
-export type DashboardPageAnchor = "agents" | "projects" | "teams";
+export type DashboardPageAnchor =
+  | "agents"
+  | "organizations"
+  | "projects"
+  | "teams";
 
 const DashboardPageAnchorContext = createContext<DashboardPageAnchor | undefined>(
   undefined,

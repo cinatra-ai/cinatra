@@ -14,11 +14,15 @@ import {
   projectInstancesSchemaQueries,
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
-import { assistantThreadSchemaQueries } from "@/lib/assistant-thread-schema";
+import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema";
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
-import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
+import {
+  artifactClaimSchemaQueries,
+  objectContentSnapshotSchemaQueries,
+  runContextSelectionsSchemaQueries,
+} from "@/lib/artifact-claim-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -811,6 +815,7 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."chat_threads" ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS chat_threads_project_created_idx ON "${schemaName.replaceAll('"', '""')}"."chat_threads" (project_id, created_at DESC, id) WHERE project_id IS NOT NULL` },
     ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
+    ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1), additive — mirrors core__0046
     // usage_events table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."usage_events" (
       id text PRIMARY KEY,
@@ -1915,45 +1920,16 @@ $body$` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
     // ---- run_context_selections audit table ----
-
-    // Append-only audit row written by the context-agent at every
-    // selection. PINS the replay-safe triple
-    // (artifact_id, representation_revision_id, semantic_assertion_id)
-    // so future replays of the parent run resolve to the EXACT artifact
-    // version + the EXACT extension classification that was selected at
-    // run-time, even if the artifact gets re-classified or the
-    // representation gets a newer revision later.
-
-    // Replay-safety guard: like semantic_assertion this
-    // table is append-only — never UPDATE or DELETE. A correction is a
-    // NEW row, not a mutation.
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."run_context_selections" (
-  id                          text PRIMARY KEY,
-  org_id                      text NOT NULL,
-  parent_run_id               text NOT NULL,
-  parent_package_name         text NOT NULL,
-  slot_id                     text NOT NULL,
-  artifact_id                 text NOT NULL,
-  representation_revision_id  text NOT NULL,
-  semantic_assertion_id       text NOT NULL,
-  extension                   text NOT NULL,
-  source_scope                text NOT NULL,
-  selected_by                 text NOT NULL,
-  selection_mode              text NOT NULL,
-  selected_at                 timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT rcs_source_chk CHECK (source_scope IN ('user','team','organization','workspace','project')),
-  CONSTRAINT rcs_selectedby_chk CHECK (selected_by IN ('user','agent','autonomous')),
-  CONSTRAINT rcs_selmode_chk CHECK (selection_mode IN ('interactive','autonomous'))
-)` },
-    { text: `CREATE INDEX IF NOT EXISTS rcs_run_idx ON "${schemaName.replaceAll('"', '""')}"."run_context_selections" (org_id, parent_run_id, selected_at)` },
-    { text: `CREATE INDEX IF NOT EXISTS rcs_artifact_idx ON "${schemaName.replaceAll('"', '""')}"."run_context_selections" (org_id, artifact_id)` },
-    { text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_run_context_selections_append_only"() RETURNS trigger LANGUAGE plpgsql AS $body$
-BEGIN
-  RAISE EXCEPTION 'run_context_selections is append-only: % forbidden — write a NEW audit row to correct a prior selection', TG_OP;
-END;
-$body$` },
-    { text: `DROP TRIGGER IF EXISTS trg_run_context_selections_append_only ON "${schemaName.replaceAll('"', '""')}"."run_context_selections"` },
-    { text: `CREATE TRIGGER trg_run_context_selections_append_only BEFORE UPDATE OR DELETE ON "${schemaName.replaceAll('"', '""')}"."run_context_selections" FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_run_context_selections_append_only"()` },
+    // Extracted to the pure-strings leaf artifact-claim-schema.ts (cinatra#1430
+    // vertical slice; extract-leaf pattern — an EXISTING drizzle-store import,
+    // so the locked route graphs gain no module). Append-only audit pinning
+    // the replay-safe selection triple; trigger-enforced.
+    ...runContextSelectionsSchemaQueries(schemaName),
+    // ---- object_content_snapshots keying table (cinatra#1430) ----
+    // In the same artifact-claim-schema.ts leaf (the #1429
+    // bindingWritePathSchemaQueries accretion precedent). Existing deployments
+    // also converge via migration core__0047.
+    ...objectContentSnapshotSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 
     // Operational recursion-control table for authoring-skill chains.

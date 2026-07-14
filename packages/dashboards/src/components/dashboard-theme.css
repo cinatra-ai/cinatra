@@ -147,6 +147,9 @@ html.dark {
 body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="agents"]
   [data-cinatra-page-action="run-agent"])
   [data-cinatra-page-actions-fallback="agents"],
+body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="organizations"]
+  [data-cinatra-page-action="new-organization"])
+  [data-cinatra-page-actions-fallback="organizations"],
 body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="projects"]
   [data-cinatra-page-action="new-project"])
   [data-cinatra-page-actions-fallback="projects"],
@@ -156,17 +159,18 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
   display: none;
 }
 
-/* Dashboard filter bar as a CHILD TOOLBAR (design spec §Nested toolbar,
- * cinatra#65).
+/* Dashboard filter bar as a flush-aligned SECONDARY TOOLBAR (cinatra#1511;
+ * supersedes the §Nested-toolbar child-toolbar framing of cinatra#65).
  *
  * `<DashboardFilterBarSlot>` (composed-dashboard.tsx) provides the stable
- * host hook `[data-cinatra-dashboard-filter-bar]` plus the nested-toolbar
- * geometry (20px inset; 6px stack gap via the toolbar's own margin). The
- * cube paints every bar/chip color through inline
- * `style={{ … var(--dc-*) … }}`, so the restyle is a SCOPED VARIABLE
- * REDEFINITION — no DC-internal DOM mutation, and the only class-keyed
- * rules below target three single-purpose utility hooks pinned by
- * `__tests__/dc-filter-bar-contract.test.ts`.
+ * host hook `[data-cinatra-dashboard-filter-bar]` and mounts the bar flush
+ * with the primary toolbar (no horizontal inset); the 6px stack gap comes
+ * from the toolbar's own bottom margin. The bar still reads as one level
+ * down via the lighter ground below. The cube paints every bar/chip color
+ * through inline `style={{ … var(--dc-*) … }}`, so the restyle is a SCOPED
+ * VARIABLE REDEFINITION — no DC-internal DOM mutation, and the only
+ * class-keyed rules below target three single-purpose utility hooks pinned
+ * by `__tests__/dc-filter-bar-contract.test.ts`.
  *
  *  - ground   → --toolbar-l2 (one level beneath the primary toolbar)
  *  - borders  → transparent (spec: embedded controls are borderless;
@@ -247,6 +251,30 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
 .dashboard-grid-container [data-portlet-id] > .portlet-drag-handle button svg {
   width: 1rem;
   height: 1rem;
+}
+
+/* Query-error card containment (cinatra#1512).
+ *
+ * The portlet-level `overflow: hidden` above is the rounded-corner clip and
+ * stays. But drizzle-cube's query-error card (AnalyticsPortlet's error
+ * branch: a `dc:p-4 dc:border dc:rounded-sm` div with inline `height: 100%`,
+ * rendered as the direct child of the `dc:flex-1 dc:min-h-0` chart body)
+ * stacks its debug `<details>` expandables BELOW that fixed height, so
+ * expanding them pushed content past the portlet boundary into the clip.
+ * Give the card LOCAL overflow instead: it scrolls inside the portlet on
+ * both axes (the debug `<pre>` blocks keep their own inner scrolling via
+ * `dc:overflow-auto dc:max-h-20`; the card-level `auto` is the backstop for
+ * long unbroken strings — e.g. a member list in an error message — so
+ * nothing is ever clipped, per the #1512 acceptance). The selector is benign
+ * if it ever matches a non-error child: overflow only engages when content
+ * exceeds the box. Pinned against the installed bundle by
+ * portlet-error-card-contract.test.ts. */
+.dashboard-grid-container
+  [data-portlet-id]
+  .dc\:flex-1.dc\:min-h-0
+  > .dc\:p-4.dc\:border.dc\:rounded-sm {
+  max-height: 100%;
+  overflow: auto;
 }
 
 body[data-cinatra-dashboard-modal-open="true"]

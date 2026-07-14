@@ -18,6 +18,7 @@ import { readProjectById, readProjectCoOwners } from "@/lib/projects-store";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { ProjectSubnav } from "@/components/project-subnav";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import type { AccessComboboxProps } from "@/components/access-combobox";
 
@@ -174,7 +175,9 @@ export default async function ProjectPermissionsPage({ params }: Props) {
             <ScopeBadge level={ownerLevel} aria-label={`Ownership: ${ownerLevel}`} />
           </span>
         }
+        divider={false}
       />
+      <ProjectSubnav projectId={project.id} activeSection="permissions" />
       <PageContent className="flex flex-col gap-6 pb-8">
         {/* Clarify ownership vs access. */}
         <AccessVsOwnershipNote />

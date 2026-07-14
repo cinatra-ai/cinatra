@@ -71,6 +71,23 @@ export type ResolveContextSlotInput = {
    *  present + NOT in actor.projectIds → `[]` fail-closed. */
   projectId?: string;
   installedExtensions: ReadonlyArray<InstalledExtensionDescriptor>;
+  /** cinatra#1430: the snapshot pins minted/reused by
+   *  `captureSnapshotsForContextSlot` at THIS resolution. A CLAIMED row
+   *  (eligible binding) is emitted ONLY through its pinned snapshot
+   *  representation — never "latest revision" (an A→B→A content cycle must
+   *  resolve to the reused snapshot, and a redaction-blocked row must not be
+   *  selectable through an older representation). Claimed rows without a pin
+   *  are EXCLUDED (fail-closed). Generic artifacts ignore this and keep the
+   *  latest-representation join. */
+  snapshotPins?: ReadonlyArray<{
+    objectId: string;
+    representationRevisionId: string;
+    /** The binding assertion the snapshot was captured under: the claimed row
+     * is emitted ONLY as this assertion (a binding transition between capture
+     * and resolve fails closed — no candidate — instead of pairing an old
+     * claimant's snapshot with a new claimant's identity). */
+    semanticAssertionId: string;
+  }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -215,7 +232,13 @@ export function resolveContextSlot(
   };
   const acceptedPh = ph(accepted);
   const orgIdPh = ph(input.actor.organizationId);
-  // The semantic-artifact object type literal is a constant — no param needed.
+  // The generic semantic-artifact object type literal (the default-artifact
+  // floor's base type). cinatra#1430: this is no longer the ONLY admissible
+  // type — a CLAIMED typed row carrying an eligible BINDING assertion is also a
+  // context candidate (its snapshot representation + binding assertion complete
+  // the triple). The type predicate below admits the generic type OR any row
+  // bearing an eligible binding; the assertion join + accepted-extension filter
+  // remain the real gate on WHICH extensions resolve.
   const artifactTypePh = ph(SEMANTIC_ARTIFACT_OBJECT_TYPE);
 
   // The project-narrowing clause. When projectId is set, we ADDITIONALLY
@@ -245,14 +268,37 @@ export function resolveContextSlot(
   const projectExcludeWhenUnset =
     input.projectId === undefined ? " AND o.project_id IS NULL" : "";
 
+  // cinatra#1430: snapshot pins for claimed rows (empty arrays when the
+  // caller passed none — every claimed row is then excluded, fail-closed).
+  const pins = input.snapshotPins ?? [];
+  const pinObjectIdsPh = ph(pins.map((p) => p.objectId));
+  const pinRepIdsPh = ph(pins.map((p) => p.representationRevisionId));
+  const pinAssertionIdsPh = ph(pins.map((p) => p.semanticAssertionId));
+
   const sql = `
     WITH visible_objects AS (
-      SELECT id, org_id, owner_level, owner_id, visibility, project_id
+      SELECT id, org_id, owner_level, owner_id, visibility, project_id,
+        EXISTS (
+          SELECT 1 FROM "${schema}"."semantic_assertion" b
+          WHERE b.org_id = o.org_id AND b.artifact_id = o.id
+            AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
+        ) AS is_claimed
       FROM "${schema}"."objects" o
       WHERE o.org_id = ${orgIdPh}
-        AND o.type = ${artifactTypePh}
+        AND (
+          o.type = ${artifactTypePh}
+          OR EXISTS (
+            SELECT 1 FROM "${schema}"."semantic_assertion" b
+            WHERE b.org_id = o.org_id AND b.artifact_id = o.id
+              AND b.assertion_basis = 'binding' AND b.eligibility = 'eligible'
+          )
+        )
         AND o.deleted_at IS NULL
         AND (${ownership.sql})${projectNarrow}${projectExcludeWhenUnset}
+    ),
+    pins AS (
+      SELECT * FROM unnest(${pinObjectIdsPh}::text[], ${pinRepIdsPh}::text[], ${pinAssertionIdsPh}::text[])
+        AS p(object_id, rep_id, assertion_id)
     )
     SELECT
       o.id AS artifact_id,
@@ -268,14 +314,35 @@ export function resolveContextSlot(
     JOIN "${schema}"."semantic_assertion" sa
       ON sa.org_id = o.org_id AND sa.artifact_id = o.id
     JOIN LATERAL (
-      SELECT id, revision
-      FROM "${schema}"."representation"
-      WHERE org_id = o.org_id AND artifact_id = o.id
-      ORDER BY revision DESC
+      -- Generic artifacts: the latest representation revision (unchanged).
+      -- CLAIMED rows: ONLY the snapshot representation pinned at THIS
+      -- resolution (cinatra#1430) — no pin, no candidate.
+      SELECT rep.id, rep.revision
+      FROM "${schema}"."representation" rep
+      WHERE rep.org_id = o.org_id AND rep.artifact_id = o.id
+        AND (
+          (NOT o.is_claimed AND rep.revision = (
+            SELECT MAX(r2.revision) FROM "${schema}"."representation" r2
+            WHERE r2.org_id = o.org_id AND r2.artifact_id = o.id
+          ))
+          OR (o.is_claimed AND rep.id = (
+            SELECT p.rep_id FROM pins p WHERE p.object_id = o.id LIMIT 1
+          ))
+        )
       LIMIT 1
     ) r ON true
     WHERE sa.eligibility = 'eligible'
       AND sa.extension = ANY(${acceptedPh}::text[])
+      -- A claimed row's context identity is its BINDING assertion — classic
+      -- assertions on a claimed row never resolve as candidates
+      -- (claimant-isolation; codex round-2 finding) — and specifically the
+      -- EXACT binding the snapshot pin was captured under (codex round-3:
+      -- a binding transition between capture and resolve yields NO candidate,
+      -- never a mixed old-snapshot/new-identity triple).
+      AND (NOT o.is_claimed OR (
+        sa.assertion_basis = 'binding'
+        AND sa.id = (SELECT p.assertion_id FROM pins p WHERE p.object_id = o.id LIMIT 1)
+      ))
   `;
 
   const [res] = runPostgresQueriesSync({
