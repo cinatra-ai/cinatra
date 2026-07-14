@@ -102,7 +102,7 @@ Use `readAgentsForSkillMatching({ throwOnError? })` from `@/lib/agents-store` fo
 
 `readAgentsCatalog()` (the legacy `readdirSync(packages/*)` scan) is reserved for non-matcher callers that genuinely need the workspace BUILD package list — do not introduce new matcher-adjacent call sites pointing at it.
 
-The matcher write path passes `throwOnError: true` so transient upstream read failures halt the job rather than silently clobbering the legacy `agent_skill_matches` projection with empty data. `throwOnError` threads through every read in the union: `readInstalledAgentTemplates`, root readdir, per-agent JSON parse, and existing-but-malformed sibling `package.json` (ENOENT on the sibling is silently skipped — legitimate "no fallback" case). Default (`throwOnError: false`) is fine for read-only UI / inline-eval / personal-skill form callers.
+The matcher path passes `throwOnError: true` so transient upstream read failures halt the run rather than surfacing an empty/partial projection to callers. `throwOnError` threads through every read in the union: `readInstalledAgentTemplates`, root readdir, per-agent JSON parse, and existing-but-malformed sibling `package.json` (ENOENT on the sibling is silently skipped — legitimate "no fallback" case). Default (`throwOnError: false`) is fine for read-only UI / inline-eval / personal-skill form callers. `readAgentSkillMatches()` (the compatibility projection served to the admin Matches tab and the skills registry) takes the same option: default fail-open for display, but a mutation guard (the per-agent max-skills check in `addAgentSkillMatchAction`) passes `throwOnError: true` so a transient read aborts the add instead of counting a false-empty set.
 
 ### Matches projection rules
 
@@ -158,7 +158,7 @@ extensionRegistry.register(createSkillExtensionHandler());
 |--------|-------|
 | `install(ref, actor)` | `installSkillPackageFromGitHub(ref.packageName)` → `matchAgentsToSkills()` |
 | `update(ref, actor)` | Same as install (upsert semantics — no separate path needed) |
-| `uninstall(ref, actor)` | `uninstallSkillPackage("github:<packageName>")` → filter `agent_skill_matches` blob to remove entries prefixed `"github:<packageName>:"` → save filtered blob |
+| `uninstall(ref, actor)` | `uninstallSkillPackage("github:<packageName>")` → `rebuildSkillsCatalog()` (the rebuilt catalog drops the removed package's skills, so the canonical `skill_matches` projection served by `readAgentSkillMatches()` filters its matches out on the next read — no separate match-store cleanup) |
 
 `validate()` is intentionally absent — deferred.
 

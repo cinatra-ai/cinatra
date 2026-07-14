@@ -680,20 +680,6 @@ export function replaceAgentCatalogInDatabase(input: {
   writeConnectorConfigToDatabase("agent_catalog", input);
 }
 
-export function readAgentSkillMatchesFromDatabase() {
-  return readConnectorConfigFromDatabase("agent_skill_matches", {
-    matches: [] as Array<Record<string, unknown>>,
-    matchedAt: "",
-  });
-}
-
-export function replaceAgentSkillMatchesInDatabase(input: {
-  matches: Array<{ id: string } & Record<string, unknown>>;
-  matchedAt: string;
-}) {
-  writeConnectorConfigToDatabase("agent_skill_matches", input);
-}
-
 export function readAgentSkillExclusionsFromDatabase() {
   return readConnectorConfigFromDatabase("agent_skill_exclusions", {
     exclusions: [] as Array<Record<string, unknown>>,
