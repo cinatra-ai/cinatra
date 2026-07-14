@@ -117,6 +117,104 @@
           "literals": ["aria-label=\"Filter by connection state\""]
         }
       ]
+    },
+    "approvals-inbox": {
+      "manifest": "app",
+      "selector": "harness [data-surface-id=\"approvals-inbox\"][data-variant=\"populated\"] (approve/reject affordances → data-outcome; empty: [data-slot=\"empty\"]; error: [data-slot=\"alert\"]). Real success outcome is server-action gated (session + seeded rows), unreachable on the DB-less standalone harness; the surface is modelled with the real design-system primitives it is built from and each action driven to its manifest outcome (contract.ts).",
+      "requires": [
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        },
+        {
+          "file": "src/components/ui/status-pill.tsx",
+          "literals": ["data-slot=\"status-pill\"", "data-status={status}"]
+        },
+        {
+          "file": "src/components/ui/empty.tsx",
+          "literals": ["data-slot=\"empty\""]
+        },
+        {
+          "file": "src/components/ui/alert.tsx",
+          "literals": ["data-slot='alert'"]
+        }
+      ]
+    },
+    "approvals-your-requests": {
+      "manifest": "app",
+      "selector": "harness [data-surface-id=\"approvals-your-requests\"][data-variant=\"populated\"] (approve/withdraw affordances → data-outcome; empty: [data-slot=\"empty\"]; error: [data-slot=\"alert\"]).",
+      "requires": [
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        },
+        {
+          "file": "src/components/ui/status-pill.tsx",
+          "literals": ["data-slot=\"status-pill\"", "data-status={status}"]
+        },
+        {
+          "file": "src/components/ui/empty.tsx",
+          "literals": ["data-slot=\"empty\""]
+        },
+        {
+          "file": "src/components/ui/alert.tsx",
+          "literals": ["data-slot='alert'"]
+        }
+      ]
+    },
+    "approvals-marketplace-states": {
+      "manifest": "app",
+      "selector": "harness [data-surface-id=\"approvals-marketplace-states\"] — empty mounts the REAL MarketplaceNotConnectedGroup (\"Marketplace not connected\" + Connect registry CTA); retry → data-outcome=\"reloaded\"; error: [data-slot=\"alert\"].",
+      "requires": [
+        {
+          "file": "src/app/configuration/approvals/marketplace-group-views.tsx",
+          "literals": ["Marketplace not connected", "Connect registry"]
+        },
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        },
+        {
+          "file": "src/components/ui/alert.tsx",
+          "literals": ["data-slot='alert'"]
+        }
+      ]
+    },
+    "scheduling-step": {
+      "manifest": "app",
+      "selector": "harness [data-surface-id=\"scheduling-step\"][data-variant=\"populated\"] (schedule affordance → data-outcome=\"armed\"; error: [data-slot=\"alert\"]; loading: [data-testid=\"scheduling-step-loading\"]).",
+      "requires": [
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        },
+        {
+          "file": "src/components/ui/status-pill.tsx",
+          "literals": ["data-slot=\"status-pill\"", "data-status={status}"]
+        },
+        {
+          "file": "src/components/ui/alert.tsx",
+          "literals": ["data-slot='alert'"]
+        }
+      ]
+    },
+    "scheduling-trigger-tab": {
+      "manifest": "app",
+      "selector": "harness [data-surface-id=\"scheduling-trigger-tab\"][data-variant=\"populated\"] (cancel/release affordances → data-outcome; error: [data-slot=\"alert\"]).",
+      "requires": [
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        },
+        {
+          "file": "src/components/ui/status-pill.tsx",
+          "literals": ["data-slot=\"status-pill\"", "data-status={status}"]
+        },
+        {
+          "file": "src/components/ui/alert.tsx",
+          "literals": ["data-slot='alert'"]
+        }
+      ]
     }
   },
   "shared": {
