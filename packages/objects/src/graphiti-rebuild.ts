@@ -2,7 +2,8 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { clearGraph, getEpisodes } from "./graphiti-client";
-import { parseClaimDispositions, resolveClaimWinner, type ArbitrableClaim } from "./claims";
+import { resolveClaimProjectionDisposition, type ArbitrableClaim } from "./claims";
+import { GENERIC_ARTIFACT_OBJECT_TYPE } from "./effective-identity";
 import {
   deriveProjectionGroupId,
   orgIdFromProjectionGroupId,
@@ -92,47 +93,166 @@ const GROUP_MATCH_SQL = `((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = 
 // The `@cinatra-ai/memory:concept` type id, inlined as a literal (NOT imported)
 // for the same worker-dispatch / route-graph reason as graphiti-projector.ts —
 // the source of truth is MEMORY_CONCEPT_TYPE_ID in ../integration/register-types.
+// (GENERIC_ARTIFACT_OBJECT_TYPE is imported from ./effective-identity — the pure
+// leaf is already in this module's graph via the projector import.)
 //
 // A rebuild journal rebuilds ONE ambient org GROUP (`cinatra-org-<id>` /
 // `cinatra-default`): its clearGraph + getEpisodes both scope to that single
-// `group_id`. A memory-concept row projects into a per-scope lane derived by
-// deriveMemoryConceptLane, which is the ambient base lane for ONLY the
-// org/workspace class; every other class is either a per-scope NESTED lane
-// (user / team / any project-suffixed) the single-group clear/count never touch,
-// or a terminal SKIP (public / unclassifiable scope → the projector writes no
-// episode at all). The ambient-group rebuild must operate on ONLY the
-// ambient-base-lane memory rows (their episode IS in this group), and exclude
-// every other memory row:
-//   - a NESTED-lane memory row replayed here would append a duplicate episode
-//     into its uncleared nested lane;
-//   - a SKIP memory row counted here inflates `expected` with no matching
+// `group_id`. A LANE-ELIGIBLE row (memory concept #1379 UNION the generic
+// artifact type UNION an org's currently-artifact-safe-disposed claimed types
+// #1436) projects into a per-scope lane derived by deriveScopeLane, which is
+// the ambient base lane for ONLY the org/workspace class; every other class is
+// either a per-scope NESTED lane (user / team / any project-suffixed) the
+// single-group clear/count never touch, or a terminal SKIP (public /
+// unclassifiable scope → the projector writes no episode at all). The
+// ambient-group rebuild must operate on ONLY the ambient-base-lane rows (their
+// episode IS in this group), and exclude every other lane-eligible row:
+//   - a NESTED-lane row replayed here would append a duplicate episode into its
+//     uncleared nested lane;
+//   - a SKIP row counted here inflates `expected` with no matching
 //     `projected`/episode;
 // either way verification (ambient episode count vs projected-row count) would
-// diverge forever. Conversely, ambient-scoped memory rows MUST stay in the
-// rebuild — excluding them would strand the episode clearGraph just deleted,
-// unprojected. The nested/skip rows' lifecycle is the write-path projector's.
+// diverge forever. Conversely, ambient-scoped lane-eligible rows MUST stay in
+// the rebuild — excluding them would strand the episode clearGraph just
+// deleted, unprojected. The nested/skip rows' lifecycle is the write-path
+// projector's. NON-lane-eligible rows (a claimed 'raw' opt-in, adapter-owned
+// CRM rows, every unclaimed type) keep the single ambient org lane and always
+// stay in the ambient rebuild.
 const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
 
-/** SQL predicate: a memory-concept row whose episode is NOT in the ambient base
- * lane this journal rebuilds — i.e. any memory row deriveMemoryConceptLane does
+/** SQL predicate: a LANE-ELIGIBLE row whose episode is NOT in the ambient base
+ * lane this journal rebuilds — i.e. any lane-eligible row deriveScopeLane does
  * NOT route to the bare `deriveProjectionGroupId(orgId)` lane (a NESTED user /
- * team / project-suffixed lane, OR a terminal public/unclassifiable skip).
+ * team / project-suffixed lane, OR a terminal public/unclassifiable skip)
+ * whose episode genuinely lives OUTSIDE the ambient group.
+ *
+ * `laneTypesParam` is a bind-parameter placeholder (e.g. `"$4::text[]"`) for the
+ * lane-eligible type set (memory literal + generic artifact literal + the org's
+ * artifact-safe claimed types) — a PARAM, not spliced, because the claimed type
+ * ids are extension-controlled (never string-interpolated into SQL). Only the
+ * hardcoded ambient-base classification constants are spliced.
  *
  * Written as the NULL-safe complement of the ambient-base classification (the
- * exact org/workspace branch of deriveMemoryConceptLane): a row is ambient-base
- * iff it is not public, not team-owned, is org-visible OR org/workspace-owned,
- * and carries no project refinement. `(...) IS NOT TRUE` folds both FALSE and
- * NULL (missing/legacy scope) into "exclude", so a partially-populated scope
- * fails closed to exclusion rather than a wrong ambient count. `a` is the table
- * alias; splices only hardcoded constants (no user input). Non-memory rows never
- * match (the `type =` guard), so they always stay in the ambient rebuild. */
-function nonAmbientMemorySql(a: string): string {
-  return `(${a}.type = '${MEMORY_CONCEPT_TYPE_ID}' AND (
+ * exact org/workspace branch of deriveScopeLane): a row is ambient-base iff it
+ * is not public, not team-owned, is org-visible OR org/workspace-owned, and
+ * carries no project refinement. `(...) IS NOT TRUE` folds both FALSE and NULL
+ * (missing/legacy scope) into "exclude", so a partially-populated scope fails
+ * closed to exclusion rather than a wrong ambient count. `a` is the table alias.
+ * A non-lane-eligible row never matches (the `type = ANY(...)` guard), so it
+ * always stays in the ambient rebuild.
+ *
+ * This is the PURE-SCOPE test ("does this row's TARGET lane differ from the
+ * ambient base") — the right predicate for the VERIFYING counts/sample, which
+ * ask "should this row have an ambient-group episode" (target = base). The
+ * SETTLE/RESET/REPLAY phases need the episode-LOCATION-aware variant
+ * `nonAmbientLaneReplaySql` below instead, to handle claim-transition rows whose
+ * stale episode was in the (now-cleared) ambient group. */
+function nonAmbientLaneSql(a: string, laneTypesParam: string): string {
+  return `(${a}.type = ANY(${laneTypesParam}) AND (
         ${a}.visibility IS DISTINCT FROM 'public'
         AND ${a}.owner_level IS DISTINCT FROM 'team'
         AND (${a}.visibility = 'organization' OR ${a}.owner_level IN ('organization', 'workspace'))
         AND ${a}.project_id IS NULL
       ) IS NOT TRUE)`;
+}
+
+/** The ambient base lane of a row, mirroring `deriveProjectionGroupId(org_id)`
+ * in SQL (splices only the `a` alias). */
+function ambientBaseLaneSql(a: string): string {
+  return `(CASE WHEN ${a}.org_id IS NULL THEN 'cinatra-default' ELSE 'cinatra-org-' || ${a}.org_id END)`;
+}
+
+/** SQL predicate: a LANE-ELIGIBLE row to EXCLUDE from the ambient rebuild's
+ * SETTLE / RESET / REPLAY / exhaustion phases — i.e. a row that neither has an
+ * ambient-group episode to rebuild NOR needs one (re)created there. That is a
+ * pure-scope non-ambient row (`nonAmbientLaneSql`) whose episode ALSO genuinely
+ * lives OUTSIDE the ambient group — either it SKIPS projection entirely
+ * (visibility='public') OR its persisted lane is a real NESTED lane
+ * (`projected_group_id` non-null and distinct from the ambient base).
+ *
+ * TRANSITION HANDLING (#1436). A nested-scope row that just became lane-eligible
+ * via a claim change has NO nested episode yet: its `projected_group_id` is the
+ * ambient base lane (was raw/unclaimed -> the base episode `clearGraph` wiped)
+ * OR NULL (was 'none' -> never projected). Neither is "genuinely nested", so
+ * such a row is NOT excluded — it stays in the reset+replay and the projector
+ * creates its nested episode (else it strands: ambient episode gone, nested
+ * never created — the codex-caught raw/none -> artifact-safe regression). A
+ * correctly-nested row (`projected_group_id` = its nested lane) IS excluded (its
+ * surviving nested episode must not be duplicated — the #1379 invariant). The
+ * VERIFYING phase deliberately uses the pure-scope `nonAmbientLaneSql`: it runs
+ * only AFTER the drain settles, by which point every replayed transition row has
+ * been projected into its nested lane (its `projected_group_id` now nested), so
+ * the two predicates agree on which rows carry an ambient episode. */
+function nonAmbientLaneReplaySql(a: string, laneTypesParam: string): string {
+  return `(${nonAmbientLaneSql(a, laneTypesParam)} AND (
+        ${a}.visibility = 'public'
+        OR (${a}.projected_group_id IS NOT NULL
+            AND ${a}.projected_group_id IS DISTINCT FROM ${ambientBaseLaneSql(a)})
+      ))`;
+}
+
+/** The dynamic per-org claim-disposition sets the ambient rebuild needs. */
+type ClaimedTypeDispositions = {
+  /** Claimed types whose WINNER disposition is 'none' — policy-skipped by the
+   * projector (never projected, never counted): excluded from the ambient
+   * expected/projected counts + the recall sample. */
+  excludedTypes: string[];
+  /** Claimed types whose WINNER disposition is 'artifact-safe' / faceted —
+   * LANE-ELIGIBLE exactly like the generic artifact type (nested under
+   * per-scope lanes), so they join the non-ambient exclusion set. */
+  artifactSafeTypes: string[];
+};
+
+/**
+ * One org-scoped claim read → both dynamic type sets the ambient rebuild needs.
+ * Winner arbitration + disposition run through resolveClaimProjectionDisposition,
+ * whose fail-closed disposition leaf (`claimWinnerProjectionDisposition`) is the
+ * SAME rule the projector applies per-row on the write path, so the
+ * counted/replayed/excluded set can never disagree with what the projector
+ * actually writes. Read FRESH each phase: a claimed type whose winning
+ * disposition later flips (e.g. artifact-safe → raw/none) is itself a
+ * claim-change that enqueues a re-projection row, bumps the group epoch, and
+ * FOLDS this journal back to 'clearing' at the higher epoch — so the next phase
+ * re-reads the new set and verify converges (no stale nested-lane episodes stay
+ * uncounted forever). Claim-set/dispositions parsing via the pure claims leaf. */
+export function readClaimedTypeDispositions(orgId: string | null): ClaimedTypeDispositions {
+  const excludedTypes: string[] = [];
+  const artifactSafeTypes: string[] = [];
+  if (orgId == null) return { excludedTypes, artifactSafeTypes };
+  const [result] = run([
+    {
+      text: `SELECT id, scope, object_type_id, claim_kind, status, extension_package, extension_version, generation, dispositions
+             FROM "${s()}"."artifact_type_claims"
+             WHERE scope = 'platform' OR scope = $1`,
+      values: [`org:${orgId}`],
+    },
+  ]);
+  const claims: ArbitrableClaim[] = ((result?.rows ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    id: String(r.id),
+    scope: String(r.scope),
+    objectTypeId: String(r.object_type_id),
+    claimKind: String(r.claim_kind) as ArbitrableClaim["claimKind"],
+    status: String(r.status) as ArbitrableClaim["status"],
+    extensionPackage: String(r.extension_package),
+    extensionVersion: String(r.extension_version),
+    generation: Number(r.generation),
+    dispositions: r.dispositions ?? null,
+  }));
+  for (const typeId of new Set(claims.map((c) => c.objectTypeId))) {
+    const disposition = resolveClaimProjectionDisposition(claims, { orgId, objectTypeId: typeId });
+    if (disposition === "none") excludedTypes.push(typeId);
+    else if (disposition === "artifact-safe") artifactSafeTypes.push(typeId);
+  }
+  return { excludedTypes, artifactSafeTypes };
+}
+
+/** The lane-eligible type set spliced (as a bind value) into the non-ambient
+ * exclusion: the memory concept literal + the generic artifact literal + the
+ * org's artifact-safe-disposed claimed types. A claimed 'raw' opt-in and every
+ * 'none'/unclaimed type are NOT lane-eligible (they keep the single ambient org
+ * lane), so they stay in the ambient rebuild. */
+export function laneEligibleTypes(artifactSafeTypes: readonly string[]): string[] {
+  return [MEMORY_CONCEPT_TYPE_ID, GENERIC_ARTIFACT_OBJECT_TYPE, ...artifactSafeTypes];
 }
 
 export interface RebuildJournalRow {
@@ -430,6 +550,8 @@ async function advanceJournal(initial: RebuildJournalRow, options?: DriveRebuild
  */
 async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
   const q = s();
+  // Lane-eligible type set for the non-ambient exclusion (fresh read this phase).
+  const laneTypes = laneEligibleTypes(readClaimedTypeDispositions(journal.orgId).artifactSafeTypes);
   // In-flight items must settle first: an item mid-projection could append
   // an episode AFTER our group clear (the addEpisode network call is not
   // fenced). Wait for the worker to finish the batch; the recovery sweep in
@@ -460,13 +582,13 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
   // Terminally settle superseded pending/failed items for the group: the full
   // replay below delivers every AMBIENT row's CURRENT state, so pre-bump items
   // (both ordinary NULL-epoch items and older-epoch replay leftovers) are
-  // obsolete. EXCLUDE items for NESTED-lane memory rows: the replay below does
-  // NOT re-deliver them (their episodes live in nested lanes this ambient
-  // rebuild does not own), so superseding a pending nested-memory write-path
-  // item here would drop it with no re-enqueue — the concept would never
-  // project. Those items are left to the write-path projector (NULL-epoch) / the
-  // stale-epoch fence (any old epoch-stamped leftover). Ambient-scoped memory
-  // items ARE re-delivered by the replay, so they supersede like any ambient row.
+  // obsolete. EXCLUDE items for NESTED-lane lane-eligible rows: the replay below
+  // does NOT re-deliver them (their episodes live in nested lanes this ambient
+  // rebuild does not own), so superseding a pending nested write-path item here
+  // would drop it with no re-enqueue — the row would never project. Those items
+  // are left to the write-path projector (NULL-epoch) / the stale-epoch fence
+  // (any old epoch-stamped leftover). Ambient-scoped lane-eligible items ARE
+  // re-delivered by the replay, so they supersede like any ambient row.
   run([
     {
       text: `UPDATE "${q}"."graphiti_projection_outbox" o
@@ -478,9 +600,9 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
                AND (o.projection_epoch IS NULL OR o.projection_epoch < $3)
                AND NOT EXISTS (
                  SELECT 1 FROM "${q}"."objects" om
-                 WHERE om.id = o.object_id AND ${nonAmbientMemorySql("om")}
+                 WHERE om.id = o.object_id AND ${nonAmbientLaneReplaySql("om", "$4::text[]")}
                )`,
-      values: [journal.orgId, String(journal.toEpoch), journal.toEpoch],
+      values: [journal.orgId, String(journal.toEpoch), journal.toEpoch, laneTypes],
     },
   ]);
 
@@ -491,12 +613,12 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
 
   // Reset per-row bookkeeping: the S1 equal-version dedup guard suppresses
   // same-version re-projection by design, so the replay only lands if the
-  // projected-version watermark is cleared. EXCLUDE NESTED-lane memory rows —
-  // their episode lives in a nested lane this ambient clear never touched, so
-  // nulling their watermark (while the replay below skips them) would strand a
-  // live nested-lane episode as "unprojected" forever. Ambient-scoped memory
-  // rows ARE reset (their ambient episode was just cleared; the replay re-drives
-  // them) exactly like any ambient row.
+  // projected-version watermark is cleared. EXCLUDE NESTED-lane lane-eligible
+  // rows — their episode lives in a nested lane this ambient clear never
+  // touched, so nulling their watermark (while the replay below skips them)
+  // would strand a live nested-lane episode as "unprojected" forever.
+  // Ambient-scoped lane-eligible rows ARE reset (their ambient episode was just
+  // cleared; the replay re-drives them) exactly like any ambient row.
   run([
     {
       text: `UPDATE "${q}"."objects" o
@@ -508,11 +630,11 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
              FROM (SELECT $1::text AS org_id) j
              WHERE ((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = j.org_id)
                AND o.deleted_at IS NULL
-               AND NOT ${nonAmbientMemorySql("o")}
+               AND NOT ${nonAmbientLaneReplaySql("o", "$2::text[]")}
                AND (o.graphiti_projected_version IS NOT NULL
                     OR o.graphiti_episode_uuid IS NOT NULL
                     OR o.graphiti_sync_status <> 'pending')`,
-      values: [journal.orgId],
+      values: [journal.orgId, laneTypes],
     },
   ]);
 
@@ -532,8 +654,13 @@ async function runClearingPhase(journal: RebuildJournalRow): Promise<boolean> {
 /** One atomic replay batch: select the next id-window of qualifying rows,
  * enqueue epoch-stamped outbox items, move the checkpoint — all in ONE
  * data-modifying CTE statement (kill-safe: the cursor moves iff the items
- * landed). Exported for the SQL-shape unit test. */
-export function buildReplayBatchQuery(schemaName: string, input: { journalId: string; toEpoch: number; batchSize: number }): QueryInput {
+ * landed). `laneEligibleTypes` is REQUIRED (never defaulted) so a caller can
+ * never silently drop the artifact-safe claimed types from the non-ambient
+ * exclusion (#1436 AC4). Exported for the SQL-shape unit test. */
+export function buildReplayBatchQuery(
+  schemaName: string,
+  input: { journalId: string; toEpoch: number; batchSize: number; laneEligibleTypes: string[] },
+): QueryInput {
   const q = schemaName.replaceAll('"', '""');
   return {
     text: `WITH j AS (
@@ -550,7 +677,7 @@ export function buildReplayBatchQuery(schemaName: string, input: { journalId: st
         WHERE ${GROUP_MATCH_SQL}
           AND o.deleted_at IS NULL
           AND ${SOURCE_GATE_SQL}
-          AND NOT ${nonAmbientMemorySql("o")}
+          AND NOT ${nonAmbientLaneReplaySql("o", "$4::text[]")}
           AND (j.last_id IS NULL OR o.id > j.last_id)
         ORDER BY o.id
         LIMIT $3
@@ -568,7 +695,7 @@ export function buildReplayBatchQuery(schemaName: string, input: { journalId: st
           updated_at = now()
       FROM j
       WHERE g.id = j.id AND (SELECT count(*) FROM ins) > 0`,
-    values: [input.journalId, input.toEpoch, input.batchSize],
+    values: [input.journalId, input.toEpoch, input.batchSize, input.laneEligibleTypes],
   };
 }
 
@@ -578,9 +705,18 @@ function runReplayingPhase(journal: RebuildJournalRow, options?: DriveRebuildOpt
   const q = s();
   const batchSize = options?.replayBatchSize ?? 200;
   const maxBatches = options?.maxReplayBatches ?? 20;
+  // Lane-eligible type set for the non-ambient exclusion (fresh read this
+  // phase; reused across every batch + the exhaustion CAS so they exclude the
+  // identical set — a mismatch would loop or diverge).
+  const laneTypes = laneEligibleTypes(readClaimedTypeDispositions(journal.orgId).artifactSafeTypes);
   for (let i = 0; i < maxBatches; i += 1) {
     const [batchResult] = run([
-      buildReplayBatchQuery(postgresSchema, { journalId: journal.id, toEpoch: journal.toEpoch, batchSize }),
+      buildReplayBatchQuery(postgresSchema, {
+        journalId: journal.id,
+        toEpoch: journal.toEpoch,
+        batchSize,
+        laneEligibleTypes: laneTypes,
+      }),
     ]);
     if ((batchResult?.rowCount ?? 0) > 0) continue; // batch landed, cursor moved
     // 0 rows: either the enumeration is exhausted or we were fenced out
@@ -602,50 +738,15 @@ function runReplayingPhase(journal: RebuildJournalRow, options?: DriveRebuildOpt
                    WHERE ${GROUP_MATCH_SQL}
                      AND o.deleted_at IS NULL
                      AND ${SOURCE_GATE_SQL}
-                     AND NOT ${nonAmbientMemorySql("o")}
+                     AND NOT ${nonAmbientLaneReplaySql("o", "$3::text[]")}
                      AND (j.last_id IS NULL OR o.id > j.last_id)
                  )`,
-        values: [journal.id, journal.toEpoch],
+        values: [journal.id, journal.toEpoch, laneTypes],
       },
     ]);
     return (cas?.rowCount ?? 0) > 0;
   }
   return true; // bounded work done for this cycle; more batches next cycle
-}
-
-/** Types whose winning claim carries `projection: 'none'` for this org —
- * their rows are policy-skipped by the projector (never projected, never
- * counted). Read directly (this module already has PG access); winner
- * arbitration + dispositions parsing via the pure claims leaf. */
-function readPolicyExcludedTypes(orgId: string | null): string[] {
-  if (orgId == null) return [];
-  const [result] = run([
-    {
-      text: `SELECT id, scope, object_type_id, claim_kind, status, extension_package, extension_version, generation, dispositions
-             FROM "${s()}"."artifact_type_claims"
-             WHERE scope = 'platform' OR scope = $1`,
-      values: [`org:${orgId}`],
-    },
-  ]);
-  const claims: ArbitrableClaim[] = ((result?.rows ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    id: String(r.id),
-    scope: String(r.scope),
-    objectTypeId: String(r.object_type_id),
-    claimKind: String(r.claim_kind) as ArbitrableClaim["claimKind"],
-    status: String(r.status) as ArbitrableClaim["status"],
-    extensionPackage: String(r.extension_package),
-    extensionVersion: String(r.extension_version),
-    generation: Number(r.generation),
-    dispositions: r.dispositions ?? null,
-  }));
-  const excluded: string[] = [];
-  for (const typeId of new Set(claims.map((c) => c.objectTypeId))) {
-    const winner = resolveClaimWinner(claims, { orgId, objectTypeId: typeId });
-    if (!winner || winner.dispositions == null) continue;
-    const parsed = parseClaimDispositions(winner.dispositions);
-    if (parsed.ok && parsed.dispositions.projection === "none") excluded.push(typeId);
-  }
-  return excluded;
 }
 
 /**
@@ -693,15 +794,22 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
     return false;
   }
 
-  const excludedTypes = readPolicyExcludedTypes(journal.orgId);
-  // NESTED-lane memory rows (#1379) project into per-scope lanes, NOT this
-  // journal's single ambient group. `episodes` below is fetched from the ambient
-  // group_id ONLY, so counting them in the expected/projected totals would make
-  // the episode-vs-projected comparison permanently diverge (episodes.length
-  // undercounts by every nested memory episode → the journal never reaches
-  // 'done'). Exclude them from every ambient count + the recall sample; their
-  // nested-lane hygiene is the write-path projector's. Ambient-scoped memory
-  // rows (episode in THIS group) are counted like any ambient row.
+  // One org-scoped claim read → both dynamic type sets: 'none'-disposed types
+  // (excluded from the counts + sample) + artifact-safe types (lane-eligible,
+  // joined with the memory + generic-artifact literals into the non-ambient
+  // exclusion). Fresh read this phase — a disposition flip folds this journal
+  // back to clearing, so verify converges (see readClaimedTypeDispositions).
+  const { excludedTypes, artifactSafeTypes } = readClaimedTypeDispositions(journal.orgId);
+  const laneTypes = laneEligibleTypes(artifactSafeTypes);
+  // NESTED-lane lane-eligible rows (#1379 memory, #1436 artifact) project into
+  // per-scope lanes, NOT this journal's single ambient group. `episodes` below
+  // is fetched from the ambient group_id ONLY, so counting them in the
+  // expected/projected totals would make the episode-vs-projected comparison
+  // permanently diverge (episodes.length undercounts by every nested episode →
+  // the journal never reaches 'done'). Exclude them from every ambient count +
+  // the recall sample; their nested-lane hygiene is the write-path projector's.
+  // Ambient-scoped lane-eligible rows (episode in THIS group) are counted like
+  // any ambient row.
   const [counts] = run([
     {
       text: `SELECT
@@ -712,8 +820,8 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
              WHERE ((j.org_id IS NULL AND o.org_id IS NULL) OR o.org_id = j.org_id)
                AND o.deleted_at IS NULL
                AND ${SOURCE_GATE_SQL}
-               AND NOT ${nonAmbientMemorySql("o")}`,
-      values: [journal.orgId, excludedTypes],
+               AND NOT ${nonAmbientLaneSql("o", "$3::text[]")}`,
+      values: [journal.orgId, excludedTypes, laneTypes],
     },
   ]);
   const countsRow = (counts?.rows[0] ?? {}) as { expected?: number; projected?: number };
@@ -754,9 +862,9 @@ async function runVerifyingPhase(journal: RebuildJournalRow, options?: DriveRebu
                AND ${SOURCE_GATE_SQL}
                AND o.graphiti_projected_version IS NOT NULL
                AND o.type <> ALL($2::text[])
-               AND NOT ${nonAmbientMemorySql("o")}
+               AND NOT ${nonAmbientLaneSql("o", "$3::text[]")}
              ORDER BY o.id LIMIT 3`,
-      values: [journal.orgId, [...excludedTypes, ...adapterTypes]],
+      values: [journal.orgId, [...excludedTypes, ...adapterTypes], laneTypes],
     },
   ]);
   const sampleIds = ((sample?.rows ?? []) as Array<{ id: string }>).map((r) => String(r.id));

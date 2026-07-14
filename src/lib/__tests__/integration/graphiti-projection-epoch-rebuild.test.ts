@@ -36,6 +36,11 @@ import {
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@");
 
+// The lane-eligible type set (the non-ambient exclusion param, #1436 AC4). For
+// these fixtures the artifact-safe claimed set is empty, so it is just the two
+// static literals — memory concept + generic artifact.
+const LANE_TYPES = ["@cinatra-ai/memory:concept", "@cinatra-ai/artifact:object"];
+
 describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (real DB)", () => {
   let client: Client;
   let schema: string;
@@ -161,7 +166,7 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (r
     );
 
     // Batch 1 (size 2): enqueues obj-r-01, obj-r-02; cursor → obj-r-02.
-    const b1 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 2 });
+    const b1 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 2, laneEligibleTypes: LANE_TYPES });
     const r1 = await client.query(b1.text, b1.values);
     expect(r1.rowCount).toBeGreaterThan(0);
 
@@ -173,11 +178,11 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (r
     expect(after1[0].checkpoint.enqueued).toBe(2);
 
     // KILL-RESUME: re-run from the persisted cursor → enqueues ONLY obj-r-03.
-    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 2 });
+    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 2, laneEligibleTypes: LANE_TYPES });
     await client.query(b2.text, b2.values);
 
     // Exhaustion: a third run enqueues nothing (rowCount 0).
-    const b3 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 2 });
+    const b3 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 2, laneEligibleTypes: LANE_TYPES });
     const r3 = await client.query(b3.text, b3.values);
     expect(r3.rowCount).toBe(0);
 
@@ -231,6 +236,15 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (r
       id: "obj-mem-org", type: MEM, orgId: org,
       ownerLevel: "organization", ownerId: org, visibility: "organization",
     });
+    // The nested rows already carry their nested-lane episode (projected by the
+    // write-path) — the realistic steady state. The replay predicate excludes a
+    // nested row only when its projected_group_id is a GENUINE nested lane
+    // (episode outside the ambient group clearGraph cleared); a public row is
+    // excluded by scope regardless of projected_group_id.
+    const base = `cinatra-org-${org}`;
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-mem-user", `${base}-user-user-42`]);
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-mem-team", `${base}-team-team-7`]);
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-mem-proj", `${base}-proj-proj-9`]);
     const journalId = randomUUID();
     await client.query(
       `INSERT INTO "${schema}"."graphiti_rebuild_journal"
@@ -239,12 +253,12 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (r
       [journalId, `cinatra-org-${org}`, org],
     );
 
-    const b = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50 });
+    const b = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50, laneEligibleTypes: LANE_TYPES });
     await client.query(b.text, b.values);
     // A second run reaches exhaustion (rowCount 0) despite the excluded memory
     // rows still existing past the cursor — the exhaustion predicate excludes
     // exactly the same set.
-    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50 });
+    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50, laneEligibleTypes: LANE_TYPES });
     const r2 = await client.query(b2.text, b2.values);
     expect(r2.rowCount).toBe(0);
 
@@ -254,6 +268,117 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (r
     );
     // Ambient row + ambient-scoped memory replayed; nested + public memory are not.
     expect(outbox.map((r) => r.object_id)).toEqual(["obj-mem-org", "obj-normal"]);
+  });
+
+  it("replay EXCLUDES non-ambient ARTIFACT + artifact-safe CLAIMED rows, but a 'raw' claimed row keeps the ambient lane (#1436 AC4)", async () => {
+    const org = "org-art-excl";
+    const ART = "@cinatra-ai/artifact:object"; // the generic artifact type (always lane-eligible)
+    const SAFE = "@acme/safe:doc"; // a claimed type whose winner disposition is artifact-safe → lane-eligible
+    const RAW = "@acme/raw:blob"; // a claimed 'raw' type → NOT lane-eligible (keeps the ambient lane)
+    // Generic artifact rows: org-scoped ambient (REPLAY) + user-private nested (EXCLUDE).
+    await insertObject(client, schema, {
+      id: "obj-a-art-org", type: ART, orgId: org,
+      ownerLevel: "organization", ownerId: org, visibility: "organization",
+    });
+    await insertObject(client, schema, {
+      id: "obj-b-art-user", type: ART, orgId: org,
+      ownerLevel: "user", ownerId: "user-42", visibility: "private",
+    });
+    // Artifact-safe claimed rows: same split — nested excluded, ambient replayed.
+    await insertObject(client, schema, {
+      id: "obj-c-safe-org", type: SAFE, orgId: org,
+      ownerLevel: "organization", ownerId: org, visibility: "organization",
+    });
+    await insertObject(client, schema, {
+      id: "obj-d-safe-user", type: SAFE, orgId: org,
+      ownerLevel: "user", ownerId: "user-42", visibility: "private",
+    });
+    // A 'raw' claimed row is NOT lane-eligible: even user-private it stays in the
+    // ambient rebuild (its episode is in the ambient group), so it REPLAYS.
+    await insertObject(client, schema, {
+      id: "obj-e-raw-user", type: RAW, orgId: org,
+      ownerLevel: "user", ownerId: "user-42", visibility: "private",
+    });
+    // The nested rows already carry their nested-lane episode (steady state), so
+    // the replay excludes them (episode outside the cleared ambient group).
+    const base = `cinatra-org-${org}`;
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-b-art-user", `${base}-user-user-42`]);
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-d-safe-user", `${base}-user-user-42`]);
+    const journalId = randomUUID();
+    await client.query(
+      `INSERT INTO "${schema}"."graphiti_rebuild_journal"
+         (id, group_id, org_id, from_epoch, to_epoch, phase, checkpoint, reason)
+       VALUES ($1, $2, $3, 1, 2, 'replaying', jsonb_build_object('lastObjectId', NULL, 'enqueued', 0), '{}'::jsonb)`,
+      [journalId, `cinatra-org-${org}`, org],
+    );
+
+    // The lane-eligible set the driver's readClaimedTypeDispositions would
+    // compute for this org: memory + generic artifact literals + the artifact-
+    // safe claimed type (SAFE). RAW is absent (not lane-eligible).
+    const laneEligibleTypes = ["@cinatra-ai/memory:concept", ART, SAFE];
+    const b = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50, laneEligibleTypes });
+    await client.query(b.text, b.values);
+    // Exhaustion despite the excluded nested rows still existing past the cursor.
+    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50, laneEligibleTypes });
+    const r2 = await client.query(b2.text, b2.values);
+    expect(r2.rowCount).toBe(0);
+
+    const outbox = await q<{ object_id: string }>(
+      `SELECT object_id FROM "${schema}"."graphiti_projection_outbox" WHERE org_id = $1 ORDER BY object_id`,
+      [org],
+    );
+    // Ambient artifact + ambient safe-claimed + the raw row replayed; nested
+    // artifact + nested safe-claimed are excluded.
+    expect(outbox.map((r) => r.object_id)).toEqual(["obj-a-art-org", "obj-c-safe-org", "obj-e-raw-user"]);
+  });
+
+  it("replay INCLUDES claim-transition nested rows (projected_group_id = base OR NULL) but not correctly-nested / public rows, so a transition never strands (#1436)", async () => {
+    const org = "org-transition";
+    const group = `cinatra-org-${org}`;
+    const ART = "@cinatra-ai/artifact:object";
+    // Four user-private (nested-scope) lane-eligible rows differing only by their
+    // prior projection state, plus a public one:
+    //  - obj-a-stale-ambient : projected_group_id = the ambient BASE lane
+    //      (raw/unclaimed -> artifact-safe: base episode clearGraph wiped)   → REPLAY
+    //  - obj-b-never-proj    : projected_group_id = NULL
+    //      (none -> artifact-safe: never projected — the codex-caught strand) → REPLAY
+    //  - obj-c-already-nested: projected_group_id = its NESTED lane
+    //      (steady state: surviving nested episode)                          → EXCLUDE
+    //  - obj-d-public        : public scope, projected_group_id = NULL
+    //      (terminal skip — never projected)                                 → EXCLUDE
+    for (const id of ["obj-a-stale-ambient", "obj-b-never-proj", "obj-c-already-nested"]) {
+      await insertObject(client, schema, {
+        id, type: ART, orgId: org,
+        ownerLevel: "user", ownerId: "user-42", visibility: "private",
+      });
+    }
+    await insertObject(client, schema, {
+      id: "obj-d-public", type: ART, orgId: org,
+      ownerLevel: "user", ownerId: "user-42", visibility: "public",
+    });
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-a-stale-ambient", group]);
+    // obj-b-never-proj keeps projected_group_id = NULL (insert default).
+    await client.query(`UPDATE "${schema}"."objects" SET projected_group_id = $2 WHERE id = $1`, ["obj-c-already-nested", `${group}-user-user-42`]);
+    const journalId = randomUUID();
+    await client.query(
+      `INSERT INTO "${schema}"."graphiti_rebuild_journal"
+         (id, group_id, org_id, from_epoch, to_epoch, phase, checkpoint, reason)
+       VALUES ($1, $2, $3, 1, 2, 'replaying', jsonb_build_object('lastObjectId', NULL, 'enqueued', 0), '{}'::jsonb)`,
+      [journalId, group, org],
+    );
+    const b = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50, laneEligibleTypes: LANE_TYPES });
+    await client.query(b.text, b.values);
+    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50, laneEligibleTypes: LANE_TYPES });
+    const r2 = await client.query(b2.text, b2.values);
+    expect(r2.rowCount).toBe(0);
+
+    const outbox = await q<{ object_id: string }>(
+      `SELECT object_id FROM "${schema}"."graphiti_projection_outbox" WHERE org_id = $1 ORDER BY object_id`,
+      [org],
+    );
+    // Both transition rows (stale-ambient + never-projected) replay; the
+    // correctly-nested row and the public row are excluded.
+    expect(outbox.map((r) => r.object_id)).toEqual(["obj-a-stale-ambient", "obj-b-never-proj"]);
   });
 
   it("stale-epoch FENCE: only the item stamped below the group's epoch is discarded", async () => {
