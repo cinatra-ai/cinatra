@@ -120,14 +120,16 @@ type CollapsibleGroup = {
   suppressLinkNav?: boolean;
 };
 
+// The retired "Data" group used to fill the generic-NavGroup-collapsible slot
+// here; #1431 / PR #1582 folded it into the consolidated /artifacts surface, so
+// its sidebar entry and `sidebar-collapsible-label-data` testid no longer exist.
+// Nothing shipped replaces it ON THIS ROUTE: /design-fixtures renders the shell
+// UNAUTHENTICATED, and the only remaining generic collapsible — Analytics — is
+// admin-tier (metric.read), so the root layout pushes it onto hiddenNavTitles
+// for a null session (src/app/layout.tsx) and AppSidebar filters it out. Chat is
+// therefore the only collapsible group the fixture renders, and its label-click
+// toggle is the hand-rolled handleChatLinkClick parity (#819) under guard.
 const COLLAPSIBLE_GROUPS: CollapsibleGroup[] = [
-  {
-    // Generic NavGroup collapsible (whole button is the CollapsibleTrigger).
-    name: "Data",
-    labelTestId: "sidebar-collapsible-label-data",
-    subItemsTestId: "sidebar-collapsible-subitems-data",
-    sampleSubItem: "All data",
-  },
   {
     // Chat — label-click toggle is hand-rolled in handleChatLinkClick (#819).
     name: "Chat",
