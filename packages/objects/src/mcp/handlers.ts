@@ -437,6 +437,22 @@ async function enforceActivatedTypePayload(
 const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
 
 /**
+ * Fail-closed registration probe shared by the memory-envelope gate and the
+ * objects_save pre-classification guard: a memory-typed write with no static
+ * registration has no enforceable envelope schema — refuse rather than
+ * persist unvalidated.
+ */
+function resolveMemoryConceptDefOrThrow() {
+  const def = objectTypeRegistry.resolve(MEMORY_CONCEPT_TYPE_ID);
+  if (!def) {
+    throw new Error(
+      `[objects:memory-concept] refusing to write "${MEMORY_CONCEPT_TYPE_ID}": the static type is not registered, so its envelope schema cannot be enforced`,
+    );
+  }
+  return def;
+}
+
+/**
  * Memory-envelope enforcement (cinatra#1376, epic #1373). Memory rows take
  * the deterministic static-type path; this gate wires the type's REGISTERED
  * Zod schema (defined in `integration/register-types.ts`, resolved via the
@@ -450,6 +466,17 @@ const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
  * no kill-switch — memory files are untrusted input end-to-end, and a
  * memory-typed write whose schema cannot be resolved is refused outright.
  *
+ * FAIL-CLOSED COVERAGE NOTE: this gate keys on the RESOLVED type id, which
+ * on objects_save is `classifyObject`'s output. When the static registration
+ * is missing, the classifier's static fast-path cannot fire and its LLM
+ * output schema is enum-constrained to registered/dynamic ids — so the
+ * memory id can never reach this gate from the save path. The save handler
+ * therefore carries its own pre-classification guard on the DECLARED
+ * `typeHint` (see objects_save) so a memory-declared save is refused before
+ * classification instead of being misclassified and persisted unvalidated.
+ * objects_update needs no such guard: it keys on the existing row's stored
+ * type and always reaches this gate.
+ *
  * Returns the data TO PERSIST. For a valid memory envelope this is the input
  * with the schema's `okfVersion` default ("0.1") materialized when the caller
  * omitted it — the parsed output itself is NOT stored because Zod's strip
@@ -461,14 +488,7 @@ function enforceMemoryConceptEnvelope(
   data: Record<string, unknown>,
 ): Record<string, unknown> {
   if (objectTypeId !== MEMORY_CONCEPT_TYPE_ID) return data;
-  const def = objectTypeRegistry.resolve(objectTypeId);
-  if (!def) {
-    // Fail closed: a memory-typed write with no static registration has no
-    // enforceable envelope schema — refuse rather than persist unvalidated.
-    throw new Error(
-      `[objects:memory-concept] refusing to write "${objectTypeId}": the static type is not registered, so its envelope schema cannot be enforced`,
-    );
-  }
+  const def = resolveMemoryConceptDefOrThrow();
   const parsed = def.schema.safeParse(data);
   if (!parsed.success) {
     const issues = parsed.error.issues
@@ -531,6 +551,18 @@ export function createObjectsPrimitiveHandlers() {
       // Canonical `rawData` + `typeHint` only; legacy `payload` / `type`
       // aliases are intentionally not supported here.
       const rawData = input.rawData ?? {};
+
+      // Fail-closed pre-classification guard (cinatra#1376): a save that
+      // DECLARES the memory type must be refused HERE when the static
+      // registration is missing. classifyObject's static fast-path requires a
+      // registry hit, and its LLM output schema is enum-constrained to
+      // registered/dynamic ids — so with the registration gone the memory id
+      // can never come back as `classification.type`, the envelope gate below
+      // would never fire, and the payload would be misclassified (or minted
+      // as a dynamic type) and persisted with no envelope validation at all.
+      if (input.typeHint === MEMORY_CONCEPT_TYPE_ID) {
+        resolveMemoryConceptDefOrThrow();
+      }
 
       // 1. Classify
       const classificationModel = readObjectsClassificationModelFromDatabase();

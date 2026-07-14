@@ -7,7 +7,10 @@
 // - AC2: envelope rejection paths (externalId mismatch, okfType/frontmatter
 //   mismatch, body over the 64 KiB cap) reject BEFORE any commit.
 // - Fail-closed: a memory-typed write whose static registration is missing is
-//   refused (exercised via objects_update, which never classifies).
+//   refused on BOTH write paths — objects_save via the pre-classification
+//   guard on the declared typeHint (the classifier can never return an
+//   unregistered static id, so the envelope gate alone cannot cover saves),
+//   and objects_update via the envelope gate on the existing row's type.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -205,6 +208,18 @@ describe("objects_save — memory envelope rejection paths (AC2, fail-closed)", 
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
+  it("FAIL-CLOSED: refuses a memory-declared save when the static registration is missing — before classification, no LLM fall-through, no dynamic mint", async () => {
+    objectTypeRegistry._clearForTests(); // simulate a boot path that never registered the type
+    await expect(save(makeEnvelope())).rejects.toThrow(/static type is not registered/);
+    expect(mockUpsert).not.toHaveBeenCalled();
+    // The guard fires BEFORE classifyObject: without it the classifier would
+    // fall through to the LLM path (its output enum cannot return an
+    // unregistered static id) and the payload could be misclassified or
+    // minted as a dynamic type and persisted with no envelope validation.
+    expect(mockLlmResolve).not.toHaveBeenCalled();
+    expect(mockEnsureDynamic).not.toHaveBeenCalled();
+  });
+
   it("does NOT gate other static types (memory-scoped enforcement)", async () => {
     mockUpsert.mockReturnValue(
       makeMemoryRecord({ type: "@cinatra-ai/campaigns:context", data: { anything: true } }),
@@ -255,7 +270,7 @@ describe("objects_update — memory envelope enforcement on the merged payload",
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
-  it("FAIL-CLOSED: refuses a memory-typed write when the static registration is missing", async () => {
+  it("FAIL-CLOSED: refuses a memory-typed UPDATE when the static registration is missing (existing-row type path)", async () => {
     objectTypeRegistry._clearForTests(); // simulate a boot path that never registered the type
     mockGet.mockReturnValue(makeMemoryRecord());
     const handlers = createObjectsPrimitiveHandlers();
