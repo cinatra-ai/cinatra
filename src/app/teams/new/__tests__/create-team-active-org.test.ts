@@ -156,4 +156,15 @@ describe("createTeamAction active-org destination guard", () => {
     expect(dest).toBe("/not-authorized");
     expect(h.setActiveOrganization).not.toHaveBeenCalled();
   });
+
+  it("fails visibly when the switch rejects post-create (no silent /teams redirect)", async () => {
+    // Deliberate policy: if set-active fails (e.g. membership revoked between
+    // create and switch), surface the error rather than landing on a /teams
+    // page that would not show the just-created team.
+    mockSession(ACTIVE_ORG);
+    h.setActiveOrganization.mockRejectedValue(new Error("FORBIDDEN"));
+
+    await expect(createTeamAction(formFor(OTHER_ORG))).rejects.toThrow("FORBIDDEN");
+    expect(h.setActiveOrganization).toHaveBeenCalledTimes(1);
+  });
 });
