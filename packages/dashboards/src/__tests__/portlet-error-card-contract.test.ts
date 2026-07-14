@@ -108,8 +108,10 @@ describe("drizzle-cube portlet error-card contract (cinatra#1512)", () => {
 
   it("dashboard-theme.css carries the scoped containment rule AND keeps the portlet clip", () => {
     // The containment rule: error card scrolls locally inside the portlet.
+    // The full selector chain is pinned INCLUDING the .dashboard-grid-container
+    // prefix — the rule must stay scoped to Cinatra's grid, never global.
     expect(THEME_CSS).toMatch(
-      /\[data-portlet-id\]\s*\n?\s*\.dc\\:flex-1\.dc\\:min-h-0\s*\n?\s*>\s*\.dc\\:p-4\.dc\\:border\.dc\\:rounded-sm\s*\{[^}]*max-height:\s*100%;[^}]*overflow:\s*auto;/,
+      /\.dashboard-grid-container\s*\n?\s*\[data-portlet-id\]\s*\n?\s*\.dc\\:flex-1\.dc\\:min-h-0\s*\n?\s*>\s*\.dc\\:p-4\.dc\\:border\.dc\\:rounded-sm\s*\{[^}]*max-height:\s*100%;[^}]*overflow:\s*auto;/,
     );
     // The portlet-level rounded-corner clip is untouched (containment is
     // LOCAL overflow on the card, not removal of the portlet clip).
