@@ -34,7 +34,9 @@ docker/wayflow/.wayflow.env
 .DS_Store
 
 # --- Claude Code (local-only: memory + ephemeral session data) ---
-memory/
+# Root-anchored: an unanchored `memory/` would also swallow the tracked
+# workspace package at packages/memory.
+/memory/
 .claude/
 
 # --- Python (docker/wayflow) ---
