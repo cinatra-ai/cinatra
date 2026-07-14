@@ -79,3 +79,28 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
     { text: `CREATE INDEX IF NOT EXISTS assistant_turns_thread_created_idx ON "${s}"."assistant_turns" (thread_id, created_at, id)` },
   ];
 }
+
+/** Bootstrap DDL for `assistant_handles` — the platform-unique handle registry
+ * (cinatra#1037 P1.2 / P5.1 substrate): the normalized, collision-suffixed handle
+ * an assistant PRINCIPAL is mentioned by, one row per principal (assistant_user_id
+ * is the 1:1 key), with an owner-override flag distinguishing a chosen handle from
+ * the username-derived default. `handle` is UNIQUE across the platform so mention
+ * resolution is deterministic (retiring the old un-normalized raw-lowercase-username
+ * match). NET-NEW table (additive), so the fresh-install shape is born here and
+ * ledger-fakes core__0046; that migration carries the SAME create onto the operator
+ * upgrade path AND backfills existing assistant principals from public."user".
+ * assistant_user_id is a bare text column (no cross-schema FK to the Better Auth
+ * `public."user"` table, exactly like assistant_threads.assistant_user_id). */
+export function assistantHandleSchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."assistant_handles" (
+      assistant_user_id text PRIMARY KEY,
+      handle text NOT NULL,
+      is_override boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS assistant_handles_handle_key ON "${s}"."assistant_handles" (handle)` },
+  ];
+}

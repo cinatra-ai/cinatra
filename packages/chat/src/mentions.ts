@@ -1,7 +1,9 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
-import { betterAuthDb, betterAuthUsers } from "@/lib/better-auth-db";
+import {
+  resolveAssistantHandles,
+  lookupAssistantHandlesByIds,
+} from "@/lib/better-auth-db";
 import type { Mention } from "./types";
 // parseMentions and RawMention live in the pure module (no server-only/DB imports).
 // Re-export parseMentions so existing callers (actions.ts, chat-page.tsx) keep working.
@@ -10,20 +12,17 @@ import { parseMentions, type RawMention } from "./mentions-pure";
 
 // ---------------------------------------------------------------------------
 // resolveMentions — resolve @handles to assistant user ids
+//
+// Reads the platform handle REGISTRY (`assistant_handles`, cinatra#1037 P1.2),
+// NOT the un-normalized raw-lowercase `public."user".username`. The registry is
+// the deterministic, collision-suffixed source of truth: a handle hit IS a
+// mentionable assistant principal (the registry only ever holds assistants).
 // ---------------------------------------------------------------------------
 
 export async function resolveMentions(raw: RawMention[]): Promise<Mention[]> {
   if (raw.length === 0) return [];
 
-  // Fetch all assistant users — the set is small and changes rarely
-  const users = await betterAuthDb
-    .select({ id: betterAuthUsers.id, username: betterAuthUsers.username })
-    .from(betterAuthUsers)
-    .where(and(eq(betterAuthUsers.userType, "assistant")));
-
-  const byHandle = new Map(
-    users.filter((u) => u.username).map((u) => [u.username!.toLowerCase(), u.id]),
-  );
+  const byHandle = await resolveAssistantHandles(raw.map((r) => r.handle));
 
   return raw
     .map((r): Mention | null => {
@@ -35,23 +34,19 @@ export async function resolveMentions(raw: RawMention[]): Promise<Mention[]> {
 
 // ---------------------------------------------------------------------------
 // resolveAssistantsByIds — reverse lookup: userId[] → Mention[]
-// Used for broadcast dispatch when taggedAssistantUserIds are known but handles aren't.
+// Used for broadcast dispatch when taggedAssistantUserIds are known but handles
+// aren't. Reads the registry handle (not the raw username).
 // ---------------------------------------------------------------------------
 
 export async function resolveAssistantsByIds(ids: string[]): Promise<Mention[]> {
   if (ids.length === 0) return [];
 
-  const users = await betterAuthDb
-    .select({ id: betterAuthUsers.id, username: betterAuthUsers.username })
-    .from(betterAuthUsers)
-    .where(and(eq(betterAuthUsers.userType, "assistant")));
+  const byId = await lookupAssistantHandlesByIds(ids);
 
   return ids
     .map((id): Mention | null => {
-      const user = users.find((u) => u.id === id);
-      return user?.username
-        ? { handle: user.username.toLowerCase(), assistantUserId: id, offset: 0, length: 0 }
-        : null;
+      const handle = byId.get(id);
+      return handle ? { handle, assistantUserId: id, offset: 0, length: 0 } : null;
     })
     .filter((m): m is Mention => m !== null);
 }
@@ -68,22 +63,18 @@ export async function resolveMentionsWithDefault(content: string): Promise<Menti
     return resolveMentions(raw);
   }
 
-  // No explicit mention — fall back to @cinatra
-  const cinatra = await betterAuthDb
-    .select({ id: betterAuthUsers.id })
-    .from(betterAuthUsers)
-    .where(and(eq(betterAuthUsers.username, "cinatra"), eq(betterAuthUsers.userType, "assistant")))
-    .limit(1);
-
-  if (!cinatra[0]) {
-    // @cinatra not seeded yet — no routing
+  // No explicit mention — fall back to @cinatra via the registry.
+  const byHandle = await resolveAssistantHandles(["cinatra"]);
+  const cinatraId = byHandle.get("cinatra");
+  if (!cinatraId) {
+    // @cinatra not registered yet — no routing.
     return [];
   }
 
   return [
     {
       handle: "cinatra",
-      assistantUserId: cinatra[0].id,
+      assistantUserId: cinatraId,
       offset: 0,
       length: 0, // synthetic — not present in content
     },

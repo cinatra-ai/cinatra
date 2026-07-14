@@ -16,6 +16,7 @@ import {
   betterAuthPool,
   betterAuthSessions,
   betterAuthUsers,
+  backfillMissingAssistantHandles,
 } from "@/lib/better-auth-db";
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
@@ -887,4 +888,16 @@ async function ensureBuiltInCinatraAssistant() {
 export async function ensureAssistantBootstrap() {
   await ensureAssistantUserSchema();
   await ensureBuiltInCinatraAssistant();
+  // Register mention handles for any assistant principals lacking one — this is
+  // where @cinatra's registry handle is minted on a fresh install (the seed above
+  // runs AFTER migrations, so core__0046's backfill can't see it). Best-effort:
+  // a registry error must not break assistant bootstrap.
+  try {
+    await backfillMissingAssistantHandles();
+  } catch (err) {
+    console.warn(
+      "[cinatra-assistant] Could not backfill assistant handles:",
+      err instanceof Error ? err.message : err,
+    );
+  }
 }

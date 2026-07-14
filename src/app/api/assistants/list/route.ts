@@ -3,11 +3,19 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { auth } from "@/lib/auth";
-import { betterAuthDb, betterAuthMembers, betterAuthUsers } from "@/lib/better-auth-db";
+import {
+  betterAuthDb,
+  betterAuthMembers,
+  betterAuthUsers,
+  lookupAssistantHandlesByIds,
+} from "@/lib/better-auth-db";
 
 export const dynamic = "force-dynamic";
 
-/** Derive a GitLab-style ASCII handle: lowercase, spaces→_, strip non-[a-z0-9_-] */
+/** Derive a GitLab-style ASCII handle: lowercase, spaces→_, strip non-[a-z0-9_-].
+ * Humans are not in the handle registry, so their display handle is still derived
+ * here; ASSISTANT handles come from the registry below (the authoritative,
+ * collision-suffixed handle mention resolution matches). */
 function toHandle(raw: string): string {
   return raw
     .toLowerCase()
@@ -67,6 +75,12 @@ export async function GET() {
     .from(betterAuthUsers)
     .where(directoryFilter);
 
+  // Authoritative assistant handles come from the registry (cinatra#1037 P1.2) so
+  // the picker shows exactly what mention resolution will match. Humans keep the
+  // derived slug (they are not registry principals).
+  const assistantIds = rows.filter((r) => r.userType === "assistant").map((r) => r.id);
+  const registryHandles = await lookupAssistantHandlesByIds(assistantIds);
+
   const mentionables = rows
     .filter((r) => r.id !== session.user.id) // exclude current user
     .map((r) => {
@@ -76,9 +90,12 @@ export async function GET() {
         ? (r.username?.trim() ?? r.name?.trim() ?? r.email?.split("@")[0] ?? null)
         : (r.name?.trim() ?? r.username?.trim() ?? r.email?.split("@")[0] ?? null);
       if (!displayName) return null;
-      // handle: ASCII slug derived from username first (already a handle), then name
+      // handle: assistants use the registry handle ONLY (authoritative — never
+      // advertise a derived slug that mention resolution would reject); an
+      // assistant not yet backfilled is omitted until its handle is minted (boot
+      // backfill / createAssistantUser). Humans (not registry principals) derive.
       const handleSource = r.username?.trim() || r.name?.trim() || r.email?.split("@")[0] || "";
-      const handle = toHandle(handleSource);
+      const handle = isAssistant ? registryHandles.get(r.id) : toHandle(handleSource);
       if (!handle || handle === "unknown") return null;
       return {
         id: r.id,

@@ -1,8 +1,8 @@
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { toPgTextArrayLiteral } from "@/lib/pg-array";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, pgSchema, text, timestamp, boolean } from "drizzle-orm/pg-core";
 import { Pool } from "pg";
 
 declare global {
@@ -94,6 +94,181 @@ export const betterAuthUsers = pgTable("user", {
   clientId: text("clientId"),
   accentColor: text("accent_color"),
 });
+
+// ---------------------------------------------------------------------------
+// Assistant handle registry (cinatra#1037 P1.2 / P5.1 substrate).
+//
+// `assistant_handles` is a CORE-STORE table (created by the bootstrap DDL
+// `assistantHandleSchemaQueries` + migration core__0046), so it lives in the core
+// schema (SUPABASE_SCHEMA, default "cinatra") — NOT the Better Auth `public`
+// schema that owns `user`. Both are in the SAME database (Better Auth and the
+// core store share SUPABASE_DB_URL), so `betterAuthDb` — bound to that one
+// connection — reaches the registry via a schema-qualified drizzle table. The
+// schema name is read from the environment INLINE (this module deliberately reads
+// SUPABASE_DB_URL directly rather than importing @/lib/postgres-config; mirroring
+// that keeps the import graph unchanged). Evaluated at import: with no env it
+// falls back to "cinatra" and constructs no connection (safe for `next build`).
+const CORE_STORE_SCHEMA = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
+const coreStoreSchema = pgSchema(CORE_STORE_SCHEMA);
+
+/** The platform-unique assistant handle registry (schema-qualified to the core
+ * store). One row per assistant principal; `handle` is UNIQUE. */
+export const assistantHandles = coreStoreSchema.table("assistant_handles", {
+  assistantUserId: text("assistant_user_id").primaryKey(),
+  handle: text("handle").notNull(),
+  isOverride: boolean("is_override").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }),
+});
+
+/**
+ * Normalize a raw string into a mention handle: lowercase, spaces→`_`, strip any
+ * char outside [a-z0-9_-], trim leading/trailing `[_-]`. Returns `null` when
+ * nothing survives (an all-symbol/empty source has no valid handle). This is the
+ * SINGLE normalizer for the registry — it supersedes the ad-hoc `toHandle` slug
+ * that `/api/assistants/list` derived on the fly, and it is the one normalizer
+ * both the boot backfill and the create-time mint route through, so every handle
+ * for a given username is derived identically.
+ */
+export function normalizeAssistantHandle(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const h = raw
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_-]/g, "")
+    .replace(/^[_-]+|[_-]+$/g, "");
+  return h.length > 0 ? h : null;
+}
+
+/**
+ * Register (mint) a platform-unique handle for an assistant principal, idempotent
+ * and collision-safe. If the principal already has a handle, returns it unchanged.
+ * Otherwise normalizes `desired` (or `override`) into a base and claims the first
+ * free candidate in the deterministic sequence `base`, `base-2`, `base-3`, …,
+ * skipping any candidate already taken by another principal (cross-base-correct).
+ * Returns the claimed handle, or `null` when `desired` normalizes to nothing.
+ * `override:true` marks an owner-chosen handle (still normalized + suffixed).
+ */
+export async function registerAssistantHandle(
+  assistantUserId: string,
+  opts: { desired: string | null | undefined; override?: boolean },
+): Promise<string | null> {
+  // Idempotent: a principal keeps its first handle.
+  const existing = await betterAuthDb
+    .select({ handle: assistantHandles.handle })
+    .from(assistantHandles)
+    .where(eq(assistantHandles.assistantUserId, assistantUserId))
+    .limit(1);
+  if (existing[0]) return existing[0].handle;
+
+  const base = normalizeAssistantHandle(opts.desired);
+  if (!base) return null;
+  const override = opts.override ?? false;
+
+  // Bounded collision loop. The UNIQUE(handle) constraint is the arbiter; a lost
+  // race on our own principal (PK conflict) is resolved by re-reading the row.
+  for (let i = 0; i < 1000; i++) {
+    const candidate = i === 0 ? base : `${base}-${i + 1}`;
+    const inserted = await betterAuthDb
+      .insert(assistantHandles)
+      .values({
+        assistantUserId,
+        handle: candidate,
+        isOverride: override,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning({ handle: assistantHandles.handle });
+    if (inserted[0]) return inserted[0].handle;
+
+    // Nothing inserted: either another principal owns `candidate` (try the next
+    // suffix) or a concurrent caller just minted OURS (re-read and return it).
+    const raced = await betterAuthDb
+      .select({ handle: assistantHandles.handle })
+      .from(assistantHandles)
+      .where(eq(assistantHandles.assistantUserId, assistantUserId))
+      .limit(1);
+    if (raced[0]) return raced[0].handle;
+  }
+  return null;
+}
+
+/**
+ * Resolve mention handles → assistant principal ids via the registry. Returns a
+ * `handle → assistantUserId` map for the subset that resolve (case-insensitive:
+ * handles are stored already-normalized/lowercased). This is the authoritative
+ * resolver — the registry only ever holds assistant principals, so a hit IS a
+ * mentionable assistant (no separate userType filter needed).
+ */
+export async function resolveAssistantHandles(
+  handles: string[],
+): Promise<Map<string, string>> {
+  if (handles.length === 0) return new Map();
+  const wanted = Array.from(new Set(handles.map((h) => h.toLowerCase())));
+  const rows = await betterAuthDb
+    .select({ handle: assistantHandles.handle, id: assistantHandles.assistantUserId })
+    .from(assistantHandles)
+    .where(inArray(assistantHandles.handle, wanted));
+  return new Map(rows.map((r) => [r.handle, r.id]));
+}
+
+/**
+ * Reverse lookup: assistant principal ids → their registry handles. Returns an
+ * `assistantUserId → handle` map for the subset registered.
+ */
+export async function lookupAssistantHandlesByIds(
+  ids: string[],
+): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const wanted = Array.from(new Set(ids));
+  const rows = await betterAuthDb
+    .select({ handle: assistantHandles.handle, id: assistantHandles.assistantUserId })
+    .from(assistantHandles)
+    .where(inArray(assistantHandles.assistantUserId, wanted));
+  return new Map(rows.map((r) => [r.id, r.handle]));
+}
+
+/**
+ * Self-healing boot backfill: the SOLE handle populator (the migration is
+ * structural). Mints a registry handle for every assistant principal that lacks
+ * one (a LEFT JOIN of `public."user"` against the core-schema registry on the
+ * shared connection) and PRUNES orphan rows whose principal no longer exists as
+ * an assistant. Idempotent — a principal that already has a handle is skipped.
+ *
+ * This is where the built-in @cinatra handle is registered (the principal is
+ * seeded AFTER migrations run). Minting is deterministic: principals are ordered
+ * by their stable id so a shared normalized base always suffixes in the same
+ * order (first-run-wins, then idempotent), and `registerAssistantHandle`'s
+ * collision loop is cross-base-correct (it skips any suffixed candidate already
+ * taken by another principal — the case a single-pass SQL backfill could not).
+ * Returns the count minted. Called from `ensureAssistantBootstrap`. */
+export async function backfillMissingAssistantHandles(): Promise<number> {
+  // Prune orphan handles first (principal deleted, or no longer an assistant) so
+  // the resolver never returns a dead principal id and a freed handle can be
+  // reclaimed.
+  const liveAssistantIds = betterAuthDb
+    .select({ id: betterAuthUsers.id })
+    .from(betterAuthUsers)
+    .where(eq(betterAuthUsers.userType, "assistant"));
+  await betterAuthDb
+    .delete(assistantHandles)
+    .where(notInArray(assistantHandles.assistantUserId, liveAssistantIds));
+
+  const missing = await betterAuthDb
+    .select({ id: betterAuthUsers.id, username: betterAuthUsers.username })
+    .from(betterAuthUsers)
+    .leftJoin(assistantHandles, eq(assistantHandles.assistantUserId, betterAuthUsers.id))
+    .where(and(eq(betterAuthUsers.userType, "assistant"), isNull(assistantHandles.assistantUserId)))
+    .orderBy(betterAuthUsers.id);
+
+  let minted = 0;
+  for (const u of missing) {
+    const handle = await registerAssistantHandle(u.id, { desired: u.username });
+    if (handle) minted++;
+  }
+  return minted;
+}
 
 export const betterAuthAccounts = pgTable("account", {
   id: text("id").primaryKey(),
