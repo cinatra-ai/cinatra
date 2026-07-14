@@ -13,11 +13,14 @@
  * filter — an inaccessible team yields zero rows (fail closed).
  */
 import "server-only";
+import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Settings } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 
 import { getAuthSession } from "@/lib/auth-session";
 
@@ -46,6 +49,18 @@ export async function TeamDetailDashboardPage({
         title="Team"
         description="Team overview."
         divider={false}
+        actions={
+          /* Navigation hop to the team's management surface (settings: slug +
+             members — cinatra#1567). No `pageAnchor` is passed to the shell
+             below, so no live toolbar mounts and this server-rendered action
+             needs no `data-cinatra-page-actions-fallback` hide-wrapper. */
+          <Button asChild variant="outline">
+            <Link href={`/teams/${encodeURIComponent(teamId)}/settings`}>
+              <Settings data-icon="inline-start" aria-hidden="true" />
+              Team settings
+            </Link>
+          </Button>
+        }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <DashboardsClientShell>

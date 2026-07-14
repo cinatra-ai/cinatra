@@ -214,7 +214,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/objects/binding-reconcile-sweep.ts": {
     class: "migratable-background-setup",
     justification:
-      "Binding reconcile sweep + queue consumer + enrollment backfill (cinatra#1429): a COLD administrative batch path (checkpointed, resumable) that pages a claimed type's object rows and reconciles each binding, plus the drain of the claim registry's winner-change reconcile queue. Driven by claim lifecycle transitions + enrollment, not a request-time store; sync leaf composing into the synchronous store graph. Migrates with the objects subsystem.",
+      "Binding reconcile sweep + queue consumer + enrollment backfill (cinatra#1429): a COLD administrative batch path (checkpointed, resumable) that pages a claimed type's object rows and reconciles each binding, plus the drain of the claim registry's winner-change reconcile queue. cinatra#1433 adds the guarded per-row default-coverage floor reconcile (one guard SELECT + a conditional advisory-locked rebalance tx) to the same cold sweep/drain. Driven by claim lifecycle transitions + enrollment, not a request-time store; sync leaf composing into the synchronous store graph. Migrates with the objects subsystem.",
   },
   "src/lib/objects/claim-activation-gate.ts": {
     class: "migratable-background-setup",

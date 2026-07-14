@@ -49,6 +49,7 @@ import { toast } from "@/lib/cinatra-toast";
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 import { isRedirectError } from "./is-redirect-error";
 import {
+  appendDiagnosticReference,
   installAccessStageFailureCopy,
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
@@ -182,7 +183,11 @@ export function ExtensionInstallScopeDialog({
     if (result.stage === "access" || result.stage === "access-partial") {
       return installAccessStageFailureCopy(result.stage, name);
     }
-    return failureCopyByCategory[result.category] ?? defaultFailureMessage;
+    // #1539: surface the diagnostic reference on the access-scoped install path.
+    return appendDiagnosticReference(
+      failureCopyByCategory[result.category] ?? defaultFailureMessage,
+      result.reference,
+    );
   };
 
   // Internal <form action> — the NEXT_REDIRECT sentinel is re-thrown so

@@ -188,7 +188,7 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
 function CompatMeta({ sdkAbiRange }: { sdkAbiRange: string | null | undefined }) {
   const state = deriveExtensionCompatState(sdkAbiRange);
   const Icon = state === "compatible" ? Check : state === "incompatible" ? TriangleAlert : CircleHelp;
-  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Unknown";
+  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Compatibility unknown";
   const textColor =
     state === "incompatible" ? "text-destructive" : state === "unknown" ? "text-muted-foreground" : "text-foreground";
   return (

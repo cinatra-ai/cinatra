@@ -74,6 +74,17 @@ export type SemanticArtifactRef = { extension: string };
  * agent-bindings generator) are permitted CROSS-KIND metadata on any
  * extension manifest, not agent-package drift — hence their presence here
  * alongside the artifact-only `artifact` key.
+ *
+ * `displayName` is likewise cross-kind PRESENTATION metadata: a human-readable
+ * label the host already recognises as a name source for a type
+ * (`generic-renderers` name-key list) and that connectors declare too. The
+ * shipped artifact fleet (every `@cinatra-ai/*-artifact`) declares it, and the
+ * companion repos' own kind-gate (`extension-kind-gate.mjs`
+ * ARTIFACT_ALLOWED_CINATRA_KEYS) already permits it — so the host allowlist is
+ * reconciled to that shipped contract here. Without it the artifact bridge
+ * (`registerArtifactExtensions`) rejects the whole manifest as extraneous and
+ * skips registration, dropping the extension's `artifact` descriptor AND its
+ * `objectTypes` claims at boot.
  */
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
@@ -81,4 +92,5 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "artifact",
   "dependencies",
   "roles",
+  "displayName",
 ]);

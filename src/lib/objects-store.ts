@@ -912,13 +912,17 @@ export function upsertObjectAndEnqueue(
                  FROM upserted
                ),
                binding_reconcile_enqueue AS (
-                 -- Durable object-side binding reconcile (cinatra#1429, epic
-                 -- #1424). Enqueue a per-artifact 'binding-reconcile-write' row
+                 -- Durable object-side binding/floor reconcile (cinatra#1429 +
+                 -- #1433, epic #1424). Enqueue a per-artifact
+                 -- 'binding-reconcile-write' row
                  -- IN THIS transaction (atomic with the object write — never lost
                  -- to a crash) when a CREATE or a TYPE CHANGE could affect this
-                 -- row's binding: the row's CURRENT type carries a live dedicated
-                 -- claim (a create/type-change INTO a claimed type needs a binding
-                 -- INSERT), OR the artifact still carries an active binding (a
+                 -- row's claim-derived identity: the row's CURRENT type carries a
+                 -- live claim of EITHER kind (a create/type-change INTO a
+                 -- dedicated-claimed type needs a binding INSERT; into a
+                 -- DEFAULT-claimed type — objects:object / an org-approved
+                 -- dynamic type, cinatra#1433 — it is owed a floor assertion),
+                 -- OR the artifact still carries an active binding (a
                  -- type-change AWAY from a claimed / since-retired type needs the
                  -- stale binding ARCHIVED — no later TYPE sweep can select that
                  -- row, which is exactly why the object-side axis must be a
@@ -939,7 +943,7 @@ export function upsertObjectAndEnqueue(
                    AND (
                      EXISTS (
                        SELECT 1 FROM "${schema}"."artifact_type_claims" c
-                       WHERE c.object_type_id = upserted.type AND c.claim_kind = 'dedicated'
+                       WHERE c.object_type_id = upserted.type
                          AND c.status IN ('active','retiring')
                          AND (c.scope = 'platform' OR c.scope = 'org:' || upserted.org_id))
                      OR EXISTS (
@@ -986,12 +990,13 @@ export function upsertObjectAndEnqueue(
     );
   }
 
-  // Binding write-path composition (cinatra#1429, epic #1424) rides the upsert
-  // transaction above: the `binding_reconcile_enqueue` CTE arm durably records a
-  // per-artifact 'binding-reconcile-write' reconcile — atomically with the
-  // object write, so a crash never loses it — whenever a create/type-change
-  // could affect this row's binding. The reconcile itself (live-winner
-  // resolution under the per-artifact advisory lock at REPEATABLE READ) is
+  // Binding/floor write-path composition (cinatra#1429 + #1433, epic #1424)
+  // rides the upsert transaction above: the `binding_reconcile_enqueue` CTE arm
+  // durably records a per-artifact 'binding-reconcile-write' reconcile —
+  // atomically with the object write, so a crash never loses it — whenever a
+  // create/type-change could affect this row's binding or default-coverage
+  // floor. The reconcile itself (live-winner resolution under the per-artifact
+  // advisory lock at REPEATABLE READ, plus the guarded floor rebalance) is
   // performed by the queue consumer, keeping this universal writer's hot path
   // free of both the advisory lock and any isolation-level change.
 

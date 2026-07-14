@@ -141,11 +141,12 @@ describe("MarketplaceDetailHeader", () => {
     expect(html).not.toContain("Updated ");
     expect(html).not.toContain("Version ");
     // The meta row now always renders because it carries the 3-state compat
-    // badge — with no declared sdkAbiRange the badge reads the neutral "Unknown".
+    // badge — with no declared sdkAbiRange the badge reads the neutral,
+    // self-describing "Compatibility unknown".
     expect(html).toContain('data-slot="marketplace-detail-meta"');
     expect(html).toContain('data-slot="extension-compat-badge"');
     expect(html).toContain('data-compat-state="unknown"');
-    expect(html).toContain("Unknown");
+    expect(html).toContain("Compatibility unknown");
   });
 
   it("renders the Compatible (green/success) badge for a satisfied declared range", () => {

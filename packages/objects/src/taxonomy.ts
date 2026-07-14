@@ -216,6 +216,13 @@ export const OBJECT_TYPE_FAMILY = {
   "@cinatra-ai/campaigns:email-draft-bundle": "campaign",
   "@cinatra-ai/campaigns:email-followup-bundle": "campaign",
   "@cinatra-ai/campaigns:send-attempt": "campaign",
+  // Agent-memory concept rows (cinatra#1376, epic #1373): locked-taxonomy
+  // category `content`, UI-family `asset` — the content-category grouping the
+  // browser's "Assets" filter reads (the blog-post precedent: category
+  // `content` maps to the asset family). Registered in
+  // `packages/objects/src/integration/register-types.ts` with the enforced
+  // envelope schema defined inline there.
+  "@cinatra-ai/memory:concept": "asset",
 } as const satisfies Record<string, UiFamily>;
 
 export type KnownObjectTypeId = keyof typeof OBJECT_TYPE_FAMILY;

@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 149,
-    "/api/mcp": 1449,
-    "/chat": 1487,
-    "/api/a2a": 1454,
-    "/api/llm-bridge": 1460
+    "/sign-in": 150,
+    "/api/mcp": 1458,
+    "/chat": 1496,
+    "/api/a2a": 1463,
+    "/api/llm-bridge": 1469
   },
   "absorbs": {
-    "/sign-in": {
-      "from": 147,
-      "to": 149,
-      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: the auth config (src/lib/auth.ts, reachable from /sign-in) gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports (src/app/teams/new/team-slug) \u2014 MEASURED in the PR worktree at merge commit 15640bba vs origin/main 53ab28b7; /sign-in's first-party graph resolved fully in the measurement (the four companion-extension-dependent routes are untouched by this PR). NET +2 (149 = measured reachable count, not arithmetic). RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
-      "pr": 1517
-    },
-    "/api/mcp": {
-      "from": 1447,
-      "to": 1449,
-      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /api/mcp reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1446 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
-      "pr": 1517
-    },
-    "/chat": {
-      "from": 1485,
-      "to": 1487,
-      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /chat reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1484 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
-      "pr": 1517
-    },
     "/api/a2a": {
-      "from": 1452,
-      "to": 1454,
-      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /api/a2a reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1451 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
-      "pr": 1517
+      "from": 1462,
+      "to": 1463,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1459->1460 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     },
     "/api/llm-bridge": {
-      "from": 1458,
-      "to": 1460,
-      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /api/llm-bridge reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1457 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
-      "pr": 1517
+      "from": 1468,
+      "to": 1469,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1465->1466 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
+    },
+    "/api/mcp": {
+      "from": 1457,
+      "to": 1458,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1454->1455 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
+    },
+    "/chat": {
+      "from": 1495,
+      "to": 1496,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 1492->1493 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
+    },
+    "/sign-in": {
+      "from": 149,
+      "to": 150,
+      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 149->150 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
+      "pr": 1579
     }
   }
 }

@@ -36,3 +36,21 @@ export async function saveAgentSkillMatches(
   }>,
 ): Promise<void> {}
 export async function syncInstalledAgentsToDatabase(): Promise<void> {}
+// cinatra#1503: src/app/projects/[projectId]/agents/{actions,page}.tsx import
+// the canonical installed-agents reader for the bind picker's candidate
+// enumeration / bound-row name resolution. Tests that exercise the action
+// vi.mock this module with a factory; the stub keeps module loads safe.
+export async function readAgentsForSkillMatching(): Promise<
+  Array<{
+    id: string;
+    identifier: string;
+    packageId: string;
+    packageName: string;
+    packageSlug: string;
+    humanReadableName: string;
+    description: string;
+    keywords: string[];
+  }>
+> {
+  return [];
+}
