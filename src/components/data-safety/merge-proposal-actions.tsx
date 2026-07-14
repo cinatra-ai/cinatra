@@ -18,7 +18,7 @@ import {
 import {
   approveMergeProposalAction,
   rejectMergeProposalAction,
-} from "@/app/data-safety/merge-proposals/[proposalId]/actions";
+} from "@/app/artifacts/merge-proposals/[proposalId]/actions";
 
 export type MergeProposalActionsProps = {
   proposalId: string;

@@ -196,6 +196,49 @@ describe("cinatra#1428 artifact-surface canonical object authorization", () => {
     expect(retentionTombstone).not.toHaveBeenCalled();
   });
 
+  // cinatra#1431 §III: the detail route must DISTINGUISH not-found from
+  // read-denied so a list-visible-but-read-denied row opens the not-authorized
+  // panel (never a bare 404, never its bytes).
+  it("readArtifactForDetail: not-found when the store denies/omits the row (ownership filter → null)", async () => {
+    const { readArtifactForDetail } = await import("../artifact-service");
+    getObjectById.mockReturnValue(null);
+    expect(
+      readArtifactForDetail({ artifactId: "gone", orgId: ORG, actor: member() }),
+    ).toEqual({ kind: "not-found" });
+  });
+
+  it("readArtifactForDetail: not-found when the row is not an artifact type", async () => {
+    const { readArtifactForDetail } = await import("../artifact-service");
+    getObjectById.mockReturnValue(row({ type: "@cinatra-ai/email:send-attempt" }));
+    expect(
+      readArtifactForDetail({ artifactId: "a1", orgId: ORG, actor: member() }),
+    ).toEqual({ kind: "not-found" });
+  });
+
+  it("readArtifactForDetail: DENIED (not 404) when the row lists but object.read refuses — the spec's 'may list but not read'", async () => {
+    const { readArtifactForDetail } = await import("../artifact-service");
+    // The store returned the artifact row (ownership filter passed ⇒ the actor
+    // can LIST it), but a ServiceAccount holds no object.read: the canonical
+    // kernel refuses. This is DENIED, distinct from not-found.
+    getObjectById.mockReturnValue(row());
+    const svc = member({
+      principalType: "ServiceAccount",
+      principalId: "svc-1",
+      orgRole: undefined,
+    } as Partial<ActorContext>);
+    expect(
+      readArtifactForDetail({ artifactId: "a1", orgId: ORG, actor: svc }),
+    ).toEqual({ kind: "denied" });
+  });
+
+  it("readArtifactForDetail: ok for an org member passing object.read", async () => {
+    const { readArtifactForDetail } = await import("../artifact-service");
+    getObjectById.mockReturnValue(row());
+    const res = readArtifactForDetail({ artifactId: "a1", orgId: ORG, actor: member() });
+    expect(res.kind).toBe("ok");
+    expect(res.kind === "ok" && res.artifact.artifactId).toBe("a1");
+  });
+
   it("internal callers (no actor) keep the trusted path: no kernel gate, system attribution", async () => {
     const { tombstoneArtifact } = await import("../artifact-service");
     retentionTombstone.mockReturnValue({
