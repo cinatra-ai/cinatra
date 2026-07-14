@@ -22,7 +22,7 @@ import { notifPerf, notifPerfNote, notifPerfNow } from "./perf-log";
 // ---------------------------------------------------------------------------
 // Postgres-backed notifications service.
 //
-// One row per (user, notification). Topic/admin/team/org/project recipients
+// One row per (user, notification). Topic/admin/team/org recipients
 // fan out at write time. Dedupe is handled by the partial unique index in
 // the host's drizzle-store.ts via ON CONFLICT DO NOTHING.
 //
@@ -256,11 +256,9 @@ function insertNotificationRowForUser(args: {
       ? args.recipient.teamId
       : args.recipient.kind === "organization"
         ? args.recipient.organizationId
-        : args.recipient.kind === "project"
-          ? args.recipient.projectId
-          : args.recipient.kind === "user"
-            ? args.recipient.userId
-            : null;
+        : args.recipient.kind === "user"
+          ? args.recipient.userId
+          : null;
 
   // `auto-mark-read` renders as `read_at = now()` inline; otherwise
   // the column defaults to NULL (unread). This keeps it to one INSERT — no

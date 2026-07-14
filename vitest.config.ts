@@ -350,7 +350,19 @@ export default defineConfig({
     // must run and pass; new `src/**/__tests__` files are gated by default.
     exclude: [
       "**/node_modules/**",
-      "**/*.integration.test.ts",
+      // DB-integration file tier (`*.integration.test.ts`): needs a live
+      // Postgres, so the default run (and the perpetual-loops-invariants CI
+      // job, which has no DB service) excludes it. Lifted by the SAME
+      // CINATRA_DB_INTEGRATION_TESTS=1 flag as the directory tier below —
+      // identical contract (the flag asserts a live Postgres is provided) —
+      // so these suites have an in-repo, reproducible runner:
+      //   CINATRA_DB_INTEGRATION_TESTS=1 SUPABASE_DB_URL=<live> \
+      //     pnpm exec vitest run <suite>
+      // CI is unaffected: the only CI job setting the flag pins a single
+      // non-tier file on its CLI filter.
+      ...(process.env.CINATRA_DB_INTEGRATION_TESTS === "1"
+        ? []
+        : ["**/*.integration.test.ts"]),
       // node:test runner files (vitest reports "No test suite found"); each is
       // run via `node --test` by its own dedicated workflow or step
       // (gatekept-install-no-direct-registry, actions-pin-gate,

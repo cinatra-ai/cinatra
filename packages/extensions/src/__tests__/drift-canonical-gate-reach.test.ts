@@ -193,6 +193,24 @@ describe("canonical lifecycle status reachability guard", () => {
         // resource/representation/artifact_blobs/object_content_snapshots/
         // run_context_selections/artifact_refs — never installed_extension.
         "src/lib/artifacts/__tests__/object-content-snapshot.integration.test.ts",
+        // Default/dynamic coverage integration test (cinatra#1433): its FIXTURE
+        // builds the same minimal isolated per-test schema and seeds one live
+        // install row so the dedicated-claimant effective-identity chain (AC-3)
+        // resolves against real SQL — same fixture class as the entries above.
+        // Confined to its own per-test schema; the code under test writes
+        // artifact_type_claims/artifact_claim_events/semantic_assertion —
+        // never installed_extension.
+        "src/lib/objects/__tests__/default-dynamic-coverage.integration.test.ts",
+        // MCP context_resolve capture integration test (cinatra#1430
+        // follow-up): the same fixture class as the entry above — its FIXTURE
+        // provisions an isolated per-test schema from the CANONICAL
+        // buildCreateStoreSchemaQueries DDL and seeds live install rows with
+        // raw INSERTs so claim/binding resolution runs against real SQL.
+        // Confined to its own per-test schema; the code under test (the MCP
+        // context_resolve handler + capture composition) writes
+        // resource/representation/artifact_blobs/object_content_snapshots —
+        // never installed_extension.
+        "src/lib/artifacts/__tests__/context-mcp-resolve-capture.integration.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(

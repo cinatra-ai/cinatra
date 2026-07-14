@@ -110,8 +110,8 @@ const RANK_SQL = `CASE asserted_by WHEN 'user' THEN 3 WHEN 'authoring_skill' THE
  *  - ARCHIVE the active default when a non-default eligible exists.
  * `$1=org $2=artifact $3=default-ext $4=newDefaultId $5=floorSource`.
  */
-function floorRebalanceSql(): { text: string; argIdx: { id: number; src: number } }[] {
-  const S = q();
+function floorRebalanceSql(schemaName?: string): { text: string; argIdx: { id: number; src: number } }[] {
+  const S = schemaName ? schemaName.replaceAll('"', '""') : q();
   return [
     {
       text: `INSERT INTO "${S}"."semantic_assertion"
@@ -186,9 +186,16 @@ export function buildFloorRebalanceAndRefreshQueries(
   orgId: string,
   artifactId: string,
   floorSource: AssertionSource,
+  // Optional EXPLICIT schema, matching every sibling builder's
+  // `schemaName`-first convention (buildReserveClaimQueries,
+  // buildBindingReconcileQueries, …): a composing caller that runs the tail
+  // inside ITS OWN transaction passes its own binding so the whole statement
+  // set speaks one schema. Absent ⇒ this module's binding (unchanged callers).
+  schemaName?: string,
 ): Query[] {
   // floor assertion is never asserted_by 'matcher'
   const fSrc: AssertionSource = floorSource === "matcher" ? "agent" : floorSource;
+  const S = schemaName ? schemaName.replaceAll('"', '""') : q();
   // CRITICAL: each floor-rebalance query gets ONLY the parameters its SQL
   // references. The first query (INSERT default-eligible) uses $1-$5;
   // the second (archive active default) uses $1-$3 only.
@@ -197,7 +204,7 @@ export function buildFloorRebalanceAndRefreshQueries(
   // only 3 makes PG return `bind message supplies 5 parameters, but prepared
   // statement "" requires 3` on every artifact_authoring_emit call. This
   // mirrors the `buildAssertionOps` split-values handling.
-  const rebQueries = floorRebalanceSql();
+  const rebQueries = floorRebalanceSql(schemaName);
   const reb: Query[] = [
     {
       text: rebQueries[0].text,
@@ -213,7 +220,7 @@ export function buildFloorRebalanceAndRefreshQueries(
       // Bump version + pending status. Skips silently if the row
       // doesn't exist or belongs to a different tenant — the
       // assertion ops above already failed if so.
-      text: `UPDATE "${q()}"."objects"
+      text: `UPDATE "${S}"."objects"
 SET version = version + 1, graphiti_sync_status='pending', graphiti_projection_error=NULL, updated_at=now()
 WHERE id=$1 AND org_id=$2
 RETURNING version`,
@@ -221,10 +228,10 @@ RETURNING version`,
     },
     {
       // Outbox row with the bumped version; consumed by the projector.
-      text: `INSERT INTO "${q()}"."graphiti_projection_outbox"
+      text: `INSERT INTO "${S}"."graphiti_projection_outbox"
 (id, object_id, object_version, org_id, operation, payload_hash, status, attempts)
 SELECT gen_random_uuid()::text, o.id, o.version, o.org_id, 'upsert', NULL, 'pending', 0
-FROM "${q()}"."objects" o
+FROM "${S}"."objects" o
 WHERE o.id=$1 AND o.org_id=$2`,
       values: [artifactId, orgId],
     },
