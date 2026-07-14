@@ -81,7 +81,10 @@ function renderCard(runId: string, row: InstalledExtension, isArchived: boolean)
       emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
       kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
       kindLabel={seed?.kindLabel ?? row.kind}
-      vendor={resolveVendorPresentation({ name: seed?.vendor })}
+      vendor={resolveVendorPresentation(
+        { name: seed?.vendor },
+        { surface: "installed-extensions-fixture", ref: row.packageName },
+      )}
       description={seed?.description ?? null}
       version={version}
       status={<InstalledStatusIndicator status={row.status} />}

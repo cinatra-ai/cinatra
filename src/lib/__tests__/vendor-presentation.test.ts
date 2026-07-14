@@ -6,7 +6,10 @@
  *   - null / undefined / empty / whitespace-only → `missing`;
  *   - the input type has no slug/packageName field, so a machine identifier can
  *     never become the label — the surfaces feed ONLY a display-name candidate;
- *   - a `missing` resolution emits a deduplicated structured diagnostic.
+ *   - the result is a BRANDED type, so ONLY this resolver can mint a
+ *     presentation — a surface can never be handed a hand-forged `known` label;
+ *   - EVERY `missing` resolution emits a deduplicated structured diagnostic; the
+ *     diagnostic context is REQUIRED, so there is no silent-omission path.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +17,6 @@ import {
   resolveVendorPresentation,
   VENDOR_BY_CONNECTIVE,
   VENDOR_MISSING_LABEL,
-  type VendorPresentation,
 } from "../vendor-presentation";
 
 afterEach(() => {
@@ -24,8 +26,11 @@ afterEach(() => {
 describe("resolveVendorPresentation — known state", () => {
   it("resolves a real display name to known, carrying the store URL", () => {
     expect(
-      resolveVendorPresentation({ name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" }),
-    ).toEqual<VendorPresentation>({
+      resolveVendorPresentation(
+        { name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" },
+        { surface: "unit-test-surface", ref: "@scope/foundry" },
+      ),
+    ).toEqual({
       kind: "known",
       displayName: "Foundry",
       storeUrl: "https://marketplace.cinatra.ai/store/foundry",
@@ -33,7 +38,9 @@ describe("resolveVendorPresentation — known state", () => {
   });
 
   it("trims the display name and defaults an absent store URL to null", () => {
-    expect(resolveVendorPresentation({ name: "  Acme Labs  " })).toEqual<VendorPresentation>({
+    expect(
+      resolveVendorPresentation({ name: "  Acme Labs  " }, { surface: "unit-test-surface", ref: "@scope/acme" }),
+    ).toEqual({
       kind: "known",
       displayName: "Acme Labs",
       storeUrl: null,
@@ -42,8 +49,8 @@ describe("resolveVendorPresentation — known state", () => {
 
   it("preserves a long / Unicode display name verbatim (never slug-ifies it)", () => {
     const name = "Ştefan & Associés — Ελληνικά Εργαλεία 日本語ツール";
-    const result = resolveVendorPresentation({ name });
-    expect(result).toEqual<VendorPresentation>({ kind: "known", displayName: name, storeUrl: null });
+    const result = resolveVendorPresentation({ name }, { surface: "unit-test-surface", ref: "@scope/unicode" });
+    expect(result).toEqual({ kind: "known", displayName: name, storeUrl: null });
   });
 });
 
@@ -54,13 +61,20 @@ describe("resolveVendorPresentation — missing state (never a slug / scope)", (
     ["empty string", ""],
     ["whitespace only", "   "],
     ["tab/newline only", "\t\n "],
-  ])("resolves a %s display name to missing", (_label, name) => {
-    expect(resolveVendorPresentation({ name })).toEqual<VendorPresentation>({ kind: "missing" });
+  ])("resolves a %s display name to missing", (label, name) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(
+      resolveVendorPresentation({ name }, { surface: "unit-test-surface", ref: `@scope/missing-${label}` }),
+    ).toEqual({ kind: "missing" });
   });
 
   it("drops any surviving store URL on missing (the placeholder is never linked)", () => {
-    const result = resolveVendorPresentation({ name: "", storeUrl: "https://evil.example/store" });
-    expect(result).toEqual<VendorPresentation>({ kind: "missing" });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = resolveVendorPresentation(
+      { name: "", storeUrl: "https://evil.example/store" },
+      { surface: "unit-test-surface", ref: "@scope/missing-url" },
+    );
+    expect(result).toEqual({ kind: "missing" });
     expect(result).not.toHaveProperty("storeUrl");
   });
 });
@@ -85,10 +99,16 @@ describe("resolveVendorPresentation — structured, deduplicated diagnostic", ()
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("does not require a diagnostic context (pure result)", () => {
+  it("has no silent-omission path — a required diagnostic means every missing resolution logs", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(resolveVendorPresentation({ name: "" })).toEqual<VendorPresentation>({ kind: "missing" });
-    expect(warn).not.toHaveBeenCalled();
+    expect(
+      resolveVendorPresentation({ name: "" }, { surface: "unit-test-surface", ref: "@scope/no-silent-path" }),
+    ).toEqual({ kind: "missing" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      event: "vendor.display_name.missing",
+      ref: "@scope/no-silent-path",
+    });
   });
 });
 

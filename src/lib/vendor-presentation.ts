@@ -9,16 +9,27 @@
  * (an npm package scope, a vendor slug, a connector host slug) when the real
  * human display name is absent.
  *
- * Architectural guarantee (why the class of bug is unrepresentable here): the
- * resolver's render input {@link VendorNameInput} carries ONLY a `name`
- * display-name candidate + an optional `storeUrl`. It has no `slug` /
- * `packageName` / `scope` / `host` field, so — because callers construct an
- * object literal, which TypeScript excess-property-checks — a slug or package
- * scope cannot be threaded in as the display name through the type. The
- * diagnostic identifier (see below) is a SEPARATE, non-rendering parameter that
- * never influences the returned label. A focused lint/AST gate
- * (scripts/audit/vendor-byline-scan.mjs) additionally forbids the retired
- * substitution constructs inside the byline rendering paths.
+ * Architectural guarantee — closed on BOTH sides of the resolver so a machine
+ * identifier cannot become a byline label:
+ *   1. INPUT: the render input {@link VendorNameInput} carries ONLY a `name`
+ *      display-name candidate + an optional `storeUrl`. It has no `slug` /
+ *      `packageName` / `scope` / `host` field, so — because callers construct an
+ *      object literal, which TypeScript excess-property-checks — a slug or
+ *      package scope cannot be threaded in AS the display name through the type.
+ *   2. OUTPUT: {@link VendorPresentation} is a BRANDED type (a phantom
+ *      compile-time tag, erased at runtime). Only {@link resolveVendorPresentation}
+ *      can mint one; a caller cannot hand-construct `{ kind: "known",
+ *      displayName: someSlug }` and pass it to a byline surface, because that
+ *      object literal is not assignable to the branded type. A future surface
+ *      that receives a `VendorPresentation` prop therefore receives a value that
+ *      PROVABLY came from this resolver, not a forged label.
+ * The one path the types alone can't forbid — a caller deliberately passing a
+ * slug AS the `name` — is caught by the focused lint/AST gate
+ * (scripts/audit/vendor-byline-scan.mjs), which forbids the retired substitution
+ * constructs (`scopeFromPackageName`, a `vendor.slug` read) inside the byline
+ * rendering paths, and by the per-surface behavioural tests. The diagnostic
+ * identifier (see below) is a SEPARATE, non-rendering parameter that never
+ * influences the returned label.
  *
  * Missing-data contract: a null / empty / whitespace-only display name resolves
  * to the explicit `missing` state, which the surfaces render as a localized
@@ -35,15 +46,36 @@
  */
 
 /**
- * The resolved vendor byline state. `known` carries the human display name (and
- * the optional store URL, scheme-guarded AT RENDER, not here); `missing` is the
- * explicit no-display-name state the surfaces render as the localized
- * placeholder. There is deliberately no `slug` / `packageName` on either arm —
- * a machine identifier can never reach a byline through this type.
+ * Phantom brand for {@link VendorPresentation}. Declared as a `unique symbol`
+ * with NO runtime value, so a resolved presentation is a plain `{ kind, … }`
+ * object at runtime — but the brand makes the type UNFORGEABLE at compile time:
+ * only {@link resolveVendorPresentation} (the sole minting site) produces a
+ * value TypeScript accepts as a `VendorPresentation`.
  */
-export type VendorPresentation =
+declare const VENDOR_PRESENTATION_BRAND: unique symbol;
+
+/**
+ * The resolved vendor byline state, WITHOUT the brand. Not exported: callers
+ * never name this — they receive the branded {@link VendorPresentation} from the
+ * resolver. `known` carries the human display name (and the optional store URL,
+ * scheme-guarded AT RENDER, not here); `missing` is the explicit no-display-name
+ * state the surfaces render as the localized placeholder. There is deliberately
+ * no `slug` / `packageName` on either arm.
+ */
+type UnbrandedVendorPresentation =
   | { readonly kind: "known"; readonly displayName: string; readonly storeUrl: string | null }
   | { readonly kind: "missing" };
+
+/**
+ * The resolved vendor byline state — a BRANDED discriminated union. `known`
+ * carries the human display name; `missing` is the explicit no-display-name
+ * state. A machine identifier can never reach a byline through this type: no
+ * `slug` / `packageName` on either arm, AND the brand means a caller cannot
+ * forge a `known` value — only {@link resolveVendorPresentation} can mint one.
+ */
+export type VendorPresentation = UnbrandedVendorPresentation & {
+  readonly [VENDOR_PRESENTATION_BRAND]: true;
+};
 
 /**
  * The ONLY render input the resolver accepts: a display-name candidate and an
@@ -121,19 +153,31 @@ function emitMissingVendorDiagnostic(context: VendorDiagnosticContext): void {
  * never become the label.
  *
  * @param input      The display-name candidate + optional store URL. NEVER a slug.
- * @param diagnostic Optional non-rendering context; when supplied, a `missing`
- *                   resolution emits a deduplicated structured diagnostic. The
- *                   returned value does not depend on it (the resolver is pure
- *                   with respect to its result), so it stays unit-testable.
+ * @param diagnostic REQUIRED non-rendering context. Every `missing` resolution
+ *                   emits a deduplicated structured diagnostic — there is no
+ *                   silent-omission path (AC2): a caller cannot resolve a
+ *                   missing vendor without the data defect being logged. The
+ *                   returned value does not depend on it, so the resolver stays
+ *                   pure with respect to its RESULT.
  */
 export function resolveVendorPresentation(
   input: VendorNameInput,
-  diagnostic?: VendorDiagnosticContext,
+  diagnostic: VendorDiagnosticContext,
 ): VendorPresentation {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (name.length === 0) {
-    if (diagnostic) emitMissingVendorDiagnostic(diagnostic);
-    return { kind: "missing" };
+    emitMissingVendorDiagnostic(diagnostic);
+    return mint({ kind: "missing" });
   }
-  return { kind: "known", displayName: name, storeUrl: input.storeUrl ?? null };
+  return mint({ kind: "known", displayName: name, storeUrl: input.storeUrl ?? null });
+}
+
+/**
+ * The SOLE minting site for the branded {@link VendorPresentation}. The cast is
+ * safe (the branded type is assignable to the unbranded shape, so the two are
+ * comparable) and confined here — no other code adds the brand, which is what
+ * makes a resolved presentation unforgeable everywhere else.
+ */
+function mint(value: UnbrandedVendorPresentation): VendorPresentation {
+  return value as VendorPresentation;
 }
