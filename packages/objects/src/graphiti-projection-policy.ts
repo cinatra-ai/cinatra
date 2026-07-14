@@ -103,7 +103,8 @@ export function deriveMemoryConceptLane(
   const base = deriveProjectionGroupId(orgId);
 
   // user lane: a per-user lane. Requires a concrete ownerId (the user id).
-  // Covers visibility='private' (the default human/agent memory scope) AND a
+  // Covers visibility='private' (the default save scope for human- and
+  // agent-authored memory rows) AND a
   // user-owned visibility='team' row: buildOwnershipFilter reads a user-owned
   // row for the owning user regardless of its visibility axis, and the owning
   // user's entitlement includes exactly this `-user-<ownerId>` lane — whereas a
