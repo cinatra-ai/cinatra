@@ -46,12 +46,12 @@ export function buildInvitationAcceptUrl(origin: string, invitationId: string): 
 export function buildInvitationEmail(input: {
   organizationName?: string | null;
   inviterLabel?: string | null;
-  role?: string | null;
+  role?: string | readonly string[] | null;
   acceptUrl: string;
 }): { subject: string; text: string } {
   const organizationName = input.organizationName?.trim() || "a Cinatra organization";
   const inviterLabel = input.inviterLabel?.trim() || "A Cinatra organization owner";
-  const role = input.role?.trim() || "member";
+  const role = normalizeInviteRole(input.role);
 
   return {
     subject: `You're invited to join ${organizationName} on Cinatra`,
@@ -60,4 +60,17 @@ export function buildInvitationEmail(input: {
       `Accept the invitation:\n${input.acceptUrl}\n\n` +
       `If you weren't expecting this, you can safely ignore this email.`,
   };
+}
+
+/**
+ * Better Auth does not normalize the invitation role before invoking the
+ * sendInvitationEmail callback: depending on the invite call it can arrive as
+ * a single string, an array of roles, or a comma-separated string. Render all
+ * of them as a readable ", "-joined list, defaulting to "member".
+ */
+function normalizeInviteRole(role: string | readonly string[] | null | undefined): string {
+  const parts = (Array.isArray(role) ? role : String(role ?? "").split(","))
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
+  return parts.join(", ") || "member";
 }

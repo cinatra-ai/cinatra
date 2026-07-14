@@ -67,6 +67,28 @@ describe("buildInvitationEmail", () => {
     expect(text).not.toContain("undefined");
     expect(text).toContain("member"); // defaulted role
   });
+
+  // Better Auth does not normalize the role before the callback: it can be a
+  // single string, an ARRAY of roles, or a comma-separated string.
+  it("renders an array of roles as a readable list (no .trim crash)", () => {
+    const { text } = buildInvitationEmail({
+      role: ["admin", "member"],
+      acceptUrl: "https://x/y",
+    });
+    expect(text).toContain("as admin, member.");
+  });
+
+  it("renders a comma-separated role string readably and defaults empty arrays", () => {
+    expect(
+      buildInvitationEmail({ role: "admin,member", acceptUrl: "https://x/y" }).text,
+    ).toContain("as admin, member.");
+    expect(buildInvitationEmail({ role: [], acceptUrl: "https://x/y" }).text).toContain(
+      "as member.",
+    );
+    expect(
+      buildInvitationEmail({ role: ["  "], acceptUrl: "https://x/y" }).text,
+    ).toContain("as member.");
+  });
 });
 
 describe("organization plugin factory threads sendInvitationEmail (cinatra#1565)", () => {
