@@ -10,18 +10,15 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { createOrganizationAction } from "./actions";
+import { organizationCreateErrorMessage } from "./error-messages";
 
 type NewOrganizationFormProps = {
   initialError?: string;
 };
 
-const ERROR_MESSAGES: Record<string, string> = {
-  "missing-name": "Enter an organization name.",
-  "slug-unavailable":
-    "A unique URL slug could not be derived from that name. Try a different name.",
-};
-
 export function NewOrganizationForm({ initialError }: NewOrganizationFormProps) {
+  const errorMessage = organizationCreateErrorMessage(initialError);
+
   return (
     <form
       action={createOrganizationAction}
@@ -37,11 +34,7 @@ export function NewOrganizationForm({ initialError }: NewOrganizationFormProps) 
           </FieldDescription>
         </Field>
 
-        {initialError ? (
-          <FieldError>
-            {ERROR_MESSAGES[initialError] ?? "Could not create the organization."}
-          </FieldError>
-        ) : null}
+        {errorMessage ? <FieldError>{errorMessage}</FieldError> : null}
 
         <div className="flex justify-end gap-3">
           <Button type="submit">Create organization</Button>
