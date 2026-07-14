@@ -20,6 +20,13 @@ import {
   identityHashToUuid,
 } from "../graphiti-client";
 import type { EntityNode } from "../graphiti-client";
+// Memory-recall lane entitlement (cinatra#1379 AC4). The lane math is shared
+// with the projector (single source of truth for the nested-lane naming);
+// `readTeamsForUser` resolves the actor's org-scoped team memberships. Both
+// modules are already reachable from every locked route that reaches these
+// handlers (measured: route-graph unchanged) — no new graph pressure.
+import { deriveEntitledMemoryLanes } from "../graphiti-projection-policy";
+import { readTeamsForUser } from "@/lib/better-auth-db";
 // Connector dispatch is intentionally not active in this handler.
 import { isDynamicObjectTypeId } from "../namespace";
 import { objectTypeRegistry } from "../registry";
@@ -824,12 +831,39 @@ export function createObjectsPrimitiveHandlers() {
       // meta.fallback="postgres_filter" + body from a Postgres-only list.
       // -----------------------------------------------------------------
       const groupId = resolveGroupId(orgId);
+
+      // Memory-recall lane entitlement (cinatra#1379 AC4). Memory-concept rows
+      // project into NESTED per-scope lanes (user / team / ambient, optionally
+      // project-suffixed), so a recall over the ambient org lane alone would
+      // miss the caller's own user-lane and team-lane concepts. For a
+      // memory-typed query we pass the actor's SERVER-DERIVED entitled lane set
+      // — own user lane + a lane for every team the actor is a member of + the
+      // org lane, each also in its `-proj-<id>` form when a projectId is in the
+      // call context. A lane the actor is not entitled to is never in the set,
+      // so an unentitled team's / project's concepts can never surface. Every
+      // other type keeps the single ambient org lane (unchanged).
+      let searchGroupIds: string[] = [groupId];
+      if (input.type === MEMORY_CONCEPT_TYPE_ID) {
+        const actorUserId = actorExt.userId;
+        let teamIds: string[] = [];
+        if (actorUserId && orgId) {
+          const teams = await readTeamsForUser(actorUserId, orgId);
+          teamIds = teams.map((t) => t.id);
+        }
+        searchGroupIds = deriveEntitledMemoryLanes({
+          orgId,
+          userId: actorUserId,
+          teamIds,
+          projectId,
+        });
+      }
+
       let objectIds: string[] | null = null;
       let degraded = false;
       try {
         const res = await searchNodes({
           query: input.query!,
-          group_ids: [groupId],
+          group_ids: searchGroupIds,
           max_nodes: input.limit ?? 50,
         });
         objectIds = extractObjectIds(res.nodes);

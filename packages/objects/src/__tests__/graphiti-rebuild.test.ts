@@ -134,6 +134,21 @@ describe("buildReplayBatchQuery", () => {
     expect(sql).toMatch(/o\.deleted_at\s+IS\s+NULL/i);
     expect(sql).toMatch(/j\.org_id\s+IS\s+NULL\s+AND\s+o\.org_id\s+IS\s+NULL/i);
   });
+
+  it("EXCLUDES only NON-AMBIENT memory rows — org/workspace-scoped memory rebuilds like any ambient row (#1379)", () => {
+    // A memory row whose derived lane is NOT the ambient base lane (nested
+    // user/team/project lane, OR a public/unclassifiable terminal skip) must be
+    // excluded: replaying a nested one duplicates its uncleared nested episode,
+    // counting a skip one inflates `expected` with no episode — both diverge
+    // verification. But org/workspace-scoped memory lives in the ambient group
+    // clearGraph DID clear, so it must stay in the replay (the NULL-safe
+    // ambient-base complement keeps exactly those).
+    expect(sql).toMatch(/NOT\s*\(\s*o\.type\s*=\s*'@cinatra-ai\/memory:concept'/i);
+    expect(sql).toMatch(/o\.visibility\s+IS\s+DISTINCT\s+FROM\s+'public'/i);
+    expect(sql).toMatch(/o\.owner_level\s+IS\s+DISTINCT\s+FROM\s+'team'/i);
+    expect(sql).toMatch(/o\.visibility\s*=\s*'organization'\s+OR\s+o\.owner_level\s+IN\s*\('organization',\s*'workspace'\)/i);
+    expect(sql).toMatch(/o\.project_id\s+IS\s+NULL\s*\n?\s*\)\s+IS\s+NOT\s+TRUE/i);
+  });
 });
 
 describe("buildOpenRollbackRebuildQuery", () => {

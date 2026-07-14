@@ -7,7 +7,11 @@ import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
 import { parseClaimDispositions, resolveClaimWinner } from "./claims";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "./effective-identity";
-import { deriveProjectionGroupId, readProjectionEpochs } from "./graphiti-projection-policy";
+import {
+  deriveProjectionGroupId,
+  deriveMemoryConceptLane,
+  readProjectionEpochs,
+} from "./graphiti-projection-policy";
 // Claimed-row projection (#1427 AC-3) resolves the claim winner via the HOST
 // claim store and the row's identity through the ONE effective-identity
 // service (epic #1424: one resolution point for every surface — the projector
@@ -65,7 +69,78 @@ type CanonicalRow = {
   // route); `created_at` feeds the adapter's reference_time when routing.
   source: string | null;
   created_at: string;
+  // Canonical scope columns (core__0033 ownership vocabulary). Read for the
+  // memory-concept nested-lane derivation (#1379); NULL/absent for the many
+  // fixtures that predate it — non-memory rows never consult them.
+  owner_level: string | null;
+  owner_id: string | null;
+  visibility: string | null;
+  project_id: string | null;
+  // The lane a memory-concept row was LAST projected into (#1379 lane-move
+  // bookkeeping). NULL = never projected under the lane model (or a non-memory
+  // row). The OLD lane is read from HERE — not re-derived from the current
+  // scope — so a scope change can locate and delete the prior-lane episode
+  // (identityHashToUuid is lane-scoped, so a lane change also moves the UUID).
+  projected_group_id: string | null;
 };
+
+// ---------------------------------------------------------------------------
+// Memory-concept capped projection body (cinatra#1379 AC3).
+//
+// The `@cinatra-ai/memory:concept` type id, inlined as a literal on purpose:
+// importing it from `../integration/register-types` would drag that module's
+// zod schema + React renderers into this worker-dispatch graph. The source of
+// truth is `MEMORY_CONCEPT_TYPE_ID` there; the memory projector test asserts
+// this literal equals that constant.
+// ---------------------------------------------------------------------------
+const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
+
+/** Hard cap on the memory-concept episode body excerpt, in UTF-8 BYTES (the
+ * same unit the envelope's 64 KiB bodyMarkdown cap uses). */
+export const MEMORY_CONCEPT_PROJECTION_EXCERPT_MAX_BYTES = 4 * 1024;
+
+/** Truncate `s` to at most `maxBytes` UTF-8 bytes on a code-point boundary
+ * (never splits a multi-byte char — `for..of` iterates by code point). */
+function truncateToUtf8Bytes(s: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(s).length <= maxBytes) return s;
+  let out = "";
+  let bytes = 0;
+  for (const ch of s) {
+    const chBytes = encoder.encode(ch).length;
+    if (bytes + chBytes > maxBytes) break;
+    out += ch;
+    bytes += chBytes;
+  }
+  return out;
+}
+
+/**
+ * Capped projection body for a `@cinatra-ai/memory:concept` row (#1379 AC3).
+ * Whitelist ONLY: { conceptId, okfType, title (from frontmatter.title), excerpt
+ * (bodyMarkdown truncated to 4 KiB) }. NEVER the full envelope — no full
+ * bodyMarkdown (64 KiB cap), no raw `frontmatter` passthrough, no `links[]`,
+ * no externalId/bundleId. Pure — mirrors `projectArtifactSafe`.
+ */
+export function projectMemoryConceptCapped(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const conceptId = typeof data.conceptId === "string" ? data.conceptId : undefined;
+  const okfType = typeof data.okfType === "string" ? data.okfType : undefined;
+  const frontmatter =
+    data.frontmatter && typeof data.frontmatter === "object" && !Array.isArray(data.frontmatter)
+      ? (data.frontmatter as Record<string, unknown>)
+      : undefined;
+  const title =
+    frontmatter && typeof frontmatter.title === "string" ? frontmatter.title : undefined;
+  const bodyMarkdown = typeof data.bodyMarkdown === "string" ? data.bodyMarkdown : "";
+  return {
+    conceptId,
+    okfType,
+    title,
+    excerpt: truncateToUtf8Bytes(bodyMarkdown, MEMORY_CONCEPT_PROJECTION_EXCERPT_MAX_BYTES),
+  };
+}
 
 function deriveEntityName(data: Record<string, unknown>, type: string): string {
   const candidate =
@@ -271,7 +346,7 @@ function readCanonicalRow(objectId: string, orgId: string | null): CanonicalRow 
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, type, data, org_id, version, run_id, agent_id, graphiti_episode_uuid, graphiti_projected_version, source, created_at
+        text: `SELECT id, type, data, org_id, version, run_id, agent_id, graphiti_episode_uuid, graphiti_projected_version, source, created_at, owner_level, owner_id, visibility, project_id, projected_group_id
              FROM "${schema}"."objects"
              WHERE id = $1 AND (org_id = $2 OR $2 IS NULL) AND deleted_at IS NULL
              LIMIT 1`,
@@ -286,6 +361,11 @@ function markProjected(input: {
   objectId: string;
   episodeUuid: string;
   projectedVersion: number;
+  // The lane this projection landed in — persisted so a later scope change can
+  // read the OLD lane and delete its episode (#1379 lane-move). Passed for
+  // every path (memory rows carry the nested lane; non-memory/adapter rows
+  // carry the ambient org lane) so the column is always populated post-project.
+  projectedGroupId: string;
 }): void {
   const schema = postgresSchema.replaceAll('"', '""');
   runPostgresQueriesSync({
@@ -297,14 +377,43 @@ function markProjected(input: {
                  graphiti_episode_uuid = $1,
                  graphiti_projected_version = $2,
                  graphiti_projected_at = now(),
-                 graphiti_projection_error = NULL
+                 graphiti_projection_error = NULL,
+                 projected_group_id = $4
              WHERE id = $3
                AND (graphiti_projected_version IS NULL OR graphiti_projected_version < $2)`,
-        values: [input.episodeUuid, input.projectedVersion, input.objectId],
+        values: [input.episodeUuid, input.projectedVersion, input.objectId, input.projectedGroupId],
       },
     ],
   });
   // 0 rows affected ⇒ a newer version already won; benign.
+}
+
+/**
+ * Retract a memory-concept row's lane bookkeeping after its prior-lane episode
+ * has been deleted because the row transitioned to a NON-projected scope
+ * (visibility='public' or an unclassifiable scope — #1379). Clears
+ * projected_group_id + graphiti_episode_uuid so a re-enqueue does not re-delete
+ * an already-gone episode (prior lane reads back as "none"), and records that
+ * the row is no longer projected. graphiti_projected_version is intentionally
+ * left untouched (a later scope change back to a real lane bumps the version and
+ * re-projects fresh). */
+function markMemoryLaneRetracted(objectId: string): void {
+  const schema = postgresSchema.replaceAll('"', '""');
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `UPDATE "${schema}"."objects"
+             SET graphiti_sync_status = 'skipped',
+                 graphiti_episode_uuid = NULL,
+                 projected_group_id = NULL,
+                 graphiti_projected_at = now(),
+                 graphiti_projection_error = NULL
+             WHERE id = $1`,
+        values: [objectId],
+      },
+    ],
+  });
 }
 
 function markDeleted(objectId: string): void {
@@ -447,6 +556,9 @@ export async function projectObjectToGraphiti(input: {
       objectId: row.id,
       episodeUuid: adapterEpisodeUuid,
       projectedVersion: input.objectVersion,
+      // Adapter-owned types (CRM pointer rows) are never memory-scoped and
+      // project to the ambient org lane.
+      projectedGroupId: deriveProjectionGroupId(input.orgId ?? row.org_id),
     });
     return { episodeUuid: adapterEpisodeUuid };
   }
@@ -469,7 +581,87 @@ export async function projectObjectToGraphiti(input: {
     return { episodeUuid: null, skipped: true };
   }
 
-  const groupId = deriveProjectionGroupId(input.orgId ?? row.org_id);
+  // Group-id (Graphiti lane) derivation. Memory-concept rows NEST under the
+  // org lane via their server-derived scope (#1379 AC1); every other type keeps
+  // the ambient org lane (the epic guardrail — deriveProjectionGroupId stays
+  // single-lane-per-org for non-memory types).
+  const isMemory = row.type === MEMORY_CONCEPT_TYPE_ID;
+  let groupId: string;
+  if (isMemory) {
+    const derivation = deriveMemoryConceptLane(input.orgId ?? row.org_id, {
+      ownerLevel: row.owner_level,
+      ownerId: row.owner_id,
+      visibility: row.visibility,
+      projectId: row.project_id,
+    });
+    // The prior lane is the PERSISTED `projected_group_id` (NOT re-derived from
+    // the current scope — that already reflects the NEW scope). The lane-scoped
+    // deterministic UUID (identityHashToUuid(row.id, priorLane)) locates the
+    // prior-lane episode for the best-effort purge below.
+    //
+    // SECURITY BOUNDARY NOTE. The Graphiti lane is a RECALL-RELEVANCE scoping
+    // mechanism, NOT the authorization boundary. The authz boundary is the
+    // recall handler's canonical re-fetch: objects_list resolves searchNodes
+    // candidate ids, then `listObjectsByFilter(..., scopeActor)` re-reads the
+    // Postgres rows through `buildOwnershipFilter` (owner_level/owner_id/
+    // visibility) and `enforceResourceAccess(object.read)` re-checks each — on
+    // the CURRENT scope. So a stale/orphaned episode in an old lane can at worst
+    // surface a candidate id that the Postgres ownership filter then DROPS; it
+    // can never disclose content under a scope the actor no longer has. The
+    // episode purge here is therefore relevance HYGIENE, and it is best-effort:
+    // Graphiti gives no episode-uuid control (see graphiti-rebuild.ts — the
+    // authoritative purge is a group rebuild, not per-episode delete), exactly
+    // like `deleteCurrentEpisodeFromGraphiti`. A delete failure must NOT block
+    // re-projection (that would strand the concept out of its new lane), so it
+    // is swallowed + warned, mirroring the object-delete path.
+    const priorLane = row.projected_group_id;
+    if (derivation.kind === "skip") {
+      // Terminal skip (public / unclassifiable scope). If the row was PREVIOUSLY
+      // projected into a lane, best-effort purge that stale episode and clear
+      // the lane bookkeeping (so a re-enqueue does not re-attempt the purge).
+      // Recall authz is enforced Postgres-side on the current scope regardless.
+      if (priorLane) {
+        try {
+          await deleteEpisode({ uuid: identityHashToUuid(row.id, priorLane) });
+        } catch (err) {
+          console.warn(
+            `[graphiti-projector] memory retract: deleteEpisode failed for prior lane ${priorLane} of ${row.id}:`,
+            err,
+          );
+        }
+        markMemoryLaneRetracted(row.id);
+        console.log(
+          `[graphiti-projector] memory row ${row.id}: retracted prior-lane episode ` +
+            `(${priorLane}) — ${derivation.reason}`,
+        );
+      } else {
+        console.log(`[graphiti-projector] skipping memory row ${row.id}: ${derivation.reason}`);
+      }
+      return { episodeUuid: null, skipped: true };
+    }
+    groupId = derivation.groupId;
+    // Lane-move (#1379 AC2). A scope change moves a concept between lanes: when
+    // the prior lane differs from the newly-derived lane, best-effort purge the
+    // prior-lane episode (its lane-scoped UUID differs from the new one) before
+    // projecting into the new lane. Best-effort + swallowed for the same reason
+    // as the retract above — the purge is relevance hygiene, not the authz gate.
+    if (priorLane && priorLane !== groupId) {
+      try {
+        await deleteEpisode({ uuid: identityHashToUuid(row.id, priorLane) });
+        console.log(
+          `[graphiti-projector] memory lane-move for ${row.id}: purged prior-lane episode ` +
+            `(${priorLane} -> ${groupId})`,
+        );
+      } catch (err) {
+        console.warn(
+          `[graphiti-projector] memory lane-move: deleteEpisode failed for prior lane ${priorLane} of ${row.id}:`,
+          err,
+        );
+      }
+    }
+  } else {
+    groupId = deriveProjectionGroupId(input.orgId ?? row.org_id);
+  }
   // EPISODE-UUID-EMPTY: knowledge-graph-mcp 1.0.x add_memory returns only a
   // message string — no uuid in any known response path. We compute a stable
   // deterministic UUID locally for Postgres bookkeeping and delete attempts.
@@ -505,14 +697,20 @@ export async function projectObjectToGraphiti(input: {
       ? readSemanticIdentityForProjection(row.org_id, row.id)
       : undefined;
   // Precedence: claimed faceted body > claimed explicit-raw opt-in >
-  // generic-artifact safe projection > raw data (unclaimed non-artifact
-  // rows — unchanged pre-#1427 behavior).
+  // memory-concept capped body (#1379 AC3) > generic-artifact safe projection >
+  // raw data (unclaimed non-artifact rows — unchanged pre-#1427 behavior).
+  // Memory rows are never claimed (claims are artifact-type claims), so the
+  // capped branch sits just after the claim branches: it replaces the raw-data
+  // default those rows previously fell through to (which leaked the full 64 KiB
+  // envelope — frontmatter, links, bundleId).
   const projectionData =
     claimedProjection?.kind === "faceted"
       ? claimedProjection.body
       : claimedProjection?.kind === "raw"
         ? row.data
-        : (projectArtifactSafe(row.data, semanticIdentity) ?? row.data);
+        : isMemory
+          ? projectMemoryConceptCapped(row.data)
+          : (projectArtifactSafe(row.data, semanticIdentity) ?? row.data);
   const episodeBody = JSON.stringify({
     ...projectionData,
     cinatra_object_id: row.id,
@@ -538,6 +736,9 @@ export async function projectObjectToGraphiti(input: {
     objectId: row.id,
     episodeUuid,
     projectedVersion: input.objectVersion,
+    // Persist the lane just projected into so a later scope change can locate
+    // and delete THIS episode (#1379 lane-move bookkeeping).
+    projectedGroupId: groupId,
   });
   return { episodeUuid };
 }
