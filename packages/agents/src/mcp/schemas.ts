@@ -638,7 +638,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
       // ONLY `runId` is caller-supplied. The notification recipient is ALWAYS
       // server-derived from the request actor (HumanUser only); a non-human
       // actor or unset progressContext makes every progress event a no-op.
-      // Callers CANNOT fan notifications out to other users/teams/orgs/projects
+      // Callers CANNOT fan notifications out to other users/teams/orgs
       // via this field.
       progressContext: z
         .object({
