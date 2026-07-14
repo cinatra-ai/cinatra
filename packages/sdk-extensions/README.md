@@ -21,7 +21,7 @@ privileged host capability through the injected `ctx` ports — never via a
 
 ## ABI version
 
-The SDK ABI is **`2.3.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
+The SDK ABI is **`2.4.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
 [`src/register.ts`](src/register.ts) — the authoritative source of truth, also
 mirrored as `cinatra.sdkAbiVersion` in this package's `package.json`). A CI gate
 asserts this README, the `register.ts` constant, and the `package.json` field
@@ -55,6 +55,10 @@ The ABI is semantic-versioned independently of the npm package version (see
 - **`2.3.0`** — added optional `logger.capture`/`logger.captureDirectory` —
   host-owned request/response log capture (replaces extension-side `node:fs`
   logging, cinatra#981).
+- **`2.4.0`** — added optional `objects.resolveType` — the edge-bound CONSUME
+  side of `objects.registerType` (an extension edge-bound to a non-default
+  side-by-side version of an object-type-registering package resolves THAT
+  version's descriptor, fail-closed; cinatra#1392).
 
 ### ABI-evolution policy
 
