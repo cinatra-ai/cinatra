@@ -46,7 +46,7 @@ const COPY: Record<
       `This extension declares SDK ABI ${range ?? "(unknown)"}, which this instance (ABI ${HOST_SDK_ABI_VERSION}) does not satisfy — installing it would be refused.`,
   },
   unknown: {
-    label: "Unknown",
+    label: "Compatibility unknown",
     variant: "outline",
     tooltip: () =>
       `This extension declares no SDK ABI range, so its compatibility with this instance (ABI ${HOST_SDK_ABI_VERSION}) cannot be determined.`,
