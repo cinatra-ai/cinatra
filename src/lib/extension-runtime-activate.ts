@@ -955,16 +955,69 @@ export async function runHostExtensionInstallAndActivate(
     // committed install (the boot rescan is the durable path). Reads
     // `package.json` only — never imports/executes package code.
     if (result.installed === true && row.kind === "artifact") {
+      let bridgeRegistered = false;
       try {
         const { rescanArtifactBridgeFromStore } = await import(
           "@/lib/extension-artifact-bridge-rescan"
         );
-        await rescanArtifactBridgeFromStore({ onlyPackage: packageName });
+        const rescan = await rescanArtifactBridgeFromStore({ onlyPackage: packageName });
+        bridgeRegistered = rescan.registered.includes(packageName);
       } catch (err) {
         console.warn(
           `[extension-runtime-activate] artifact-bridge rescan threw for "${packageName}" (non-fatal):`,
           err instanceof Error ? err.message : err,
         );
+      }
+
+      // INSTALL-ANCHOR CLAIM ACTIVATION (cinatra#1493, epic #1424): tie the
+      // finalized artifact install's manifest `objectTypes` claims to the
+      // durable claim registry. Runs ONLY after the rescan actually registered
+      // THIS package (so the per-claim validators the activation gate resolves
+      // are in the registry, and a fail-closed rescan skip also skips claim
+      // activation), and never for a durably rolled-back update. The hook is
+      // idempotent against its own prior run (re-fires diff live claims vs the
+      // manifest) and NON-THROWING — a claim conflict is a warning outcome,
+      // never a pipeline throw that would roll back the finalized install. A
+      // 'failed' outcome is not terminal: the boot claim-activation backstop
+      // (`runInstallAnchorClaimBackstop`, fired from the artifact-bridge boot
+      // phase) re-drives the idempotent hook at the next boot — the durable
+      // path, parallel to the bridge rescan's own boot pass.
+      if (bridgeRegistered && result.rolledBack !== true) {
+        try {
+          const { readInstallAnchorManifestClaims, runInstallAnchorClaimActivation } =
+            await import("@/lib/objects/artifact-claim-install-anchor");
+          const claims = await readInstallAnchorManifestClaims(result.storeDir);
+          if (claims) {
+            const activation = runInstallAnchorClaimActivation({
+              scope: row.organizationId ? `org:${row.organizationId}` : "platform",
+              extensionPackage: packageName,
+              // The pipeline's RESOLVED concrete version — the requested
+              // `version` may be a dist-tag (e.g. "latest") and must never be
+              // recorded as claim provenance.
+              extensionVersion: result.version,
+              installId: row.id,
+              claims,
+            });
+            if (activation.outcome === "failed") {
+              console.warn(
+                `[extension-runtime-activate] claim activation failed for "${packageName}" ` +
+                  `(non-fatal — the install stays finalized; ${
+                    activation.conflict ? "claim conflict" : "lifecycle error"
+                  }): ${activation.reason}`,
+              );
+            } else {
+              console.info(
+                `[extension-runtime-activate] claim activation for "${packageName}": ` +
+                  JSON.stringify(activation),
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[extension-runtime-activate] claim activation threw for "${packageName}" (non-fatal):`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
     }
 

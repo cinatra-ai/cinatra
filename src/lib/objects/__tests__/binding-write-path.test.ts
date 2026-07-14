@@ -40,11 +40,22 @@ describe("buildBindingReconcileQueries", () => {
     expect(insert.text).toMatch(/'binding'/);
   });
 
-  it("archive targets only active BINDING rows that do not match the current winner", () => {
+  it("archive targets active BINDING rows that do not match the current winner", () => {
     expect(archive.text).toMatch(/UPDATE "cinatra"\."semantic_assertion"[\s\S]*SET eligibility = 'archived'/);
-    expect(archive.text).toMatch(/assertion_basis = 'binding' AND sa\.eligibility <> 'archived'/);
-    expect(archive.text).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM winner w/);
+    expect(archive.text).toMatch(/sa\.eligibility <> 'archived'/);
+    expect(archive.text).toMatch(/sa\.assertion_basis = 'binding' AND NOT EXISTS \(\s*SELECT 1 FROM winner w/);
     expect(archive.values).toEqual(["o1", "a1"]);
+  });
+
+  it("archive ALSO supersedes the winner extension's live CLASSIC row (cinatra#1493) — and ONLY the winner's", () => {
+    // A live same-extension classic row holds the sa_active_unique_idx slot the
+    // winner INSERT needs; the archive statement must clear it in the same tx.
+    expect(archive.text).toMatch(
+      /sa\.assertion_basis <> 'binding' AND EXISTS \(\s*SELECT 1 FROM winner w WHERE w\.ext = sa\.extension\)/,
+    );
+    // The classic clause is winner-scoped: no winner ⇒ EXISTS is empty ⇒ classic
+    // rows are untouched when a claim retires; other extensions never match w.ext.
+    expect(archive.text).toMatch(/w\.ext = sa\.extension/);
   });
 
   it("the winner CTE resolves the DEDICATED claim, org-scope over platform, gen DESC/id ASC, excluding quarantined", () => {
