@@ -209,6 +209,38 @@ export function listAssistantThreadsForOrg(orgId: string, limit = 50): Assistant
   return (res?.rows ?? []).map((r) => mapAssistantThreadRow(r as Record<string, unknown>));
 }
 
+/** List the org threads VISIBLE TO one non-admin actor, most-recently-updated
+ *  first: personally owned rows plus rows whose bound assistant principal IS
+ *  the actor (the participant axis). The SQL predicate is the store-side twin
+ *  of the non-admin branch of `evaluateAssistantThreadAccess`
+ *  (src/lib/assistant-thread-access.ts) so a page of `limit` rows can never be
+ *  crowded out by newer rows the actor may not see (cinatra#1037 P5.5; codex
+ *  round-1 #1). Callers still re-apply the pure decision per row —
+ *  defense-in-depth against predicate drift. */
+export function listAssistantThreadsForOrgVisibleTo(
+  orgId: string,
+  actorUserId: string,
+  limit = 50,
+): AssistantThread[] {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, title, context_id, created_at, updated_at
+               FROM "${schema}"."assistant_threads"
+               WHERE org_id = $1
+                 AND (owner_user_id = $2 OR assistant_user_id = $2)
+               ORDER BY updated_at DESC, id
+               LIMIT $3`,
+        values: [orgId, actorUserId, limit],
+      },
+    ],
+  });
+  return (res?.rows ?? []).map((r) => mapAssistantThreadRow(r as Record<string, unknown>));
+}
+
 /** Bump a thread's `updated_at` (e.g. on a new turn) so it sorts to the top. */
 export function touchAssistantThread(threadId: string): void {
   ensurePostgresSchema();

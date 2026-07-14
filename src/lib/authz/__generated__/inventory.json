@@ -333,6 +333,21 @@
       "line": 262
     },
     {
+      "primitiveName": "assistant_send",
+      "file": "src/lib/assistant-mcp.ts",
+      "line": 876
+    },
+    {
+      "primitiveName": "assistant_thread_get",
+      "file": "src/lib/assistant-mcp.ts",
+      "line": 886
+    },
+    {
+      "primitiveName": "assistant_thread_list",
+      "file": "src/lib/assistant-mcp.ts",
+      "line": 881
+    },
+    {
       "primitiveName": "blog_connector_list",
       "file": "extensions/cinatra-ai/blog-connector/src/mcp/module.ts",
       "line": 28

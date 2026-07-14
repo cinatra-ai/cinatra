@@ -107,6 +107,24 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   approvals_get:    { resourceType: "agent", action: "read",  status: "enforced" },
   approvals_decide: { resourceType: "agent", action: "share", status: "enforced" },
 
+  // ───── assistant MCP surface (cinatra#1037 P5.5) ─────
+  // Generalized assistant_send / assistant_thread_* over the STRUCTURED
+  // assistant_threads/assistant_turns store (src/lib/assistant-mcp.ts).
+  // resourceType "object": these are the registry-driven successors of the
+  // chat_thread_* set above (object list/read/create — the SAME class), and a
+  // dedicated "assistant" resourceType would add registry pairs with no
+  // enforcement delta at the coarse Posture-B boundary. The boundary's W4
+  // cannot-express gate additionally captures the three names as surface
+  // "assistant" (mcp-boundary.ts — sub-org agent-run OBO ceilings deny
+  // fail-closed; org scoping is all the store can express). The REAL
+  // authorization is the module's own input-time authorizeAssistantMcpTurn
+  // (handle registry resolution + mcp.enabled/restriction target policy + the
+  // generalized G2 thread/grant check with sealed-room 404-hide) — all
+  // identity from mcpRequestContextStorage, never tool input.
+  assistant_send:        { resourceType: "object", action: "create", status: "enforced" },
+  assistant_thread_get:  { resourceType: "object", action: "read",   status: "enforced" },
+  assistant_thread_list: { resourceType: "object", action: "list",   status: "enforced" },
+
   // ───── artifact ─────
   artifact_assertion_get:           { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_assertion_list:          { resourceType: "artifact", action: "list",   status: "enforced" },
