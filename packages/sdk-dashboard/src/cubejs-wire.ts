@@ -330,10 +330,18 @@ export function resolveAndValidateCubeId(
   const prefix = `${cubeId}.`;
   const foreign = allMembers.filter((m) => !m.startsWith(prefix));
   if (foreign.length > 0) {
+    // Multiple qualified cubes → name them all; otherwise the "foreign"
+    // members are bare (`count`, not `<cube>.count`) and naming a single cube
+    // as a mix would read wrong — name the offending fields instead.
+    const cubes = collectQueryCubeIds(q);
+    const explanation =
+      cubes.length > 1
+        ? describeCrossCubeQuery(cubes)
+        : `Some fields in this card's query don't belong to the ${humanizeCubeId(cubeId)} data source (${foreign.join(", ")}). Choose fields from one data source.`;
     return {
       ok: false,
       code: "cube_id_ambiguous",
-      userMessage: `${describeCrossCubeQuery(collectQueryCubeIds(q))} Edit this card to change its fields — retrying will not fix an invalid configuration.`,
+      userMessage: `${explanation} Edit this card to change its fields — retrying will not fix an invalid configuration.`,
       details: { resolved: cubeId, foreignMembers: foreign },
     };
   }

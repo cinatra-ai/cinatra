@@ -129,6 +129,18 @@ describe("resolveAndValidateCubeId — full validation", () => {
       );
     }
   });
+  it("cube_id_ambiguous userMessage names the offending BARE members when only one cube is qualified", () => {
+    const out = resolveAndValidateCubeId({
+      measures: ["agent_runs.count"],
+      dimensions: ["status"],
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.code).toBe("cube_id_ambiguous");
+      expect(out.userMessage).toContain("don't belong to the Agent Runs data source (status)");
+      expect(out.userMessage).not.toContain("mixes fields from");
+    }
+  });
   it("cube_id_required userMessage explains the missing-fields recovery", () => {
     const out = resolveAndValidateCubeId({});
     expect(out.ok).toBe(false);
