@@ -63,7 +63,8 @@ function getFrom(sources: Map<string, string>, name: string): string {
 }
 
 // AnalyticsPortlet + DashboardPortletCard ship in the DashboardEditModal
-// chunk; CubeClient ships in the chart-data-table chunk (v0.5.7 layout).
+// chunk; CubeClient ships in the chart-data-table chunk (chunk layout of the
+// installed drizzle-cube release — see the pinned version in package.json).
 const editModalSources = loadSources(/^DashboardEditModal-.*\.js\.map$/);
 const dataTableSources = loadSources(/^chart-data-table-.*\.js\.map$/);
 
