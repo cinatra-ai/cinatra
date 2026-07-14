@@ -49,6 +49,32 @@ describe("invite-member dialog source contract", () => {
   });
 });
 
+// cinatra#1565: an invitation now dispatches an email (auth.ts
+// sendInvitationEmail) AND the dialog surfaces a copyable accept link as the
+// always-available delivery mechanism, so it never claims an email definitely
+// went out (the platform mailer is optional).
+describe("invite-member dialog honesty fallback (cinatra#1565)", () => {
+  it("builds the copyable accept link from the shared helper (no drift with the emailed link)", () => {
+    expect(DIALOG_SOURCE).toContain('from "@/lib/org-invitation-email"');
+    expect(DIALOG_SOURCE).toContain("buildInvitationAcceptUrl(window.location.origin");
+  });
+
+  it("offers a copy-to-clipboard affordance for the accept link", () => {
+    expect(DIALOG_SOURCE).toContain("navigator.clipboard.writeText");
+    // The link is shown in a read-only input so it can still be selected +
+    // copied manually if the clipboard API is unavailable.
+    expect(DIALOG_SOURCE).toContain("readOnly");
+    expect(DIALOG_SOURCE).toContain("inviteLink");
+  });
+
+  it("no longer claims an email was definitively sent", () => {
+    // The old copy asserted delivery ("Invitation sent to ..."); the honest
+    // success message states the invitation was created.
+    expect(DIALOG_SOURCE).not.toContain("Invitation sent to ");
+    expect(DIALOG_SOURCE).toContain("Invitation created for ");
+  });
+});
+
 describe("permissions page invite gating contract", () => {
   it("resolves the invite gate from the Better Auth invitation:create permission", () => {
     expect(PAGE_SOURCE).toContain("auth.api.hasPermission");

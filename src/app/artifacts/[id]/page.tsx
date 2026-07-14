@@ -43,12 +43,19 @@ import { Button } from "@/components/ui/button";
 
 import { getAuthSession, requireActorContext } from "@/lib/auth-session";
 import {
-  getArtifact,
+  readArtifactForDetail,
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 
+import { objectTypeRegistry } from "@cinatra-ai/objects";
+
 import { pickHandler } from "./pick-handler";
+import { ArtifactReadDeniedPanel } from "./read-denied-panel";
+import {
+  pickArtifactRenderer,
+  isSelectionPreparing,
+} from "./renderer-dispatch";
 import { MarkdownHandler } from "./handlers/markdown-handler";
 import { PlainTextHandler } from "./handlers/plain-text-handler";
 import { PdfHandler } from "./handlers/pdf-handler";
@@ -70,12 +77,13 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   if (!orgId) redirect("/sign-in");
 
   const actor = await requireActorContext();
-  const artifact: ArtifactSummary | null = getArtifact({
-    artifactId: id,
-    orgId,
-    actor,
-  });
-  if (!artifact) notFound();
+  // §III read authorization: distinguish not-found (404-hide) from a
+  // list-visible-but-read-denied row, which the spec routes to the
+  // not-authorized panel — never to the bytes and never to a generic 404.
+  const access = readArtifactForDetail({ artifactId: id, orgId, actor });
+  if (access.kind === "not-found") notFound();
+  if (access.kind === "denied") return <ArtifactReadDeniedPanel />;
+  const artifact: ArtifactSummary = access.artifact;
 
   const revisionId = artifact.latestRepresentationRevisionId;
   // Latest representation is required for any in-page rendering. Without
@@ -91,6 +99,28 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
   const handler = pickHandler(mime);
+
+  // §III renderer dispatch by effective identity (cinatra#1431): typed renderer
+  // → MIME handler → generic fallback ("there is always a renderer"). Read
+  // authorization is already enforced above by `getArtifact` (canonical
+  // `object.read`) — a row the viewer may not read never reaches here. The
+  // typed branch activates once claimed typed rows carry a base type with a
+  // registered detail renderer (email/list claimant extensions, #1434/#1435);
+  // the generic artifact type ships none, so today's rows dispatch to the MIME
+  // handler or the generic fallback. The dispatch decision is unit-tested in
+  // `renderer-dispatch.test.ts`.
+  const hasTypedRenderer = Boolean(
+    objectTypeRegistry.resolve(artifact.objectType)?.renderers?.detail,
+  );
+  const dispatch = pickArtifactRenderer({
+    identity: artifact.effectiveIdentity,
+    hasTypedRenderer,
+    mime,
+  });
+  // Activation barrier (§III): selection (pin / add-to-context) requires a
+  // settled binding; a catalog browse-only identity shows "Preparing" until it
+  // lands. Open still renders the row read-only.
+  const selectionPreparing = isSelectionPreparing(artifact.effectiveIdentity);
   const previewHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/preview`
     : null;
@@ -142,7 +172,22 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
           ) : null
         }
       />
-      <PageContent className="flex flex-col gap-6 pb-8">
+      <PageContent
+        className="flex flex-col gap-6 pb-8"
+        data-render-dispatch={dispatch.kind}
+      >
+        {/* §III activation barrier: pin / add-to-context is replaced by a
+            muted "Preparing" label until the claim's binding lands. */}
+        {selectionPreparing ? (
+          <span
+            className="inline-flex w-fit items-center rounded-md bg-surface-muted px-2 py-1 text-xs text-muted-foreground"
+            data-testid="artifact-selection-preparing"
+            data-conformance-id="artifacts-activation-preparing"
+            title="Preparing — pinning and context selection unlock once this artifact's binding lands."
+          >
+            Preparing
+          </span>
+        ) : null}
         {(() => {
           if (!previewHref) {
             return <FallbackHandler artifact={artifact} mime={mime} />;

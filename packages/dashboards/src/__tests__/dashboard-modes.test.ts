@@ -31,7 +31,8 @@ const ENABLED = [
   "projects-dashboard.tsx",
   "teams-dashboard.tsx",
   "organizations-dashboard.tsx",
-  "artifacts-dashboard.tsx",
+  // artifacts-dashboard.tsx retired — `/artifacts` is now the bespoke
+  // consolidated surface, not a DC index dashboard (cinatra#1431).
 ];
 
 describe("DashboardsClientShell dashboardModes prop", () => {
