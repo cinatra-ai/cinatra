@@ -329,6 +329,15 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   project_agent_template_bindings_delete:     { resourceType: "project", action: "update", status: "enforced" },
   project_agent_template_bindings_list:       { resourceType: "project", action: "read",   status: "enforced" },
   project_agent_template_bindings_update:     { resourceType: "project", action: "update", status: "enforced" },
+  // Project-manager pilot host tool seam (cinatra#1033 W3). COARSE Posture-B
+  // class only — the real authorization (run-token identity + OBO scope-ceiling
+  // containment + PM-seat/lease/provider gates) lives in the seam handlers
+  // (src/lib/project-seam-mcp.ts) and the composed W2 primitives. instantiate
+  // creates the project instance; dispatch advances project execution; tick is
+  // a read.
+  project_dispatch_worker:                    { resourceType: "project", action: "update", status: "enforced" },
+  project_instantiate:                        { resourceType: "project", action: "create", status: "enforced" },
+  project_tick_context:                       { resourceType: "project", action: "read",   status: "enforced" },
   projects_archive:                           { resourceType: "project", action: "update", status: "enforced" },
   projects_create:                            { resourceType: "project", action: "create", status: "enforced" },
   projects_get:                               { resourceType: "project", action: "read",   status: "enforced" },
