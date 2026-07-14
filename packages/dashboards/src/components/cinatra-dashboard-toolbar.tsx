@@ -89,6 +89,17 @@ export const DASHBOARD_PAGE_ACTIONS: Readonly<
       icon: Plus,
     },
   ],
+  // cinatra#1496: the organizations screen passes its anchor only when the
+  // viewer may create organizations (single-org mode off + the
+  // `organization.create` permission), so this entry renders gated.
+  organizations: [
+    {
+      id: "new-organization",
+      href: "/organizations/new",
+      label: "New organization",
+      icon: Plus,
+    },
+  ],
   projects: [
     { id: "new-project", href: "/projects/new", label: "New project", icon: Plus },
   ],

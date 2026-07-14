@@ -147,6 +147,9 @@ html.dark {
 body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="agents"]
   [data-cinatra-page-action="run-agent"])
   [data-cinatra-page-actions-fallback="agents"],
+body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="organizations"]
+  [data-cinatra-page-action="new-organization"])
+  [data-cinatra-page-actions-fallback="organizations"],
 body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="projects"]
   [data-cinatra-page-action="new-project"])
   [data-cinatra-page-actions-fallback="projects"],
