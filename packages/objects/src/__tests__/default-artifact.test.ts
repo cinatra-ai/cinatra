@@ -13,6 +13,10 @@ import {
   DEFAULT_ARTIFACT_EXTENSION,
   isDefaultArtifactType,
 } from "../semantic-manifest";
+import {
+  parseArtifactObjectTypeClaims,
+  validateObjectTypeClaimSchemaSources,
+} from "../claims";
 import { registerArtifactExtensions } from "../integration/register-artifact-extensions";
 import { objectTypeRegistry } from "../registry";
 
@@ -62,5 +66,62 @@ describe("@cinatra-ai/default-artifact — built-in floor type", () => {
     expect(entry).toBeDefined();
     expect(entry?.isArtifact?.accepts.dashboard).toBe(true);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1433 AC-1 — the "default object IS default artifact" exception: the
+// floor extension declares a lower-priority DEFAULT claim on the generic
+// object type via the #1432 manifest mechanism. The entry below is the exact
+// contract the default-artifact manifest PR declares; the inline schema is
+// REQUIRED (the claimed type is registered by `@cinatra-ai/objects`, which is
+// neither the claimant nor a manifest dependency — the #1432 AC-4 rule).
+// ---------------------------------------------------------------------------
+const EXPECTED_FLOOR_CLAIM = {
+  type: "@cinatra-ai/objects:object",
+  claim: "default",
+  dispositions: {
+    projection: "artifact-safe",
+    pinnable: false,
+    snapshotPolicy: "none",
+    sensitivity: "normal",
+  },
+  schema: { type: "object" },
+};
+
+describe("#1433 AC-1 — the generic-object DEFAULT claim contract", () => {
+  it("the claim entry is schema-valid and satisfies the schema-source rule with zero dependencies", () => {
+    const parsed = parseArtifactObjectTypeClaims([EXPECTED_FLOOR_CLAIM]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.claims[0].claim).toBe("default");
+    expect(
+      validateObjectTypeClaimSchemaSources({
+        packageName: DEFAULT_ARTIFACT_EXTENSION,
+        claims: parsed.claims,
+        dependencyPackageNames: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("a manifest carrying the claim parses as a valid semantic manifest", () => {
+    const withClaim = {
+      ...pkgJson.cinatra.artifact,
+      objectTypes: [EXPECTED_FLOOR_CLAIM],
+    };
+    const r = parseSemanticArtifactManifest(withClaim);
+    expect(r.ok).toBe(true);
+  });
+
+  it("once the pinned default-artifact checkout carries objectTypes, it is exactly this claim", () => {
+    const objectTypes = pkgJson.cinatra.artifact.objectTypes;
+    if (objectTypes === undefined) {
+      // Pre-re-pin window: the companion default-artifact manifest PR has not
+      // been pinned into cinatra-required-extensions.lock.json yet. The two
+      // tests above pin the contract the re-pin must satisfy; this equality
+      // check arms itself automatically on the re-pin.
+      return;
+    }
+    expect(objectTypes).toEqual([EXPECTED_FLOOR_CLAIM]);
   });
 });
