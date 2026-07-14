@@ -14,6 +14,7 @@ import {
 } from "@/lib/database";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { getArtifact } from "./artifact-service";
+import { captureSnapshotsForContextSlot } from "./object-content-snapshot";
 import {
   resolveContextSlot,
   type InstalledExtensionDescriptor,
@@ -116,6 +117,15 @@ function resolveActorAndOrg(): {
     teamIds: a2a?.teamIds,
     projectIds: a2a?.projectIds,
   }) as unknown as ActorContext;
+  // Carry the transport-verified agent-run OBO scope-ceiling onto the actor
+  // (codex finding on the #1430 MCP capture wiring): buildOwnershipFilter
+  // AND-s the ceiling over the visibility OR-set, so the capture composition
+  // and the resolver both stay inside a delegated run's ceiling — without it
+  // a delegated caller could mint/return org-visible claimed rows outside
+  // its user/team/project scope. Mirrors the REST reference
+  // (context-route-io.ts), which attaches the ceiling to its actor.
+  // Narrow-only: absent ceiling (chat/session/machine callers) = unchanged.
+  if (ctx?.oboCeiling) actor.oboCeiling = ctx.oboCeiling;
   return { orgId, userId, actor };
 }
 
@@ -251,11 +261,28 @@ export function registerContextPrimitives(server: McpRuntimeToolServer): void {
       const { actor } = resolveActorAndOrg();
       const slot = findSlotOrThrow(parsed.parentAgentOas, parsed.slotId);
       const installedExtensions = getInstalledExtensionDescriptors();
+      // cinatra#1430 "capture at RESOLUTION time": BEFORE resolving, capture
+      // (or keyed-reuse) content snapshots for the actor-visible CLAIMED
+      // typed rows matching the slot — mirrors `resolveCandidates` in
+      // context-route-io.ts (the /api/context-resolve + /api/context-finalize
+      // path). Fail-soft per row (a redaction-blocked/oversized row is
+      // skipped, never fails the resolution) and idempotent (unchanged rows
+      // keyed-reuse). A slot with no claimed matches yields `pins: []`,
+      // leaving generic artifact resolution byte-identical.
+      const capture = await captureSnapshotsForContextSlot({
+        actor,
+        slot,
+        projectId: parsed.projectId,
+        installedExtensions,
+      });
       const refs: ResolvedContextRef[] = resolveContextSlot({
         actor,
         slot,
         projectId: parsed.projectId,
         installedExtensions,
+        // Claimed rows resolve ONLY through the snapshots pinned at THIS
+        // resolution (never "latest revision") — see ResolveContextSlotInput.
+        snapshotPins: capture.pins,
       });
       return envelope({
         slotId: slot.slotId,
