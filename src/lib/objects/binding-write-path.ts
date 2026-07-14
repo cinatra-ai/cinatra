@@ -28,7 +28,17 @@
 //      winner, or a quarantined object. Archiving is an UPDATE to
 //      eligibility='archived' (the frozen trigger's one legal eligibility
 //      transition; append-only doctrine preserved — a binding is never mutated
-//      in place, a new one is INSERTed).
+//      in place, a new one is INSERTed). ALSO archives the WINNER extension's
+//      live NON-binding (classic) assertion on the artifact: the binding is
+//      the authoritative same-extension identity (cinatra#1493) — a live
+//      classic row from the winner extension holds the sa_active_unique_idx
+//      (org, artifact, extension) slot and would make statement 2 throw a
+//      duplicate-key error, permanently parking the reconcile queue row for
+//      the whole type. Pre-claims classic rows (or an uninstall-replay's
+//      replacement classics) are superseded IN THE SAME TRANSACTION the
+//      winner's binding is inserted, so the artifact never transiently loses
+//      the extension's identity. Classic rows from OTHER extensions are never
+//      touched.
 //   2. INSERT the winner's binding IFF a winner exists and no active binding
 //      already matches it (idempotent: a matching binding ⇒ zero inserts).
 //
@@ -103,18 +113,28 @@ export function buildBindingReconcileQueries(
     // 1. Archive every active binding that is not the current winner's exact
     // (claim id, generation, extension). When there is no winner (default/none/
     // retired/uninstalled/quarantined) the CTE is empty ⇒ every active binding
-    // archives.
+    // archives. ALSO archive the winner extension's live CLASSIC row on this
+    // artifact (same-extension supersede, cinatra#1493): it holds the
+    // sa_active_unique_idx slot statement 2's binding INSERT needs — without
+    // this the INSERT throws duplicate-key and the reconcile queue row parks
+    // 'failed' for the whole type. Statement 2 inserts the winner's binding in
+    // the SAME transaction, so the extension's identity on the artifact is
+    // continuous. No winner ⇒ the classic clause matches nothing (classic rows
+    // are untouched when a claim retires); other extensions' classics are
+    // never touched.
     {
       text: `WITH ${winnerCte(s)}
 UPDATE "${s}"."semantic_assertion" sa
    SET eligibility = 'archived', archived_at = now()
  WHERE sa.org_id = $1 AND sa.artifact_id = $2
-   AND sa.assertion_basis = 'binding' AND sa.eligibility <> 'archived'
-   AND NOT EXISTS (
+   AND sa.eligibility <> 'archived'
+   AND ((sa.assertion_basis = 'binding' AND NOT EXISTS (
      SELECT 1 FROM winner w
      WHERE w.claim_id = sa.binding_claim_id
        AND w.gen = sa.binding_generation
-       AND w.ext = sa.extension)`,
+       AND w.ext = sa.extension))
+    OR (sa.assertion_basis <> 'binding' AND EXISTS (
+     SELECT 1 FROM winner w WHERE w.ext = sa.extension)))`,
       values: [input.orgId, input.artifactId],
     },
     // 2. Insert the winner's binding when one exists and no active binding
