@@ -1,6 +1,10 @@
 "use server";
 
-import { requireAuthSession, resolveOrgRoleForSession } from "@/lib/auth-session";
+import {
+  requireAuthSession,
+  resolveOrgRoleForSession,
+  isPlatformAdmin,
+} from "@/lib/auth-session";
 import {
   approveMergeProposal,
   readMergeProposalById,
@@ -26,6 +30,11 @@ export async function approveMergeProposalAction(input: {
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
     return { ok: false, reason: "no active organization on session" };
+  }
+  // Relocated under the /artifacts admin side (cinatra#1431): admin-gated,
+  // fail-closed. The per-object `object.update` enforcement below stays.
+  if (!isPlatformAdmin(session)) {
+    return { ok: false, reason: "administrator only" };
   }
   const proposal = readMergeProposalById(input.proposalId, { orgId });
   if (!proposal) {
@@ -90,6 +99,11 @@ export async function rejectMergeProposalAction(input: {
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
     return { ok: false, reason: "no active organization on session" };
+  }
+  // Relocated under the /artifacts admin side (cinatra#1431): admin-gated,
+  // fail-closed. The per-object `object.update` enforcement below stays.
+  if (!isPlatformAdmin(session)) {
+    return { ok: false, reason: "administrator only" };
   }
   // Reject MUST enforce object.update on the target — otherwise any
   // active-org user can deny review work for objects they have no write

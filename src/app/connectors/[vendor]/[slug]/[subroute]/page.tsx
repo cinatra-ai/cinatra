@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Suspense } from "react";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { getActorContext } from "@/lib/auth-session";
 import {
@@ -39,6 +39,7 @@ import { resolveSchemaConfigInitialValues } from "@/lib/extension-config-hydrati
 import {
   enforceConnectorPolicy,
 } from "@/lib/connector-policy";
+import { resolveConnectorSetupRedirect } from "@/lib/connector-setup-redirect";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
@@ -167,6 +168,22 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // Fail closed: no trusted+addressable runtime install → not found (never leak
     // existence to an unauthorized/cross-org actor).
     if (!cardRecord || cardRecord.vendor !== vendor || cardRecord.slug !== slug) {
+      // cinatra#1529: before the 404, evaluate the NARROW marketplace-redirect
+      // decision. Only a genuinely-absent install of a connector this actor can
+      // already discover + install in the in-app marketplace redirects there;
+      // every other state (unknown, not-discoverable, inactive/archived install,
+      // withdrawn/incompatible, non-admin) fails closed to the 404. The resolver
+      // wraps its own catalog/store IO and never throws, so `redirect()` (which
+      // throws NEXT_REDIRECT) is called OUTSIDE any try/catch — otherwise this
+      // route would convert the redirect back into a 404.
+      const redirectDecision = await resolveConnectorSetupRedirect({
+        packageName,
+        subroute,
+        actor,
+      });
+      if (redirectDecision.kind === "redirect") {
+        redirect(redirectDecision.target);
+      }
       notFound();
     }
     // A runtime-only connector reaches its setup route only via the schema-config

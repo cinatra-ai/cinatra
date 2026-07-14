@@ -9,8 +9,12 @@ import type { MutationResult } from "@/lib/object-history";
 // The data-safety "Saved … [Undo]" toast.
 //
 // On a successful mutation that produced a change-set, fires a toast whose
-// Undo action deep-links to the change-set's restore modal
-// (/data-safety/change-sets/[id]?openRestore=1). On failure, an error toast.
+// Undo action deep-links to the consolidated undo surface, carrying the
+// change-set id so that exact row's restore modal auto-opens
+// (/artifacts?mode=undo&openRestore=<changeSetId> — the former
+// /data-safety change-set route was retired in cinatra#1431 §VII; the flat
+// undo list carries the per-row restore modal and honours the deep-link).
+// On failure, an error toast.
 // On success WITHOUT a change-set id, nothing. Uses the project's
 // cinatra-toast wrapper (owner-mandated; never sonner directly).
 //
@@ -21,7 +25,11 @@ import type { MutationResult } from "@/lib/object-history";
 // toast, just without the host's default router navigation.
 
 export function undoDeepLink(changeSetId: string): string {
-  return `/data-safety/change-sets/${changeSetId}?openRestore=1`;
+  // The per-change-set restore route was retired (cinatra#1431 §VII); the Undo
+  // toast now lands on the consolidated undo surface. The change-set id rides in
+  // `openRestore` so the flat undo list auto-opens THIS change-set's restore
+  // modal (the same deep-open the retired detail route gave via ?openRestore).
+  return `/artifacts?mode=undo&openRestore=${encodeURIComponent(changeSetId)}`;
 }
 
 export type UndoToastOptions = {

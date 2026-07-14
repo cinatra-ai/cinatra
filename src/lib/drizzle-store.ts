@@ -2040,6 +2040,13 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_episode_uuid TEXT` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_version INTEGER` },
+    // projected_group_id: the Graphiti lane a row was LAST projected into
+    // (cinatra#1379). Read back on the next projection so a memory-concept scope
+    // change can locate + delete the PRIOR-lane episode (the episode UUID is
+    // lane-scoped, so a lane change also moves the deterministic UUID). Purely
+    // additive + nullable — rides this idempotent bootstrap path like its
+    // graphiti_* siblings, NOT the destructive numbered migration ledger.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS projected_group_id TEXT` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_hash TEXT` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_at TIMESTAMPTZ` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projection_error TEXT` },
