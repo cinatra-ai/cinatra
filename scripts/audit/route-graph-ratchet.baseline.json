@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 147,
-    "/api/mcp": 1447,
-    "/chat": 1485,
-    "/api/a2a": 1452,
-    "/api/llm-bridge": 1458
+    "/sign-in": 149,
+    "/api/mcp": 1449,
+    "/chat": 1487,
+    "/api/a2a": 1454,
+    "/api/llm-bridge": 1460
   },
   "absorbs": {
     "/sign-in": {
-      "from": 142,
-      "to": 147,
-      "reason": "cinatra#1367 (PR #1473) chat-capture autosave detection graph, RE-MEASURED on the merged tree (origin/main d26fe7a0 contained in HEAD) with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET; module overlap between the enqueue and pipeline subgraphs makes per-edge contributions non-additive). The chat-capture feature becomes reachable from the locked routes at the request-time persistence chokepoint via new edges (the route-graph walker counts dynamic import()): src/lib/drizzle-store.ts STATICALLY imports @/lib/chat-capture-schema (a pure SQL-strings, import-free schema leaf — the #1425/#1426/#1475 extract-leaf pattern), and src/lib/database.ts DYNAMIC-imports @/lib/chat-capture/enqueue (the fire-and-forget enqueue hook fired after thread persistence; the seam is pinned by chat-capture-enqueue-hook.test.ts). /sign-in reaches the store via auth -> DB (drizzle-store + database.ts) but NOT the background-jobs registry that dynamic-imports the detection pipeline, so it gains EXACTLY +5 (the schema leaf + the enqueue-hook subgraph), not the +8 the four non-auth routes gain. Ablating the three chat-capture edges returns /sign-in to its exact origin/main ceiling 142, so the entire growth is attributable to this feature and nothing else. Absorbed raise 142->147.",
-      "pr": 1473
+      "from": 147,
+      "to": 149,
+      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: the auth config (src/lib/auth.ts, reachable from /sign-in) gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports (src/app/teams/new/team-slug) \u2014 MEASURED in the PR worktree at merge commit 15640bba vs origin/main 53ab28b7; /sign-in's first-party graph resolved fully in the measurement (the four companion-extension-dependent routes are untouched by this PR). NET +2 (149 = measured reachable count, not arithmetic). RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
+      "pr": 1517
     },
     "/api/mcp": {
-      "from": 1444,
-      "to": 1447,
-      "reason": "cinatra#1037 P5.5 (PR #1538) generalized assistant MCP surface, MEASURED in the PR worktree rebased on origin/main cba30247 with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET reachable-module-set diff via ablation of the module wiring; the ablated tree returns EXACTLY to each base ceiling, so the entire growth is attributable to this feature and nothing else). Exactly three first-party modules become reachable on each grown route — wired via src/lib/mcp-server.ts registering createAssistantMcpModule(): src/lib/assistant-mcp.ts (the new platform-owned tool module), src/lib/assistant-thread-access.ts (the new pure G2-generalized access-decision leaf), and src/lib/assistant-thread-store.ts (the structured P2.3 assistant_threads/assistant_turns store, reachable from these routes for the FIRST time through the new module — the rest of the composed substrate (assistant-runtime/*, the better-auth-db handle registry, the @cinatra-ai/a2a event log, auth-session) was already reachable via the existing chat module, which is why the NET is +3 and not PR #1522's +8). /sign-in is flat at 147 — it does not reach the MCP tool-module registry in mcp-server.ts. Absorbed raise 1444->1447.",
-      "pr": 1538
+      "from": 1447,
+      "to": 1449,
+      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /api/mcp reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1446 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
+      "pr": 1517
     },
     "/chat": {
-      "from": 1482,
-      "to": 1485,
-      "reason": "cinatra#1037 P5.5 (PR #1538) generalized assistant MCP surface, MEASURED in the PR worktree rebased on origin/main cba30247 with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET reachable-module-set diff via ablation of the module wiring; the ablated tree returns EXACTLY to each base ceiling, so the entire growth is attributable to this feature and nothing else). Exactly three first-party modules become reachable on each grown route — wired via src/lib/mcp-server.ts registering createAssistantMcpModule(): src/lib/assistant-mcp.ts (the new platform-owned tool module), src/lib/assistant-thread-access.ts (the new pure G2-generalized access-decision leaf), and src/lib/assistant-thread-store.ts (the structured P2.3 assistant_threads/assistant_turns store, reachable from these routes for the FIRST time through the new module — the rest of the composed substrate (assistant-runtime/*, the better-auth-db handle registry, the @cinatra-ai/a2a event log, auth-session) was already reachable via the existing chat module, which is why the NET is +3 and not PR #1522's +8). /sign-in is flat at 147 — it does not reach the MCP tool-module registry in mcp-server.ts. Absorbed raise 1482->1485.",
-      "pr": 1538
+      "from": 1485,
+      "to": 1487,
+      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /chat reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1484 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
+      "pr": 1517
     },
     "/api/a2a": {
-      "from": 1449,
-      "to": 1452,
-      "reason": "cinatra#1037 P5.5 (PR #1538) generalized assistant MCP surface, MEASURED in the PR worktree rebased on origin/main cba30247 with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET reachable-module-set diff via ablation of the module wiring; the ablated tree returns EXACTLY to each base ceiling, so the entire growth is attributable to this feature and nothing else). Exactly three first-party modules become reachable on each grown route — wired via src/lib/mcp-server.ts registering createAssistantMcpModule(): src/lib/assistant-mcp.ts (the new platform-owned tool module), src/lib/assistant-thread-access.ts (the new pure G2-generalized access-decision leaf), and src/lib/assistant-thread-store.ts (the structured P2.3 assistant_threads/assistant_turns store, reachable from these routes for the FIRST time through the new module — the rest of the composed substrate (assistant-runtime/*, the better-auth-db handle registry, the @cinatra-ai/a2a event log, auth-session) was already reachable via the existing chat module, which is why the NET is +3 and not PR #1522's +8). /sign-in is flat at 147 — it does not reach the MCP tool-module registry in mcp-server.ts. Absorbed raise 1449->1452.",
-      "pr": 1538
+      "from": 1452,
+      "to": 1454,
+      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /api/a2a reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1451 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
+      "pr": 1517
     },
     "/api/llm-bridge": {
-      "from": 1455,
-      "to": 1458,
-      "reason": "cinatra#1037 P5.5 (PR #1538) generalized assistant MCP surface, MEASURED in the PR worktree rebased on origin/main cba30247 with the companion extension repos cloned pinned (missingCount 0) — never arithmetic (measured NET reachable-module-set diff via ablation of the module wiring; the ablated tree returns EXACTLY to each base ceiling, so the entire growth is attributable to this feature and nothing else). Exactly three first-party modules become reachable on each grown route — wired via src/lib/mcp-server.ts registering createAssistantMcpModule(): src/lib/assistant-mcp.ts (the new platform-owned tool module), src/lib/assistant-thread-access.ts (the new pure G2-generalized access-decision leaf), and src/lib/assistant-thread-store.ts (the structured P2.3 assistant_threads/assistant_turns store, reachable from these routes for the FIRST time through the new module — the rest of the composed substrate (assistant-runtime/*, the better-auth-db handle registry, the @cinatra-ai/a2a event log, auth-session) was already reachable via the existing chat module, which is why the NET is +3 and not PR #1522's +8). /sign-in is flat at 147 — it does not reach the MCP tool-module registry in mcp-server.ts. Absorbed raise 1455->1458.",
-      "pr": 1538
+      "from": 1458,
+      "to": 1460,
+      "reason": "cinatra#1494 (PR #1517) Better Auth org-creation default-team slug hook: /api/llm-bridge reaches the auth config (src/lib/auth.ts), which gains src/lib/better-auth-org-hooks.ts plus the shared team-slug deriver it imports \u2014 same +2 as the absorbed /sign-in raise. MEASURED by the CI ratchet with the companion extension repos cloned (run 29317421492, head 6118bc0e, vs live origin/main): 1457 = measured reachable count, not arithmetic. RE-BASED 2026-07-14 after main-side baseline rewrite (assistants/artifacts merges raised the companion routes; from/to re-derived on the new base, same measured NET +2 \u2014 CI re-verifies on the merged tree).",
+      "pr": 1517
     }
   }
 }
