@@ -137,7 +137,12 @@ export function ExtensionInstallScopeDialog({
     projects: installTargets
       .filter((t) => t.level === "project")
       .map((t) => ({ id: t.id, name: ownerEntityNames[t.value] ?? t.label })),
-    orgName: ownerEntityNames["org"] ?? "Organization",
+    // Multi-scope W1: ownerEntityNames is keyed by the id-carrying `org:<id>`
+    // token (the bare "org" key was retired). Fall through to the empty string
+    // so the combobox renders its own "Your organization" fallback ONLY when
+    // the org genuinely has no name — no hardcoded "Organization".
+    orgName: ownerEntityNames[`org:${activeOrgId}`] ?? "",
+    orgId: activeOrgId,
     workspaceExposed: false,
   };
   const disabledScopes = installTargets

@@ -123,7 +123,12 @@ export function InstallScopeDialog({
     projects: installTargets
       .filter((t) => t.level === "project")
       .map((t) => ({ id: t.id, name: ownerEntityNames[t.value] ?? t.label })),
-    orgName: ownerEntityNames["org"] ?? "Organization",
+    // Multi-scope W1: ownerEntityNames is keyed by the id-carrying `org:<id>`
+    // token (the bare "org" key was retired). Fall through to the empty string
+    // so the combobox renders its own "Your organization" fallback ONLY when
+    // the org genuinely has no name — no hardcoded "Organization".
+    orgName: ownerEntityNames[`org:${activeOrgId}`] ?? "",
+    orgId: activeOrgId,
     workspaceExposed: false,
   };
   const disabledScopes = installTargets
@@ -168,7 +173,10 @@ export function InstallScopeDialog({
             ? entityName
               ? `project ${entityName}`
               : "project"
-            : entityName ?? "organization";
+            // Truthy (not nullish) fallback: ownerEntityNames now stores "" for
+            // a nameless org (cinatra#1526), and `?? ` would let the empty
+            // string through to an empty toast scope.
+            : entityName || "organization";
       toast.success(`Installed ${packageName} at ${scopeLabel}`);
       setOpen(false);
       setSubmitting(false);

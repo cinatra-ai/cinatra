@@ -38,6 +38,15 @@ export type AccessComboboxProps = {
     projects: { id: string; name: string }[];
     teams: { id: string; name: string }[];
     orgName: string;
+    /**
+     * Active organization id. Multi-scope W1 retired the bare `"org"` token in
+     * favour of the id-carrying `org:<id>`; the org row emits `org:${orgId}` so
+     * its value, selected-state, and disabled-scope lookup line up with the
+     * server-built install-target rows. Optional: when absent (no active org),
+     * the row degrades to the legacy bare `"org"` token rather than emit a
+     * malformed `org:` with an empty tail.
+     */
+    orgId?: string;
     workspaceExposed: boolean;
   };
   isAdmin: boolean;
@@ -91,7 +100,14 @@ export function resolveAccessLabel(
   if (value === "owner") return { type: null, name: "Only me" };
   if (value === "admin") return { type: null, name: "Admins only" };
   if (value === "workspace") return { type: null, name: "Whole Workspace" };
-  if (value === "org") {
+  // Multi-scope W1 retired the bare `"org"` token for the id-carrying
+  // `org:<id>`; the bare form is still ACCEPTED here for read-compatibility
+  // with any persisted legacy value (AgentAuthPolicyVisibilitySchema still
+  // validates the literal "org"). The picker only ever scopes the active org,
+  // so both forms — and any malformed / stale / cross-org `org:<id>` — resolve
+  // to the active org's name; a well-formed org token therefore never reaches
+  // the raw-value fallback, and no raw token leaks into the label.
+  if (value === "org" || value.startsWith("org:")) {
     const orgName = availableScopes.orgName || "your organization";
     return { type: null, name: `Anyone in ${orgName}` };
   }
@@ -140,8 +156,12 @@ export function AccessCombobox({
 }: AccessComboboxProps) {
   const [open, setOpen] = useState(false);
 
-  const { projects, teams, orgName } = availableScopes;
+  const { projects, teams, orgName, orgId } = availableScopes;
   const resolvedOrgName = orgName || "Your organization";
+  // Org row value: the id-carrying `org:<id>` token (multi-scope W1). Falls
+  // back to the legacy bare `"org"` only when no active org id is supplied, so
+  // the row never emits a malformed `org:` with an empty tail.
+  const orgRowValue = orgId ? `org:${orgId}` : "org";
 
   const selected = resolveAccessLabel(value, availableScopes);
 
@@ -394,22 +414,24 @@ export function AccessCombobox({
                   </span>
                 }
               >
-                {/* Org item — disabledScopes?.includes gate via renderTargetRow */}
+                {/* Org item — id-carrying `org:<id>` value (multi-scope W1) so
+                    the selected-state, checkmark, and disabledScopes lookup all
+                    match the server-built install-target rows. */}
                 {renderTargetRow(
-                  "org",
+                  orgRowValue,
                   <CommandItem
-                    value="org"
+                    value={orgRowValue}
                     onSelect={() => {
-                      onValueChange("org");
+                      onValueChange(orgRowValue);
                       setOpen(false);
                     }}
-                    className={itemClass("org")}
+                    className={itemClass(orgRowValue)}
                   >
                     <div className="flex items-center w-full">
                       <span className="text-foreground whitespace-nowrap">
                         Anyone in {resolvedOrgName}
                       </span>
-                      {renderCheckmark("org")}
+                      {renderCheckmark(orgRowValue)}
                     </div>
                   </CommandItem>,
                 )}
