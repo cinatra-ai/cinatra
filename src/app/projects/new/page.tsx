@@ -292,7 +292,7 @@ export default async function NewProjectPage({
         title="New project"
         description="Create a bounded work context. Choose where it lives — pick the smallest scope it needs, you can ratchet it up later."
       />
-      <PageContent className="max-w-3xl flex flex-col gap-6 pb-8">
+      <PageContent className="flex flex-col gap-6 pb-8">
         <NewProjectForm
           teams={teamRows.rows}
           organizations={orgRows.rows}

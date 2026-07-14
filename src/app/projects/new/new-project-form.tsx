@@ -110,7 +110,7 @@ export function NewProjectForm({ teams, organizations, action, initialError }: N
     <Form {...form}>
       <form
         onSubmit={form.handleSubmit(onSubmit)}
-        className="soft-panel rounded-panel p-6 flex flex-col gap-4"
+        className="soft-panel rounded-panel max-w-2xl p-6 flex flex-col gap-4"
       >
         <FormField
           control={form.control}

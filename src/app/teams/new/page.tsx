@@ -32,7 +32,7 @@ export default async function NewTeamPage({ searchParams }: NewTeamPageProps) {
         title="Create team"
         description="Create a capability and governance space inside an organization you administer."
       />
-      <PageContent className="pb-8">
+      <PageContent className="flex flex-col gap-6 pb-8">
         <NewTeamForm organizations={organizations} initialError={params?.error} />
       </PageContent>
     </Main>
