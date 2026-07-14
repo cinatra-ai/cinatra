@@ -43,6 +43,7 @@ import {
   type ExtensionEmblemKind,
 } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
+import { resolveVendorPresentation } from "@/lib/vendor-presentation";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 // §III per-extension update-available chip (cinatra#1041 outcome 3): the
@@ -374,7 +375,14 @@ export async function RegistryCatalogScreen({
       emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
       kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
       kindLabel={KIND_LABEL[row.kind]}
-      vendor={row.vendor}
+      // §III byline (cinatra#1528): resolve the manifest/registry vendor name
+      // (already free of any package scope) through the single resolver — an
+      // absent name renders the explicit missing-vendor placeholder, never a
+      // silently dropped "by" clause.
+      vendor={resolveVendorPresentation(
+        { name: row.vendor },
+        { surface: "registry-catalog-screen", ref: row.packageName },
+      )}
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}

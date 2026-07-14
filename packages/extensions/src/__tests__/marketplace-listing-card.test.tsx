@@ -17,10 +17,11 @@
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
 
 import { Button } from "@/components/ui/button";
 import { MarketplaceListingCard } from "../screens/marketplace-listing-card";
-import type { MarketplaceCardData } from "../screens/marketplace-card-model";
+import { catalogEntryToCardData, type MarketplaceCardData } from "../screens/marketplace-card-model";
 
 function cardData(over: Partial<MarketplaceCardData> = {}): MarketplaceCardData {
   return {
@@ -139,15 +140,98 @@ describe("MarketplaceListingCard — 0.5.0 §I byline in the banner (cinatra#124
     expect(body).toContain("line-clamp-3");
   });
 
-  it("shows the VERIFIED check only for a catalog-carried vendor, and the vendor links out", () => {
+  it("shows the VERIFIED check only for a known vendor, and the vendor links out", () => {
     const withVendor = renderCard({
       vendor: { name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" },
     });
     expect(withVendor).toContain('data-slot="extension-card-verified"');
     expect(withVendor).toContain('href="https://marketplace.cinatra.ai/store/foundry"');
-    // A derived package-scope namespace (no vendor block) is NOT verified.
+    expect(withVendor).toContain('data-vendor-state="known"');
+    // A missing vendor (no block) renders the placeholder, NO verified mark.
     const noVendor = renderCard({ vendor: null });
     expect(noVendor).not.toContain('data-slot="extension-card-verified"');
+    expect(noVendor).toContain('data-vendor-state="missing"');
+  });
+});
+
+describe("MarketplaceListingCard — §I vendor byline never substitutes a machine identifier (cinatra#1528)", () => {
+  // Feed RAW catalog input with distinct sentinels through catalogEntryToCardData
+  // (exercising normalization) and render the REAL card, then assert the EXACT
+  // visible vendor-label node — the package scope and vendor slug legitimately
+  // appear elsewhere (detail href, package text), so the whole-DOM must not be
+  // asserted.
+  function renderFromCatalog(over: Partial<MarketplaceCatalogEntry>): string {
+    const card = catalogEntryToCardData({
+      package_name: "@scope-sentinel/pkg",
+      scope: "scope-sentinel",
+      extension_name: "pkg",
+      version: "0.1.0",
+      kind_slug: "skill",
+      kind_label: "Skill",
+      display_name: "Sentinel Skill",
+      description: "Sentinel description",
+      badge: { text: "Open source", variant: "oss", license: "Apache-2.0" },
+      freshness_at: "2026-06-01T00:00:00Z",
+      rating: { average: 4, count: 12 },
+      vendor_logo_key: null,
+      permalink: "https://marketplace.cinatra.ai/product/pkg",
+      ...over,
+    });
+    return renderToStaticMarkup(
+      <MarketplaceListingCard
+        card={card!}
+        accentColor="rust"
+        ctaControl={<Button size="sm">Install now</Button>}
+        detailsControl={<Button variant="link">More details</Button>}
+      />,
+    );
+  }
+
+  /** The EXACT visible text inside the vendor-label node (a link or a span). */
+  function vendorLabel(html: string): string | undefined {
+    return html.match(/data-slot="extension-card-vendor-label"[^>]*>([^<]*)</)?.[1];
+  }
+
+  it("renders the display name as the label (slug ignored) when a real name is present", () => {
+    const html = renderFromCatalog({
+      vendor: { name: "Distinct Vendor Name", slug: "machine-slug-sentinel", store_url: "https://marketplace.cinatra.ai/store/distinct" },
+    });
+    expect(vendorLabel(html)).toBe("Distinct Vendor Name");
+    expect(vendorLabel(html)).not.toContain("machine-slug-sentinel");
+    expect(html).toContain('data-vendor-state="known"');
+    expect(html).toContain('data-slot="extension-card-verified"');
+  });
+
+  it("renders the missing-vendor placeholder — never the slug, never the package scope — when the name is blank", () => {
+    const html = renderFromCatalog({
+      vendor: { name: "  ", slug: "machine-slug-sentinel", store_url: "https://marketplace.cinatra.ai/store/x" },
+    });
+    expect(vendorLabel(html)).toBe("Unknown vendor");
+    expect(vendorLabel(html)).not.toContain("machine-slug-sentinel");
+    expect(vendorLabel(html)).not.toContain("scope-sentinel");
+    // Missing → plain text, no verified mark, and never linked (not even via a
+    // surviving store URL).
+    expect(html).toContain('data-vendor-state="missing"');
+    expect(html).not.toContain('data-slot="extension-card-verified"');
+    expect(html).not.toContain('href="https://marketplace.cinatra.ai/store/x"');
+  });
+
+  it("renders the placeholder when the catalog carries no vendor block (no package-scope fallback)", () => {
+    const html = renderFromCatalog({});
+    expect(vendorLabel(html)).toBe("Unknown vendor");
+    expect(vendorLabel(html)).not.toContain("scope-sentinel");
+    expect(html).toContain('data-vendor-state="missing"');
+  });
+
+  it("keeps a long / Unicode display name as the full accessible label (never slug-ified)", () => {
+    // No HTML-special chars (renderToStaticMarkup would entity-escape them),
+    // so the exact-text match reads the rendered label verbatim.
+    const name = "Ştefan Associés — Ελληνικά Εργαλεία 日本語ツール Studio";
+    const html = renderFromCatalog({
+      vendor: { name, slug: "machine-slug-sentinel", store_url: null },
+    });
+    expect(vendorLabel(html)).toBe(name);
+    expect(html).toContain('data-vendor-state="known"');
   });
 });
 

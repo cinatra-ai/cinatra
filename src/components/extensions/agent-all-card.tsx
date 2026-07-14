@@ -30,6 +30,7 @@ import { InstalledExtensionCard } from "@/components/extensions/installed-extens
 import { AgentDetailModal } from "@/components/extensions/agent-detail-modal";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
+import { resolveAgentCardVendor } from "@/components/extensions/agent-card-vendor";
 import type { MarketplaceDetailLoadResult } from "@/lib/marketplace-detail-view";
 
 /** The subset of the /agents row model this card renders. */
@@ -59,7 +60,12 @@ export function AgentAllCard({
   loadDetail?: (packageName: string) => Promise<MarketplaceDetailLoadResult>;
 }) {
   const [open, setOpen] = useState(false);
-  const vendor = row.host === "local" ? "Cinatra" : row.host;
+  // §IV vendor byline (cinatra#1528): resolved through the shared resolver via
+  // resolveAgentCardVendor — "local" → the genuine "Cinatra" display name; an
+  // external A2A agent's connector host slug is a machine identifier and
+  // resolves to the explicit missing-vendor state, never the raw slug. This
+  // surface never renders `row.host` as a vendor label.
+  const vendor = resolveAgentCardVendor({ host: row.host, ref: row.packageName ?? row.key });
   // A scoped listing carries both packageName and detailHref (in lockstep) → the
   // accent panel and "More details" both open the §V modal. External A2A /
   // unscoped agents carry neither → Run only, inert accent.

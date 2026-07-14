@@ -29,6 +29,7 @@ import {
 } from "../installed-extension-card";
 import { Button } from "@/components/ui/button";
 import { ACCENT_PALETTE } from "@/lib/extension-accent";
+import type { VendorPresentation } from "@/lib/vendor-presentation";
 
 function render(archived: boolean): string {
   return renderToStaticMarkup(
@@ -38,7 +39,7 @@ function render(archived: boolean): string {
       emblem={<svg data-testid="emblem" />}
       kindIcon={<svg data-testid="kind-icon" />}
       kindLabel="Agent"
-      vendor="cinatra-ai"
+      vendor={{ kind: "known", displayName: "cinatra-ai", storeUrl: null }}
       description="Stateless schema-driven web research enricher."
       version="dev / abc1234"
       status={<span data-testid="status-slot">status</span>}
@@ -130,7 +131,7 @@ describe("InstalledExtensionCard — §IV Agent card (All Agents) derivation", (
         emblem={<svg data-testid="emblem" />}
         kindIcon={<svg data-testid="kind-icon" />}
         kindLabel="Agent"
-        vendor="Cinatra"
+        vendor={{ kind: "known", displayName: "Cinatra", storeUrl: null }}
         description="Gathers sources, summarises, and cites answers grounded in your team's own documents."
         descriptionLineClamp={2}
         actions={<Button type="button">Run</Button>}
@@ -179,6 +180,55 @@ describe("InstalledExtensionCard — §IV Agent card (All Agents) derivation", (
   });
 });
 
+describe("InstalledExtensionCard — §III/§IV vendor byline contract (cinatra#1528)", () => {
+  function renderVendor(vendor: VendorPresentation): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="Web Research Agent"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor={vendor}
+        description="Stateless schema-driven web research enricher."
+        actions={<Button type="button">Run</Button>}
+      />,
+    );
+  }
+
+  /** The EXACT visible text inside the byline vendor-label node. */
+  function vendorLabel(html: string): string | undefined {
+    return html.match(/data-slot="installed-extension-vendor-label"[^>]*>([^<]*)</)?.[1];
+  }
+
+  it("renders a known vendor's display name after the localized connective", () => {
+    const html = renderVendor({ kind: "known", displayName: "Distinct Vendor Name", storeUrl: null });
+    expect(vendorLabel(html)).toBe("Distinct Vendor Name");
+    expect(html).toContain(" by ");
+  });
+
+  it("renders the missing-vendor placeholder (never a silently dropped clause) for the missing state", () => {
+    const html = renderVendor({ kind: "missing" });
+    expect(vendorLabel(html)).toBe("Unknown vendor");
+    // The "{Kind} by {Vendor}" clause is ALWAYS present — the pre-1528 silent
+    // omission (the byline dropped entirely when the vendor was falsy) is gone.
+    expect(html).toContain(" by ");
+  });
+
+  it("renders the placeholder when the vendor prop is omitted (defensive default, never a slug)", () => {
+    const html = renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="Web Research Agent"
+        accentColor="green"
+        emblem={<svg />}
+        kindLabel="Agent"
+        description="x"
+      />,
+    );
+    expect(vendorLabel(html)).toBe("Unknown vendor");
+  });
+});
+
 describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)", () => {
   function renderAccent(props: {
     accentDetailHref?: string;
@@ -192,7 +242,7 @@ describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)"
         accentColor="green"
         emblem={<svg data-testid="emblem" />}
         kindLabel="Agent"
-        vendor="Cinatra"
+        vendor={{ kind: "known", displayName: "Cinatra", storeUrl: null }}
         description="Gathers sources, summarises, and cites answers."
         actions={<Button type="button">Run</Button>}
         {...props}
@@ -412,7 +462,7 @@ describe("InstalledExtensionCard — post-install needs-review strip", () => {
         emblem={<svg data-testid="emblem" />}
         kindIcon={<svg data-testid="kind-icon" />}
         kindLabel="Agent"
-        vendor="Cinatra"
+        vendor={{ kind: "known", displayName: "Cinatra", storeUrl: null }}
         description="Builds and enriches lead lists."
         actions={<Button type="button">Run</Button>}
         configurationNeeds={configurationNeeds}
@@ -472,7 +522,7 @@ describe("InstalledExtensionCard — post-install needs-review strip", () => {
         emblem={<svg data-testid="emblem" />}
         kindIcon={<svg data-testid="kind-icon" />}
         kindLabel="Agent"
-        vendor="Cinatra"
+        vendor={{ kind: "known", displayName: "Cinatra", storeUrl: null }}
         description="Builds and enriches lead lists."
         actions={<Button type="button">Run</Button>}
       />,

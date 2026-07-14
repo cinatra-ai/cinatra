@@ -10,6 +10,11 @@ import {
   type ExtensionAccent,
 } from "@/components/extension-card";
 import type { ConfigurationNeed } from "@/lib/extension-dependency-ux";
+import {
+  VENDOR_BY_CONNECTIVE,
+  VENDOR_MISSING_LABEL,
+  type VendorPresentation,
+} from "@/lib/vendor-presentation";
 
 /**
  * InstalledExtensionCard — the design system's "Installed extensions" card
@@ -46,7 +51,16 @@ export type InstalledExtensionCardProps = {
   /** Small kind glyph for the byline (white on the coloured banner ground). */
   kindIcon?: ReactNode;
   kindLabel: string;
-  vendor?: string | null;
+  /**
+   * The resolved vendor byline state (cinatra#1528). The caller must resolve it
+   * through `resolveVendorPresentation` — this card renders ONLY the
+   * discriminated result and never constructs a vendor label from a slug /
+   * package scope / connector host. A `missing` (or omitted) vendor renders the
+   * localized placeholder, never a silently dropped "by" clause. The §III/§IV
+   * surfaces carry no store URL, so a `known` vendor renders as plain,
+   * unlinked text.
+   */
+  vendor?: VendorPresentation;
   description?: string | null;
   /** Already-formatted version text (the v-prefixed formatting is the caller's). */
   version?: string | null;
@@ -311,12 +325,14 @@ export function InstalledExtensionCard({
             )}
             <span className="overflow-hidden text-ellipsis">
               <span className="font-medium">{kindLabel}</span>
-              {vendor && (
-                <>
-                  {" by "}
-                  <span className="font-medium">{vendor}</span>
-                </>
-              )}
+              {/* The "{Kind} by {Vendor}" byline ALWAYS renders (cinatra#1528):
+                  a known vendor shows its display name; a missing/omitted vendor
+                  shows the localized placeholder — never a silently dropped
+                  clause, never a slug. */}
+              {` ${VENDOR_BY_CONNECTIVE} `}
+              <span data-slot="installed-extension-vendor-label" className="font-medium">
+                {vendor?.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL}
+              </span>
             </span>
           </div>
         }
