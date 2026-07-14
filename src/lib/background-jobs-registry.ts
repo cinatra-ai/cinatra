@@ -771,17 +771,6 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       });
     },
   },
-  [BACKGROUND_JOB_NAMES.SKILL_MATCH_PARITY_OBSERVE]: {
-    payloadSchema: looseObject(),
-    async handle() {
-      // Agent/skill-match parity observation (cinatra #1366): compares the fresh
-      // canonical projection against the legacy agent_skill_matches snapshot and
-      // records a parity report + divergence telemetry. Observation only — no
-      // retirement, no deletion, no dual-write removal.
-      const { runAgentSkillMatchParityObservation } = await import("@/lib/agents-store");
-      await runAgentSkillMatchParityObservation();
-    },
-  },
   [BACKGROUND_JOB_NAMES.ARTIFACT_PROVIDER_CACHE_EVICT]: {
     payloadSchema: looseObject(),
     async handle(job) {
