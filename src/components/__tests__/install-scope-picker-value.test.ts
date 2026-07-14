@@ -24,6 +24,12 @@ describe("pickerValueToTarget", () => {
     expect(pickerValueToTarget("org", ORG)).toEqual({ level: "organization", id: ORG });
   });
 
+  it("returns null for the legacy bare 'org' token when there is NO active org (empty id guard)", () => {
+    // With no active org the bare "org" token cannot resolve to a real target
+    // — it must NOT forward an empty {id:""} to the server.
+    expect(pickerValueToTarget("org", "")).toBeNull();
+  });
+
   it("returns null for the non-target rows and for no selection (defensive guard)", () => {
     for (const v of ["", "owner", "admin", "workspace"]) {
       expect(pickerValueToTarget(v, ORG)).toBeNull();
@@ -51,6 +57,10 @@ describe("canSubmitApprovalScope — the required-ness predicate", () => {
   it("is FALSE for a prefix with an empty id (submit stays disabled)", () => {
     expect(canSubmitApprovalScope("team:", ORG)).toBe(false);
     expect(canSubmitApprovalScope("project:", ORG)).toBe(false);
+  });
+
+  it("is FALSE for the legacy bare 'org' token when there is no active org", () => {
+    expect(canSubmitApprovalScope("org", "")).toBe(false);
   });
 
   it("is TRUE only for a resolved org / team / project selection", () => {
