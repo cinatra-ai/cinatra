@@ -17,11 +17,17 @@
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
 
 import { Button } from "@/components/ui/button";
 import { MarketplaceListingCard } from "../screens/marketplace-listing-card";
 import { catalogEntryToCardData, type MarketplaceCardData } from "../screens/marketplace-card-model";
+
+// The card mapper's raw-entry type, DERIVED from its own signature rather than
+// imported directly from the vendored marketplace MCP client package: that
+// vendored specifier is banned for NEW imports (the vendored-import regression
+// guard), and the published `@cinatra-ai/marketplace-mcp-contract` does not
+// export this type yet. Deriving it keeps this test off the vendored specifier.
+type MarketplaceCatalogEntry = Parameters<typeof catalogEntryToCardData>[0];
 
 function cardData(over: Partial<MarketplaceCardData> = {}): MarketplaceCardData {
   return {
