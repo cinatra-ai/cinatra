@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 149,
-    "/api/mcp": 1454,
-    "/chat": 1492,
-    "/api/a2a": 1459,
-    "/api/llm-bridge": 1465
+    "/api/mcp": 1457,
+    "/chat": 1495,
+    "/api/a2a": 1462,
+    "/api/llm-bridge": 1468
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1455,
-      "to": 1459,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1455->1459 (NET +4).",
-      "pr": 1573
+      "from": 1459,
+      "to": 1462,
+      "reason": "cinatra#1493 (PR #1577) install-anchor claim activation: activateArtifactExtensionClaims is wired into the live install pipeline (runHostExtensionInstallAndActivate) via src/lib/extension-runtime-activate.ts, making the artifact claim/uninstall lifecycle substrate production-reachable for the first time (it had zero production callers). MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 3 net-new first-party modules become reachable on each MCP-reaching route: src/lib/objects/artifact-claim-lifecycle.ts and src/lib/objects/artifact-uninstall-operations.ts (newly production-reachable) plus the new src/lib/objects/artifact-claim-install-anchor.ts (pulled onto the graph by the extension-runtime-activate anchor import). /sign-in is FLAT at 149 — it does not reach the install-anchor surface. Absorbed raise 1459->1462 (NET +3).",
+      "pr": 1577
     },
     "/api/llm-bridge": {
-      "from": 1461,
-      "to": 1465,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1461->1465 (NET +4).",
-      "pr": 1573
+      "from": 1465,
+      "to": 1468,
+      "reason": "cinatra#1493 (PR #1577) install-anchor claim activation: activateArtifactExtensionClaims is wired into the live install pipeline (runHostExtensionInstallAndActivate) via src/lib/extension-runtime-activate.ts, making the artifact claim/uninstall lifecycle substrate production-reachable for the first time (it had zero production callers). MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 3 net-new first-party modules become reachable on each MCP-reaching route: src/lib/objects/artifact-claim-lifecycle.ts and src/lib/objects/artifact-uninstall-operations.ts (newly production-reachable) plus the new src/lib/objects/artifact-claim-install-anchor.ts (pulled onto the graph by the extension-runtime-activate anchor import). /sign-in is FLAT at 149 — it does not reach the install-anchor surface. Absorbed raise 1465->1468 (NET +3).",
+      "pr": 1577
     },
     "/api/mcp": {
-      "from": 1450,
-      "to": 1454,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1450->1454 (NET +4).",
-      "pr": 1573
+      "from": 1454,
+      "to": 1457,
+      "reason": "cinatra#1493 (PR #1577) install-anchor claim activation: activateArtifactExtensionClaims is wired into the live install pipeline (runHostExtensionInstallAndActivate) via src/lib/extension-runtime-activate.ts, making the artifact claim/uninstall lifecycle substrate production-reachable for the first time (it had zero production callers). MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 3 net-new first-party modules become reachable on each MCP-reaching route: src/lib/objects/artifact-claim-lifecycle.ts and src/lib/objects/artifact-uninstall-operations.ts (newly production-reachable) plus the new src/lib/objects/artifact-claim-install-anchor.ts (pulled onto the graph by the extension-runtime-activate anchor import). /sign-in is FLAT at 149 — it does not reach the install-anchor surface. Absorbed raise 1454->1457 (NET +3).",
+      "pr": 1577
     },
     "/chat": {
-      "from": 1488,
-      "to": 1492,
-      "reason": "cinatra#1433 (PR #1573) default/dynamic artifact coverage: the org-scoped dynamic-type artifact-visibility approval source is wired into the approvals-source registry (src/app/configuration/approvals/sources/registry.ts + nav-registry.ts), reachable from every route that reaches the MCP/approvals surface. MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 4 net-new first-party modules become reachable on each MCP-reaching route: src/app/configuration/approvals/sources/dynamic-type-artifact-visibility.ts, dynamic-type-artifact-visibility.contract.ts, dynamic-type-visibility-decision-actions.tsx, and src/lib/objects/artifact-visibility-approval.ts (pulled onto the graph by the registry source entry + nav contract entry). /sign-in is FLAT at 149 — it does not reach the approvals registry. Absorbed raise 1488->1492 (NET +4).",
-      "pr": 1573
+      "from": 1492,
+      "to": 1495,
+      "reason": "cinatra#1493 (PR #1577) install-anchor claim activation: activateArtifactExtensionClaims is wired into the live install pipeline (runHostExtensionInstallAndActivate) via src/lib/extension-runtime-activate.ts, making the artifact claim/uninstall lifecycle substrate production-reachable for the first time (it had zero production callers). MEASURED with the companion extension repos cloned pinned (sync-dev-extensions --pinned, missingCount 0) — never arithmetic. Exactly 3 net-new first-party modules become reachable on each MCP-reaching route: src/lib/objects/artifact-claim-lifecycle.ts and src/lib/objects/artifact-uninstall-operations.ts (newly production-reachable) plus the new src/lib/objects/artifact-claim-install-anchor.ts (pulled onto the graph by the extension-runtime-activate anchor import). /sign-in is FLAT at 149 — it does not reach the install-anchor surface. Absorbed raise 1492->1495 (NET +3).",
+      "pr": 1577
     },
     "/sign-in": {
       "from": 147,
