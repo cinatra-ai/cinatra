@@ -175,10 +175,15 @@ export function AccessCombobox({
 
   const { projects, teams, orgName, orgId } = availableScopes;
   const resolvedOrgName = orgName || "Your organization";
-  // Org row value: the id-carrying `org:<id>` token (multi-scope W1). Falls
-  // back to the legacy bare `"org"` only when no active org id is supplied, so
-  // the row never emits a malformed `org:` with an empty tail.
-  const orgRowValue = orgId ? `org:${orgId}` : "org";
+  // Org row value: the id-carrying `org:<id>` token (multi-scope W1), matched to
+  // the server-built install-target row value `org:<activeOrgId>` EXACTLY so the
+  // selected-state, checkmark, and disabledScopes lookup line up — including the
+  // no-active-org case, where the server emits `org:` (empty tail) and the row
+  // must key on the same token or the disabled-scope membership check would miss.
+  // Falls back to the legacy bare `"org"` only when no org id is SUPPLIED at all
+  // (`orgId` undefined — e.g. the read-only Permissions tab, popover disabled).
+  // A stray empty-tail `org:` click is rejected by the value→target adapter guard.
+  const orgRowValue = orgId != null ? `org:${orgId}` : "org";
 
   const selected = resolveAccessLabel(value, availableScopes);
 

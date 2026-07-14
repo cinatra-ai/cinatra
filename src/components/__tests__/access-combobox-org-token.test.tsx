@@ -34,6 +34,7 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { resolveAccessLabel } from "@/components/access-combobox";
+import { pickerValueToTarget } from "@cinatra-ai/agents/auth-policy-types";
 
 const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
 
@@ -134,9 +135,15 @@ describe("AccessCombobox org row — id-carrying value wiring (AC3)", () => {
     expect(SOURCE).toMatch(/orgId\?:\s*string/);
   });
 
-  it("derives the org row value from orgId (id-carrying token, bare-org fallback)", () => {
+  it("derives the org row value from orgId, matching the server token even with no active org", () => {
+    // `orgId != null` (NOT truthiness): with no active org the caller supplies
+    // orgId="" and the server-built install-target row value is `org:` (empty
+    // tail) — the row must key on the SAME token or the disabledScopes membership
+    // check would miss and render a server-disabled row as clickable. The bare
+    // "org" fallback applies only when orgId is undefined (the read-only
+    // Permissions tab, popover disabled).
     expect(SOURCE).toMatch(
-      /const\s+orgRowValue\s*=\s*orgId\s*\?\s*`org:\$\{orgId\}`\s*:\s*"org"/,
+      /const\s+orgRowValue\s*=\s*orgId\s*!=\s*null\s*\?\s*`org:\$\{orgId\}`\s*:\s*"org"/,
     );
   });
 
@@ -177,6 +184,52 @@ describe("install dialogs — org-name lookup keyed by the id-carrying token (AC
     expect(AGENT).toMatch(/orgId:\s*activeOrgId/);
     expect(AGENT).not.toMatch(/ownerEntityNames\["org"\]/);
     expect(AGENT).not.toMatch(/\?\?\s*"Organization"/);
+  });
+
+  it("the canonical value→target adapter rejects an empty-tail org:/team:/project: token (AC5)", () => {
+    // Behavioral: the shared, exported adapter (also backing the approval scope
+    // step) returns null for an empty id so a stray value can never reach the
+    // server action with a malformed {id:""} target. This is the contract the
+    // two dialog copies mirror below.
+    expect(pickerValueToTarget("org:", "active-org")).toBeNull();
+    expect(pickerValueToTarget("team:", "active-org")).toBeNull();
+    expect(pickerValueToTarget("project:", "active-org")).toBeNull();
+    // the legacy bare "org" token also yields null when there is no active org
+    // so it can never forward an empty id to a server action.
+    expect(pickerValueToTarget("org", "")).toBeNull();
+    // and a well-formed token still resolves.
+    expect(pickerValueToTarget("org:o9", "active-org")).toEqual({
+      level: "organization",
+      id: "o9",
+    });
+    expect(pickerValueToTarget("org", "active-org")).toEqual({
+      level: "organization",
+      id: "active-org",
+    });
+  });
+
+  it("both install-dialog adapter copies carry the same empty-id guard (AC5 — the value→target adapter surface)", () => {
+    // Each dialog declares a local (unexported) pickerValueToTarget copy; they
+    // must mirror the canonical guard so the id-carrying token contract holds on
+    // EVERY consumer of the access/install surface, not just the exported one.
+    // Source-pinned because the copies are not exported.
+    for (const SRC of [EXT, AGENT]) {
+      expect(SRC).toMatch(/id\s*\?\s*\{\s*level:\s*"organization",\s*id\s*\}\s*:\s*null/);
+      expect(SRC).toMatch(/id\s*\?\s*\{\s*level:\s*"team",\s*id\s*\}\s*:\s*null/);
+      expect(SRC).toMatch(/id\s*\?\s*\{\s*level:\s*"project",\s*id\s*\}\s*:\s*null/);
+      // The legacy bare "org" branch also guards a missing active org.
+      expect(SRC).toMatch(
+        /value\s*===\s*"org"\)\s*\n?\s*return\s+activeOrgId\s*\?\s*\{\s*level:\s*"organization",\s*id:\s*activeOrgId\s*\}\s*:\s*null/,
+      );
+      // No unguarded org: slice that would forward an empty id.
+      expect(SRC).not.toMatch(
+        /return\s*\{\s*level:\s*"organization",\s*id:\s*value\.slice/,
+      );
+      // No unguarded bare-org branch forwarding activeOrgId without a check.
+      expect(SRC).not.toMatch(
+        /value\s*===\s*"org"\)\s*return\s+\{\s*level:\s*"organization",\s*id:\s*activeOrgId\s*\}/,
+      );
+    }
   });
 
   it("the picker-context builder no longer seeds the org name with a hardcoded \"Organization\"", () => {
