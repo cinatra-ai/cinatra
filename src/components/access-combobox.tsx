@@ -18,6 +18,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+// The unknown-entity fallback is the ONE shared helper (cinatra#1509 §4.0-a):
+// this flat picker and the hierarchical `resolveAccessParts` both delegate here
+// so the "Unknown team" / "Unknown project" contract has a single definition
+// and no truncated-id copy drifts (cinatra#1508).
+import {
+  resolveScopeEntityName,
+  unknownScopeEntityName,
+} from "@/components/access-scope";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,12 +98,12 @@ export function resolveAccessLabel(
   if (value.startsWith("team:")) {
     const id = value.slice("team:".length);
     const team = availableScopes.teams.find((t) => t.id === id);
-    return { type: "Team", name: team?.name ?? id.slice(-6) };
+    return { type: "Team", name: resolveScopeEntityName("team", id, team?.name) };
   }
   if (value.startsWith("project:")) {
     const id = value.slice("project:".length);
     const project = availableScopes.projects.find((p) => p.id === id);
-    return { type: "Project", name: project?.name ?? `Project ${id.slice(-6)}` };
+    return { type: "Project", name: resolveScopeEntityName("project", id, project?.name) };
   }
   return { type: null, name: value };
 }
@@ -108,12 +116,16 @@ export function resolveAccessLabel(
  * Hierarchical access-level combobox extracted from permissions-tab-client.tsx.
  * Presentational only — no auth decisions, no session reads, no fetch calls.
  *
- * Hierarchy:
+ * Hierarchy (cinatra#1509 §3.3, narrow → broad — typed headings, no bare org
+ * name):
  *   1. "Only me" (no group heading)
- *   2. Projects group — only if projects.length > 0
- *   3. Org + Teams group — always rendered; heading is orgName
- *   4. Workspace group — disabled + tooltip for non-admins
- *   5. Admin group
+ *   2. Projects group — heading "Projects"; rendered if there are projects or
+ *      an unhydrated project selection to synthesize
+ *   3. Teams group — heading "Teams"; rendered if there are teams or an
+ *      unhydrated team selection to synthesize (ABOVE the org row)
+ *   4. Organization group — heading "Organization: <name>"; always rendered
+ *   5. Workspace group — disabled + tooltip for non-admins
+ *   6. Admin group
  */
 export function AccessCombobox({
   value,
@@ -132,6 +144,18 @@ export function AccessCombobox({
   const resolvedOrgName = orgName || "Your organization";
 
   const selected = resolveAccessLabel(value, availableScopes);
+
+  // Selected-scope synthesis (cinatra#1509 §3.2 / #1508): a `team:<id>` /
+  // `project:<id>` selection that does not hydrate to any available row (the
+  // team/project belongs to another org, or the viewer isn't a member) would
+  // otherwise render NO row — so the selection had no checkmark and looked
+  // unselected. Synthesize an explicit, checked "Unknown team" / "Unknown
+  // project" row so a selection is ALWAYS visible with its checkmark,
+  // independent of hydration.
+  const needsSynthTeam =
+    value.startsWith("team:") && !teams.some((t) => `team:${t.id}` === value);
+  const needsSynthProject =
+    value.startsWith("project:") && !projects.some((p) => `project:${p.id}` === value);
 
   // ---------------------------------------------------------------------------
   // Disabled-row helper.
@@ -185,16 +209,42 @@ export function AccessCombobox({
     );
   };
 
+  // Row visual contract, aligned to the hierarchical picker (cinatra#1261 /
+  // cinatra#1509 §3.2): idle rows are WHITE (`bg-surface-strong`), hover /
+  // keyboard-active rows are `bg-surface-muted` (a DISTINCT, visible state —
+  // this is #1508's "pointer gets lost" fix), and the selected row keeps the
+  // muted tint. Replaces the old invisible variant where the idle and hover
+  // tokens were identical, so the pointer row was indistinguishable.
   const itemClass = (itemValue: string) =>
     cn(
-      "rounded-none px-3 py-2 cursor-pointer bg-surface hover:bg-surface-strong data-[selected=true]:bg-surface-strong",
-      value === itemValue && "bg-surface-strong",
+      "rounded-none px-3 py-2 cursor-pointer bg-surface-strong hover:bg-surface-muted data-[selected=true]:bg-surface-muted",
+      value === itemValue && "bg-surface-muted",
     );
 
   const renderCheckmark = (itemValue: string) => (
     <Check
       className={cn("ml-auto size-4", value === itemValue ? "opacity-100" : "opacity-0")}
     />
+  );
+
+  // A synthesized, checked, selectable row for an unhydrated selection
+  // (rowValue === the current value, so `itemClass` marks it selected and
+  // `renderCheckmark` shows its check). Label is the shared "Unknown …"
+  // fallback (§4.0-a) — never a raw id.
+  const renderSynthRow = (rowValue: string, label: string) => (
+    <CommandItem
+      value={rowValue}
+      onSelect={() => {
+        onValueChange(rowValue);
+        setOpen(false);
+      }}
+      className={itemClass(rowValue)}
+    >
+      <div className="flex items-center w-full">
+        <span className="text-foreground whitespace-nowrap">{label}</span>
+        {renderCheckmark(rowValue)}
+      </div>
+    </CommandItem>
   );
 
   return (
@@ -208,7 +258,10 @@ export function AccessCombobox({
             role="combobox"
             aria-expanded={open}
             disabled={disabled}
-            className="w-full h-9 justify-between rounded-control border-line font-normal"
+            // No `h-9` override: the shared form-control height is the Button
+            // default (`h-8`), matching Input + the hierarchical picker trigger
+            // (cinatra#1509 §3.2 — the mechanism behind #1505's misaligned rows).
+            className="w-full justify-between rounded-control border-line font-normal"
           >
             <span className="flex items-center min-w-0 gap-1">
               {selected.type && (
@@ -248,8 +301,9 @@ export function AccessCombobox({
                 </CommandGroup>
               )}
 
-              {/* Group 2 — Projects (only if non-empty) */}
-              {projects.length > 0 && (
+              {/* Group 2 — Projects (typed heading; rendered when there are
+                  projects OR an unhydrated project selection to synthesize) */}
+              {(projects.length > 0 || needsSynthProject) && (
                 <CommandGroup
                   className="p-0"
                   heading={
@@ -282,15 +336,61 @@ export function AccessCombobox({
                       </React.Fragment>
                     );
                   })}
+                  {needsSynthProject &&
+                    renderSynthRow(value, unknownScopeEntityName("project"))}
                 </CommandGroup>
               )}
 
-              {/* Group 3 — Org + Teams (always rendered) */}
+              {/* Group 3 — Teams (typed heading, ABOVE the org row per the
+                  #1508 hierarchy Only me → Projects → Teams → Organization →
+                  Workspace → Admin; rendered when there are teams OR an
+                  unhydrated team selection to synthesize) */}
+              {(teams.length > 0 || needsSynthTeam) && (
+                <CommandGroup
+                  className="p-0"
+                  heading={
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
+                      Teams
+                    </span>
+                  }
+                >
+                  {teams.map((t) => {
+                    const itemValue = `team:${t.id}`;
+                    const item = (
+                      <CommandItem
+                        key={t.id}
+                        value={itemValue}
+                        onSelect={() => {
+                          onValueChange(itemValue);
+                          setOpen(false);
+                        }}
+                        className={itemClass(itemValue)}
+                      >
+                        <div className="flex items-center w-full">
+                          <span className="text-foreground whitespace-nowrap">{t.name}</span>
+                          {renderCheckmark(itemValue)}
+                        </div>
+                      </CommandItem>
+                    );
+                    return (
+                      <React.Fragment key={t.id}>
+                        {renderTargetRow(itemValue, item)}
+                      </React.Fragment>
+                    );
+                  })}
+                  {needsSynthTeam &&
+                    renderSynthRow(value, unknownScopeEntityName("team"))}
+                </CommandGroup>
+              )}
+
+              {/* Group 4 — Organization (typed heading `Organization: <name>`,
+                  never a bare org name — this is #1508's "Default" heading fix.
+                  Always rendered) */}
               <CommandGroup
                 className="p-0"
                 heading={
                   <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                    {resolvedOrgName}
+                    Organization: {resolvedOrgName}
                   </span>
                 }
               >
@@ -313,35 +413,9 @@ export function AccessCombobox({
                     </div>
                   </CommandItem>,
                 )}
-
-                {/* Team items */}
-                {teams.map((t) => {
-                  const itemValue = `team:${t.id}`;
-                  const item = (
-                    <CommandItem
-                      key={t.id}
-                      value={itemValue}
-                      onSelect={() => {
-                        onValueChange(itemValue);
-                        setOpen(false);
-                      }}
-                      className={cn(itemClass(itemValue), "pl-6")}
-                    >
-                      <div className="flex items-center w-full">
-                        <span className="text-foreground whitespace-nowrap">{t.name}</span>
-                        {renderCheckmark(itemValue)}
-                      </div>
-                    </CommandItem>
-                  );
-                  return (
-                    <React.Fragment key={t.id}>
-                      {renderTargetRow(itemValue, item)}
-                    </React.Fragment>
-                  );
-                })}
               </CommandGroup>
 
-              {/* Group 4 — Workspace. Hidden in installMode because workspace is not an install target. */}
+              {/* Group 5 — Workspace. Hidden in installMode because workspace is not an install target. */}
               {!installMode && (
               <CommandGroup
                 className="p-0"
@@ -387,7 +461,7 @@ export function AccessCombobox({
               </CommandGroup>
               )}
 
-              {/* Group 5 — Admin. Hidden in installMode because admin is not an install target. */}
+              {/* Group 6 — Admin. Hidden in installMode because admin is not an install target. */}
               {!installMode && (
               <CommandGroup
                 className="p-0"

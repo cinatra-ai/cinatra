@@ -147,6 +147,9 @@ html.dark {
 body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="agents"]
   [data-cinatra-page-action="run-agent"])
   [data-cinatra-page-actions-fallback="agents"],
+body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="organizations"]
+  [data-cinatra-page-action="new-organization"])
+  [data-cinatra-page-actions-fallback="organizations"],
 body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="projects"]
   [data-cinatra-page-action="new-project"])
   [data-cinatra-page-actions-fallback="projects"],
@@ -248,6 +251,30 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
 .dashboard-grid-container [data-portlet-id] > .portlet-drag-handle button svg {
   width: 1rem;
   height: 1rem;
+}
+
+/* Query-error card containment (cinatra#1512).
+ *
+ * The portlet-level `overflow: hidden` above is the rounded-corner clip and
+ * stays. But drizzle-cube's query-error card (AnalyticsPortlet's error
+ * branch: a `dc:p-4 dc:border dc:rounded-sm` div with inline `height: 100%`,
+ * rendered as the direct child of the `dc:flex-1 dc:min-h-0` chart body)
+ * stacks its debug `<details>` expandables BELOW that fixed height, so
+ * expanding them pushed content past the portlet boundary into the clip.
+ * Give the card LOCAL overflow instead: it scrolls inside the portlet on
+ * both axes (the debug `<pre>` blocks keep their own inner scrolling via
+ * `dc:overflow-auto dc:max-h-20`; the card-level `auto` is the backstop for
+ * long unbroken strings — e.g. a member list in an error message — so
+ * nothing is ever clipped, per the #1512 acceptance). The selector is benign
+ * if it ever matches a non-error child: overflow only engages when content
+ * exceeds the box. Pinned against the installed bundle by
+ * portlet-error-card-contract.test.ts. */
+.dashboard-grid-container
+  [data-portlet-id]
+  .dc\:flex-1.dc\:min-h-0
+  > .dc\:p-4.dc\:border.dc\:rounded-sm {
+  max-height: 100%;
+  overflow: auto;
 }
 
 body[data-cinatra-dashboard-modal-open="true"]
