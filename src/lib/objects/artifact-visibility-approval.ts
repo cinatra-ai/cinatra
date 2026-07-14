@@ -260,6 +260,59 @@ export async function countUnapprovedDynamicTypes(
 }
 
 /**
+ * Finish an approval: activate the (fresh or stranded-'reserved') claim and
+ * translate every activation-time race into the same VALUE ladder the caller
+ * promises — this function is the only path allowed to touch activateClaim.
+ *
+ * Two race classes exist beneath the store call:
+ *   - the store THROWS ArtifactClaimConflictError when the activation lands
+ *     on the one-active-winner index (a same-scope activation raced) — the
+ *     exact typed error reserve-time already maps → 'claim_conflict';
+ *   - the store returns `{ changed: false }` when its CAS did not write
+ *     (the claim vanished, or left 'reserved' between our read and the CAS).
+ *     A racer may legitimately have completed THIS activation (two admins
+ *     deciding the same stranded row), so re-read: the SAME claim id now
+ *     live and out of 'reserved' is a success (the approval record conveys
+ *     coverage); anything else refuses — returning ok for a still-reserved
+ *     or vanished claim would report an approval that conveys nothing.
+ */
+function completeApprovalActivation(
+  deps: Required<DynamicTypeVisibilityDeps>,
+  input: { orgId: string; objectTypeId: string; approvedBy: string },
+  claimId: string,
+  repairedReservedClaim: boolean,
+): ApproveDynamicTypeVisibilityResult {
+  let changed: boolean;
+  try {
+    ({ changed } = deps.activateClaim({ claimId, actor: input.approvedBy }));
+  } catch (error) {
+    if (error instanceof ArtifactClaimConflictError) {
+      return {
+        ok: false,
+        code: "claim_conflict",
+        message: `Activating the approval claim for '${input.objectTypeId}' raced a concurrent same-scope activation — re-decide the row.`,
+      };
+    }
+    throw error;
+  }
+  if (!changed) {
+    const now = approvalClaim(
+      deps.readClaimsForOrg(input.orgId),
+      input.orgId,
+      input.objectTypeId,
+    );
+    if (now == null || now.id !== claimId || now.status === "reserved") {
+      return {
+        ok: false,
+        code: "claim_conflict",
+        message: `Activation of the approval claim for '${input.objectTypeId}' did not land (a concurrent claim action interfered) — re-decide the row.`,
+      };
+    }
+  }
+  return { ok: true, claimId, repairedReservedClaim };
+}
+
+/**
  * The org-scoped artifact-visibility APPROVAL action (admin-only — the caller
  * enforces the gate; the ApprovalSource decide and any server action wrap this
  * with the viewer's admin check). Ladder, fail-closed:
@@ -273,7 +326,9 @@ export async function countUnapprovedDynamicTypes(
  *      completed here (idempotent activate; the CAS re-checks 'reserved')
  *   4. reserve → activate the org-scoped default claim (conservative
  *      dispositions). A concurrent approval racing to the same slot hits the
- *      one-live-default index inside reserve → 'claim_conflict'.
+ *      one-live-default index inside reserve OR inside activate →
+ *      'claim_conflict' either way (completeApprovalActivation owns the
+ *      activate-time half).
  *
  * Activation may legally land 'dormant' (a dedicated claimant already governs
  * the type — #1425 domination): the approval record exists from this moment
@@ -311,9 +366,8 @@ export async function approveDynamicTypeArtifactVisibility(
   if (existing) {
     if (existing.status === "reserved") {
       // Crash-window self-heal: the record exists but activation is owed —
-      // complete it (the store's CAS makes a lost race a no-op).
-      deps.activateClaim({ claimId: existing.id, actor: input.approvedBy });
-      return { ok: true, claimId: existing.id, repairedReservedClaim: true };
+      // complete it (activation races collapse into the value ladder).
+      return completeApprovalActivation(deps, input, existing.id, true);
     }
     return {
       ok: false,
@@ -345,6 +399,7 @@ export async function approveDynamicTypeArtifactVisibility(
     }
     throw error;
   }
-  deps.activateClaim({ claimId, actor: input.approvedBy });
-  return { ok: true, claimId, repairedReservedClaim: false };
+  // A failed activation leaves the reserved claim in place — the next decide
+  // on this row routes into the reserved-claim self-heal above.
+  return completeApprovalActivation(deps, input, claimId, false);
 }

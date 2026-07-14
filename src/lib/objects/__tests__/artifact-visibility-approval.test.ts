@@ -164,6 +164,107 @@ describe("approveDynamicTypeArtifactVisibility — refusal ladder (fail-closed)"
       ),
     ).rejects.toThrow("connection refused");
   });
+
+  it("maps an ACTIVATE-time constraint conflict to 'claim_conflict' on the fresh path (never a throw)", async () => {
+    const d = deps({
+      activateClaim: vi.fn(() => {
+        throw new ArtifactClaimConflictError(`org:${ORG}`, TYPE);
+      }),
+    });
+    const res = await approveDynamicTypeArtifactVisibility(
+      { orgId: ORG, objectTypeId: TYPE, approvedBy: "admin-1" },
+      d,
+    );
+    expect(res).toMatchObject({ ok: false, code: "claim_conflict" });
+  });
+
+  it("maps an ACTIVATE-time constraint conflict to 'claim_conflict' on the reserved self-heal path (never a throw)", async () => {
+    const d = deps({
+      readClaimsForOrg: vi.fn(() => [claimRow({ status: "reserved" })]),
+      activateClaim: vi.fn(() => {
+        throw new ArtifactClaimConflictError(`org:${ORG}`, TYPE);
+      }),
+    });
+    const res = await approveDynamicTypeArtifactVisibility(
+      { orgId: ORG, objectTypeId: TYPE, approvedBy: "admin-1" },
+      d,
+    );
+    expect(res).toMatchObject({ ok: false, code: "claim_conflict" });
+    expect(d.reserveClaim).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a non-conflict ACTIVATE-time infra error (never swallowed into a refusal)", async () => {
+    const d = deps({
+      activateClaim: vi.fn(() => {
+        throw new Error("connection reset");
+      }),
+    });
+    await expect(
+      approveDynamicTypeArtifactVisibility(
+        { orgId: ORG, objectTypeId: TYPE, approvedBy: "admin-1" },
+        d,
+      ),
+    ).rejects.toThrow("connection reset");
+  });
+
+  it("activate CAS no-op ({changed:false}) + re-read shows the SAME claim live ⇒ ok (a racer completed THIS activation)", async () => {
+    // Fresh path: reserve succeeds, our activate loses the CAS because a
+    // concurrent self-heal decide activated 'claim-new' first — the approval
+    // record is live, so this decide reports success, not a phantom conflict.
+    const reads = vi
+      .fn<() => ArtifactTypeClaimRow[]>()
+      .mockReturnValueOnce([]) // ladder step 3: no existing record
+      .mockReturnValue([claimRow({ id: "claim-new", status: "active" })]); // post-CAS re-read
+    const d = deps({
+      readClaimsForOrg: reads,
+      activateClaim: vi.fn(() => ({ changed: false })),
+    });
+    const res = await approveDynamicTypeArtifactVisibility(
+      { orgId: ORG, objectTypeId: TYPE, approvedBy: "admin-1" },
+      d,
+    );
+    expect(res).toEqual({ ok: true, claimId: "claim-new", repairedReservedClaim: false });
+  });
+
+  it.each<[string, ArtifactTypeClaimRow[]]>([
+    ["the claim VANISHED", []],
+    ["the claim is STILL 'reserved'", [claimRow({ id: "claim-new", status: "reserved" })]],
+    ["a DIFFERENT claim occupies the slot", [claimRow({ id: "claim-other", status: "active" })]],
+  ])(
+    "activate CAS no-op ({changed:false}) + %s ⇒ 'claim_conflict', never a silent ok",
+    async (_label, postCasRows) => {
+      const reads = vi
+        .fn<() => ArtifactTypeClaimRow[]>()
+        .mockReturnValueOnce([]) // ladder step 3: no existing record
+        .mockReturnValue(postCasRows);
+      const d = deps({
+        readClaimsForOrg: reads,
+        activateClaim: vi.fn(() => ({ changed: false })),
+      });
+      const res = await approveDynamicTypeArtifactVisibility(
+        { orgId: ORG, objectTypeId: TYPE, approvedBy: "admin-1" },
+        d,
+      );
+      expect(res).toMatchObject({ ok: false, code: "claim_conflict" });
+    },
+  );
+
+  it("self-heal path: {changed:false} + the reserved claim went live via the racer ⇒ ok with repairedReservedClaim", async () => {
+    const reads = vi
+      .fn<() => ArtifactTypeClaimRow[]>()
+      .mockReturnValueOnce([claimRow({ status: "reserved" })]) // ladder step 3
+      .mockReturnValue([claimRow({ status: "dormant" })]); // post-CAS re-read (dominated is still an approval)
+    const d = deps({
+      readClaimsForOrg: reads,
+      activateClaim: vi.fn(() => ({ changed: false })),
+    });
+    const res = await approveDynamicTypeArtifactVisibility(
+      { orgId: ORG, objectTypeId: TYPE, approvedBy: "admin-1" },
+      d,
+    );
+    expect(res).toEqual({ ok: true, claimId: "claim-1", repairedReservedClaim: true });
+    expect(d.reserveClaim).not.toHaveBeenCalled();
+  });
 });
 
 describe("approveDynamicTypeArtifactVisibility — the approval write", () => {

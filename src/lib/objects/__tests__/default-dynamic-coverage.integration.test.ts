@@ -15,6 +15,12 @@
 //         approval creates the org default claim; approval flips rows of the
 //         type to default-artifact (truth-table rows 7–8). Denial ladder
 //         (not_found / not_active / already_approved) proven on real rows.
+//
+// The object-side write axis is driven through the REAL universal writer
+// (objects-store.ts upsertObjectAndEnqueue): its widened
+// binding_reconcile_enqueue CTE is asserted directly — enqueues on a create
+// into a DEFAULT-claimed type (platform arm in AC-1, org arm in AC-2),
+// nothing on a content-only update, nothing in an org without the claim.
 //   AC-3  a dedicated claimant dominates the org default claim ('dormant',
 //         winner-change event), rows upgrade to the dedicated extension
 //         (catalog browse-only until the binding lands, then
@@ -27,8 +33,25 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // The full app bootstrap references Supabase-only tables (public.user) absent
 // on a plain verify Postgres, so we no-op ensurePostgresSchema and build ONLY
 // the tables this slice needs (minimal objects/outbox/installed_extension/
-// dynamic_object_types + the merged assertion/claim leaves).
+// dynamic_object_types/change_set/object_change_event + the merged
+// assertion/claim leaves).
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
+
+// The root vitest config aliases @/lib/database to an inert unit-test stub
+// (a placeholder DSN + schema 'cinatra'), which would sever the REAL universal
+// writer (objects-store.ts upsertObjectAndEnqueue) from the live verify DB.
+// This suite exists to drive that writer's binding_reconcile_enqueue CTE
+// against real SQL, so re-point ONLY the connection surface at the real
+// env-driven postgres-config; everything else keeps the stub's inert exports.
+vi.mock("@/lib/database", async (importOriginal) => {
+  const stub = await importOriginal<Record<string, unknown>>();
+  const real = await import("@/lib/postgres-config");
+  return {
+    ...stub,
+    postgresSchema: real.postgresSchema,
+    getPostgresConnectionString: real.getPostgresConnectionString,
+  };
+});
 
 import {
   parseArtifactObjectTypeClaims,
@@ -47,6 +70,7 @@ import {
   retireArtifactExtensionClaims,
 } from "@/lib/objects/artifact-claim-lifecycle";
 import { readArtifactClaimEvents, readArtifactTypeClaimById } from "@/lib/objects/artifact-claim-store";
+import { upsertObjectAndEnqueue } from "@/lib/objects-store";
 import { processBindingReconcileQueue } from "@/lib/objects/binding-reconcile-sweep";
 import { buildFloorRebalanceAndRefreshQueries } from "@/lib/artifacts/semantic-assertion-store";
 import { computeClaimDispositionFingerprint } from "@/lib/artifacts/object-content-snapshot";
@@ -130,18 +154,43 @@ function drainQueue() {
   return processBindingReconcileQueue({ limit: 200 });
 }
 
-/** Simulate the universal writer's enqueue arm for one artifact (the
- * objects-store `binding_reconcile_enqueue` CTE — widened by cinatra#1433 to
- * fire for DEFAULT-claimed types too; hand-inserted here exactly like the
- * binding-write-path integration precedent, since the full upsert machinery
- * is out of this fixture's scope). */
-function enqueueWriteReconcile(input: { orgId: string; artifactId: string; type: string }) {
-  sql(
-    `INSERT INTO "${S()}"."artifact_binding_reconcile_queue"
-       (scope, object_type_id, object_id, org_id, kind, status)
-     VALUES ('org:' || $1, $2, $3, $1, 'binding-reconcile-write', 'pending')`,
-    [input.orgId, input.type, input.artifactId],
+/** Save a row through the REAL universal writer (objects-store
+ * upsertObjectAndEnqueue — the @/lib/database mock above points it at the
+ * live verify DB): whether its `binding_reconcile_enqueue` CTE fires is
+ * exactly the widened-predicate behavior under test, so nothing here touches
+ * the queue by hand. */
+function saveViaUniversalWriter(input: { id: string; type: string; orgId: string }) {
+  return upsertObjectAndEnqueue({
+    upsertInput: {
+      id: input.id,
+      type: input.type,
+      orgId: input.orgId,
+      data: { note: "written by the real universal writer" },
+      createdBy: "it-1433",
+      ownerLevel: "organization",
+      ownerId: input.orgId,
+      visibility: "organization",
+    },
+    operation: "upsert",
+  });
+}
+
+/** PENDING write-reconcile queue rows for one artifact — the durable record
+ * the writer's CTE either produced (predicate matched) or did not. */
+function pendingWriteReconcileRows(
+  artifactId: string,
+): { scope: string; type: string; kind: string; orgId: string }[] {
+  const r = sql(
+    `SELECT scope, object_type_id, kind, org_id FROM "${S()}"."artifact_binding_reconcile_queue"
+     WHERE object_id=$1 AND status='pending' ORDER BY created_at`,
+    [artifactId],
   );
+  return r.rows.map((row: Record<string, unknown>) => ({
+    scope: String(row.scope),
+    type: String(row.object_type_id),
+    kind: String(row.kind),
+    orgId: String(row.org_id),
+  }));
 }
 
 /** Run the REAL floor-rebalance builder under the per-artifact advisory lock
@@ -193,10 +242,36 @@ beforeAll(() => {
     id text PRIMARY KEY, type text NOT NULL, parent_id text, parent_type text,
     data jsonb NOT NULL DEFAULT '{}'::jsonb, created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(), created_by text, org_id text,
-    source text, version integer NOT NULL DEFAULT 1,
+    source text, run_id text, agent_id text, package_version text,
+    agent_spec_version text, version integer NOT NULL DEFAULT 1,
     graphiti_sync_status text DEFAULT 'pending', graphiti_projection_error text,
     owner_level text, owner_id text, visibility text, project_id text,
     deleted_at timestamptz )`);
+  // The universal writer's canonical-history CTE arms (change_set +
+  // object_change_event, mirroring src/lib/drizzle-store.ts) — the writer
+  // emits both rows in the SAME transaction as the object upsert, so the
+  // fixture must carry the leaves for the real writer to run at all.
+  exec(`CREATE TABLE IF NOT EXISTS "${s}"."change_set" (
+    id text PRIMARY KEY, org_id text, opened_at timestamptz NOT NULL DEFAULT now(),
+    closed_at timestamptz, closure_reason text, actor_id text, actor_kind text,
+    run_id text, tool_call_id text, action_id text,
+    effect_rollup text NOT NULL DEFAULT 'reversible-internal',
+    restorable boolean NOT NULL DEFAULT true, restorable_reason text,
+    parent_change_set_id text, restore_of_change_set_id text, created_by text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now() )`);
+  exec(`CREATE TABLE IF NOT EXISTS "${s}"."object_change_event" (
+    id text PRIMARY KEY, change_set_id text NOT NULL, sequence integer NOT NULL,
+    object_id text NOT NULL, object_type text NOT NULL, operation text NOT NULL,
+    history_effect text NOT NULL, before_snapshot jsonb, after_snapshot jsonb,
+    base_version integer, result_version integer NOT NULL,
+    object_schema_version text NOT NULL DEFAULT 'v1',
+    restore_eligible boolean NOT NULL DEFAULT true, restore_ineligible_reason text,
+    compensating_template_id text, remote_revision_ref jsonb,
+    actor_id text, actor_kind text, run_id text, audit_event_id text,
+    org_id text, project_id text, owner_level text, owner_id text, visibility text,
+    idempotency_key text NOT NULL, event_checksum text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(), tombstoned_at timestamptz )`);
   exec(`CREATE TABLE IF NOT EXISTS "${s}"."graphiti_projection_outbox" (
     id text PRIMARY KEY, object_id text NOT NULL, object_version integer NOT NULL,
     org_id text, operation text NOT NULL, payload_hash text,
@@ -305,6 +380,23 @@ describe("AC-1 — generic-object floor claim (default-artifact manifest)", () =
       assertionId: floors[0].id,
     });
     expect(selectableAssertionId(identity)).toBe(floors[0].id);
+
+    // The PLATFORM-scope arm of the widened writer predicate: a NEW
+    // generic-type row saved through the REAL universal writer enqueues its
+    // own 'binding-reconcile-write' row (the platform floor claim matches),
+    // and the drain floors it — no manual queue insert, no manual floor call.
+    const savedViaWriter = nextId("obj");
+    saveViaUniversalWriter({ id: savedViaWriter, type: GENERIC_OBJECT_TYPE, orgId });
+    expect(pendingWriteReconcileRows(savedViaWriter)).toEqual([
+      { scope: `org:${orgId}`, type: GENERIC_OBJECT_TYPE, kind: "binding-reconcile-write", orgId },
+    ]);
+    drainQueue();
+    expect(floorAssertions(orgId, savedViaWriter)).toHaveLength(1);
+    expect(
+      resolveArtifactEffectiveIdentity({ orgId, artifactId: savedViaWriter, baseType: GENERIC_OBJECT_TYPE })
+        .identity,
+    ).toMatchObject({ kind: "default-artifact", selectable: true });
+
     // Pin candidacy rides the null-binding path: default-claimed rows never
     // carry bindings, so the snapshot fingerprint is the stable "none"
     // sentinel (object-content-snapshot.ts — proven generically by #1530).
@@ -372,22 +464,34 @@ describe("AC-2 — dynamic-type org approval gate", () => {
       assertionId: floors[0].id,
     });
 
-    // A row saved AFTER the approval rides the OBJECT-side axis: the widened
-    // objects-store enqueue arm records a 'binding-reconcile-write' row for a
-    // create into a DEFAULT-claimed type; the drain floors exactly that row.
+    // A row saved AFTER the approval rides the OBJECT-side axis THROUGH THE
+    // REAL universal writer: upsertObjectAndEnqueue's widened
+    // binding_reconcile_enqueue CTE (org-scope arm: a live DEFAULT claim at
+    // 'org:<id>') must itself record the 'binding-reconcile-write' row in the
+    // upsert transaction; the drain then floors exactly that row.
     const savedLater = nextId("obj");
-    seedObject({ id: savedLater, type, orgId });
-    enqueueWriteReconcile({ orgId, artifactId: savedLater, type });
+    saveViaUniversalWriter({ id: savedLater, type, orgId });
+    expect(pendingWriteReconcileRows(savedLater)).toEqual([
+      { scope: `org:${orgId}`, type, kind: "binding-reconcile-write", orgId },
+    ]);
     drainQueue();
     expect(floorAssertions(orgId, savedLater)).toHaveLength(1);
     expect(
       resolveArtifactEffectiveIdentity({ orgId, artifactId: savedLater, baseType: type }).identity,
     ).toMatchObject({ kind: "default-artifact", selectable: true });
 
-    // ORG-SCOPED: the same type in ANOTHER org stays a plain object.
+    // A CONTENT-ONLY update (same type) through the real writer enqueues
+    // NOTHING — the CTE's create/type-change predicate excludes it.
+    saveViaUniversalWriter({ id: savedLater, type, orgId });
+    expect(pendingWriteReconcileRows(savedLater)).toEqual([]);
+
+    // ORG-SCOPED: the same type in ANOTHER org stays a plain object — and the
+    // real writer's CTE correctly enqueues NOTHING there (no live claim at
+    // 'org:<other>' and none at 'platform' for this type).
     const otherOrg = nextId("org");
     const otherArtifact = nextId("obj");
-    seedObject({ id: otherArtifact, type, orgId: otherOrg });
+    saveViaUniversalWriter({ id: otherArtifact, type, orgId: otherOrg });
+    expect(pendingWriteReconcileRows(otherArtifact)).toEqual([]);
     runFloor(otherOrg, otherArtifact);
     expect(floorAssertions(otherOrg, otherArtifact)).toHaveLength(0);
     expect(
