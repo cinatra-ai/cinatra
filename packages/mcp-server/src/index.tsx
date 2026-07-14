@@ -42,7 +42,7 @@ import { McpConsentScreen } from "./components/mcp-consent-screen";
 import { writeMcpServerLogFile } from "@/lib/mcp-logging";
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { readServiceAccountByClientId } from "./service-accounts";
-import { resolveActorIdentity, resolveOrgRoleFromMembership } from "./actor-identity";
+import { resolveActorIdentity, resolveOrgRoleFromMembership, pickServerDerivedOrgId } from "./actor-identity";
 import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
 import {
   isTrustedDevHost,
@@ -1152,6 +1152,53 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         // non-fatal — tools will fall back to cinatra-default group
       }
     }
+    // Compose the actor identity ONCE — cookie / service-account / localhost-
+    // admin — and do it BEFORE the dev-only A2A first-org fallbacks below, so a
+    // verified Bearer caller's SERVER-DERIVED org (the matched service_accounts
+    // row's `org_id`) takes precedence over the dev first-org fallback (#1545).
+    // The delegated actor token's `userId`/`orgId` (an OBO token) and the
+    // trusted-dev coherent pair already won above; we consult
+    // `resolveActorIdentity` ONLY when neither applies — preserving the exact
+    // prior `userId` short-circuit (no extra DB read for delegated/trusted-dev).
+    //
+    // Bearer org composition precedence (#1545), SERVER-DERIVED ONLY — no arm
+    // reads a caller-suppliable org operand:
+    //   1. delegated OBO `orgId`                    (resolvedOrgId init above)
+    //   2. cookie `session.activeOrganizationId`    (resolvedOrgId init above)
+    //   3. trusted-dev coherent `{userId, orgId}`   (dev only; set above)
+    //   4. verified-Bearer service-account `org_id` (← this block; the fix)
+    //   5. A2A_DEV_BYPASS first-org                 (dev only; below, iff null)
+    // A Bearer identity with no server-derivable org leaves resolvedOrgId null;
+    // in production (no dev bypass) the boundary then denies `not_org_member`
+    // (fail-closed, unchanged). Only the dev-only A2A_DEV_BYPASS fallback below
+    // may subsequently supply a first org, and never on a real remote Bearer.
+    // There is deliberately NO silent first-membership pick for a multi-org
+    // identity: the service-account arm carries exactly its row's `org_id`
+    // (behind a live-membership gate), and no arm enumerates memberships to
+    // guess one.
+    const actorIdentity =
+      delegatedActor?.userId || trustedDevAdminUserId
+        ? null
+        : await resolveActorIdentity({
+            sessionUser,
+            requestClientId,
+            request,
+            env: { A2A_DEV_BYPASS: process.env.A2A_DEV_BYPASS },
+            isLocalhost: isLocalhostRequest(request),
+            readServiceAccount: readServiceAccountByClientId,
+            pool: betterAuthPool,
+          });
+    const resolvedUserId =
+      delegatedActor?.userId ?? trustedDevAdminUserId ?? actorIdentity?.userId ?? null;
+    // Apply the service-account arm's server-derived org via the pure
+    // precedence + coherence gate (never overrides a higher-precedence org;
+    // only adopts an org coherently paired with its own resolved userId). The
+    // dev-only A2A first-org fallbacks below fill the org ONLY if still null.
+    resolvedOrgId = pickServerDerivedOrgId({
+      currentOrgId: resolvedOrgId,
+      actorIdentity,
+      resolvedUserId,
+    });
     // When A2A_DEV_BYPASS is active and the request has no user session (e.g.
     // Python Docker agent calling host.docker.internal), fall back to the first
     // org in the DB so that objects_save/update write to the correct Graphiti group
@@ -1189,30 +1236,6 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         }
       }
     }
-    // Compose userId from cookie / service-account / localhost-admin so
-    // cookieless MCP transports (Claude Code on localhost, tunneled service
-    // accounts) carry an actor userId. The agent-builder MCP registry actor
-    // injection only fires when this is non-null. The delegated actor token's
-    // `userId` is the human chat user; it wins over the
-    // cookie/service-account/localhost-admin chain.
-    // `trustedDevAdminUserId` is set BEFORE `resolveActorIdentity()` so the
-    // coherent admin/member pair from the trusted-dev branch wins over
-    // `resolveActorIdentity()`'s own A2A_DEV_BYPASS admin lookup, which can
-    // return a different admin (no org) when both env flags are on.
-    // When neither delegated nor trusted-dev applies, fall
-    // back to the cookie/service-account/localhost-admin chain.
-    const resolvedUserId =
-      delegatedActor?.userId ??
-      trustedDevAdminUserId ??
-      (await resolveActorIdentity({
-        sessionUser,
-        requestClientId,
-        request,
-        env: { A2A_DEV_BYPASS: process.env.A2A_DEV_BYPASS },
-        isLocalhost: isLocalhostRequest(request),
-        readServiceAccount: readServiceAccountByClientId,
-        pool: betterAuthPool,
-      }));
     // Resolve the caller's role in the active org ONCE, AFTER the full
     // orgId/userId resolution chain (cookie session, delegated OBO token,
     // trusted-dev / A2A dev bypass) has settled, so the carried `orgRole` is
