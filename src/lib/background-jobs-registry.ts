@@ -460,6 +460,26 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           // (formerly outside the inner try) skipping moveToDelayed and silently
           // killing the loop until the next reboot re-seeded it.
           ensureCrmSyncRegistrations();
+
+          // Binding-reconcile queue drain (cinatra#1429, epic #1424). The claim
+          // registry enqueues a durable 'binding-reconcile' row on every winner
+          // transition; drain it in the SAME 30s repair cadence so a claim
+          // winner change reconciles every affected row's binding. Drained
+          // BEFORE the projection cycle so (a) the freshly-reconciled bindings
+          // project THIS cycle, and (b) a later projection-cycle throw cannot
+          // starve binding reconciliation (codex Q4). The sweep is idempotent +
+          // FOR UPDATE SKIP LOCKED. Lazy-imported (same alias pattern as the
+          // cycle) to keep the objects binding graph off the registry's
+          // module-load path. A throw surfaces to the loop's error reporter and
+          // the loop re-delays — the #849 no-cycle-try/catch contract.
+          const { processBindingReconcileQueue } = await import(
+            "@/lib/objects/binding-reconcile-sweep"
+          );
+          const drain = processBindingReconcileQueue({ limit: 50 });
+          if (drain.processed > 0 || drain.failed > 0) {
+            console.log("[graphiti-projection-repair] binding-reconcile drain:", drain);
+          }
+
           // Full projection cycle (#1427): batch pending claim-set changes
           // into projection-policy epoch bumps, advance open epoch-fenced
           // rebuild journals, then drain the outbox (stale-epoch fencing
@@ -612,6 +632,22 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       await runSkillPrefillGenerationJob(job.data as { skillIds: string[] }, jobId);
     },
   },
+  // Chat-capture detection (cinatra#1367): one-shot per persisted chat user
+  // turn. The pipeline is idempotent via the chat_capture_turns ledger claim,
+  // so re-deliveries / enqueue-site retries are safe. Lazy-imported to keep
+  // the LLM + skills graph out of the registry's module load.
+  [BACKGROUND_JOB_NAMES.CHAT_CAPTURE_DETECTION]: {
+    payloadSchema: z
+      .object({ threadId: z.string(), turnId: z.string(), ownerUserId: z.string() })
+      .passthrough(),
+    async handle(job, jobId) {
+      const { runChatCaptureDetectionJob } = await import("@/lib/chat-capture/pipeline");
+      await runChatCaptureDetectionJob(
+        job.data as { threadId: string; turnId: string; ownerUserId: string },
+        jobId,
+      );
+    },
+  },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_SKILL]: {
     payloadSchema: z
       .object({ skillId: z.string(), jobStartedAt: z.string() })
@@ -733,17 +769,6 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         // --- sweep deps ---
         recordManualStale: async (pairs) => writeSkillMatchManualStale(pairs),
       });
-    },
-  },
-  [BACKGROUND_JOB_NAMES.SKILL_MATCH_PARITY_OBSERVE]: {
-    payloadSchema: looseObject(),
-    async handle() {
-      // Agent/skill-match parity observation (cinatra #1366): compares the fresh
-      // canonical projection against the legacy agent_skill_matches snapshot and
-      // records a parity report + divergence telemetry. Observation only — no
-      // retirement, no deletion, no dual-write removal.
-      const { runAgentSkillMatchParityObservation } = await import("@/lib/agents-store");
-      await runAgentSkillMatchParityObservation();
     },
   },
   [BACKGROUND_JOB_NAMES.ARTIFACT_PROVIDER_CACHE_EVICT]: {

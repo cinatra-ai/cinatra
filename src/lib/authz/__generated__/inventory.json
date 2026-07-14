@@ -973,6 +973,21 @@
       "line": 132
     },
     {
+      "primitiveName": "project_dispatch_worker",
+      "file": "src/lib/project-seam-mcp.ts",
+      "line": 646
+    },
+    {
+      "primitiveName": "project_instantiate",
+      "file": "src/lib/project-seam-mcp.ts",
+      "line": 636
+    },
+    {
+      "primitiveName": "project_tick_context",
+      "file": "src/lib/project-seam-mcp.ts",
+      "line": 641
+    },
+    {
       "primitiveName": "projects_archive",
       "file": "packages/projects/src/mcp/registry.ts",
       "line": 93

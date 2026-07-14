@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import {
   createExtensionHostContext,
@@ -211,5 +211,57 @@ describe("ctx.mcp.callPrimitive on an ABORTED non-default registration (codex ro
     sink.abort();
     expect(() => ctx.mcp.callPrimitive("objects_list", {})).toThrow(/failed registration|not available/);
     expect(seenIdentities).toEqual([]);
+  });
+});
+
+// cinatra#1392 object-type serve — ctx.objects.resolveType must run inside the
+// CALLING record's ctx-identity ALS frame (like ctx.mcp.callPrimitive), so an
+// extension is served ITS OWN pinned dependency edges, never the outer run's.
+describe("ctx.objects.resolveType — the extension-ctx identity frame", () => {
+  const KEY = Symbol.for("@cinatra-ai/host:extension-object-type-serve/v1");
+  type Holder = { [k: symbol]: unknown };
+  let original: unknown;
+  const seen: unknown[] = [];
+
+  beforeEach(() => {
+    seen.length = 0;
+    original = (globalThis as unknown as Holder)[KEY];
+    // Stub the published port to capture the ctx-identity observed INSIDE the
+    // port call (the frame makeObjects.resolveType must establish).
+    (globalThis as unknown as Holder)[KEY] = {
+      resolveObjectType: async () => {
+        seen.push(getExtensionCtxIdentity());
+        return { kind: "none" };
+      },
+      planListing: async () => ({ substitutions: [], notes: [] }),
+    };
+  });
+  afterEach(() => {
+    (globalThis as unknown as Holder)[KEY] = original;
+  });
+
+  it("the DEFAULT ctx resolves under its (packageName, default) identity", async () => {
+    const ctx = createExtensionHostContext(CALLER, ["objects"], {}, { version: "1.0.0", isDefault: true });
+    await ctx.objects.resolveType!("@x/dep:type");
+    expect(seen).toEqual([{ packageName: CALLER, installId: null, version: "1.0.0", isDefault: true }]);
+  });
+
+  it("the NON-DEFAULT ctx resolves under ITS OWN pinned identity, not the outer run's", async () => {
+    const sink = beginVersionKeyedRegistration(CALLER, V);
+    const ctx = createNonDefaultVersionHostContext(CALLER, ["objects"], {}, sink, {
+      version: V,
+      isDefault: false,
+    });
+    await ctx.objects.resolveType!("@x/dep:type");
+    expect(seen).toEqual([{ packageName: CALLER, installId: null, version: V, isDefault: false }]);
+  });
+
+  it("a refuse decision REJECTS with evidence (never a silent default)", async () => {
+    (globalThis as unknown as Holder)[KEY] = {
+      resolveObjectType: async () => ({ kind: "refuse", code: "UNKNOWN_VERSION", message: "torn retention" }),
+      planListing: async () => ({ substitutions: [], notes: [] }),
+    };
+    const ctx = createExtensionHostContext(CALLER, ["objects"], {}, { version: "1.0.0", isDefault: true });
+    await expect(ctx.objects.resolveType!("@x/dep:type")).rejects.toThrow(/refused — torn retention/);
   });
 });

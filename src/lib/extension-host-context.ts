@@ -105,8 +105,10 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { captureExtensionLogEntry, resolveExtensionCaptureDirectory } from "@/lib/extension-log-capture";
 
 // Kept in lockstep with SDK_EXTENSIONS_ABI_VERSION (cinatra#981 bumped 2.2.0 ->
-// 2.3.0 for the additive `logger.capture`/`logger.captureDirectory` methods).
-const ABI_VERSION = "2.3.0";
+// 2.3.0 for the additive `logger.capture`/`logger.captureDirectory` methods;
+// cinatra#1392 bumped 2.3.0 -> 2.4.0 for the additive `objects.resolveType`
+// edge-bound object-type consume method).
+const ABI_VERSION = "2.4.0";
 
 function makeLogger(packageName: string): HostLoggerPort {
   const tag = `[ext:${packageName}]`;
@@ -537,7 +539,41 @@ function makeSecrets(
 // objects — object-type registration + org-scoped object store + history.
 // ---------------------------------------------------------------------------
 
-function makeObjects(packageName: string): ExtensionHostContext["objects"] {
+// The edge-bound object-type serve port (cinatra#1392) published by
+// `extension-edge-bound-serving.ts` on the globalThis singleton surface. Read
+// off globalThis rather than imported so this factory never adds the
+// edge-bound-serving subgraph to the routes that reach it (route-graph ratchet
+// is shrink-only); absent (that serve module never loaded) ⇒ `ctx.objects
+// .resolveType` falls back to the global/default registration, the S7-consistent
+// default-serving outcome. The Symbol key + this minimal port shape MUST match
+// the publisher's `ExtensionObjectTypeServePort` (cross-compilation safe via
+// `Symbol.for`).
+const EXTENSION_OBJECT_TYPE_SERVE_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-object-type-serve/v1",
+);
+type PublishedObjectTypeServePort = {
+  resolveObjectType(typeId: string): Promise<
+    | { kind: "none" }
+    | { kind: "default" }
+    | { kind: "versioned"; descriptor: { typeId: string; ioSpec?: unknown; [k: string]: unknown } }
+    | { kind: "refuse"; code: string; message: string }
+  >;
+};
+function readObjectTypeServePort(): PublishedObjectTypeServePort | undefined {
+  return (globalThis as unknown as { [k: symbol]: PublishedObjectTypeServePort | undefined })[
+    EXTENSION_OBJECT_TYPE_SERVE_KEY
+  ];
+}
+
+function makeObjects(
+  packageName: string,
+  identity?: ExtensionRecordIdentityInput,
+): ExtensionHostContext["objects"] {
+  // The CALLING record's ctx-identity (cinatra#1392 S8) — the same frame
+  // `makeCallPrimitive` establishes so an edge-bound resolve binds THIS
+  // extension's dependency edges (highest-precedence identity source), never the
+  // outer run's. Used by `resolveType` below.
+  const ctxIdentity = { packageName, ...effectiveIdentity(identity) };
   const requireClient = async () => {
     const actor = await resolveExtensionActorContext();
     if (!actor) {
@@ -570,6 +606,36 @@ function makeObjects(packageName: string): ExtensionHostContext["objects"] {
         descriptor as unknown as Parameters<typeof objectTypeRegistry.register>[0],
         packageName,
       );
+    },
+    resolveType: async (typeId: string) => {
+      // The CONSUME side of registerType, edge-bound (cinatra#1392): when the
+      // CALLING extension's resolved edge pins a NON-DEFAULT version of the
+      // type's owning package, serve THAT version's retained descriptor; a torn
+      // edge-bound retention REJECTS with evidence (never the default's). Absent
+      // seam / no pin / a default edge falls back to the global registration.
+      //
+      // The port call runs inside THIS record's ctx-identity ALS frame (exactly
+      // as `makeCallPrimitive` does) so the edge-bound resolver binds the CALLING
+      // extension's dependency edges — never the outer agent/run's. Without the
+      // frame, extension B calling `ctx.objects.resolveType` would be served the
+      // version A's (the outer run's) edges select (codex convergence).
+      const port = readObjectTypeServePort();
+      if (port) {
+        const decision = await runWithExtensionCtxIdentity(ctxIdentity, () =>
+          port.resolveObjectType(typeId),
+        );
+        if (decision.kind === "refuse") {
+          throw new Error(
+            `[ExtensionHostContext] ${packageName}: ctx.objects.resolveType("${typeId}") refused — ${decision.message}`,
+          );
+        }
+        if (decision.kind === "versioned") return decision.descriptor;
+      }
+      const def = objectTypeRegistry.resolve(typeId);
+      if (!def) return null;
+      // The global registry stores the host `ObjectTypeDefinition`; surface it
+      // through the opaque SDK descriptor contract with an explicit `typeId`.
+      return { typeId, ...(def as unknown as Record<string, unknown>) };
     },
     read: async <T = unknown>(typeId: string, id: string) => {
       const client = await requireClient();
@@ -852,7 +918,7 @@ export function createExtensionHostContext(
     nango: gated("nango", () => makeNango()),
     authSession: gated("authSession", () => makeAuthSession(packageName)),
     mcp: gated("mcp", () => makeMcp(packageName, identity)),
-    objects: gated("objects", () => makeObjects(packageName)),
+    objects: gated("objects", () => makeObjects(packageName, identity)),
     jobs: gated("jobs", () => makeJobs(packageName)),
     notifications: gated("notifications", () => makeNotifications(packageName)),
     ui: gated("ui", () => makeUi(packageName)),
@@ -959,7 +1025,12 @@ export function createExtensionProbeHostContext(
   };
   const probeObjects: ExtensionHostContext["objects"] = granted.has("objects")
     ? {
-        ...createExtensionHostContext(packageName, grantedPorts).objects,
+        // Spread the REAL objects port (identity + env threaded — so a probe's
+        // `resolveType` binds THIS record's ctx-identity, not the default;
+        // cinatra#1392) and override ONLY registerType to record instead of
+        // registering. Was a fresh identity-less ctx, which dropped the record
+        // identity from the non-default ctx's inherited `resolveType`.
+        ...real.objects,
         registerType: (descriptor) => {
           // Minimal shape validation mirrors the host registry's keying field so a
           // structurally-broken descriptor (the same input the real registry

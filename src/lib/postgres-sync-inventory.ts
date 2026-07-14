@@ -161,6 +161,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b.",
   },
+  "src/lib/chat-capture/ledger.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Chat-capture turn-ledger DB primitives (cinatra#1367): the durable idempotency + provenance + quota record (one row per thread_id/turn_id) that keeps the background chat-capture detection job idempotent across retries and worker crashes. Built as a sync leaf mirroring skill-lifecycle-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; job-triggered (never the request cycle), migratable to async pooled access with the chat-capture subsystem.",
+  },
   "packages/objects/src/graphiti-projector.ts": {
     class: "migratable-request-path",
     justification:

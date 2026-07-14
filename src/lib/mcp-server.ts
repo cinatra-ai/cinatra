@@ -13,6 +13,7 @@ import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
 import { createApprovalsMcpModule } from "@/app/configuration/approvals/approvals-mcp";
+import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
 import { createBlogContentModule } from "@/lib/blog/integration/module";
 import { createDashboardsModule } from "@cinatra-ai/dashboards/module";
@@ -102,6 +103,10 @@ const postConnectorPlatformModules = [
   // federates agent creation requests, the workflow legacy passthrough, and
   // (once they join the registry) the marketplace sources. Agent-adjacent slot.
   createApprovalsMcpModule(),
+  // Project-manager pilot host tool seam (cinatra#1033 W3 / #1032 D3):
+  // project_instantiate / project_tick_context / project_dispatch_worker as
+  // run-token-authenticated MCP tools offered to the PM seat's own agent run.
+  createProjectSeamMcpModule(),
   createExtensionsModule(),
   createChatModule(),
   createTriggerModule(),

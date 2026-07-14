@@ -37,6 +37,7 @@ export type {
   HostMcpPort,
   HostMcpToolRegistration,
   HostObjectsPort,
+  HostObjectTypeDescriptor,
   HostJobsPort,
   HostNotificationsPort,
   HostUiPort,

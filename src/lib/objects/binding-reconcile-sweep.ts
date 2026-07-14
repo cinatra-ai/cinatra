@@ -33,7 +33,10 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
-import { reconcileArtifactBinding } from "@/lib/objects/binding-write-path";
+import {
+  reconcileArtifactBinding,
+  reconcileArtifactBindingForWrite,
+} from "@/lib/objects/binding-write-path";
 
 const conn = (): string => getPostgresConnectionString();
 const q = (): string => postgresSchema.replaceAll('"', '""');
@@ -293,12 +296,24 @@ export interface QueueDrainResult {
 const MAX_QUEUE_ATTEMPTS = 5;
 
 /**
- * Drain pending 'binding-reconcile' work the claim registry enqueued on winner
- * transitions. Each row names (scope, object_type_id); we resolve its generation
- * from the claim event and sweep the type, so every affected row's binding
- * reconciles to the current winner. A row that errors is marked 'failed'
- * (attempts incremented) and skipped; the sweep is idempotent so a retry is
- * safe. Returns the counts.
+ * Drain pending binding-reconcile work across BOTH axes:
+ *
+ *   - CLAIM-side ('binding-reconcile'): the claim registry enqueues these on
+ *     winner transitions. Each names (scope, object_type_id); we resolve its
+ *     generation from the claim event and TYPE-sweep, so every affected row's
+ *     binding reconciles to the current winner.
+ *   - OBJECT-side ('binding-reconcile-write', cinatra#1493): the object write
+ *     path (upsertObjectAndEnqueue) enqueues these atomically with a
+ *     create/type-change. Each names the concrete (org_id, object_id); we
+ *     reconcile exactly THAT artifact via `reconcileArtifactBindingForWrite`
+ *     (guard SELECT → advisory-locked REPEATABLE READ reconcile). This is the
+ *     axis a TYPE sweep cannot converge — a type-change AWAY from a claimed type
+ *     leaves a stale binding on a row the claimed type's sweep no longer selects.
+ *
+ * A row that errors is marked 'failed'/retried (attempts incremented) and
+ * skipped; both drivers are idempotent (they resolve the live winner), so a
+ * retry — or a duplicate write-driven row for the same artifact — is safe.
+ * Returns the counts.
  */
 export function processBindingReconcileQueue(input?: { limit?: number }): QueueDrainResult {
   ensurePostgresSchema();
@@ -311,10 +326,10 @@ export function processBindingReconcileQueue(input?: { limit?: number }): QueueD
     transaction: true,
     queries: [
       {
-        text: `SELECT rq.id, rq.scope, rq.object_type_id, rq.attempts, ev.generation
+        text: `SELECT rq.id, rq.kind, rq.scope, rq.object_type_id, rq.object_id, rq.org_id, rq.attempts, ev.generation
 FROM "${q()}"."artifact_binding_reconcile_queue" rq
 LEFT JOIN "${q()}"."artifact_claim_events" ev ON ev.id = rq.claim_event_id
-WHERE rq.kind = 'binding-reconcile' AND rq.status = 'pending'
+WHERE rq.kind IN ('binding-reconcile', 'binding-reconcile-write') AND rq.status = 'pending'
 ORDER BY rq.created_at ASC
 LIMIT $1
 FOR UPDATE OF rq SKIP LOCKED`,
@@ -326,12 +341,26 @@ FOR UPDATE OF rq SKIP LOCKED`,
   let failed = 0;
   for (const row of (pending?.[0]?.rows ?? []) as Array<Record<string, unknown>>) {
     const id = String(row.id);
+    const kind = String(row.kind);
     const scope = String(row.scope);
     const objectTypeId = String(row.object_type_id);
     const generation = row.generation == null ? 0 : Number(row.generation);
     const attempts = row.attempts == null ? 0 : Number(row.attempts);
     try {
-      reconcileTypeBindings({ scope, objectTypeId, generation, restart: true });
+      if (kind === "binding-reconcile-write") {
+        // Object-side: reconcile exactly this artifact. The row's presence is
+        // itself the has_claim/has_binding gate (it was only enqueued when the
+        // write could affect a binding); the guarded entry re-resolves the LIVE
+        // winner, so a type since changed further, or a claim since retired,
+        // still converges.
+        reconcileArtifactBindingForWrite({
+          orgId: String(row.org_id),
+          artifactId: String(row.object_id),
+          type: objectTypeId,
+        });
+      } else {
+        reconcileTypeBindings({ scope, objectTypeId, generation, restart: true });
+      }
       runPostgresQueriesSync({
         connectionString: conn(),
         queries: [

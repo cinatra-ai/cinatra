@@ -1872,6 +1872,9 @@ importers:
 
   packages/objects:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: ^4.1.1
+        version: 4.1.1
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:../llm

@@ -11,6 +11,7 @@ import { buildConfigurationNeedsNotificationInput } from "@/lib/agent-configurat
 import { ConformanceCardFixtures } from "./card-fixtures";
 import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixture";
 import { ConnectorSetupConformanceFixture } from "./connector-setup-fixture";
+import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -144,6 +145,11 @@ export default function ConformanceHarnessPage() {
             <ConnectorSetupConformanceFixture />
           </CardContent>
         </Card>
+
+        {/* Approvals + Scheduling surfaces added at spec 4d7b3505 (cinatra#1043):
+            approvals-inbox, approvals-your-requests, approvals-marketplace-states,
+            scheduling-step, scheduling-trigger-tab. */}
+        <ApprovalsSchedulingConformanceFixtures />
       </PageContent>
     </Main>
   );

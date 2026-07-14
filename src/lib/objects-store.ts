@@ -830,7 +830,7 @@ export function upsertObjectAndEnqueue(
     queries: [
       {
         text: `WITH base_row AS (
-                 SELECT version, row_to_json(o.*)::jsonb AS payload
+                 SELECT version, type AS prev_type, row_to_json(o.*)::jsonb AS payload
                  FROM "${schema}"."objects" o WHERE id = $1
                ),
                upserted AS (
@@ -910,6 +910,43 @@ export function upsertObjectAndEnqueue(
                         upserted.org_id, upserted.project_id, upserted.owner_level, upserted.owner_id, upserted.visibility,
                         $23, $24, now()
                  FROM upserted
+               ),
+               binding_reconcile_enqueue AS (
+                 -- Durable object-side binding reconcile (cinatra#1429, epic
+                 -- #1424). Enqueue a per-artifact 'binding-reconcile-write' row
+                 -- IN THIS transaction (atomic with the object write — never lost
+                 -- to a crash) when a CREATE or a TYPE CHANGE could affect this
+                 -- row's binding: the row's CURRENT type carries a live dedicated
+                 -- claim (a create/type-change INTO a claimed type needs a binding
+                 -- INSERT), OR the artifact still carries an active binding (a
+                 -- type-change AWAY from a claimed / since-retired type needs the
+                 -- stale binding ARCHIVED — no later TYPE sweep can select that
+                 -- row, which is exactly why the object-side axis must be a
+                 -- per-artifact record, not a type sweep). A content-only update
+                 -- (same type) enqueues nothing. A null-org write has no binding
+                 -- surface. The consumer (processBindingReconcileQueue) resolves
+                 -- the live winner under the per-artifact advisory lock at
+                 -- REPEATABLE READ — so this write path never takes that lock nor
+                 -- changes its own isolation, and the reconcile stays crash-safe.
+                 INSERT INTO "${schema}"."artifact_binding_reconcile_queue"
+                   (scope, object_type_id, object_id, org_id, kind, status)
+                 SELECT 'org:' || upserted.org_id, upserted.type, upserted.id, upserted.org_id,
+                        'binding-reconcile-write', 'pending'
+                 FROM upserted
+                 WHERE upserted.org_id IS NOT NULL
+                   AND ((SELECT version FROM base_row) IS NULL
+                        OR (SELECT prev_type FROM base_row) IS DISTINCT FROM upserted.type)
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM "${schema}"."artifact_type_claims" c
+                       WHERE c.object_type_id = upserted.type AND c.claim_kind = 'dedicated'
+                         AND c.status IN ('active','retiring')
+                         AND (c.scope = 'platform' OR c.scope = 'org:' || upserted.org_id))
+                     OR EXISTS (
+                       SELECT 1 FROM "${schema}"."semantic_assertion" sa
+                       WHERE sa.org_id = upserted.org_id AND sa.artifact_id = upserted.id
+                         AND sa.assertion_basis = 'binding' AND sa.eligibility <> 'archived')
+                   )
                )
                SELECT * FROM upserted`,
         values: [
@@ -948,6 +985,16 @@ export function upsertObjectAndEnqueue(
       `upsertObjectAndEnqueue: no row returned for id=${id} — possible cross-tenant collision (org_id mismatch on ON CONFLICT DO UPDATE)`,
     );
   }
+
+  // Binding write-path composition (cinatra#1429, epic #1424) rides the upsert
+  // transaction above: the `binding_reconcile_enqueue` CTE arm durably records a
+  // per-artifact 'binding-reconcile-write' reconcile — atomically with the
+  // object write, so a crash never loses it — whenever a create/type-change
+  // could affect this row's binding. The reconcile itself (live-winner
+  // resolution under the per-artifact advisory lock at REPEATABLE READ) is
+  // performed by the queue consumer, keeping this universal writer's hot path
+  // free of both the advisory lock and any isolation-level change.
+
   // Surface the synthetic legacy change-set id so write callers
   // (objects_update → MutationResult) can offer an Undo. Additive spread on
   // the ObjectRecord: existing field readers (objects_save etc.) are

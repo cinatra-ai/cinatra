@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SDK_EXTENSIONS_ABI_VERSION } from "../register";
 import type {
   HostNangoPort,
+  HostObjectsPort,
   ExtensionHostContext,
   AbiScopedNangoPort,
   SdkAbiRangeMeets22,
@@ -25,14 +26,14 @@ import type { AgentIOSpec } from "../agent-io-contract";
 // additive surface is OPTIONAL (so a host pinned to an older minor still type-checks).
 
 describe("SDK ABI 2.2.0 foundation", () => {
-  it("is at least 2.2.0 (current: 2.3.0 — see register.ts's ABI changelog)", () => {
+  it("is at least 2.2.0 (current: 2.4.0 — see register.ts's ABI changelog)", () => {
     // This file locks in the minimum-minor ABI-evolution MACHINERY introduced
     // alongside the 2.2.0 bump (AbiScopedNangoPort / SdkAbiRangeMeets22 /
     // GrantedHostContext) — it is not re-created per bump, so the live-version
     // assertion tracks the CURRENT constant rather than re-pinning "2.2.0"
     // forever. The 2.2-keyed compile-time assertions below stay valid: a
     // >=2.2 floor's semantics do not change when the ABI advances further.
-    expect(SDK_EXTENSIONS_ABI_VERSION).toBe("2.3.0");
+    expect(SDK_EXTENSIONS_ABI_VERSION).toBe("2.4.0");
   });
 
   it("declares the new nango render getters as OPTIONAL (additive minor)", () => {
@@ -91,7 +92,21 @@ describe("SDK ABI 2.2.0 foundation", () => {
 
   it("keeps the ABI version on the ExtensionHostContext type", () => {
     const ctxAbi: ExtensionHostContext["abiVersion"] = SDK_EXTENSIONS_ABI_VERSION;
-    expect(ctxAbi).toBe("2.3.0");
+    expect(ctxAbi).toBe("2.4.0");
+  });
+
+  it("declares objects.resolveType as OPTIONAL (additive 2.4.0 minor)", () => {
+    // A HostObjectsPort with ONLY the pre-2.4.0 required methods must still
+    // satisfy the type — proving `resolveType` (the edge-bound object-type
+    // consume seam, cinatra#1392) is optional, so a host/extension pinned to an
+    // older minor still type-checks.
+    const legacyObjects: HostObjectsPort = {
+      registerType: () => undefined,
+      read: async () => null,
+      write: async () => ({ id: "x" }),
+      history: async () => [],
+    };
+    expect(legacyObjects.resolveType).toBeUndefined();
   });
 });
 
