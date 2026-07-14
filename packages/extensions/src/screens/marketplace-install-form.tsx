@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/cinatra-toast";
 import { isRedirectError } from "./is-redirect-error";
+import { appendDiagnosticReference } from "./marketplace-failure-copy";
 import type {
   MarketplaceFailureCategory,
   MarketplaceInstallActionResult,
@@ -71,7 +72,11 @@ export function MarketplaceInstallForm({
       // Failure path: the action returned a classified category. Show the
       // mapped, actionable, non-technical copy — never the raw error.
       if (result && result.ok === false) {
-        toast.error(failureCopyByCategory[result.category] ?? defaultFailureMessage);
+        const base = failureCopyByCategory[result.category] ?? defaultFailureMessage;
+        // #1539: append the opaque diagnostic reference when present so an admin
+        // can cite it and the operator can correlate it with the sanitized
+        // server log. The reference carries no technical detail itself.
+        toast.error(appendDiagnosticReference(base, result.reference));
       }
       // Success returns undefined (the action redirect()s, which throws below).
     } catch (error) {
