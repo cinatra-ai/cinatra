@@ -68,7 +68,7 @@ export function ObjectHistoryPanel(props: ObjectHistoryPanelProps) {
                   by {event.actorKind ?? "system"}
                   {event.actorId ? ` (${event.actorId.slice(0, 8)})` : ""} ·{" "}
                   <Link
-                    href={`/data-safety/change-sets/${event.changeSetId}`}
+                    href="/artifacts?mode=undo"
                     className="text-primary hover:underline"
                   >
                     change-set

@@ -127,8 +127,11 @@ export function AgentDecisionActions({
         projects: scopeCtx.installTargets
           .filter((t) => t.level === "project")
           .map((t) => ({ id: t.id, name: scopeCtx.ownerEntityNames[t.value] ?? t.label })),
-        orgName:
-          scopeCtx.ownerEntityNames[`org:${scopeCtx.activeOrgId}`] ?? "Organization",
+        // Multi-scope W1: keyed by the id-carrying `org:<id>` token. Fall
+        // through to the empty string so the combobox renders its own "Your
+        // organization" fallback ONLY when the org genuinely has no name.
+        orgName: scopeCtx.ownerEntityNames[`org:${scopeCtx.activeOrgId}`] ?? "",
+        orgId: scopeCtx.activeOrgId,
         workspaceExposed: false,
       }
     : null;

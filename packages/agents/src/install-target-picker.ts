@@ -91,8 +91,13 @@ export async function buildInstallTargetPickerContext(args: {
     // teamRoles intentionally omitted — see module header.
   };
 
-  // Look up org name for the picker label.
-  let orgName = "Organization";
+  // Look up org name for the picker label. Left EMPTY when the org has no name
+  // (or no active org): the AccessCombobox owns the single generic fallback
+  // ("Your organization"), so no hardcoded "Organization" string is stored in
+  // ownerEntityNames — it would otherwise render verbatim for a nameless org
+  // (cinatra#1526). buildInstallTargets' org-row label carries its own
+  // "this organization" fallback for the empty case.
+  let orgName = "";
   if (activeOrgId) {
     const orgRows = await betterAuthDb
       .select({ name: betterAuthOrganizations.name })

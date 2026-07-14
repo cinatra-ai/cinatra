@@ -197,6 +197,65 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1427 projection-policy epoch + rebuild (r
     expect(after3[0].checkpoint.enqueued).toBe(3);
   });
 
+  it("replay EXCLUDES non-ambient memory (nested + skip) but KEEPS ambient-scoped memory (#1379)", async () => {
+    const org = "org-mem-excl";
+    const TYPE = `@cinatra-ai/test:${org}`;
+    const MEM = "@cinatra-ai/memory:concept";
+    // A normal ambient row + memory rows across every class:
+    //  - obj-mem-user   : user-private   → per-user NESTED lane   → EXCLUDE
+    //  - obj-mem-team   : team-owned     → per-team NESTED lane   → EXCLUDE
+    //  - obj-mem-proj   : org + project  → `-proj-` NESTED lane   → EXCLUDE
+    //  - obj-mem-public : public         → terminal SKIP (no episode) → EXCLUDE
+    //    (keeping it would inflate `expected` with no matching episode → diverge)
+    //  - obj-mem-org    : org-scoped     → the AMBIENT base lane clearGraph DID
+    //    clear → must be REPLAYED like any ambient row (excluding it would strand
+    //    that episode unprojected — the codex-caught regression).
+    await seedObject(org, TYPE, "obj-normal");
+    await insertObject(client, schema, {
+      id: "obj-mem-user", type: MEM, orgId: org,
+      ownerLevel: "user", ownerId: "user-42", visibility: "private",
+    });
+    await insertObject(client, schema, {
+      id: "obj-mem-team", type: MEM, orgId: org,
+      ownerLevel: "team", ownerId: "team-7", visibility: "team",
+    });
+    await insertObject(client, schema, {
+      id: "obj-mem-proj", type: MEM, orgId: org,
+      ownerLevel: "organization", ownerId: org, visibility: "organization", projectId: "proj-9",
+    });
+    await insertObject(client, schema, {
+      id: "obj-mem-public", type: MEM, orgId: org,
+      ownerLevel: "user", ownerId: "user-42", visibility: "public",
+    });
+    await insertObject(client, schema, {
+      id: "obj-mem-org", type: MEM, orgId: org,
+      ownerLevel: "organization", ownerId: org, visibility: "organization",
+    });
+    const journalId = randomUUID();
+    await client.query(
+      `INSERT INTO "${schema}"."graphiti_rebuild_journal"
+         (id, group_id, org_id, from_epoch, to_epoch, phase, checkpoint, reason)
+       VALUES ($1, $2, $3, 1, 2, 'replaying', jsonb_build_object('lastObjectId', NULL, 'enqueued', 0), '{}'::jsonb)`,
+      [journalId, `cinatra-org-${org}`, org],
+    );
+
+    const b = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50 });
+    await client.query(b.text, b.values);
+    // A second run reaches exhaustion (rowCount 0) despite the excluded memory
+    // rows still existing past the cursor — the exhaustion predicate excludes
+    // exactly the same set.
+    const b2 = buildReplayBatchQuery(schema, { journalId, toEpoch: 2, batchSize: 50 });
+    const r2 = await client.query(b2.text, b2.values);
+    expect(r2.rowCount).toBe(0);
+
+    const outbox = await q<{ object_id: string }>(
+      `SELECT object_id FROM "${schema}"."graphiti_projection_outbox" WHERE org_id = $1 ORDER BY object_id`,
+      [org],
+    );
+    // Ambient row + ambient-scoped memory replayed; nested + public memory are not.
+    expect(outbox.map((r) => r.object_id)).toEqual(["obj-mem-org", "obj-normal"]);
+  });
+
   it("stale-epoch FENCE: only the item stamped below the group's epoch is discarded", async () => {
     const org = "org-fence";
     const group = `cinatra-org-${org}`;
