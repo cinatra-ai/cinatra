@@ -19,8 +19,17 @@
 //
 // It owns exactly the picker mechanics the interaction/perf contract requires:
 //   - debounce (0 ms on open / an empty query, 300 ms while typing — §3.5),
-//   - stale-result ignoring (a cancelled flag; a late response for an old query
-//     never overwrites the current query's results — §3.4),
+//   - stale-result ignoring for BOTH request paths (a cancelled flag on the
+//     first-page search AND an epoch guard on the pagination path; a late
+//     response for an old query / a closed popover never overwrites or merges
+//     into the current results — §3.4),
+//   - the full §3.4 keyboard contract with focus staying in the anchoring
+//     Input: the Input is the combobox (role="combobox", aria-expanded,
+//     aria-controls, aria-activedescendant); ArrowDown/ArrowUp open the list or
+//     move the active row (key events are forwarded to cmdk's root, which owns
+//     selection movement, disabled-row skipping, and scroll-into-view); Enter
+//     selects the active row; Escape closes (focus never left the Input); Tab
+//     closes and moves on (no trap),
 //   - an EXPLICIT error row ("Couldn't search — try again.") distinct from the
 //     empty state ("No matches.") — the shared component FIXES the panels'
 //     silent failure→empty coercion (§3.4),
@@ -35,6 +44,7 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useRef, useState } from "react";
+import { useCommandState } from "cmdk";
 import { Loader2 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
@@ -138,6 +148,67 @@ export function visibleEntityResults<T extends { id: string }>(
 const DEFAULT_PAGE_SIZE = 20;
 
 // ---------------------------------------------------------------------------
+// a11y bridge — mirrors cmdk's popup identity + active option onto the
+// EXTERNAL input.
+//
+// Focus lives in the anchoring Input (outside the Command tree), so the input
+// is the combobox and must carry `aria-controls` (the popup listbox's id) and
+// `aria-activedescendant` (the active option's DOM id) per the ARIA combobox
+// pattern. cmdk owns both ids (its List/Item override any user-supplied `id`)
+// and tracks the active option as `selectedItemId` in its store; this bridge
+// renders INSIDE the Command (where the store context exists), subscribes via
+// cmdk's public `useCommandState`, and syncs both onto the input as DOM
+// attributes. It must live inside the popover content: the content is
+// portal-mounted a commit AFTER the parent's `open` state flips, so a parent
+// effect keyed on `open` runs too early to see the listbox — this component
+// mounts exactly when the listbox does (and its cleanup runs exactly when the
+// popup unmounts). Attribute sync (not React state) — the input is an
+// external system here, and this avoids cascading renders.
+// ---------------------------------------------------------------------------
+function CommandComboboxA11yBridge({
+  inputRef,
+  commandRef,
+}: {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  commandRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const activeId = useCommandState((state) => state.selectedItemId);
+  const activeValue = useCommandState((state) => state.value);
+
+  // aria-controls: resolvable on mount — refs are attached before effects run,
+  // and this bridge mounts in the same commit as the listbox.
+  useEffect(() => {
+    const input = inputRef.current;
+    const listId = commandRef.current?.querySelector("[cmdk-list]")?.id;
+    if (!input || !listId) return;
+    input.setAttribute("aria-controls", listId);
+    return () => input.removeAttribute("aria-controls");
+  }, [inputRef, commandRef]);
+
+  // aria-activedescendant: tracks cmdk's active option live. cmdk populates
+  // `selectedItemId` lazily (its internal scheduler resolves the id from the
+  // DOM, and on the INITIAL auto-select that lookup can run a commit before
+  // the row's aria-selected is stamped, leaving the id undefined while a row
+  // is visibly active) — so this also subscribes to the store's `value` and
+  // falls back to the committed DOM, which a passive effect observes reliably.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const id =
+      activeId ??
+      commandRef.current?.querySelector('[cmdk-item][aria-selected="true"]')?.id;
+    if (id) {
+      input.setAttribute("aria-activedescendant", id);
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+    return () => input.removeAttribute("aria-activedescendant");
+  }, [activeId, activeValue, inputRef, commandRef]);
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -155,11 +226,20 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const commandRef = useRef<HTMLDivElement>(null);
   const [results, setResults] = useState<T[]>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Results epoch: bumped whenever the results generation changes (open/close,
+  // query change). The pagination path captures the epoch when its request
+  // starts and DROPS the response if the epoch moved — a late second page for
+  // an old query / a closed popover must never merge into the current list
+  // (§3.4; codex merge-review finding 2 — the first-page effect's `cancelled`
+  // flag did not cover handleListScroll).
+  const epochRef = useRef(0);
 
   // Reset the transient search state when the popover closes. Done in the
   // open-change handler (NOT synchronously inside the effect) so the effect
@@ -167,6 +247,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (!next) {
+      epochRef.current += 1; // invalidate in-flight page merges immediately
       setResults([]);
       setSearching(false);
       setError(false);
@@ -179,6 +260,10 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
   // out-of-order responses so a late reply to an old query never overwrites the
   // current one (§3.4). A rejection sets the explicit error state (§3.4).
   useEffect(() => {
+    // Any open/query transition starts a new results generation: in-flight
+    // page merges for the previous generation become stale NOW (not after the
+    // 300 ms debounce), so a late page response can never race the new query.
+    epochRef.current += 1;
     if (!open) return;
     let cancelled = false;
     const handle = window.setTimeout(async () => {
@@ -211,16 +296,62 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
     if (distanceFromBottom > 64) return;
     setLoadingMore(true);
     const offset = results.length;
+    const epoch = epochRef.current;
     void onSearch(query, { offset, limit: pageSize })
       .then((result) => {
         setLoadingMore(false);
+        if (epochRef.current !== epoch) return; // stale page — query changed / closed
         setResults((prev) => mergeEntityPages(prev, result.results));
         setHasMore(result.hasMore ?? false);
       })
       .catch(() => {
         setLoadingMore(false);
+        if (epochRef.current !== epoch) return; // stale failure — don't surface
         setError(true);
       });
+  };
+
+  // §3.4 keyboard contract, with focus staying in the anchoring Input. cmdk
+  // owns selection movement (disabled-row skipping, group traversal,
+  // scroll-into-view), so ArrowUp/ArrowDown/Enter are FORWARDED to its root
+  // element as bubbling KeyboardEvents rather than re-implemented — cmdk's
+  // root onKeyDown handles them exactly as if its own input had focus. The
+  // active row is reflected back onto this input by
+  // CommandActiveDescendantBridge. Home/End are NOT forwarded: in a text
+  // input they move the caret, which wins (matching native combobox inputs).
+  const forwardKeyToList = (key: string) => {
+    commandRef.current?.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+    );
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); // never move the caret
+      if (!open) {
+        handleOpenChange(true); // closed combobox: arrows open the list
+        return;
+      }
+      forwardKeyToList(e.key);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault(); // never submit a surrounding form
+      if (open) forwardKeyToList("Enter"); // select the active row
+      return;
+    }
+    if (e.key === "Escape") {
+      if (open) {
+        e.preventDefault();
+        handleOpenChange(false); // focus already lives here — nothing to restore
+      }
+      return;
+    }
+    if (e.key === "Tab" && open) {
+      // §3.4: Tab closes the popover and moves focus onward (no trap) —
+      // deliberately NOT preventDefault.
+      handleOpenChange(false);
+    }
   };
 
   const visibleResults = visibleEntityResults(results, excludeIds);
@@ -246,14 +377,21 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
           disabled={disabled}
           placeholder={placeholder}
           value={query}
+          role="combobox"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-autocomplete="list"
           onChange={(e) => {
             setQuery(e.target.value);
             if (!open) handleOpenChange(true);
           }}
-          onClick={() => handleOpenChange(!open)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.preventDefault();
+          // Open-only: clicking back into an OPEN input (to place the caret)
+          // must not close the list — close is Escape / outside click /
+          // selection (codex merge-review finding 3).
+          onClick={() => {
+            if (!open) handleOpenChange(true);
           }}
+          onKeyDown={handleInputKeyDown}
           className="bg-surface-strong"
         />
       </PopoverAnchor>
@@ -279,7 +417,8 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
         }}
         className="w-[var(--radix-popover-trigger-width)] max-w-[min(28rem,calc(100vw-2rem))] p-0 bg-surface-strong"
       >
-        <Command shouldFilter={false} className="bg-surface-strong">
+        <Command ref={commandRef} shouldFilter={false} className="bg-surface-strong">
+          <CommandComboboxA11yBridge inputRef={inputRef} commandRef={commandRef} />
           <CommandList
             onScroll={handleListScroll}
             className="max-h-72 bg-surface-strong"

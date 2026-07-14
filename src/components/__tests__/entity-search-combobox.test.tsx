@@ -9,7 +9,12 @@
  * component must own so its adopters inherit them for free):
  *  - the presentational prop contract (onSearch / onPick / renderRow / etc.)
  *  - debounce via the pure entitySearchDebounceMs (0 ms open / 300 ms typing)
- *  - stale-result ignoring (the `cancelled` flag)
+ *  - stale-result ignoring on BOTH request paths (the `cancelled` flag on the
+ *    first-page search AND the epoch guard on the pagination path)
+ *  - the ARIA combobox wiring on the EXTERNAL input (role/aria-expanded static;
+ *    aria-controls + aria-activedescendant via the in-Command bridge) and the
+ *    keyboard forwarding (Arrows/Enter → cmdk root; Escape closes; Tab moves on)
+ *  - open-only click (caret re-click never closes the list)
  *  - an EXPLICIT error row ("Couldn't search — try again.") DISTINCT from the
  *    empty state ("No matches.") — the panels' silent failure→empty coercion is
  *    fixed here
@@ -20,6 +25,8 @@
  *  - Input-anchored focus (onOpenAutoFocus prevented → focus stays in the Input)
  *  - shouldFilter={false} (server-side filtering)
  *  - module loads without throwing (import/type drift smoke)
+ * BEHAVIOUR (arrow/enter selection, caret re-click, stale-page dropping) is
+ * exercised for real in entity-search-combobox-interaction.test.tsx (jsdom).
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
@@ -54,6 +61,48 @@ describe("EntitySearchCombobox", () => {
     expect(SOURCE).toMatch(/let cancelled = false/);
     expect(SOURCE).toMatch(/if \(cancelled\) return/);
     expect(SOURCE).toMatch(/cancelled = true/);
+  });
+
+  it("guards the PAGINATION path with a results epoch (stale page never merges)", () => {
+    // The epoch bumps on every open/query transition AND on close…
+    expect(SOURCE).toMatch(/const epochRef = useRef\(0\)/);
+    const bumps = SOURCE.match(/epochRef\.current \+= 1/g) ?? [];
+    expect(bumps.length).toBeGreaterThanOrEqual(2);
+    // …and the page response is dropped when the epoch moved.
+    expect(SOURCE).toMatch(/const epoch = epochRef\.current/);
+    expect(SOURCE).toMatch(/if \(epochRef\.current !== epoch\) return/);
+  });
+
+  it("wires the external input as the ARIA combobox (§3.4)", () => {
+    expect(SOURCE).toMatch(/role="combobox"/);
+    expect(SOURCE).toMatch(/aria-expanded=\{open\}/);
+    expect(SOURCE).toMatch(/aria-haspopup="listbox"/);
+    expect(SOURCE).toMatch(/aria-autocomplete="list"/);
+    // aria-controls + aria-activedescendant are synced by the in-Command
+    // bridge (they belong to cmdk-generated ids, resolvable only after the
+    // portal content mounts).
+    expect(SOURCE).toMatch(/function CommandComboboxA11yBridge/);
+    expect(SOURCE).toMatch(/useCommandState\(\(state\) => state\.selectedItemId\)/);
+    expect(SOURCE).toMatch(/setAttribute\("aria-controls", listId\)/);
+    expect(SOURCE).toMatch(/setAttribute\("aria-activedescendant", id\)/);
+  });
+
+  it("forwards ArrowUp/ArrowDown/Enter from the input to cmdk's root (§3.4 keyboard)", () => {
+    expect(SOURCE).toMatch(/const forwardKeyToList = \(key: string\)/);
+    expect(SOURCE).toMatch(/new KeyboardEvent\("keydown", \{ key, bubbles: true, cancelable: true \}\)/);
+    // Arrows open a closed list, move the active row on an open one.
+    expect(SOURCE).toMatch(/e\.key === "ArrowDown" \|\| e\.key === "ArrowUp"/);
+    // Enter selects the active row; Escape closes; Tab closes without trapping.
+    expect(SOURCE).toMatch(/if \(open\) forwardKeyToList\("Enter"\)/);
+    expect(SOURCE).toMatch(/e\.key === "Escape"/);
+    expect(SOURCE).toMatch(/e\.key === "Tab" && open/);
+  });
+
+  it("click is open-only — a caret re-click never closes the list (finding 3)", () => {
+    // The click handler opens when closed and does nothing when open.
+    const click = SOURCE.slice(SOURCE.indexOf("onClick={() => {"), SOURCE.indexOf("onKeyDown={handleInputKeyDown}"));
+    expect(click).toMatch(/if \(!open\) handleOpenChange\(true\);/);
+    expect(click).not.toMatch(/handleOpenChange\(!open\)/);
   });
 
   it("renders an EXPLICIT error row distinct from the empty state (§3.4)", () => {
