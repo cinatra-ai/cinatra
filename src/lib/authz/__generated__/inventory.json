@@ -505,12 +505,12 @@
     {
       "primitiveName": "context_list_eligible_assertions",
       "file": "src/lib/artifacts/context-mcp.ts",
-      "line": 268
+      "line": 295
     },
     {
       "primitiveName": "context_resolve",
       "file": "src/lib/artifacts/context-mcp.ts",
-      "line": 246
+      "line": 256
     },
     {
       "primitiveName": "crm_account_create",
