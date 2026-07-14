@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { z } from "zod";
 // CRM object types (account / contact / list) are registered by the
 // crm-connector extension (host boot path: createCrmModule() +
@@ -14,6 +15,9 @@ import {
   GenericObjectListRow,
   GenericObjectCard,
   GenericObjectDetail,
+  MemoryConceptListRow,
+  MemoryConceptCard,
+  MemoryConceptDetail,
 } from "./generic-renderers";
 
 /**
@@ -369,6 +373,183 @@ function registerEmailObjectTypes(): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// @cinatra-ai/memory:concept — envelope contract (cinatra#1376, epic #1373).
+// ---------------------------------------------------------------------------
+//
+// Memory rows take the deterministic static-type path: `objects_save` with the
+// exact `typeHint` resolves against the static registry (no classifier LLM
+// call), and the registered Zod schema below is enforced on the write path
+// (`packages/objects/src/mcp/handlers.ts`) before any commit. Memory files are
+// untrusted input end-to-end, so every invariant here is validated
+// server-side — the sync client's own checks are advisory only.
+//
+// Defined INLINE in this module (not a sibling file) on purpose: this module
+// is reachable from the locked route-graph budgets (via the package barrel /
+// createObjectsModule), so a new first-party sibling module would grow every
+// locked route by one. Inline schemas are this file's existing idiom (see the
+// email object types above). The barrel re-exports these symbols for the
+// memory sync path (epic S5) and tests.
+
+/** The static object type id for a memory concept row. */
+export const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept" as const;
+
+/** Hard cap on `bodyMarkdown`, measured in UTF-8 BYTES (not JS chars). */
+export const MEMORY_CONCEPT_BODY_MAX_BYTES = 64 * 1024;
+
+/**
+ * Deterministic external identity of a concept row:
+ * `sha256(UTF-8(bundleId + NUL + conceptId))`, lowercase hex. Inputs are
+ * case-sensitive (path = identity under OKF; no normalization). The NUL
+ * separator makes the concatenation injective — neither field may contain
+ * NUL (the envelope schema rejects it in `conceptId`; a UUID never has one).
+ */
+export function computeMemoryConceptExternalId(
+  bundleId: string,
+  conceptId: string,
+): string {
+  return createHash("sha256")
+    .update(`${bundleId}\u0000${conceptId}`, "utf8")
+    .digest("hex");
+}
+
+/**
+ * A concept id is a RELATIVE POSIX path (path = identity in OKF 0.1) with the
+ * `.md` suffix already stripped by the sync layer:
+ * - non-empty, `/`-separated segments, each segment non-empty (no `//`,
+ *   no leading or trailing `/`),
+ * - no `.` / `..` segments (no traversal), no backslashes, no NUL,
+ * - must NOT end with `.md` (the suffix belongs to the file, not the
+ *   identity; case-sensitive like the rest of the path).
+ */
+export function isValidMemoryConceptId(conceptId: string): boolean {
+  if (conceptId.length === 0) return false;
+  if (conceptId.includes("\u0000") || conceptId.includes("\\")) return false;
+  if (conceptId.endsWith(".md")) return false;
+  const segments = conceptId.split("/");
+  return segments.every((s) => s.length > 0 && s !== "." && s !== "..");
+}
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+
+const memoryConceptLinkSchema = z
+  .object({
+    /** Raw link target as written in the Markdown (untyped in OKF 0.1). */
+    target: z.string().min(1),
+    /** Present when the sync layer resolved the target to a concept id. */
+    resolvedConceptId: z.string().min(1).optional(),
+  })
+  .strict();
+
+/**
+ * Envelope schema for `@cinatra-ai/memory:concept` rows.
+ *
+ * Validation-only on the write path: the handler safeParses the SAME enriched
+ * shape that gets stored, so unknown TOP-LEVEL keys (e.g. the system-injected
+ * `cinatraAgentRunId`) are tolerated, `frontmatter` preserves unknown keys
+ * (tolerant OKF consumption), and `links` entries are strict (the fixed
+ * `{ target, resolvedConceptId? }` contract).
+ *
+ * Cross-field invariants:
+ * - `externalId` must equal `sha256(UTF-8(bundleId + NUL + conceptId))`
+ *   (case-sensitive; the server recomputes and rejects mismatches),
+ * - `okfType` must equal `frontmatter.type` (the sole required OKF field),
+ * - `bodyMarkdown` is capped at 64 KiB of UTF-8 bytes.
+ */
+export const memoryConceptEnvelopeSchema = z
+  .object({
+    conceptId: z
+      .string()
+      .min(1)
+      .refine(isValidMemoryConceptId, {
+        message:
+          "conceptId must be a relative POSIX path without `.`/`..` segments, backslashes, or a `.md` suffix",
+      }),
+    bundleId: z.uuid({ message: "bundleId must be a UUID" }),
+    externalId: z
+      .string()
+      .regex(SHA256_HEX_RE, {
+        message: "externalId must be 64 lowercase hex chars (sha256)",
+      }),
+    okfType: z.string().min(1),
+    // Unknown frontmatter keys are PRESERVED (tolerant consumption); only
+    // `type` is cross-checked against `okfType` below.
+    frontmatter: z.record(z.string(), z.unknown()),
+    bodyMarkdown: z.string().refine(
+      (s) => new TextEncoder().encode(s).length <= MEMORY_CONCEPT_BODY_MAX_BYTES,
+      {
+        message: `bodyMarkdown exceeds the ${MEMORY_CONCEPT_BODY_MAX_BYTES}-byte (64 KiB) cap`,
+      },
+    ),
+    links: z.array(memoryConceptLinkSchema),
+    okfVersion: z.string().min(1).default("0.1"),
+  })
+  .superRefine((env, ctx) => {
+    const computed = computeMemoryConceptExternalId(env.bundleId, env.conceptId);
+    if (env.externalId !== computed) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["externalId"],
+        message:
+          "externalId does not match sha256(UTF-8(bundleId + NUL + conceptId)) recomputed by the server",
+      });
+    }
+    const frontmatterType = env.frontmatter["type"];
+    if (typeof frontmatterType !== "string" || frontmatterType !== env.okfType) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["okfType"],
+        message: "okfType must equal frontmatter.type (a non-empty string)",
+      });
+    }
+  });
+
+export type MemoryConceptEnvelope = z.infer<typeof memoryConceptEnvelopeSchema>;
+
+// ---------------------------------------------------------------------------
+// @cinatra-ai/memory:concept (cinatra#1376, epic #1373) — the agent-memory
+// static type. Memory rows take the deterministic static-type path (exact
+// `typeHint` resolves in the registry — no classifier LLM call) and the
+// registered envelope schema above is ENFORCED on the
+// objects_save / objects_update write paths (memory-scoped in #1376;
+// generalizing enforcement to other static types is follow-up work).
+//
+// Identity is the envelope's `externalId` (= sha256(bundleId + NUL +
+// conceptId), server-recomputed): the layered resolver picks it up as the
+// explicit external key, and the identityKey below states the same fact for
+// registry consumers. Re-syncing the same concept file therefore updates the
+// existing row instead of minting a duplicate.
+//
+// No crudPolicy on purpose: the automap dispatcher must never auto-write
+// memory envelopes (types without a policy always escalate to HITL); the
+// memory sync path (epic S5) writes explicitly via objects_save.
+export function registerMemoryConceptType(): void {
+  objectTypeRegistry.register({
+    type: MEMORY_CONCEPT_TYPE_ID,
+    category: "content",
+    schema: memoryConceptEnvelopeSchema,
+    lifecycle: {
+      // Filesystem is authoritative for memory content in this iteration:
+      // rows arrive from agent-driven sync (or an import), and only agents
+      // may mutate them — there is no Cinatra-side user edit surface.
+      sources: ["agent", "import"],
+      mutableBy: ["agent"],
+    },
+    renderers: {
+      listRow: MemoryConceptListRow,
+      card: MemoryConceptCard,
+      detail: MemoryConceptDetail,
+    },
+    identityKey: (data) => {
+      const d = data as Record<string, unknown>;
+      const externalId = d.externalId;
+      return typeof externalId === "string" && externalId.length > 0
+        ? externalId
+        : null;
+    },
+  });
+}
+
 export function registerAllObjectTypes(): void {
   registerGenericObjectType();
   registerCampaignType();
@@ -376,6 +557,7 @@ export function registerAllObjectTypes(): void {
   registerCampaignRecipientsType();
   registerCampaignBundleTypes();
   registerEmailObjectTypes();
+  registerMemoryConceptType();
   // CRM types (account / contact / list) are registered by the crm-connector
   // extension via the host boot path (createCrmModule() +
   // src/lib/register-all-object-types.ts), not here — this package must not
