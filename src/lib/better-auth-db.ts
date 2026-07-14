@@ -1077,3 +1077,37 @@ export async function readTeamForOrg(
     .limit(1);
   return rows[0] ?? null;
 }
+
+/**
+ * Batched name resolution for a CLOSED set of team ids, bounded by one
+ * organization (cinatra#1509 §4.1 / codex F5 — the #1508 selection hydration).
+ *
+ * The query is doubly bounded: only ids in `teamIds` AND only teams whose
+ * `organizationId` matches are returned. Ids outside the org (or pointing at
+ * deleted teams) are simply absent from the result, so callers fall back to
+ * the explicit "Unknown team" label instead of leaking anything.
+ *
+ * SECURITY: callers must derive `teamIds` from server-side state only (e.g.
+ * a project's stored access expression + its project_access rows) — this is
+ * NOT a client-supplied-id → name oracle and must never be exposed as one.
+ *
+ * One batched query per call (no N+1 — §3.5). Ordered by name, then id, for
+ * deterministic output like `listTeamsForOrg`.
+ */
+export async function readTeamsByIdsForOrg(
+  teamIds: string[],
+  organizationId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  if (teamIds.length === 0) return [];
+  const rows = await betterAuthDb
+    .select({ id: betterAuthTeams.id, name: betterAuthTeams.name })
+    .from(betterAuthTeams)
+    .where(
+      and(
+        inArray(betterAuthTeams.id, teamIds),
+        eq(betterAuthTeams.organizationId, organizationId),
+      ),
+    )
+    .orderBy(betterAuthTeams.name, betterAuthTeams.id);
+  return rows;
+}

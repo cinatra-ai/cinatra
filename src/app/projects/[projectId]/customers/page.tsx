@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { ProjectSubnav } from "@/components/project-subnav";
 import { AccessVsOwnershipNote } from "@/components/access-vs-ownership-note";
 import { readProjectById } from "@/lib/projects-store";
 
@@ -43,9 +44,11 @@ export default async function ProjectCustomersPage({ params }: Props) {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="Customers"
+        title={project.name}
         description="Invite external users to this project with scoped, read-mostly, revocable access."
+        divider={false}
       />
+      <ProjectSubnav projectId={project.id} activeSection="customers" />
       <PageContent className="flex flex-col gap-6 pb-8">
         <AccessVsOwnershipNote />
         <CustomersClient projectId={project.id} initialGrants={grants} />

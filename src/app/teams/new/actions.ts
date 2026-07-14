@@ -2,7 +2,9 @@
 
 import { randomUUID } from "crypto";
 import { sql } from "drizzle-orm";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth";
 import { requireAuthSession } from "@/lib/auth-session";
 import {
   betterAuthDb,
@@ -70,6 +72,23 @@ export async function createTeamAction(formData: FormData) {
 
   if (!result.ok) {
     redirect("/teams/new?error=slug-conflict");
+  }
+
+  // /teams is ACTIVE-organization scoped (its cube hard-filters teams to the
+  // session's active org), but a team can be created in ANY org the caller
+  // owns/administers — not necessarily the active one. Without switching, a
+  // team created in a non-active org would land nowhere visible (#1495). So
+  // set the session's active organization to the new team's org before landing
+  // on /teams. Better Auth's server-side set-active endpoint re-validates
+  // membership (guaranteed here — the org came from the owner/admin creatable
+  // set above) and propagates the refreshed session cookie via the nextCookies
+  // plugin. Skip the round-trip when the chosen org is already active (no-op,
+  // identical to the prior behavior).
+  if (organizationId !== session.session?.activeOrganizationId) {
+    await auth.api.setActiveOrganization({
+      headers: await headers(),
+      body: { organizationId },
+    });
   }
 
   redirect("/teams");

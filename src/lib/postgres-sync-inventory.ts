@@ -159,7 +159,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/assistant-thread-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b.",
+      "Structured assistant_threads / assistant_turns store (cinatra#1037 P2a). Built as a sync leaf mirroring chat-thread-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf primitives) so it composes into the synchronous store graph. It is the forward replacement for chat-thread-store and, like it, migrates to async typed reads when the sync-table access pattern is converted; the request-path wiring (the /api/chat persistence subroutes + chat_thread_send) lands in P2b. P5.5 adds one call site: the per-actor visibility-predicate list read (listAssistantThreadsForOrgVisibleTo) backing the assistant_thread_list MCP tool — same class, same table, same migration path.",
   },
   "src/lib/chat-capture/ledger.ts": {
     class: "migratable-request-path",

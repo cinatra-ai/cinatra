@@ -181,10 +181,13 @@ async function executeWireQuery(
   }
   const resolved = resolveAndValidateCubeId(wireQuery);
   if (!resolved.ok) {
+    // `error` carries the human-readable copy (drizzle-cube's CubeClient
+    // throws `new Error(body.error)` and the portlet error card renders
+    // `error.message` verbatim — cinatra#1512); `code` stays the machine code.
     return {
       ok: false,
       status: 400,
-      body: { error: resolved.code, code: resolved.code, details: resolved.details },
+      body: { error: resolved.userMessage, code: resolved.code, details: resolved.details },
     };
   }
   // CG-5 (cinatra#660): for a RUNTIME cube, assert the contributing extension is

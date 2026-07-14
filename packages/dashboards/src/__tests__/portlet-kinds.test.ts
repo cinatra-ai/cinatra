@@ -155,3 +155,237 @@ describe("analytics portlet kind (cinatra#325)", () => {
     expect(res.ok, JSON.stringify(res)).toBe(true);
   });
 });
+
+// cinatra#1512: a single executable query must be cube-scoped — the query
+// endpoint rejects mixed-cube queries with `cube_id_ambiguous`, so a portlet
+// that mixes cubes in one query can never render. The write path (every save
+// funnels through the mutation service's registry validation) fails closed
+// with product copy instead of persisting a permanently-broken card.
+describe("analytics portlet cross-cube query validation (cinatra#1512)", () => {
+  const embed = (portlet: Record<string, unknown>) => ({
+    dashboard: {
+      portlets: [{ id: "p1", title: "Runs", w: 3, h: 4, x: 0, y: 0, ...portlet }],
+      layoutMode: "grid",
+      grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+    },
+  });
+  const queryAnalysis = (
+    query: unknown,
+    chartType = "bar",
+  ): Record<string, unknown> => ({
+    analysisConfig: {
+      version: 1,
+      analysisType: "query",
+      activeView: "chart",
+      charts: { query: { chartType, chartConfig: {}, displayConfig: {} } },
+      query,
+    },
+  });
+
+  it("rejects the issue-#1512 repro: a kpiNumber query spanning agent_runs/teams/projects", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis(
+          {
+            measures: [
+              "agent_runs.count",
+              "agent_runs.last_run_at",
+              "teams.count",
+              "teams.member_count",
+              "projects.count",
+            ],
+            dimensions: [],
+          },
+          "kpiNumber",
+        ),
+      ),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_cross_cube_query");
+    expect(errs[0].message).toContain('card "Runs"');
+    expect(errs[0].message).toContain(
+      "mixes fields from Agent Runs, Teams, and Projects",
+    );
+    expect(errs[0].message).toContain("create a separate KPI card per data source");
+  });
+
+  it("rejects a cross-cube single query for non-KPI charts too (generic copy)", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(queryAnalysis({ measures: ["agent_runs.count", "teams.count"] })),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_cross_cube_query");
+    expect(errs[0].message).toContain("mixes fields from Agent Runs and Teams");
+    expect(errs[0].message).not.toContain("KPI");
+  });
+
+  it("catches a foreign cube referenced only through a filter / order key", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis({
+          measures: ["agent_runs.count"],
+          filters: [{ member: "teams.id", operator: "equals", values: ["t1"] }],
+          order: { "projects.count": "desc" },
+        }),
+      ),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_cross_cube_query");
+  });
+
+  it("accepts a single-cube query using every member surface", () => {
+    expect(
+      vc(
+        ANALYTICS_PORTLET_KIND,
+        embed(
+          queryAnalysis({
+            measures: ["teams.member_count"],
+            dimensions: ["teams.name"],
+            filters: [{ member: "teams.id", operator: "equals", values: ["t1"] }],
+            order: { "teams.member_count": "desc" },
+          }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("accepts a non-KPI multi-query config spanning cubes ACROSS sub-queries", () => {
+    expect(
+      vc(
+        ANALYTICS_PORTLET_KIND,
+        embed(
+          queryAnalysis({
+            queries: [
+              { measures: ["agent_runs.count"] },
+              { measures: ["teams.count"] },
+            ],
+            mergeStrategy: "concat",
+          }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects a multi-query config whose individual sub-query mixes cubes", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis({
+          queries: [
+            { measures: ["agent_runs.count", "teams.count"] },
+            { measures: ["projects.count"] },
+          ],
+          mergeStrategy: "concat",
+        }),
+      ),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_cross_cube_query");
+  });
+
+  it("rejects a KPI multi-query whose sub-queries span cubes even when each is single-cube", () => {
+    const errs = vc(
+      ANALYTICS_PORTLET_KIND,
+      embed(
+        queryAnalysis(
+          {
+            queries: [
+              { measures: ["agent_runs.count"] },
+              { measures: ["teams.count"] },
+            ],
+            mergeStrategy: "concat",
+          },
+          "kpiNumber",
+        ),
+      ),
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0].message).toContain("create a separate KPI card per data source");
+  });
+
+  it("checks the legacy top-level query field (object AND JSON-string forms)", () => {
+    const legacyObject = {
+      query: { measures: ["agent_runs.count", "teams.count"] },
+      chartType: "bar",
+    };
+    expect(vc(ANALYTICS_PORTLET_KIND, embed(legacyObject))[0].code).toBe(
+      "port_analytics_cross_cube_query",
+    );
+    const legacyString = {
+      query: JSON.stringify({ measures: ["agent_runs.count", "teams.count"] }),
+      chartType: "bar",
+    };
+    expect(vc(ANALYTICS_PORTLET_KIND, embed(legacyString))[0].code).toBe(
+      "port_analytics_cross_cube_query",
+    );
+  });
+
+  it("tolerates an unparseable legacy query string (drizzle-cube owns invalid-JSON handling)", () => {
+    expect(
+      vc(ANALYTICS_PORTLET_KIND, embed({ query: "not json {", chartType: "bar" })),
+    ).toEqual([]);
+  });
+
+  it("skips funnel/flow/retention analysis types (different query DSLs, not served in v1)", () => {
+    expect(
+      vc(
+        ANALYTICS_PORTLET_KIND,
+        embed({
+          analysisConfig: {
+            version: 1,
+            analysisType: "funnel",
+            activeView: "chart",
+            charts: { funnel: { chartType: "funnel", chartConfig: {}, displayConfig: {} } },
+            query: {
+              funnel: {
+                bindingKey: "agent_runs.id",
+                timeDimension: "teams.created_at",
+                steps: [],
+              },
+            },
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("the registry-backed apiVersion 1.2 path (the mutation-service sequence) rejects a cross-cube portlet", () => {
+    // Mirror assertConfigV12's two stages: structural v12 validation, then
+    // per-kind config validation via the live registry — the exact sequence
+    // every dashboard save runs (mutation-service.ts). The structural stage
+    // passes (the envelope is well-formed); the per-kind stage carries the
+    // cross-cube rejection.
+    const v12 = {
+      apiVersion: DASHBOARD_CONFIG_V12_VERSION,
+      scopeLevel: "user",
+      portlets: [
+        {
+          instanceId: "analytics",
+          kind: "analytics",
+          version: "1.0.0",
+          slot: "fixed",
+          config: embed(
+            queryAnalysis(
+              { measures: ["agent_runs.count", "teams.count"] },
+              "kpiNumber",
+            ),
+          ),
+        },
+      ],
+    };
+    const res = validateDashboardConfigV12(v12, { getPortletKind: getPortletKindDescriptor });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    if (!res.ok) return;
+    const p = res.config.portlets[0];
+    const errs = validatePortletConfig(p.kind, p.version, {
+      config: p.config,
+      inputs: p.inputs,
+      outputs: p.outputs,
+    });
+    expect(errs).toHaveLength(1);
+    expect(errs[0].code).toBe("port_analytics_cross_cube_query");
+  });
+});

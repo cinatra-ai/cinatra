@@ -37,14 +37,16 @@ import type { OboCeilingChain, OboCeilingTier } from "@cinatra-ai/mcp-server/obo
 // ratchet). Exported for unit tests.
 // ---------------------------------------------------------------------------
 
-/** The cannot-express W4 surface classes (epic #1049 surface class 3). */
+/** The cannot-express W4 surface classes (epic #1049 surface class 3), plus
+ *  the P5.5 assistant surface (cinatra#1037) which joined the class at birth. */
 export type CannotExpressSurface =
   | "connector"
   | "trigger"
   | "metrics"
   | "permissions"
   | "notifications"
-  | "dashboard_cube";
+  | "dashboard_cube"
+  | "assistant";
 
 // The standalone trigger-config primitives (the trigger module's own tools).
 // The sibling agent_run_trigger_* primitives share resourceType "trigger" but
@@ -60,11 +62,25 @@ const TRIGGER_CONFIG_PRIMITIVES: ReadonlySet<string> = new Set([
 // "dashboard" does not drag in the dashboards_* proper tools (ad-hoc wave W3).
 const DASHBOARD_CUBE_PREFIX = "dashboards_cube_";
 
+// The generalized assistant MCP surface (cinatra#1037 P5.5). assistant_threads
+// rows carry ORG scoping only (no team/project/workspace column), and a sent
+// turn runs with the target user's FULL server-resolved context — so the
+// surface structurally cannot honor a sub-organization ceiling. Matched by
+// NAME because the classification resourceType "object" is shared with the
+// objects_* kernel wave (W2), which resolves real ownership and must NOT be
+// captured. The module's resolveCaller() refuses the same callers as
+// defense-in-depth.
+const ASSISTANT_MCP_PRIMITIVES: ReadonlySet<string> = new Set([
+  "assistant_send",
+  "assistant_thread_list",
+  "assistant_thread_get",
+]);
+
 /**
  * Which cannot-express W4 surface a primitive belongs to, or `null` when it is
  * not a W4 cannot-express surface. The five resource types matched by type are
- * EXCLUSIVELY W4 surfaces; the trigger/dashboard members are matched by name
- * because those resource types are shared with sibling waves.
+ * EXCLUSIVELY W4 surfaces; the trigger/dashboard/assistant members are matched
+ * by name because those resource types are shared with sibling waves.
  */
 export function cannotExpressSurface(args: {
   primitiveName: string;
@@ -77,6 +93,7 @@ export function cannotExpressSurface(args: {
   if (resourceType === "notification") return "notifications";
   if (TRIGGER_CONFIG_PRIMITIVES.has(primitiveName)) return "trigger";
   if (primitiveName.startsWith(DASHBOARD_CUBE_PREFIX)) return "dashboard_cube";
+  if (ASSISTANT_MCP_PRIMITIVES.has(primitiveName)) return "assistant";
   return null;
 }
 
@@ -245,7 +262,19 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
   });
   if (cannotExpress && req.ctx?.oboCeiling) {
     const unhonoredCeilingTiers = oboCeilingNonOrgTiers(req.ctx.oboCeiling);
-    if (unhonoredCeilingTiers.length > 0) {
+    // Most cannot-express surfaces deny only a NARROWER-than-org ceiling — an
+    // org-only ceiling is honored elsewhere (e.g. the dashboard-cube pins
+    // `accessibleOrgIds` to the run org). The ASSISTANT surface is stricter: a
+    // sent turn runs with the target's FULL server-resolved context AND drives a
+    // NESTED turn under a fresh ceiling-less delegation token (the runtime mints
+    // `delegation:"chat"`), so it can honor NEITHER a sub-org bound NOR the org
+    // floor itself. It therefore denies on the ceiling's PRESENCE — agent-run
+    // OBO delegations do not use this surface until the ceiling can be expressed
+    // AND propagated (cinatra#1037; the module's resolveCaller() enforces the
+    // same, handler-side defense-in-depth).
+    const denyForSurface =
+      cannotExpress === "assistant" ? true : unhonoredCeilingTiers.length > 0;
+    if (denyForSurface) {
       await audit(req, classification.resourceType, "denied", {
         mode: "enforced",
         boundary: "mcp_handler_dispatch",
