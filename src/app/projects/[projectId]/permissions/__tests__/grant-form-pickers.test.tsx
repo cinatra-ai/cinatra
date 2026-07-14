@@ -112,6 +112,21 @@ describe("grant form source contract (cinatra#1505 AC)", () => {
     expect(SOURCE).toMatch(/Already granted — \{fixedRowGrantedRole\}/);
   });
 
+  it("the session-grant echo is symmetric: revoke removes the matching entry", () => {
+    // handleRevoke must not leave a grant→revoke principal marked "already
+    // granted" until reload (append-only echo bug).
+    expect(SOURCE).toMatch(
+      /setSessionGrants\(\(prev\) => withoutGrantedPrincipal\(prev, lvl, pid\)\)/,
+    );
+  });
+
+  it("selected-user state keeps the Label association: the Change button carries principal-id", () => {
+    // When a user is picked the combobox unmounts; the interactive element in
+    // the selected state must carry id="principal-id" so the field Label
+    // still points at something (a11y).
+    expect(SOURCE).toMatch(/<Button\s+id="principal-id"[\s\S]{0,400}?Change\s*<\/Button>/);
+  });
+
   it("the workspace fixed row keeps the sentinel value but never renders the raw id", () => {
     expect(SOURCE).toMatch(/WORKSPACE_PRINCIPAL_ID/);
     expect(SOURCE).toMatch(/Whole workspace/);

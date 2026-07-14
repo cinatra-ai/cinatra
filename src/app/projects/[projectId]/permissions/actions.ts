@@ -503,7 +503,13 @@ async function assertProjectGrantAuthority(projectId: string): Promise<{
       message: "Project admin required.",
     });
 
-  const session = await requireAuthSession();
+  // `requireAuthSession` throws Next's redirect sentinel when there is no
+  // session; the candidate actions' generic try/catch must never swallow it
+  // into an `{ok:false}` payload. Adopt the `searchWorkspaceUsersForProject`
+  // precedent: coerce a missing session to null here and fail closed as the
+  // same typed AuthzError as every other authority failure.
+  const session = await requireAuthSession().catch(() => null);
+  if (!session) throw forbidden();
   const userId = session.user.id;
 
   const project = projectId ? await readProjectById(projectId) : null;

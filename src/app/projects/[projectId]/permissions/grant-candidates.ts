@@ -75,3 +75,20 @@ export function grantedPrincipalIds(
 ): string[] {
   return rows.filter((r) => r.principalLevel === level).map((r) => r.principalId);
 }
+
+/**
+ * Drop a principal's rows after a successful revoke — the session-grant echo
+ * must not be append-only, or a grant→revoke sequence in one session would
+ * leave the principal marked "Already granted" (excluded/disabled) until a
+ * reload. Pure; returns the same array when nothing matched.
+ */
+export function withoutGrantedPrincipal<T extends GrantedPrincipalRef>(
+  rows: readonly T[],
+  level: GrantPrincipalLevel,
+  principalId: string,
+): T[] {
+  const kept = rows.filter(
+    (r) => !(r.principalLevel === level && r.principalId === principalId),
+  );
+  return kept.length === rows.length ? (rows as T[]) : kept;
+}

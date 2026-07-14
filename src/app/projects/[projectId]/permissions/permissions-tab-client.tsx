@@ -64,6 +64,7 @@ import {
   WORKSPACE_PRINCIPAL_ID,
   alreadyGrantedRole,
   grantedPrincipalIds,
+  withoutGrantedPrincipal,
   type GrantPrincipalLevel,
 } from "./grant-candidates";
 
@@ -413,8 +414,15 @@ function ProjectAccessSection({ projectId, canEdit, rows }: ProjectAccessSection
   const handleRevoke = (lvl: GrantPrincipalLevel, pid: string) => {
     startTransition(async () => {
       const r = await revokeProjectAccessAction(projectId, lvl, pid);
-      if (r.ok) toast.success(`Revoked ${lvl}:${pid}.`);
-      else toast.error(`Could not revoke access: ${r.error}`);
+      if (r.ok) {
+        toast.success(`Revoked ${lvl}:${pid}.`);
+        // Keep the session echo symmetric: a revoked principal must become
+        // grantable again immediately (not stay excluded/disabled until a
+        // reload).
+        setSessionGrants((prev) => withoutGrantedPrincipal(prev, lvl, pid));
+      } else {
+        toast.error(`Could not revoke access: ${r.error}`);
+      }
     });
   };
 
@@ -444,7 +452,10 @@ function ProjectAccessSection({ projectId, canEdit, rows }: ProjectAccessSection
             </span>
           ) : null}
         </span>
+        {/* The interactive element in the selected state carries the
+            `principal-id` id so the field Label stays associated (a11y). */}
         <Button
+          id="principal-id"
           type="button"
           variant="link"
           size="xs"

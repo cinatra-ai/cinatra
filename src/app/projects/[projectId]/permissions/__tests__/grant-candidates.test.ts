@@ -17,6 +17,7 @@ import {
   alreadyGrantedRole,
   grantedPrincipalIds,
   toIlikePattern,
+  withoutGrantedPrincipal,
   type GrantedPrincipalRef,
 } from "../grant-candidates";
 
@@ -95,5 +96,30 @@ describe("already-granted marking/exclusion (§4.2 exclude-or-mark)", () => {
       "user-reader",
     ]);
     expect(grantedPrincipalIds(rows, "organization")).toEqual([]);
+  });
+
+  it("grant → revoke in one session makes the principal grantable again", () => {
+    // Grant: the session echo marks the principal as already granted…
+    let echo: GrantedPrincipalRef[] = [];
+    echo = [...echo, { principalLevel: "user", principalId: "user-new", role: "read" }];
+    expect(alreadyGrantedRole(echo, "user", "user-new")).toBe("read");
+    expect(grantedPrincipalIds(echo, "user")).toContain("user-new");
+
+    // …revoke: the echo entry is removed (NOT append-only), so the principal
+    // is grantable again immediately.
+    echo = withoutGrantedPrincipal(echo, "user", "user-new");
+    expect(alreadyGrantedRole(echo, "user", "user-new")).toBeNull();
+    expect(grantedPrincipalIds(echo, "user")).not.toContain("user-new");
+  });
+
+  it("withoutGrantedPrincipal only drops the exact level+id match", () => {
+    const after = withoutGrantedPrincipal(rows, "user", "user-reader");
+    expect(alreadyGrantedRole(after, "user", "user-reader")).toBeNull();
+    // Other levels / other users untouched.
+    expect(alreadyGrantedRole(after, "user", "user-owner")).toBe("owner");
+    expect(alreadyGrantedRole(after, "team", "team-1")).toBe("write");
+    // Level must match: revoking a team id at user level is a no-op — and a
+    // no-op returns the SAME array (no needless state write).
+    expect(withoutGrantedPrincipal(rows, "user", "team-1")).toBe(rows);
   });
 });

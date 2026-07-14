@@ -194,6 +194,26 @@ describe("authority gate (assertProjectGrantAuthority)", () => {
     expect(listTeamsForOrg).not.toHaveBeenCalled();
   });
 
+  it("a missing session fails closed as forbidden — the redirect sentinel is never swallowed into the payload", async () => {
+    // `requireAuthSession` throws Next's redirect sentinel when unauthenticated;
+    // the searchWorkspaceUsersForProject precedent coerces it to a typed
+    // failure instead of leaking `err.message` through the generic catch.
+    requireAuthSession.mockRejectedValue(new Error("NEXT_REDIRECT"));
+    expect(await searchProjectGrantUserCandidates(PROJECT_ID, "a")).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(await listProjectGrantTeamCandidates(PROJECT_ID)).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(await readProjectGrantOrgCandidate(PROJECT_ID)).toEqual({
+      ok: false,
+      error: "forbidden",
+    });
+    expect(recordedQueries).toHaveLength(0);
+  });
+
   it("a missing project raises the IDENTICAL forbidden — no existence oracle", async () => {
     readProjectById.mockResolvedValue(null);
     primeProjectAdmin();
