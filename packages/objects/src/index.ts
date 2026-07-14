@@ -130,7 +130,21 @@ export { createDeterministicObjectsClient } from "./mcp/client/deterministic-cli
 export { objectsClient } from "./objects-client";
 export { createSessionObjectsClient } from "./objects-client";
 export { createObjectsModule } from "./integration/module";
-export { registerAllObjectTypes } from "./integration/register-types";
+// Agent-memory concept envelope (cinatra#1376, epic #1373): the static type
+// id, the enforced envelope schema, and the deterministic external-identity
+// derivation — consumed by the memory sync path (epic S5) and tests. These
+// live inline in register-types.ts (route-graph budget: no new sibling
+// module on the locked routes).
+export {
+  registerAllObjectTypes,
+  registerMemoryConceptType,
+  MEMORY_CONCEPT_TYPE_ID,
+  MEMORY_CONCEPT_BODY_MAX_BYTES,
+  computeMemoryConceptExternalId,
+  isValidMemoryConceptId,
+  memoryConceptEnvelopeSchema,
+} from "./integration/register-types";
+export type { MemoryConceptEnvelope } from "./integration/register-types";
 // Per-type CRUD policy + agent-output dispatcher. The dispatcher is PURE
 // (decideDispatch); the in-process wrapper that performs the lookup +
 // canonical write lives in app code (`src/lib/objects-automap.ts`) so this

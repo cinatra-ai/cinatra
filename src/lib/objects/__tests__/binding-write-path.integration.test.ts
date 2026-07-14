@@ -23,6 +23,9 @@ import { artifactClaimSchemaQueries } from "@/lib/artifact-claim-schema";
 
 import {
   activateArtifactTypeClaim,
+  beginArtifactTypeClaimRetirement,
+  finalizeArtifactTypeClaimRetirement,
+  readArtifactTypeClaimsForExtension,
   reserveArtifactTypeClaim,
 } from "@/lib/objects/artifact-claim-store";
 import {
@@ -407,6 +410,68 @@ describe("cinatra#1429 — binding write path (real DB)", () => {
     // Binding survived.
     expect(readActiveBinding(orgId, artifactId)?.extension).toBe(pkg);
     expect(activeBindingCount(orgId, artifactId)).toBe(1);
+  });
+
+  it("same-extension classic supersede (cinatra#1493): a PRE-EXISTING live classic row from the winner extension is archived and the binding inserts in one tx — no sa_active_unique_idx throw", () => {
+    const orgId = nextId("org");
+    const type = `@vendor/${nextId("sup")}:thing`;
+    const artifactId = nextId("obj");
+    const pkg = "@vendor/sup-artifact";
+    const otherPkg = "@vendor/bystander-artifact";
+    seedObject({ id: artifactId, type, orgId });
+    // A pre-claims classic identity row from the SOON-TO-BE winner extension —
+    // the exact state a first claim activation (or an uninstall-replay's
+    // replacement classic) leaves on disk. Plus a bystander classic from a
+    // DIFFERENT extension that must survive untouched.
+    const classicId = nextId("sa");
+    sql(
+      `INSERT INTO "${S()}"."semantic_assertion" (id, org_id, artifact_id, extension, asserted_by, eligibility)
+       VALUES ($1,$2,$3,$4,'agent','eligible')`,
+      [classicId, orgId, artifactId, pkg],
+    );
+    const bystanderId = nextId("sa");
+    sql(
+      `INSERT INTO "${S()}"."semantic_assertion" (id, org_id, artifact_id, extension, asserted_by, eligibility)
+       VALUES ($1,$2,$3,$4,'agent','eligible')`,
+      [bystanderId, orgId, artifactId, otherPkg],
+    );
+    seedDedicatedClaim({ scope: `org:${orgId}`, type, pkg });
+
+    // Without the supersede clause this THROWS duplicate-key on
+    // sa_active_unique_idx and the reconcile-queue row would park 'failed'.
+    const res = reconcileArtifactBinding({ orgId, artifactId });
+    expect(res.inserted).toBe(1);
+    expect(res.archived).toBe(1); // the winner's classic row — nothing else
+    expect(readActiveBinding(orgId, artifactId)?.extension).toBe(pkg);
+
+    // The winner's classic row is archived; the bystander classic is untouched.
+    const rows = sql(
+      `SELECT id, eligibility FROM "${S()}"."semantic_assertion"
+       WHERE org_id=$1 AND artifact_id=$2 AND assertion_basis='classic'`,
+      [orgId, artifactId],
+    ).rows as Array<{ id: string; eligibility: string }>;
+    expect(rows.find((r) => r.id === classicId)?.eligibility).toBe("archived");
+    expect(rows.find((r) => r.id === bystanderId)?.eligibility).toBe("eligible");
+
+    // Idempotent re-run: nothing further changes.
+    const again = reconcileArtifactBinding({ orgId, artifactId });
+    expect(again).toEqual({ archived: 0, inserted: 0, changed: false });
+
+    // No-winner regression guard: retiring the claim archives the binding but
+    // NEVER touches classic rows (the supersede clause is winner-scoped).
+    const claims = readArtifactTypeClaimsForExtension(`org:${orgId}`, pkg);
+    for (const c of claims) {
+      beginArtifactTypeClaimRetirement({ claimId: c.id, actor: "system" });
+      finalizeArtifactTypeClaimRetirement({ claimId: c.id, actor: "system" });
+    }
+    const after = reconcileArtifactBinding({ orgId, artifactId });
+    expect(after.archived).toBe(1); // the binding only
+    expect(readActiveBinding(orgId, artifactId)).toBeNull();
+    const bystander = sql(
+      `SELECT eligibility FROM "${S()}"."semantic_assertion" WHERE id = $1`,
+      [bystanderId],
+    ).rows[0] as { eligibility: string };
+    expect(bystander.eligibility).toBe("eligible");
   });
 
   it("AC-4a: enforcement — an invalid payload for an activated type is rejected", () => {

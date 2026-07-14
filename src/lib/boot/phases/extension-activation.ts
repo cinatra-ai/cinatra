@@ -162,11 +162,35 @@ export function extensionActivationPhases(
         const { rescanArtifactBridgeFromStore } = await import(
           "@/lib/extension-artifact-bridge-rescan"
         );
-        const { registered } = await rescanArtifactBridgeFromStore();
+        const { registered, registeredRecords } = await rescanArtifactBridgeFromStore();
         if (registered.length) {
           console.info(
             `[boot] artifact-bridge rescan: registered ${registered.length} runtime artifact type(s) — ` +
               registered.map((p) => p.replace("@cinatra-ai/", "")).join(", "),
+          );
+        }
+        // CLAIM-ACTIVATION BACKSTOP (cinatra#1493): the install-anchor hook is
+        // NON-THROWING — a claim activation that failed/raced at install time
+        // ended as a console.warn with nothing re-driving it. Re-fire the
+        // idempotent hook here for every registered install-active artifact
+        // package (validators are in the registry from the rescan above, so
+        // the fail-closed activation gate can resolve them): a healthy install
+        // no-ops, a failed one converges. Best-effort — never aborts boot.
+        try {
+          const { runInstallAnchorClaimBackstop } = await import(
+            "@/lib/objects/artifact-claim-install-anchor"
+          );
+          const backstop = await runInstallAnchorClaimBackstop(registeredRecords);
+          if (backstop.converged || backstop.failed) {
+            console.info(
+              `[boot] claim-activation backstop: converged=${backstop.converged} ` +
+                `failed=${backstop.failed} skipped=${backstop.skipped}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            "[boot] claim-activation backstop threw (non-fatal):",
+            err instanceof Error ? err.message : err,
           );
         }
       },

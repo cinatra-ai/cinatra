@@ -74,15 +74,22 @@ describe("OBJECT_TYPE_FAMILY locked set", () => {
 
   it("maps every asset type to the asset family", () => {
     // Legacy @cinatra-ai/asset-blog:* types are excluded; the asset family is
-    // exactly the canonical @cinatra-ai/assets:* model written by the current
-    // source of truth.
+    // the canonical @cinatra-ai/assets:* model written by the current source
+    // of truth plus the agent-memory concept type (cinatra#1376 — content
+    // category, asset UI-family).
     expect(objectTypeIdsForFamily("asset").sort()).toEqual(
       [
         "@cinatra-ai/assets:blog-project",
         "@cinatra-ai/assets:blog-idea",
         "@cinatra-ai/assets:blog-post",
+        "@cinatra-ai/memory:concept",
       ].sort(),
     );
+  });
+
+  it("maps the memory concept type to the asset family (cinatra#1376)", () => {
+    expect(uiFamilyForTypeId("@cinatra-ai/memory:concept")).toBe("asset");
+    expect(isKnownObjectTypeId("@cinatra-ai/memory:concept")).toBe(true);
   });
 
   it("isKnownObjectTypeId narrows correctly", () => {
