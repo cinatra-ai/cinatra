@@ -2,6 +2,7 @@ import "server-only";
 
 import { agentCreationRequestsContract } from "./agent-creation-requests.contract";
 import { hostPortGrantsContract } from "./host-port-grants.contract";
+import { dynamicTypeArtifactVisibilityContract } from "./dynamic-type-artifact-visibility.contract";
 import { workflowLegacyPassthroughContract } from "./workflow-legacy-passthrough.contract";
 import { marketplaceSubmissionModerationContract } from "./marketplace-submission-moderation.contract";
 import { marketplaceVendorAppModerationContract } from "./marketplace-vendor-app-moderation.contract";
@@ -34,6 +35,7 @@ import type { ApprovalNavSource, ApprovalViewer } from "./types";
 export const approvalNavSourceRegistry: ApprovalNavSource[] = [
   agentCreationRequestsContract,
   hostPortGrantsContract,
+  dynamicTypeArtifactVisibilityContract,
   workflowLegacyPassthroughContract,
   marketplaceSubmissionModerationContract,
   marketplaceVendorAppModerationContract,

@@ -21,7 +21,7 @@ The package never imports `@/lib/database`, `@/lib/postgres-sync`, `@/lib/auth-s
 - `src/app/api/notifications/stream/route.ts` (bypasses the facade)
 - `src/lib/background-jobs.ts` (top-level `@/lib/notifications-host` import -- the worker path from `instrumentation.node.ts` -- **NOT** a package import; it's a host module that side-effect-registers adapters)
 
-`recipient-policy.ts` is **host-schema-aware by design** (it knows Better-Auth `public."user"` / `"teamMember"` / `"member"` + `{schema}."project_co_owners"` schemas). The SQL strings stay inside the package; the DB *access primitives* are injected. Don't introduce a generic PostgresPort that hides this coupling -- it was an explicit BLOCKER.
+`recipient-policy.ts` is **host-schema-aware by design** (it knows Better-Auth `public."user"` / `"teamMember"` / `"member"` schemas). The SQL strings stay inside the package; the DB *access primitives* are injected. Don't introduce a generic PostgresPort that hides this coupling -- it was an explicit BLOCKER.
 
 ## Boot-graph rules (load-bearing -- break these and dev boots ESM/TDZ)
 

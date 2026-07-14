@@ -87,6 +87,11 @@ describe("rescanArtifactBridgeFromStore (cinatra#661)", () => {
 
     const res = await rescanArtifactBridgeFromStore({ storeRoot });
     expect(res.registered).toEqual(["@cinatra-ai/store-thing-artifact"]);
+    // The boot claim-activation backstop (cinatra#1493) consumes the registered
+    // package WITH its anchor-vetted store dir.
+    expect(res.registeredRecords).toHaveLength(1);
+    expect(res.registeredRecords[0].packageName).toBe("@cinatra-ai/store-thing-artifact");
+    expect(res.registeredRecords[0].storeDir).toContain("store-thing-artifact");
 
     const typeId = "@cinatra-ai/store-thing-artifact:artifact";
     expect(objectTypeRegistry.resolve(typeId)).not.toBeNull();

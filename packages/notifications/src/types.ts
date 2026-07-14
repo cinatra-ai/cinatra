@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Notifications — shared types for the Postgres-backed layer.
 //
-// Recipients are resolved at write time. Topic/admin/team/org/project
+// Recipients are resolved at write time. Topic/admin/team/org
 // recipients fan out to per-user rows in `cinatra.notifications`. There is
 // no nullable topic row and no join table — every notification belongs to
 // exactly one user.
@@ -20,7 +20,6 @@ export type NotificationRecipient =
   | { kind: "user"; userId: string }
   | { kind: "team"; teamId: string }
   | { kind: "organization"; organizationId: string }
-  | { kind: "project"; projectId: string }
   | { kind: "admins" };
 
 export type NotificationInput = {

@@ -3,7 +3,8 @@
  *
  * The shared MCP boundary denies (fail-closed, named) the surfaces that resolve
  * no target ownership (connectors, triggers, permissions, metrics, notifications,
- * dashboard cubes) when an AGENT-RUN OBO token carries a NON-ORG scope ceiling —
+ * dashboard cubes, and the P5.5 assistant surface — org-scoped store only)
+ * when an AGENT-RUN OBO token carries a NON-ORG scope ceiling —
  * BEFORE the carve-out / unenforced-skip / platform-admin short-circuits, so a
  * platform-admin invoker can never nullify the ceiling for a delegated run.
  * Non-agent-run callers (no `oboCeiling` on the frame) and sibling-wave
@@ -66,6 +67,9 @@ describe("enforceMcpBoundary — W4 cannot-express OBO gate", () => {
     ["chat_mentions_poll", "notifications"],
     ["dashboards_cube_load", "dashboard_cube"],
     ["dashboards_cube_discover", "dashboard_cube"],
+    ["assistant_send", "assistant"],
+    ["assistant_thread_list", "assistant"],
+    ["assistant_thread_get", "assistant"],
   ];
 
   it.each(surfaceCases)(
@@ -136,6 +140,25 @@ describe("enforceMcpBoundary — W4 cannot-express OBO gate", () => {
       delegatedRestricted: false,
     });
     expect(d.allowed).toBe(true);
+  });
+
+  it("DENIES the assistant surface on an ORG-ONLY ceiling too (it can honor neither the sub-org bound nor the org floor)", async () => {
+    for (const primitiveName of ["assistant_send", "assistant_thread_list", "assistant_thread_get"]) {
+      const d = await enforceMcpBoundary({
+        primitiveName,
+        ctx: oboAdminCtx(orgOnlyCeiling()),
+        delegatedRestricted: false,
+      });
+      expect(d).toMatchObject({
+        allowed: false,
+        reason: "agent_run_obo_scope_unsupported:assistant",
+        shouldBlock: true,
+      });
+    }
+    // The platform_admin "via" allow-audit must NOT have fired.
+    expect(auditSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ via: "platform_admin" }) }),
+    );
   });
 
   it("does NOT capture agent_run_trigger_* (W2 run-resolvable, same resourceType)", async () => {
@@ -218,6 +241,12 @@ describe("cannotExpressSurface", () => {
       "dashboards_cube_chart",
     ]) {
       expect(cannotExpressSurface({ primitiveName, resourceType: "dashboard" })).toBe("dashboard_cube");
+    }
+  });
+
+  it("maps the assistant MCP surface (by name; resourceType 'object' is shared with objects_*)", () => {
+    for (const primitiveName of ["assistant_send", "assistant_thread_list", "assistant_thread_get"]) {
+      expect(cannotExpressSurface({ primitiveName, resourceType: "object" })).toBe("assistant");
     }
   });
 

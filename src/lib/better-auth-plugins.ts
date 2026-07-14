@@ -82,6 +82,30 @@ export type CinatraOrganizationPluginOptions = {
   allowUserToCreateOrganization?: (
     user: Record<string, unknown>,
   ) => Promise<boolean> | boolean;
+  /**
+   * Runtime-only Better Auth organization lifecycle hooks. BEHAVIORAL, not
+   * schema-bearing: the bootstrap migration never creates organizations, so it
+   * omits them, and they do not affect `getSchema()` (the drift-guard test).
+   * Threaded through the shared factory so `organization()` keeps exactly one
+   * construction site. cinatra#1494 injects `beforeCreateTeam` here to give
+   * Better Auth's default team a slug (`public.team.slug` is NOT NULL).
+   */
+  organizationHooks?: NonNullable<
+    Parameters<typeof organization>[0]
+  >["organizationHooks"];
+  /**
+   * Runtime-only Better Auth invitation-email callback. BEHAVIORAL, not
+   * schema-bearing: Better Auth invokes it after creating an `invitation` row,
+   * and it does not affect `getSchema()` (the drift-guard test), so the
+   * bootstrap migration omits it. cinatra#1565 injects it so org-member
+   * invitations actually dispatch the accept link (Better Auth ships NO default
+   * sender — without this the row is created but nothing is sent). Threaded
+   * through the shared factory so `organization()` keeps exactly one
+   * construction site.
+   */
+  sendInvitationEmail?: NonNullable<
+    Parameters<typeof organization>[0]
+  >["sendInvitationEmail"];
 };
 
 /**
@@ -110,6 +134,12 @@ export function buildCinatraOrganizationPlugin(
     ...cinatraOrganizationOptions,
     ...(opts.allowUserToCreateOrganization
       ? { allowUserToCreateOrganization: opts.allowUserToCreateOrganization }
+      : {}),
+    ...(opts.organizationHooks
+      ? { organizationHooks: opts.organizationHooks }
+      : {}),
+    ...(opts.sendInvitationEmail
+      ? { sendInvitationEmail: opts.sendInvitationEmail }
       : {}),
   });
 }
