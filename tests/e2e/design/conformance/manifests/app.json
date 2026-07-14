@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app.html",
-  "contentHash": "sha256:1b7db4a57e534124f96ac7f8ae29805720c884196cb19d64905102978c8ed193",
+  "contentHash": "sha256:d4f6172a42050ecc1a011460f1d45c56796879c678ff4ff9747e59b117280c43",
   "surfaces": [
     {
       "id": "status-pills",
@@ -14,56 +14,6 @@
       "fields": [],
       "actions": [],
       "states": []
-    },
-    {
-      "id": "approvals-inbox",
-      "fields": [],
-      "actions": [
-        {
-          "action": "approve",
-          "outcome": "approved"
-        },
-        {
-          "action": "reject",
-          "outcome": "rejected"
-        }
-      ],
-      "states": [
-        "empty",
-        "error"
-      ]
-    },
-    {
-      "id": "approvals-your-requests",
-      "fields": [],
-      "actions": [
-        {
-          "action": "approve",
-          "outcome": "approved"
-        },
-        {
-          "action": "withdraw",
-          "outcome": "withdrawn"
-        }
-      ],
-      "states": [
-        "empty",
-        "error"
-      ]
-    },
-    {
-      "id": "approvals-marketplace-states",
-      "fields": [],
-      "actions": [
-        {
-          "action": "retry",
-          "outcome": "reloaded"
-        }
-      ],
-      "states": [
-        "empty",
-        "error"
-      ]
     }
   ]
 }
