@@ -582,6 +582,188 @@ const EXTENSION_DETAIL_MODAL_DRIVER: SurfaceDriver = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Approvals + Scheduling drivers (cinatra#1043) — the surfaces the app manifest
+// gained at spec 4d7b3505. Mounted on the base conformance harness by
+// src/app/design-fixtures/conformance/approvals-scheduling-fixtures.tsx. Their
+// real screens drive every decision through a server action that needs an
+// authenticated session + seeded rows (unreachable on the standalone harness,
+// which is why the LIVE-render conformance was proven by hand); the harness
+// models each surface with the REAL design-system primitives it is built from
+// and exercises each manifest action to its specified outcome (asserted on the
+// harness `data-outcome` instrumentation, mirrored by a real StatusPill).
+// ---------------------------------------------------------------------------
+
+/** The populated (interactive) root of an approvals/scheduling harness surface. */
+function harnessRoot(id: string): (page: Page) => Locator {
+  return (page) => page.locator(`[data-surface-id="${id}"][data-variant="populated"]`);
+}
+
+/** Assert a state variant's real design-system treatment renders. */
+function variantSlotState(id: string, variant: string, slot: string): StateAssert {
+  return async (page) => {
+    await expect(
+      page.locator(`[data-surface-id="${id}"][data-variant="${variant}"] [data-slot="${slot}"]`),
+    ).toBeVisible();
+  };
+}
+
+/**
+ * Action driver: click `button` (retrying through hydration), optionally clear a
+ * one-step confirm (`confirm`), then assert the surface root reaches
+ * `data-outcome=outcome` and — when the outcome maps to a lifecycle status — the
+ * matching real StatusPill renders.
+ */
+function outcomeAction(
+  outcome: string,
+  button: string,
+  opts?: { confirm?: string; pillStatus?: string; fill?: { label: string; value: string } },
+): { outcome: string; run: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    outcome,
+    run: async (_page, root) => {
+      if (opts?.confirm) {
+        await clickUntil(root.getByRole("button", { name: button, exact: true }), async () => {
+          await expect(
+            root.getByRole("button", { name: opts.confirm!, exact: true }),
+          ).toBeVisible({ timeout: 2_000 });
+        });
+        // A required reason field (mirrors the real reject ceremony) blocks the
+        // confirm submit until filled — fill it before confirming.
+        if (opts.fill) {
+          await root.getByLabel(opts.fill.label).fill(opts.fill.value);
+        }
+        await clickUntil(root.getByRole("button", { name: opts.confirm, exact: true }), async () => {
+          await expect(root).toHaveAttribute("data-outcome", outcome, { timeout: 2_000 });
+        });
+      } else {
+        await clickUntil(root.getByRole("button", { name: button, exact: true }), async () => {
+          await expect(root).toHaveAttribute("data-outcome", outcome, { timeout: 2_000 });
+        });
+      }
+      if (opts?.pillStatus) {
+        await expect(
+          root.locator(`[data-slot="status-pill"][data-status="${opts.pillStatus}"]`),
+        ).toBeVisible();
+      }
+    },
+  };
+}
+
+/** Assert a named affordance button renders on the populated root. */
+function presentButton(name: string): (page: Page, root: Locator) => Promise<void> {
+  return async (_page, root) => {
+    await expect(root.getByRole("button", { name, exact: true })).toBeVisible();
+  };
+}
+
+const APPROVALS_INBOX_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("approvals-inbox"),
+  present: presentButton("Approve"),
+  fields: {},
+  actions: {
+    approve: outcomeAction("approved", "Approve", { pillStatus: "approved" }),
+    reject: outcomeAction("rejected", "Reject", {
+      confirm: "Confirm rejection",
+      pillStatus: "declined",
+      fill: { label: "Reason for rejection", value: "Not aligned with policy." },
+    }),
+  },
+  states: {
+    empty: variantSlotState("approvals-inbox", "empty", "empty"),
+    error: variantSlotState("approvals-inbox", "error", "alert"),
+  },
+};
+
+const APPROVALS_YOUR_REQUESTS_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("approvals-your-requests"),
+  present: presentButton("Approve"),
+  fields: {},
+  actions: {
+    approve: outcomeAction("approved", "Approve", { pillStatus: "approved" }),
+    withdraw: outcomeAction("withdrawn", "Withdraw", { pillStatus: "archived" }),
+  },
+  states: {
+    empty: variantSlotState("approvals-your-requests", "empty", "empty"),
+    error: variantSlotState("approvals-your-requests", "error", "alert"),
+  },
+};
+
+const APPROVALS_MARKETPLACE_STATES_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("approvals-marketplace-states"),
+  present: presentButton("Try again"),
+  fields: {},
+  actions: {
+    // Retry re-derives the group — the real MarketplaceNotConnectedGroup (a
+    // "Connect registry" CTA) returns as the reloaded content.
+    retry: {
+      outcome: "reloaded",
+      run: async (_page, root) => {
+        await clickUntil(root.getByRole("button", { name: "Try again", exact: true }), async () => {
+          await expect(root).toHaveAttribute("data-outcome", "reloaded", { timeout: 2_000 });
+        });
+        await expect(root.getByRole("link", { name: "Connect registry" })).toBeVisible();
+      },
+    },
+  },
+  states: {
+    // Connectivity state (a): the REAL group-level "Marketplace not connected"
+    // Empty + Connect registry CTA.
+    empty: async (page) => {
+      const empty = page.locator(
+        '[data-surface-id="approvals-marketplace-states"][data-variant="empty"]',
+      );
+      await expect(empty.locator('[data-slot="empty"]')).toBeVisible();
+      await expect(empty.getByText("Marketplace not connected")).toBeVisible();
+      await expect(empty.getByRole("link", { name: "Connect registry" })).toBeVisible();
+    },
+    error: variantSlotState("approvals-marketplace-states", "error", "alert"),
+  },
+};
+
+const SCHEDULING_STEP_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("scheduling-step"),
+  present: presentButton("Schedule run"),
+  fields: {},
+  actions: {
+    schedule: outcomeAction("armed", "Schedule run", { pillStatus: "scheduled" }),
+  },
+  states: {
+    error: variantSlotState("scheduling-step", "error", "alert"),
+    loading: async (page) => {
+      await expect(
+        page.locator(
+          '[data-surface-id="scheduling-step"][data-variant="loading"] [data-testid="scheduling-step-loading"]',
+        ),
+      ).toBeVisible();
+    },
+  },
+};
+
+const SCHEDULING_TRIGGER_TAB_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("scheduling-trigger-tab"),
+  present: presentButton("Cancel trigger"),
+  fields: {},
+  actions: {
+    cancel: outcomeAction("cancelled", "Cancel trigger", {
+      confirm: "Confirm cancel",
+      pillStatus: "archived",
+    }),
+    release: outcomeAction("released", "Release now", {
+      confirm: "Confirm release",
+      pillStatus: "running",
+    }),
+  },
+  states: {
+    error: variantSlotState("scheduling-trigger-tab", "error", "alert"),
+  },
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "status-pills": STATUS_PILLS_DRIVER,
@@ -592,6 +774,11 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "connector-grid": CONNECTOR_GRID_DRIVER,
   "connector-connection-filter": CONNECTOR_CONNECTION_FILTER_DRIVER,
   "extension-detail-modal": EXTENSION_DETAIL_MODAL_DRIVER,
+  "approvals-inbox": APPROVALS_INBOX_DRIVER,
+  "approvals-your-requests": APPROVALS_YOUR_REQUESTS_DRIVER,
+  "approvals-marketplace-states": APPROVALS_MARKETPLACE_STATES_DRIVER,
+  "scheduling-step": SCHEDULING_STEP_DRIVER,
+  "scheduling-trigger-tab": SCHEDULING_TRIGGER_TAB_DRIVER,
   ...Object.fromEntries(
     CONFORMANCE_CARD_FIXTURES.map((fixture) => [fixture.surfaceId, cardDriver(fixture)]),
   ),
