@@ -46,10 +46,17 @@ export function UndoActionChip({ runId }: UndoActionChipProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
+  // §VI: the chip renders ONLY when the actor is eligible (the action returns a
+  // changeSetId only for an eligible actor); an ineligible actor renders
+  // nothing — the `not-eligible` conformance state is the affordance's absence.
   if (!changeSetId) return null;
 
   return (
-    <div className="mt-1">
+    <div
+      className="mt-1"
+      data-conformance-id="artifacts-undo-entry"
+      data-state="eligible"
+    >
       <Button asChild variant="outline" size="xs">
         <Link href={undoDeepLink(changeSetId)}>
           <Undo2 data-icon="inline-start" />

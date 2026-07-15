@@ -21,6 +21,7 @@
     "./install-target-picker": "./src/install-target-picker.ts",
     "./llm-provider-policy": "./src/llm-provider-policy.ts",
     "./store": "./src/store.ts",
+    "./run-wait-notifier": "./src/run-wait-notifier.ts",
     "./module": "./src/integration/module.ts",
     "./mcp-handlers": "./src/mcp/handlers.ts",
     "./screens": "./src/screens.tsx",

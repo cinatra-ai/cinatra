@@ -199,6 +199,7 @@
       "@cinatra-ai/dashboards": ["./packages/dashboards/src/index.ts"],
       "@cinatra-ai/dashboards/module": ["./packages/dashboards/src/integration/module.ts"],
       "@cinatra-ai/dashboards/extension-materialization": ["./packages/dashboards/src/extension-materialization.ts"],
+      "@cinatra-ai/dashboards/overview-config": ["./packages/dashboards/src/components/seed-configs/overview-config.ts"],
       "@cinatra-ai/dashboards/screens": ["./packages/dashboards/src/screens/index.tsx"],
       "@cinatra-ai/dashboards/store": ["./packages/dashboards/src/store/index.ts"],
       "@cinatra-ai/dashboards/mcp": ["./packages/dashboards/src/mcp/index.ts"],

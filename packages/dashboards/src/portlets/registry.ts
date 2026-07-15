@@ -38,6 +38,13 @@ export type PortletKindEntry = {
   /** Launcher portlets prefill arbitrary template-placeholder / agent-input keys,
    *  so the install validator skips the input-key-in-inputKeys check for them. */
   readonly allowsArbitraryInputs?: boolean;
+  /**
+   * RENDER-ONLY kind (cinatra#702): the portlet is EPHEMERAL presentation built
+   * fresh per render (e.g. the entity-summary Overview blocks) and may NEVER be
+   * persisted to a dashboard row — the write-path validator (`assertConfigV12`)
+   * rejects any config containing a render-only kind, so a saved row can never
+   * serve a stale / authorization-obsolete value. Undefined for normal kinds. */
+  readonly renderOnly?: boolean;
   /** Install-time per-kind validation over the portlet instance. Returns [] when ok. */
   readonly validateConfig?: (portlet: PortletInstanceForValidation) => PortletConfigError[];
   /**
@@ -133,6 +140,19 @@ export function registerRuntimePortletKind(
       reason: `rendersAs "${reg.rendersAs}" has no bundled client component — runtime kinds may not be placeholder-only`,
     };
   }
+  // A RENDER-ONLY target (cinatra#702) may never back a runtime kind: runtime
+  // (extension) kinds are PERSISTABLE dashboard portlets, but a render-only kind
+  // is ephemeral presentation whose config must never be saved. Aliasing one
+  // would mint a persistable kind that renders through the render-only component
+  // — bypassing the `assertConfigV12` persist guard and re-opening the exact
+  // stale / authorization-obsolete-value leak. Reject fail-closed.
+  if (target.renderOnly) {
+    return {
+      ok: false,
+      code: "portlet_renders_as_render_only",
+      reason: `rendersAs "${reg.rendersAs}" is a render-only kind — runtime kinds may not alias an ephemeral (render-only) kind`,
+    };
+  }
   const key = keyOf(reg.kind, reg.version);
   const existing = registry.get(key);
   if (existing) {
@@ -193,6 +213,13 @@ export function unregisterRuntimePortletKindsForPackage(sourcePackageName: strin
 /** True when a kind is RUNTIME-contributed (has a source package). */
 export function isRuntimePortletKind(kind: string, version: string): boolean {
   return getPortletKind(kind, version)?.sourcePackageName !== undefined;
+}
+
+/** True when a kind is RENDER-ONLY (cinatra#702) — ephemeral presentation that
+ *  the write-path validator must refuse to persist. Unknown kind → false (the
+ *  unknown-kind reject is handled separately by the config validator). */
+export function isRenderOnlyPortletKind(kind: string, version: string): boolean {
+  return getPortletKind(kind, version)?.renderOnly === true;
 }
 
 export function getPortletKind(kind: string, version: string): PortletKindEntry | undefined {
