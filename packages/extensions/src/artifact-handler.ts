@@ -315,7 +315,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
         );
         if (extraneous.length > 0) {
           errors.push(
-            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles}; ` +
+            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles,displayName,vendor}; ` +
               `unexpected key(s): ${extraneous.join(", ")}`,
           );
         }
