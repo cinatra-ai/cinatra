@@ -17,6 +17,8 @@ import { ObjectVersionHistoryPortlet } from "./portlets/object-version-history-p
 import { ArtifactEditTextPortlet } from "./portlets/artifact-edit-text-portlet";
 import { ArtifactEditBinaryPromptPortlet } from "./portlets/artifact-edit-binary-prompt-portlet";
 import { AgentLauncherPortlet } from "./portlets/agent-launcher-portlet";
+import { EntityMetadataPortlet } from "./portlets/entity-metadata-portlet";
+import { EntityCountPortlet } from "./portlets/entity-count-portlet";
 
 const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
   "object-list": ObjectListPortlet,
@@ -26,6 +28,8 @@ const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
   "artifact-edit-text": ArtifactEditTextPortlet,
   "artifact-edit-binary-prompt": ArtifactEditBinaryPromptPortlet,
   "agent-launcher": AgentLauncherPortlet,
+  "entity-metadata": EntityMetadataPortlet,
+  "entity-count": EntityCountPortlet,
 };
 
 // The `analytics` keystone kind (cinatra#325) embeds a WHOLE drizzle-cube
@@ -43,11 +47,18 @@ type AnalyticsDashboardConfig = import("@/components/dashboards/embedded-drizzle
 // Per-kind chrome policy. Most kinds render as a titled `<Card>` in the vertical
 // stack; the `analytics` kind renders BARE (no surrounding card chrome,
 // full-width) so the embedded drizzle-cube grid paints its own toolbar / filter
-// bar / grid edge-to-edge (cinatra#325 §2b). Default is `"card"`.
-type PortletChrome = "card" | "bare";
+// bar / grid edge-to-edge (cinatra#325 §2b). The entity-summary kinds
+// (cinatra#702) render `"plain"`: a `<Card>` WITHOUT the instanceId/`kind@version`
+// dev header, since they carry their own human `config.title` — the raw
+// instanceId header would be noise on a user-facing Overview. Default is
+// `"card"`. (Literals mirror the registered kind names in
+// `packages/dashboards/src/portlets/kinds.ts`.)
+type PortletChrome = "card" | "bare" | "plain";
 const KIND_CHROME: Record<string, PortletChrome> = {
   analytics: "bare",
   "cube-dashboard": "bare",
+  "entity-metadata": "plain",
+  "entity-count": "plain",
 };
 
 type Binding = { fromInstanceId: string; key: string } | { fromDashboard: string };
@@ -108,17 +119,23 @@ export function PortletHost({
         }
 
         const Comp = COMPONENT_MAP[p.kind];
+        // `plain` chrome (cinatra#702): a card body with NO dev header — the
+        // entity-summary portlets render their own `config.title`, so the raw
+        // instanceId + `kind@version` header would be user-facing noise.
+        const plain = (KIND_CHROME[p.kind] ?? "card") === "plain";
         return (
           <Card key={p.instanceId} className="border-line bg-surface backdrop-blur-none">
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle className="text-base">{p.instanceId}</CardTitle>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {p.kind}@{p.version}
-                </span>
-              </div>
-            </CardHeader>
-            <CardContent>
+            {!plain && (
+              <CardHeader>
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle className="text-base">{p.instanceId}</CardTitle>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {p.kind}@{p.version}
+                  </span>
+                </div>
+              </CardHeader>
+            )}
+            <CardContent className={plain ? "pt-6" : undefined}>
               {Comp ? (
                 <Comp
                   instanceId={p.instanceId}

@@ -53,7 +53,7 @@ import {
   type PortletKindLookup,
 } from "./extension/dashboard-config-v12";
 import { registerCorePortletKinds } from "./portlets/kinds";
-import { getPortletKindDescriptor, validatePortletConfig } from "./portlets/registry";
+import { getPortletKindDescriptor, isRenderOnlyPortletKind, validatePortletConfig } from "./portlets/registry";
 import {
   isV12Envelope,
   ownerLevelToScopeLevel,
@@ -1253,6 +1253,20 @@ function assertConfigV12(config: unknown, getPortletKind?: PortletKindLookup) {
   const lookup = getPortletKind ?? getPortletKindDescriptor;
   const res = validateDashboardConfigV12(config, { getPortletKind: lookup });
   if (!res.ok) throw new DashboardConfigInvalidError(res.errors.join("; "));
+  // Render-only kinds (cinatra#702) are EPHEMERAL presentation built fresh per
+  // render (the entity-summary Overview blocks) and may NEVER be persisted — a
+  // saved row must not serve a stale / authorization-obsolete summary. Checked
+  // unconditionally against the real registry (registered above) so NO write
+  // path — including an extension materialize injecting its own lookup — can
+  // slip one into a dashboard row.
+  const renderOnly = res.config.portlets.filter((p) => isRenderOnlyPortletKind(p.kind, p.version));
+  if (renderOnly.length > 0) {
+    throw new DashboardConfigInvalidError(
+      renderOnly
+        .map((p) => `portlet "${p.instanceId}": kind "${p.kind}" is render-only and cannot be persisted to a dashboard`)
+        .join("; "),
+    );
+  }
   // Per-kind structured config validation (incl. unknown-kind). Only
   // run against the real registry (when no custom lookup was injected).
   if (!getPortletKind) {
