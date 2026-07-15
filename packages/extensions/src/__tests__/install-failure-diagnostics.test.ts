@@ -37,6 +37,15 @@ vi.mock("@cinatra-ai/agents", () => ({
   withInstallLock: vi.fn(async (_name: string, fn: () => Promise<unknown>) => fn()),
 }));
 
+// The absent-target branch (#1602) snapshots the canonical row before the
+// install (to protect a pre-existing install from the fail-closed rollback) and
+// resolves the installed kind after. Here the install FAILS before either read
+// matters — mock the store so the snapshot doesn't reach the real pool.
+vi.mock("../canonical-store", () => ({
+  readInstalledExtensionByIdentity: vi.fn(async () => null),
+  readInstalledExtensionsByPackageName: vi.fn(async () => []),
+}));
+
 vi.mock("../utils", () => ({
   deriveTypeId: vi.fn((k: string | null | undefined) => k ?? "agent"),
   resolveExtensionTypeId: vi.fn(async () => "connector"),
