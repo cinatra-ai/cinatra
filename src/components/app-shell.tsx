@@ -469,9 +469,11 @@ export function AppShell({
 
   return (
     <NotificationsProvider>
-    {/* NotificationsProvider owns the public NotificationContext
-        (consumed by useNotify() for form-save toasts) AND the internal flyout
-        state machine consumed by <NotificationsBellTrigger /> below.
+    {/* NotificationsProvider owns two now-decoupled concerns: the public
+        NotificationContext (consumed by useNotify() purely to fire form-save
+        toasts — it no longer writes any bell-visible state) and the internal
+        flyout state machine (server-polled/SSE rows only) consumed by
+        <NotificationsBellTrigger /> below.
         It is only provided in the main shell path — bypass/redirect paths
         do not render forms that call useNotify(). */}
     <SidebarProvider>
