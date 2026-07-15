@@ -1,20 +1,18 @@
 /**
- * Pill total + visibility PARITY (cinatra#1283).
+ * Approval total + visibility PARITY (cinatra#1283).
  *
- * After the data-contract/view split, two INDEPENDENT passes derive an approval
- * total for a viewer:
- *   • the root layout → `summarizeApprovalsNav(availableNavSources, viewer)` →
- *     the sidebar badge pill total (+ visibility);
- *   • the `/configuration/approvals` page → `sum(availableSources.counts().inbox)`
- *     → the Inbox-tab total.
- *
- * `registry-parity.test.ts` proves both passes enumerate the same sources with
- * the same count FUNCTIONS. This test pins the REDUCERS themselves: given one
- * shared source list, the layout badge total equals the page's Inbox reduce
- * expression, and visibility lights exactly when an actionable Inbox source
- * applies. Together they mean the badge and the page agree in the steady state
- * (they can still momentarily differ under a per-source soft-fail — an
- * independent-pass property, not a reducer disagreement).
+ * The root layout resolves an approval total for a viewer via
+ * `summarizeApprovalsNav(availableNavSources, viewer)`. Post-#1558 cutover that
+ * `total` feeds the NOTIFICATIONS BELL badge's approvals contribution (spec §IV)
+ * — it previously drove the now-retired sidebar Approvals pill. This test pins
+ * the REDUCER: given one shared source list, `summarizeApprovalsNav().total`
+ * equals the exact Inbox reduce (sum of every available source's Inbox count,
+ * per-source soft-failing to 0) that the unified surface derives from the same
+ * registry, and `visible` lights exactly when an actionable Inbox source applies
+ * (the `visible` flag is retained on the summary but no longer gates a nav item —
+ * the bell always renders). `registry-parity.test.ts` proves the nav registry
+ * and the full registry enumerate the same sources with the same count
+ * FUNCTIONS, so the bell badge and the /notifications feed agree in steady state.
  */
 import { describe, it, expect } from "vitest";
 
@@ -39,9 +37,9 @@ function navSource(opts: {
   };
 }
 
-// The page's exact Inbox-tab reduce (page.tsx): sum of every available source's
-// Inbox count, per-source soft-failing to 0.
-async function pageInboxTotal(sources: ApprovalNavSource[], viewer: ApprovalViewer): Promise<number> {
+// The exact Inbox reduce the unified surface derives from the registry: sum
+// of every available source's Inbox count, per-source soft-failing to 0.
+async function inboxReduceTotal(sources: ApprovalNavSource[], viewer: ApprovalViewer): Promise<number> {
   const countsList = await Promise.all(
     sources.map((s) => s.counts(viewer).catch(() => ({ inbox: 0, mine: 0 }) as SourceCounts)),
   );
@@ -67,24 +65,24 @@ const sources = [
   }),
 ];
 
-describe("sidebar pill ⇔ page Inbox parity", () => {
-  it("admin: badge total equals the page Inbox reduce, and the nav is visible", async () => {
+describe("bell-badge approvals total ⇔ inbox reduce parity", () => {
+  it("admin: summarizeApprovalsNav total equals the inbox reduce, and visible is true", async () => {
     const badge = await summarizeApprovalsNav(sources, ADMIN);
-    const page = await pageInboxTotal(sources, ADMIN);
-    expect(badge.total).toBe(page); // 3 + 2 + 4
+    const reduced = await inboxReduceTotal(sources, ADMIN);
+    expect(badge.total).toBe(reduced); // 3 + 2 + 4
     expect(badge.total).toBe(9);
     expect(badge.visible).toBe(true); // an actionable admin Inbox source applies
   });
 
-  it("non-admin: badge total equals the page Inbox reduce; the nav lights via their own request (option-b)", async () => {
+  it("non-admin: summarizeApprovalsNav total equals the inbox reduce; visible lights via their own request (option-b)", async () => {
     const badge = await summarizeApprovalsNav(sources, MEMBER);
-    const page = await pageInboxTotal(sources, MEMBER);
+    const reduced = await inboxReduceTotal(sources, MEMBER);
     // Only the read-only workflow passthrough contributes an Inbox count to a
     // member; both reducers agree on it. No actionable Inbox source applies, but
     // the member has an own request in flight (agent `mine: 1`), so the nav is
     // visible via the option-b mine path (owner review #1302 ask 5) — visibility
     // rides `mine`, independent of the Inbox total.
-    expect(badge.total).toBe(page); // 0 + 2 + 0 (Inbox total unchanged)
+    expect(badge.total).toBe(reduced); // 0 + 2 + 0 (Inbox total unchanged)
     expect(badge.total).toBe(2);
     expect(badge.visible).toBe(true);
   });
@@ -96,8 +94,8 @@ describe("sidebar pill ⇔ page Inbox parity", () => {
         : s,
     );
     const badge = await summarizeApprovalsNav(noOwn, MEMBER);
-    const page = await pageInboxTotal(noOwn, MEMBER);
-    expect(badge.total).toBe(page); // 0 + 2 + 0
+    const reduced = await inboxReduceTotal(noOwn, MEMBER);
+    expect(badge.total).toBe(reduced); // 0 + 2 + 0
     expect(badge.visible).toBe(false);
   });
 });
