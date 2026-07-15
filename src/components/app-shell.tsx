@@ -84,8 +84,10 @@ function EmbedMessageListener() {
   return null;
 }
 
-// Notifications flyout state lives in `src/components/notifications-flyout.tsx`.
-// The Provider owns state; the BellTrigger renders the bell + popover.
+// The notifications bell is a badge + link (no flyout — retired in the E8
+// cutover, cinatra#1558). The Provider (packages/notifications) owns the E6
+// store poll/SSE + per-route mark-read; the BellTrigger renders the badge and
+// links to `/notifications`.
 
 function deriveDocumentTitle(pathname: string, explicitTitle?: string) {
   if (explicitTitle) {
@@ -145,7 +147,6 @@ export function AppShell({
   singleOrg = false,
   hiddenNavTitles,
   pendingApprovalsTotal = 0,
-  approvalsNavVisible = false,
 }: {
   children: React.ReactNode;
   connectionReady: boolean;
@@ -158,17 +159,13 @@ export function AppShell({
   singleOrg?: boolean;
   hiddenNavTitles?: string[];
   /**
-   * Sum of the viewer's Inbox-actionable approval counts across the
-   * ApprovalSource registry. 0 when not signed in or when every source
-   * reports 0; the sidebar pill hides at 0.
+   * The viewer's Inbox-actionable approval count across the ApprovalSource
+   * registry (resolved server-side in layout.tsx). Feeds the notifications bell
+   * badge's approvals contribution (spec §IV) — the standalone sidebar Approvals
+   * pill was removed in the E8 cutover (cinatra#1558) and this count moved to the
+   * bell. 0 when not signed in / no org / every source reports 0.
    */
   pendingApprovalsTotal?: number;
-  /**
-   * Availability-driven visibility of the Admin → Approvals nav item: true
-   * when the viewer has any available source with an actionable Inbox (v1 →
-   * admins). Resolved server-side in layout.tsx from the registry.
-   */
-  approvalsNavVisible?: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -192,7 +189,8 @@ export function AppShell({
     }
     return false;
   });
-  // Notifications flyout state lives in <NotificationsProvider>.
+  // The notifications bell (badge + link) reads the E6 store via
+  // <NotificationsProvider>.
   const [devToolsOpen, setDevToolsOpen] = useState(false);
   const [bypassSetupStepGates, setBypassSetupStepGates] = useState(() =>
     typeof window !== "undefined" && window.localStorage.getItem("__cinatra_dev_bypass_step_gates") === "true",
@@ -332,8 +330,8 @@ export function AppShell({
     }
   }, [activeHeader?.title, pathname, chatThreadTitle, agentInstanceName]);
 
-  // <NotificationsProvider> owns polling / SSE / per-route mark-read /
-  // custom-event open behavior (`src/components/notifications-flyout.tsx`).
+  // <NotificationsProvider> (packages/notifications) owns the E6 store's
+  // polling / SSE / per-route mark-read that feed the bell badge.
 
   if (requiresSetupRedirect) {
     // Show a minimal loading screen instead of a blank page. The useEffect
@@ -417,8 +415,8 @@ export function AppShell({
     );
   }
 
-  // <NotificationsBellTrigger> owns unread/visible/error derivations +
-  // per-row open/mark-read handlers (`notifications-flyout.tsx`).
+  // <NotificationsBellTrigger> derives the unread badge count from the E6 store
+  // and links to `/notifications` (`packages/notifications/notifications-provider.tsx`).
 
   // The /configuration/skills Library tab owns the Recreate-Library action.
 
@@ -468,12 +466,14 @@ export function AppShell({
   }
 
   return (
-    <NotificationsProvider>
+    <NotificationsProvider approvalsNeedsActionCount={pendingApprovalsTotal}>
     {/* NotificationsProvider owns two now-decoupled concerns: the public
         NotificationContext (consumed by useNotify() purely to fire form-save
-        toasts — it no longer writes any bell-visible state) and the internal
-        flyout state machine (server-polled/SSE rows only) consumed by
-        <NotificationsBellTrigger /> below.
+        toasts — it no longer writes any bell-visible state) and the E6 client
+        store (server-polled/SSE rows). The bell badge below combines the store's
+        derived unread count with the server-resolved actionable-approvals count
+        (approvalsNeedsActionCount) so "what needs the viewer" — including a
+        pending approval decision — is always signalled (spec §IV).
         It is only provided in the main shell path — bypass/redirect paths
         do not render forms that call useNotify(). */}
     <SidebarProvider>
@@ -483,8 +483,6 @@ export function AppShell({
         singleOrg={singleOrg}
         hiddenNavTitles={hiddenNavTitles}
         isAdmin={isAdmin}
-        pendingApprovalsTotal={pendingApprovalsTotal}
-        approvalsNavVisible={approvalsNavVisible}
       />
       <SidebarInset>
         {/* Spacer: pushes the sticky header (and all page content) into normal flow

@@ -96,10 +96,11 @@ mirroring the runtime dispatch so the two cannot drift:
   escape hatch. The package identity is threaded from the same run-start call
   sites that already thread the #1056 connector deps — the two `run-actions.ts`
   start paths and the MCP `agent_run` handler (hard preflight), plus the
-  workflow-delegation executor (under the delegated-reconciler `softPreflight`,
-  which has no live session actor, so a missing provider surfaces as a run
-  failure at execution rather than a hard enqueue block) — i.e. exact parity with
-  the #1056 connector gate's coverage.
+  project-dispatch scheduler's dispatch tick (`src/lib/project-dispatch.ts`,
+  threading the same deps via `enqueueDepsForTemplate` under `softPreflight`: the
+  tick has no live session actor, so a missing provider surfaces as a run failure
+  at execution rather than a hard enqueue block) — i.e. exact parity with the
+  #1056 connector gate's coverage.
 - `packages/agents/src/run-actions.ts` — the run action results surface the
   actionable preflight error (`LlmProviderNotConfiguredError` and the sibling
   `ConnectorNotConfiguredError`) instead of the generic "enqueue failed", so the

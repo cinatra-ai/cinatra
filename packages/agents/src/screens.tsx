@@ -202,8 +202,8 @@ export async function AgentApprovalDetailScreen({
         <PageContent className="flex flex-col gap-6 pb-8">
           <div className="soft-panel rounded-card px-6 py-8 text-center">
             <p className="text-muted-foreground mb-4">No active organization.</p>
-            <Link href="/configuration/approvals?tab=agents" className="text-sm text-foreground hover:underline">
-              ← Approval Inbox
+            <Link href="/notifications" className="text-sm text-foreground hover:underline">
+              ← Notifications
             </Link>
           </div>
         </PageContent>
@@ -224,8 +224,8 @@ export async function AgentApprovalDetailScreen({
         <PageContent className="flex flex-col gap-6 pb-8">
           <div className="soft-panel rounded-card px-6 py-8 text-center">
             <p className="text-muted-foreground mb-4">Agent creation request not found.</p>
-            <Link href="/configuration/approvals?tab=agents" className="text-sm text-foreground hover:underline">
-              ← Approval Inbox
+            <Link href="/notifications" className="text-sm text-foreground hover:underline">
+              ← Notifications
             </Link>
           </div>
         </PageContent>
