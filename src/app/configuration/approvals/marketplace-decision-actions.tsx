@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -32,15 +32,25 @@ export function MarketplaceDecisionActions({
   mode,
   eligibility,
   detailsHref,
+  onDecided,
 }: {
   sourceId: string;
   rowId: string;
   mode: "moderate" | "withdraw";
   eligibility?: RowEligibility;
   detailsHref?: string;
+  /** OPTIONAL — fired once when the decision succeeds (E7 feed optimistic drop). */
+  onDecided?: () => void;
 }) {
   const [state, formAction, pending] = useActionState(decideApprovalRow, INITIAL);
   const [rejecting, setRejecting] = useState(false);
+  const decidedRef = useRef(false);
+  useEffect(() => {
+    if (state.ok && !decidedRef.current) {
+      decidedRef.current = true;
+      onDecided?.();
+    }
+  }, [state.ok, onDecided]);
 
   const hidden = (
     <>

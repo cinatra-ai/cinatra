@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,12 +23,22 @@ export function HostPortGrantDecisionActions({
   sourceId,
   rowId,
   expectedVersion,
+  onDecided,
 }: {
   sourceId: string;
   rowId: string;
   expectedVersion: string;
+  /** OPTIONAL — fired once when the decision succeeds (E7 feed optimistic drop). */
+  onDecided?: () => void;
 }) {
   const [state, formAction, pending] = useActionState(decideApprovalRow, INITIAL);
+  const decidedRef = useRef(false);
+  useEffect(() => {
+    if (state.ok && !decidedRef.current) {
+      decidedRef.current = true;
+      onDecided?.();
+    }
+  }, [state.ok, onDecided]);
   return (
     <div className="flex flex-col items-end gap-1.5">
       <form action={formAction} className="flex items-center gap-2">

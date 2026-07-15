@@ -200,7 +200,13 @@ test.describe("notifications flyout", () => {
     await expect(
       page.getByRole("heading", { name: "Notifications", level: 1 }),
     ).toBeVisible({ timeout: 15_000 });
-    // Archive tabs (same shape as the flyout).
-    await expect(page.getByRole("tab", { name: /^All/ })).toBeVisible();
+    // Unified /notifications v2 (cinatra#1557, E7) replaced the archive's Radix
+    // tabs with filter CHIPS (buttons, aria-pressed) per the ratified design
+    // notifications design spec (§III — filters, not tabs). "All" is the
+    // default-pressed chip. The full conformance suite is E11 (#1561); this is
+    // the minimal keep-green realignment of the navigation assertion.
+    await expect(
+      page.getByRole("button", { name: "All", exact: true }),
+    ).toBeVisible();
   });
 });
