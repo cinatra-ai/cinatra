@@ -213,10 +213,15 @@ export function deriveIconSlug(packageName: string): string | null {
 /**
  * Map the catalog entry's OPTIONAL vendor block into the card's publisher
  * ref. The wire shape mirrors the public REST detail's `vendor` object
- * (`{name, slug, store_url}`); every field is optional/nullable, so this
- * degrades to null (no publisher line) whenever no non-empty name or slug is
- * present. The store URL passes through UNVALIDATED — the render side owns
- * the http(s) scheme guard (`safeHttpUrl`), same as the detail modal.
+ * (`{name, slug, store_url}`), but ONLY the human `name` feeds the byline: the
+ * slug is a machine identifier and is NEVER substituted for the display name
+ * (cinatra#1528). A block with no non-empty `name` degrades to null — the §I
+ * render then resolves that to the explicit missing-vendor state via
+ * `resolveVendorPresentation`, so the byline is never a slug and never silently
+ * dropped. The store URL passes through UNVALIDATED — the render side owns the
+ * http(s) scheme guard (`safeHttpUrl`), same as the detail modal — and is
+ * dropped along with the block when no name survives (a nameless vendor is
+ * never linked).
  */
 function normalizeCardVendor(
   raw: MarketplaceCatalogEntry["vendor"],
@@ -224,8 +229,7 @@ function normalizeCardVendor(
   if (!raw || typeof raw !== "object") {
     return null;
   }
-  const name =
-    normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.slug);
+  const name = normalizeOptionalString(raw.name);
   if (!name) {
     return null;
   }

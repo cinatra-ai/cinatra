@@ -300,11 +300,31 @@ describe("catalogEntryToCardData — publisher/vendor block (§IV publisher line
     });
   });
 
-  it("falls back to the slug when the name is blank, and null store URL when absent", () => {
+  it("NEVER substitutes the slug for a blank name — a nameless vendor degrades to null (cinatra#1528)", () => {
+    // The retired `name ?? slug` fallback rendered the machine slug as the
+    // vendor. A blank name now degrades to null and the §I render resolves that
+    // to the explicit missing-vendor placeholder — the slug is never the label.
     const card = catalogEntryToCardData(
-      catalogEntry({ vendor: { name: "  ", slug: "foundry", store_url: null } }),
+      catalogEntry({ vendor: { name: "  ", slug: "machine-slug-sentinel", store_url: null } }),
     );
-    expect(card!.vendor).toEqual({ name: "foundry", storeUrl: null });
+    expect(card!.vendor).toBeNull();
+  });
+
+  it("keeps only the human name (slug ignored) when both are present", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        vendor: { name: "Foundry", slug: "machine-slug-sentinel", store_url: null },
+      }),
+    );
+    expect(card!.vendor).toEqual({ name: "Foundry", storeUrl: null });
+  });
+
+  it("drops the store URL along with the block when the name is absent (a nameless vendor is never linked)", () => {
+    expect(
+      catalogEntryToCardData(
+        catalogEntry({ vendor: { name: " ", slug: "machine-slug-sentinel", store_url: "https://x" } }),
+      )!.vendor,
+    ).toBeNull();
   });
 
   it("degrades to null (no publisher line vendor) when the catalog omits or blanks the block", () => {
