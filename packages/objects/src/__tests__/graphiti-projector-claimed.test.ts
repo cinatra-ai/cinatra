@@ -86,6 +86,16 @@ function claimedRow(over: Record<string, unknown> = {}) {
     graphiti_projected_version: null,
     source: "route",
     created_at: "2026-01-01T00:00:00Z",
+    // Canonical scope columns (post-#1428, always populated). A faceted claimed
+    // row now nests under a scope-derived lane exactly like memory (#1436): an
+    // org-visible row lands the ambient org lane, so these fixtures keep
+    // projecting (the faceted-body assertions are lane-agnostic). Lane
+    // derivation itself is exercised in graphiti-projector-artifact-lanes.test.ts.
+    owner_level: "organization",
+    owner_id: "org-1",
+    visibility: "organization",
+    project_id: null,
+    projected_group_id: null,
     ...over,
   };
 }

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   claimPrecedenceRank,
+  claimWinnerProjectionDisposition,
   isDefaultClaimDominated,
   isValidClaimScope,
   isWinnerEligible,
   orgClaimScope,
   parseClaimDispositions,
+  resolveClaimProjectionDisposition,
   resolveClaimWinner,
   type ArbitrableClaim,
 } from "../claims";
@@ -177,5 +179,59 @@ describe("claim dispositions union", () => {
     expect(parseClaimDispositions({ projection: "raw", surprise: 1 }).ok).toBe(false);
     expect(parseClaimDispositions({ projection: "full" }).ok).toBe(false);
     expect(parseClaimDispositions("raw").ok).toBe(false);
+  });
+});
+
+// The single fail-closed winner->disposition rule shared by the projector's
+// per-row write path, the rebuild driver, and the recall handler (cinatra#1436).
+describe("claimWinnerProjectionDisposition (the shared fail-closed rule)", () => {
+  it("absent dispositions default to artifact-safe", () => {
+    expect(claimWinnerProjectionDisposition({ dispositions: null })).toBe("artifact-safe");
+    expect(claimWinnerProjectionDisposition({ dispositions: undefined })).toBe("artifact-safe");
+  });
+
+  it("valid dispositions pass through the parsed projection", () => {
+    expect(claimWinnerProjectionDisposition({ dispositions: { projection: "raw" } })).toBe("raw");
+    expect(claimWinnerProjectionDisposition({ dispositions: { projection: "none" } })).toBe("none");
+    expect(claimWinnerProjectionDisposition({ dispositions: { projection: "artifact-safe" } })).toBe(
+      "artifact-safe",
+    );
+  });
+
+  it("INVALID dispositions fail closed DOWN to artifact-safe, never up to raw", () => {
+    expect(claimWinnerProjectionDisposition({ dispositions: { projection: "totally-invalid" } })).toBe(
+      "artifact-safe",
+    );
+    expect(claimWinnerProjectionDisposition({ dispositions: { projection: "raw", surprise: 1 } })).toBe(
+      "artifact-safe",
+    );
+    expect(claimWinnerProjectionDisposition({ dispositions: "raw" })).toBe("artifact-safe");
+  });
+});
+
+describe("resolveClaimProjectionDisposition (winner arbitration + the shared rule)", () => {
+  const input = { orgId: "org-1", objectTypeId: "@vendor/pkg:thing" };
+
+  it("returns null when nothing claims the type", () => {
+    expect(resolveClaimProjectionDisposition([], input)).toBeNull();
+  });
+
+  it("applies the winner's disposition via the shared rule (org winner over platform)", () => {
+    const claims = [
+      claim({ id: "p", scope: "platform", claimKind: "dedicated", dispositions: { projection: "raw" } }),
+      claim({ id: "o", scope: "org:org-1", claimKind: "dedicated", dispositions: { projection: "none" } }),
+    ];
+    // The org winner ('o') decides; equals claimWinnerProjectionDisposition of that winner.
+    expect(resolveClaimProjectionDisposition(claims, input)).toBe("none");
+    expect(resolveClaimProjectionDisposition(claims, input)).toBe(
+      claimWinnerProjectionDisposition(claims[1]),
+    );
+  });
+
+  it("a winner with invalid dispositions fails closed to artifact-safe (same leaf)", () => {
+    const claims = [
+      claim({ id: "w", scope: "platform", claimKind: "dedicated", dispositions: { projection: "full" } }),
+    ];
+    expect(resolveClaimProjectionDisposition(claims, input)).toBe("artifact-safe");
   });
 });
