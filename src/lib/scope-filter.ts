@@ -2,7 +2,8 @@
 // Shared scope-filter vocabulary.
 //
 // The `/connectors` and `/skills` list pages share a single scope dropdown
-// (rendered by <ScopeFilterCombobox>, which wraps AccessComboboxHierarchical).
+// (rendered by <ScopeFilterCombobox>, which wraps the unified AccessCombobox in
+// selectionMode="multiple").
 // This module owns the URL-param token vocabulary and a normalized match
 // predicate so each surface can filter its own resources without importing the
 // other's internals.
@@ -36,12 +37,12 @@ export type NormalizedResourceScope = {
   adminOnly?: boolean;
 };
 
-/** Map a URL token to the AccessComboboxHierarchical value it renders. */
+/** Map a URL token to the AccessCombobox value it renders. */
 export function scopeTokenToComboboxValue(token: ScopeToken): string {
   return token === "personal" ? "owner" : token;
 }
 
-/** Map an AccessComboboxHierarchical value back to a URL token. */
+/** Map an AccessCombobox value back to a URL token. */
 export function comboboxValueToScopeToken(value: string): ScopeToken {
   return value === "owner" ? "personal" : value;
 }

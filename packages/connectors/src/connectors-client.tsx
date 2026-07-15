@@ -28,7 +28,7 @@ import {
 import { iconForSlug } from "@/components/connector-brand-icons";
 import { CinatraLogo } from "@/app/cinatra-logo";
 import { ScopeFilterCombobox } from "@/components/scope-filter-combobox";
-import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
+import type { AvailableScopes } from "@/components/access-combobox";
 
 // ---------------------------------------------------------------------------
 // Public catalog-driven shape: cards keep their look while the boolean-prop

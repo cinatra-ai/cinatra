@@ -17,8 +17,8 @@
 import type { AgentAuthPolicy, AgentAuthPolicyVisibility } from "@cinatra-ai/agents/auth-policy";
 
 // Re-declared here to avoid an import cycle through the client component.
-// The shape MUST match `src/components/access-combobox-hierarchical.tsx`
-// `AvailableScopes`.
+// The shape MUST match `src/components/access-scope.ts` `AvailableScopes`
+// (re-exported by the unified `src/components/access-combobox.tsx`).
 export type FilterableAvailableScopes = {
   orgs: Array<{ id: string; name: string; teams: Array<{ id: string; name: string }> }>;
   projects: Array<{ id: string; name: string }>;

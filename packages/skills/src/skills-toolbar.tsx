@@ -17,7 +17,7 @@
 // the ?scope= param), every control here clones the CURRENT search params
 // and mutates only its own key, so search / view / scope changes preserve
 // one another. To keep a single URL owner (no cross-control race), the
-// scope dropdown is the shared AccessComboboxHierarchical wired through
+// scope dropdown is the shared AccessCombobox (selectionMode="multiple") wired through
 // the same pushWith path — it owns the ?scope= URL param that deep links
 // rely on.
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Toolbar, ToolbarButton, ToolbarGroup, ToolbarSeparator } from "@/components/ui/toolbar";
-import { AccessComboboxHierarchical } from "@/components/access-combobox-hierarchical";
+import { AccessCombobox } from "@/components/access-combobox";
 import { getListViewCookieName } from "@/lib/list-view";
 import type { AvailableScopes } from "@/components/access-scope";
 import {
@@ -162,9 +162,9 @@ export function SkillsToolbar({
       </ToolbarGroup>
       <ToolbarSeparator />
       <ToolbarGroup>
-        <AccessComboboxHierarchical
+        <AccessCombobox
           id="skills-scope-filter"
-          multiple
+          selectionMode="multiple"
           value={scopeSelection.map(scopeTokenToComboboxValue)}
           onChange={selectScope}
           toggleSelection={toggleScopeFilterComboboxValue}

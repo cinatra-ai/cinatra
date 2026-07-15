@@ -1,16 +1,17 @@
 /**
- * Source-text contract test for AccessComboboxHierarchical disabledScopes /
- * disabledReasons (cinatra#953 W3 — the per-scope disable the connection
- * share surface renders a connector's `only:*` ceiling with).
+ * Source-text contract test for the unified AccessCombobox's multi-select
+ * disabledScopes / disabledReasons (cinatra#1607; formerly cinatra#953 W3 on
+ * AccessComboboxHierarchical — the per-scope disable the connection share
+ * surface renders a connector's `only:*` ceiling with).
  *
- * Mirrors access-combobox-disabled-scopes.test.tsx: component tests in this
- * repo use source-file text assertions (@testing-library/react is not
- * available from the root package.json).
+ * Mirrors access-combobox-disabled-scopes.test.tsx (the single-mode sibling):
+ * component tests in this repo use source-file text assertions
+ * (@testing-library/react is not available from the root package.json).
  *
- * Truths locked here:
- *  - AccessComboboxHierarchicalProps exposes disabledScopes?: string[] and
+ * Truths locked here (the selectionMode="multiple" half):
+ *  - the multi props expose disabledScopes?: string[] and
  *    disabledReasons?: Record<string,string>
- *  - the component consumes both props (destructured in the signature)
+ *  - the multi component consumes both props (destructured in its signature)
  *  - ONE uniform selectable-row builder branches on disabledScopes membership
  *    for EVERY scope class (owner / project / team / org / workspace / admin)
  *  - the tooltip is carried by a <span> wrapper OUTSIDE the disabled
@@ -20,13 +21,13 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import * as Mod from "@/components/access-combobox-hierarchical";
+import * as Mod from "@/components/access-combobox";
 
-const SOURCE = readFileSync("src/components/access-combobox-hierarchical.tsx", "utf-8");
+const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
 
-describe("AccessComboboxHierarchical disabledScopes", () => {
-  it("module loads and exports AccessComboboxHierarchical", () => {
-    expect(typeof Mod.AccessComboboxHierarchical).toBe("function");
+describe("AccessCombobox multi-select disabledScopes (cinatra#1607)", () => {
+  it("module loads and exports the unified AccessCombobox", () => {
+    expect(typeof Mod.AccessCombobox).toBe("function");
   });
 
   it("exposes the disabledScopes and disabledReasons optional props", () => {
@@ -34,8 +35,8 @@ describe("AccessComboboxHierarchical disabledScopes", () => {
     expect(SOURCE).toMatch(/disabledReasons\?:\s*Record<string,\s*string>/);
   });
 
-  it("destructures both props in the component signature", () => {
-    const body = SOURCE.slice(SOURCE.indexOf("export function AccessComboboxHierarchical"));
+  it("destructures both props in the multi component signature", () => {
+    const body = SOURCE.slice(SOURCE.indexOf("function AccessComboboxMultiSelect"));
     expect(body).toMatch(/disabledScopes\b/);
     expect(body).toMatch(/disabledReasons\b/);
   });

@@ -228,7 +228,11 @@ export function ExtensionInstallScopeDialog({
   const failureMessageForResult = (
     result: MarketplaceInstallActionResult,
   ): string => {
-    if (result.stage === "access" || result.stage === "access-partial") {
+    if (
+      result.stage === "access" ||
+      result.stage === "access-partial" ||
+      result.stage === "access-required"
+    ) {
       return installAccessStageFailureCopy(result.stage, name);
     }
     // #1539: surface the diagnostic reference on the access-scoped install path.

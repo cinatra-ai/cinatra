@@ -1,25 +1,24 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Interactive design/conformance fixture for BOTH access pickers:
-//  - the checkbox multi-select AccessComboboxHierarchical (cinatra#1072,
-//    multi-scope W3), and
-//  - the flat AccessCombobox after its #1509 §4.0-c alignment (cinatra#1508):
-//    typed headings, distinct hover, selected checkmark, "Unknown team"
-//    synthesis for unhydrated selections, disabled rows with tooltips.
-// Mounts the REAL components against seeded scopes so both pickers can be
-// proven with Playwright on ONE route without a DB/auth round-trip (mirrors
-// the extension-settings fixture pattern). Kept OFF the pixel-diffed
-// /design-fixtures index — driven directly by verification runs / the owner.
+// Interactive design/conformance fixture for the UNIFIED access picker
+// (cinatra#1607 AC1): ONE component, AccessCombobox, driven in both selection
+// modes so both surfaces are proven with Playwright on ONE route without a
+// DB/auth round-trip (mirrors the extension-settings fixture pattern):
+//   - selectionMode="multiple" — the checkbox multi-select picker
+//     (cinatra#1072, multi-scope W3), and
+//   - selectionMode="single" (default) — the flat single-select combobox after
+//     its #1509 §4.0-c alignment (cinatra#1508): typed headings, distinct
+//     hover, selected checkmark, "Unknown team" synthesis for unhydrated
+//     selections, disabled rows with tooltips.
+// Kept OFF the pixel-diffed /design-fixtures index — driven directly by
+// verification runs / the owner.
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
 import {
-  AccessComboboxHierarchical,
-  type AvailableScopes,
-} from "@/components/access-combobox-hierarchical";
-import {
   AccessCombobox,
+  type AvailableScopes,
   type AccessComboboxProps,
 } from "@/components/access-combobox";
 
@@ -78,13 +77,13 @@ export function AccessPickerFixture() {
   return (
     <div className="mx-auto max-w-3xl p-8 flex flex-col gap-6">
       <h1 className="text-lg font-semibold text-foreground">
-        Access picker — checkbox multi-select (W3)
+        Access picker — checkbox multi-select (selectionMode=&quot;multiple&quot;)
       </h1>
 
       {/* The interactive instance the verification run drives (open, toggle,
           check org-implication + workspace-implication, read the summary). */}
       <Case id="picker-live" label="Interactive (multi)">
-        <AccessComboboxHierarchical multiple value={live} onChange={setLive} scopes={SEED_SCOPES} />
+        <AccessCombobox selectionMode="multiple" value={live} onChange={setLive} scopes={SEED_SCOPES} />
         <pre data-testid="picker-live-value" className="text-xs font-mono text-muted-foreground">
           {JSON.stringify(live)}
         </pre>
@@ -92,36 +91,36 @@ export function AccessPickerFixture() {
 
       {/* Static trigger-label variants (closed) for the summary screenshot. */}
       <Case id="picker-owner" label="Trigger: single (Personal)">
-        <AccessComboboxHierarchical multiple value={["owner"]} onChange={() => {}} scopes={SEED_SCOPES} />
+        <AccessCombobox selectionMode="multiple" value={["owner"]} onChange={() => {}} scopes={SEED_SCOPES} />
       </Case>
       <Case id="picker-single-team" label="Trigger: single (Team)">
-        <AccessComboboxHierarchical
-          multiple
+        <AccessCombobox
+          selectionMode="multiple"
           value={["team:team-rev"]}
           onChange={() => {}}
           scopes={SEED_SCOPES}
         />
       </Case>
       <Case id="picker-multi" label="Trigger: multi-scope composition (tooltip)">
-        <AccessComboboxHierarchical
-          multiple
+        <AccessCombobox
+          selectionMode="multiple"
           value={["team:team-rev", "org:org-beta", "project:proj-atlas"]}
           onChange={() => {}}
           scopes={SEED_SCOPES}
         />
       </Case>
       <Case id="picker-workspace" label="Trigger: Workspace: All">
-        <AccessComboboxHierarchical
-          multiple
+        <AccessCombobox
+          selectionMode="multiple"
           value={["workspace"]}
           onChange={() => {}}
           scopes={SEED_SCOPES}
         />
       </Case>
 
-      {/* Flat AccessCombobox cases (cinatra#1508 / #1509 §4.1) ------------- */}
+      {/* Flat single-select AccessCombobox cases (cinatra#1508 / #1509 §4.1) -- */}
       <h2 className="text-lg font-semibold text-foreground">
-        Access picker — flat single-select (#1508)
+        Access picker — flat single-select (selectionMode=&quot;single&quot;, #1508)
       </h2>
 
       {/* Closed default trigger. */}

@@ -21,7 +21,7 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // permissions-tab-client.tsx wrapper.
 import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
 import type { OwnerView as CoOwnerView } from "@/components/permissions-form";
-import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
+import type { AvailableScopes } from "@/components/access-combobox";
 import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";

@@ -46,9 +46,9 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 import {
-  AccessComboboxHierarchical,
+  AccessCombobox,
   type AvailableScopes,
-} from "@/components/access-combobox-hierarchical";
+} from "@/components/access-combobox";
 import type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
@@ -222,8 +222,8 @@ export function PermissionsFormDraft({
       <div className="flex flex-col gap-4">
         <h2 className="text-base font-semibold text-foreground">Access</h2>
         <div className="flex flex-col gap-1.5">
-          <AccessComboboxHierarchical
-            multiple
+          <AccessCombobox
+            selectionMode="multiple"
             value={policy.runListVisibility}
             onChange={setAccess}
             scopes={availableScopes}

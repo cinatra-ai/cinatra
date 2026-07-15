@@ -4,7 +4,8 @@
  * pre-existing #1072 multi-select cases).
  *
  * Locks:
- *  - the fixture still mounts the REAL components (both pickers)
+ *  - the fixture mounts the REAL, ONE unified AccessCombobox in BOTH selection
+ *    modes (cinatra#1607 — no separate hierarchical module import survives)
  *  - the original W3 multi-select cases keep their testids (conformance
  *    testids are contract — tests/e2e/design/conformance/README.md)
  *  - the four flat cases exist: default, open-with-selection (interactive,
@@ -26,9 +27,17 @@ const SOURCE = readFileSync(
 );
 
 describe("access-picker fixture — flat-picker cases (#1508)", () => {
-  it("mounts the real components for both pickers", () => {
-    expect(SOURCE).toMatch(/from "@\/components\/access-combobox-hierarchical"/);
+  it("mounts the ONE unified AccessCombobox in both selection modes (cinatra#1607)", () => {
+    // The fixture no longer imports two picker modules — it mounts the single
+    // AccessCombobox from @/components/access-combobox in both modes.
     expect(SOURCE).toMatch(/from "@\/components\/access-combobox"/);
+    expect(SOURCE).not.toMatch(/access-combobox-hierarchical/);
+    // multi-select cases pass selectionMode="multiple"...
+    expect(SOURCE).toMatch(/<AccessCombobox\s+selectionMode="multiple"/);
+    // ...and the flat single-select cases mount AccessCombobox with the default
+    // (no selectionMode) + the scalar onValueChange contract.
+    expect(SOURCE).toMatch(/<AccessCombobox\b/);
+    expect(SOURCE).toMatch(/onValueChange=/);
   });
 
   it("keeps the original multi-select case testids stable", () => {
