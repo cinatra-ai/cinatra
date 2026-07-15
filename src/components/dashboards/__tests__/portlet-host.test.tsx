@@ -166,3 +166,48 @@ describe("PortletHost — analytics bare-chrome policy (cinatra#325 §2b)", () =
     expect(c.textContent).toContain("missing its");
   });
 });
+
+// The entity-summary Overview portlets (cinatra#702) are REAL, server-safe,
+// pure-presentation components (no server-only loader), so they render here
+// unmocked. They use `plain` chrome: a bordered Card WITHOUT the dev
+// instanceId/`kind@version` header (they carry their own `config.title`).
+describe("PortletHost — entity-summary plain chrome (cinatra#702)", () => {
+  it("renders entity-metadata plain: no instanceId/kind dev header, its own title + label/value rows", async () => {
+    const c = await mount([
+      {
+        instanceId: "overview-metadata",
+        kind: "entity-metadata",
+        version: "1.0.0",
+        slot: "fixed",
+        config: { title: "Team", items: [{ label: "Name", value: "Platform" }, { label: "Organization", value: "Acme" }] },
+      },
+    ]);
+    // plain: still a bordered card, but NO dev header line.
+    expect(c.querySelector(".border-line")).not.toBeNull();
+    expect(c.textContent).not.toContain("entity-metadata@1.0.0");
+    expect(c.textContent).not.toContain("overview-metadata");
+    // its own content rendered.
+    expect(c.textContent).toContain("Team");
+    expect(c.textContent).toContain("Name");
+    expect(c.textContent).toContain("Platform");
+    expect(c.textContent).toContain("Organization");
+    expect(c.textContent).toContain("Acme");
+  });
+
+  it("renders entity-count tiles plain (numeric values shown)", async () => {
+    const c = await mount([
+      {
+        instanceId: "overview-counts",
+        kind: "entity-count",
+        version: "1.0.0",
+        slot: "fixed",
+        config: { items: [{ label: "Members", value: 12 }, { label: "Teams", value: 3 }] },
+      },
+    ]);
+    expect(c.textContent).not.toContain("entity-count@1.0.0");
+    expect(c.textContent).toContain("Members");
+    expect(c.textContent).toContain("12");
+    expect(c.textContent).toContain("Teams");
+    expect(c.textContent).toContain("3");
+  });
+});
