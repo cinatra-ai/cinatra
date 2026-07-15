@@ -54,6 +54,7 @@ export {
   semanticArtifactManifestSchema,
   semanticProducesSchema,
   parseSemanticArtifactManifest,
+  validateSemanticArtifactManifestForPublish,
   DEFAULT_ARTIFACT_EXTENSION,
   isDefaultArtifactType,
 } from "./semantic-manifest";

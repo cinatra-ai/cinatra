@@ -102,6 +102,9 @@ export function loadLiveRules(sdkRepoRoot) {
     return { ok: false, missing };
   }
 
+  const sdkExtensionsPkg = JSON.parse(sdkExtensionsPkgRaw);
+  const sdkUiPkg = JSON.parse(sdkUiPkgRaw);
+
   const hostPortNames = extractStringArrayConst(hostContextSrc, "HOST_PORT_NAMES");
   const artifactAllowedCinatraKeys = extractStringSetConst(
     artifactContractSrc,
@@ -111,6 +114,26 @@ export function loadLiveRules(sdkRepoRoot) {
     accessConfigSrc,
     "CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION",
   );
+  // artifact-ui (cinatra#1621): DERIVED from live source — the slot enum + the
+  // `ui` ABI version from the leaf's artifact-contract.ts, and the canonical SDK
+  // ABI from `packages/sdk-extensions/package.json`'s `cinatra.sdkAbiVersion`.
+  // We read the canonical ABI from the package.json (already in this checker's
+  // minimal sparse checkout) rather than register.ts (which is NOT) so a
+  // per-repo reusable-workflow run never hits a missing-file infra failure. The
+  // `sdk-abi-readme-gate` pins package.json `cinatra.sdkAbiVersion` byte-equal to
+  // register.ts's `SDK_EXTENSIONS_ABI_VERSION` (the value the leaf's
+  // `generateArtifactUiSdkAbiRange` uses at runtime), so this derived pin always
+  // matches the leaf. Never a re-listed literal (#979 addendum principle).
+  const artifactUiSlots = extractStringArrayConst(artifactContractSrc, "ARTIFACT_UI_SLOTS");
+  const artifactUiReservedSlots = extractStringArrayConst(
+    artifactContractSrc,
+    "ARTIFACT_UI_RESERVED_SLOTS",
+  );
+  const artifactUiAbiVersion = extractNumberConst(artifactContractSrc, "ARTIFACT_UI_ABI_VERSION");
+  const sdkAbiVersion =
+    typeof sdkExtensionsPkg?.cinatra?.sdkAbiVersion === "string"
+      ? sdkExtensionsPkg.cinatra.sdkAbiVersion
+      : null;
 
   if (!hostPortNames || hostPortNames.length === 0) {
     return { ok: false, missing: [], derivationFailed: "HOST_PORT_NAMES" };
@@ -121,15 +144,33 @@ export function loadLiveRules(sdkRepoRoot) {
   if (connectorAccessConfigFormatVersion === null) {
     return { ok: false, missing: [], derivationFailed: "CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION" };
   }
-
-  const sdkExtensionsPkg = JSON.parse(sdkExtensionsPkgRaw);
-  const sdkUiPkg = JSON.parse(sdkUiPkgRaw);
+  if (!artifactUiSlots || artifactUiSlots.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_SLOTS" };
+  }
+  if (!artifactUiReservedSlots) {
+    return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_RESERVED_SLOTS" };
+  }
+  if (artifactUiAbiVersion === null) {
+    return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_ABI_VERSION" };
+  }
+  // Mirror `generateArtifactUiSdkAbiRange` (leaf): caret over maj.min.patch of
+  // the canonical SDK ABI. The generation RULE is one line — drift here can only
+  // produce a false CI signal, never a security gap.
+  const abiTriple = /^(\d+)\.(\d+)\.(\d+)/.exec(sdkAbiVersion ?? "");
+  if (!abiTriple) {
+    return { ok: false, missing: [], derivationFailed: "cinatra.sdkAbiVersion" };
+  }
+  const artifactUiSdkAbiRange = `^${abiTriple[1]}.${abiTriple[2]}.${abiTriple[3]}`;
 
   return {
     ok: true,
     hostPortNames: new Set(hostPortNames),
     artifactAllowedCinatraKeys,
     connectorAccessConfigFormatVersion,
+    artifactUiSlots: new Set(artifactUiSlots),
+    artifactUiReservedSlots: new Set(artifactUiReservedSlots),
+    artifactUiAbiVersion,
+    artifactUiSdkAbiRange,
     sdkExtensionsExports: Object.keys(sdkExtensionsPkg.exports ?? {}),
     sdkUiExports: Object.keys(sdkUiPkg.exports ?? {}),
   };
