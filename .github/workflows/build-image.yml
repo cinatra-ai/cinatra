@@ -511,7 +511,8 @@ jobs:
     # with the workflow extension kind, so there is no suite left to run. This
     # REQUIRED check is kept green as a stub so the package removal lands without a
     # branch-protection change; the job + its required-context are fully retired
-    # alongside the BPMN CI gate in Slice F.
+    # in Slice F. The BPMN CI gate itself was retired with the workflow engine in
+    # this PR (#1035 Slice C).
     timeout-minutes: 5
     steps:
       - name: Release workflows suite retired (package removed in cinatra 1035 Slice C)
@@ -1372,15 +1373,6 @@ jobs:
           JOBS_DASHBOARD_DIFF_BASE: ${{ steps.base.outputs.base }}
         run: node scripts/audit/configuration-jobs-dashboard-banned.mjs
 
-      # Cinatra BPMN Profile 1.0 install gate. Every kind:"workflow" extension
-      # must ship exactly one canonical cinatra/workflow.bpmn (no inline JSON
-      # definition), declare an integer cinatra.workflowVersion, and that
-      # sidecar must parse + validate against Profile 1.0 + compile to a
-      # lossless WorkflowSpec. Run under tsx so the gate can import the
-      # TypeScript BPMN substrate source directly.
-      - name: Workflow BPMN Profile 1.0 gate
-        run: node --import tsx scripts/audit/workflow-bpmn-gate.mjs
-
       # Design packages pack smoke.
       # Runs `pnpm pack` on @cinatra-ai/design + @cinatra-ai/sdk-ui and
       # verifies the produced tarballs contain the expected files and no
@@ -1734,8 +1726,8 @@ jobs:
     # not need a branch-protection change to land; the job, its
     # `.github/gate-suite.json` requiredContext, the mirror in
     # scripts/ci/merge-group-coverage-guard.mjs, and the branch-protection
-    # required_status_check are fully retired alongside the BPMN CI gate in
-    # #1035 Slice F.
+    # required_status_check are fully retired in #1035 Slice F. The BPMN CI gate
+    # itself was retired with the workflow engine in this PR (#1035 Slice C).
     timeout-minutes: 5
     steps:
       - name: Workflows e2e retired (route removed in cinatra 1035 Slice C)
