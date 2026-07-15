@@ -253,7 +253,12 @@ export async function RegistryCatalogScreen({
       packageVersion: row.rawVersion ?? "",
       displayName: row.displayName,
       description: row.description,
-      kindSlug: row.kind,
+      // row.kind is the canonical ExtensionKind — still bridge-wide with
+      // "workflow" until #1035 Slice G. No workflow row is ever collected
+      // (KIND_ORDER excludes it), but coerce the (impossible) legacy value to
+      // the neutral "unknown" card kind so the narrowed MarketplaceCardKind is
+      // satisfied and the modal degrades gracefully rather than crashing.
+      kindSlug: row.kind === "workflow" ? "unknown" : row.kind,
       kindLabel: KIND_LABEL[row.kind],
       badge: null,
       freshnessAt: null,

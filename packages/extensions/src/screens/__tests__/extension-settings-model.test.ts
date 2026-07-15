@@ -194,16 +194,17 @@ describe("resolveSettingsAffordances (§V — locked/system + complementary Arch
 });
 
 describe("kind sets", () => {
-  it("access-policy kinds are exactly the canonical-row-identity kinds", () => {
-    expect([...ACCESS_POLICY_KINDS]).toEqual(["connector", "artifact", "workflow"]);
+  it("access-policy kinds are exactly the canonical-row-identity kinds (workflow removed — cinatra#1035)", () => {
+    expect([...ACCESS_POLICY_KINDS]).toEqual(["connector", "artifact"]);
+    expect(ACCESS_POLICY_KINDS).not.toContain("workflow");
   });
-  it("valid settings kinds cover all five extension kinds", () => {
+  it("valid settings kinds cover the four extension kinds (workflow removed — cinatra#1035)", () => {
     expect([...VALID_SETTINGS_KINDS]).toEqual([
       "agent",
       "skill",
       "connector",
       "artifact",
-      "workflow",
     ]);
+    expect(VALID_SETTINGS_KINDS).not.toContain("workflow");
   });
 });

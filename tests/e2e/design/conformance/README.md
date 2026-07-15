@@ -43,7 +43,7 @@ dependency-free kit behind `/design-fixtures/conformance/seeded`:
 - **Exact cardinality** — every cardinality-bearing surface (the marketplace
   grid, the installed list per status, the connector grid per connection
   state) asserts an EXACT count against the kit, and counts of confusable
-  collections are pairwise distinct (7 / 4 / 2 / 3 / 5).
+  collections are pairwise distinct (6 / 4 / 2 / 3 / 5).
 - **Forced state variants** — empty (empty catalog / never-provisioned
   namespace), loading (the REAL Suspense fallback over a delayed source,
   `?variant=loading`), error (the REAL cinatra#110 fail-soft containment on a

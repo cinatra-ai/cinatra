@@ -712,14 +712,14 @@ function DependenciesSection({ dependencies }: { dependencies: MarketplaceDetail
   );
 }
 
-/** Map a wire kind slug onto the emblem union; anything unknown → generic. */
+/** Map a wire kind slug onto the emblem union; anything unknown → generic. The
+ * removed "workflow" kind (cinatra#1035) falls through to the generic emblem. */
 function dependencyEmblemKind(kind: string | null): ExtensionEmblemKind {
   switch (kind) {
     case "agent":
     case "skill":
     case "connector":
     case "artifact":
-    case "workflow":
       return kind;
     default:
       return "unknown";
