@@ -975,7 +975,10 @@ export function AgenticRunPanel({
               Run paused — awaiting human approval before continuing.
             </span>
             <Button asChild variant="outline" size="sm">
-              <Link href={`/configuration/agents/approvals?runId=${encodeURIComponent(runId)}`}>
+              {/* Approvals moved into the unified /notifications feed in the E8
+                  cutover (cinatra#1558); the run's pending approval surfaces
+                  there as a row. */}
+              <Link href="/notifications">
                 Review approval
               </Link>
             </Button>

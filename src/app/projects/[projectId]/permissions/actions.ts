@@ -452,7 +452,7 @@ export async function listProjectAccessAction(
 // team could never grant to it). Instead every candidate action is
 //   - gated on the SAME authority as `grantProjectAccessAction` (project
 //     admin/owner via projectGrants, or platform admin — the
-//     `assertProjectAdmin` precedent in customers/actions.ts), and
+//     `assertProjectAdmin` precedent, now in guest-actions.ts), and
 //   - bounded by the PROJECT's `organizationId`, never the viewer's org
 //     memberships.
 // The pickers these feed are affordances only — final authority stays

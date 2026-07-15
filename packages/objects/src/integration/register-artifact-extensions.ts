@@ -143,6 +143,14 @@ function registerOneArtifactDir(dir: string): boolean {
     );
     return false;
   }
+  // A malformed `cinatra.artifact.ui` block DEGRADES (generic rendering) but
+  // NEVER blocks registration — the type + its `objectTypes` claims still land
+  // (cinatra#1621). Surface the sanitized diagnostic; keep going.
+  if (parsed.diagnostics && parsed.diagnostics.length > 0) {
+    console.warn(
+      `[artifacts:bridge] ${pkg.name} declares an unsupported cinatra.artifact.ui — rendering generically (type + claims still registered): ${parsed.diagnostics.join("; ")}`,
+    );
+  }
   const descriptor: SemanticArtifactManifest = parsed.manifest;
   // Schema-source rule for objectTypes claims (cinatra#1432 AC-4): same
   // fail-closed check the handler's validate() runs — a claim with no inline

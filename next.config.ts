@@ -371,26 +371,44 @@ const nextConfig: NextConfig = {
         permanent: true,
       },
       // analytics-routes-retire-allowlist-end
-      // — Approvals consolidation. The standalone /approvals page
-      // and /configuration/agents/approvals index are retired in favor of
-      // the unified /configuration/approvals tabbed page. Detail pages at
-      // /configuration/agents/approvals/[id] keep their path unchanged.
+      // — Approvals consolidation (E8 cutover, cinatra#1558). Approvals were
+      // unified into the /notifications surface; the standalone
+      // /configuration/approvals page (+ its ?tab= / ?direction= machinery), the
+      // legacy /approvals page, and the /configuration/agents/approvals INDEX
+      // are all retired → /notifications. The per-approval detail page
+      // /configuration/agents/approvals/[id] SURVIVES unchanged.
       {
         source: "/approvals",
-        destination: "/configuration/approvals?tab=workflows",
+        destination: "/notifications",
         permanent: true,
       },
+      // The agent-approvals INDEX (exact) → the unified feed. Exact source, so
+      // it never swallows the surviving /configuration/agents/approvals/[id].
       {
         source: "/configuration/agents/approvals",
-        destination: "/configuration/approvals?tab=agents",
+        destination: "/notifications",
         permanent: true,
       },
-      // Reciprocal: the alternative new-location detail path. We kept the
-      // existing path, so anyone arriving via the new-shape URL gets routed
-      // to the canonical detail page.
+      // Reciprocal old detail shape → the canonical (surviving) detail page.
+      // MUST precede the /configuration/approvals/:path* wildcard below so the
+      // detail redirect is not swallowed by the page retirement (specific
+      // detail route before the wildcard).
       {
         source: "/configuration/approvals/agents/:id",
         destination: "/configuration/agents/approvals/:id",
+        permanent: true,
+      },
+      // The retired inbox page (direct load) → the unified feed.
+      {
+        source: "/configuration/approvals",
+        destination: "/notifications",
+        permanent: true,
+      },
+      // Any legacy deep link UNDER the retired page (incl. ?tab= / ?direction=,
+      // which fall through harmlessly) → the unified feed.
+      {
+        source: "/configuration/approvals/:path*",
+        destination: "/notifications",
         permanent: true,
       },
       // /desk renamed to /personal.

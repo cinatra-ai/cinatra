@@ -26,7 +26,7 @@ import type { RowEligibility } from "@/app/configuration/approvals/sources/types
 import {
   AGENT_SOURCE_ID,
   WORKFLOW_SOURCE_ID,
-} from "@/app/configuration/approvals/resolve-active-view";
+} from "@/app/configuration/approvals/sources/source-ids";
 import {
   collapseByJobId,
   getInProgressItems,

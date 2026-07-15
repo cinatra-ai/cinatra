@@ -14,8 +14,16 @@
  * convention; no @testing-library at root).
  */
 import { readFileSync } from "node:fs";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+// guest-actions imports @/lib/auth (top-level-await better-auth boot) — that
+// module is always mocked in the vitest sandbox, so mock the actions surface.
+vi.mock("../guest-actions", () => ({
+  inviteGuestByEmailAction: async () => ({ ok: false, error: "unknown" }),
+  revokeGuestAction: async () => ({ ok: false }),
+  listGuestRows: async () => [],
+}));
+
 import { ProjectPermissionsTabClient } from "../permissions-tab-client";
 
 const CLIENT_SOURCE = readFileSync(
@@ -44,6 +52,7 @@ function renderTab(canEdit: boolean): string {
       coOwners={[]}
       currentUserId="user-1"
       projectAccessRows={[]}
+      guestRows={[]}
     />,
   );
 }

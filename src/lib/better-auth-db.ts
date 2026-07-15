@@ -669,6 +669,70 @@ export async function readUserById(userId: string): Promise<{ id: string } | nul
   return rows[0] ?? null;
 }
 
+// ---------------------------------------------------------------------------
+// Case-insensitive email → user resolution (cinatra#1501 guest invites). Email
+// uniqueness in Better Auth is effectively case-insensitive (sign-in
+// normalizes), so lower(email) is the correct join key here.
+// ---------------------------------------------------------------------------
+export async function readUserByEmail(
+  email: string,
+): Promise<{ id: string; name: string | null; email: string | null } | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  const rows = await betterAuthDb
+    .select({
+      id: betterAuthUsers.id,
+      name: betterAuthUsers.name,
+      email: betterAuthUsers.email,
+    })
+    .from(betterAuthUsers)
+    .where(sql`lower(${betterAuthUsers.email}) = ${normalized}`)
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Is `userId` a member of `organizationId`? Guest invites (cinatra#1501) must
+ * never relabel a member of the TARGET project's org as a guest — the
+ * classification rejects with "already-member" instead. Scoped to that org
+ * deliberately: membership in some OTHER organization does not disqualify an
+ * external collaborator (and must not leak to project admins).
+ */
+export async function readUserIsOrgMember(
+  userId: string,
+  organizationId: string,
+): Promise<boolean> {
+  const rows = await betterAuthDb
+    .select({ id: betterAuthMembers.id })
+    .from(betterAuthMembers)
+    .where(
+      and(
+        eq(betterAuthMembers.userId, userId),
+        eq(betterAuthMembers.organizationId, organizationId),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Resolve display rows (name/email) for a set of user ids — the Guests list
+ * shows people, not raw ids. Returns only the ids that exist.
+ */
+export async function readUsersByIds(
+  userIds: string[],
+): Promise<Array<{ id: string; name: string | null; email: string | null }>> {
+  if (userIds.length === 0) return [];
+  return betterAuthDb
+    .select({
+      id: betterAuthUsers.id,
+      name: betterAuthUsers.name,
+      email: betterAuthUsers.email,
+    })
+    .from(betterAuthUsers)
+    .where(inArray(betterAuthUsers.id, userIds));
+}
+
 /**
  * Look up whether `userId` is a platform admin, reading Better Auth's
  * `user.role` column directly. Better Auth's admin plugin stores roles as a
