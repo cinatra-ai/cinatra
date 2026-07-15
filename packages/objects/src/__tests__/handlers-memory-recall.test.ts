@@ -45,6 +45,8 @@ vi.mock("../graphiti-client", () => ({
 // The handler resolves the actor's team lanes via readTeamsForUser; mock it so
 // no live DB is touched (the vitest alias already routes this to a no-op stub).
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi.fn(async () => [] as Array<{ id: string; name: string }>),
 }));
 

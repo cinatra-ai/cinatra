@@ -43,6 +43,8 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi.fn(async () => []),
   readProjectGrantsForUser: vi.fn(async () => grants),
 }));

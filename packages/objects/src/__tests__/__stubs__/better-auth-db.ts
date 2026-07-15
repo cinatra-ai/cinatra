@@ -11,3 +11,19 @@ export async function readTeamsForUser(
 ): Promise<Array<{ id: string; name: string }>> {
   return [];
 }
+
+// Sidebar org-switcher reads (consumed via `@/lib/auth-session` /
+// `src/components/org-switcher-actions.ts`); stubbed to the no-membership
+// defaults so any handler test that pulls those modules loads without a DB.
+export async function readOrganizationNameForUser(
+  _userId: string,
+  _orgId: string,
+): Promise<string | null> {
+  return null;
+}
+
+export async function listOrganizationsForUser(
+  _userId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  return [];
+}

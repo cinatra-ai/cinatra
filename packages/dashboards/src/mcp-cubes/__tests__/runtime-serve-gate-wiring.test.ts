@@ -32,7 +32,11 @@ vi.mock("../cubes-singleton", () => ({
   getMcpCubeTools: () => ({ definitions: [], handle: handleStub, handles: () => true, toolNames: [], resources: [] }),
   __resetMcpCubeToolsForTests: () => {},
 }));
-vi.mock("@/lib/better-auth-db", () => ({ listAccessibleOrgIdsForUser: async () => [] }));
+vi.mock("@/lib/better-auth-db", () => ({
+  listAccessibleOrgIdsForUser: async () => [],
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
+}));
 // Mock the runtime registry so the ext_* ids are runtime cubes, agent_runs is not.
 vi.mock("@cinatra-ai/dashboards/runtime-cube-registry", () => ({
   isRuntimeCube: (id: string) => id === "ext_denied" || id === "ext_allowed",

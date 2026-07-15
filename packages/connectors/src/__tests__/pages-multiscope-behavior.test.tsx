@@ -33,6 +33,8 @@ vi.mock("@/lib/auth-session", () => ({
   getActorContext: vi.fn(async () => ({ userId: ACTOR, organizationId: ORG })),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readOrgsWithTeamsForUser: vi.fn(async () => [
     { id: ORG, name: "Org One", teams: [{ id: "t1", name: "Team One" }] },
   ]),

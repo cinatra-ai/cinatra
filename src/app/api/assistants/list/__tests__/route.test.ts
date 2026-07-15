@@ -59,6 +59,8 @@ const h = vi.hoisted(() => {
 vi.mock("next/headers", () => ({ headers: () => Promise.resolve(new Headers()) }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: (...a: unknown[]) => h.getSession(...a) } } }));
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: h.betterAuthDb,
   betterAuthMembers: h.betterAuthMembers,
   betterAuthUsers: h.betterAuthUsers,

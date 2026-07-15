@@ -44,7 +44,11 @@ vi.mock("@/lib/agent-creation-requests-store", () => ({
     },
   ),
 }));
-vi.mock("@/lib/better-auth-db", () => ({ countOtherPlatformAdmins: vi.fn() }));
+vi.mock("@/lib/better-auth-db", () => ({
+  countOtherPlatformAdmins: vi.fn(),
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
+}));
 vi.mock("@/lib/database", () => ({ readConnectorConfigFromDatabase: () => h.config }));
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: unknown }) => {

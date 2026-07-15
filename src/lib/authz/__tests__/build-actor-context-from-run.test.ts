@@ -24,6 +24,8 @@ const MODULE_PATH = "@/lib/authz/build-actor-context-from-run";
 // Mock the better-auth-db readers that buildActorContextFromRun composes.
 // vi.hoisted ensures the spies are stable across test cases.
 const betterAuthDb = vi.hoisted(() => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readOrgsWithTeamsForUser: vi.fn(
     async (
       _userId: string,

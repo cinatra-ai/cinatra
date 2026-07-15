@@ -28,6 +28,8 @@ import * as path from "node:path";
 const executeCalls: Array<{ query: unknown }> = [];
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: {
     execute: vi.fn(async (query: unknown) => {
       executeCalls.push({ query });

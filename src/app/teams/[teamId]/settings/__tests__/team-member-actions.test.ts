@@ -51,6 +51,8 @@ const transaction = vi.fn(async (fn: (tx: { execute: typeof execute }) => Promis
   fn({ execute }),
 );
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: {
     execute: (...a: unknown[]) => execute(...(a as [unknown])),
     transaction: (...a: unknown[]) =>

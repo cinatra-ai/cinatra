@@ -18,7 +18,10 @@ const { getAuthSession, listOrganizationsForUser } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth-session", () => ({ getAuthSession }));
-vi.mock("@/lib/better-auth-db", () => ({ listOrganizationsForUser }));
+vi.mock("@/lib/better-auth-db", () => ({
+  listOrganizationsForUser,
+  readOrganizationNameForUser: vi.fn(async () => null),
+}));
 
 import { listMemberOrganizations } from "@/components/org-switcher-actions";
 

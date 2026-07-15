@@ -21,6 +21,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const queryMock = vi.fn();
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthPool: {
     query: (...args: unknown[]) => queryMock(...args),
   },

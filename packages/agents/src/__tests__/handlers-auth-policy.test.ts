@@ -150,6 +150,8 @@ vi.mock("../trigger-service", () => ({
 // handlers.ts imports readUserById for the isA2aServiceIdentity probe.
 // Mock it here to avoid hitting the DB.
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi.fn(async () => []),
   // The implementation calls readProjectGrantsForUser via the canonical resolver.
   // readProjectsForUser is retained for callsites that still use it.

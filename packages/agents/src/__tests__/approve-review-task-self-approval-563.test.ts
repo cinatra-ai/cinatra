@@ -62,6 +62,8 @@ const { countOtherPlatformAdminsMock } = vi.hoisted(() => ({
   countOtherPlatformAdminsMock: vi.fn(async () => 0),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   countOtherPlatformAdmins: countOtherPlatformAdminsMock,
   readTeamForOrg: vi.fn(async () => null),
 }));

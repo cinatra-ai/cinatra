@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/lib/better-auth-db", () => ({ readTeamsForUser: vi.fn() }));
+vi.mock("@/lib/better-auth-db", () => ({
+  readTeamsForUser: vi.fn(),
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
+}));
 vi.mock("@/lib/auth-session", () => ({
   isPlatformAdmin: vi.fn(),
   resolveOrgRoleForSession: vi.fn(),

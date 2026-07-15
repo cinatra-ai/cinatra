@@ -51,6 +51,8 @@ vi.mock("@/lib/database", () => dbMock);
 // admin exists → guard stays on / SoD preserved); single-admin tests override
 // to 0.
 const betterAuthDbMock = vi.hoisted(() => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   countOtherPlatformAdmins: vi.fn(async () => 1),
 }));
 vi.mock("@/lib/better-auth-db", () => betterAuthDbMock);

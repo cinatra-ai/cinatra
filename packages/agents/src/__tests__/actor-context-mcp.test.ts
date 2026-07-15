@@ -15,6 +15,8 @@ import { actorContextFromMcpRequest } from "../auth-policy";
 // ---------------------------------------------------------------------------
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi
     .fn()
     .mockResolvedValue([{ id: "team-1", name: "Team One" }]),

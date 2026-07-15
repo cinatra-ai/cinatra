@@ -21,6 +21,8 @@ const whereSpy = vi.fn();
 // Drizzle chain stub for betterAuthDb.select().from().where().orderBy().
 // orderBy resolves to the (already createdAt-ASC-ordered) memberRows fixture.
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: {
     select: () => ({
       from: () => ({

@@ -48,6 +48,8 @@ vi.mock("@/lib/agent-run-actor-resolve", () => ({
   resolveAgentRunMcpActor: (...a: unknown[]) => resolveAgentRunMcpActor(...a),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: async () => [],
   readProjectGrantsForUser: async () => [],
 }));

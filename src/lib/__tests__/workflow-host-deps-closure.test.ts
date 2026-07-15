@@ -23,7 +23,11 @@ vi.mock("@/lib/project-writable", () => ({
   assertProjectWritableSync: vi.fn(),
   assertProjectWritable: vi.fn(),
 }));
-vi.mock("@/lib/better-auth-db", () => ({ readProjectGrantsForUser: vi.fn() }));
+vi.mock("@/lib/better-auth-db", () => ({
+  readProjectGrantsForUser: vi.fn(),
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
+}));
 vi.mock("@/lib/workflow-agent-executor", () => ({ workflowAgentRefAvailable: vi.fn() }));
 vi.mock("@/lib/workflow-approvers", () => ({ approverResolvable: vi.fn() }));
 vi.mock("@/lib/auth-session", () => ({ resolveOrgRoleForUser: vi.fn() }));

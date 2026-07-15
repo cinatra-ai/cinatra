@@ -159,6 +159,14 @@ describe("OrgSwitcher — lazy list tier", () => {
     renderSwitcher();
     openMenu();
     expect(await screen.findByTestId("org-switcher-loading")).toBeTruthy();
+    // Skeletons are decorative (aria-hidden); the sr-only polite live region
+    // announces the pending fetch to assistive tech.
+    expect(
+      screen.getByTestId("org-switcher-loading").getAttribute("aria-hidden"),
+    ).toBe("true");
+    const statusRegion = screen.getByRole("status");
+    expect(statusRegion.textContent).toBe("Loading organizations");
+    expect(statusRegion.getAttribute("aria-live")).toBe("polite");
     expect(screen.queryByTestId("org-switcher-org-org-a")).toBeNull();
 
     resolveFetch(TWO_ORGS);
@@ -173,6 +181,10 @@ describe("OrgSwitcher — lazy list tier", () => {
 
     const retry = await screen.findByTestId("org-switcher-retry");
     expect(retry.textContent).toContain("Couldn't load");
+    // The error is announced assertively via an sr-only alert.
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Couldn't load organizations",
+    );
     expect(listMemberOrganizations).toHaveBeenCalledTimes(1);
 
     fireEvent.click(retry);

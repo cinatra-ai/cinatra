@@ -56,6 +56,8 @@ vi.mock("@/lib/auth-session", () => authSessionMock);
 // service-identity probe was removed with the owner-substitution).
 // ---------------------------------------------------------------------------
 const betterAuthDbMock = vi.hoisted(() => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi.fn(async () => []),
   readProjectGrantsForUser: vi.fn(async () => []),
   readProjectsForUser: vi.fn(async () => []),

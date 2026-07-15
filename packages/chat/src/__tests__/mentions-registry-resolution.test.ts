@@ -9,6 +9,8 @@ const resolveAssistantHandles = vi.fn<(handles: string[]) => Promise<Map<string,
 const lookupAssistantHandlesByIds = vi.fn<(ids: string[]) => Promise<Map<string, string>>>();
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   resolveAssistantHandles: (h: string[]) => resolveAssistantHandles(h),
   lookupAssistantHandlesByIds: (ids: string[]) => lookupAssistantHandlesByIds(ids),
 }));

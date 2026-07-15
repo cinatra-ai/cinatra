@@ -164,25 +164,37 @@ export function OrgSwitcher({
               Organizations
             </DropdownMenuLabel>
             {status === "idle" || status === "loading" ? (
-              <div data-testid="org-switcher-loading" aria-hidden="true">
-                <SidebarMenuSkeleton />
-                <SidebarMenuSkeleton />
-                <SidebarMenuSkeleton />
-              </div>
+              <>
+                {/* The skeletons are decoration; the sr-only live region is
+                    what announces the pending fetch to assistive tech. */}
+                <span role="status" aria-live="polite" className="sr-only">
+                  Loading organizations
+                </span>
+                <div data-testid="org-switcher-loading" aria-hidden="true">
+                  <SidebarMenuSkeleton />
+                  <SidebarMenuSkeleton />
+                  <SidebarMenuSkeleton />
+                </div>
+              </>
             ) : null}
             {status === "error" ? (
-              <DropdownMenuItem
-                data-testid="org-switcher-retry"
-                className="text-muted-foreground"
-                onSelect={(event) => {
-                  // Keep the menu open — retry re-runs the fetch in place so
-                  // the list can never wedge in a stuck-loading state.
-                  event.preventDefault();
-                  void loadOrganizations();
-                }}
-              >
-                Couldn&apos;t load — Retry
-              </DropdownMenuItem>
+              <>
+                <span role="alert" className="sr-only">
+                  Couldn&apos;t load organizations
+                </span>
+                <DropdownMenuItem
+                  data-testid="org-switcher-retry"
+                  className="text-muted-foreground"
+                  onSelect={(event) => {
+                    // Keep the menu open — retry re-runs the fetch in place so
+                    // the list can never wedge in a stuck-loading state.
+                    event.preventDefault();
+                    void loadOrganizations();
+                  }}
+                >
+                  Couldn&apos;t load — Retry
+                </DropdownMenuItem>
+              </>
             ) : null}
             {status === "loaded" ? (
               isEmpty ? (

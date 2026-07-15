@@ -23,6 +23,8 @@ vi.mock("@/lib/agent-run-enqueue", () => ({ enqueueAgentRun: vi.fn() }));
 // via betterAuthDb.execute(sql) — mock it to return controlled rows.
 const dbExecute = vi.fn();
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: { execute: (...a: unknown[]) => dbExecute(...a) },
 }));
 

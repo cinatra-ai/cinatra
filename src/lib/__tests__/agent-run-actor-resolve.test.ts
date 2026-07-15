@@ -32,6 +32,8 @@ const { USERS, MEMBERS, fixtures, buildActorContextFromRunMock } = vi.hoisted(()
 }));
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: {
     select: () => ({
       from: (table: unknown) => ({

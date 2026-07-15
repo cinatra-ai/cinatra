@@ -61,7 +61,11 @@ vi.mock("@better-auth/oauth-provider/resource-client", () => ({
 const betterAuthDbMock = vi.hoisted(() => ({
   execute: vi.fn(async () => ({ rows: [] as Array<{ clientId: string; scopes: unknown }> })),
 }));
-vi.mock("@/lib/better-auth-db", () => ({ betterAuthDb: betterAuthDbMock }));
+vi.mock("@/lib/better-auth-db", () => ({
+  betterAuthDb: betterAuthDbMock,
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
+}));
 
 import { verifyA2AAccessToken } from "@/lib/a2a-auth";
 

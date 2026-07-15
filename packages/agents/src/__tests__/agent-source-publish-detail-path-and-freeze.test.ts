@@ -132,6 +132,8 @@ vi.mock("@/lib/mcp-pagination", () => ({
   buildListPage: vi.fn(() => ({ items: [], nextCursor: null })),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi.fn(async () => []),
   readProjectsForUser: vi.fn(async () => []),
   readUserById: vi.fn(async () => null),

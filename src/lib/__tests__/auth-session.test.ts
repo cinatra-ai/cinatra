@@ -23,6 +23,8 @@ function makeChain(rows: Row[]) {
 const dbChain: { rows: Row[] } = { rows: [] };
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: {
     select: () => makeChain(dbChain.rows),
   },

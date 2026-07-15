@@ -61,6 +61,8 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   resolveAssistantHandles: mocks.resolveAssistantHandles,
   lookupAssistantHandlesByIds: mocks.lookupAssistantHandlesByIds,
 }));

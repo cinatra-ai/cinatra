@@ -130,6 +130,8 @@ function makeUpdateChain() {
 }
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   betterAuthDb: {
     insert: () => makeInsertChain(),
     select: () => makeSelectChain(),

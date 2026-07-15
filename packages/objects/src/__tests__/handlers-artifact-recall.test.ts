@@ -45,6 +45,8 @@ vi.mock("../graphiti-client", () => ({
 }));
 
 vi.mock("@/lib/better-auth-db", () => ({
+  readOrganizationNameForUser: vi.fn(async () => null),
+  listOrganizationsForUser: vi.fn(async () => []),
   readTeamsForUser: vi.fn(async () => [] as Array<{ id: string; name: string }>),
 }));
 
