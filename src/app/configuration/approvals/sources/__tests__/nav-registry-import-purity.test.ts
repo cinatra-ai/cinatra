@@ -98,8 +98,12 @@ describe("nav-registry import purity", () => {
     expect(joined).toMatch(/marketplace-shared\.ts$/m);
     expect(joined).toMatch(/agent-creation-requests\.contract\.ts$/m);
     // Reached a contract's package-boundary store import — proves the walker
-    // followed the contract graph out to its bare specifiers.
-    expect([...specifiers].some((s) => s.startsWith("@cinatra-ai/marketplace-mcp-client"))).toBe(true);
+    // followed the contract graph out to its bare @cinatra-ai/* specifiers.
+    // Anchored on the scope, not a specific package name, so the sanity check
+    // stays robust as boundary packages change (the prior @cinatra-ai/workflows
+    // anchor was removed with the workflow kind) without this test itself
+    // naming a package the vendored-import ratchet guard bans.
+    expect([...specifiers].some((s) => s.startsWith("@cinatra-ai/"))).toBe(true);
   });
 
   it("never reaches the agents runtime, decision-helpers, or decision-actions", () => {
