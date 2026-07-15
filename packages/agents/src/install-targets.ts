@@ -27,12 +27,20 @@ import "server-only";
  * reflects this naturally, with no special-case branch needed here.
  */
 
-export type InstallTargetLevel = "organization" | "team" | "project";
+export type InstallTargetLevel =
+  | "organization"
+  | "team"
+  | "project"
+  | "workspace"
+  | "admin";
 
 export type InstallTarget = {
   /** Picker value: "org:<id>" | "team:<id>" | "project:<id>" (multi-scope W1
    * retired the bare "org" token; the org row now carries "org:<activeOrgId>"
-   * so labels / adapters / ownerEntityNames unify on the id-carrying form). */
+   * so labels / adapters / ownerEntityNames unify on the id-carrying form).
+   * The always-offered workspace scopes (cinatra#1527) carry the bare tokens
+   * "workspace" / "admin" — matching the AccessCombobox labels and the audience
+   * visibility tokens. */
   value: string;
   label: string;
   level: InstallTargetLevel;
@@ -70,12 +78,23 @@ export type BuildInstallTargetsArgs = {
     owningTeamId: string | null;
   }[];
   currentProjectId?: string;
+  /**
+   * cinatra#1527: append the two always-offered workspace scopes — "Whole
+   * Workspace" and "Admins only". OFF by default so the shared agent
+   * at-scope picker (which cannot install to a workspace-audience scope — its
+   * install persists an owner level, not an audience) is unaffected. The
+   * extension marketplace picker passes `true`. Both rows are platform-admin-
+   * only (mirrors assertCanInstallAtTarget); non-admins see them DISABLED with
+   * a reason.
+   */
+  includeWorkspaceScopes?: boolean;
 };
 
 const REASON_ORG = "Requires organization admin role.";
 const REASON_TEAM = "Requires team admin role on this team.";
 const REASON_PROJECT =
   "Requires project ownership or team admin of the owning team.";
+const REASON_WORKSPACE_SCOPE = "Requires platform admin.";
 
 export function buildInstallTargets(
   args: BuildInstallTargetsArgs,
@@ -135,6 +154,31 @@ export function buildInstallTargets(
       id: project.id,
       disabled: !enabled,
       reason: enabled ? undefined : REASON_PROJECT,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Workspace scopes (cinatra#1527) — ALWAYS offered when requested, both
+  // platform-admin-only (mirrors assertCanInstallAtTarget's workspace/admin
+  // branch). The id is the active org, the canonical tenant/workspace anchor;
+  // the install action re-derives it server-side and never trusts a client id.
+  // ---------------------------------------------------------------------------
+  if (args.includeWorkspaceScopes) {
+    rows.push({
+      value: "workspace",
+      label: "Whole Workspace",
+      level: "workspace",
+      id: activeOrgId,
+      disabled: !isPlatformAdmin,
+      reason: isPlatformAdmin ? undefined : REASON_WORKSPACE_SCOPE,
+    });
+    rows.push({
+      value: "admin",
+      label: "Admins only",
+      level: "admin",
+      id: activeOrgId,
+      disabled: !isPlatformAdmin,
+      reason: isPlatformAdmin ? undefined : REASON_WORKSPACE_SCOPE,
     });
   }
 

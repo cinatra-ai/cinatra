@@ -196,6 +196,53 @@ describe("installExtensionPackageFormAction — access selector", () => {
     });
   });
 
+  it("3b. workspace target → ['workspace'] policy; the tenant id is RE-DERIVED, a forged client id is discarded (cinatra#1527 AC3)", async () => {
+    readRowMock.mockResolvedValueOnce(null).mockResolvedValueOnce(ROW);
+    await runAction({
+      ...INPUT,
+      // A malicious/forged cross-org id must never reach the gate or the policy.
+      accessTarget: { level: "workspace", id: "forged-other-org" },
+    });
+    // Gate received the SESSION tenant id (org-1), not the forged client value.
+    // (The gate mocks are typed with no params, so read the recorded call args
+    // through an unknown[] cast rather than a strict tuple index.)
+    expect(targetGateMock).toHaveBeenCalledTimes(1);
+    const wsTenantArgs = (tenantGateMock.mock.calls[0] ?? []) as unknown[];
+    expect(wsTenantArgs[1]).toEqual({ level: "workspace", id: "org-1" });
+    expect(setAccessMock).toHaveBeenCalledExactlyOnceWith({
+      kind: "connector",
+      resourceId: "iext_abc123",
+      installedByUserId: "admin-1",
+      policy: {
+        runListVisibility: ["workspace"],
+        runDataVisibility: ["workspace"],
+        runExecuteVisibility: ["workspace"],
+        allowRunSharing: false,
+      },
+    });
+  });
+
+  it("3c. admin target → ['admin'] audience policy on all three tiers", async () => {
+    readRowMock.mockResolvedValueOnce(null).mockResolvedValueOnce(ROW);
+    await runAction({
+      ...INPUT,
+      accessTarget: { level: "admin", id: "forged-other-org" },
+    });
+    const adminTenantArgs = (tenantGateMock.mock.calls[0] ?? []) as unknown[];
+    expect(adminTenantArgs[1]).toEqual({ level: "admin", id: "org-1" });
+    expect(setAccessMock).toHaveBeenCalledExactlyOnceWith({
+      kind: "connector",
+      resourceId: "iext_abc123",
+      installedByUserId: "admin-1",
+      policy: {
+        runListVisibility: ["admin"],
+        runDataVisibility: ["admin"],
+        runExecuteVisibility: ["admin"],
+        allowRunSharing: false,
+      },
+    });
+  });
+
   it("4. authz deny → NOTHING installed, classified failure returned (fail closed)", async () => {
     targetGateMock.mockRejectedValueOnce(new Error("forbidden"));
     const result = await runAction({
