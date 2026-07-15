@@ -314,8 +314,10 @@ export const betterAuthMembers = pgTable("member", {
 // team.organizationId.
 //
 // `role` ('member' | 'admin') is APP-OWNED, not Better Auth's: the library has
-// no per-team-member role and its teamMember `additionalFields` hook silently
-// provisions nothing (better-auth#5234), so the column is provisioned by the
+// no per-team-member role and its schema builder ignores `teamMember`
+// additionalFields (maintainer-endorsed workaround per better-auth
+// discussion#2130; native support pending in better-auth#7628/#7886), so the
+// column is provisioned by the
 // guarded post-step in `scripts/better-auth-migrate.mts` (cinatra#1566). On a
 // deployment that has not re-run `pnpm auth:migrate` the column is ABSENT —
 // every read of it must go through the `teamMemberRoleColumnExists()` guard

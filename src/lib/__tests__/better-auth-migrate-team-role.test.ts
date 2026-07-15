@@ -1,7 +1,8 @@
 // cinatra#1566 — `ensureTeamMemberRoleColumn`, the app-owned guarded DDL that
 // provisions `public."teamMember"."role"`. This is the ONLY correct
 // provisioning site: better-auth 1.6.19's teamMember schema branch ignores
-// `additionalFields` (better-auth#5234) and core `core__NNNN` migrations are
+// `additionalFields` (better-auth discussion#2130; native support pending in
+// better-auth#7628/#7886) and core `core__NNNN` migrations are
 // ledger-faked on fresh schemas — so the bootstrap migration runner carries a
 // post-step that must be idempotent, transactional, and backfill-once.
 //

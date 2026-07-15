@@ -148,9 +148,13 @@ async function ensureRoleCheckConstraint(client: PoolClient) {
  *
  * WHY HERE and not via Better Auth config or a core migration (cinatra#1566):
  *  - better-auth 1.6.19's organization plugin has NO per-team-member role, and
- *    its `teamMember` schema branch ignores `additionalFields` — a config-only
- *    attempt typechecks but provisions nothing (upstream better-auth#5234).
- *    `getMigrations()` therefore never creates this column.
+ *    its schema builder spreads `additionalFields` for every org sub-entity
+ *    EXCEPT `teamMember` (still true at 1.6.23 and 1.7.0-rc.1) — a config-only
+ *    attempt typechecks but provisions nothing. Maintainer guidance is to
+ *    modify the DB schema yourself (better-auth discussion#2130); native
+ *    `teamMember.additionalFields` is pending in the org-plugin rewrite
+ *    (better-auth#7628 → #7886, unreleased). `getMigrations()` therefore
+ *    never creates this column.
  *  - A `core__NNNN` migration cannot provision it either: the core chain is
  *    ledger-faked on fresh schemas (packages/migrations/src/core-migrations.mjs)
  *    on the assumption bootstrap DDL already produced the current shape — but
@@ -168,7 +172,12 @@ async function ensureRoleCheckConstraint(client: PoolClient) {
  * row per team to 'admin' — the earliest member with a stable tie-break
  * (`DISTINCT ON ("teamId") … ORDER BY "teamId", "createdAt" ASC, id ASC`),
  * which is the creator for app-created teams (`src/app/teams/new/actions.ts`
- * inserts the creator's membership first).
+ * inserts the creator's membership first). ACCEPTED LIMITATION: on legacy or
+ * imported data, or where the creator's membership row was since deleted, the
+ * earliest SURVIVING member is promoted instead — the schema records no
+ * creator provenance anywhere to prefer, and each team needs exactly one
+ * deterministic admin for the role model to be administrable at all. A wrong
+ * grant is visible and correctable in the members-card role UI.
  *
  * When the column PRE-exists (hand-provisioned or a re-run after a partial
  * failure), the backfill is skipped and a shape-repair pass runs instead:
