@@ -14,6 +14,12 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 // server graph, no @/lib/auth) — the PACKAGE server helpers stay behind the
 // existing dynamic await import("@cinatra-ai/notifications/server") calls.
 import "@/lib/notifications-host";
+// Side-effect import injects the run human-wait notifier (cinatra #1559 / E9)
+// into the packages/agents seam so `transitionRunStatus` mints/clears the
+// durable awaiting-human notification on the worker path (where run execution
+// drives most human-gate enters/leaves). Idempotent with the same import in
+// src/instrumentation.node.ts.
+import "@/lib/register-run-wait-notifier";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
 import { dispatchRegisteredJob } from "@/lib/background-jobs-registry";
 

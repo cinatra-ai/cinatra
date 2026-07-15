@@ -17,10 +17,14 @@ export {
   isConfigurationNeedsNotification,
   getConfigurationNeedsMetadata,
   AGENT_CONFIGURATION_NEEDS_CATEGORY,
+  isRunAwaitingHumanNotification,
+  getRunAwaitingHumanMetadata,
+  RUN_AWAITING_HUMAN_CATEGORY,
 } from "./flyout-state";
 export type {
   ConfigurationNeedsConnector,
   ConfigurationNeedsMetadata,
+  RunAwaitingHumanMetadata,
 } from "./flyout-state";
 
 export {

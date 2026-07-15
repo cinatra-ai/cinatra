@@ -247,6 +247,67 @@ export function filterAgentCreationProgressByRunId(
 export const AGENT_CONFIGURATION_NEEDS_CATEGORY =
   "agent_configuration_needs" as const;
 
+// ---------------------------------------------------------------------------
+// Run "awaiting human" notification (cinatra #1559 / notifications epic E9).
+//
+// A run parked on a genuine human gate (`pending_approval`, or the stop-run-hitl
+// `pending_input` reason) mints a durable actionable notification to its
+// initiator, hard-deleted when the wait resolves (the #1057 config-needs
+// lifecycle applied to runs). The row renders through the unified feed as a
+// standard notification: its `href` deep-links to the run's approval surface, so
+// the row-shell's inline "Open" action routes the viewer straight to the gate.
+//
+// The category tag + payload SHAPE live here (browser-safe, zero deps) so the
+// host writer and the feed renderer share ONE definition and cannot drift. The
+// dedupeKey helper + input builder are host-side (see
+// `src/lib/agent-run-wait-notifications.ts`), exactly as with config-needs.
+// ---------------------------------------------------------------------------
+
+/** `metadata.category` tag identifying a run-awaiting-human notification. */
+export const RUN_AWAITING_HUMAN_CATEGORY = "run_awaiting_human" as const;
+
+/** The `metadata.runAwaitingHuman` payload carried by the notification. */
+export type RunAwaitingHumanMetadata = {
+  /** The run parked on the human gate (also the dedupeKey discriminator). */
+  runId: string;
+  /** Which flavour of human gate the run is parked on. */
+  reason: "pending_approval" | "pending_input";
+};
+
+/**
+ * True when the notification is a run-awaiting-human entry
+ * (`metadata.category === RUN_AWAITING_HUMAN_CATEGORY`). Pure.
+ */
+export function isRunAwaitingHumanNotification(n: AppNotification): boolean {
+  const md = n.metadata as { category?: unknown } | undefined;
+  return Boolean(md) && md?.category === RUN_AWAITING_HUMAN_CATEGORY;
+}
+
+/**
+ * Extract + validate the `runAwaitingHuman` payload, returning `null` for any
+ * non-matching or malformed row. Defensive — the feed renderer must never throw
+ * on a hand-crafted / legacy metadata blob. Pure — never mutates the input.
+ */
+export function getRunAwaitingHumanMetadata(
+  n: AppNotification,
+): RunAwaitingHumanMetadata | null {
+  const md = n.metadata as
+    | { category?: unknown; runAwaitingHuman?: unknown }
+    | undefined;
+  if (!md || md.category !== RUN_AWAITING_HUMAN_CATEGORY) return null;
+  const ra = md.runAwaitingHuman as
+    | { runId?: unknown; reason?: unknown }
+    | undefined;
+  if (!ra || typeof ra !== "object") return null;
+  const runId = typeof ra.runId === "string" ? ra.runId : "";
+  const reason =
+    ra.reason === "pending_approval" || ra.reason === "pending_input"
+      ? ra.reason
+      : null;
+  if (!runId || !reason) return null;
+  return { runId, reason };
+}
+
 /** One required connector the affected agent still needs configured. */
 export type ConfigurationNeedsConnector = {
   /** Human-readable manifest displayName — the primary rendered link label. */

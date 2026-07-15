@@ -109,6 +109,14 @@ import "@/lib/register-pm-work-store-providers";
 // activation.
 import "@/lib/register-blog-providers";
 
+// Inject the run human-wait notifier (cinatra #1559 / notifications epic E9)
+// into the packages/agents seam so `transitionRunStatus` mints/clears the
+// durable, actionable awaiting-human notification on every human-gate
+// enter/leave. Server-action status transitions (approve / reject / stop /
+// reset) run in this Next.js process; the BullMQ worker registers the same
+// notifier via src/lib/background-jobs.ts. Idempotent (global-symbol slot).
+import "@/lib/register-run-wait-notifier";
+
 import { installFatalErrorHandlers } from "@/lib/boot/fatal-error-policy";
 import { runBoot } from "@/lib/boot/boot-orchestrator";
 

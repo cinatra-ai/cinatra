@@ -16,6 +16,10 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
+// Run human-wait notification lifecycle seam (cinatra #1559 / E9). Runtime
+// edge store → run-wait-notifier only; run-wait-notifier's `AgentRunStatus`
+// import is type-only (erased) so there is no runtime cycle.
+import { dispatchRunWaitTransition } from "./run-wait-notifier";
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   agentTemplates,
@@ -1677,6 +1681,16 @@ export async function transitionRunStatus(
     startedAt?: Date;
     completedAt?: Date;
     stepResults?: unknown[];
+    /**
+     * Marks a `→pending_input` transition as a GENUINE human-wait gate (the
+     * stop-run-hitl pause, cinatra #1058 — a human must install optional
+     * sub-agents and resume). Only that one `pending_input` reason sets this;
+     * every other `pending_input` reason (setup, trigger editing, failed-run
+     * reset, enqueue-compensation) leaves it unset so it does NOT notify. Not a
+     * DB column — `updateAgentRunStatus` whitelists patch fields and ignores it;
+     * it only feeds the run-wait-notifier classification below.
+     */
+    humanWaitGate?: boolean;
   },
 ): Promise<void> {
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
@@ -1686,13 +1700,30 @@ export async function transitionRunStatus(
   if (!won) {
     throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
   }
-  // Delegate terminal-state side-effects + meta patching to updateAgentRunStatus.
-  // The CAS already wrote the status column; re-writing it here is a no-op that
-  // still runs the terminal-detection branch (expireRunStream) and meta-patch
-  // logic. Skip the call for non-terminal transitions with no meta (the CAS's
-  // single UPDATE was enough).
-  if (meta || TERMINAL_RUN_STATUSES.has(to)) {
-    await updateAgentRunStatus(runId, to, meta as Partial<AgentRunRecord> | undefined);
+  try {
+    // Delegate terminal-state side-effects + meta patching to
+    // updateAgentRunStatus. The CAS already wrote the status column; re-writing
+    // it here is a no-op that still runs the terminal-detection branch
+    // (expireRunStream) and meta-patch logic. Skip the call for non-terminal
+    // transitions with no meta (the CAS's single UPDATE was enough).
+    if (meta || TERMINAL_RUN_STATUSES.has(to)) {
+      await updateAgentRunStatus(runId, to, meta as Partial<AgentRunRecord> | undefined);
+    }
+  } finally {
+    // Run human-wait notification lifecycle (cinatra #1559 / E9). Emit-on-enter
+    // / clear-on-leave for genuine human gates, driven from this single
+    // canonical status seam. In `finally` so it STILL fires when the meta/
+    // terminal side-effect above throws — the status-column CAS already
+    // committed the new state, so the run genuinely entered/left the gate and a
+    // retry would lose the CAS (missing the emit or, worse, the terminal clear).
+    // Best-effort + host-injected: a no-op when no host wired a notifier, and a
+    // notification failure can never fail this transition.
+    await dispatchRunWaitTransition({
+      runId,
+      from,
+      to,
+      humanWaitGate: meta?.humanWaitGate === true,
+    });
   }
 }
 
