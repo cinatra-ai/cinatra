@@ -236,6 +236,42 @@ function normalizeCardVendor(
   return { name, storeUrl: normalizeOptionalString(raw.store_url) };
 }
 
+/**
+ * Resolve the card's human display name in the design-spec fallback order
+ * (cinatra#1605). Every rendered name on `/configuration/marketplace` — the
+ * listing-card title, the install popup title, and the detail modal, which all
+ * consume `card.displayName` — binds `manifest.displayName` per the pinned spec
+ * (`data-field="name=manifest.displayName"`), NEVER the raw package name.
+ *
+ * Highest priority first:
+ *   1. a NON-EMPTY, trimmed catalog `display_name` — the current marketplace
+ *      data wins (a listed package keeps the name it already rendered);
+ *   2. the extension's SELF-DECLARED `cinatra.displayName` from the generated
+ *      static manifest, matched by EXACT package identity in the browse loader —
+ *      this rescues a bundled extension whose catalog entry omits the field
+ *      (e.g. `@cinatra-ai/default-artifact` → "Default Artifact");
+ *   3. the raw package name — a TRUE LAST RESORT, meaning neither the catalog
+ *      nor the static manifest supplied a human name (a data gap, not a routine
+ *      state). Shown verbatim: never prettified into a fake human name, and the
+ *      slug is never substituted for a display name (the same anti-lookalike
+ *      discipline as the vendor byline, cinatra#1528).
+ *
+ * Blank / whitespace values at any tier are treated as absent
+ * (`normalizeOptionalString`), so a `"  "` catalog `display_name` falls through
+ * to the manifest rather than rendering as an empty title.
+ */
+export function resolveCardDisplayName(
+  catalogDisplayName: string | null | undefined,
+  manifestDisplayName: string | null | undefined,
+  packageName: string,
+): string {
+  return (
+    normalizeOptionalString(catalogDisplayName) ??
+    normalizeOptionalString(manifestDisplayName) ??
+    packageName
+  );
+}
+
 const KIND_LABELS: Record<MarketplaceCardKind, string> = {
   agent: "Agent",
   skill: "Skill",
@@ -334,6 +370,16 @@ export function catalogEntryToCardData(
      * degrades exactly as before. Guarded here (`safeManifestLogoSrc`).
      */
     manifestLogo?: string | null;
+    /**
+     * The extension's SELF-DECLARED human name (`cinatra.displayName` =
+     * `STATIC_EXTENSION_MANIFEST[pkg].displayName`), injected by the server-side
+     * browse loader for a locally-known (bundled) package (cinatra#1605),
+     * matched by EXACT package identity (no fuzzy match). The remote catalog
+     * does not carry the manifest, so a not-bundled package leaves this null and
+     * the name resolution falls through to the catalog `display_name` or, only
+     * as a true last resort, the package name (`resolveCardDisplayName`).
+     */
+    manifestDisplayName?: string | null;
   },
 ): MarketplaceCardData | null {
   const packageName = typeof entry.package_name === "string" ? entry.package_name.trim() : "";
@@ -345,7 +391,16 @@ export function catalogEntryToCardData(
   return {
     packageName,
     packageVersion,
-    displayName: entry.display_name || packageName,
+    // cinatra#1605: resolve a human name (catalog display_name → static manifest
+    // displayName → package name LAST), so a bundled extension whose catalog
+    // entry omits display_name renders its manifest name — not the raw package
+    // name — everywhere `card.displayName` feeds (card title, install popup,
+    // detail modal).
+    displayName: resolveCardDisplayName(
+      entry.display_name,
+      opts?.manifestDisplayName,
+      packageName,
+    ),
     description: normalizeCardDescription(entry.description),
     kindSlug,
     kindLabel: entry.kind_label || KIND_LABELS[kindSlug],

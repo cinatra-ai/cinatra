@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
 import {
   catalogEntryToCardData,
+  resolveCardDisplayName,
   normalizeCardDescription,
   resolveMarketplaceCardCta,
   resolveCardPriceLabel,
@@ -177,6 +178,117 @@ describe("catalogEntryToCardData", () => {
     expect(card!.description).toBe(
       "Email Outreach Agent Run an outbound email campaign from scratch.",
     );
+  });
+});
+
+describe("resolveCardDisplayName — human-name fallback order (cinatra#1605)", () => {
+  // Anti-lookalike (cinatra#1528 / conformance seed-data discipline): the
+  // manifest display name shares NO token with the package name OR its slug, so
+  // a resolver that leaks / prettifies the package name can NEVER coincidentally
+  // produce the expected value — the assertion is a genuine RED, not a lookalike
+  // pass. (A shared-token pair like "@…/default-artifact" ↔ "Default Artifact"
+  // would let a slug-prettifier pass, so it is deliberately avoided here.)
+  const PKG = "@cinatra-ai/quill-scribe"; // tokens: cinatra, ai, quill, scribe
+  const SLUG = "quill-scribe";
+  const MANIFEST_NAME = "Ledger Beacon"; // tokens: ledger, beacon — disjoint
+  // Every plausible prettification of the package name / slug. The resolved
+  // human name must equal NONE of these (it is the manifest name, not a
+  // derived-from-package-name string).
+  const PRETTIFY_CANDIDATES = [
+    SLUG,
+    "Quill Scribe",
+    "Quill-Scribe",
+    "quill scribe",
+    "Cinatra Ai Quill Scribe",
+    PKG,
+  ];
+
+  it("prefers a non-empty trimmed catalog display_name (current marketplace data wins)", () => {
+    // Catalog name present AND a different manifest name present → catalog wins.
+    expect(resolveCardDisplayName("Blog Skills", MANIFEST_NAME, PKG)).toBe("Blog Skills");
+    expect(resolveCardDisplayName("  Blog Skills  ", MANIFEST_NAME, PKG)).toBe("Blog Skills");
+  });
+
+  it("falls back to the static manifest displayName when the catalog omits display_name (bundled rescue)", () => {
+    // display_name absent/blank/whitespace → the manifest human name resolves,
+    // NOT the raw package name (the #1605 symptom). MANIFEST_NAME shares no
+    // token with PKG, so this proves the manifest tier was chosen — not a
+    // prettified package name that happens to look like it.
+    for (const absent of [undefined, null, "", "   "]) {
+      const resolved = resolveCardDisplayName(absent, MANIFEST_NAME, PKG);
+      expect(resolved).toBe(MANIFEST_NAME);
+      for (const pretty of PRETTIFY_CANDIDATES) expect(resolved).not.toBe(pretty);
+    }
+  });
+
+  it("uses the raw package name ONLY as a true last resort (neither catalog nor manifest supplied a name)", () => {
+    expect(resolveCardDisplayName(undefined, undefined, PKG)).toBe(PKG);
+    expect(resolveCardDisplayName("", null, PKG)).toBe(PKG);
+    expect(resolveCardDisplayName("  ", "  ", PKG)).toBe(PKG);
+  });
+
+  it("never prettifies or substitutes the slug for the package name at the last resort (anti-lookalike)", () => {
+    // Last-resort output is the package name VERBATIM — no derived pretty name.
+    const resolved = resolveCardDisplayName(undefined, undefined, PKG);
+    expect(resolved).toBe(PKG);
+    expect(resolved).not.toBe(MANIFEST_NAME);
+    // It is the untouched scoped npm name: no space-separated prettification.
+    expect(resolved).toBe("@cinatra-ai/quill-scribe");
+    expect(resolved).not.toContain(" ");
+  });
+});
+
+describe("catalogEntryToCardData — display-name resolution (cinatra#1605)", () => {
+  // The install popup title, the listing-card title, and the detail modal all
+  // consume `card.displayName`; fixing it at the model covers all three (AC5).
+  // Anti-lookalike pair (shares no token with the package name/slug), so binding
+  // MANIFEST_NAME proves the manifest tier was chosen — never a prettified
+  // package name that merely resembles it.
+  const PKG = "@cinatra-ai/quill-scribe";
+  const MANIFEST_NAME = "Ledger Beacon";
+
+  it("keeps the catalog display_name when present, even if a manifest name is injected", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: PKG, display_name: "Catalog Name" }),
+      { manifestDisplayName: MANIFEST_NAME },
+    );
+    expect(card!.displayName).toBe("Catalog Name");
+  });
+
+  it("resolves the injected manifest displayName when the catalog entry lacks display_name (the popup no longer shows the package name)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: PKG, display_name: "" as never }),
+      { manifestDisplayName: MANIFEST_NAME },
+    );
+    expect(card!.displayName).toBe(MANIFEST_NAME);
+    expect(card!.displayName).not.toBe(PKG);
+    // Not a prettified slug either (anti-lookalike): shares no token with PKG.
+    expect(card!.displayName).not.toBe("Quill Scribe");
+    expect(card!.displayName).not.toBe("quill-scribe");
+  });
+
+  it("a bundled extension (present in the static manifest) NEVER falls through to the package name (AC3)", () => {
+    // The manifest tier is the guarantee for a bundled package with no catalog
+    // display_name — the package name must not appear as the title.
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: PKG, display_name: undefined as never }),
+      { manifestDisplayName: MANIFEST_NAME },
+    );
+    expect(card!.displayName).not.toBe(card!.packageName);
+    expect(card!.displayName).toBe(MANIFEST_NAME);
+  });
+
+  it("falls to the package name only when neither the catalog nor the manifest supplies a name (data gap, not a routine state)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: PKG, display_name: "" as never }),
+      { manifestDisplayName: null },
+    );
+    expect(card!.displayName).toBe(PKG);
+  });
+
+  it("un-enriched call (no manifest injected) still resolves the catalog display_name", () => {
+    const card = catalogEntryToCardData(catalogEntry({ display_name: "Blog Skills" }));
+    expect(card!.displayName).toBe("Blog Skills");
   });
 });
 

@@ -88,6 +88,17 @@ describe("ExtensionInstallScopeDialog", () => {
     expect(SOURCE).toMatch(/pending \? ["']Installing\.\.\.["'] : ["']Install["']/);
     expect(SOURCE).not.toMatch(/isLoading=/);
   });
+
+  it("titles the popup from the resolved displayName prop, never a package-name substitute (cinatra#1605)", () => {
+    // The popup title binds `card.displayName` (passed as the displayName prop),
+    // which the marketplace card model now resolves to a human name
+    // (catalog display_name -> static manifest displayName -> package name LAST).
+    // The dialog's own `|| packageName` is a defensive tail only — with a
+    // resolved non-empty displayName it never triggers. Pin the binding so the
+    // popup can never be refactored to title itself from the raw package name.
+    expect(SOURCE).toMatch(/const\s+name\s*=\s*displayName\s*\|\|\s*packageName;/);
+    expect(SOURCE).toMatch(/<DialogTitle>Install \{name\}<\/DialogTitle>/);
+  });
 });
 
 describe("marketplace screen wiring", () => {

@@ -7,11 +7,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // loader's orchestration is tested in isolation. Field mapping itself is
 // covered by marketplace-card-model.test.ts.
 
-const { publicListMock, publicDetailMock, loadVerdaccioMock } = vi.hoisted(() => ({
-  publicListMock: vi.fn(),
-  publicDetailMock: vi.fn(),
-  loadVerdaccioMock: vi.fn(),
-}));
+const { publicListMock, publicDetailMock, loadVerdaccioMock, catalogToCardMock } = vi.hoisted(
+  () => ({
+    publicListMock: vi.fn(),
+    publicDetailMock: vi.fn(),
+    loadVerdaccioMock: vi.fn(),
+    catalogToCardMock: vi.fn(),
+  }),
+);
 
 vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", () => ({
   fetchPublicMarketplaceExtensionList: publicListMock,
@@ -26,10 +29,10 @@ vi.mock("@cinatra-ai/registries", () => ({
 
 // Mock the screens barrel so the real (server-component) barrel never loads in
 // the node test env. The mapper returns an identifiable shape; its real field
-// logic is tested separately.
+// logic is tested separately. A hoisted spy so a test can assert the enrichment
+// OPTS the loader threads in (manifest.logo + manifest.displayName, cinatra#1605).
 vi.mock("@cinatra-ai/extensions/screens", () => ({
-  catalogEntryToCardData: (e: { package_name: string; version: string }) =>
-    e.version ? { packageName: e.package_name, packageVersion: e.version } : null,
+  catalogEntryToCardData: catalogToCardMock,
 }));
 
 vi.mock("@/lib/verdaccio-config", () => ({
@@ -40,11 +43,21 @@ import { loadMarketplaceBrowse, loadPublicMarketplaceDetail } from "../marketpla
 import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
 import { InstanceNamespaceNotConfiguredError } from "@cinatra-ai/registries";
 import { VendorCredentialsMissingError } from "@/lib/marketplace-credentials";
+// The REAL generated static manifest — the same source the loader reads — so
+// the enrichment wiring test asserts against the actual bundled displayName
+// instead of a hardcoded string that could drift on regeneration.
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 
 beforeEach(() => {
   publicListMock.mockReset();
   publicDetailMock.mockReset();
   loadVerdaccioMock.mockReset();
+  catalogToCardMock.mockReset();
+  // Default mapper: identifiable shape, gated on a real version (mirrors the
+  // real mapper's install-identity guard); ignores the enrichment opts.
+  catalogToCardMock.mockImplementation((e: { package_name: string; version: string }) =>
+    e.version ? { packageName: e.package_name, packageVersion: e.version } : null,
+  );
   loadVerdaccioMock.mockResolvedValue({
     registryUrl: "https://registry.test",
     packageScope: "",
@@ -66,6 +79,71 @@ describe("loadMarketplaceBrowse", () => {
     expect(res.cards).toEqual([{ packageName: "@a/x", packageVersion: "1.0.0" }]);
     expect(publicListMock).toHaveBeenCalledWith({ limit: 100, offset: 0 });
     expect(publicListMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads the static-manifest displayName into the card mapper for a bundled package (cinatra#1605)", async () => {
+    // A bundled package whose catalog entry OMITS display_name must still
+    // resolve a human name from the static manifest — so the loader injects the
+    // manifest displayName by EXACT package identity. Asserted against the real
+    // manifest value (no hardcoded string that could drift).
+    const pkg = "@cinatra-ai/default-artifact";
+    const expected = STATIC_EXTENSION_MANIFEST[pkg]?.displayName;
+    expect(expected).toBeTruthy(); // guards the fixture package still ships
+    publicListMock.mockResolvedValue({
+      items: [{ package_name: pkg, version: "0.1.0" }],
+      total: 1,
+    });
+
+    await loadMarketplaceBrowse();
+
+    expect(catalogToCardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ package_name: pkg }),
+      expect.objectContaining({ manifestDisplayName: expected }),
+    );
+  });
+
+  it("matches the manifest by EXACT package identity — a near-collision name does NOT borrow a bundled displayName (cinatra#1605)", async () => {
+    // A package_name that is a prefix/suffix neighbour of a real bundled key
+    // must NOT fuzzy-match it. Proves the lookup is `MANIFEST[name]` (exact key)
+    // and can never leak one extension's human name onto a look-alike identity.
+    const bundled = "@cinatra-ai/default-artifact";
+    expect(STATIC_EXTENSION_MANIFEST[bundled]?.displayName).toBeTruthy();
+    for (const nearMiss of [
+      "@cinatra-ai/default-artifactx", // suffix neighbour
+      "@cinatra-ai/default-artifac", // truncated neighbour
+      "@cinatra-ai/default", // scope-prefix neighbour
+    ]) {
+      expect(STATIC_EXTENSION_MANIFEST[nearMiss]).toBeUndefined(); // guard: truly absent
+      publicListMock.mockReset();
+      publicListMock.mockResolvedValue({
+        items: [{ package_name: nearMiss, version: "1.0.0" }],
+        total: 1,
+      });
+
+      await loadMarketplaceBrowse();
+
+      expect(catalogToCardMock).toHaveBeenCalledWith(
+        expect.objectContaining({ package_name: nearMiss }),
+        expect.objectContaining({ manifestDisplayName: null }),
+      );
+    }
+  });
+
+  it("injects a null manifestDisplayName for a not-bundled (storefront-only) package", async () => {
+    // A package the host does not bundle is absent from the static manifest, so
+    // the loader passes null and the name resolution degrades to the catalog
+    // display_name / package name — never crashing on an unknown package.
+    publicListMock.mockResolvedValue({
+      items: [{ package_name: "@storefront-only/mystery", version: "1.0.0" }],
+      total: 1,
+    });
+
+    await loadMarketplaceBrowse();
+
+    expect(catalogToCardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ package_name: "@storefront-only/mystery" }),
+      expect.objectContaining({ manifestDisplayName: null }),
+    );
   });
 
   it("pages the storefront catalog past the 100-per-call public catalog clamp", async () => {
