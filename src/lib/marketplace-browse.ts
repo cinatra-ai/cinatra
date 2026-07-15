@@ -156,6 +156,24 @@ function manifestLogoForPackage(rawName: unknown): string | null {
 }
 
 /**
+ * The extension's SELF-DECLARED human name (`cinatra.displayName` =
+ * `STATIC_EXTENSION_MANIFEST[pkg].displayName`) for a package the host
+ * bundles/knows, else null (cinatra#1605). Read from the SAME
+ * `STATIC_EXTENSION_MANIFEST` `/connectors` and the installed page use, matched
+ * by EXACT package identity, so a bundled extension whose catalog entry omits
+ * `display_name` still resolves its human name in the marketplace card + install
+ * popup instead of falling through to the raw package name. A storefront-only
+ * (not-bundled) package returns null and the name resolution degrades to the
+ * catalog `display_name` (owned separately) or the package name last resort.
+ * `package_name` is normalized (trim) before the lookup.
+ */
+function manifestDisplayNameForPackage(rawName: unknown): string | null {
+  const name = typeof rawName === "string" ? rawName.trim() : "";
+  if (name.length === 0) return null;
+  return STATIC_EXTENSION_MANIFEST[name]?.displayName ?? null;
+}
+
+/**
  * Load the marketplace browse catalog. Pure-ish orchestration over the public
  * catalog client; the field mapping is delegated to the pure mappers in
  * `@cinatra-ai/extensions/screens`.
@@ -169,6 +187,9 @@ export async function loadMarketplaceBrowse(): Promise<MarketplaceBrowseResult> 
     .map((entry) =>
       catalogEntryToCardData(entry, {
         manifestLogo: manifestLogoForPackage(entry.package_name),
+        // cinatra#1605: the manifest's self-declared human name rescues a
+        // bundled extension whose catalog entry omits `display_name`.
+        manifestDisplayName: manifestDisplayNameForPackage(entry.package_name),
       }),
     )
     .filter((c): c is MarketplaceCardData => c !== null);
