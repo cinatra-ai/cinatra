@@ -41,6 +41,7 @@ import { listInstalledExtensions } from "../canonical-store";
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
 import { sourceVersion } from "../lifecycle-ui";
 import { resolveInstalledVendorName } from "./installed-vendor";
+import { resolveInstalledDisplayName } from "./installed-display-name";
 // The per-extension Settings route builder lives in the pure model module
 // (unit-testable without the server-only loader graph); re-exported here for
 // the card + any existing importer.
@@ -229,7 +230,18 @@ function collapseKindRows(input: {
     byPackage.set(packageName, {
       kind,
       packageName,
-      displayName: nativeName ?? summary?.title ?? packageName,
+      // §VI card title. The artifact-kind descriptor carries no name (unlike
+      // agent/skill/connector/workflow), and a locked/system extension has no
+      // marketplace catalog summary — so its self-declared `cinatra.displayName`
+      // (the same generated static manifest `vendorFor` reads for the byline)
+      // is the source that rescues it from falling to the raw package name
+      // (cinatra#1570). Registry-listed packages keep their catalog title.
+      displayName: resolveInstalledDisplayName({
+        nativeName,
+        registryTitle: summary?.title ?? null,
+        manifestDisplayName: STATIC_EXTENSION_MANIFEST[packageName]?.displayName ?? null,
+        packageName,
+      }),
       description: nativeDescription ?? summary?.description ?? null,
       versionLabel,
       rawVersion,

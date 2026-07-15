@@ -9,6 +9,7 @@
     ".": "./src/server.ts",
     "./server": "./src/server.ts",
     "./client": "./src/client.ts",
+    "./notifications-store": "./src/notifications-store.ts",
     "./flyout-state": "./src/flyout-state.ts",
     "./types": "./src/types.ts",
     "./host-adapters": "./src/host-adapters.ts",

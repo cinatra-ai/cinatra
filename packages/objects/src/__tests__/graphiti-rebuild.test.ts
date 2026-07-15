@@ -29,6 +29,8 @@ import {
   openRollbackRebuild,
   driveGraphitiRebuild,
   processGraphitiProjectionCycle,
+  readClaimedTypeDispositions,
+  laneEligibleTypes,
   REBUILD_JOURNAL_PHASES,
   deriveProjectionGroupId,
   readProjectionEpochs,
@@ -110,7 +112,11 @@ describe("buildEpochBumpQuery", () => {
 });
 
 describe("buildReplayBatchQuery", () => {
-  const sql = buildReplayBatchQuery("cinatra", { journalId: "j1", toEpoch: 3, batchSize: 200 }).text;
+  // Lane-eligible set = memory literal + generic artifact literal + the org's
+  // artifact-safe-disposed claimed types (a dynamic bind value, #1436 AC4).
+  const LANE_TYPES = ["@cinatra-ai/memory:concept", "@cinatra-ai/artifact:object", "@acme/crm:ticket"];
+  const built = buildReplayBatchQuery("cinatra", { journalId: "j1", toEpoch: 3, batchSize: 200, laneEligibleTypes: LANE_TYPES });
+  const sql = built.text;
 
   it("enqueues epoch-STAMPED outbox items behind the source gate", () => {
     expect(sql).toMatch(/INSERT\s+INTO\s+"cinatra"\."graphiti_projection_outbox"/i);
@@ -135,19 +141,97 @@ describe("buildReplayBatchQuery", () => {
     expect(sql).toMatch(/j\.org_id\s+IS\s+NULL\s+AND\s+o\.org_id\s+IS\s+NULL/i);
   });
 
-  it("EXCLUDES only NON-AMBIENT memory rows — org/workspace-scoped memory rebuilds like any ambient row (#1379)", () => {
-    // A memory row whose derived lane is NOT the ambient base lane (nested
+  it("EXCLUDES only NON-AMBIENT lane-eligible rows via a PARAMETERISED type set — ambient-scoped rebuild like any ambient row (#1379 memory + #1436 artifact)", () => {
+    // A lane-eligible row (memory, generic artifact, or an artifact-safe claimed
+    // type) whose derived lane is NOT the ambient base lane (nested
     // user/team/project lane, OR a public/unclassifiable terminal skip) must be
     // excluded: replaying a nested one duplicates its uncleared nested episode,
     // counting a skip one inflates `expected` with no episode — both diverge
-    // verification. But org/workspace-scoped memory lives in the ambient group
-    // clearGraph DID clear, so it must stay in the replay (the NULL-safe
+    // verification. But org/workspace-scoped ones live in the ambient group
+    // clearGraph DID clear, so they stay in the replay (the NULL-safe
     // ambient-base complement keeps exactly those).
-    expect(sql).toMatch(/NOT\s*\(\s*o\.type\s*=\s*'@cinatra-ai\/memory:concept'/i);
+    //
+    // The type set is a BIND PARAM (never spliced) — claimed type ids are
+    // extension-controlled. The memory + generic-artifact literals + the org's
+    // artifact-safe claimed types travel as the $4 value.
+    expect(sql).toMatch(/NOT\s*\(+\s*o\.type\s*=\s*ANY\(\$4::text\[\]\)/i);
+    expect(sql).not.toMatch(/o\.type\s*=\s*'@cinatra-ai\/memory:concept'/i); // no spliced literal
+    expect(built.values).toContainEqual(LANE_TYPES);
     expect(sql).toMatch(/o\.visibility\s+IS\s+DISTINCT\s+FROM\s+'public'/i);
     expect(sql).toMatch(/o\.owner_level\s+IS\s+DISTINCT\s+FROM\s+'team'/i);
     expect(sql).toMatch(/o\.visibility\s*=\s*'organization'\s+OR\s+o\.owner_level\s+IN\s*\('organization',\s*'workspace'\)/i);
     expect(sql).toMatch(/o\.project_id\s+IS\s+NULL\s*\n?\s*\)\s+IS\s+NOT\s+TRUE/i);
+  });
+
+  it("REPLAY carve-out (#1436): excludes only a genuinely-nested episode OR a public skip — a stale-ambient / never-projected transition row STAYS in the replay", () => {
+    // The replay/reset predicate is episode-LOCATION aware: a lane-eligible
+    // non-ambient row is excluded only when it is public (never projected) OR its
+    // projected_group_id is a real NESTED lane (episode outside the cleared
+    // ambient group). A nested-scope row whose projected_group_id is the ambient
+    // base (raw/unclaimed -> artifact-safe: base episode wiped) OR NULL (none ->
+    // artifact-safe: never projected) is NOT excluded, so the projector creates
+    // its nested episode instead of stranding it. The base-lane expression
+    // mirrors deriveProjectionGroupId.
+    expect(sql).toMatch(/o\.visibility\s*=\s*'public'\s*\n?\s*OR\s*\(\s*o\.projected_group_id\s+IS\s+NOT\s+NULL/i);
+    expect(sql).toMatch(/o\.projected_group_id\s+IS\s+DISTINCT\s+FROM/i);
+    expect(sql).toMatch(/CASE\s+WHEN\s+o\.org_id\s+IS\s+NULL\s+THEN\s+'cinatra-default'\s+ELSE\s+'cinatra-org-'\s*\|\|\s*o\.org_id\s+END/i);
+  });
+});
+
+describe("lane-eligible type set (#1436 AC4)", () => {
+  const MEM = "@cinatra-ai/memory:concept";
+  const ARTIFACT = "@cinatra-ai/artifact:object";
+
+  it("laneEligibleTypes always leads with the memory + generic-artifact literals", () => {
+    expect(laneEligibleTypes([])).toEqual([MEM, ARTIFACT]);
+    expect(laneEligibleTypes(["@acme/crm:ticket"])).toEqual([MEM, ARTIFACT, "@acme/crm:ticket"]);
+  });
+
+  it("readClaimedTypeDispositions(null) issues no query and returns empty sets", () => {
+    const out = readClaimedTypeDispositions(null);
+    expect(out).toEqual({ excludedTypes: [], artifactSafeTypes: [] });
+    expect(runPg).not.toHaveBeenCalled();
+  });
+
+  it("classifies each type's WINNING disposition: artifact-safe (incl. null-default + fail-closed) vs none vs raw", () => {
+    // Platform-scoped active dedicated claims (each the sole winner for its type).
+    const mk = (objectTypeId: string, dispositions: unknown) => ({
+      id: `c-${objectTypeId}`,
+      scope: "platform",
+      object_type_id: objectTypeId,
+      claim_kind: "dedicated",
+      status: "active",
+      extension_package: "@acme/x",
+      extension_version: "1.0.0",
+      generation: 1,
+      dispositions,
+    });
+    runPg.mockReturnValue([
+      {
+        rows: [
+          mk("@acme/t:safe-explicit", { projection: "artifact-safe" }),
+          mk("@acme/t:safe-default", null), // no dispositions ⇒ artifact-safe default
+          mk("@acme/t:safe-failclosed", { projection: "totally-bogus" }), // invalid ⇒ fail-closed artifact-safe
+          mk("@acme/t:raw", { projection: "raw" }),
+          mk("@acme/t:none", { projection: "none" }),
+        ],
+      },
+    ]);
+    const out = readClaimedTypeDispositions("org-1");
+    // Artifact-safe (lane-eligible): explicit + null-default + invalid-fail-closed.
+    expect(out.artifactSafeTypes.sort()).toEqual(
+      ["@acme/t:safe-default", "@acme/t:safe-explicit", "@acme/t:safe-failclosed"].sort(),
+    );
+    // 'none' → excluded from counts; 'raw' is in NEITHER (keeps the ambient lane).
+    expect(out.excludedTypes).toEqual(["@acme/t:none"]);
+    expect(out.artifactSafeTypes).not.toContain("@acme/t:raw");
+    expect(out.excludedTypes).not.toContain("@acme/t:raw");
+    // The full lane-eligible set threaded into the exclusion carries the literals + the artifact-safe claimed types.
+    const laneSet = laneEligibleTypes(out.artifactSafeTypes);
+    expect(laneSet).toContain(MEM);
+    expect(laneSet).toContain(ARTIFACT);
+    expect(laneSet).toContain("@acme/t:safe-default");
+    expect(laneSet).not.toContain("@acme/t:raw");
   });
 });
 

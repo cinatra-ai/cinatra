@@ -20,13 +20,21 @@ import {
   identityHashToUuid,
 } from "../graphiti-client";
 import type { EntityNode } from "../graphiti-client";
-// Memory-recall lane entitlement (cinatra#1379 AC4). The lane math is shared
-// with the projector (single source of truth for the nested-lane naming);
+// Scope-recall lane entitlement (cinatra#1379 memory AC4, generalized to
+// artifact rows in cinatra#1436 AC3). The lane math is shared with the
+// projector (single source of truth for the nested-lane naming);
 // `readTeamsForUser` resolves the actor's org-scoped team memberships. Both
 // modules are already reachable from every locked route that reaches these
 // handlers (measured: route-graph unchanged) — no new graph pressure.
-import { deriveEntitledMemoryLanes } from "../graphiti-projection-policy";
+// Artifact-scoped recall detection composes resolveClaimProjectionDisposition,
+// whose fail-closed disposition leaf (claimWinnerProjectionDisposition) is the
+// SAME rule the projector applies per-row and the rebuild driver uses, so a
+// claimed artifact-safe type surfaces its nested lanes on search.
+import { deriveEntitledLanes } from "../graphiti-projection-policy";
 import { readTeamsForUser } from "@/lib/better-auth-db";
+import { GENERIC_ARTIFACT_OBJECT_TYPE } from "../effective-identity";
+import { resolveClaimProjectionDisposition } from "../claims";
+import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 // Connector dispatch is intentionally not active in this handler.
 import { isDynamicObjectTypeId } from "../namespace";
 import { objectTypeRegistry } from "../registry";
@@ -444,6 +452,25 @@ async function enforceActivatedTypePayload(
 const MEMORY_CONCEPT_TYPE_ID = "@cinatra-ai/memory:concept";
 
 /**
+ * Is `type` an ARTIFACT-scoped recall type for `orgId` (cinatra#1436 AC3)?
+ * True for the generic artifact object type, and for any CLAIMED type whose
+ * winning disposition resolves to 'artifact-safe' / faceted — the same
+ * lane-eligible set the projector nests into per-scope lanes, so a recall must
+ * search the caller's entitled lane set (not the ambient lane alone) or it
+ * would miss the caller's own user-/team-lane artifacts. Memory is handled by
+ * its own branch (never reaches here). The disposition is resolved through the
+ * SAME shared resolver the projector/rebuild use, so the four surfaces agree.
+ * The lane is relevance scoping only — every candidate is still Postgres
+ * ownership-filtered + object.read-gated after search.
+ */
+function isArtifactScopedRecallType(orgId: string, type: string): boolean {
+  if (type === GENERIC_ARTIFACT_OBJECT_TYPE) return true;
+  if (type === MEMORY_CONCEPT_TYPE_ID) return false;
+  const claims = readArtifactTypeClaimsForOrg(orgId);
+  return resolveClaimProjectionDisposition(claims, { orgId, objectTypeId: type }) === "artifact-safe";
+}
+
+/**
  * Fail-closed registration probe shared by the memory-envelope gate and the
  * objects_save pre-classification guard: a memory-typed write with no static
  * registration has no enforceable envelope schema — refuse rather than
@@ -832,25 +859,33 @@ export function createObjectsPrimitiveHandlers() {
       // -----------------------------------------------------------------
       const groupId = resolveGroupId(orgId);
 
-      // Memory-recall lane entitlement (cinatra#1379 AC4). Memory-concept rows
-      // project into NESTED per-scope lanes (user / team / ambient, optionally
+      // Scope-recall lane entitlement (cinatra#1379 memory AC4, generalized to
+      // artifact rows in cinatra#1436 AC3). LANE-ELIGIBLE rows — memory concepts
+      // and artifact-scoped rows (the generic artifact type OR a claimed type
+      // resolving to an artifact-safe / faceted disposition) — project into
+      // NESTED per-scope lanes (user / team / ambient, optionally
       // project-suffixed), so a recall over the ambient org lane alone would
-      // miss the caller's own user-lane and team-lane concepts. For a
-      // memory-typed query we pass the actor's SERVER-DERIVED entitled lane set
-      // — own user lane + a lane for every team the actor is a member of + the
-      // org lane, each also in its `-proj-<id>` form when a projectId is in the
-      // call context. A lane the actor is not entitled to is never in the set,
-      // so an unentitled team's / project's concepts can never surface. Every
-      // other type keeps the single ambient org lane (unchanged).
+      // miss the caller's own user-lane and team-lane rows. For a lane-eligible
+      // query we pass the actor's SERVER-DERIVED entitled lane set — own user
+      // lane + a lane for every team the actor is a member of + the org lane,
+      // each also in its `-proj-<id>` form when a projectId is in the call
+      // context. A lane the actor is not entitled to is never in the set, so an
+      // unentitled team's / project's rows can never surface. Every other type
+      // keeps the single ambient org lane (unchanged). The lane set is relevance
+      // scoping only: each candidate is still re-fetched + object.read-gated.
       let searchGroupIds: string[] = [groupId];
-      if (input.type === MEMORY_CONCEPT_TYPE_ID) {
+      const wantsEntitledLanes =
+        input.type != null &&
+        orgId != null &&
+        (input.type === MEMORY_CONCEPT_TYPE_ID || isArtifactScopedRecallType(orgId, input.type));
+      if (wantsEntitledLanes) {
         const actorUserId = actorExt.userId;
         let teamIds: string[] = [];
         if (actorUserId && orgId) {
           const teams = await readTeamsForUser(actorUserId, orgId);
           teamIds = teams.map((t) => t.id);
         }
-        searchGroupIds = deriveEntitledMemoryLanes({
+        searchGroupIds = deriveEntitledLanes({
           orgId,
           userId: actorUserId,
           teamIds,

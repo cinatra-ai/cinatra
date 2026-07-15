@@ -5,11 +5,11 @@ import { addEpisode, deleteEpisode, identityHashToUuid } from "./graphiti-client
 import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
 import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
-import { parseClaimDispositions, resolveClaimWinner } from "./claims";
+import { claimWinnerProjectionDisposition, parseClaimDispositions, resolveClaimWinner } from "./claims";
 import { GENERIC_ARTIFACT_OBJECT_TYPE } from "./effective-identity";
 import {
   deriveProjectionGroupId,
-  deriveMemoryConceptLane,
+  deriveScopeLane,
   readProjectionEpochs,
 } from "./graphiti-projection-policy";
 // Claimed-row projection (#1427 AC-3) resolves the claim winner via the HOST
@@ -305,18 +305,22 @@ function resolveClaimedRowProjection(row: CanonicalRow): ClaimedRowProjection | 
   const claims = readArtifactTypeClaimsForOrg(orgId);
   const winner = resolveClaimWinner(claims, { orgId, objectTypeId: row.type });
   if (!winner) return null;
-  let projection: "raw" | "artifact-safe" | "none" = "artifact-safe";
+  // The raw/none/artifact-safe DECISION goes through the shared
+  // claimWinnerProjectionDisposition rule — the exact fail-closed mapping the
+  // rebuild/recall surfaces apply via resolveClaimProjectionDisposition — so the
+  // write path can never disagree with the counted / replayed / recalled set.
+  // The parse below is DIAGNOSTIC only: it surfaces WHY a malformed payload
+  // failed closed and never decides the disposition.
   if (winner.dispositions != null) {
     const parsed = parseClaimDispositions(winner.dispositions);
-    if (parsed.ok) {
-      projection = parsed.dispositions.projection;
-    } else {
+    if (!parsed.ok) {
       console.warn(
         `[graphiti-projector] invalid dispositions on claim ${winner.id} (${row.type}); ` +
           `failing closed to artifact-safe projection: ${parsed.errors.join("; ")}`,
       );
     }
   }
+  const projection = claimWinnerProjectionDisposition(winner);
   if (projection === "none") return { kind: "skip" };
   if (projection === "raw") return { kind: "raw" };
   const enrichment = resolveArtifactEffectiveIdentity({
@@ -389,15 +393,15 @@ function markProjected(input: {
 }
 
 /**
- * Retract a memory-concept row's lane bookkeeping after its prior-lane episode
+ * Retract a lane-eligible row's lane bookkeeping after its prior-lane episode
  * has been deleted because the row transitioned to a NON-projected scope
- * (visibility='public' or an unclassifiable scope — #1379). Clears
- * projected_group_id + graphiti_episode_uuid so a re-enqueue does not re-delete
- * an already-gone episode (prior lane reads back as "none"), and records that
- * the row is no longer projected. graphiti_projected_version is intentionally
- * left untouched (a later scope change back to a real lane bumps the version and
- * re-projects fresh). */
-function markMemoryLaneRetracted(objectId: string): void {
+ * (visibility='public' or an unclassifiable scope — #1379 memory, #1436
+ * artifact). Clears projected_group_id + graphiti_episode_uuid so a re-enqueue
+ * does not re-delete an already-gone episode (prior lane reads back as "none"),
+ * and records that the row is no longer projected. graphiti_projected_version is
+ * intentionally left untouched (a later scope change back to a real lane bumps
+ * the version and re-projects fresh). */
+function markLaneRetracted(objectId: string): void {
   const schema = postgresSchema.replaceAll('"', '""');
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -414,6 +418,38 @@ function markMemoryLaneRetracted(objectId: string): void {
       },
     ],
   });
+}
+
+/**
+ * Retract a row that transitions to a NON-projected state — a lane-derivation
+ * terminal skip (public / unclassifiable scope) OR a winning claim disposition
+ * of 'none'. Best-effort purge the PRIOR-lane episode (located via the PERSISTED
+ * projected_group_id, never re-derived) and clear the lane bookkeeping so a
+ * re-enqueue does not re-attempt the purge. A row that was never projected
+ * (priorLane null) just logs the skip. Best-effort + swallowed: the purge is
+ * relevance HYGIENE, not the authz gate (recall re-checks Postgres ownership +
+ * object.read on the CURRENT scope), so a delete failure never blocks the skip.
+ * Shared by the claim-'none' skip and the lane-skip so an artifact-safe -> none
+ * disposition flip never leaves a nested-lane episode orphaned (#1436).
+ */
+async function retractPriorLaneEpisode(row: CanonicalRow, reason: string): Promise<void> {
+  const priorLane = row.projected_group_id;
+  if (!priorLane) {
+    console.log(`[graphiti-projector] skipping row ${row.id} (${row.type}): ${reason}`);
+    return;
+  }
+  try {
+    await deleteEpisode({ uuid: identityHashToUuid(row.id, priorLane) });
+  } catch (err) {
+    console.warn(
+      `[graphiti-projector] lane retract: deleteEpisode failed for prior lane ${priorLane} of ${row.id}:`,
+      err,
+    );
+  }
+  markLaneRetracted(row.id);
+  console.log(
+    `[graphiti-projector] row ${row.id} (${row.type}): retracted prior-lane episode (${priorLane}) — ${reason}`,
+  );
 }
 
 function markDeleted(objectId: string): void {
@@ -573,94 +609,98 @@ export async function projectObjectToGraphiti(input: {
       ? resolveClaimedRowProjection(row)
       : null;
   if (claimedProjection?.kind === "skip") {
-    // The winning claim's dispositions say projection: 'none' — terminal
-    // skip: the outbox row settles done, nothing is projected, no retry.
-    console.log(
-      `[graphiti-projector] skipping row ${row.id} (${row.type}): winning claim dispositions set projection='none'`,
+    // The winning claim's dispositions say projection: 'none' — terminal skip:
+    // the outbox row settles done, nothing is projected, no retry. If the row
+    // was PREVIOUSLY projected (e.g. an artifact-safe -> none disposition flip
+    // that left a nested-lane episode), best-effort purge that prior-lane
+    // episode + clear the bookkeeping so it is not orphaned (#1436) — the
+    // ambient-group rebuild would never reach a nested lane.
+    await retractPriorLaneEpisode(
+      row,
+      "winning claim dispositions set projection='none'",
     );
     return { episodeUuid: null, skipped: true };
   }
 
-  // Group-id (Graphiti lane) derivation. Memory-concept rows NEST under the
-  // org lane via their server-derived scope (#1379 AC1); every other type keeps
-  // the ambient org lane (the epic guardrail — deriveProjectionGroupId stays
-  // single-lane-per-org for non-memory types).
+  // Group-id (Graphiti lane) derivation. LANE-ELIGIBLE rows NEST under the org
+  // lane via their server-derived scope: memory concepts (#1379 AC1) UNION
+  // generic artifact rows UNION claimed rows whose winning disposition is
+  // artifact-safe / faceted (#1436 AC1). A claimed 'raw' explicit opt-in,
+  // adapter-owned CRM rows (routed to the adapter above and never reaching
+  // here), and every other typed row keep the SINGLE ambient org lane (epic
+  // #1424 guardrail — deriveProjectionGroupId stays single-lane-per-org for
+  // those). All lane-eligible classes reuse the SAME hardened scope->lane
+  // function (deriveScopeLane) — no independent artifact branch that could
+  // reintroduce the #1379 phantom-team-lane bug (#1436 AC6).
   const isMemory = row.type === MEMORY_CONCEPT_TYPE_ID;
+  const isLaneEligible =
+    isMemory ||
+    row.type === GENERIC_ARTIFACT_OBJECT_TYPE ||
+    claimedProjection?.kind === "faceted";
+  // The prior lane is the PERSISTED `projected_group_id` (NOT re-derived from
+  // the current scope — that already reflects the NEW scope). The lane-scoped
+  // deterministic UUID (identityHashToUuid(row.id, priorLane)) locates the
+  // prior-lane episode for the best-effort purge below.
+  //
+  // SECURITY BOUNDARY NOTE. The Graphiti lane is a RECALL-RELEVANCE scoping
+  // mechanism, NOT the authorization boundary. The authz boundary is the
+  // recall handler's canonical re-fetch: objects_list resolves searchNodes
+  // candidate ids, then `listObjectsByFilter(..., scopeActor)` re-reads the
+  // Postgres rows through `buildOwnershipFilter` (owner_level/owner_id/
+  // visibility) and `enforceResourceAccess(object.read)` re-checks each — on
+  // the CURRENT scope. So a stale/orphaned episode in an old lane can at worst
+  // surface a candidate id that the Postgres ownership filter then DROPS; it
+  // can never disclose content under a scope the actor no longer has. The
+  // episode purge here is therefore relevance HYGIENE, and it is best-effort:
+  // Graphiti gives no episode-uuid control (see graphiti-rebuild.ts — the
+  // authoritative purge is a group rebuild, not per-episode delete), exactly
+  // like `deleteCurrentEpisodeFromGraphiti`. A delete failure must NOT block
+  // re-projection (that would strand the row out of its new lane), so it is
+  // swallowed + warned, mirroring the object-delete path.
+  const priorLane = row.projected_group_id;
   let groupId: string;
-  if (isMemory) {
-    const derivation = deriveMemoryConceptLane(input.orgId ?? row.org_id, {
+  if (isLaneEligible) {
+    const derivation = deriveScopeLane(input.orgId ?? row.org_id, {
       ownerLevel: row.owner_level,
       ownerId: row.owner_id,
       visibility: row.visibility,
       projectId: row.project_id,
     });
-    // The prior lane is the PERSISTED `projected_group_id` (NOT re-derived from
-    // the current scope — that already reflects the NEW scope). The lane-scoped
-    // deterministic UUID (identityHashToUuid(row.id, priorLane)) locates the
-    // prior-lane episode for the best-effort purge below.
-    //
-    // SECURITY BOUNDARY NOTE. The Graphiti lane is a RECALL-RELEVANCE scoping
-    // mechanism, NOT the authorization boundary. The authz boundary is the
-    // recall handler's canonical re-fetch: objects_list resolves searchNodes
-    // candidate ids, then `listObjectsByFilter(..., scopeActor)` re-reads the
-    // Postgres rows through `buildOwnershipFilter` (owner_level/owner_id/
-    // visibility) and `enforceResourceAccess(object.read)` re-checks each — on
-    // the CURRENT scope. So a stale/orphaned episode in an old lane can at worst
-    // surface a candidate id that the Postgres ownership filter then DROPS; it
-    // can never disclose content under a scope the actor no longer has. The
-    // episode purge here is therefore relevance HYGIENE, and it is best-effort:
-    // Graphiti gives no episode-uuid control (see graphiti-rebuild.ts — the
-    // authoritative purge is a group rebuild, not per-episode delete), exactly
-    // like `deleteCurrentEpisodeFromGraphiti`. A delete failure must NOT block
-    // re-projection (that would strand the concept out of its new lane), so it
-    // is swallowed + warned, mirroring the object-delete path.
-    const priorLane = row.projected_group_id;
     if (derivation.kind === "skip") {
-      // Terminal skip (public / unclassifiable scope). If the row was PREVIOUSLY
-      // projected into a lane, best-effort purge that stale episode and clear
-      // the lane bookkeeping (so a re-enqueue does not re-attempt the purge).
-      // Recall authz is enforced Postgres-side on the current scope regardless.
-      if (priorLane) {
-        try {
-          await deleteEpisode({ uuid: identityHashToUuid(row.id, priorLane) });
-        } catch (err) {
-          console.warn(
-            `[graphiti-projector] memory retract: deleteEpisode failed for prior lane ${priorLane} of ${row.id}:`,
-            err,
-          );
-        }
-        markMemoryLaneRetracted(row.id);
-        console.log(
-          `[graphiti-projector] memory row ${row.id}: retracted prior-lane episode ` +
-            `(${priorLane}) — ${derivation.reason}`,
-        );
-      } else {
-        console.log(`[graphiti-projector] skipping memory row ${row.id}: ${derivation.reason}`);
-      }
+      // Terminal skip (public / unclassifiable scope). Best-effort purge any
+      // prior-lane episode + clear the bookkeeping (shared with the claim-'none'
+      // skip). Recall authz is enforced Postgres-side on the current scope
+      // regardless.
+      await retractPriorLaneEpisode(row, derivation.reason);
       return { episodeUuid: null, skipped: true };
     }
     groupId = derivation.groupId;
-    // Lane-move (#1379 AC2). A scope change moves a concept between lanes: when
-    // the prior lane differs from the newly-derived lane, best-effort purge the
-    // prior-lane episode (its lane-scoped UUID differs from the new one) before
-    // projecting into the new lane. Best-effort + swallowed for the same reason
-    // as the retract above — the purge is relevance hygiene, not the authz gate.
-    if (priorLane && priorLane !== groupId) {
-      try {
-        await deleteEpisode({ uuid: identityHashToUuid(row.id, priorLane) });
-        console.log(
-          `[graphiti-projector] memory lane-move for ${row.id}: purged prior-lane episode ` +
-            `(${priorLane} -> ${groupId})`,
-        );
-      } catch (err) {
-        console.warn(
-          `[graphiti-projector] memory lane-move: deleteEpisode failed for prior lane ${priorLane} of ${row.id}:`,
-          err,
-        );
-      }
-    }
   } else {
     groupId = deriveProjectionGroupId(input.orgId ?? row.org_id);
+  }
+  // Lane-move (#1379 AC2, generalized to artifact rows #1436 AC2). When the prior
+  // lane differs from the newly-derived lane — a scope change between nested
+  // lanes, OR a claimed row leaving lane treatment entirely because its winning
+  // disposition flipped artifact-safe -> raw (nested lane -> the ambient org
+  // lane) — best-effort purge the prior-lane episode (its lane-scoped UUID
+  // differs from the new one) before projecting into the new lane. Applies to
+  // BOTH branches so a lane-eligibility EXIT never strands a nested episode.
+  // Best-effort + swallowed for the same reason as the retract above — the purge
+  // is relevance hygiene, not the authz gate. A first-ever projection (priorLane
+  // null) and a same-lane re-projection (priorLane === groupId) purge nothing.
+  if (priorLane && priorLane !== groupId) {
+    try {
+      await deleteEpisode({ uuid: identityHashToUuid(row.id, priorLane) });
+      console.log(
+        `[graphiti-projector] lane-move for ${row.id} (${row.type}): purged prior-lane episode ` +
+          `(${priorLane} -> ${groupId})`,
+      );
+    } catch (err) {
+      console.warn(
+        `[graphiti-projector] lane-move: deleteEpisode failed for prior lane ${priorLane} of ${row.id}:`,
+        err,
+      );
+    }
   }
   // EPISODE-UUID-EMPTY: knowledge-graph-mcp 1.0.x add_memory returns only a
   // message string — no uuid in any known response path. We compute a stable

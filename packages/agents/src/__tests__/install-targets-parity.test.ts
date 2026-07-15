@@ -211,6 +211,77 @@ describe("buildInstallTargets parity with assertCanInstallAtTarget", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#1527 — the always-offered workspace scopes (parity with the
+// assertCanInstallAtTarget workspace/admin branch: platform-admin-only).
+// ---------------------------------------------------------------------------
+describe("buildInstallTargets — workspace scopes (cinatra#1527)", () => {
+  const buildFor = (
+    actor: Parameters<typeof buildInstallTargets>[0]["actor"],
+  ) =>
+    buildInstallTargets({
+      actor,
+      activeOrgId: ACTIVE_ORG,
+      orgName: ORG_NAME,
+      teams: [TEAM_ENG],
+      projects: [PROJ_Q1],
+      includeWorkspaceScopes: true,
+    });
+
+  const wsRow = (t: ReturnType<typeof buildInstallTargets>) =>
+    t.find((r) => r.value === "workspace");
+  const adminRow = (t: ReturnType<typeof buildInstallTargets>) =>
+    t.find((r) => r.value === "admin");
+
+  it("omits both rows unless includeWorkspaceScopes is set", () => {
+    const targets = buildInstallTargets({
+      actor: { principalId: ALICE, organizationId: ACTIVE_ORG, platformRole: "platform_admin" },
+      activeOrgId: ACTIVE_ORG,
+      orgName: ORG_NAME,
+      teams: [TEAM_ENG],
+      projects: [PROJ_Q1],
+    });
+    expect(wsRow(targets)).toBeUndefined();
+    expect(adminRow(targets)).toBeUndefined();
+  });
+
+  it("platform_admin: workspace + admin rows ENABLED (level, id, no reason)", () => {
+    const targets = buildFor({
+      principalId: ALICE,
+      organizationId: ACTIVE_ORG,
+      platformRole: "platform_admin",
+    });
+    const ws = wsRow(targets);
+    const ad = adminRow(targets);
+    expect(ws?.disabled).toBe(false);
+    expect(ws?.level).toBe("workspace");
+    expect(ws?.id).toBe(ACTIVE_ORG);
+    expect(ws?.label).toBe("Whole Workspace");
+    expect(ws?.reason).toBeUndefined();
+    expect(ad?.disabled).toBe(false);
+    expect(ad?.level).toBe("admin");
+    expect(ad?.id).toBe(ACTIVE_ORG);
+    expect(ad?.label).toBe("Admins only");
+    expect(ad?.reason).toBeUndefined();
+  });
+
+  // Every non-platform-admin role — org_owner, org_admin, team_admin, member —
+  // sees BOTH rows disabled with a reason. Mirrors AC2 (install authority).
+  it.each([
+    ["org_owner", { orgRole: "org_owner" as const }],
+    ["org_admin", { orgRole: "org_admin" as const }],
+    ["member", { orgRole: "member" as const }],
+    ["team_admin", { orgRole: "member" as const, teamRoles: { [TEAM_ENG.id]: "team_admin" as const } }],
+  ])("%s: workspace + admin rows DISABLED with reason", (_label, extra) => {
+    const targets = buildFor({ principalId: ALICE, organizationId: ACTIVE_ORG, ...extra });
+    for (const row of [wsRow(targets), adminRow(targets)]) {
+      expect(row?.disabled).toBe(true);
+      expect(typeof row?.reason).toBe("string");
+      expect((row?.reason ?? "").length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("pickDefaultPickerValue", () => {
   it("returns null when no enabled targets exist", async () => {
     const { pickDefaultPickerValue } = await import("../install-targets");

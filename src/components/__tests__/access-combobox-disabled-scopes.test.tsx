@@ -14,8 +14,10 @@
  *    disabled CommandItem suppresses pointer events on its content, so the
  *    wrapper span is what receives hover/focus
  *  - aria-disabled is set on disabled rows
- *  - The owner / admin rows are NOT in the disabledScopes branch (they have
- *    separate semantics; only the 3 install-target row types are gated)
+ *  - The owner row is NOT in the disabledScopes branch (separate semantics).
+ *    The org / team / project rows are gated via the shared renderTargetRow
+ *    helper; in installMode the workspace / admin scopes (cinatra#1527) delegate
+ *    to the SAME helper (server-driven disabled/reason).
  *  - Module loads without throwing (smoke test for type/import drift)
  */
 import { readFileSync } from "node:fs";
@@ -64,10 +66,11 @@ describe("AccessCombobox disabledScopes", () => {
     expect(SOURCE).toMatch(/aria-disabled/);
   });
 
-  it("does not pollute owner/admin rows with disabledScopes (only org/team/project rows are gated)", () => {
-    // The disabledScopes wiring lives only on the org / team / project rows.
-    // disabledScopes?.includes(...) appears at most 3 times (org row + team
-    // loop + project loop). Owner/admin/workspace are not target scopes.
+  it("routes disabled state through the shared renderTargetRow helper (single disabledScopes gate)", () => {
+    // The disabledScopes membership check lives in ONE place — the shared
+    // renderTargetRow helper the org / team / project rows (and, in installMode,
+    // the workspace / admin rows — cinatra#1527) all delegate to. It must not be
+    // copy-pasted per row.
     const matches = SOURCE.match(/disabledScopes\?\.includes/g) ?? [];
     expect(matches.length).toBeGreaterThanOrEqual(1);
     expect(matches.length).toBeLessThanOrEqual(3);
@@ -80,11 +83,21 @@ describe("AccessCombobox disabledScopes", () => {
     expect(SOURCE).toMatch(/disabled\s*\?\s*undefined\s*:\s*setOpen/);
   });
 
-  it("exposes installMode flag that hides owner/admin/workspace groups", () => {
-    // Type-level prop.
+  it("exposes installMode + installWorkspaceScopes and hides only the owner row in installMode", () => {
+    // Type-level props.
     expect(SOURCE).toMatch(/installMode\?:\s*boolean/);
-    // Each of the three excluded groups is gated by `!installMode`.
-    const owners = SOURCE.match(/\{!installMode\s*&&\s*\(/g) ?? [];
-    expect(owners.length).toBeGreaterThanOrEqual(3);
+    expect(SOURCE).toMatch(/installWorkspaceScopes\?:\s*boolean/);
+    // The owner ("Only me") group stays hidden in installMode — owner is not an
+    // install target.
+    expect(SOURCE).toMatch(/\{!installMode\s*&&\s*\(/);
+  });
+
+  it("cinatra#1527: installMode renders the workspace + admin scopes as server-driven target rows", () => {
+    // In installMode the workspace/admin groups are gated on installWorkspaceScopes
+    // and delegate to renderTargetRow (server-decided disabled/reason) rather than
+    // the client isAdmin gate.
+    expect(SOURCE).toMatch(/installMode\s*\n?\s*\?\s*installWorkspaceScopes\s*&&/);
+    expect(SOURCE).toMatch(/renderTargetRow\(\s*\n?\s*"workspace"/);
+    expect(SOURCE).toMatch(/renderTargetRow\(\s*\n?\s*"admin"/);
   });
 });
