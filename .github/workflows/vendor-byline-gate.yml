@@ -1,0 +1,84 @@
+name: vendor-byline-gate
+
+# cinatra#1528 — the extension "{Kind} by {Vendor}" byline must never substitute
+# a machine identifier (an npm package scope, a vendor slug, a connector host
+# slug) for the vendor's human display name.
+#
+# Two required halves of the anti-regression contract:
+#   - gate:  the LINT/AST scan (scripts/audit/vendor-byline-scan.mjs) — every
+#            byline path consumes resolveVendorPresentation and carries no
+#            retired scope/slug substitution.
+#   - tests: the BEHAVIOURAL per-surface tests fed raw catalog input with
+#            distinct sentinels (§I listing card, §II detail modal, §III/§IV
+#            installed + agents card), the resolver unit tests, and the scanner's
+#            own parser tests.
+#
+# Deliberately NOT paths-scoped: an upstream model/helper change (the resolver,
+# the card model, the installed-rows loader) can regress the surfaces WITHOUT
+# touching the byline files, so the behavioural suite must see every PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Vendor-byline lint/AST scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Run gate
+        run: node scripts/audit/vendor-byline-scan.mjs
+
+  tests:
+    name: Vendor-byline behavioural + parser tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: §I / §II byline tests (packages/extensions)
+        run: >-
+          pnpm --filter @cinatra-ai/extensions exec vitest run
+          src/__tests__/marketplace-card-model.test.ts
+          src/__tests__/marketplace-listing-card.test.tsx
+          src/__tests__/marketplace-modal-byline.test.tsx
+
+      - name: Resolver + §III/§IV byline + parser tests (root)
+        run: >-
+          pnpm exec vitest run --config vitest.config.ts
+          src/lib/__tests__/vendor-presentation.test.ts
+          src/components/extensions/__tests__/installed-extension-card.test.tsx
+          src/components/extensions/__tests__/agent-card-vendor.test.ts
+          scripts/audit/__tests__/vendor-byline-scan.test.mjs

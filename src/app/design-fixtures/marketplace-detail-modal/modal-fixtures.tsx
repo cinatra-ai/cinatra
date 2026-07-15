@@ -27,7 +27,13 @@
 // itself is "use client" and client-safe. Type-only imports from the barrel
 // are erased at compile time and are safe.
 import { MarketplaceDetailModal } from "@cinatra-ai/extensions/screens/marketplace-detail-modal";
+import type { ModalInstallScopeContext } from "@cinatra-ai/extensions/screens/marketplace-detail-modal";
 import type { MarketplaceCardData, MarketplaceCardCta } from "@cinatra-ai/extensions/screens";
+import {
+  buildMarketplaceFailureCopy,
+  marketplaceFailureCopy,
+} from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
+import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 import type {
   MarketplaceDetailLoadResult,
   MarketplaceDetailView,
@@ -174,6 +180,59 @@ const EMPTY_DETAIL: MarketplaceDetailView = {
   },
 };
 
+/**
+ * Fixture 3 — an access-target kind (connector). Its footer "Install now" must
+ * open the pre-install access-scope dialog LAYERED above the modal (cinatra#1541,
+ * reusing cinatra#805), NOT submit directly — the regression this fixture and
+ * the paired e2e guard against. Minimal detail body; the point is the footer.
+ */
+const CONNECTOR_DETAIL: MarketplaceDetailView = {
+  packageName: "@cinatra-ai/example-connector",
+  displayName: "Example Connector",
+  kindLabel: "Connector",
+  cost: "Free",
+  license: null,
+  latestVersion: "1.0.0",
+  freshnessAt: "2026-06-10T12:00:00.000Z",
+  installCount: 120,
+  permalink: "https://marketplace.cinatra.ai/product/example-connector",
+  sdkAbiRange: null,
+  readmeMarkdown: null,
+  longDescription: null,
+  description: "A sample connector whose install offers the pre-install access-scope selector.",
+  iconUrl: null,
+  compatibleUpTo: null,
+  changelog: [],
+  dependencies: [],
+  ratingSummary: emptyRatingSummary(),
+  reviews: [],
+  vendor: {
+    name: "Cinatra",
+    slug: "cinatra",
+    storeUrl: "https://marketplace.cinatra.ai/store/cinatra",
+  },
+};
+
+// Seeded already-authorized picker rows — one org + one team scope, the same
+// shape buildInstallTargetPickerContext computes server-side (id-carrying
+// "org:<id>" token, #1562). No DB: the fixture stands in for the server context
+// so the layered dialog renders on the production-equivalent /design-fixtures
+// route. The action is a side-effect-free stand-in (no persistence here — the
+// completed-install proof is a separate operator-gated run).
+const CONNECTOR_INSTALL_TARGETS: InstallTarget[] = [
+  { value: "org:acme", label: "Anyone in Acme Corp", level: "organization", id: "acme", disabled: false },
+  { value: "team:eng", label: "Engineering", level: "team", id: "eng", disabled: false },
+];
+const CONNECTOR_INSTALL_SCOPE: ModalInstallScopeContext = {
+  installTargets: CONNECTOR_INSTALL_TARGETS,
+  ownerEntityNames: { "org:acme": "Acme Corp", "team:eng": "Engineering" },
+  activeOrgId: "acme",
+  defaultValue: "org:acme",
+  failureCopyByCategory: buildMarketplaceFailureCopy("install", CONNECTOR_DETAIL.displayName),
+  defaultFailureMessage: marketplaceFailureCopy("unrecoverable", "install", CONNECTOR_DETAIL.displayName),
+  installAction: async () => {},
+};
+
 function cardFor(detail: MarketplaceDetailView, kindSlug: MarketplaceCardData["kindSlug"]): MarketplaceCardData {
   return {
     packageName: detail.packageName,
@@ -210,6 +269,7 @@ const FIXTURES: Array<{
   label: string;
   detail: MarketplaceDetailView;
   kindSlug: MarketplaceCardData["kindSlug"];
+  installScope?: ModalInstallScopeContext;
 }> = [
   {
     testId: "modal-fixture-populated",
@@ -222,6 +282,13 @@ const FIXTURES: Array<{
     label: "Empty states — no changelog, none-declared dependencies, no reviews",
     detail: EMPTY_DETAIL,
     kindSlug: "skill",
+  },
+  {
+    testId: "modal-fixture-connector",
+    label: "Access-target kind — Install now opens the access-scope dialog layered above the modal",
+    detail: CONNECTOR_DETAIL,
+    kindSlug: "connector",
+    installScope: CONNECTOR_INSTALL_SCOPE,
   },
 ];
 
@@ -249,6 +316,7 @@ export function MarketplaceDetailModalFixtures() {
                 installAction={noopAction}
                 updateAction={noopAction}
                 restoreAction={noopAction}
+                installScope={f.installScope}
                 loadDetail={async (): Promise<MarketplaceDetailLoadResult> => ({
                   ok: true,
                   detail: f.detail,

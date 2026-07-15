@@ -42,6 +42,7 @@ import {
   type ExtensionEmblemKind,
 } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
+import { resolveVendorPresentation } from "@/lib/vendor-presentation";
 
 import {
   SEEDED_INSTALLED_EXTENSIONS,
@@ -80,7 +81,10 @@ function renderCard(runId: string, row: InstalledExtension, isArchived: boolean)
       emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
       kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
       kindLabel={seed?.kindLabel ?? row.kind}
-      vendor={seed?.vendor ?? null}
+      vendor={resolveVendorPresentation(
+        { name: seed?.vendor },
+        { surface: "installed-extensions-fixture", ref: row.packageName },
+      )}
       description={seed?.description ?? null}
       version={version}
       status={<InstalledStatusIndicator status={row.status} />}

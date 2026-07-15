@@ -62,11 +62,20 @@ import {
 } from "@/lib/marketplace-detail-view";
 import { getPublicMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
 import { isRedirectError } from "./is-redirect-error";
+import { MarketplaceModalByline } from "./marketplace-modal-byline";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import {
   buildMarketplaceFailureCopy,
   marketplaceFailureCopy,
 } from "./marketplace-failure-copy";
+// cinatra#1541 — the modal footer's install CTA for a connector / artifact /
+// workflow opens the SAME pre-install access-scope dialog (cinatra#805) the
+// §I/§IV card opens, layered above the modal; gated by the SAME predicate.
+import {
+  ExtensionInstallScopeDialog,
+  type ExtensionInstallScopeDialogProps,
+} from "./extension-install-scope-dialog";
+import { isInstallAccessTargetKind } from "../install-access-target";
 import type { MarketplaceCardData, MarketplaceCardCta } from "./marketplace-card-model";
 import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 // §II footer update flow (cinatra#1041): "Update now" dry-runs the resolver and
@@ -75,6 +84,27 @@ import { ModalUpdatePlanFlow } from "./update-plan-flow";
 import type { PlanExtensionUpdateResult } from "./update-plan-model";
 
 type BoundLifecycleAction = () => Promise<MarketplaceInstallActionResult | void>;
+
+/**
+ * Pre-install access-scope context (cinatra#1541). Exactly the already-
+ * authorized picker rows + owner names + default selection + failure copy the
+ * §I/§IV card computes SERVER-SIDE and passes to its ExtensionInstallScopeDialog
+ * — reused verbatim (Pick of the dialog's own prop types, single source of
+ * truth). packageName / packageVersion / displayName are derived from `card`,
+ * so they are excluded here. `installAction` is the object-arg
+ * installExtensionPackageFormAction (the same UNBOUND action the card wires),
+ * the adapter AC1 anticipates over the modal's zero-arg `installAction` prop.
+ */
+export type ModalInstallScopeContext = Pick<
+  ExtensionInstallScopeDialogProps,
+  | "installTargets"
+  | "ownerEntityNames"
+  | "activeOrgId"
+  | "defaultValue"
+  | "failureCopyByCategory"
+  | "defaultFailureMessage"
+  | "installAction"
+>;
 
 type LoadStatus = "idle" | "loading" | "loaded" | "notfound" | "error";
 
@@ -166,6 +196,24 @@ export interface MarketplaceDetailModalProps {
    */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Pre-install access-scope context (cinatra#1541). When present AND the
+   * footer resolves to the INSTALL state for a connector / artifact / workflow
+   * (the isInstallAccessTargetKind kinds), the footer's "Install now" opens the
+   * pre-install access-scope dialog LAYERED above this modal instead of
+   * submitting directly — closing the bypass where a modal install skipped the
+   * access selection the card enforces.
+   *
+   * Confidentiality (AC3): this is ONLY the card's already-authorized target
+   * set + owner names — the modal performs no broader lookup and exposes no
+   * extra entity names; the server action stays the authorization boundary and
+   * re-validates the submitted target. When ABSENT for an access-target kind
+   * the scoped install is DEFERRED (disabled CTA), never a silent direct submit
+   * (AC2) — that would recreate the bypass. Non-access kinds ignore it and keep
+   * the direct-submit form, matching the card (AC5). The update flow is
+   * untouched (AC7).
+   */
+  installScope?: ModalInstallScopeContext;
 }
 
 export function MarketplaceDetailModal({
@@ -182,6 +230,7 @@ export function MarketplaceDetailModal({
   linkTrigger,
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
+  installScope,
 }: MarketplaceDetailModalProps) {
   // cinatra#1121 — opt-in controlled open. When `controlledOpen` is passed the
   // Dialog is externally controlled and the lifted setter is the single source
@@ -373,6 +422,7 @@ export function MarketplaceDetailModal({
               updateAction={updateAction}
               restoreAction={restoreAction}
               planUpdateAction={planUpdateAction}
+              installScope={installScope}
             />
           </div>
         ) : cta?.state === "update" && updateAction != null && planUpdateAction != null ? (
@@ -555,39 +605,17 @@ function ModalHero({
           {card.displayName || detail.displayName}
         </h2>
         {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
-            vendor as a semibold primary link (no underline at rest) out to
-            its marketplace store. */}
-        <p className="flex items-center gap-1.25 text-sm text-muted-foreground">
-          <span aria-hidden="true" className="shrink-0" style={{ color: bg }}>
-            {extensionKindEmblem(card.kindSlug, "size-3.5")}
-          </span>
-          <span className="min-w-0 truncate">
-            {/* data-slot: conformance stable-id contract (cinatra#986) — §V
-                byline kind label (per-kind state variant assertions). */}
-            <span data-slot="marketplace-modal-kind" className="text-foreground">
-              {detail.kindLabel}
-            </span>
-            {detail.vendor ? (
-              <>
-                {" by "}
-                {detail.vendor.storeUrl ? (
-                  <Link
-                    href={detail.vendor.storeUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-semibold text-primary hover:underline hover:underline-offset-2"
-                  >
-                    {detail.vendor.name || detail.vendor.slug}
-                  </Link>
-                ) : (
-                  <span className="font-semibold text-foreground">
-                    {detail.vendor.name || detail.vendor.slug}
-                  </span>
-                )}
-              </>
-            ) : null}
-          </span>
-        </p>
+            vendor label resolved through the single vendor-presentation resolver
+            (cinatra#1528) — a known vendor links out to its store; a missing
+            display name renders the localized placeholder as plain text, never
+            the vendor slug and never a dropped clause. */}
+        <MarketplaceModalByline
+          kindSlug={card.kindSlug}
+          kindLabel={detail.kindLabel}
+          vendor={detail.vendor}
+          accentColor={bg}
+          packageName={detail.packageName}
+        />
       </div>
       {/* 0.5.0 §II price: pinned to the TOP of the centred header (self-start +
           4px top pad) even though the name/byline block centres against the logo. */}
@@ -959,6 +987,7 @@ function ModalFooterCta({
   updateAction,
   restoreAction,
   planUpdateAction,
+  installScope,
 }: {
   card: MarketplaceCardData;
   cta: MarketplaceCardCta;
@@ -966,6 +995,7 @@ function ModalFooterCta({
   updateAction: BoundLifecycleAction;
   restoreAction: BoundLifecycleAction;
   planUpdateAction?: () => Promise<PlanExtensionUpdateResult>;
+  installScope?: ModalInstallScopeContext;
 }) {
   const compat = deriveExtensionCompatState(card.sdkAbiRange);
   const state = resolveModalInstallState(cta, compat);
@@ -1033,6 +1063,25 @@ function ModalFooterCta({
       />
     );
   }
+  // Install access-target dialog (cinatra#1541): for a NOT-installed connector
+  // / artifact / workflow, "Install now" must open the SAME pre-install
+  // access-scope dialog the §I/§IV card opens (cinatra#805) — NOT submit
+  // directly. Gate is the SAME isInstallAccessTargetKind predicate the card
+  // uses (AC5), never a second rule; the update path is handled above (AC7).
+  if (!isUpdate && isInstallAccessTargetKind(card.kindSlug)) {
+    // AC2: the scoped flow requires the already-authorized picker context the
+    // card computes server-side. If it is not plumbed, DISABLE the CTA
+    // (deferred) — NEVER fall through to the direct-submit form, which would
+    // recreate the bypass this issue closes.
+    if (!installScope) {
+      return (
+        <Button size="sm" disabled title="Preparing install options…">
+          Install now
+        </Button>
+      );
+    }
+    return <ModalInstallScopeCta card={card} installScope={installScope} />;
+  }
   const op = isUpdate ? "update" : "install";
   return (
     <MarketplaceInstallForm
@@ -1044,6 +1093,54 @@ function ModalFooterCta({
         {isUpdate ? "Update now" : "Install now"}
       </MarketplaceInstallSubmit>
     </MarketplaceInstallForm>
+  );
+}
+
+/**
+ * The footer "Install now" CTA for an access-target kind (cinatra#1541). The
+ * button is the trigger — clicking it opens the pre-install access-scope
+ * dialog controlled-open, so the dialog layers ABOVE this modal (AC4); Radix
+ * returns focus to this button when the dialog closes. The dialog carries the
+ * SAME server-side install contract as the card (same UNBOUND action + the
+ * card's already-authorized target rows), so an install from the modal
+ * persists the SAME access outcome as one from the card (AC1/AC6).
+ */
+function ModalInstallScopeCta({
+  card,
+  installScope,
+}: {
+  card: MarketplaceCardData;
+  installScope: ModalInstallScopeContext;
+}) {
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const ctaRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <Button ref={ctaRef} size="sm" onClick={() => setScopeOpen(true)}>
+        Install now
+      </Button>
+      <ExtensionInstallScopeDialog
+        open={scopeOpen}
+        onOpenChange={setScopeOpen}
+        // Radix modal content restores focus to its registered trigger on close
+        // and preventDefaults the browser restore; the scope dialog suppresses
+        // that trigger when controlled, so return focus to THIS CTA (AC4).
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          ctaRef.current?.focus();
+        }}
+        packageName={card.packageName}
+        packageVersion={card.packageVersion}
+        displayName={card.displayName}
+        installTargets={installScope.installTargets}
+        ownerEntityNames={installScope.ownerEntityNames}
+        activeOrgId={installScope.activeOrgId}
+        defaultValue={installScope.defaultValue}
+        failureCopyByCategory={installScope.failureCopyByCategory}
+        defaultFailureMessage={installScope.defaultFailureMessage}
+        installAction={installScope.installAction}
+      />
+    </>
   );
 }
 
