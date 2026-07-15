@@ -23,7 +23,6 @@ export type MarketplaceCardKind =
   | "skill"
   | "connector"
   | "artifact"
-  | "workflow"
   | "unknown";
 
 /** Commerce badge mirrored from the storefront card ("Open source"/"Free"/price). */
@@ -277,16 +276,19 @@ const KIND_LABELS: Record<MarketplaceCardKind, string> = {
   skill: "Skill",
   connector: "Connector",
   artifact: "Artifact",
-  workflow: "Workflow",
   unknown: "Extension",
 };
 
+// The four extension kinds. A slug outside this set — the removed "workflow"
+// kind (cinatra#1035), or any unmapped/future value off the storefront wire —
+// normalizes to "unknown" (label "Extension"), rendered only under "All": the
+// listing degrades gracefully to a neutral card instead of crashing or painting
+// a workflow-kind label/filter.
 const KNOWN_KINDS: ReadonlySet<string> = new Set([
   "agent",
   "skill",
   "connector",
   "artifact",
-  "workflow",
 ]);
 
 function normalizeKind(slug: string | null | undefined): MarketplaceCardKind {
@@ -403,7 +405,11 @@ export function catalogEntryToCardData(
     ),
     description: normalizeCardDescription(entry.description),
     kindSlug,
-    kindLabel: entry.kind_label || KIND_LABELS[kindSlug],
+    // Trust the wire kind_label only for a KNOWN kind. When the kind normalizes
+    // to "unknown" — the removed "workflow" (cinatra#1035) or any unmapped slug
+    // — force the neutral "Extension" label so a stale wire label ("Workflow")
+    // can never reintroduce a workflow-kind label on the card.
+    kindLabel: kindSlug === "unknown" ? KIND_LABELS.unknown : entry.kind_label || KIND_LABELS[kindSlug],
     badge: entry.badge
       ? { text: entry.badge.text, variant: entry.badge.variant }
       : null,

@@ -86,13 +86,20 @@ export default async function ExtensionMarketplaceEntryPage({
   // carries an agent.json payload); every other kind renders purely from the
   // marketplace `ExtensionDetail` — non-agent packages must never hit
   // `getAgentPackage` (it throws on packages without an agent payload).
-  const kind: "agent" | "skill" | "connector" | "artifact" | "workflow" =
+  //
+  // The removed "workflow" kind (cinatra#1035) — still served by the storefront
+  // until the Slice B delist — degrades to the neutral non-agent render with the
+  // generic "unknown" emblem: it must NOT fall through to the "agent" default
+  // (which would crash on `getAgentPackage`) and must NOT paint a workflow
+  // emblem. Any other unmapped kind tolerates the same way.
+  const kind: "agent" | "skill" | "connector" | "artifact" | "unknown" =
     detail.kind === "skill" ||
     detail.kind === "connector" ||
-    detail.kind === "artifact" ||
-    detail.kind === "workflow"
+    detail.kind === "artifact"
       ? detail.kind
-      : "agent";
+      : detail.kind === "agent" || !detail.kind
+        ? "agent"
+        : "unknown";
 
   // The detail shell mirrors the public marketplace single-extension layout
   // for ALL kinds: kind hero (emblem + name H1 + license/open-source badge),

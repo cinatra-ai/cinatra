@@ -219,10 +219,18 @@ function toDetailView(
   packageName: string,
   detail: MarketplaceExtensionGetOutput,
 ): MarketplaceDetailView {
+  // Trust the wire kindLabel only for a KNOWN kind. A removed/unmapped kind —
+  // the retired "workflow" (cinatra#1035) or anything not in KIND_LABEL — forces
+  // the neutral "Extension" label so a stale wire label ("Workflow") never leaks
+  // into the detail modal's "{Kind} by {Vendor}" byline (its emblem is already
+  // neutral). Symmetric with the browse card model's kind-label resolution.
+  const knownKindLabel = detail.kind != null ? KIND_LABEL[detail.kind] : undefined;
   const kindLabel =
-    (typeof detail.kindLabel === "string" && detail.kindLabel.trim() !== ""
-      ? detail.kindLabel
-      : KIND_LABEL[detail.kind ?? ""]) ?? "Extension";
+    knownKindLabel === undefined
+      ? "Extension"
+      : typeof detail.kindLabel === "string" && detail.kindLabel.trim() !== ""
+        ? detail.kindLabel
+        : knownKindLabel;
   return {
     packageName,
     displayName:

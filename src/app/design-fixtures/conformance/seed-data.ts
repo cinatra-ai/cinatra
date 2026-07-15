@@ -186,21 +186,20 @@ export type SeededGridCard = {
   /** Anti-lookalike: shares no token with packageName. */
   displayName: string;
   description: string;
-  kindSlug: "agent" | "skill" | "workflow" | "connector" | "artifact";
+  kindSlug: "agent" | "skill" | "connector" | "artifact";
   kindLabel: string;
 };
 
 export const SEEDED_GRID_CARDS: SeededGridCard[] = [
   { packageName: "@cinatra-fixtures/field-notes", packageVersion: "1.0.0", displayName: "Survey Companion", description: "Collects structured observations on the go.", kindSlug: "agent", kindLabel: "Agent" },
   { packageName: "@cinatra-fixtures/page-turner", packageVersion: "2.3.0", displayName: "Longform Skimmer", description: "Summarizes book-length PDFs chapter by chapter.", kindSlug: "skill", kindLabel: "Skill" },
-  { packageName: "@cinatra-fixtures/drip-feed", packageVersion: "0.8.0", displayName: "Nurture Sequencer", description: "Schedules multi-step outreach cadences.", kindSlug: "workflow", kindLabel: "Workflow" },
   { packageName: "@cinatra-fixtures/wire-tap", packageVersion: "1.1.2", displayName: "Event Stream Bridge", description: "Subscribes the workspace to external event feeds.", kindSlug: "connector", kindLabel: "Connector" },
   { packageName: "@cinatra-fixtures/style-pack", packageVersion: "4.0.0", displayName: "Voice Guide Bundle", description: "House tone-of-voice templates and examples.", kindSlug: "artifact", kindLabel: "Artifact" },
   { packageName: "@cinatra-fixtures/quote-mill", packageVersion: "1.5.0", displayName: "Proposal Drafter", description: "Assembles priced proposals from catalog items.", kindSlug: "agent", kindLabel: "Agent" },
   { packageName: "@cinatra-fixtures/lens-cap", packageVersion: "0.2.1", displayName: "Screenshot Annotator", description: "Marks up captures with callouts and blur.", kindSlug: "skill", kindLabel: "Skill" },
 ];
 
-export const SEEDED_GRID_CARD_COUNT = SEEDED_GRID_CARDS.length; // 7
+export const SEEDED_GRID_CARD_COUNT = SEEDED_GRID_CARDS.length; // 6 (workflow card removed — cinatra#1035)
 
 // ---------------------------------------------------------------------------
 // connector-grid / connector-connection-filter (static seeds — the /connectors

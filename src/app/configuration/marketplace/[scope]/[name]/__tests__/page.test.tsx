@@ -341,6 +341,44 @@ describe("ExtensionMarketplaceEntryPage", () => {
     expect(findElementsByType(result, marketplaceDetailHeaderMock)).toHaveLength(1);
   });
 
+  it("degrades a served 'workflow' kind to a neutral non-agent render — no crash, no workflow emblem (cinatra#1035)", async () => {
+    // The workflow extension kind was removed, but the storefront may still
+    // serve a workflow detail until the Slice B delist. It must render like any
+    // other non-agent kind (never routing through the Verdaccio-backed agent
+    // sections, which throw without an agent payload) and its hero emblem must
+    // degrade to the neutral "unknown" kind — never fall through to the "agent"
+    // default and never paint a "workflow" emblem.
+    fetchPublicDetailMock.mockResolvedValue(
+      publicDetail({
+        name: "Legacy Pipeline",
+        kind: "workflow",
+        license: "MIT",
+        longDescription: "A retired workflow extension.",
+      }),
+    );
+
+    const result = await ExtensionMarketplaceEntryPage({
+      params: Promise.resolve({ scope: "cinatra-ai", name: "legacy-pipeline" }),
+    });
+
+    const headers = findElementsByType(result, marketplaceDetailHeaderMock);
+    expect(headers).toHaveLength(1);
+    expect(headers[0].props).toMatchObject({
+      name: "Legacy Pipeline",
+      kind: "unknown",
+      license: "MIT",
+    });
+    // Never the agent path (getAgentPackage throws without an agent payload).
+    expect(findElementsByType(result, registryEntryDetailSectionsMock)).toHaveLength(0);
+    expect(registryEntryDetailSectionsMock).not.toHaveBeenCalled();
+    // The non-agent body renders from the marketplace text.
+    const readmeSlots = findElementsByType(result, marketplaceReadmeSectionMock);
+    expect(readmeSlots).toHaveLength(1);
+    expect(JSON.stringify(readmeSlots[0].props)).toContain(
+      "A retired workflow extension.",
+    );
+  });
+
   it("maps public detail 404 to notFound with no authenticated fallback", async () => {
     fetchPublicDetailMock.mockRejectedValue(
       new MarketplaceMcpErrorStub("missing", 404, ""),
