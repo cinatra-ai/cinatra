@@ -12,7 +12,7 @@ export type PortletScopePolicy = {
    *  acknowledge it; the server data-loader is the actual enforcement point. */
   readonly scopeFrom: "session";
   /** Resource family this portlet reads/writes (drives enforceResourceAccess). */
-  readonly resource: "object" | "artifact" | "workflow" | "dashboard" | "none";
+  readonly resource: "object" | "artifact" | "dashboard" | "none";
   /** The op checked at the server loader (e.g. "object.read"). Omitted for
    *  launcher portlets that delegate authz to the wrapped primitive. */
   readonly op?: string;
@@ -21,8 +21,8 @@ export type PortletScopePolicy = {
 export type PortletConfigError = { code: string; message: string };
 
 /** The portlet instance shape a per-kind validator inspects at install time —
- *  config + the wiring (inputs/outputs), so e.g. workflow-status can require at
- *  least one of its workflowId/projectId input bindings. */
+ *  config + the wiring (inputs/outputs), so e.g. artifact-version-history can
+ *  require its parentObjectField config. */
 export type PortletInstanceForValidation = {
   readonly config: Record<string, unknown>;
   readonly inputs?: Record<string, unknown>;

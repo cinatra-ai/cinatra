@@ -144,8 +144,6 @@ describe("AgentRunRecord type surface", () => {
       projectId: null,
       // idempotencyKey records idempotent agent-task dispatch provenance.
       idempotencyKey: null,
-      workflowId: null,
-      workflowTaskId: null,
       oboCeiling: null,
       dependentInstallId: null,
     };

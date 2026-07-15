@@ -18,7 +18,7 @@
 //    (see `normalizeLegacyDependencies`). A later CI drift gate fails on
 //    disagreement — not enforced here.
 
-export const EXTENSION_KINDS = ["agent", "connector", "artifact", "skill", "workflow"] as const;
+export const EXTENSION_KINDS = ["agent", "connector", "artifact", "skill"] as const;
 export type ExtensionKind = (typeof EXTENSION_KINDS)[number];
 
 export const DEPENDENCY_EDGE_TYPES = ["runtime", "install-time", "peer"] as const;

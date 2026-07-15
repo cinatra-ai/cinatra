@@ -34,11 +34,9 @@ import { createMetricUsageMcpModule } from "@cinatra-ai/metric-usage-api/mcp-mod
 import { createTriggerModule } from "@cinatra-ai/trigger/module";
 import { createChatModule } from "@cinatra-ai/chat/module";
 import { createAgentsModule } from "@cinatra-ai/agents/module";
-import { createWorkflowsModule } from "@cinatra-ai/workflows/module";
 import { createExtensionsModule } from "@cinatra-ai/extensions/mcp-module";
 import { readActiveManifestsFromStore } from "@cinatra-ai/extensions/runtime-discovery-host";
 import { setLiveAgentManifestProvider } from "@cinatra-ai/agents";
-import { buildWorkflowHandlerDeps } from "@/lib/workflow-host-deps";
 import { auth } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
@@ -101,8 +99,8 @@ const postConnectorPlatformModules = [
   createMetricUsageMcpModule(),
   createAgentsModule(),
   // Unified approvals_* (list/get/decide) over the ApprovalSource registry —
-  // federates agent creation requests, the workflow legacy passthrough, and
-  // (once they join the registry) the marketplace sources. Agent-adjacent slot.
+  // federates agent creation requests and (once they join the registry) the
+  // marketplace sources. Agent-adjacent slot.
   createApprovalsMcpModule(),
   // Project-manager pilot host tool seam (cinatra#1033 W3 / #1032 D3):
   // project_instantiate / project_tick_context / project_dispatch_worker as
@@ -119,13 +117,6 @@ const postConnectorPlatformModules = [
   createTriggerModule(),
   createDashboardsModule(),
   createDashboardCubesMcpModule(),
-  // Workflow proposal chat tools. Host injects the project-archive gate,
-  // agent-existence, and approver-scope resolvability so the instantiate
-  // handler and start-time re-auth share one set of probes.
-  // Workflow host deps (project write-grant gate, agent-existence,
-  // approver-scope) are built in ONE place so the launcher portlet action and the
-  // MCP server share the exact same gates (no authz drift).
-  createWorkflowsModule(buildWorkflowHandlerDeps()),
 ];
 
 // TRUSTED actor resolver, passed uniformly to every manifest-discovered

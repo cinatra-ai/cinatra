@@ -96,7 +96,7 @@ describe("enforceMcpBoundary", () => {
 
   it("short-circuits via CarveOut at the delegated_chat_token perimeter", async () => {
     const d = await enforceMcpBoundary({
-      primitiveName: "workflow_draft_create",
+      primitiveName: "dashboards_create",
       ctx: memberCtx(),
       delegatedRestricted: true,
     });

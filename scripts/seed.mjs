@@ -56,14 +56,6 @@
 import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildWorkflowSeedTemplates,
-  buildWorkflowSeedInstances,
-} from "./seed-lib/workflow-fixtures.mjs";
-import {
-  readPresentExtensionPackages,
-  filterWorkflowSeedByPresence,
-} from "./seed-lib/extension-presence.mjs";
 
 const { Pool } = pg;
 
@@ -143,23 +135,10 @@ async function listProtectedUserIds() {
 async function wipeSeedableData(protectedUserIds) {
   console.log("Wiping seedable data…");
 
-  // v65 fixture-tagged rows: FK-safe delete order BEFORE the bulk TRUNCATEs
-  // below. workflow_task_attempt/artifact/approval have ON DELETE RESTRICT on
-  // workflow_task, so the order matters: attempts → events → artifacts →
-  // approvals → dependencies → gates → tasks → workflow → template. Lists,
-  // dashboards, chat threads, and team role-grants are wiped here too because
-  // they live in tables that we don't TRUNCATE wholesale (objects, dashboards,
-  // chat_threads, role_grant — those tables hold real user/runtime data we
-  // must not clobber).
-  await q(`DELETE FROM cinatra.workflow_task_attempt WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_event WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_artifact WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_approval WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_dependency WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_gate WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_task WHERE workflow_id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow WHERE id LIKE 'wf-seed-v65-%'`);
-  await q(`DELETE FROM cinatra.workflow_template WHERE id LIKE 'wftpl-seed-v65-%'`);
+  // v65 fixture-tagged rows: Lists, dashboards, chat threads, and team
+  // role-grants are wiped here because they live in tables that we don't
+  // TRUNCATE wholesale (objects, dashboards, chat_threads, role_grant — those
+  // tables hold real user/runtime data we must not clobber).
   await q(`DELETE FROM cinatra.dashboard_revisions WHERE dashboard_id LIKE 'dash-seed-v65-%'`);
   await q(`DELETE FROM cinatra.dashboards WHERE id LIKE 'dash-seed-v65-%'`);
   await q(`DELETE FROM cinatra.chat_threads WHERE id LIKE 'chat-seed-v65-%'`);
@@ -1415,239 +1394,6 @@ async function seedChatThreads() {
 }
 
 // ---------------------------------------------------------------------------
-// Release Workflows — 6 templates + 15 instances spanning every status
-// (draft / active / paused / completed / failed / cancelled), every task
-// status, and every approval status (pending / granted / rejected /
-// needs_revision). Spread across all 3 ACME orgs because `/workflows`
-// filters by exact `workflow.org_id` match against actor.activeOrgId — the
-// admin must see workflows in every org they switch to. Idempotent: the
-// wipe block at the top of wipeSeedableData deletes by `wf-seed-v65-%` and
-// `wftpl-seed-v65-%` prefixes in FK-safe order.
-// ---------------------------------------------------------------------------
-
-async function seedWorkflows(orgMap, adminUserId) {
-  console.log("Seeding release workflows…");
-
-  const orgGroup = orgMap["acme-group"] ?? "org-acme-group";
-  const orgRobotics = orgMap["acme-robotics"] ?? "org-acme-robotics";
-  const orgCloud = orgMap["acme-cloud"] ?? "org-acme-cloud";
-
-  const daysFromNow = (n) => new Date(Date.now() + n * 86_400_000);
-  // The cascade-demo fixture derives EVERY date (target + each task window) from
-  // ONE captured instant so the static planned columns equal the schedule
-  // resolver's output exactly — `daysFromNow` re-reads `Date.now()` per call and
-  // could drift across a millisecond boundary, breaking that equality.
-  const cascadeBase = Date.now();
-  const cascadeDay = (n) => new Date(cascadeBase + n * 86_400_000);
-
-  // ── Templates + instances, presence-conditional ────────────────────────
-  // Several fixtures reference OPTIONAL agent extensions (blog-pipeline,
-  // blog-linkedin-writer, email-outreach). Resolve every agent ref against
-  // the materialized extension universe and SKIP-WITH-NOTICE anything that
-  // names an absent package — never seed a dangling agent ref (the
-  // required-only universe carries none of the optional agents; the seed
-  // must stay green there with the reduced, deterministic fixture set).
-  const presentPackages = readPresentExtensionPackages(EXTENSIONS_ROOT);
-  const { templates, instances, skippedTemplates, skippedInstances } =
-    filterWorkflowSeedByPresence(
-      {
-        templates: buildWorkflowSeedTemplates({ orgGroup, orgRobotics, orgCloud }),
-        instances: buildWorkflowSeedInstances({ orgGroup, orgRobotics, orgCloud, daysFromNow, cascadeDay }),
-      },
-      presentPackages,
-    );
-  for (const skip of skippedTemplates) {
-    console.log(`  NOTICE: skipping workflow template ${skip.id} — absent agent extension(s): ${skip.missing.join(", ")}`);
-  }
-  for (const skip of skippedInstances) {
-    console.log(`  NOTICE: skipping workflow instance ${skip.id} — ${skip.missing.length > 0 ? `absent agent extension(s): ${skip.missing.join(", ")}` : skip.reason}`);
-  }
-
-  for (const t of templates) {
-    await q(
-      `INSERT INTO cinatra.workflow_template
-         (id, key, version, name, description, definition, owner_level, owner_id, org_id, visibility, created_by, created_at, updated_at)
-       VALUES ($1, $2, 1, $3, $4, $5::jsonb, 'organization', $6, $6, 'organization', $7, NOW(), NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         definition = EXCLUDED.definition,
-         updated_at = NOW()`,
-      [t.id, t.key, t.name, t.description, JSON.stringify(t.definition), t.orgId, adminUserId],
-    );
-  }
-
-  // ── Instance helper ────────────────────────────────────────────────────
-  // Inserts a workflow + its tasks + dependencies + (optional) attempts +
-  // approvals + events + gates + artifacts. Idempotency is owned by the
-  // wipe block at the top of wipeSeedableData (DELETE by prefix); inserts
-  // here are unconditional.
-  async function insertWorkflow(wf) {
-    const {
-      id, name, product, status, targetAt, sourceTemplateId, orgId,
-      tasks, dependencies = [], attempts = [], approvals = [], events = [],
-      gates = [], artifacts = [],
-    } = wf;
-    await q(
-      `INSERT INTO cinatra.workflow
-         (id, source_template_id, source_template_version, name, product,
-          target_at_utc, target_tz, status, owner_level, owner_id, org_id,
-          spec_version, lock_version, created_by, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'UTC', $7, 'organization', $8, $8, 1, 1, $9, NOW(), NOW())`,
-      [id, sourceTemplateId ?? null, sourceTemplateId ? 1 : null, name, product, targetAt, status, orgId, adminUserId],
-    );
-    const taskIdByKey = new Map();
-    for (const t of tasks) {
-      const taskId = `${id}-task-${t.key}`;
-      taskIdByKey.set(t.key, taskId);
-      await q(
-        `INSERT INTO cinatra.workflow_task
-           (id, workflow_id, key, type, title, status,
-            agent_package, agent_ref,
-            planned_start_utc, planned_end_utc, due_at_utc,
-            actual_start_utc, actual_end_utc, schedule, anchor, lock_version,
-            created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, 1, NOW(), NOW())`,
-        [
-          taskId, id, t.key, t.type, t.title, t.status,
-          t.agentPackage ?? null,
-          t.agentRef ? JSON.stringify(t.agentRef) : null,
-          // Pass `start` and/or `end` per task to model a multi-day span (SVAR
-          // renders as a real Gantt bar). Default keeps the old point-in-time
-          // behavior: planned_start = planned_end = due (SVAR milestone diamond).
-          t.start ?? t.due ?? null,
-          t.end ?? t.due ?? null,
-          t.due ?? null,
-          t.actualStart ?? null,
-          t.actualEnd ?? null,
-          // Relative `schedule` jsonb makes a target-date move cascade this task
-          // (offset from the anchor) instead of collapsing it to the target.
-          // The denormalized `anchor` column mirrors insertSpecRows so the
-          // resolver/cascade read it without re-parsing the schedule.
-          t.schedule ? JSON.stringify(t.schedule) : null,
-          t.schedule?.mode === "relative"
-            ? JSON.stringify({ anchor: t.schedule.anchor, point: t.schedule.anchorPoint ?? "due" })
-            : null,
-        ],
-      );
-    }
-    // Two-phase parent_task_id write: every row exists now, so
-    // resolve `parent` keys → ids and UPDATE; doing this in the INSERT would
-    // FK-violate whenever a child appears before its parent in the fixture.
-    for (const t of tasks) {
-      if (!t.parent) continue;
-      const parentId = taskIdByKey.get(t.parent);
-      if (!parentId) continue;
-      await q(
-        `UPDATE cinatra.workflow_task SET parent_task_id = $1 WHERE id = $2`,
-        [parentId, taskIdByKey.get(t.key)],
-      );
-    }
-    for (const d of dependencies) {
-      await q(
-        `INSERT INTO cinatra.workflow_dependency
-           (id, workflow_id, task_id, depends_on_task_id, outcome)
-         VALUES ($1, $2, $3, $4, 'success')`,
-        [`${id}-dep-${d.from}-${d.to}`, id, taskIdByKey.get(d.to), taskIdByKey.get(d.from)],
-      );
-    }
-    for (const g of gates) {
-      // workflow_gate.state ∈ {pending, passed, blocked, not_required}.
-      await q(
-        `INSERT INTO cinatra.workflow_gate
-           (id, workflow_id, task_id, gate_kind, state, reason, evaluated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-        [`${id}-gate-${g.taskKey}-${g.kind}`, id, taskIdByKey.get(g.taskKey), g.kind, g.state, g.reason ?? null],
-      );
-    }
-    for (const a of attempts) {
-      await q(
-        `INSERT INTO cinatra.workflow_task_attempt
-           (id, workflow_id, task_id, attempt_no, idempotency_key, status,
-            started_at, completed_at, error)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
-        [
-          `${id}-att-${a.taskKey}-${a.attemptNo}`,
-          id, taskIdByKey.get(a.taskKey), a.attemptNo,
-          `${id}:${a.taskKey}:${a.attemptNo}`,
-          a.status, a.startedAt ?? null, a.completedAt ?? null,
-          a.error ? JSON.stringify(a.error) : null,
-        ],
-      );
-    }
-    for (const ap of approvals) {
-      // notification_state.solicitedAt encodes that the reconciler has
-      // OPENED the approval (timing + deps satisfied → approver list
-      // notified). The UI + decision CAS treat `pending + solicitedAt`
-      // as actionable. Right pattern:
-      //   - Decided rows (granted / rejected / needs_revision) were
-      //     necessarily opened first → ALWAYS stamp.
-      //   - Pending rows: stamp ONLY when the fixture deliberately
-      //     models a deliberately-open pending (upstream deps satisfied,
-      //     approver awaiting). Set `solicitedAt: true` (or a Date) in
-      //     the fixture literal. Pending rows behind blocked deps must
-      //     omit solicitedAt — otherwise they look prematurely actionable.
-      const decided = ap.status !== "pending";
-      const explicit = ap.solicitedAt;
-      const shouldStamp = decided || Boolean(explicit);
-      let notificationState = null;
-      if (shouldStamp) {
-        const stampAt = explicit instanceof Date
-          ? explicit.toISOString()
-          : (ap.decidedAt instanceof Date ? ap.decidedAt.toISOString() : new Date().toISOString());
-        notificationState = { solicitedAt: stampAt };
-      }
-      await q(
-        `INSERT INTO cinatra.workflow_approval
-           (id, workflow_id, task_id, required_scope, status,
-            notification_state, decided_by, decided_at, reason)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8, $9)`,
-        [
-          `${id}-apr-${ap.taskKey}`, id, taskIdByKey.get(ap.taskKey),
-          JSON.stringify(ap.requiredScope), ap.status,
-          notificationState ? JSON.stringify(notificationState) : null,
-          ap.decidedBy ?? null, ap.decidedAt ?? null, ap.reason ?? null,
-        ],
-      );
-    }
-    for (const ar of artifacts) {
-      await q(
-        `INSERT INTO cinatra.workflow_artifact
-           (id, workflow_id, task_id, kind, ref, version, pinned)
-         VALUES ($1, $2, $3, $4, $5, 1, true)`,
-        [`${id}-art-${ar.taskKey}-${ar.kind}`, id, taskIdByKey.get(ar.taskKey), ar.kind, ar.ref],
-      );
-    }
-    for (const e of events) {
-      await q(
-        `INSERT INTO cinatra.workflow_event
-           (id, workflow_id, task_key, kind, source, actor_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          `${id}-evt-${e.kind}-${e.taskKey ?? "wf"}-${e.at.getTime()}`,
-          id, e.taskKey ?? null, e.kind, e.source, adminUserId, e.at,
-        ],
-      );
-    }
-  }
-
-  // ── Instances ──────────────────────────────────────────────────────────
-  // 17 instances spread across the three ACME orgs. Status coverage:
-  //   active (7), completed (3), draft (3), failed (2), cancelled (1),
-  //   paused (1) — every status surfaced.
-  // Approval coverage: pending, granted, rejected, needs_revision — all four.
-  // Task-status coverage: idle, scheduled, running, succeeded, failed,
-  // cancelled, skipped, pending_approval — all surfaced.
-  for (const wf of instances) {
-    await insertWorkflow(wf);
-  }
-  console.log(`  seeded ${templates.length} workflow_templates + ${instances.length} workflows across ${new Set(instances.map(i => i.orgId)).size} orgs` +
-    (skippedTemplates.length + skippedInstances.length > 0
-      ? ` (skipped ${skippedTemplates.length} templates + ${skippedInstances.length} instances naming absent optional agents)`
-      : ""));
-}
-
-// ---------------------------------------------------------------------------
 async function seedV64CanonicalDemo(orgMap) {
   console.log("Seeding canonical-extension demo fixtures (cinatra.installed_extension)…");
 
@@ -1704,18 +1450,6 @@ async function seedV64CanonicalDemo(orgMap) {
       kind: "artifact",
       status: "active",
       source: { type: "local", path: "/opt/cinatra/extensions/demo-local-artifact", resolvedCommitOrTreeHash: "f0e1d2c3b4a5968778695a4b3c2d1e0f12345678" },
-      requiredInProd: false,
-      deps: [],
-    },
-    {
-      id: "iext_seed-v64-05",
-      pkg: "@cinatra-ai/demo-launch-workflow",
-      ownerLevel: "organization",
-      ownerId: orgAcme,
-      orgId: orgAcme,
-      kind: "workflow",
-      status: "active",
-      source: { type: "verdaccio", registryUrl: "http://localhost:4873", packageName: "@cinatra-ai/demo-launch-workflow", version: "1.0.0", integrity: "sha512-seed-v64-05" },
       requiredInProd: false,
       deps: [],
     },
@@ -1921,7 +1655,6 @@ async function main() {
   await seedDashboards(orgMap, admin.id);
   await seedLists(orgMap, admin.id);
   await seedChatThreads();
-  await seedWorkflows(orgMap, admin.id);
   await seedUser1ActiveOrg(admin.id);
 
   await reportFixtureDistribution(admin.id);

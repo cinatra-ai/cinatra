@@ -55,9 +55,7 @@ export const PORTLET_KINDS_WITH_BUNDLED_COMPONENT = [
   "artifact-version-history",
   "artifact-edit-text",
   "artifact-edit-binary-prompt",
-  "workflow-launcher",
   "agent-launcher",
-  "workflow-status",
   ANALYTICS_PORTLET_KIND,
   ANALYTICS_PORTLET_KIND_ALIAS,
 ] as const;
@@ -307,17 +305,6 @@ export function registerCorePortletKinds(): void {
     validateConfig: (p) => reqConfigString(p, "parentObjectField", "port_version_history_missing_field"),
   });
 
-  // workflow-launcher — wraps workflow_template_instantiate (dynamic prefills).
-  registerPortletKind({
-    kind: "workflow-launcher",
-    version: PORTLET_VERSION,
-    scopePolicy: { scopeFrom: "session", resource: "workflow" },
-    inputKeys: ["projectId"],
-    outputKeys: ["workflowId"],
-    allowsArbitraryInputs: true,
-    validateConfig: (p) => reqConfigString(p, "templateKey", "port_workflow_launcher_missing_template"),
-  });
-
   // agent-launcher — wraps agent_run start (dynamic prefills).
   registerPortletKind({
     kind: "agent-launcher",
@@ -330,21 +317,6 @@ export function registerCorePortletKinds(): void {
       typeof p.config.agentRef === "string" || typeof p.config.agentPackage === "string"
         ? []
         : [{ code: "port_agent_launcher_missing_agent", message: "config.agentRef or config.agentPackage is required" }],
-  });
-
-  // workflow-status — status summary; single-workflow OR project-scope mode.
-  registerPortletKind({
-    kind: "workflow-status",
-    version: PORTLET_VERSION,
-    scopePolicy: { scopeFrom: "session", resource: "workflow" },
-    inputKeys: ["workflowId", "projectId"],
-    outputKeys: [],
-    validateConfig: (p) => {
-      const inputs = p.inputs ?? {};
-      return inputs.workflowId !== undefined || inputs.projectId !== undefined
-        ? []
-        : [{ code: "port_workflow_status_missing_binding", message: "workflow-status requires a workflowId or projectId input binding" }];
-    },
   });
 
   // analytics (keystone, cinatra#325) — embeds a WHOLE drizzle-cube

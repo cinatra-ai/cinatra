@@ -6,9 +6,8 @@
  *   (a) enforcement bypass without a registered CarveOut → CI fails.
  *   (b) registered CarveOut without a matching bypass → CI fails (stale).
  *
- * The delegated-chat exception for `workflow_draft_create` and
- * `workflow_draft_update` is represented here so the token-policy bypass has
- * a single typed source of truth.
+ * The delegated-chat draft-authoring exceptions (e.g. `dashboards_create`) are
+ * represented here so the token-policy bypass has a single typed source of truth.
  */
 
 import type { Action } from "./registry";
@@ -59,32 +58,6 @@ export const CARVE_OUTS: readonly CarveOut[] = [
   // project context the user can write. The MCP boundary (perimeter 1) still
   // enforces the per-handler authorization that the token resolves to; this
   // carve-out gates ONLY the token policy (perimeter 5).
-  {
-    primitiveName: "workflow_draft_create",
-    resourceType: "workflow_draft",
-    action: "write",
-    boundary: "delegated_chat_token",
-    reason:
-      "Delegated chat assistant authors proposal drafts in user-writable project context. Token-policy gate; MCP dispatch (perimeter 1) re-checks per-handler authz.",
-    risk: "medium",
-    replacementPhase: "Migrate token-policy gate to typed CarveOut consumer",
-    owningTeam: "platform-authz",
-    reviewedAt: "2026-05-20",
-    reviewerId: "platform-authz-reviewer",
-  },
-  {
-    primitiveName: "workflow_draft_update",
-    resourceType: "workflow_draft",
-    action: "update",
-    boundary: "delegated_chat_token",
-    reason:
-      "Same as workflow_draft_create — CAS-guarded update authored by delegated chat under user-writable project context. Token-policy gate only.",
-    risk: "medium",
-    replacementPhase: "Migrate token-policy gate to typed CarveOut consumer",
-    owningTeam: "platform-authz",
-    reviewedAt: "2026-05-20",
-    reviewerId: "platform-authz-reviewer",
-  },
   {
     primitiveName: "dashboards_create",
     resourceType: "dashboard",

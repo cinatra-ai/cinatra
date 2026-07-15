@@ -171,9 +171,8 @@ export function registerExtensionsPrimitives(server: McpRuntimeToolServer) {
           actorType: "model",
           source: "agent",
           ...(userId ? { userId } : {}),
-          // Forward orgId so kind:"workflow" lifecycle (dashboard
-          // materialization) has the organization context; the workflow adapter
-          // fails closed (MISSING_ORG_CONTEXT) without it.
+          // Forward orgId so org-scoped extension lifecycle has the
+          // organization context (adapters that need it fail closed without it).
           ...(orgId ? { orgId } : {}),
           // Forward platformRole so downstream handlers (audit, lifecycle)
           // see the trusted admin hint without re-reading cookies.

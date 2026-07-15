@@ -99,10 +99,8 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // nullable project refinement (
     // DDL). Drizzle returns the typed column directly.
     projectId: row.projectId ?? null,
-    // idempotent agent-task dispatch provenance.
+    // idempotent child-run dispatch key.
     idempotencyKey: row.idempotencyKey ?? null,
-    workflowId: row.workflowId ?? null,
-    workflowTaskId: row.workflowTaskId ?? null,
     // persisted OBO scope-ceiling chain (JSON-as-text). Defensive parse — a
     // malformed / empty stored value becomes null (fails closed at mint).
     oboCeiling: parseOboCeilingChain(row.oboCeiling ?? null),

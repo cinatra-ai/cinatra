@@ -438,30 +438,6 @@ describe("kind-disjointness hardening (codex convergence)", () => {
     expect(compiled.error).toMatch(/cinatra\.oas|unexpected key/);
   });
 
-  it("artifact compile rejects a stale workflow.bpmn sidecar (kind-foreign file from a reused slug)", async () => {
-    const handlers = createAgentBuilderPrimitiveHandlers();
-    const slug = "stale-sidecar-artifact";
-    await handlers["artifact_source_write"](
-      req("artifact_source_write", {
-        packageSlug: slug,
-        packageJson: JSON.stringify({
-          name: `@cinatra/${slug}`,
-          version: "0.1.0",
-          license: "Apache-2.0",
-          cinatra: { artifact: VALID_ARTIFACT_MANIFEST },
-        }),
-      }),
-    );
-    await fs.mkdir(path.join(tmpRoot, "cinatra-ai", slug, "cinatra"), { recursive: true });
-    await fs.writeFile(path.join(tmpRoot, "cinatra-ai", slug, "cinatra", "workflow.bpmn"), "<stale/>");
-
-    const compiled = (await handlers["artifact_source_compile"](
-      req("artifact_source_compile", { packageSlug: slug }),
-    )) as { valid?: boolean; error?: string };
-    expect(compiled.valid).toBe(false);
-    expect(compiled.error).toMatch(/workflow\.bpmn/);
-  });
-
   it("skill_source_write fails closed on a capabilities map referencing an unwritten slug", async () => {
     const handler = createAgentBuilderPrimitiveHandlers()["skill_source_write"];
     const result = (await handler(

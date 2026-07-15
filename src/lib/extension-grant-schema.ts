@@ -382,7 +382,7 @@ BEGIN
        OR (d.elem->>'requirement') IS NULL
        OR (d.elem->>'requirement') NOT IN ('required','optional')
        OR (d.elem ? 'kind' AND ((d.elem->>'kind') IS NULL
-           OR (d.elem->>'kind') NOT IN ('agent','connector','artifact','skill','workflow')))
+           OR (d.elem->>'kind') NOT IN ('agent','connector','artifact','skill')))
        OR jsonb_typeof(d.elem->'versionConstraint') IS DISTINCT FROM 'object'
        OR ((
             ((d.elem->'versionConstraint'->>'kind') = 'semver-range'

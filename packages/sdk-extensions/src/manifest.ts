@@ -81,7 +81,7 @@ export type ConnectorVendorIdentity = {
 /** The `cinatra` manifest block (additive fields marked). */
 export type CinatraManifest = {
   apiVersion: string;
-  kind: "agent" | "connector" | "artifact" | "skill" | "workflow";
+  kind: "agent" | "connector" | "artifact" | "skill";
 
   // ---- loader / ABI fields (additive) ----
   /** Compiled server entry the loaders dynamically import (`./register`). */
@@ -214,7 +214,14 @@ export type CinatraManifest = {
 export type NormalizedExtensionRecord = {
   packageName: string;
   scope: string;
-  kind: CinatraManifest["kind"];
+  // A NEWLY-declared/authored extension is one of the four canonical kinds
+  // (`CinatraManifest["kind"]`); the kind gate + host handler reject
+  // kind:"workflow" fail-closed. The normalized RECORD additionally tolerates
+  // the legacy "workflow" kind ONLY so the generated static manifest can still
+  // represent the two workflow dev-extensions (blog-content-workflow,
+  // major-release-workflow) that remain in the dev-extension universe until
+  // they are retired in #1035 Slice G. No new workflow package can enter here.
+  kind: CinatraManifest["kind"] | "workflow";
   version: string | null;
   /** Repo-relative dir in dev; package-store path in prod. */
   sourceDir: string;

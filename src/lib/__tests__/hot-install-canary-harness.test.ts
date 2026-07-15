@@ -276,7 +276,7 @@ async function packFixture(kind: string): Promise<{ bytes: Buffer; integrity: st
 beforeAll(async () => {
   workDir = await mkdtemp(path.join(tmpdir(), "cinatra-hot-install-canary-"));
   // Pack every fixture ONCE (the "built image" analogue — one pack, reused).
-  for (const kind of ["connector", "agent", "skill", "artifact", "workflow", "cube"]) {
+  for (const kind of ["connector", "agent", "skill", "artifact", "cube"]) {
     await packFixture(kind);
   }
   baselineGeneratedHash = await hashGeneratedTree(GENERATED_ROOT);
@@ -550,36 +550,6 @@ describe("hot-install canary — ARTIFACT (CG-4 write gate), no rebuild", () => 
 });
 
 // ===========================================================================
-// 5. WORKFLOW — agent_task step gate (the SAME runtime-install-gate rule the
-//    workflow-agent-executor consumes via isAgentRuntimeRunnable).
-// ===========================================================================
-describe("hot-install canary — WORKFLOW (agent_task step gate), no rebuild", () => {
-  const AGENT_PKG = "@cinatra-ai/workflow-canary-agent";
-
-  it("install -> step dispatches; disable -> agent_task REFUSES (AGENT_NOT_INSTALLED); no-row -> CG-1 floor", async () => {
-    const cell = new CanonicalCell(AGENT_PKG, "agent");
-    // The workflow agent_task executor gates the start/instantiate re-auth probe
-    // AND the dispatch on `isAgentRuntimeRunnable` over the resolved effective
-    // status — an archived agent yields AGENT_NOT_INSTALLED. We drive the same
-    // resolver the executor calls.
-    const dispatches = async (phase: Phase): Promise<boolean> => {
-      cell.set(phase);
-      const runnable = await resolveRunnableAgentPackageNames([AGENT_PKG], { readStatus: cell.readStatus });
-      return runnable.has(AGENT_PKG);
-    };
-    expect(await dispatches("active")).toBe(true);     // installed -> dispatches
-    expect(await dispatches("archived")).toBe(false);  // CG-6: agent_task REFUSES (AGENT_NOT_INSTALLED)
-    // NO row is the CG-1 floor (a built-in workflow-agent never lifecycle-tracked
-    // stays dispatchable) — NOT the uninstall case. A runtime workflow's UNINSTALL
-    // deletes its row AND its bytes; the dedicated UNINSTALL TEARDOWN section
-    // proves a runtime-only package stays down after deletion (no bundled floor).
-    expect(await dispatches("absent")).toBe(true);     // CG-1 floor (no row -> runnable)
-
-    await assertNoRegeneration("workflow");
-  });
-});
-
-// ===========================================================================
 // 6. CUBE / PORTLET — CG-5 serve-gate on BOTH transports (HTTP + MCP).
 //    Drives `decideRuntimeCubeServe` (the pure gate both transports call) +
 //    `filterServeableCubeIds` (the catalog filter both /meta + discover call).
@@ -800,11 +770,6 @@ describe("hot-install canary — source-wiring guard (the gates are the LIVE cal
     const s = await src("packages/agents/src/mcp/handlers.ts");
     expect(s).toContain("assertAgentPackageRunnable(");
     expect(s).toContain("partitionRunnableAgentPackages(");
-  });
-  it("the workflow agent_task executor consumes isAgentRuntimeRunnable", async () => {
-    const s = await src("src/lib/workflow-agent-executor.ts");
-    expect(s).toContain("isAgentRuntimeRunnable");
-    expect(s).toContain("AGENT_NOT_INSTALLED");
   });
   it("BOTH cube transports call the serve-gate (HTTP route + MCP handlers)", async () => {
     const http = await src("src/app/api/dashboards/cubejs-api/v1/[...endpoint]/route.ts");

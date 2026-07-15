@@ -1,8 +1,9 @@
 // Byte-shape guard for the broadened extension-access CHECK constraints.
 //
-// Asserts that buildCreateStoreSchemaQueries emits the 8-kind `_kind_check_v3`
-// (cinatra#951: + 'connection') for BOTH polymorphic tables and drops the
-// legacy 4-kind `_kind_check` AND the 7-kind `_kind_check_v2`.
+// Asserts that buildCreateStoreSchemaQueries emits the 7-kind `_kind_check_v3`
+// (cinatra#951: + 'connection'; #1035 Slice C: - 'workflow') for BOTH
+// polymorphic tables and drops the legacy 4-kind `_kind_check` AND the older
+// `_kind_check_v2`.
 // Matches against the joined query batch (NOT a snapshot file).
 
 import { describe, expect, it } from "vitest";
@@ -15,8 +16,8 @@ function batchText(): string {
     .join("\n");
 }
 
-const EIGHT_KINDS =
-  /resource_kind IN \('agent_run', 'agent_template', 'skill_package', 'skill', 'connector', 'artifact', 'workflow', 'connection'\)/;
+const SEVEN_KINDS =
+  /resource_kind IN \('agent_run', 'agent_template', 'skill_package', 'skill', 'connector', 'artifact', 'connection'\)/;
 
 describe("extension-access CHECK broadening", () => {
   const sql = batchText();
@@ -34,13 +35,13 @@ describe("extension-access CHECK broadening", () => {
       );
     });
 
-    it(`${table}: adds the 8-kind _kind_check_v3`, () => {
+    it(`${table}: adds the 7-kind _kind_check_v3`, () => {
       expect(sql).toContain(`${table}_kind_check_v3`);
     });
   }
 
-  it("the v3 check enumerates all eight kinds incl. connection (cinatra#951)", () => {
-    const matches = sql.match(new RegExp(EIGHT_KINDS, "g")) ?? [];
+  it("the v3 check enumerates seven kinds incl. connection, excl. workflow (cinatra#951, #1035)", () => {
+    const matches = sql.match(new RegExp(SEVEN_KINDS, "g")) ?? [];
     // One occurrence per table.
     expect(matches.length).toBeGreaterThanOrEqual(2);
   });

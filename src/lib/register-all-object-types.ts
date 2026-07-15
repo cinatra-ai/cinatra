@@ -9,8 +9,6 @@ import { runExtensionObjectTypeRegistrars } from "@/lib/extension-object-type-re
 // delegates to the asset-blog implementation.
 import { registerBlogObjectTypes } from "@/lib/blog-project-store";
 import { registerAgentBuilderObjectTypes } from "@cinatra-ai/agents/integration/register-object-types";
-// Register workflow / workflow_template as known object types.
-import { registerWorkflowObjectTypes } from "@cinatra-ai/workflows/integration/register-object-types";
 import path from "node:path";
 // Object-registry descriptor bridge: scans extensions/cinatra-ai/*-artifact
 // and registers each as a generic artifact-bearing object type, consumed
@@ -57,7 +55,6 @@ export function registerAllObjectTypes(): void {
   runExtensionObjectTypeRegistrars();
   registerBlogObjectTypes();
   registerAgentBuilderObjectTypes();
-  registerWorkflowObjectTypes();
   // Bridge built-in + any added kind:"artifact" extensions into the object
   // registry as generic artifact-bearing types. Pass the extensions ROOT (not
   // a single vendor dir): the bridge scans `<root>/*-artifact` AND

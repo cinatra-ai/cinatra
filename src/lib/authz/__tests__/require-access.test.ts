@@ -114,7 +114,7 @@ describe("requireAccess", () => {
   });
 
   it("short-circuits to allowed when a valid carve-out is supplied", async () => {
-    const sample = CARVE_OUTS.find((c) => c.primitiveName === "workflow_draft_create")!;
+    const sample = CARVE_OUTS.find((c) => c.primitiveName === "dashboards_create")!;
     const actor = makeActor();
     await expect(
       requireAccess(

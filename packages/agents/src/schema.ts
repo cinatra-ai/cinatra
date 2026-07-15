@@ -255,12 +255,10 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Read/written by createAgentRun and the run-worker entry that wraps
   // execution in a ProjectContext frame.
   projectId: text("project_id"),
-  // Idempotent agent_run start for release-workflow dispatch. All
-  // nullable/additive (DDL in src/lib/drizzle-store.ts). A retried workflow
-  // dispatch with the same idempotency_key resolves to the SAME child run.
+  // Idempotent child-run dispatch. Nullable/additive (DDL in
+  // src/lib/drizzle-store.ts). A retried dispatch with the same
+  // idempotency_key resolves to the SAME child run.
   idempotencyKey: text("idempotency_key"),
-  workflowId: text("workflow_id"),
-  workflowTaskId: text("workflow_task_id"),
   // Delegated execution-actor snapshot. Captured at instantiate from the
   // requesting user's ActorContext and replayed at run-start re-authorization
   // plus mid-run authz checks. JSON text. NULL for legacy rows (callers fall
@@ -321,9 +319,6 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   idempotencyKeyIdx: uniqueIndex("agent_runs_idempotency_key_uniq")
     .on(t.idempotencyKey)
     .where(sql`idempotency_key IS NOT NULL`),
-  workflowIdIdx: index("agent_runs_workflow_id_idx")
-    .on(t.workflowId)
-    .where(sql`workflow_id IS NOT NULL`),
   // Partial UNIQUE index — mirrors the SQL DDL in src/lib/drizzle-store.ts
   // (`agent_runs_run_token_hash_uniq` WHERE run_token_hash IS NOT NULL). One
   // run per credential; a new all-NULL column cannot collide on existing rows.

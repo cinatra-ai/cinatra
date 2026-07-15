@@ -1,11 +1,10 @@
 "use server";
 
 // Server actions for the MUTATING portlets (edit-text, edit-binary-prompt,
-// workflow-launcher, agent-launcher) + the launcher's read resolver.
+// agent-launcher) + the launcher's read resolver.
 // Security model: every action re-derives the actor from SESSION (never trusts
 // a client-supplied actor/scope), and gates EACH effect by the resource it
-// touches — object.update on the parent object, assertProjectWriteAccess on
-// the project (inside the workflows handler). A tampered client input
+// touches — object.update on the parent object. A tampered client input
 // therefore only ever resolves to a resource the session user is already
 // authorized for. Trusted refs (projectId/postId) are read from
 // the GATED parent object server-side, not from the client.
@@ -23,8 +22,6 @@ import { createDeterministicBlogContentClient } from "@/lib/blog/mcp/client/dete
 import { readBlogPostsProjectById } from "@/lib/blog/store";
 import { isBackgroundJobActive } from "@/lib/background-jobs";
 import { createDeterministicAgentsClient } from "@cinatra-ai/agents/mcp-client";
-import { createDeterministicWorkflowsClient } from "@cinatra-ai/workflows/mcp-client";
-import { buildWorkflowHandlerDeps } from "@/lib/workflow-host-deps";
 // The WordPress instance store is CONNECTOR-owned since cinatra#975 Wave 3 —
 // the typed-picker options loader resolves the relocated client lazily and
 // degrades to NO options when the owning connector is absent (there is no
@@ -332,36 +329,6 @@ export async function applyBinaryRefSwapAction(args: {
   return { ok: true };
 }
 
-// ---------------------------------------------------------------------------
-// Workflow-launcher — instantiate a workflow template. The workflows
-// handler asserts project write access (host-injected deps) BEFORE any DB write
-// when projectId is present, so a tampered projectId is denied server-side.
-// ---------------------------------------------------------------------------
-export type WorkflowLauncherTemplate = {
-  templateId: string;
-  name: string;
-  placeholders: Record<string, unknown>;
-  metadata: Record<string, unknown>;
-};
-
-export async function loadWorkflowLauncherTemplate(args: {
-  templateKey: string;
-  templateVersion?: string;
-}): Promise<WorkflowLauncherTemplate | null> {
-  const actor = await resolvePortletPrimitiveActor();
-  if (!actor.orgId) return null;
-  const client = createDeterministicWorkflowsClient({ actor, deps: buildWorkflowHandlerDeps() });
-  const listed = await client.template.list();
-  if ("error" in listed) return null;
-  const match = listed.templates.find(
-    (t) => t.key === args.templateKey && (!args.templateVersion || t.version === args.templateVersion),
-  );
-  if (!match) return null;
-  const got = await client.template.get(match.id);
-  if ("error" in got) return null;
-  return { templateId: got.id, name: got.name, placeholders: got.placeholders, metadata: got.metadata };
-}
-
 // Typed-picker options loaders. The wordpress one strips every secret field
 // (applicationPassword, siteUrl, username) — the client receives ONLY
 // { id, label }. Same scope-leakage posture as the read loaders.
@@ -372,32 +339,6 @@ export async function loadWordpressInstanceOptions(): Promise<PortletPickerOptio
   if (!actor.orgId) return [];
   const instances = (await resolveWordPressInstanceAdmin()?.listWordPressInstances()) ?? [];
   return instances.map((i) => ({ id: i.id, label: i.name }));
-}
-
-export async function launchWorkflowAction(args: {
-  templateId: string;
-  projectId?: string;
-  inputs?: Record<string, unknown>;
-  name?: string;
-}): Promise<PortletActionResult<{ workflowId: string }>> {
-  const actor = await resolvePortletPrimitiveActor();
-  if (!actor.orgId) return { ok: false, code: "no_org", message: "Active organization required." };
-  // The launcher is project-bound: a blank/missing projectId would create a
-  // project_id=null workflow that BYPASSES the handler's assertProjectWriteAccess
-  // gate (it only fires when projectId is truthy). Reject before instantiate.
-  const projectId = typeof args.projectId === "string" ? args.projectId.trim() : "";
-  if (!projectId) {
-    return { ok: false, code: "project_required", message: "A project is required to launch a workflow." };
-  }
-  const client = createDeterministicWorkflowsClient({ actor, deps: buildWorkflowHandlerDeps() });
-  const res = await client.template.instantiate({
-    templateId: args.templateId,
-    projectId,
-    inputs: args.inputs,
-    name: args.name,
-  });
-  if ("error" in res) return { ok: false, code: res.code ?? "instantiate_failed", message: res.error };
-  return { ok: true, workflowId: res.workflowId };
 }
 
 // ---------------------------------------------------------------------------

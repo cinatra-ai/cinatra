@@ -226,7 +226,6 @@
     "test:e2e:agents-run": "playwright test -c tests/e2e/config/agents-run.config.ts",
     "test:e2e:notifications": "playwright test -c tests/e2e/config/notifications.config.ts",
     "test:e2e:rbac": "playwright test -c tests/e2e/config/rbac.config.ts",
-    "test:e2e:workflows": "playwright test -c tests/e2e/config/workflows.config.ts",
     "test:e2e:wp-drupal": "playwright test -c tests/e2e/config/wp-drupal-uat.config.ts",
     "test:e2e:design": "playwright test -c tests/e2e/config/design.config.ts",
     "test:e2e:design:update": "playwright test -c tests/e2e/config/design.config.ts --update-snapshots",

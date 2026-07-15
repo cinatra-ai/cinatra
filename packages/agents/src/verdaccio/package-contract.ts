@@ -67,11 +67,10 @@ export const cinatraVersionConstraintSchema = z.union([
 export const cinatraExtensionDependencySchema = z
   .object({
     packageName: z.string().min(1),
-    // All 5 kinds (incl. workflow) — `dependencies` carries cross-kind edges, so
-    // it must accept a workflow target even though an agent PACKAGE itself is
-    // never kind:"workflow" (cinatraExtensionKindSchema above is the narrower
-    // package-self enum).
-    kind: z.enum(["agent", "connector", "artifact", "skill", "workflow"]).optional(),
+    // All four kinds — `dependencies` carries cross-kind edges (the depended-on
+    // extension's kind). cinatraExtensionKindSchema above is the narrower
+    // package-self enum.
+    kind: z.enum(["agent", "connector", "artifact", "skill"]).optional(),
     edgeType: z.enum(["runtime", "install-time", "peer"]),
     versionConstraint: cinatraVersionConstraintSchema,
     requirement: z.enum(["required", "optional"]),
