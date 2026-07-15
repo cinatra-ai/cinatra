@@ -10,6 +10,11 @@
  *    role column is provisioned; with the column absent the gate is
  *    byte-identical to the pre-#1566 behavior (the default in this file:
  *    `teamMemberRoleColumnExists` resolves false);
+ *  - team-admin authority is RE-VERIFIED inside the advisory-locked
+ *    transaction before any mutation: the gate's role read is pre-lock, so a
+ *    concurrently demoted/removed admin whose request was queued on the lock
+ *    must be refused (stale-authority TOCTOU); platform/org tiers live
+ *    outside the teamMember table and are not re-read;
  *  - a missing team raises the IDENTICAL `forbidden` (no existence oracle —
  *    the assertProjectGrantAuthority precedent);
  *  - add: the target must be a member of the team's org (`user_not_in_org`),
@@ -310,24 +315,31 @@ describe("removeTeamMemberAction", () => {
 // Team-admin authority tier (#1566) — the lazy team-role read in the gate
 // ---------------------------------------------------------------------------
 describe("team-admin authority tier", () => {
-  it("a plain org member who is TEAM ADMIN passes the gate via the lazy role read", async () => {
+  it("a plain org member who is TEAM ADMIN passes the gate via the lazy role read AND the in-lock re-check", async () => {
     primeManagerSession({ orgRole: "member" });
     teamMemberRoleColumnExists.mockImplementation(async () => true);
-    // team lookup → caller team-role read → org-boundary probe → lock → insert
+    // team lookup → caller team-role read (gate) → org-boundary probe →
+    // lock → in-lock re-read (still admin) → insert
     queuedRows = [
       [TEAM_ROW],
       [{ role: "admin" }],
       [{ id: "m-1" }],
       [],
+      [{ role: "admin" }],
       [{ id: "tm-new" }],
     ];
     const r = await addTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: true });
-    // The lazy read is bound to the team AND the caller.
+    // The lazy gate read is bound to the team AND the caller.
     const roleRead = executed[1]!.sql;
     expect(sqlText(roleRead)).toContain('SELECT role FROM public."teamMember"');
     expect(containsValue(roleRead, "team-1")).toBe(true);
     expect(containsValue(roleRead, "caller-1")).toBe(true);
+    // The re-check runs INSIDE the locked transaction (after the lock).
+    expect(sqlText(executed[3]!.sql)).toContain("pg_advisory_xact_lock");
+    const recheck = executed[4]!.sql;
+    expect(sqlText(recheck)).toContain('SELECT role FROM public."teamMember"');
+    expect(containsValue(recheck, "caller-1")).toBe(true);
   });
 
   it("a plain TEAM MEMBER still gets forbidden (role read ran, tier not met)", async () => {
@@ -345,6 +357,63 @@ describe("team-admin authority tier", () => {
     const r = await addTeamMemberAction("team-1", "user-2");
     expect(r).toEqual({ ok: false, error: "forbidden" });
     expect(executed).toHaveLength(1); // team lookup only — no role SELECT
+  });
+
+  it("CONCURRENT DEMOTION (add): a team admin demoted after the gate but before the lock is refused with NO mutation", async () => {
+    primeManagerSession({ orgRole: "member" });
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // The gate read (pre-lock) still sees 'admin' — the demotion commits
+    // while this request is queued on the advisory lock — then the in-lock
+    // re-read sees 'member'.
+    queuedRows = [
+      [TEAM_ROW],
+      [{ role: "admin" }],
+      [{ id: "m-1" }],
+      [],
+      [{ role: "member" }],
+    ];
+    const r = await addTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "forbidden" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("INSERT"))).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("CONCURRENT REMOVAL (remove): a team admin removed from the team mid-queue is refused with NO deletion", async () => {
+    primeManagerSession({ orgRole: "member" });
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // Gate read 'admin' → lock → in-lock re-read finds NO row (removed).
+    queuedRows = [[TEAM_ROW], [{ role: "admin" }], [], []];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "forbidden" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("DELETE"))).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("CONCURRENT DEMOTION (role change): a demoted admin cannot re-promote themselves from a queued request", async () => {
+    primeManagerSession({ orgRole: "member" });
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // Gate read 'admin' → lock → in-lock re-read 'member' → forbidden.
+    queuedRows = [[TEAM_ROW], [{ role: "admin" }], [], [{ role: "member" }]];
+    const r = await updateTeamMemberRoleAction("team-1", "caller-1", "admin");
+    expect(r).toEqual({ ok: false, error: "forbidden" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("UPDATE"))).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("platform/org tiers do NOT re-read team roles inside the lock (authority lives outside teamMember)", async () => {
+    primeManagerSession({ orgRole: "org_admin" });
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [], [{ id: "tm-new" }]];
+    const r = await addTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: true });
+    // team lookup → org probe → lock → insert; no role SELECT anywhere.
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(
+      texts.filter((t) => t.includes('SELECT role FROM public."teamMember"')),
+    ).toHaveLength(0);
   });
 });
 

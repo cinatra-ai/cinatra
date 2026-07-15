@@ -89,29 +89,58 @@ export interface TeamMemberRoleProvisionResult {
   backfilledAdmins: number;
   /** Set when nothing could be done: the teamMember table does not exist. */
   skipped?: "table-missing";
-  /**
-   * Set when the column pre-existed and the shape-repair pass (NULL cleanup,
-   * DEFAULT, NOT NULL, CHECK) could not be applied — e.g. out-of-vocabulary
-   * role values. Non-fatal: the migration continues and the app degrades to
-   * whatever the column supports.
-   */
-  repairFailed?: boolean;
 }
 
-/** Guarded ADD CONSTRAINT — `ADD CONSTRAINT` has no `IF NOT EXISTS`, so probe
- *  `pg_constraint` scoped to the table (`conrelid`), not by name alone. */
-async function addRoleCheckConstraintIfMissing(client: PoolClient) {
-  const existing = await client.query(
-    `SELECT 1 FROM pg_constraint
+/**
+ * Canonical spellings of the expected CHECK expression. Postgres rewrites
+ * `CHECK ("role" IN ('member', 'admin'))` into the `= ANY (ARRAY[...])` form
+ * on modern servers; the raw IN-list spelling is kept as a defensive
+ * equivalent. Compared whitespace-normalized.
+ */
+const EXPECTED_ROLE_CHECK_DEFS = new Set([
+  `CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text])))`,
+  `CHECK (("role" IN ('member', 'admin')))`,
+  `CHECK ("role" IN ('member', 'admin'))`,
+]);
+
+/**
+ * Ensure the role CHECK constraint exists WITH the expected definition —
+ * `ADD CONSTRAINT` has no `IF NOT EXISTS`, and a name-only probe would accept
+ * a same-named constraint with the WRONG definition (or a NOT VALID one).
+ * Probe `pg_constraint` scoped to the table (`conrelid`) and validate
+ * `contype` / `convalidated` / `pg_get_constraintdef()`; a mismatched
+ * constraint is dropped and replaced (the re-add validates every row, so bad
+ * data fails the migration loudly instead of leaking past the check).
+ */
+async function ensureRoleCheckConstraint(client: PoolClient) {
+  const existing = await client.query<{
+    contype: string;
+    convalidated: boolean;
+    def: string;
+  }>(
+    `SELECT contype, convalidated, pg_get_constraintdef(oid) AS def
+       FROM pg_constraint
       WHERE conname = 'teamMember_role_check'
         AND conrelid = 'public."teamMember"'::regclass`,
   );
-  if ((existing.rowCount ?? 0) === 0) {
+  const row = existing.rows[0];
+  if (row) {
+    const normalizedDef = row.def.replace(/\s+/g, " ").trim();
+    if (
+      row.contype === "c" &&
+      row.convalidated &&
+      EXPECTED_ROLE_CHECK_DEFS.has(normalizedDef)
+    ) {
+      return;
+    }
     await client.query(
-      `ALTER TABLE public."teamMember"
-         ADD CONSTRAINT "teamMember_role_check" CHECK ("role" IN ('member', 'admin'))`,
+      `ALTER TABLE public."teamMember" DROP CONSTRAINT "teamMember_role_check"`,
     );
   }
+  await client.query(
+    `ALTER TABLE public."teamMember"
+       ADD CONSTRAINT "teamMember_role_check" CHECK ("role" IN ('member', 'admin'))`,
+  );
 }
 
 /**
@@ -144,95 +173,105 @@ async function addRoleCheckConstraintIfMissing(client: PoolClient) {
  * When the column PRE-exists (hand-provisioned or a re-run after a partial
  * failure), the backfill is skipped and a shape-repair pass runs instead:
  * NULL roles are coerced to 'member', then DEFAULT / NOT NULL / CHECK are
- * (re)applied. A repair failure (e.g. out-of-vocabulary values) is reported
- * but non-fatal.
+ * (re)applied. Any failure — provisioning OR repair — ABORTS the migration:
+ * continuing would let the app's capability probe see a role column whose
+ * shape cannot be trusted (nullable, wrong default, unvalidated CHECK) and
+ * enable role semantics on top of it. Fix the column manually, then re-run
+ * `pnpm auth:migrate`.
+ *
+ * Concurrency: the whole probe→branch→DDL unit runs inside ONE transaction
+ * that FIRST takes a transaction-scoped advisory lock on a constant key —
+ * two concurrent runners (e.g. parallel `setup` invocations) serialize, and
+ * the loser re-probes AFTER the winner committed, sees the column, and takes
+ * the repair path instead of re-running the one-shot backfill (which would
+ * overwrite role changes made since the winner's run).
  */
 export async function ensureTeamMemberRoleColumn(
   pool: Pool,
 ): Promise<TeamMemberRoleProvisionResult> {
-  const tableExists = await pool.query(
-    `SELECT EXISTS (
-       SELECT 1 FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_name = 'teamMember'
-     ) AS "exists"`,
-  );
-  if (!tableExists.rows[0]?.exists) {
-    return { provisioned: false, backfilledAdmins: 0, skipped: "table-missing" };
-  }
-
-  const columnExists = await pool.query(
-    `SELECT EXISTS (
-       SELECT 1 FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND table_name = 'teamMember'
-         AND column_name = 'role'
-     ) AS "exists"`,
-  );
-  const preExisting = Boolean(columnExists.rows[0]?.exists);
-
-  // One checked-out client for the whole DDL+backfill unit — pool.query()
-  // may hop connections between statements, which would break BEGIN/COMMIT.
+  // One checked-out client for the whole unit — pool.query() may hop
+  // connections between statements, which would break BEGIN/COMMIT and
+  // detach the advisory lock from the transaction that needs it.
   const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+    // Serialize concurrent runners BEFORE probing (see the docblock).
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtext('cinatra-migrations'), hashtext('teamMember.role'))`,
+    );
+
+    const tableExists = await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = 'teamMember'
+       ) AS "exists"`,
+    );
+    if (!tableExists.rows[0]?.exists) {
+      await client.query("ROLLBACK");
+      return { provisioned: false, backfilledAdmins: 0, skipped: "table-missing" };
+    }
+
+    const columnExists = await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'teamMember'
+           AND column_name = 'role'
+       ) AS "exists"`,
+    );
+    const preExisting = Boolean(columnExists.rows[0]?.exists);
+
     if (!preExisting) {
       // Fresh provisioning: column + CHECK + one-shot backfill, atomically.
-      // A failure here MUST propagate — this is the provisioning path.
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          `ALTER TABLE public."teamMember"
-             ADD COLUMN IF NOT EXISTS "role" text NOT NULL DEFAULT 'member'`,
-        );
-        await addRoleCheckConstraintIfMissing(client);
-        const backfilled = await client.query(
-          `UPDATE public."teamMember" tm
-              SET "role" = 'admin'
-             FROM (
-               SELECT DISTINCT ON ("teamId") id
-                 FROM public."teamMember"
-                ORDER BY "teamId", "createdAt" ASC, id ASC
-             ) first
-            WHERE tm.id = first.id`,
-        );
-        await client.query("COMMIT");
-        return {
-          provisioned: true,
-          backfilledAdmins: backfilled.rowCount ?? 0,
-        };
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => undefined);
-        throw err;
-      }
+      await client.query(
+        `ALTER TABLE public."teamMember"
+           ADD COLUMN IF NOT EXISTS "role" text NOT NULL DEFAULT 'member'`,
+      );
+      await ensureRoleCheckConstraint(client);
+      const backfilled = await client.query(
+        `UPDATE public."teamMember" tm
+            SET "role" = 'admin'
+           FROM (
+             SELECT DISTINCT ON ("teamId") id
+               FROM public."teamMember"
+              ORDER BY "teamId", "createdAt" ASC, id ASC
+           ) first
+          WHERE tm.id = first.id`,
+      );
+      await client.query("COMMIT");
+      return {
+        provisioned: true,
+        backfilledAdmins: backfilled.rowCount ?? 0,
+      };
     }
 
     // Column pre-exists: no backfill (it is one-shot by design), but make the
     // shape trustworthy — the app's roleless membership inserts rely on
-    // DEFAULT 'member' + NOT NULL.
-    try {
-      await client.query("BEGIN");
-      await client.query(
-        `UPDATE public."teamMember" SET "role" = 'member' WHERE "role" IS NULL`,
-      );
-      await client.query(
-        `ALTER TABLE public."teamMember" ALTER COLUMN "role" SET DEFAULT 'member'`,
-      );
-      await client.query(
-        `ALTER TABLE public."teamMember" ALTER COLUMN "role" SET NOT NULL`,
-      );
-      await addRoleCheckConstraintIfMissing(client);
-      await client.query("COMMIT");
-      return { provisioned: false, backfilledAdmins: 0 };
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      console.warn(
-        `better-auth-migrate: public."teamMember"."role" exists but its shape ` +
-          `could not be repaired (DEFAULT/NOT NULL/CHECK): ${
-            err instanceof Error ? err.message : String(err)
-          }. Pre-existing malformed role columns are unsupported — fix the ` +
-          `column manually, then re-run \`pnpm auth:migrate\`.`,
-      );
-      return { provisioned: false, backfilledAdmins: 0, repairFailed: true };
-    }
+    // DEFAULT 'member' + NOT NULL, and the CHECK definition is validated (a
+    // same-named constraint with the wrong definition is replaced).
+    await client.query(
+      `UPDATE public."teamMember" SET "role" = 'member' WHERE "role" IS NULL`,
+    );
+    await client.query(
+      `ALTER TABLE public."teamMember" ALTER COLUMN "role" SET DEFAULT 'member'`,
+    );
+    await client.query(
+      `ALTER TABLE public."teamMember" ALTER COLUMN "role" SET NOT NULL`,
+    );
+    await ensureRoleCheckConstraint(client);
+    await client.query("COMMIT");
+    return { provisioned: false, backfilledAdmins: 0 };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    // Fail LOUDLY (stop the deployment): a role column that cannot be
+    // brought to the expected shape must never be silently enabled.
+    throw new Error(
+      `better-auth-migrate: provisioning/repairing public."teamMember"."role" failed: ${
+        err instanceof Error ? err.message : String(err)
+      }. Pre-existing malformed role columns are unsupported — fix the column ` +
+        `manually, then re-run \`pnpm auth:migrate\`.`,
+      { cause: err },
+    );
   } finally {
     client.release();
   }
@@ -304,9 +343,7 @@ if (
     ? `skipped (${result.teamMemberRole.skipped})`
     : result.teamMemberRole.provisioned
       ? `provisioned (${result.teamMemberRole.backfilledAdmins} team admin(s) backfilled)`
-      : result.teamMemberRole.repairFailed
-        ? "present (shape repair FAILED — see warning above)"
-        : "present";
+      : "present";
   console.log(
     `Better Auth migration: created [${
       result.created.join(", ") || "none"

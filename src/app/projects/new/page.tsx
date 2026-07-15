@@ -186,11 +186,12 @@ async function createProjectAction(formData: FormData) {
     // The MCP `projects_create` handler applies an ownership-authority check
     // inline (user-owned must be self; org-owned requires matching active org +
     // org_admin/org_owner; workspace-owned requires platform_admin). The
-    // MCP team-owned path additionally requires team_admin, but that path is
-    // driven by callers that can supply a resolved team-role bag; the
-    // page-driven flow has no such source (Better Auth's teamMember has no role
-    // column), so here team-owned creation is gated on the IDOR membership-check
-    // SQL above plus the `enforceResourceAccess` `project.create` gate.
+    // MCP team-owned path additionally requires team_admin. This page-driven
+    // flow now has the same role source (the guarded `teamMember.role` read
+    // above, cinatra#1566): team-owned creation is gated on the IDOR
+    // membership-check SQL plus the `enforceResourceAccess` `project.create`
+    // gate, with a confirmed team admin surfaced as `team_admin` in the
+    // enriched role bag (plain member where the column is not provisioned).
   } catch (err) {
     // AuthzError.statusCode is stripped by Next.js serialization across the
     // server→client boundary, so the form catch block can't distinguish it

@@ -6,10 +6,15 @@
 // post-step that must be idempotent, transactional, and backfill-once.
 //
 // Driven against a scripted fake pg pool (no live Postgres): the contract
-// here is WHICH statements run in WHICH branch, that the DDL+backfill unit is
-// atomic (single checked-out client, BEGIN/COMMIT, ROLLBACK on failure), and
-// that the one-shot backfill is deterministic (DISTINCT ON with the
-// createdAt/id tie-break = earliest member ≈ the creator).
+// here is WHICH statements run in WHICH branch, that the whole
+// probe→branch→DDL unit is serialized (BEGIN + a constant-key advisory
+// xact-lock BEFORE the probes, so concurrent runners cannot double-run the
+// one-shot backfill), that the CHECK constraint's DEFINITION is validated
+// (contype/convalidated/pg_get_constraintdef — a same-named wrong constraint
+// is replaced), that the one-shot backfill is deterministic (DISTINCT ON with
+// the createdAt/id tie-break = earliest member ≈ the creator), and that ANY
+// failure rolls back and rethrows (a half-shaped role column must stop the
+// deployment, never be silently enabled).
 
 import { describe, it, expect, vi } from "vitest";
 import type pg from "pg";
@@ -20,41 +25,37 @@ type FakeResult = { rows: unknown[]; rowCount: number };
 type Handler = (sql: string) => Partial<FakeResult> | Error;
 
 function makeFakePool(handler: Handler) {
-  const poolQueries: string[] = [];
   const clientQueries: string[] = [];
-  const run = async (sql: string, log: string[]): Promise<FakeResult> => {
-    log.push(sql);
+  const run = async (sql: string): Promise<FakeResult> => {
+    clientQueries.push(sql);
     const out = handler(sql);
     if (out instanceof Error) throw out;
     return { rows: out.rows ?? [], rowCount: out.rowCount ?? 0 };
   };
   const client = {
-    query: vi.fn((sql: string) => run(sql, clientQueries)),
+    query: vi.fn((sql: string) => run(sql)),
     release: vi.fn(),
   };
   const pool = {
-    query: vi.fn((sql: string) => run(sql, poolQueries)),
+    query: vi.fn((sql: string) => run(sql)),
     connect: vi.fn(async () => client),
   };
-  return {
-    pool: pool as unknown as pg.Pool,
-    raw: pool,
-    client,
-    poolQueries,
-    clientQueries,
-  };
+  return { pool: pool as unknown as pg.Pool, raw: pool, client, clientQueries };
 }
 
-/** Handler presets keyed by probe result. */
+const VALID_CHECK_DEF = `CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text])))`;
+
+/** Handler presets keyed by probe results. */
 function scripted(opts: {
   tableExists: boolean;
   columnExists: boolean;
-  constraintExists?: boolean;
+  constraint?: { contype?: string; convalidated?: boolean; def?: string } | null;
   backfillCount?: number;
   failOn?: (sql: string) => boolean;
 }): Handler {
   return (sql) => {
     if (opts.failOn?.(sql)) return new Error("boom");
+    if (sql.includes("pg_advisory_xact_lock")) return {};
     if (sql.includes("information_schema.tables")) {
       return { rows: [{ exists: opts.tableExists }] };
     }
@@ -62,7 +63,19 @@ function scripted(opts: {
       return { rows: [{ exists: opts.columnExists }] };
     }
     if (sql.includes("pg_constraint")) {
-      return { rows: opts.constraintExists ? [{ "?column?": 1 }] : [], rowCount: opts.constraintExists ? 1 : 0 };
+      const c = opts.constraint;
+      return c
+        ? {
+            rows: [
+              {
+                contype: c.contype ?? "c",
+                convalidated: c.convalidated ?? true,
+                def: c.def ?? VALID_CHECK_DEF,
+              },
+            ],
+            rowCount: 1,
+          }
+        : { rows: [], rowCount: 0 };
     }
     if (sql.includes("SET \"role\" = 'admin'")) {
       return { rowCount: opts.backfillCount ?? 0 };
@@ -72,15 +85,38 @@ function scripted(opts: {
 }
 
 describe("ensureTeamMemberRoleColumn", () => {
-  it("skips entirely (no client checkout) when the teamMember table does not exist", async () => {
-    const fake = makeFakePool(scripted({ tableExists: false, columnExists: false }));
+  it("serializes on a constant-key advisory xact-lock BEFORE probing (concurrent runners cannot double-backfill)", async () => {
+    const fake = makeFakePool(
+      scripted({ tableExists: true, columnExists: false }),
+    );
+    await ensureTeamMemberRoleColumn(fake.pool);
+    const q = fake.clientQueries;
+    expect(q[0]).toBe("BEGIN");
+    expect(q[1]).toContain("pg_advisory_xact_lock");
+    // Probes come AFTER the lock, on the SAME client/transaction — a loser
+    // re-probes after the winner committed, sees the column, and takes the
+    // repair path instead of re-running the one-shot backfill.
+    const lockIdx = q.findIndex((s) => s.includes("pg_advisory_xact_lock"));
+    const tableIdx = q.findIndex((s) => s.includes("information_schema.tables"));
+    const columnIdx = q.findIndex((s) => s.includes("information_schema.columns"));
+    expect(lockIdx).toBeGreaterThan(-1);
+    expect(lockIdx).toBeLessThan(tableIdx);
+    expect(tableIdx).toBeLessThan(columnIdx);
+  });
+
+  it("skips (rolls back, no DDL) when the teamMember table does not exist", async () => {
+    const fake = makeFakePool(
+      scripted({ tableExists: false, columnExists: false }),
+    );
     const result = await ensureTeamMemberRoleColumn(fake.pool);
     expect(result).toEqual({
       provisioned: false,
       backfilledAdmins: 0,
       skipped: "table-missing",
     });
-    expect(fake.raw.connect).not.toHaveBeenCalled();
+    expect(fake.clientQueries).toContain("ROLLBACK");
+    expect(fake.clientQueries.join("\n")).not.toContain("ALTER TABLE");
+    expect(fake.client.release).toHaveBeenCalledTimes(1);
   });
 
   it("provisions column + CHECK + one-shot backfill atomically when the column is absent", async () => {
@@ -105,21 +141,66 @@ describe("ensureTeamMemberRoleColumn", () => {
     expect(fake.client.release).toHaveBeenCalledTimes(1);
   });
 
-  it("guards the CHECK constraint by conrelid, not name alone, and skips ADD when present", async () => {
+  it("accepts an existing constraint only with the EXPECTED definition (contype+convalidated+def), skipping ADD", async () => {
     const fake = makeFakePool(
-      scripted({ tableExists: true, columnExists: false, constraintExists: true }),
+      scripted({
+        tableExists: true,
+        columnExists: false,
+        constraint: { contype: "c", convalidated: true, def: VALID_CHECK_DEF },
+      }),
     );
     await ensureTeamMemberRoleColumn(fake.pool);
     const probe = fake.clientQueries.find((s) => s.includes("pg_constraint"));
+    // conrelid-scoped (not name-only) and definition-bearing.
     expect(probe).toContain(`conrelid = 'public."teamMember"'::regclass`);
+    expect(probe).toContain("pg_get_constraintdef");
     expect(
       fake.clientQueries.filter((s) => s.includes("ADD CONSTRAINT")),
     ).toHaveLength(0);
+    expect(
+      fake.clientQueries.filter((s) => s.includes("DROP CONSTRAINT")),
+    ).toHaveLength(0);
+  });
+
+  it("REPLACES a same-named constraint whose definition is wrong", async () => {
+    const fake = makeFakePool(
+      scripted({
+        tableExists: true,
+        columnExists: false,
+        constraint: {
+          contype: "c",
+          convalidated: true,
+          def: `CHECK ((role = ANY (ARRAY['member'::text, 'admin'::text, 'owner'::text])))`,
+        },
+      }),
+    );
+    await ensureTeamMemberRoleColumn(fake.pool);
+    const joined = fake.clientQueries.join("\n");
+    expect(joined).toContain(`DROP CONSTRAINT "teamMember_role_check"`);
+    expect(joined).toContain(`ADD CONSTRAINT "teamMember_role_check"`);
+  });
+
+  it("REPLACES a same-named constraint that is NOT VALID (re-add validates every row)", async () => {
+    const fake = makeFakePool(
+      scripted({
+        tableExists: true,
+        columnExists: true,
+        constraint: { contype: "c", convalidated: false, def: VALID_CHECK_DEF },
+      }),
+    );
+    await ensureTeamMemberRoleColumn(fake.pool);
+    const joined = fake.clientQueries.join("\n");
+    expect(joined).toContain(`DROP CONSTRAINT "teamMember_role_check"`);
+    expect(joined).toContain(`ADD CONSTRAINT "teamMember_role_check"`);
   });
 
   it("is a shape-repair no-backfill pass when the column pre-exists (idempotent re-run)", async () => {
     const fake = makeFakePool(
-      scripted({ tableExists: true, columnExists: true, constraintExists: true }),
+      scripted({
+        tableExists: true,
+        columnExists: true,
+        constraint: { contype: "c", convalidated: true, def: VALID_CHECK_DEF },
+      }),
     );
     const result = await ensureTeamMemberRoleColumn(fake.pool);
     expect(result).toEqual({ provisioned: false, backfilledAdmins: 0 });
@@ -142,13 +223,13 @@ describe("ensureTeamMemberRoleColumn", () => {
         failOn: (sql) => sql.includes("DISTINCT ON"),
       }),
     );
-    await expect(ensureTeamMemberRoleColumn(fake.pool)).rejects.toThrow("boom");
+    await expect(ensureTeamMemberRoleColumn(fake.pool)).rejects.toThrow(/boom/);
     expect(fake.clientQueries).toContain("ROLLBACK");
     expect(fake.clientQueries).not.toContain("COMMIT");
     expect(fake.client.release).toHaveBeenCalledTimes(1);
   });
 
-  it("reports (not throws) a failed shape repair on a pre-existing malformed column", async () => {
+  it("rolls back and RETHROWS when the shape repair fails — a half-shaped column must stop the deployment", async () => {
     const fake = makeFakePool(
       scripted({
         tableExists: true,
@@ -156,18 +237,11 @@ describe("ensureTeamMemberRoleColumn", () => {
         failOn: (sql) => sql.includes("SET NOT NULL"),
       }),
     );
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      const result = await ensureTeamMemberRoleColumn(fake.pool);
-      expect(result).toEqual({
-        provisioned: false,
-        backfilledAdmins: 0,
-        repairFailed: true,
-      });
-      expect(fake.clientQueries).toContain("ROLLBACK");
-      expect(warn).toHaveBeenCalledTimes(1);
-    } finally {
-      warn.mockRestore();
-    }
+    await expect(ensureTeamMemberRoleColumn(fake.pool)).rejects.toThrow(
+      /provisioning\/repairing public\."teamMember"\."role" failed/,
+    );
+    expect(fake.clientQueries).toContain("ROLLBACK");
+    expect(fake.clientQueries).not.toContain("COMMIT");
+    expect(fake.client.release).toHaveBeenCalledTimes(1);
   });
 });

@@ -133,7 +133,9 @@ export default async function TeamSettingsPage({
             <CardTitle>Members</CardTitle>
             <CardDescription>
               {canManage
-                ? "People on this team. Add members from this organization, remove them, or assign the Admin role — a team keeps at least one member."
+                ? rolesEnabled
+                  ? "People on this team. Add members from this organization, remove them, or assign the Admin role — a team keeps at least one member."
+                  : "People on this team. Add members from this organization or remove them — a team keeps at least one member."
                 : "People on this team. Ask a team admin or an organization owner/admin to add or remove members."}
             </CardDescription>
           </CardHeader>

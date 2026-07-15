@@ -539,10 +539,14 @@ async function seedTeams(orgMap, adminUserId) {
       );
 
       if (hasRoleColumn) {
+        // ON CONFLICT ... DO UPDATE (not DO NOTHING): a database seeded
+        // BEFORE the role model has these membership rows already — the
+        // upsert reconciles their roles to the fixture instead of leaving
+        // them stale on 'member'.
         await q(
           `INSERT INTO public."teamMember" (id, "teamId", "userId", role, "createdAt")
            VALUES ($1, $2, $3, $4, NOW())
-           ON CONFLICT DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role`,
           [`tm-${team.id}-${userId}`, team.id, userId, userId === leadUserId ? "admin" : "member"]
         );
       } else {
@@ -579,12 +583,13 @@ async function seedTeams(orgMap, adminUserId) {
         [`mem-${adminUserId}-${team.org}`, orgId, adminUserId]
       );
       // Team-admin role for the operator (cinatra#1566) — the one user who
-      // actually demos the role-management UI on the members card.
+      // actually demos the role-management UI on the members card. Upsert
+      // (not DO NOTHING) so a pre-role-model seeded row is reconciled.
       if (hasRoleColumn) {
         await q(
           `INSERT INTO public."teamMember" (id, "teamId", "userId", role, "createdAt")
            VALUES ($1, $2, $3, 'admin', NOW())
-           ON CONFLICT DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role`,
           [`tm-${teamId}-${adminUserId}`, teamId, adminUserId]
         );
       } else {
