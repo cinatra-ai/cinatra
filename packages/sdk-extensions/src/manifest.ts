@@ -52,18 +52,20 @@ export const EXTENSION_RESOLUTIONS = ["required", "guardedOptional"] as const;
 export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
 
 /**
- * Self-declared connector vendor identity (#12 connector vendor-identity
- * end-state; vendor identity is self-declared per the nango-system-contract ruling).
+ * Self-declared vendor identity (#12 connector vendor-identity end-state;
+ * vendor identity is self-declared per the nango-system-contract ruling).
  *
- * Vendor identity lives WITH the connector — a `kind:"connector"` extension
- * declares its own vendor key + display name here, in its own manifest. The SDK
- * owns NO authoritative vendor roster (Cinatra is an open connector
- * marketplace); the `key` is the OPEN `ConnectorVendorKey` SHAPE (any string,
- * not a frozen union). Authoritative validation — key SHAPE conformance,
- * name/key ownership + uniqueness across the catalog, and provider mapping —
- * is performed at the MARKETPLACE PUBLISH GATE (the Cinatra marketplace
- * service), never in the SDK and never at the host loader (which has no
- * cross-connector roster to check against).
+ * Vendor identity lives WITH the extension — a `kind:"connector"` extension
+ * declares its own vendor key + display name here, in its own manifest, and a
+ * `kind:"artifact"` extension may declare the same shape for its installed-card
+ * byline (see `cinatra.vendor` on `CinatraManifest`). The SDK owns NO
+ * authoritative vendor roster (Cinatra is an open connector marketplace); the
+ * `key` is the OPEN `ConnectorVendorKey` SHAPE (any string, not a frozen
+ * union). Authoritative validation — key SHAPE conformance, name/key ownership
+ * + uniqueness across the catalog, and provider mapping — is performed at the
+ * MARKETPLACE PUBLISH GATE (the Cinatra marketplace service), never in the SDK
+ * and never at the host loader (which has no cross-vendor roster to check
+ * against).
  */
 export type ConnectorVendorIdentity = {
   /**
@@ -134,12 +136,18 @@ export type CinatraManifest = {
    */
   devSetup?: string;
   /**
-   * Self-declared connector vendor identity (#12). A `kind:"connector"`
-   * extension declares its OWN vendor key + name here — the SDK owns no vendor
-   * roster (open marketplace). The marketplace publish gate (separate repo)
-   * verifies shape, name/key ownership + uniqueness, and provider mapping;
-   * the host loader carries it through unvalidated. Absent for non-connector
-   * kinds and for connectors that have not yet adopted self-declared identity.
+   * Self-declared vendor identity (#12). A `kind:"connector"` extension
+   * declares its OWN vendor key + name here — the SDK owns no vendor roster
+   * (open marketplace). The marketplace publish gate (separate repo) verifies
+   * shape, name/key ownership + uniqueness, and provider mapping; the host
+   * loader carries it through unvalidated.
+   *
+   * PRESENTATION-metadata, not connector-only: the installed-card byline
+   * (`{Kind} by {Vendor}`, cinatra#948 §VI / #1570) reads `vendor.name`
+   * kind-agnostically, so a `kind:"artifact"` extension may also declare it
+   * to render its byline (the artifact allowlist admits `vendor` for exactly
+   * this reason — see `ARTIFACT_ALLOWED_CINATRA_KEYS` in `./artifact-contract`).
+   * Absent for extensions that have not adopted self-declared identity.
    */
   vendor?: ConnectorVendorIdentity;
   /** UI hot-pluggability classification. */
@@ -260,14 +268,15 @@ export type NormalizedExtensionRecord = {
   displayName: string | null;
   logo: string | null;
   /**
-   * Self-declared connector vendor identity (`cinatra.vendor`, #12), or null
-   * when the package declares none (non-connector kinds, or connectors that
-   * have not adopted self-declared identity). OPTIONAL on the type (the record
-   * shape is ABI-frozen, so the field is strictly additive); the manifest
-   * generator emits it on every record (`null` when absent). The SDK/host carry
-   * it through UNVALIDATED — vendor-identity validation (shape, name/key
-   * ownership + uniqueness, provider mapping) is the marketplace publish gate's
-   * job (separate repo), not the loader's.
+   * Self-declared vendor identity (`cinatra.vendor`, #12), or null when the
+   * package declares none (any kind that has not adopted self-declared
+   * identity). Declared by connectors AND by artifacts (the installed-card
+   * `{Kind} by {Vendor}` byline reads it kind-agnostically). OPTIONAL on the
+   * type (the record shape is ABI-frozen, so the field is strictly additive);
+   * the manifest generator emits it on every record (`null` when absent). The
+   * SDK/host carry it through UNVALIDATED — vendor-identity validation (shape,
+   * name/key ownership + uniqueness, provider mapping) is the marketplace
+   * publish gate's job (separate repo), not the loader's.
    */
   vendor?: ConnectorVendorIdentity | null;
   /**

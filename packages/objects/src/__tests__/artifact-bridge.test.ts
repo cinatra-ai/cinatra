@@ -92,6 +92,29 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     ).not.toBeNull();
   });
 
+  it("registers a manifest carrying the cross-kind vendor key (cinatra#1570 installed-card byline)", () => {
+    // `vendor` began connector-only but the `{Kind} by {Vendor}` byline reads
+    // it kind-agnostically, so a first-party artifact declares it to render
+    // "… by Cinatra". Admitted through ARTIFACT_ALLOWED_CINATRA_KEYS; the bridge
+    // must NOT reject the manifest as extraneous.
+    writeExt(root, "vendored-artifact", {
+      name: "@cinatra-ai/vendored-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        displayName: "Vendored Artifact",
+        vendor: { key: "cinatra-ai", name: "Cinatra" },
+        artifact: {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(1);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/vendored-artifact:artifact"),
+    ).not.toBeNull();
+  });
+
   it("skips a kind:'artifact' package with an invalid/missing descriptor", () => {
     writeExt(root, "broken-artifact", {
       name: "@cinatra-ai/broken-artifact",

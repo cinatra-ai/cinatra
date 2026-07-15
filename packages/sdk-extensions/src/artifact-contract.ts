@@ -85,6 +85,20 @@ export type SemanticArtifactRef = { extension: string };
  * (`registerArtifactExtensions`) rejects the whole manifest as extraneous and
  * skips registration, dropping the extension's `artifact` descriptor AND its
  * `objectTypes` claims at boot.
+ *
+ * `vendor` (cinatra#12 `ConnectorVendorIdentity`, `{ key, name }`) is admitted
+ * for the SAME cross-kind PRESENTATION reason as `displayName`. It began as a
+ * connector-only key, but the installed-card byline (`{Kind} by {Vendor}`,
+ * cinatra#948 §VI / #1570) reads it kind-agnostically: the byline resolver
+ * (`resolveInstalledVendorName` → `vendorFor`) takes the manifest's declared
+ * vendor NAME for ANY kind and never infers one from the npm scope, so a
+ * first-party artifact (e.g. `@cinatra-ai/default-artifact`) needs a declared
+ * `vendor` to render "… by Cinatra" instead of dropping the clause. The host
+ * loader carries it through UNVALIDATED (shape/ownership/uniqueness are the
+ * marketplace publish gate's job, per `ConnectorVendorIdentity` in
+ * `./manifest`); admitting it here is purely so the artifact bridge does not
+ * reject the whole manifest as extraneous. Narrowly additive — unknown keys
+ * stay rejected.
  */
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
@@ -93,4 +107,5 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "dependencies",
   "roles",
   "displayName",
+  "vendor",
 ]);
