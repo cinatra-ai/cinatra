@@ -45,12 +45,22 @@ describe("resolveMarketplaceTab — canonicalization", () => {
     expect(resolveMarketplaceTab("workflow")).toEqual({ activeTab: "all", stale: true });
   });
 
+  // A foreign value the grid never owned resolves to the default All tab but is
+  // NOT stale — the grid renders "all" and LEAVES the value in the URL rather
+  // than clobber it. Load-bearing: the design-conformance seeded harness
+  // co-mounts this grid with the installed-extensions status filter, which owns
+  // `?tab=archived` (cinatra#1645). A blanket "strip every unknown value" would
+  // rewrite that filter's tab out from under it, reverting the selection.
+  it("?tab=archived (owned by the co-mounted installed filter) → All tab, NOT stale (left untouched)", () => {
+    expect(resolveMarketplaceTab("archived")).toEqual({ activeTab: "all", stale: false });
+  });
+
   it.each(["", "  ", "Workflows", "context", "dashboard", "AGENT", "agent ", "garbage"])(
-    "an invalid/removed value %o → default All tab, STALE",
+    "a foreign/unknown value %o → default All tab, NOT stale (rendered as All, left in the URL)",
     (raw) => {
       const resolved = resolveMarketplaceTab(raw);
       expect(resolved.activeTab).toBe("all");
-      expect(resolved.stale).toBe(true);
+      expect(resolved.stale).toBe(false);
     },
   );
 });

@@ -35,11 +35,13 @@ describe("marketplace client — no 'Workflows' tab, canonicalizes stale ?tab (c
     expect(CLIENT).not.toContain("Workflows");
   });
 
-  it("canonicalizes a stale/unknown ?tab value via router.replace (never a 404, never a dead tab)", () => {
-    // Resolves the tab through the pure model and strips a stale value with a
-    // replace (setParam uses router.replace — no history push). Keyed on the
-    // raw searchParams value, so a direct load, a client-side nav, and
-    // back/forward all canonicalize identically.
+  it("canonicalizes a stale (removed) ?tab value via router.replace (never a 404, never a dead tab)", () => {
+    // Resolves the tab through the pure model and strips ONLY a stale (removed
+    // marketplace) value with a replace (setParam uses router.replace — no
+    // history push); a foreign value the grid never owned is left untouched
+    // (tabStale false — see marketplace-tab-model.test.ts). Keyed on the raw
+    // searchParams value, so a direct load, a client-side nav, and back/forward
+    // all canonicalize identically.
     expect(CLIENT).toMatch(/resolveMarketplaceTab\(rawTab\)/);
     expect(CLIENT).toMatch(/useEffect\(/);
     expect(CLIENT).toMatch(/if\s*\(tabStale\)\s*setParam\("tab",\s*null\)/);

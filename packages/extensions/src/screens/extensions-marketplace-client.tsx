@@ -62,9 +62,12 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
   const searchParams = useSearchParams();
   const rawTab = searchParams.get("tab");
   // Canonicalize the tab query value. A stale/bookmarked `?tab=workflow` (the
-  // removed kind — cinatra#1035) or any other unknown value resolves to the
-  // default "all" tab and is flagged stale so the effect below strips it — the
-  // route stays valid (never a 404, never a dead/empty tab).
+  // removed kind — cinatra#1035) resolves to the default "all" tab and is
+  // flagged stale so the effect below strips it — the route stays valid (never
+  // a 404, never a dead/empty tab). Any OTHER unknown value also renders "all"
+  // but is NOT flagged stale: the grid leaves a value it never owned in the URL
+  // (see resolveMarketplaceTab) so it can't clobber a co-mounted surface's
+  // `?tab=` — e.g. the installed-extensions filter's `?tab=archived`.
   const { activeTab: tab, stale: tabStale } = resolveMarketplaceTab(rawTab);
   const search = (searchParams.get("q") ?? "").toLowerCase();
 
@@ -75,11 +78,13 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
     router.replace(`?${next.toString()}`, { scroll: false });
   };
 
-  // Strip a stale/unknown `?tab=` value (e.g. the removed "workflow") from the
-  // URL so the canonical route carries no obsolete query. Keyed on `rawTab`
-  // (via useSearchParams, which is reactive to a direct load, a client-side
-  // navigation, AND back/forward), so all three navigation paths canonicalize;
-  // `setParam("tab", null)` is a `router.replace`, so it never pushes history.
+  // Strip a stale `?tab=` value — ONLY a removed marketplace tab value (the
+  // retired "workflow") is flagged stale — from the URL so the canonical route
+  // carries no obsolete query. A foreign value the grid never owned is left
+  // in place (tabStale is false). Keyed on `rawTab` (via useSearchParams, which
+  // is reactive to a direct load, a client-side navigation, AND back/forward),
+  // so all three navigation paths canonicalize; `setParam("tab", null)` is a
+  // `router.replace`, so it never pushes history.
   useEffect(() => {
     if (tabStale) setParam("tab", null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
