@@ -12,6 +12,7 @@ import {
   createBackgroundProgressNotification,
   createNotificationForRecipient,
   listNotificationsForUser,
+  listNotificationsKeysetForUser,
   markAllNotificationsReadForUser,
   markNotificationReadForUser,
   markNotificationsReadByHrefPrefixForUser,
@@ -472,6 +473,89 @@ describe("markAllNotificationsReadForUser", () => {
 
   it("no-ops when userId is empty", () => {
     markAllNotificationsReadForUser("");
+    expect(runQueriesMock).not.toHaveBeenCalled();
+  });
+});
+
+// The keyset ("seek") read for the unified /notifications feed (cinatra#1555).
+// Proves the WHERE-clause construction for each of the three seek boundaries,
+// the newest-first ORDER BY, the LIMIT param + clamp, and the empty-user
+// short-circuit.
+describe("listNotificationsKeysetForUser", () => {
+  it("no boundary → user filter only, ms-truncated newest-first ORDER BY, clamped limit", () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    listNotificationsKeysetForUser({ userId: "u1", limit: 10 });
+    expect(lastSql()).toContain("WHERE user_id = $1");
+    expect(lastSql()).toContain("ORDER BY date_trunc('milliseconds', created_at) DESC, id DESC");
+    expect(lastSql()).toContain("LIMIT $2");
+    expect(lastValues()).toEqual(["u1", 10]);
+  });
+
+  it("row boundary → index-narrowed ms tuple seek", () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    listNotificationsKeysetForUser({
+      userId: "u1",
+      limit: 5,
+      before: { boundary: "row", createdAt: "2026-01-01T00:00:00.000Z", id: "n9" },
+    });
+    expect(lastSql()).toContain("created_at < ($2::timestamptz + interval '1 millisecond')");
+    expect(lastSql()).toContain("(date_trunc('milliseconds', created_at), id) < ($2::timestamptz, $3::text)");
+    expect(lastValues()).toEqual(["u1", "2026-01-01T00:00:00.000Z", "n9", 5]);
+  });
+
+  it("createdAtInclusive → created_at < ($2 + 1ms) (whole cursor millisecond still ahead of a cross-stream cursor)", () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    listNotificationsKeysetForUser({
+      userId: "u1",
+      limit: 5,
+      before: { boundary: "createdAtInclusive", createdAt: "2026-01-01T00:00:00.000Z" },
+    });
+    expect(lastSql()).toContain("created_at < ($2::timestamptz + interval '1 millisecond')");
+    // No tuple seek (that's the `row` boundary); ORDER BY still ms-truncates.
+    expect(lastSql()).not.toContain("(date_trunc('milliseconds', created_at), id)");
+    expect(lastValues()).toEqual(["u1", "2026-01-01T00:00:00.000Z", 5]);
+  });
+
+  it("createdAtExclusive → created_at < $2 (cursor millisecond already past)", () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    listNotificationsKeysetForUser({
+      userId: "u1",
+      limit: 5,
+      before: { boundary: "createdAtExclusive", createdAt: "2026-01-01T00:00:00.000Z" },
+    });
+    expect(lastSql()).toMatch(/WHERE user_id = \$1 AND created_at < \$2::timestamptz/);
+    expect(lastSql()).not.toContain("interval");
+    expect(lastValues()).toEqual(["u1", "2026-01-01T00:00:00.000Z", 5]);
+  });
+
+  it("clamps limit to [1, 200]", () => {
+    runQueriesMock.mockReturnValue([{ rows: [] }]);
+    listNotificationsKeysetForUser({ userId: "u1", limit: 9999 });
+    expect(lastValues().at(-1)).toBe(200);
+    listNotificationsKeysetForUser({ userId: "u1", limit: 0 });
+    expect(lastValues().at(-1)).toBe(1);
+    listNotificationsKeysetForUser({ userId: "u1", limit: -3 });
+    expect(lastValues().at(-1)).toBe(1);
+    runQueriesMock.mockReset();
+    registerAdapter();
+  });
+
+  it("maps returned rows to records, newest-first order preserved from SQL", () => {
+    runQueriesMock.mockReturnValueOnce([
+      {
+        rows: [
+          { id: "n2", user_id: "u1", recipient_kind: "user", topic: "user:u1", kind: "info", title: "later", body: "", created_at: "2026-01-02T00:00:00Z" },
+          { id: "n1", user_id: "u1", recipient_kind: "user", topic: "user:u1", kind: "success", title: "earlier", body: "", created_at: "2026-01-01T00:00:00Z" },
+        ],
+      },
+    ]);
+    const out = listNotificationsKeysetForUser({ userId: "u1", limit: 10 });
+    expect(out.map((r) => r.id)).toEqual(["n2", "n1"]);
+    expect(out[0]).toMatchObject({ id: "n2", title: "later", kind: "info" });
+  });
+
+  it("empty userId short-circuits with no query", () => {
+    listNotificationsKeysetForUser({ userId: "", limit: 10 });
     expect(runQueriesMock).not.toHaveBeenCalled();
   });
 });
