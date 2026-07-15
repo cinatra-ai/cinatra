@@ -339,6 +339,7 @@ describe("team-admin authority tier", () => {
     expect(sqlText(executed[3]!.sql)).toContain("pg_advisory_xact_lock");
     const recheck = executed[4]!.sql;
     expect(sqlText(recheck)).toContain('SELECT role FROM public."teamMember"');
+    expect(containsValue(recheck, "team-1")).toBe(true);
     expect(containsValue(recheck, "caller-1")).toBe(true);
   });
 
