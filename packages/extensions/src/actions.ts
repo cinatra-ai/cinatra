@@ -618,8 +618,8 @@ export async function installExtensionPackageFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
 
@@ -1037,8 +1037,8 @@ export async function updateExtensionPackageFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
   const result = await updateExtensionPackage(input.packageName, input.packageVersion, actor);
@@ -1062,8 +1062,8 @@ export async function uninstallExtensionPackageFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
   const result = await uninstallExtensionPackage(input.packageName, input.packageVersion, actor);
@@ -1101,8 +1101,8 @@ export async function archiveExtensionPackageFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
   const result = await archiveExtensionPackage(
@@ -1130,8 +1130,8 @@ export async function restoreExtensionPackageFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
   const result = await restoreExtensionPackage(input.packageName, actor);
@@ -1154,8 +1154,8 @@ export async function reinstallLatestFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
   const result = await reinstallLatestExtensionPackage(input.packageName, actor);
@@ -1199,8 +1199,8 @@ export async function forceDeleteExtensionPackageFormAction(input: {
     actorType: "human",
     userId: session.user.id,
     source: "ui",
-    // Forward the active org so kind:"workflow" lifecycle (dashboard
-    // materialization) has organization context from the UI server-action path.
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
   const result = await forceDeleteExtensionPackage(

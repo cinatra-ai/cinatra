@@ -8,7 +8,6 @@ import {
 // every worker that can drive extensionRegistry.install/.update has it wired —
 // not just the MCP boot path. Single source of truth (idempotent).
 import "@/lib/extension-activate-hook-wiring";
-import { setWorkflowInstallSagaHook } from "@cinatra-ai/workflows/install-saga-hook";
 // Side-effect import: installs the durable data-teardown hook. Kept in its own
 // lightweight module so the UI Server Action path + instrumentation boot can
 // wire it WITHOUT pulling this module's heavy handler-graph imports.
@@ -28,10 +27,6 @@ import { createAgentExtensionHandler } from "@cinatra-ai/agents/extension-handle
 import { createSkillExtensionHandler } from "@cinatra-ai/skills/extension-handler";
 import { createConnectorExtensionHandler } from "@cinatra-ai/extensions/connector-handler";
 import { createArtifactExtensionHandler } from "@cinatra-ai/extensions/artifact-handler";
-import { createWorkflowExtensionHandler } from "@cinatra-ai/workflows/extension-handler";
-import { workflowAgentRefAvailable } from "@/lib/workflow-agent-executor";
-import { approverResolvable, type ApprovalScope } from "@/lib/workflow-approvers";
-import { listAccessibleOrgIdsForUser } from "@/lib/better-auth-db";
 
 // Register handlers at startup. Imported as a side effect from src/lib/mcp-server.ts.
 extensionRegistry.register(createAgentExtensionHandler());
@@ -59,22 +54,6 @@ extensionRegistry.register(
 // is owned by the object-registry bridge, so mutators are clean audit
 // no-ops (not workspace-compiled throws).
 extensionRegistry.register(createArtifactExtensionHandler());
-// kind:"workflow" handler. Real adapter: BPMN sidecar →
-// workflow template + cinatra/dashboard.json → dashboard template on install;
-// dashboard archive/restore on lifecycle transitions. Registering here ensures the
-// MCP extensions_install path picks up the adapter. The app-side re-auth probes
-// (agent availability + approver resolvability in the consuming org) are injected
-// here because they are `@/lib` resolvers the workflows package cannot import.
-extensionRegistry.register(
-  createWorkflowExtensionHandler({
-    agentExists: (agentRef: unknown, orgId: string) => workflowAgentRefAvailable(agentRef, orgId),
-    approverResolvable: (scope: unknown, orgId: string) => approverResolvable(scope as ApprovalScope, orgId),
-    // Lets a platform admin with no active org discover workflow templates
-    // across their member orgs (membership-based; the workflows package can't
-    // import this `@/lib` resolver, so the host injects it here).
-    orgListResolver: (userId: string) => listAccessibleOrgIdsForUser(userId),
-  }),
-);
 
 // Split-brain guard: inject the in-memory capability teardown the
 // purge saga fires after a committed DB delete. `removeExtensionMcpToolsForPackage`
@@ -97,23 +76,5 @@ setExtensionCapabilityTeardownHook((packageName) => teardownExtensionCapabilitie
 // file — it injects the in-process activator the dispatcher fires after a
 // verdaccio-source NEW install / UPDATE commits, so the running process picks the
 // package up WITHOUT a restart. Shared so the Server Action path wires it too.)
-
-// Inject the atomic workflow-install saga into the workflow extension handler's
-// slot (the handler delegates to it when present, else falls back to the
-// in-package install sourced from the finalized runtime-store payload, with a
-// development-only dev-tree authoring fallback — cinatra#794). The saga lives
-// in `@/lib` (host) — it needs the
-// package store + the install-op journal + the canonical store + `withInstallLock`,
-// which `@cinatra-ai/workflows` cannot import — so the host wires it here via the
-// globalThis-anchored slot (mirrors the capability teardown hook above). The deps
-// factory is lazily resolved on the FIRST install (it dynamic-imports the
-// registry/store/grant primitives), so this boot wiring stays cheap.
-setWorkflowInstallSagaHook(async (input) => {
-  const { installWorkflowExtensionSaga, makeDefaultWorkflowInstallSagaDeps } = await import(
-    "@/lib/extension-workflow-install-saga"
-  );
-  const deps = await makeDefaultWorkflowInstallSagaDeps();
-  await installWorkflowExtensionSaga(input, deps);
-});
 
 export { extensionRegistry };

@@ -233,16 +233,15 @@ export function extensionActivationPhases(
       name: "install-op-boot-cleanup",
       policy: "retryable",
       run: async () => {
-        // workflow-install-saga boot-orphan cleanup. A process killed mid-saga
-        // leaves an extension_install_ops row in a NON-terminal phase. Compensate
-        // + roll back any op idle beyond the threshold. Idempotent + best-effort:
-        // a transient DB error here must NOT crash boot. Kill-switchable.
+        // install-op boot-orphan cleanup. A process killed mid-install leaves an
+        // extension_install_ops row in a NON-terminal phase. Journal-unwind any
+        // op idle beyond the threshold. Idempotent + best-effort: a transient DB
+        // error here must NOT crash boot. Kill-switchable.
         if (process.env.CINATRA_DISABLE_INSTALL_OP_BOOT_CLEANUP === "true") {
           return SKIPPED_BY_KILL_SWITCH("CINATRA_DISABLE_INSTALL_OP_BOOT_CLEANUP");
         }
-        const { listUnfinalizedInstallOps } = await import("@/lib/extension-install-ops");
-        const { compensateOrphanInstallOp, makeDefaultWorkflowInstallSagaDeps } = await import(
-          "@/lib/extension-workflow-install-saga"
+        const { listUnfinalizedInstallOps, compensateOrphanInstallOp } = await import(
+          "@/lib/extension-install-ops"
         );
         // Only sweep ops idle for >=5 minutes so an install in-flight in another
         // worker is never compensated out from under it.
@@ -293,15 +292,11 @@ export function extensionActivationPhases(
           (op) => !activeBatchKeys!.has(`${op.packageName}::${op.orgId ?? "(global)"}`),
         );
         if (orphans.length) {
-          const deps = await makeDefaultWorkflowInstallSagaDeps();
           for (const op of orphans) {
-            await compensateOrphanInstallOp(
-              { installOpId: op.installOpId, packageName: op.packageName, orgId: op.orgId, phase: op.phase },
-              deps,
-            );
+            await compensateOrphanInstallOp({ installOpId: op.installOpId, packageName: op.packageName });
           }
           console.info(
-            `[boot] workflow-install-saga: rolled back ${orphans.length} orphan install op(s) — ` +
+            `[boot] install-ops: rolled back ${orphans.length} orphan install op(s) — ` +
               orphans.map((o) => `${o.packageName.replace("@cinatra-ai/", "")}(${o.phase})`).join(", "),
           );
         }

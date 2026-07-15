@@ -67,9 +67,7 @@ vi.mock("../portlets/artifact-list-portlet", () => ({ ArtifactListPortlet: () =>
 vi.mock("../portlets/object-version-history-portlet", () => ({ ObjectVersionHistoryPortlet: () => React.createElement("div", { "data-testid": "object-version-history" }) }));
 vi.mock("../portlets/artifact-edit-text-portlet", () => ({ ArtifactEditTextPortlet: () => React.createElement("div", { "data-testid": "artifact-edit-text" }) }));
 vi.mock("../portlets/artifact-edit-binary-prompt-portlet", () => ({ ArtifactEditBinaryPromptPortlet: () => React.createElement("div", { "data-testid": "artifact-edit-binary-prompt" }) }));
-vi.mock("../portlets/workflow-launcher-portlet", () => ({ WorkflowLauncherPortlet: () => React.createElement("div", { "data-testid": "workflow-launcher" }) }));
 vi.mock("../portlets/agent-launcher-portlet", () => ({ AgentLauncherPortlet: () => React.createElement("div", { "data-testid": "agent-launcher" }) }));
-vi.mock("../portlets/workflow-status-portlet", () => ({ WorkflowStatusPortlet: () => React.createElement("div", { "data-testid": "workflow-status" }) }));
 
 import { PortletHost, type PortletInstanceProp } from "../portlet-host";
 

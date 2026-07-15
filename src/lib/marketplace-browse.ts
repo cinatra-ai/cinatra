@@ -212,7 +212,6 @@ const KIND_LABEL: Record<string, string> = {
   skill: "Skill",
   connector: "Connector",
   artifact: "Artifact",
-  workflow: "Workflow",
 };
 
 /** Project the marketplace ExtensionDetail into the client-safe modal view. */

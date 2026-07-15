@@ -89,8 +89,6 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
     orgId: "org-test",
     projectId: null,
     idempotencyKey: null,
-    workflowId: null,
-    workflowTaskId: null,
     oboCeiling: null,
     dependentInstallId: null,
   };

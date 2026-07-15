@@ -16,9 +16,7 @@ import { ArtifactListPortlet } from "./portlets/artifact-list-portlet";
 import { ObjectVersionHistoryPortlet } from "./portlets/object-version-history-portlet";
 import { ArtifactEditTextPortlet } from "./portlets/artifact-edit-text-portlet";
 import { ArtifactEditBinaryPromptPortlet } from "./portlets/artifact-edit-binary-prompt-portlet";
-import { WorkflowLauncherPortlet } from "./portlets/workflow-launcher-portlet";
 import { AgentLauncherPortlet } from "./portlets/agent-launcher-portlet";
-import { WorkflowStatusPortlet } from "./portlets/workflow-status-portlet";
 
 const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
   "object-list": ObjectListPortlet,
@@ -27,9 +25,7 @@ const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
   "artifact-version-history": ObjectVersionHistoryPortlet,
   "artifact-edit-text": ArtifactEditTextPortlet,
   "artifact-edit-binary-prompt": ArtifactEditBinaryPromptPortlet,
-  "workflow-launcher": WorkflowLauncherPortlet,
   "agent-launcher": AgentLauncherPortlet,
-  "workflow-status": WorkflowStatusPortlet,
 };
 
 // The `analytics` keystone kind (cinatra#325) embeds a WHOLE drizzle-cube

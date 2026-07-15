@@ -38,9 +38,6 @@ import { createConnectorExtensionHandler } from "./connector-handler";
 // registration is owned by the object-registry bridge, not workspace-compiled
 // throws.
 import { createArtifactExtensionHandler } from "./artifact-handler";
-// Workflow is the fifth registered extension kind, closing the gap between
-// the workflow package shape and the canonical manifest.
-import { createWorkflowExtensionHandler } from "@cinatra-ai/workflows/extension-handler";
 // Hot-activate: side-effect-wire the host in-process activate hook so a
 // Server Action worker (which imports this bootstrap, NOT the heavy
 // `@/lib/extensions` MCP boot module) can hot-activate a connector install/update
@@ -68,7 +65,3 @@ extensionRegistry.registerIfAbsent(
   }),
 );
 extensionRegistry.register(createArtifactExtensionHandler());
-// registerIfAbsent: the app boot path (src/lib/extensions.ts) registers the
-// workflow handler WITH re-auth deps; this deps-less package-internal fallback
-// must NOT clobber it regardless of module load order (last-write-wins).
-extensionRegistry.registerIfAbsent(createWorkflowExtensionHandler());

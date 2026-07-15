@@ -19,7 +19,7 @@ const vc = (kind: string, config: Record<string, unknown>, inputs?: Record<strin
 beforeAll(() => registerCorePortletKinds());
 
 describe("core portlet kinds", () => {
-  it("registers all 9 kinds with a session scopePolicy", () => {
+  it("registers all 7 kinds with a session scopePolicy", () => {
     for (const kind of [
       "object-list",
       "object-detail",
@@ -27,9 +27,7 @@ describe("core portlet kinds", () => {
       "artifact-edit-text",
       "artifact-edit-binary-prompt",
       "artifact-version-history",
-      "workflow-launcher",
       "agent-launcher",
-      "workflow-status",
     ]) {
       const e = getPortletKind(kind, V);
       expect(e, kind).toBeDefined();
@@ -56,21 +54,12 @@ describe("core portlet kinds", () => {
     expect(vc("artifact-edit-binary-prompt", { generationPrimitive: "g", parentObjectField: "imageArtifactId", refSwapMode: "manual", refSwapPrimitive: "x" })).toEqual([]);
   });
 
-  it("workflow-status requires a workflowId OR projectId input binding", () => {
-    expect(vc("workflow-status", {}, {})[0].code).toBe("port_workflow_status_missing_binding");
-    expect(vc("workflow-status", {}, { projectId: { fromDashboard: "projectId" } })).toEqual([]);
-    expect(vc("workflow-status", {}, { workflowId: { fromInstanceId: "launcher", key: "workflowId" } })).toEqual([]);
-  });
-
-  it("workflow-launcher requires templateKey; agent-launcher requires an agent ref", () => {
-    expect(vc("workflow-launcher", {})[0].code).toBe("port_workflow_launcher_missing_template");
-    expect(vc("workflow-launcher", { templateKey: "blog-content-workflow" })).toEqual([]);
+  it("agent-launcher requires an agent ref", () => {
     expect(vc("agent-launcher", {})[0].code).toBe("port_agent_launcher_missing_agent");
     expect(vc("agent-launcher", { agentPackage: "@cinatra-ai/x-agent" })).toEqual([]);
   });
 
   it("launcher kinds allow arbitrary input keys", () => {
-    expect(getPortletKind("workflow-launcher", V)!.allowsArbitraryInputs).toBe(true);
     expect(getPortletKind("agent-launcher", V)!.allowsArbitraryInputs).toBe(true);
     expect(getPortletKind("object-list", V)!.allowsArbitraryInputs).toBeUndefined();
   });

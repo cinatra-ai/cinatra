@@ -59,7 +59,7 @@ export interface RawPackageJson {
   };
 }
 
-const VALID_KINDS: readonly ExtensionKind[] = ["agent", "skill", "connector", "artifact", "workflow"];
+const VALID_KINDS: readonly ExtensionKind[] = ["agent", "skill", "connector", "artifact"];
 
 function isValidKind(value: unknown): value is ExtensionKind {
   return typeof value === "string" && (VALID_KINDS as readonly string[]).includes(value);
@@ -74,12 +74,12 @@ function pickKind(pkg: RawPackageJson): ExtensionKind {
   // in the catalog.
   if (declared === undefined || declared === null || declared === "") {
     throw new Error(
-      `${pkg.name}: no cinatra.kind declared; refusing to default — declare cinatra.kind explicitly (one of agent/skill/connector/artifact/workflow).`,
+      `${pkg.name}: no cinatra.kind declared; refusing to default — declare cinatra.kind explicitly (one of agent/skill/connector/artifact).`,
     );
   }
   if (!isValidKind(declared)) {
     throw new Error(
-      `${pkg.name}: invalid cinatra.kind "${String(declared)}"; must be one of agent/skill/connector/artifact/workflow.`,
+      `${pkg.name}: invalid cinatra.kind "${String(declared)}"; must be one of agent/skill/connector/artifact.`,
     );
   }
   return declared;

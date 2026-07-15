@@ -1,7 +1,7 @@
 // System-loops boot phases (engineering #302).
 //
-// The BullMQ recurring-loop seeds + the eager worker registration + the durable
-// workflow reconciler + the skills relocation worker, extracted verbatim from
+// The BullMQ recurring-loop seeds + the eager worker registration + the skills
+// relocation worker, extracted verbatim from
 // `instrumentation.node.ts`. Each seed dedups by a stable jobId (BullMQ-level
 // crash-restart dedup) and self-reschedules in the handler — the boot job only
 // PRIMES the loop. All `retryable`/`degraded`: each had its own log+swallow
@@ -295,37 +295,6 @@ export function systemLoopPhases(): BootPhase[] {
         const { ensureBackgroundJobRuntime } = await import("@/lib/background-jobs");
         await ensureBackgroundJobRuntime();
         console.log("[background-jobs] worker registered eagerly at boot");
-      },
-    },
-    {
-      name: "workflow-reconciler-engine",
-      policy: "degraded",
-      run: async () => {
-        // Boot the durable release-workflow reconciler runtime on its own
-        // dedicated BullMQ queue. Soft-fails if Redis is unavailable (degraded).
-        const { ensureWorkflowEngine, buildExecutorRegistry } = await import(
-          "@cinatra-ai/workflows/engine"
-        );
-        const { buildWorkflowAgentTaskExecutor, getWorkflowChildRunStatus } = await import(
-          "@/lib/workflow-agent-executor"
-        );
-        const { buildWorkflowNotifier } = await import("@/lib/workflow-notifier");
-        const { updateAgentRunStatus } = await import("@cinatra-ai/agents");
-        await ensureWorkflowEngine({
-          executors: buildExecutorRegistry({ agent_task: buildWorkflowAgentTaskExecutor() }),
-          getChildRunStatus: getWorkflowChildRunStatus,
-          notify: buildWorkflowNotifier(),
-          // Tear down in-flight child runs when a reject-cancel cancels the
-          // workflow (best-effort; mirrors the cancelWorkflowAction teardown).
-          cancelChildRun: async (childRunId: string) => {
-            try {
-              await updateAgentRunStatus(childRunId, "stopped", { error: "workflow_cancelled" });
-            } catch {
-              /* best-effort */
-            }
-          },
-        });
-        console.log("[workflows] reconciler runtime registered at boot");
       },
     },
     {

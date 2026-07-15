@@ -1,12 +1,11 @@
-// Caller-parity. The FOUR in-process activation-trust call sites
+// Caller-parity. The THREE in-process activation-trust call sites
 //   1. boot loader          runtime-package-loader.ts        (classifyExtensionTrust)
 //   2. install pipeline      extension-install-pipeline.ts    (classifyExtensionTrust)
-//   3. workflow saga         extension-workflow-install-saga.ts (classifyExtensionTrust)
-//   4. connector-UI render   extension-install-resolution.ts  (classifyExtensionTrust)
+//   3. connector-UI render   extension-install-resolution.ts  (classifyExtensionTrust)
 // MUST reach the SAME verdict for a given package, and the connector-UI must
 // NEVER render one the boot loader would refuse.
 //
-// All four funnel through the SAME `classifyExtensionTrust` helper. This suite
+// All three funnel through the SAME `classifyExtensionTrust` helper. This suite
 // proves:
 //   (A) single source of truth — every caller imports the canonical helper from
 //       `@/lib/extension-trust` (no caller forks the trust logic), AND each
@@ -120,8 +119,8 @@ function signFixture(): string {
 // (or sources the host from a different seam), its projection diverges and the
 // Block-A matrix fails. `integrityVerified`/`persistedTrustDecision` are the
 // activation-vs-install difference: the loader + connector-UI read them from the
-// persisted anchor; the pipeline + saga hardcode `true` (a just-materialized,
-// being-finalized install). For a FINALIZED, integrity-clean install all four
+// persisted anchor; the pipeline hardcodes `true` (a just-materialized,
+// being-finalized install). For a FINALIZED, integrity-clean install all three
 // converge — that is the "same verdict for a given package" invariant.
 // ---------------------------------------------------------------------------
 type Facts = {
@@ -169,24 +168,10 @@ function pipelineInput(f: Facts) {
     allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
   };
 }
-// saga → extension-workflow-install-saga.ts (install-time: integrity + decision are `true`)
-function sagaInput(f: Facts) {
-  return {
-    packageName: PKG,
-    registryUrl: f.registryUrl,
-    integrityVerified: true,
-    persistedTrustDecision: true,
-    signatureVerified: resolveSignatureVerdict({ packageName: PKG, version: VERSION, integrity: INTEGRITY, signature: f.signature }),
-    trustedActivationHosts: trustedActivationHosts(),
-    allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
-  };
-}
-
 describe("caller-parity — single source of truth (no caller forks trust logic)", () => {
   const CALLERS = [
     "runtime-package-loader.ts",
     "extension-install-pipeline.ts",
-    "extension-workflow-install-saga.ts",
     "extension-install-resolution.ts",
   ];
   it("every activation-trust caller imports classifyExtensionTrust from the canonical @/lib/extension-trust module", () => {
@@ -204,11 +189,11 @@ describe("caller-parity — single source of truth (no caller forks trust logic)
   });
 });
 
-describe("caller-parity — four callers reach the SAME verdict for a finalized install", () => {
+describe("caller-parity — three callers reach the SAME verdict for a finalized install", () => {
   // FINALIZED, integrity-clean install (anchor decision true + integrity verified)
-  // — the case where install-time (pipeline/saga) and activation-time
+  // — the case where install-time (pipeline) and activation-time
   // (loader/connector-UI) classify the identical package. Vary signature × host ×
-  // bootstrap; assert all four caller constructions yield the SAME tier.
+  // bootstrap; assert all three caller constructions yield the SAME tier.
   type Scenario = { name: string; sign: boolean; requireSigs: boolean; allowUnsigned?: boolean; registryUrl: string; expectedTier: ExtensionTrustTier };
   const scenarios: Scenario[] = [
     { name: "signed + trusted host → trusted-signed", sign: true, requireSigs: false, registryUrl: TRUSTED_REGISTRY, expectedTier: "trusted-signed" },
@@ -230,10 +215,9 @@ describe("caller-parity — four callers reach the SAME verdict for a finalized 
       const tiers = [
         classifyExtensionTrust(loaderInput(facts)).tier,
         classifyExtensionTrust(pipelineInput(facts)).tier,
-        classifyExtensionTrust(sagaInput(facts)).tier,
         classifyExtensionTrust(connectorUiInput(facts)).tier,
       ];
-      // all four agree …
+      // all three agree …
       expect(new Set(tiers).size, `callers diverged: ${tiers.join(", ")}`).toBe(1);
       // … on the expected tier.
       expect(tiers[0]).toBe(s.expectedTier);

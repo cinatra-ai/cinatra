@@ -86,7 +86,7 @@ export type ExtensionDependencyEdgeRow = typeof extensionDependencyEdgeTable.$in
 function edgeRowToResolved(row: ExtensionDependencyEdgeRow): ResolvedDependencyEdge {
   return {
     packageName: row.declaredPackageName,
-    ...(row.declaredKind ? { kind: row.declaredKind as ExtensionKind } : {}),
+    ...(row.declaredKind ? { kind: row.declaredKind as ResolvedDependencyEdge["kind"] } : {}),
     edgeType: row.edgeType as DependencyEdgeType,
     versionConstraint: row.versionConstraint as VersionConstraint,
     requirement: row.requirement as DependencyRequirement,
