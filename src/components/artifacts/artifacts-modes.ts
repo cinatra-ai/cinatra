@@ -76,6 +76,53 @@ export function resolveRequestedArtifactsMode(
   return { kind: "denied", mode: mode as AdminArtifactsMode };
 }
 
+/**
+ * The concrete content the `/artifacts` page renders, after layering the §VI
+ * targeted-restore carve-out over `resolveRequestedArtifactsMode`.
+ *
+ * The base resolver stays PURE and admin-mode-gated: a non-admin `?mode=undo`
+ * still resolves `denied` (the mode control never surfaces Undo to a
+ * non-admin). This second, still-pure step consumes an ALREADY-COMPUTED
+ * targeted-restore eligibility verdict (the async per-object check runs in the
+ * server component) and decides the §VI non-admin undo carve-out:
+ *   - a non-admin undo deep link with a valid `openRestore` the actor is
+ *     authorized to reverse → the single `targeted-restore` (never the admin
+ *     browser list);
+ *   - a non-admin undo request that is unauthorized / malformed / missing /
+ *     foreign-org → the plain `library` surface, NOT the not-authorized panel
+ *     (a suppressed affordance must never dead-end — §VI / #1638 AC3);
+ *   - every other mode is unchanged: `denied` (raw/types/merge) → the panel,
+ *     `allowed` → that mode (admin `undo` → the browser).
+ */
+export type ArtifactsContentPlan =
+  | { render: "denied"; mode: AdminArtifactsMode }
+  | { render: ArtifactsMode }
+  | { render: "targeted-restore" };
+
+export function planArtifactsContent(input: {
+  resolved: ResolvedArtifactsMode;
+  openRestore: string | null | undefined;
+  targetedRestoreEligible: boolean;
+}): ArtifactsContentPlan {
+  const { resolved, openRestore, targetedRestoreEligible } = input;
+  if (resolved.kind === "allowed") {
+    return { render: resolved.mode };
+  }
+  // resolved.kind === "denied" — a non-admin deep link into an admin mode.
+  if (resolved.mode === "undo") {
+    if (
+      typeof openRestore === "string" &&
+      openRestore.length > 0 &&
+      targetedRestoreEligible
+    ) {
+      return { render: "targeted-restore" };
+    }
+    // Unauthorized / malformed / missing / foreign-org → plain Library.
+    return { render: "library" };
+  }
+  return { render: "denied", mode: resolved.mode };
+}
+
 /** Human-facing label per mode (sub-nav + refusal-panel copy). */
 export const ARTIFACTS_MODE_LABEL: Record<ArtifactsMode, string> = {
   library: "Library",

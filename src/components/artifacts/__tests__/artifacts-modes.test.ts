@@ -10,6 +10,7 @@ import {
   ADMIN_ARTIFACTS_MODES,
   isAdminArtifactsMode,
   isArtifactsMode,
+  planArtifactsContent,
   resolveRequestedArtifactsMode,
 } from "../artifacts-modes";
 
@@ -83,4 +84,53 @@ describe("mode predicates", () => {
     expect(isAdminArtifactsMode("undo")).toBe(true);
     expect(isAdminArtifactsMode("merge")).toBe(true);
   });
+});
+
+/**
+ * §VI carve-out (design@94cfbcf5 §I/§VI, #1638): planArtifactsContent layers
+ * the non-admin targeted-restore resolution over the pure admin-mode gate.
+ * The base resolver is UNCHANGED (still denies non-admin admin-mode deep
+ * links); this second pure step decides what the page actually renders.
+ */
+describe("planArtifactsContent — §VI non-admin undo carve-out", () => {
+  const adminUndo = resolveRequestedArtifactsMode("undo", true); // allowed
+  const nonAdminUndo = resolveRequestedArtifactsMode("undo", false); // denied
+  const nonAdminRaw = resolveRequestedArtifactsMode("raw", false); // denied
+  const nonAdminLibrary = resolveRequestedArtifactsMode("library", false); // allowed
+
+  it("passes allowed modes straight through (admin undo → the browser)", () => {
+    expect(
+      planArtifactsContent({ resolved: adminUndo, openRestore: "cs_1", targetedRestoreEligible: false }),
+    ).toEqual({ render: "undo" });
+    expect(
+      planArtifactsContent({ resolved: nonAdminLibrary, openRestore: undefined, targetedRestoreEligible: false }),
+    ).toEqual({ render: "library" });
+  });
+
+  it("keeps the not-authorized panel for a non-admin deep link into a NON-undo admin mode", () => {
+    expect(
+      planArtifactsContent({ resolved: nonAdminRaw, openRestore: undefined, targetedRestoreEligible: false }),
+    ).toEqual({ render: "denied", mode: "raw" });
+  });
+
+  it("a non-admin undo deep link with a valid + AUTHORIZED openRestore → the targeted restore", () => {
+    expect(
+      planArtifactsContent({ resolved: nonAdminUndo, openRestore: "cs_9", targetedRestoreEligible: true }),
+    ).toEqual({ render: "targeted-restore" });
+  });
+
+  it("a non-admin undo deep link that is UNAUTHORIZED → plain Library (never the not-authorized panel)", () => {
+    expect(
+      planArtifactsContent({ resolved: nonAdminUndo, openRestore: "cs_9", targetedRestoreEligible: false }),
+    ).toEqual({ render: "library" });
+  });
+
+  it.each([undefined, null, ""])(
+    "a non-admin undo request with a MISSING / empty openRestore (%p) → plain Library, no panel",
+    (openRestore) => {
+      expect(
+        planArtifactsContent({ resolved: nonAdminUndo, openRestore, targetedRestoreEligible: true }),
+      ).toEqual({ render: "library" });
+    },
+  );
 });
