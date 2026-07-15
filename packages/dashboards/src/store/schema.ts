@@ -59,6 +59,24 @@ export const dashboards = cinatraSchema.table(
     isTemplate: boolean("is_template").notNull().default(false),
     /** Set ONLY on template rows: 'organization'|'team'|'workspace'|'user'|'project'. */
     templateScope: text("template_scope"),
+    // Per-entity multi-dashboard model (cinatra#700). Identity moves from the
+    // single deterministic per-user id to the composite
+    // (entity_type, entity_id, owner_level, owner_id, name). Additive: legacy
+    // extension/unmapped rows keep entity_type/entity_id NULL and is_default
+    // false, so they are excluded from the per-entity surface.
+    /** Surface/entity kind this dashboard belongs to: 'personal'|'agents'|
+     *  'artifacts'|'projects'|'teams'|'organizations' (+ future per-instance
+     *  'project'|'team'|'organization'). NULL for extension-shipped / unmapped rows. */
+    entityType: text("entity_type"),
+    /** The specific entity instance id. For the current per-org surfaces this is
+     *  the organization_id; for a per-instance detail surface it is the project/
+     *  team/org id. NULL for extension-shipped / unmapped rows. */
+    entityId: text("entity_id"),
+    /** true on the non-removable "Overview" default for its (entity, owner). At
+     *  most one true row per (org, entity_type, entity_id, owner_level, owner_id),
+     *  enforced by a partial UNIQUE index + the mutation service. Overview cannot
+     *  be renamed/archived/deleted (service-enforced). */
+    isDefault: boolean("is_default").notNull().default(false),
   },
   (t) => ({
     orgIdIdx: index("dashboards_org_id_idx").on(t.organizationId),
@@ -74,6 +92,18 @@ export const dashboards = cinatraSchema.table(
     extInstanceUniq: uniqueIndex("dashboards_ext_instance_uniq")
       .on(t.extensionId, t.organizationId, t.projectId)
       .where(sql`extension_id IS NOT NULL AND project_id IS NOT NULL`),
+    // Per-entity list lookups (cinatra#700).
+    entityIdx: index("dashboards_entity_idx")
+      .on(t.organizationId, t.entityType, t.entityId, t.ownerLevel, t.ownerId)
+      .where(sql`entity_type IS NOT NULL`),
+    // At most ONE Overview default per (org, entity, owner).
+    entityDefaultUniq: uniqueIndex("dashboards_entity_default_uniq")
+      .on(t.organizationId, t.entityType, t.entityId, t.ownerLevel, t.ownerId)
+      .where(sql`is_default = true AND entity_type IS NOT NULL`),
+    // Dashboard NAME is unique within (org, entity, owner).
+    entityNameUniq: uniqueIndex("dashboards_entity_name_uniq")
+      .on(t.organizationId, t.entityType, t.entityId, t.ownerLevel, t.ownerId, t.name)
+      .where(sql`entity_type IS NOT NULL`),
   }),
 );
 

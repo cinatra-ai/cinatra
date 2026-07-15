@@ -132,14 +132,15 @@ const administrationSections = [
   },
   {
     title: "Workflows",
-    description: "Pending approvals and workflow management surfaces.",
-    href: "/configuration/approvals",
+    description: "Pending approvals now live in the unified Notifications surface.",
+    href: "/notifications",
     icon: domainIcons.workflows,
     links: [
-      { label: "Approvals", href: "/configuration/approvals" },
-      // The "All workflows" browse link was removed (cinatra#609) — workflow
-      // overview/tracking lives in Plane now. Workflow execution + approvals
-      // remain native (Approvals above; per-workflow detail via deep-links).
+      // Approvals moved into /notifications in the E8 cutover (cinatra#1558) —
+      // the standalone /configuration/approvals page + its ?tab machinery were
+      // retired. The "All workflows" browse link was removed earlier
+      // (cinatra#609); workflow overview/tracking lives in Plane.
+      { label: "Approvals", href: "/notifications" },
     ],
   },
   {
@@ -148,7 +149,7 @@ const administrationSections = [
     href: "/agents",
     icon: domainIcons.agents,
     links: [
-      { label: "Approvals", href: "/configuration/approvals?tab=agents" },
+      { label: "Approvals", href: "/notifications" },
       { label: "A2A servers", href: "/connectors/a2a-server" },
     ],
   },

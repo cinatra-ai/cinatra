@@ -79,11 +79,12 @@ export async function decideApprovalRow(
     return { ok: false, error: result.message };
   }
 
-  // Refresh the page rows/counts AND the sidebar Approvals badge. The badge is
-  // rendered by the ROOT layout, so a page-level revalidate alone would leave a
-  // stale count after this non-redirecting inline decision — revalidate the
-  // root layout segment too so the pill updates without a full reload.
-  revalidatePath("/configuration/approvals");
+  // Refresh the unified feed rows/counts AND the bell badge after this
+  // non-redirecting inline decision. The approvals surface is now `/notifications`
+  // (E8 cutover, cinatra#1558); revalidate that page for the feed rows, and the
+  // ROOT LAYOUT segment so the bell badge's server-resolved actionable-approvals
+  // count (spec §IV) updates without a full reload.
+  revalidatePath("/notifications");
   revalidatePath("/", "layout");
   return { ok: true };
 }
