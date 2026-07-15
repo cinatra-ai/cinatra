@@ -85,7 +85,10 @@ describe.skipIf(!RUN_IT)("mutation-service apiVersion 1.2 wrap (real Postgres)",
       project_id text,
       extension_id text,
       is_template boolean NOT NULL DEFAULT false,
-      template_scope text
+      template_scope text,
+      entity_type text,
+      entity_id text,
+      is_default boolean NOT NULL DEFAULT false
     )`);
     await pool.query(`CREATE TABLE "${SCHEMA}".dashboard_revisions (
       dashboard_id text NOT NULL REFERENCES "${SCHEMA}".dashboards(id) ON DELETE CASCADE,
