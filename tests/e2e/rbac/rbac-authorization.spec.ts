@@ -186,12 +186,16 @@ test.describe("project admin grant → revoke guest (cinatra#1501)", () => {
     });
 
     // The seeded ORG-MEMBER customer must be rejected by classification —
-    // never relabeled a guest.
+    // never relabeled a guest. Wait for the action's toast (any), THEN assert
+    // its text: a wrong classification fails immediately with the actual copy
+    // in the error instead of a blind 60s timeout after the toast expired.
+    // Let invite #1's toast expire first so the next toast is unambiguous.
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 30_000 });
     await guests.locator("#guest-email").fill(process.env.E2E_RBAC_CUSTOMER_EMAIL ?? "rbac-customer-uat@local.test");
     await guests.getByRole("button", { name: /invite guest/i }).click();
-    await expect(
-      page.getByText(/belongs to an organization member/i),
-    ).toBeVisible({ timeout: 60_000 });
+    const memberInviteToast = page.locator("[data-sonner-toast]").last();
+    await expect(memberInviteToast).toBeVisible({ timeout: 60_000 });
+    await expect(memberInviteToast).toContainText(/belongs to an organization member/i);
 
     // Revoke (same dev-mode budget as invite). 60s headroom — the dev-mode
     // server action + revalidatePath can spike above 30s on cold CI.

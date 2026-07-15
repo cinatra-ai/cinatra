@@ -145,6 +145,7 @@ async function createGuestAccount(input: {
     });
     const userId = signedUp?.user?.id;
     if (userId) return { userId };
+    console.error("[guest-invite] signUpEmail returned no user id", { keys: Object.keys(signedUp ?? {}) });
   } catch (err) {
     if (isRegistrationClosedError(err)) {
       if (!input.platformAdmin) return { error: "registration-closed" };
@@ -158,9 +159,12 @@ async function createGuestAccount(input: {
         });
         const adminCreatedId = created?.user?.id;
         if (adminCreatedId) return { userId: adminCreatedId };
-      } catch {
+      } catch (adminErr) {
         // fall through to the race re-read below
+        console.error("[guest-invite] admin create-user fallback failed", adminErr);
       }
+    } else {
+      console.error("[guest-invite] signUpEmail failed (non-registration-closed)", err);
     }
     // Duplicate/race (a concurrent invite may have created the row between
     // our read and the signUp — dev-auto-setup.ts precedent): re-read by email.
@@ -237,9 +241,10 @@ export async function inviteGuestByEmailAction(
       await auth.api.requestPasswordReset({
         body: { email, redirectTo: RESET_PASSWORD_PATH },
       });
-    } catch {
+    } catch (err) {
       // Do NOT unwind the invite — surface honestly; the guest can still use
       // "Forgot password", or the admin can re-invite to retry the email.
+      console.error("[guest-invite] password-reset email failed", err);
       resetEmailSent = false;
     }
 
@@ -251,6 +256,9 @@ export async function inviteGuestByEmailAction(
     };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: "forbidden" };
+    // The structured "unknown" hides the cause from the (non-admin-debuggable)
+    // client on purpose — but never from the server log.
+    console.error("[guest-invite] inviteGuestByEmailAction failed", err);
     return { ok: false, error: "unknown" };
   }
 }
@@ -268,7 +276,8 @@ export async function revokeGuestAction(
     await revokeCustomerAccess({ subjectUserId, projectId });
     revalidatePath(`/projects/${projectId}/permissions`);
     return { ok: true };
-  } catch {
+  } catch (err) {
+    if (!(err instanceof AuthzError)) console.error("[guest-invite] revokeGuestAction failed", err);
     return { ok: false };
   }
 }
