@@ -51,6 +51,11 @@ export function AppDialog({
       {mounted && open && createPortal(<div className="fixed top-16 left-0 md:left-64 right-0 bottom-0 z-[145] bg-black/50" />, document.body)}
       <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
         <DialogContent
+          // Opt out of DialogContent's default backdrop: this non-modal dialog
+          // renders its own content-area-only scrim above (left-64 keeps the
+          // sidebar interactive). The default full-content overlay would
+          // double-dim and cover the sidebar the modal={false} mode keeps live.
+          showOverlay={false}
           showCloseButton={showCloseButton}
           className={cn(maxWidth, className)}
           onInteractOutside={(e) => {
