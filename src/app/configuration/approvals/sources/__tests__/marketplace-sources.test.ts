@@ -256,19 +256,91 @@ describe("vendor-application moderation (admin token, inbox)", () => {
     expect(env.availability).toBe("ready");
     expect(env.rows[0]).toMatchObject({ id: "va1", title: "Acme Inc", subtitle: "@acme", status: "applied" });
   });
+
+  it("aligns the instance's OWN application row createdAt with the local timestamp (#1555 dedup stability); other vendors keep the remote applied_at", async () => {
+    h.adminToken = "admin";
+    const ownAppliedAt = "2026-03-04T05:06:07.000Z";
+    h.identity = { ...VENDOR_IDENTITY, vendorApplicationId: "va-own", vendorApplicationAppliedAt: ownAppliedAt };
+    const otherAppliedAt = "2026-05-05T05:05:05.000Z";
+    h.vendorRows = [
+      vendorAppRow({ application_id: "va-own", applied_at: "2099-01-01T00:00:00.000Z" }),
+      vendorAppRow({ application_id: "va-other", applied_at: otherAppliedAt }),
+    ];
+    const env = await marketplaceVendorAppModerationSource.fetchInbox(admin);
+    const byId = Object.fromEntries(env.rows.map((r) => [r.id, r.createdAt]));
+    // Own row: the LOCAL timestamp (same value the self-status mirror emits),
+    // NOT the remote applied_at — so the deduped feed row's cursor is stable.
+    expect(byId["va-own"]).toBe(ownAppliedAt);
+    // Every other vendor's row keeps the authoritative remote applied_at.
+    expect(byId["va-other"]).toBe(otherAppliedAt);
+  });
+});
+
+describe("moderation Inbox pagination — drains past the single-page cap (#1555)", () => {
+  it("vendor-app moderation follows next_cursor until null (no silent 50-row truncation)", async () => {
+    h.identity = VENDOR_IDENTITY;
+    h.adminToken = "admin";
+    const page1 = Array.from({ length: 50 }, (_, i) => vendorAppRow({ application_id: `p1-${i}` }));
+    const page2 = Array.from({ length: 30 }, (_, i) => vendorAppRow({ application_id: `p2-${i}` }));
+    const calls: Array<Record<string, unknown>> = [];
+    const listAdmin = vi.fn(async (input: Record<string, unknown>) => {
+      calls.push(input);
+      return calls.length === 1
+        ? { rows: page1, next_cursor: "cursor-1" }
+        : { rows: page2, next_cursor: null };
+    });
+    mockClient.mockReturnValueOnce({ vendorApplicationListAdmin: listAdmin } as never);
+
+    const env = await marketplaceVendorAppModerationSource.fetchInbox(admin);
+    expect(env.rows).toHaveLength(80);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ status: ["applied"], limit: 50 });
+    expect(calls[0].cursor).toBeUndefined();
+    expect(calls[1]).toMatchObject({ status: ["applied"], limit: 50, cursor: "cursor-1" });
+  });
+
+  it("submission moderation walks offset until a SHORT page (no silent 200-row truncation)", async () => {
+    h.adminToken = "admin";
+    const full = Array.from({ length: 200 }, (_, i) => adminSub({ submission_id: `f-${i}` }));
+    const tail = Array.from({ length: 40 }, (_, i) => adminSub({ submission_id: `t-${i}` }));
+    const calls: Array<Record<string, unknown>> = [];
+    const listAdmin = vi.fn(async (input: Record<string, unknown>) => {
+      calls.push(input);
+      return { submissions: calls.length === 1 ? full : tail };
+    });
+    mockClient.mockReturnValueOnce({ extensionSubmissionListAdmin: listAdmin } as never);
+
+    const env = await marketplaceSubmissionModerationSource.fetchInbox(admin);
+    expect(env.rows).toHaveLength(240);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ status: "pending", limit: 200, offset: 0 });
+    expect(calls[1]).toMatchObject({ status: "pending", limit: 200, offset: 200 });
+  });
+
+  it("submission moderation stops after ONE page when it is already short (< limit)", async () => {
+    h.adminToken = "admin";
+    const listAdmin = vi.fn(async () => ({ submissions: [adminSub()] }));
+    mockClient.mockReturnValueOnce({ extensionSubmissionListAdmin: listAdmin } as never);
+    const env = await marketplaceSubmissionModerationSource.fetchInbox(admin);
+    expect(env.rows).toHaveLength(1);
+    expect(listAdmin).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("my submissions (instance token, mine, withdraw) ", () => {
-  it("counts only in-flight (pending) rows, capped", async () => {
+  it("fetchMine + counts BOTH surface only in-flight (pending) rows — decided rows leave the list (#1555 pending-only)", async () => {
     process.env.MARKETPLACE_INSTANCE_TOKEN = "tok";
     h.selfSubs = [
       { submission_id: "a", target_final_identity: "@x/a@1", status: "pending", submitted_at: new Date().toISOString(), promotion_state: "none", promotion_error: null, decision_reason: null },
       { submission_id: "b", target_final_identity: "@x/b@1", status: "approved", submitted_at: new Date().toISOString(), promotion_state: "complete", promotion_error: null, decision_reason: null },
+      { submission_id: "c", target_final_identity: "@x/c@1", status: "rejected", submitted_at: new Date().toISOString(), promotion_state: "none", promotion_error: null, decision_reason: "nope" },
     ];
     const c = await marketplaceMySubmissionsSource.counts(admin);
     expect(c).toEqual({ inbox: 0, mine: 1 });
     const env = await marketplaceMySubmissionsSource.fetchMine(admin);
-    expect(env.rows.map((r) => r.id)).toEqual(["a", "b"]);
+    // Only the pending row 'a' — the approved 'b' + rejected 'c' are gone
+    // (previously fetchMine returned all rows, diverging from counts).
+    expect(env.rows.map((r) => r.id)).toEqual(["a"]);
     expect(env.actions.map((a) => a.id)).toEqual(["withdraw"]);
   });
 });
@@ -288,6 +360,40 @@ describe("vendor-application status (vendor token, mine, read-only)", () => {
     expect(env.rows).toHaveLength(1);
     expect(env.rows[0]).toMatchObject({ id: "va9", title: "@acme", status: "applied" });
     expect((await marketplaceVendorAppStatusSource.counts(admin)).mine).toBe(1);
+  });
+
+  it("decided (approved/rejected) → ZERO rows: a decided application leaves the list (#1555 pending-only)", async () => {
+    h.vendorToken = "vtok";
+    h.hasVendor = true;
+    h.identity = VENDOR_IDENTITY;
+    for (const state of ["approved", "rejected"]) {
+      invalidateMarketplaceApprovalCounts();
+      h.vendorStatus = { state, scope: "@acme", tier: "commercial", application_id: "va9", decided_at: new Date().toISOString() };
+      expect((await marketplaceVendorAppStatusSource.fetchMine(admin)).rows).toHaveLength(0);
+      expect((await marketplaceVendorAppStatusSource.counts(admin)).mine).toBe(0);
+    }
+  });
+
+  it("applied row carries a REAL sortable createdAt from the local durable vendorApplicationAppliedAt (#1555 — not the old empty string)", async () => {
+    h.vendorToken = "vtok";
+    h.hasVendor = true;
+    const appliedAt = "2026-03-04T05:06:07.000Z";
+    h.identity = { ...VENDOR_IDENTITY, vendorApplicationAppliedAt: appliedAt, createdAt: "2020-01-01T00:00:00.000Z" };
+    h.vendorStatus = { state: "applied", scope: "@acme", tier: "commercial", application_id: "va9" };
+    const env = await marketplaceVendorAppStatusSource.fetchMine(admin);
+    expect(env.rows).toHaveLength(1);
+    expect(env.rows[0].createdAt).toBe(appliedAt);
+    expect(Number.isNaN(Date.parse(env.rows[0].createdAt))).toBe(false);
+  });
+
+  it("applied row with NO durable appliedAt (legacy) falls back to the instance createdAt — still a real ISO timestamp, never ''", async () => {
+    h.vendorToken = "vtok";
+    h.hasVendor = true;
+    h.identity = { ...VENDOR_IDENTITY, createdAt: "2021-02-03T04:05:06.000Z" };
+    h.vendorStatus = { state: "applied", scope: "@acme", tier: "commercial", application_id: "va9" };
+    const env = await marketplaceVendorAppStatusSource.fetchMine(admin);
+    expect(env.rows[0].createdAt).toBe("2021-02-03T04:05:06.000Z");
+    expect(env.rows[0].createdAt).not.toBe("");
   });
 
   it("decide is a benign refusal (managed from Environment)", async () => {

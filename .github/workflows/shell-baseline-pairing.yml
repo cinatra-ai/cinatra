@@ -1,0 +1,125 @@
+# shell-baseline-pairing (#1600) — WARN, do not block.
+#
+# Closes the silent-drift window described in #1600 / #1595 / #1284: a PR that
+# changes the pixel-rendered SHELL chrome (top bar, sidebar, global tokens, the
+# baselined /design-fixtures index) WITHOUT refreshing the committed pixel
+# baselines in the same diff leaves the render un-diffed until an unrelated
+# regeneration surfaces the delta as a confusing "new" diff. This posts a
+# NON-BLOCKING warning comment on the opening PR so the window closes there.
+#
+# This is deliberately NOT a required check and NEVER blocks merge — DO NOT add
+# it to branch protection or .github/gate-suite.json requiredContexts. The
+# runtime steps are fail-open (a GitHub API hiccup → empty diff → no warning, a
+# green job), so the only red this job can legitimately show is a broken
+# detection script caught by the self-test — a real bug signal, still
+# non-blocking because the check is not required. The authoritative surface
+# list + all copy live in ONE place — scripts/ci/shell-baseline-pairing.mjs
+# (#1600 Acceptance Criterion 3). The `paths` filter below is only a coarse
+# "source or baseline changed" trigger, NOT the surface list (every shell
+# surface lives under src/).
+
+name: shell-baseline-pairing
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "src/**"
+      - "tests/e2e/design/__screenshots__/**"
+      - "scripts/ci/shell-baseline-pairing.mjs"
+      - ".github/workflows/shell-baseline-pairing.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: shell-baseline-pairing-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pairing-warn:
+    name: shell-surface pixel-baseline pairing (warn)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Dry-run the detection logic on its built-in fixtures BEFORE touching the
+      # live PR. A logic regression fails here in seconds (this is a real gate on
+      # the heuristic; the pairing evaluation below never fails the job).
+      - name: Detection self-test (dry-run)
+        run: node scripts/ci/shell-baseline-pairing.mjs --self-test
+
+      # The exact PR file set (paginated — robust past the 100-file page cap).
+      # The REST "list pull request files" endpoint keys each entry by
+      # `filename` (NOT `path`); `previous_filename` is emitted too so a shell
+      # file RENAMED AWAY is still detected by its old path. Fail-OPEN: if the
+      # API call fails, write an empty list so the evaluation below sees an empty
+      # diff (no warning) rather than reddening this non-blocking job.
+      - name: Collect changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > changed-files.txt; then
+            echo "::warning::could not list PR files — treating as an empty diff (fail-open)"
+            : > changed-files.txt
+          fi
+          echo "changed paths: $(grep -c . changed-files.txt || true)"
+
+      - name: Evaluate shell/baseline pairing
+        id: pair
+        run: |
+          node scripts/ci/shell-baseline-pairing.mjs \
+            --files-from changed-files.txt \
+            --body-out .pairing-body.md \
+            --resolved-out .pairing-resolved.md
+
+      # Upsert a single sticky comment (found by the marker) via gh — no extra
+      # pinned action needed. Fail-OPEN: a comment failure (e.g. a fork's
+      # read-only token) must never redden this non-blocking check.
+      - name: Upsert / resolve sticky warning comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WARN: ${{ steps.pair.outputs.warn }}
+          MARKER: ${{ steps.pair.outputs.marker }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Find our single sticky comment by its marker. Extraction runs through
+          # gh's OWN --jq so it is applied per response page (pagination-safe,
+          # independent of how --paginate frames array pages). Distinguish a
+          # genuine API failure (gh non-zero → bail WITHOUT mutating, so a
+          # transient error can never POST a duplicate) from a clean no-match
+          # (empty output → ID=""). `#` is literal inside a jq string.
+          if ! gh api --paginate "repos/$REPO/issues/$PR/comments" \
+               --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" > marker-ids.txt; then
+            echo "::warning::could not list PR comments — skipping comment upsert (fail-open)"
+            exit 0
+          fi
+          ID=$(head -1 marker-ids.txt || true)
+
+          if [ "$WARN" = "true" ]; then
+            BODY_FILE=.pairing-body.md
+          else
+            if [ -z "$ID" ]; then
+              echo "no unpaired shell change and no prior warning comment — nothing to do."
+              exit 0
+            fi
+            BODY_FILE=.pairing-resolved.md
+          fi
+
+          if [ -n "$ID" ]; then
+            jq -n --arg b "$(cat "$BODY_FILE")" '{body:$b}' \
+              | gh api --method PATCH "repos/$REPO/issues/comments/$ID" --input - >/dev/null
+            echo "updated sticky comment $ID"
+          else
+            jq -n --arg b "$(cat "$BODY_FILE")" '{body:$b}' \
+              | gh api --method POST "repos/$REPO/issues/$PR/comments" --input - >/dev/null
+            echo "created sticky comment"
+          fi

@@ -39,10 +39,12 @@ import {
   countUnreadForUser,
   createNotificationForRecipient,
   listNotificationsForUser,
+  listNotificationsKeysetForUser,
   markAllNotificationsReadForUser,
   markNotificationReadForUser,
   markNotificationsReadByHrefPrefixForUser,
 } from "@cinatra-ai/notifications/server";
+import type { NotificationsKeysetBefore } from "@cinatra-ai/notifications/server";
 import type {
   AppNotification,
   BackgroundProcess,
@@ -168,6 +170,27 @@ export function listNotificationsForUserId(userId: string): AppNotification[] {
   if (!userId) return [];
   return listNotificationsForUser(userId).map(toAppNotification);
 }
+
+/**
+ * Keyset-paginated, session-free notifications read for the unified
+ * `/notifications` feed (cinatra#1555). Walks the FULL history newest-first
+ * (`created_at DESC, id DESC`) a page at a time via a stable seek boundary —
+ * unlike {@link listNotificationsForUserId}, which returns the fixed 200-newest
+ * window. `before` resumes from a prior page; `limit` is clamped server-side to
+ * `[1, 200]`. Consumed by the notifications+approvals union merge, which
+ * translates its `(createdAt, sourceKey, id)` union cursor into the notification
+ * boundary. Re-exports the boundary type so the union can construct it.
+ */
+export function listNotificationsKeysetForUserId(args: {
+  userId: string;
+  limit: number;
+  before?: NotificationsKeysetBefore;
+}): AppNotification[] {
+  if (!args.userId) return [];
+  return listNotificationsKeysetForUser(args).map(toAppNotification);
+}
+
+export type { NotificationsKeysetBefore };
 
 export async function createNotification(input: {
   title: string;

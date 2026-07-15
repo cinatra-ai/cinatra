@@ -29,6 +29,7 @@ export {
   safeEmitAgentCreationProgress,
   listNotificationsForUser,
   listNotificationsByDedupeKeyPrefixForUser,
+  listNotificationsKeysetForUser,
   markAllNotificationsReadForUser,
   markNotificationReadForUser,
   markNotificationsReadByHrefPrefixForUser,
@@ -36,6 +37,7 @@ export {
 } from "./service";
 export type { CreateNotificationOptions } from "./service";
 export type { AgentCreationProgressMilestone } from "./service";
+export type { NotificationsKeysetBefore } from "./service";
 
 export {
   subscribeUserNotifications,
