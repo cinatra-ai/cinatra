@@ -23,6 +23,7 @@ import {
   listProjectAccessAction,
   type ProjectAccessRow,
 } from "./actions";
+import { listGuestRows, type GuestRow } from "./guest-actions";
 
 export const metadata: Metadata = { title: "Project permissions" };
 
@@ -127,6 +128,14 @@ export default async function ProjectPermissionsPage({ params }: Props) {
   const accessResult = await listProjectAccessAction(project.id);
   if (accessResult.ok) projectAccessRows = accessResult.items;
 
+  // Guest rows are ADMIN-ONLY (guest emails are never shown to read-only
+  // members): loaded only under canEdit — listGuestRows re-asserts
+  // server-side — and degraded to empty on failure like the grants above.
+  let guestRows: GuestRow[] = [];
+  if (canEdit) {
+    guestRows = await listGuestRows(project.id).catch(() => []);
+  }
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -152,6 +161,7 @@ export default async function ProjectPermissionsPage({ params }: Props) {
           coOwners={coOwnerViews}
           currentUserId={userId}
           projectAccessRows={projectAccessRows}
+          guestRows={guestRows}
         />
       </PageContent>
     </Main>
