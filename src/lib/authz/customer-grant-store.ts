@@ -60,31 +60,37 @@ export async function grantCustomerAccess(input: {
   expiresAt?: Date | null;
 }): Promise<void> {
   const now = new Date();
-  // 1. role_grant — the customer capability ceiling + expiry.
-  await db()
-    .insert(roleGrant)
-    .values({
-      subjectUserId: input.subjectUserId,
-      role: "customer",
-      scopeLevel: "project",
-      scopeRecordId: input.projectId,
-      orgId: input.orgId,
-      grantedBy: input.grantedBy,
-      grantedAt: now,
-      expiresAt: input.expiresAt ?? null,
-    })
-    .onConflictDoUpdate({
-      target: [roleGrant.subjectUserId, roleGrant.role, roleGrant.scopeLevel, roleGrant.scopeRecordId],
-      set: { grantedBy: input.grantedBy, grantedAt: now, expiresAt: input.expiresAt ?? null },
-    });
-  // 2. project_access read — sealed-room visibility.
-  await db().execute(sql`
-    INSERT INTO "${sql.raw(schemaName())}"."project_access"
-      (project_id, principal_level, principal_id, role, granted_by)
-    VALUES (${input.projectId}, 'user', ${input.subjectUserId}, 'read', ${input.grantedBy})
-    ON CONFLICT (project_id, principal_level, principal_id)
-      DO UPDATE SET role = 'read'
-  `);
+  // ONE transaction (single client): the same-org trigger on project_access
+  // accepts a non-member user only when the backing customer role_grant is
+  // already visible, and a write-#2 failure must never strand an orphan
+  // role_grant (cinatra#1501).
+  await db().transaction(async (tx) => {
+    // 1. role_grant — the customer capability ceiling + expiry.
+    await tx
+      .insert(roleGrant)
+      .values({
+        subjectUserId: input.subjectUserId,
+        role: "customer",
+        scopeLevel: "project",
+        scopeRecordId: input.projectId,
+        orgId: input.orgId,
+        grantedBy: input.grantedBy,
+        grantedAt: now,
+        expiresAt: input.expiresAt ?? null,
+      })
+      .onConflictDoUpdate({
+        target: [roleGrant.subjectUserId, roleGrant.role, roleGrant.scopeLevel, roleGrant.scopeRecordId],
+        set: { grantedBy: input.grantedBy, grantedAt: now, expiresAt: input.expiresAt ?? null },
+      });
+    // 2. project_access read — sealed-room visibility.
+    await tx.execute(sql`
+      INSERT INTO "${sql.raw(schemaName())}"."project_access"
+        (project_id, principal_level, principal_id, role, granted_by)
+      VALUES (${input.projectId}, 'user', ${input.subjectUserId}, 'read', ${input.grantedBy})
+      ON CONFLICT (project_id, principal_level, principal_id)
+        DO UPDATE SET role = 'read'
+    `);
+  });
 }
 
 /** Revoke a customer's project-scoped access — removes both rows. */
@@ -92,24 +98,29 @@ export async function revokeCustomerAccess(input: {
   subjectUserId: string;
   projectId: string;
 }): Promise<{ revoked: boolean }> {
-  const removed = await db()
-    .delete(roleGrant)
-    .where(
-      and(
-        eq(roleGrant.subjectUserId, input.subjectUserId),
-        eq(roleGrant.role, "customer"),
-        eq(roleGrant.scopeLevel, "project"),
-        eq(roleGrant.scopeRecordId, input.projectId),
-      ),
-    )
-    .returning({ subjectUserId: roleGrant.subjectUserId });
-  await db().execute(sql`
-    DELETE FROM "${sql.raw(schemaName())}"."project_access"
-     WHERE project_id = ${input.projectId}
-       AND principal_level = 'user'
-       AND principal_id = ${input.subjectUserId}
-  `);
-  return { revoked: removed.length > 0 };
+  // Same single-transaction discipline as the grant: both rows go together
+  // (the trigger only fires on INSERT/UPDATE, so delete order is free — the
+  // atomicity is what matters).
+  return db().transaction(async (tx) => {
+    const removed = await tx
+      .delete(roleGrant)
+      .where(
+        and(
+          eq(roleGrant.subjectUserId, input.subjectUserId),
+          eq(roleGrant.role, "customer"),
+          eq(roleGrant.scopeLevel, "project"),
+          eq(roleGrant.scopeRecordId, input.projectId),
+        ),
+      )
+      .returning({ subjectUserId: roleGrant.subjectUserId });
+    await tx.execute(sql`
+      DELETE FROM "${sql.raw(schemaName())}"."project_access"
+       WHERE project_id = ${input.projectId}
+         AND principal_level = 'user'
+         AND principal_id = ${input.subjectUserId}
+    `);
+    return { revoked: removed.length > 0 };
+  });
 }
 
 /** List a project's customer grants (project-admin surface). */
