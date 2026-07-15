@@ -40,7 +40,7 @@ import type { DashboardEntityRef } from "../store/entity-identity";
 import { DASHBOARD_CONFIG_V12_VERSION as V12 } from "../extension/dashboard-config-v12";
 // The REAL coexistence backfill lives in the versioned migration; pin the test
 // to it (no drift) rather than to a hand-copied SQL string.
-import { buildEntityOverviewBackfillSql } from "../../../../migrations/core/core__0048_dashboards-entity-overview-backfill.mjs";
+import { buildEntityOverviewBackfillSql } from "../../../../migrations/core/core__0049_dashboards-entity-overview-backfill.mjs";
 
 const RUN_IT = process.env.DASH_DB_IT === "1" && !!process.env.SUPABASE_DB_URL;
 const RAW_SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_it_700";

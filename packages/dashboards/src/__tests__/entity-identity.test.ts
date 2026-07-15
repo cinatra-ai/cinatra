@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import {
   MIGRATABLE_SURFACES,
   buildEntityOverviewBackfillSql,
-} from "../../../../migrations/core/core__0048_dashboards-entity-overview-backfill.mjs";
+} from "../../../../migrations/core/core__0049_dashboards-entity-overview-backfill.mjs";
 
 import {
   DASHBOARD_ENTITY_TYPES,

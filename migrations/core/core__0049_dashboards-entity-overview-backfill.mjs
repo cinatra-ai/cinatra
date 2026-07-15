@@ -1,11 +1,12 @@
-// core__0048: one-time COEXISTENCE backfill of the existing single-id dashboard
+// core__0049: one-time COEXISTENCE backfill of the existing single-id dashboard
 // rows into the per-entity multi-dashboard model + non-removable "Overview"
 // default (cinatra-ai/cinatra#700).
 //
 // SEQ NOTE: the seq is assigned at MERGE and must be strictly greater than the
-// max shipped core__ seq at that time (0047 at authoring; W5 Slice D may claim
-// 0048 first). Renumber this file to the next free seq if 0048 is taken before
-// this merges.
+// max shipped core__ seq at that time (0047 at authoring). A concurrent W5 lane
+// (#1617) claimed 0048, so this file was renumbered 0048 → 0049 at merge-prep
+// (0049 > 0047 shipped max; gaps are tolerated). Renumber again to the next free
+// seq if 0049 is taken before this merges.
 //
 // BACKGROUND. Before #700 each surface persisted exactly ONE dashboard per user,
 // keyed `system-<surface>:<orgId>:<userId>` (owner_level=user, visibility=private;
