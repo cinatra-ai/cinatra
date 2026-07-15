@@ -17,6 +17,7 @@
 import { AgentDecisionActions } from "@/app/configuration/approvals/agent-decision-actions";
 import { HostPortGrantDecisionActions } from "@/app/configuration/approvals/host-port-grant-decision-actions";
 import { DynamicTypeVisibilityDecisionActions } from "@/app/configuration/approvals/dynamic-type-visibility-decision-actions";
+import { PromotionDecisionActions } from "@/app/configuration/approvals/promotion-decision-actions";
 import { MarketplaceDecisionActions } from "@/app/configuration/approvals/marketplace-decision-actions";
 
 import type { ApprovalRowVM } from "./feed-view-model";
@@ -55,6 +56,15 @@ export function ApprovalInlineActions({
         <DynamicTypeVisibilityDecisionActions
           sourceId={sourceId}
           rowId={rowId}
+          onDecided={onDecided}
+        />
+      );
+    case "promotion":
+      return (
+        <PromotionDecisionActions
+          sourceId={sourceId}
+          rowId={rowId}
+          expectedVersion={version ?? ""}
           onDecided={onDecided}
         />
       );

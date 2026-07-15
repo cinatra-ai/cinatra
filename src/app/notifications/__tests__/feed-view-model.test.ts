@@ -77,6 +77,8 @@ describe("approvalDecideKind", () => {
     expect(approvalDecideKind("dynamic-type-artifact-visibility")).toBe("dynamic-type");
     expect(approvalDecideKind("marketplace-submission-moderation")).toBe("marketplace-moderate");
     expect(approvalDecideKind("marketplace-vendor-app-moderation")).toBe("marketplace-moderate");
+    // the shared promotion source (#1560) — one decide kind for every subject type
+    expect(approvalDecideKind("promotion-requests")).toBe("promotion");
     // self / passthrough / unknown → none
     expect(approvalDecideKind("marketplace-my-submissions")).toBe("none");
     expect(approvalDecideKind("workflow-legacy")).toBe("none");
@@ -92,6 +94,11 @@ describe("isApprovalActionable — §II eligibility, not raw pendingness", () =>
   it("a 'mine' (own request) row is never actionable here", () => {
     expect(isApprovalActionable("agent-creation-requests", "mine")).toBe(false);
     expect(isApprovalActionable("marketplace-my-submissions", "mine")).toBe(false);
+    // a promotion request the viewer made awaits others — not actionable in the feed
+    expect(isApprovalActionable("promotion-requests", "mine")).toBe(false);
+  });
+  it("a promotion inbox row (a request to review) is actionable", () => {
+    expect(isApprovalActionable("promotion-requests", "inbox")).toBe(true);
   });
   it("the read-only workflow-legacy passthrough is never actionable", () => {
     expect(isApprovalActionable("workflow-legacy", "inbox")).toBe(false);
