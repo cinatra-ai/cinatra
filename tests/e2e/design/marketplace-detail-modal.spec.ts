@@ -214,3 +214,42 @@ test.describe("§V detail modal — chrome/header tokens (no-regression composit
     await expect(modal.getByRole("link", { name: /^Share on / })).toHaveCount(5);
   });
 });
+
+test.describe("§V detail modal — install access-scope dialog (cinatra#1541)", () => {
+  test("footer Install now opens the access-scope dialog layered above the modal; dismiss returns to the modal", async ({
+    page,
+  }) => {
+    const modal = await openModal(page, "modal-fixture-connector");
+
+    // The §V footer CTA for a connector is the ENABLED primary "Install now"
+    // (visually identical to a non-access kind — the picker is the click
+    // behaviour, not a relabel).
+    const footerCta = modal.getByRole("button", { name: "Install now" });
+    await expect(footerCta).toBeEnabled();
+
+    // AC1/AC6: clicking it opens the pre-install access-scope dialog
+    // (cinatra#805) — a SECOND dialog LAYERED above the modal, NOT a direct
+    // submit. (The old bypass would have installed here with the default scope.)
+    await footerCta.click();
+    const scopeDialog = page.getByRole("dialog", { name: /^Install Example Connector$/ });
+    await expect(scopeDialog).toBeVisible();
+    await expect(scopeDialog.getByText("Who can access this extension?")).toBeVisible();
+
+    // AC4: the modal stays mounted BENEATH the scope dialog (both coexist —
+    // the scope dialog layers above, it does not replace the modal).
+    await expect(page.locator(HERO)).toBeVisible();
+
+    // AC4: only the TOP dialog handles Escape — the scope dialog dismisses and
+    // the detail modal stays open (dismissing the child must not dismiss both).
+    await page.keyboard.press("Escape");
+    await expect(scopeDialog).toBeHidden();
+    await expect(page.locator(HERO)).toBeVisible();
+
+    // AC4: focus returns to the modal's own CTA when the scope dialog closes.
+    await expect(footerCta).toBeFocused();
+
+    // AC4: a SECOND Escape then closes the detail modal itself.
+    await page.keyboard.press("Escape");
+    await expect(page.locator(HERO)).toBeHidden();
+  });
+});

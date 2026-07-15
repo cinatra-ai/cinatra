@@ -264,6 +264,29 @@ export async function ExtensionsMarketplaceScreen({
             updateAction={updateAction}
             restoreAction={restoreAction}
             planUpdateAction={planUpdateAction}
+            // cinatra#1541: the modal footer's "Install now" for a connector /
+            // artifact / workflow opens the SAME pre-install access-scope dialog
+            // the card opens (cinatra#805), layered above the modal — plumbed
+            // from the SAME server-computed, already-authorized picker context
+            // (no broader lookup; AC2/AC3). Passed only for the access-target
+            // kinds, mirroring the card's own isInstallAccessTargetKind branch.
+            installScope={
+              isInstallAccessTargetKind(card.kindSlug)
+                ? {
+                    installTargets,
+                    ownerEntityNames,
+                    activeOrgId,
+                    defaultValue: installScopeDefaultValue,
+                    failureCopyByCategory: buildMarketplaceFailureCopy("install", card.displayName),
+                    defaultFailureMessage: marketplaceFailureCopy(
+                      "unrecoverable",
+                      "install",
+                      card.displayName,
+                    ),
+                    installAction: installExtensionPackageFormAction,
+                  }
+                : undefined
+            }
           />
         }
       />
