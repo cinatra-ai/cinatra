@@ -18,13 +18,10 @@ import "server-only";
 import { formatDistanceToNow } from "date-fns";
 import { Undo2 } from "lucide-react";
 
-import {
-  listChangeSets,
-  loadChangeSet,
-  diffSnapshotFields,
-} from "@/lib/object-history";
+import { listChangeSets, loadChangeSet } from "@/lib/object-history";
 import { RestoreModal } from "@/components/data-safety/restore-modal";
 import { restoreChangeSetAction } from "@/components/data-safety/restore-change-set-action";
+import { buildUndoDiffLines, composeUndoTitle } from "./undo-row";
 
 const UNDO_LIST_LIMIT = 25;
 
@@ -51,22 +48,7 @@ export function UndoMode({
     const events = loaded?.events ?? [];
     const objectIds = new Set(events.map((e) => e.objectId));
     const objectTypes = new Set(events.map((e) => e.objectType));
-    const diffLines = events.map((event) => ({
-      objectId: event.objectId,
-      objectType: event.objectType,
-      description:
-        event.operation === "create"
-          ? `created ${event.objectId.slice(0, 8)}…`
-          : event.operation === "soft-delete" || event.operation === "tombstone"
-            ? `deleted ${event.objectId.slice(0, 8)}…`
-            : event.operation === "restore"
-              ? `restored ${event.objectId.slice(0, 8)}…`
-              : `updated fields: ${
-                  diffSnapshotFields(event.beforeSnapshot, event.afterSnapshot).join(", ") ||
-                  "(no diff captured)"
-                }`,
-      operation: event.operation,
-    }));
+    const diffLines = buildUndoDiffLines(events);
     return {
       id: cs.id,
       restorable: cs.restorable,
@@ -131,22 +113,6 @@ export function UndoMode({
       ))}
     </ul>
   );
-}
-
-function composeUndoTitle(
-  diffLines: ReadonlyArray<{ operation: string }>,
-  count: number,
-): string {
-  const ops = new Set(diffLines.map((d) => d.operation));
-  const noun = `${count} object${count === 1 ? "" : "s"}`;
-  if (ops.size === 1) {
-    const op = [...ops][0];
-    if (op === "soft-delete" || op === "tombstone") return `Deleted ${noun}`;
-    if (op === "create") return `Created ${noun}`;
-    if (op === "restore") return `Restored ${noun}`;
-    if (op === "update") return `Updated ${noun}`;
-  }
-  return `Changed ${noun}`;
 }
 
 function UndoEmptyState() {

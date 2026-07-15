@@ -31,5 +31,8 @@ describe("chat undo chip wiring", () => {
     expect(src).toMatch(/recentUndoableChangeSetForRunAction/);
     // shadcn: data-icon on the button icon, Button asChild + Link.
     expect(src).toMatch(/data-icon="inline-start"/);
+    // §VI: the rendered (eligible-only) chip carries the artifacts-undo-entry
+    // conformance anchor; the ineligible state is its absence (null render).
+    expect(src).toMatch(/data-conformance-id="artifacts-undo-entry"/);
   });
 });

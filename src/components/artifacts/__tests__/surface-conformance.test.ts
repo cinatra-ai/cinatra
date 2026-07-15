@@ -117,6 +117,69 @@ describe("§VI undo deep-link preserves the change-set target (no static list du
   });
 });
 
+describe("§VI undo entry affordances — eligibility-suppressed chip/toast + server-resolved non-admin targeted restore (design@94cfbcf5, #1638)", () => {
+  const ELIG = read("src/lib/object-history/restore-eligibility.ts");
+  const CHIP_ACTION = read("packages/chat/src/undo-actions.ts");
+  const CHIP = read("packages/chat/src/chat-undo-action-chip.tsx");
+  const TOAST = read("src/components/data-safety/undo-toast.tsx");
+  const RESTORE_ACTION = read("src/components/data-safety/restore-change-set-action.ts");
+  const PAGE = read("src/app/artifacts/page.tsx");
+  const TARGETED = read("src/components/artifacts/targeted-restore-mode.tsx");
+
+  it("the eligibility gate is the single per-object check with NO admin bypass (never consults platform-admin status)", () => {
+    expect(ELIG).toMatch(/export async function loadAuthorizedTargetedRestore/);
+    expect(ELIG).toMatch(/export async function isSessionEligibleForTargetedRestore/);
+    expect(ELIG).toMatch(/export async function resolveSessionRestoreAuthz/);
+    expect(ELIG).toMatch(/canActorRestoreChangeSet/);
+    // Eligibility includes "still restorable".
+    expect(ELIG).toMatch(/changeSet\.restorable/);
+    // No administrator bypass — the gate must not shortcut on admin status.
+    expect(ELIG).not.toMatch(/isPlatformAdmin/);
+    expect(ELIG).not.toMatch(/isAdmin/);
+  });
+
+  it("the chip is suppressed unless eligible (the action gates on the shared per-object check)", () => {
+    expect(CHIP_ACTION).toMatch(/isSessionEligibleForTargetedRestore\(cs\.id\)/);
+    expect(CHIP_ACTION).toMatch(/eligible \? \{ changeSetId: cs\.id \} : null/);
+    // The rendered chip carries the artifacts-undo-entry conformance anchor
+    // (eligible state); its absence is the not-eligible state.
+    expect(CHIP).toMatch(/data-conformance-id="artifacts-undo-entry"/);
+  });
+
+  it("the toast's Undo affordance is server-side eligibility-gated (suppressed when ineligible)", () => {
+    expect(TOAST).toMatch(/canRestoreChangeSetAction\(\{ changeSetId \}\)/);
+    // Ineligible → render nothing (no toast Undo action).
+    expect(TOAST).toMatch(/if \(!eligible\) return;/);
+  });
+
+  it("the shared confirm action exposes the eligibility server action + reuses the shared actor build", () => {
+    expect(RESTORE_ACTION).toMatch(/export async function canRestoreChangeSetAction/);
+    expect(RESTORE_ACTION).toMatch(/isSessionEligibleForTargetedRestore/);
+    expect(RESTORE_ACTION).toMatch(/resolveSessionRestoreAuthz\(session\)/);
+  });
+
+  it("the page resolves a non-admin targeted restore server-side (single load) and threads it through planArtifactsContent", () => {
+    expect(PAGE).toMatch(/loadAuthorizedTargetedRestore/);
+    expect(PAGE).toMatch(/planArtifactsContent\(/);
+    expect(PAGE).toMatch(/content\.render === "targeted-restore" && targetedRestore/);
+    expect(PAGE).toMatch(/<TargetedRestoreMode loaded=\{targetedRestore\}/);
+    // The admin Undo browser is untouched — still threads openRestore in.
+    expect(PAGE).toMatch(/<UndoMode orgId=\{orgId\} openRestore=\{sp\.openRestore\}/);
+    // The non-admin surface copy now names the targeted-restore carve-out (§VI).
+    expect(PAGE).toMatch(/the <em>Undo<\/em> browser/);
+    expect(PAGE).toMatch(/targeted restore/);
+  });
+
+  it("the targeted-restore surface renders the pre-authorized loaded change-set — no reload (TOCTOU-safe), never the browser list", () => {
+    expect(TARGETED).toMatch(/loaded: LoadedTargetedRestore/);
+    expect(TARGETED).toMatch(/restoreChangeSetAction/);
+    expect(TARGETED).toMatch(/defaultOpen=\{cs\.restorable\}/);
+    // It must NOT reload (single-load pass-through) nor enumerate the org list.
+    expect(TARGETED).not.toMatch(/loadChangeSet/);
+    expect(TARGETED).not.toMatch(/listChangeSets/);
+  });
+});
+
 describe("merge-proposals relocation is admin-gated (defense-in-depth)", () => {
   const DETAIL = read("src/app/artifacts/merge-proposals/[proposalId]/page.tsx");
   const ACTIONS = read("src/app/artifacts/merge-proposals/[proposalId]/actions.ts");
