@@ -6,6 +6,7 @@ import {
   REMOTE_COUNT_CAP,
   cappedCount,
   guardedCount,
+  isRegisteredVendor,
   marketplaceAvailability,
   resolveAdminToken,
 } from "./marketplace-shared";
@@ -27,7 +28,12 @@ export const marketplaceVendorAppModerationContract = {
   appliesTo: (viewer: ApprovalViewer, direction) => viewer.isAdmin && direction === "inbox",
 
   async counts(viewer: ApprovalViewer): Promise<SourceCounts> {
-    const inbox = await guardedCount(viewer, resolveAdminToken(), `${SOURCE_ID}:inbox`, async (token) => {
+    // Gate the badge count on the strict registration predicate too — an admin-
+    // token instance that is not a registered vendor contributes 0 (owner
+    // ruling: no vendor info unless a registered vendor), not just when the admin
+    // token is absent.
+    const sectionToken = isRegisteredVendor() ? resolveAdminToken() : undefined;
+    const inbox = await guardedCount(viewer, sectionToken, `${SOURCE_ID}:inbox`, async (token) => {
       const client = createMarketplaceClient(token);
       const out = await client.vendorApplicationListAdmin({
         status: ["applied"],
