@@ -17,9 +17,11 @@
 //
 //   EXACT CARDINALITY — every cardinality-bearing surface has its own count
 //   constant, and counts of collections that could be cross-wired are
-//   pairwise DISTINCT (grid 7 ≠ installed-active 4 ≠ installed-archived 2 ≠
+//   pairwise DISTINCT (grid 6 ≠ installed-active 4 ≠ installed-archived 2 ≠
 //   connectors-connected 3 ≠ connectors-disconnected 5), so a driver counting
-//   the wrong collection cannot accidentally pass.
+//   the wrong collection cannot accidentally pass. (grid dropped 7→6 and the
+//   installed-active workflow row became a connector when the 'workflow' kind
+//   was removed — cinatra#1035 — both preserving the distinctness.)
 //
 //   PER-RUN ISOLATION — DB-backed seeds are namespaced by a run id
 //   (CINATRA_CONFORMANCE_RUN_ID; "local" fallback). Provisioning converges the
@@ -65,7 +67,10 @@ export function seededRowId(runId: string, base: string): string {
 export type SeededInstalledExtension = {
   /** Package basename inside the run namespace (see seededPackageName). */
   base: string;
-  kind: "agent" | "skill" | "workflow" | "connector" | "artifact";
+  // 'workflow' dropped — Slice C+D removed it as an extension kind and the
+  // narrowed installed_extension_kind_chk rejects it, so no workflow row can
+  // be seeded into the canonical store (cinatra#1035).
+  kind: "agent" | "skill" | "connector" | "artifact";
   kindLabel: string;
   status: "active" | "archived";
   version: string;
@@ -122,13 +127,18 @@ export const SEEDED_INSTALLED_EXTENSIONS: SeededInstalledExtension[] = [
     registryUrl: SEEDED_INSTANCE_REGISTRY_URL,
   },
   {
-    base: "release-cadence",
-    kind: "workflow",
-    kindLabel: "Workflow",
+    // Replaces the removed 'workflow' active row (cinatra#1035): keeps the
+    // active count at 4 (pairwise-distinct invariant) and, being a connector,
+    // this row plus the archived 'ledger-link' connector below prove the
+    // status filter partitions by lifecycle status, not by kind. Org-anchored
+    // like every connector (see seededOrgAnchorId / the org-anchor invariant).
+    base: "signal-relay",
+    kind: "connector",
+    kindLabel: "Connector",
     status: "active",
-    version: "0.9.4",
-    displayName: "Shipday Orchestrator",
-    description: "Schedules and runs the recurring release checklist.",
+    version: "2.4.0",
+    displayName: "Webhook Fan-Out Hub",
+    description: "Broadcasts inbound events to subscribed destinations.",
     vendor: "Cinatra Fixtures",
   },
   {
@@ -165,7 +175,8 @@ export const SEEDED_INSTALLED_EXTENSIONS: SeededInstalledExtension[] = [
 
 export const SEEDED_INSTALLED_ACTIVE_COUNT = SEEDED_INSTALLED_EXTENSIONS.filter(
   (r) => r.status === "active",
-).length; // 4
+).length; // 4 (workflow active row → active connector — cinatra#1035; stays 4 to
+// keep the pairwise-distinct cardinality invariant, see the header note)
 export const SEEDED_INSTALLED_ARCHIVED_COUNT = SEEDED_INSTALLED_EXTENSIONS.filter(
   (r) => r.status === "archived",
 ).length; // 2

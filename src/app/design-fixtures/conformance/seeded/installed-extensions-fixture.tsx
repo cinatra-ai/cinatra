@@ -51,7 +51,7 @@ import {
 } from "../seed-data";
 
 /** Stable render order — mirrors RegistryCatalogScreen's KIND_ORDER + name sort. */
-const KIND_ORDER = ["agent", "skill", "workflow", "connector", "artifact"] as const;
+const KIND_ORDER = ["agent", "skill", "connector", "artifact"] as const;
 
 function seedFor(runId: string, row: InstalledExtension): SeededInstalledExtension | null {
   const base = row.packageName.slice(seededPackagePrefix(runId).length);
