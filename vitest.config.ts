@@ -258,6 +258,17 @@ export default defineConfig({
         ),
       },
       {
+        // The extracted shared client store (E6 / #1556). Its characterization
+        // test at src/lib/notifications/__tests__/notifications-store.test.ts
+        // imports it component-free; map the subpath to source so the store is
+        // exercised directly (not the flyout-component barrel).
+        find: "@cinatra-ai/notifications/notifications-store",
+        replacement: path.join(
+          __dirname,
+          "packages/notifications/src/notifications-store.ts",
+        ),
+      },
+      {
         find: "@cinatra-ai/notifications/server",
         replacement: path.join(
           __dirname,

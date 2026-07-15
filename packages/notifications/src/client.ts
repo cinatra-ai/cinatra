@@ -30,3 +30,17 @@ export {
   // in isolation); the app itself renders it via the flyout tree.
   ConfigurationNeedsRow,
 } from "./notifications-flyout";
+
+// The shared client store the flyout consumes and the future /notifications
+// v2 page (E7) will mount against — the extracted poll/SSE/mark-read state
+// machine. Also importable component-free via
+// `@cinatra-ai/notifications/notifications-store`.
+export {
+  createNotificationsStore,
+  useNotificationsStore,
+  NOTIFICATIONS_POLL_INTERVAL_MS,
+} from "./notifications-store";
+export type {
+  NotificationsStore,
+  NotificationsSnapshot,
+} from "./notifications-store";
