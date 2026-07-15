@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Team-membership management authority (cinatra#1567).
+// Team-membership management authority (cinatra#1567, extended by #1566).
 //
 // Pure, dependency-free predicate shared by the settings page (controls
 // visibility + the widened page gate) and the member server actions (the
@@ -7,17 +7,19 @@
 // "use server" module may only export async functions — the same split as
 // `grant-candidates.ts` next to the project permissions actions.
 //
-// INTERIM GATE — teams have NO role model yet (`public."teamMember"` has no
-// `role` column; sibling cinatra#1566 owns that decision). Until #1566 lands,
-// the defensible authority for adding/removing team members is:
+// Authority for managing a team's membership (add/remove/role changes):
+//   - a TEAM ADMIN of that team (`teamMember.role = 'admin'` — the per-team
+//     role model from cinatra#1566; this predicate was built to be swapped
+//     when that decision landed), or
 //   - an org owner/admin of the TEAM's organization (the same widening the
 //     teams-dashboard visibility uses — `TEAM_WIDENING_ORG_ROLES` in
 //     `packages/dashboards/src/auth/team-visibility.ts`), or
 //   - a platform admin.
 // Plain team membership deliberately does NOT manage membership (mirrors the
-// slug-rename action's stance that destructive team ops need org authority).
-// When #1566 introduces per-team roles, swap THIS predicate — every caller
-// routes through it by name, so the decision lands in one place.
+// slug-rename action's stance that destructive team ops need explicit
+// authority). On deployments where the role column is not provisioned yet,
+// callers pass `teamRole: undefined` and the predicate reduces to the org /
+// platform tiers — the pre-#1566 behavior.
 // ---------------------------------------------------------------------------
 
 /** Org roles (authz-kernel form) that may manage team membership. Mirrors
@@ -34,15 +36,22 @@ export type TeamMemberAuthorityInput = {
    * active org). `undefined` = no membership row / unknown role.
    */
   readonly orgRole: "org_owner" | "org_admin" | "member" | undefined;
+  /**
+   * The caller's role in THIS team (DB vocabulary, from `teamMember.role`).
+   * `undefined` = not a team member, unknown role, or the role column is not
+   * provisioned on this deployment (degrade to org/platform authority only).
+   */
+  readonly teamRole?: "admin" | "member";
 };
 
 /**
- * May the caller add/remove members of a team? Named predicate for the
- * interim (pre-#1566) authority: platform admin, or org owner/admin of the
- * team's org. `member`, `undefined`, and unknown roles fail closed.
+ * May the caller manage a team's membership (add/remove members, change
+ * roles)? Team admin of the team, org owner/admin of the team's org, or
+ * platform admin. `member`, `undefined`, and unknown roles fail closed.
  */
 export function canManageTeamMembers(input: TeamMemberAuthorityInput): boolean {
   if (input.platformAdmin) return true;
+  if (input.teamRole === "admin") return true;
   return (
     input.orgRole !== undefined &&
     (TEAM_MEMBER_MANAGING_ORG_ROLES as readonly string[]).includes(input.orgRole)

@@ -1,12 +1,14 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// TeamMembersSection — member list + roleless add/remove (cinatra#1567).
+// TeamMembersSection — member list + add/remove + per-team roles
+// (cinatra#1567; roles from the #1566 role model).
 //
 // The interim members surface on /teams/[teamId]/settings. The eventual home
 // is the #704 team-detail Permissions tab (tablist epic #699); this section
-// moves there wholesale when that lands. Membership is roleless add/remove —
-// per-member roles are deferred to the #1566 role-model decision.
+// moves there wholesale when that lands. Each member carries a per-team role
+// (Member / Admin) once the app-owned `teamMember.role` column is provisioned;
+// `rolesEnabled=false` (un-migrated deployment) renders the roleless surface.
 //
 // Mount pattern projected from the grant form (permissions-tab-client.tsx):
 //   - user search via the shared EntitySearchCombobox fed by a dedicated
@@ -14,7 +16,9 @@
 //     viewer's own scopes);
 //   - pick → selected chip + explicit "Add member" button (no add-on-pick);
 //   - remove is confirmed via AlertDialog (destructive, resource-ownership-
-//     panel precedent) and blocked server-side for the last member.
+//     panel precedent) and blocked server-side for the last member;
+//   - role assignment is a per-row Select for `canManage` viewers (plain text
+//     otherwise), wired to `updateTeamMemberRoleAction`.
 // The controls render only for `canManage` viewers; the server actions
 // re-enforce the same authority regardless.
 // ---------------------------------------------------------------------------
@@ -34,6 +38,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { EntitySearchCombobox } from "@/components/entity-search-combobox";
 import { toast } from "@/lib/cinatra-toast";
 
@@ -41,6 +52,7 @@ import {
   addTeamMemberAction,
   removeTeamMemberAction,
   searchTeamMemberCandidates,
+  updateTeamMemberRoleAction,
   type TeamMemberActionResult,
 } from "./member-actions";
 
@@ -48,18 +60,25 @@ export type TeamMemberView = {
   userId: string;
   name: string;
   email: string;
+  /** Per-team role (cinatra#1566); `null` when the role column is not
+   *  provisioned on this deployment (`rolesEnabled=false`). */
+  role: "admin" | "member" | null;
 };
 
 const REMOVE_ERROR_COPY: Record<
   Extract<TeamMemberActionResult, { ok: false }>["error"],
   string
 > = {
-  forbidden: "Only an org owner/admin (or platform admin) can manage members.",
+  forbidden:
+    "Only a team admin, org owner/admin, or platform admin can manage members.",
   invalid_user: "Invalid user.",
+  invalid_role: "Invalid role.",
   user_not_in_org: "That user is not a member of this team's organization.",
   already_member: "Already a member of this team.",
   not_a_member: "Not a member of this team.",
   last_member: "A team keeps at least one member — add someone else first.",
+  role_unavailable:
+    "Team roles are not provisioned on this deployment yet.",
   unknown_error: "Something went wrong. Try again.",
 };
 
@@ -67,10 +86,14 @@ export function TeamMembersSection({
   teamId,
   members,
   canManage,
+  rolesEnabled,
 }: {
   teamId: string;
   members: TeamMemberView[];
   canManage: boolean;
+  /** false on deployments where `teamMember.role` is not provisioned —
+   *  renders the roleless surface (no role labels, no role selects). */
+  rolesEnabled: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -106,6 +129,24 @@ export function TeamMembersSection({
     });
   };
 
+  const handleRoleChange = (user: TeamMemberView, nextRole: string) => {
+    if (nextRole !== "admin" && nextRole !== "member") return;
+    if (nextRole === user.role) return;
+    startTransition(async () => {
+      const result = await updateTeamMemberRoleAction(teamId, user.userId, nextRole);
+      if (result.ok) {
+        toast.success(
+          nextRole === "admin"
+            ? `${user.name} is now a team admin.`
+            : `${user.name} is now a member.`,
+        );
+        router.refresh();
+      } else {
+        toast.error(REMOVE_ERROR_COPY[result.error]);
+      }
+    });
+  };
+
   return (
     <div data-testid="team-members-section" className="flex flex-col gap-4">
       {members.length === 0 ? (
@@ -125,17 +166,43 @@ export function TeamMembersSection({
                   </span>
                 ) : null}
               </div>
-              {canManage && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={pending}
-                  onClick={() => setRemovalTarget(member)}
-                >
-                  Remove
-                </Button>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                {rolesEnabled &&
+                  (canManage ? (
+                    <Select
+                      value={member.role ?? "member"}
+                      onValueChange={(value) => handleRoleChange(member, value)}
+                      disabled={pending}
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="w-28"
+                        aria-label={`Role of ${member.name}`}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="member">Member</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {member.role === "admin" ? "Admin" : "Member"}
+                    </span>
+                  ))}
+                {canManage && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => setRemovalTarget(member)}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -188,7 +255,9 @@ export function TeamMembersSection({
                 };
               }}
               onPick={(u) =>
-                setSelectedUser({ userId: u.id, name: u.name, email: u.email ?? "" })
+                // Candidates have no team role yet — they join as 'member'
+                // via the column DEFAULT on add.
+                setSelectedUser({ userId: u.id, name: u.name, email: u.email ?? "", role: null })
               }
             />
           )}
@@ -203,8 +272,9 @@ export function TeamMembersSection({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Members are added without a role — per-member team roles are a
-            pending product decision.
+            {rolesEnabled
+              ? "New members join as Member. Team admins can manage this team's members and roles."
+              : "Members are added without a role — run the auth migration to enable per-team roles."}
           </p>
         </div>
       )}

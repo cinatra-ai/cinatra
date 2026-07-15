@@ -18,7 +18,7 @@ function normalizeSlug(input: string): string {
 
 import { requireAuthSession } from "@/lib/auth-session";
 import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
-import { betterAuthDb } from "@/lib/better-auth-db";
+import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
@@ -71,26 +71,38 @@ async function createProjectAction(formData: FormData) {
   // IDOR / authorization guard: verify the calling user is actually a member of
   // the chosen team or organization before creating a project under that scope.
   //
-  // TEAM: Better Auth's `public."teamMember"` table has ONLY
-  // id/teamId/userId/createdAt — there is NO `role` column (see the documented
-  // shape in `@/lib/better-auth-db`), so we can only assert MEMBERSHIP here, not
-  // a team-admin tier. Selecting `role` was the root cause of the "column
-  // \"role\" does not exist" failure that surfaced as a generic DB toast.
+  // TEAM: the app-owned `teamMember.role` column (cinatra#1566) carries the
+  // per-team role, but ONLY when provisioned on this deployment — selecting it
+  // unguarded on an un-migrated database was the root cause of the "column
+  // \"role\" does not exist" failure that surfaced as a generic DB toast
+  // (#1499), hence the `teamMemberRoleColumnExists()` guard.
   //
   // ORG: `public.member` DOES carry a `role` column, so the org-member role is
   // fetched here for the auth gate below to derive effective permissions
   // without a second round-trip.
   let isTeamMember = false;
+  let teamMemberRole: string | null = null;
   let orgMemberRole: string | null = null;
 
   if (ownerLevel === "team" && teamId) {
-    const memberRows = await betterAuthDb.execute<{ id: string }>(sql`
-      SELECT id
-      FROM public."teamMember"
-      WHERE "userId" = ${session.user.id} AND "teamId" = ${teamId}
-      LIMIT 1
-    `);
+    const hasTeamRoleColumn = await teamMemberRoleColumnExists();
+    const memberRows = await betterAuthDb.execute<{ id: string; role?: string | null }>(
+      hasTeamRoleColumn
+        ? sql`
+            SELECT id, role
+            FROM public."teamMember"
+            WHERE "userId" = ${session.user.id} AND "teamId" = ${teamId}
+            LIMIT 1
+          `
+        : sql`
+            SELECT id
+            FROM public."teamMember"
+            WHERE "userId" = ${session.user.id} AND "teamId" = ${teamId}
+            LIMIT 1
+          `,
+    );
     isTeamMember = memberRows.rows.length > 0;
+    teamMemberRole = memberRows.rows[0]?.role ?? null;
     if (!isTeamMember) {
       redirect("/projects/new?error=not-a-team-member");
     }
@@ -116,11 +128,10 @@ async function createProjectAction(formData: FormData) {
 
   // Creation authorization gate. The IDOR membership checks above ensure the
   // actor belongs to the requested team/org.
-  //   - TEAM-owned: plain membership authorizes creation. Better Auth's
-  //     teamMember carries no role column, so there is no team-admin tier to
-  //     require; the authz kernel grants `project.create` to `member`, so a
-  //     confirmed team member (mapped to the org-member role below) passes the
-  //     `project.create` gate.
+  //   - TEAM-owned: plain membership authorizes creation (the kernel grants
+  //     `project.create` to `member`); a team ADMIN (cinatra#1566) is
+  //     additionally surfaced as `team_admin` so downstream checks (e.g. the
+  //     scope ratchet's team-promotion rule) see the real tier.
   //   - ORG-owned: the org member role (owner/admin/member) resolved above is
   //     honored via the hints below.
   //
@@ -133,12 +144,11 @@ async function createProjectAction(formData: FormData) {
   let roleHintsOverride: ActorRoleHints | undefined;
 
   if (ownerLevel === "team" && teamId && isTeamMember) {
-    // No team-admin tier exists in Better Auth's teamMember schema, so a
-    // confirmed member maps to the org-member role. That is sufficient: the
-    // kernel grants `project.create` to `member`. If a real team-admin role
-    // source is ever wired, promote to "team_admin" here.
+    // A confirmed member is sufficient for `project.create`; a team admin is
+    // promoted to the kernel tier. On un-provisioned deployments the role
+    // read degrades to null → plain "member", the pre-#1566 behavior.
     enrichedRoles.push("member");
-    enrichedTeamRoles[teamId] = "member";
+    enrichedTeamRoles[teamId] = teamMemberRole === "admin" ? "team_admin" : "member";
   }
 
   if (ownerLevel === "organization" && organizationId && orgMemberRole) {
@@ -176,11 +186,12 @@ async function createProjectAction(formData: FormData) {
     // The MCP `projects_create` handler applies an ownership-authority check
     // inline (user-owned must be self; org-owned requires matching active org +
     // org_admin/org_owner; workspace-owned requires platform_admin). The
-    // MCP team-owned path additionally requires team_admin, but that path is
-    // driven by callers that can supply a resolved team-role bag; the
-    // page-driven flow has no such source (Better Auth's teamMember has no role
-    // column), so here team-owned creation is gated on the IDOR membership-check
-    // SQL above plus the `enforceResourceAccess` `project.create` gate.
+    // MCP team-owned path additionally requires team_admin. This page-driven
+    // flow now has the same role source (the guarded `teamMember.role` read
+    // above, cinatra#1566): team-owned creation is gated on the IDOR
+    // membership-check SQL plus the `enforceResourceAccess` `project.create`
+    // gate, with a confirmed team admin surfaced as `team_admin` in the
+    // enriched role bag (plain member where the column is not provisioned).
   } catch (err) {
     // AuthzError.statusCode is stripped by Next.js serialization across the
     // server→client boundary, so the form catch block can't distinguish it
