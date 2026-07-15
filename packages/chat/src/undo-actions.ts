@@ -2,6 +2,7 @@
 
 import { requireAuthSession } from "@/lib/auth-session";
 import { listChangeSets } from "@/lib/object-history";
+import { isSessionEligibleForTargetedRestore } from "@/lib/object-history/restore-eligibility";
 
 // Chat-side undo. After an agent_run tool
 // call, the chat polls for a recent CLOSED, restorable change-set produced by
@@ -9,6 +10,12 @@ import { listChangeSets } from "@/lib/object-history";
 // mitigation). Returns the change-set id so the chip can deep-link to the
 // URL-addressable restore modal (?openRestore=1), which enforces its own
 // per-event restore authz on open + confirm. Org-scoped; orgless → null.
+//
+// §VI eligibility (design@94cfbcf5): the chip renders ONLY for an actor
+// eligible to restore the candidate change-set — per-object-authorized for
+// every affected object, no administrator bypass. An ineligible actor (incl.
+// an admin lacking per-object authz for some object) is returned null so no
+// chip appears and no deep-link can dead-end on the not-authorized panel.
 //
 // Kept in a dedicated module (not actions.ts) so its import graph stays light
 // — only @/lib/auth-session + @/lib/object-history — and unit-testable under
@@ -33,5 +40,7 @@ export async function recentUndoableChangeSetForRunAction(input: {
     limit: 1,
   });
   const cs = items[0];
-  return cs ? { changeSetId: cs.id } : null;
+  if (!cs) return null;
+  const eligible = await isSessionEligibleForTargetedRestore(cs.id);
+  return eligible ? { changeSetId: cs.id } : null;
 }

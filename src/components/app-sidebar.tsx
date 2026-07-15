@@ -12,7 +12,6 @@ import {
   Settings,
 } from "lucide-react";
 import { domainIcons } from "@/components/domain-icons";
-import { Badge } from "@/components/ui/badge";
 import {
   Collapsible,
   CollapsibleContent,
@@ -42,48 +41,18 @@ import { ANALYTICS_CATEGORIES, ANALYTICS_CATEGORY_PATHS } from "@/lib/section-na
 
 // ---------- sidebar data (mirrors shadcn-admin's sidebar-data.ts pattern) ----------
 
-// Sidebar pill matching the topbar notification chip shape. Sits inline at
-// the right edge of the menu row (the bell badge is absolute; here the count
-// rides ml-auto inside the row).
-function SidebarPill({ count }: { count: number }) {
-  if (count <= 0) return null;
-  return (
-    <Badge variant="default" className="ml-auto min-w-5 px-1 text-[10px]">
-      {count > 99 ? "99+" : count}
-    </Badge>
-  );
-}
-
 type SidebarOpts = {
   isAdmin: boolean;
-  pendingApprovalsTotal: number;
-  approvalsNavVisible: boolean;
 };
 
-// The Admin group, rendered ABOVE Intelligence (top of the rail). Its two items
-// gate INDEPENDENTLY so a new approval source can light Approvals without
-// touching the sidebar:
-//   • Approvals — availability-driven (approvalsNavVisible, resolved server-side
-//     from the ApprovalSource registry): admins (an actionable Inbox source) OR
-//     any viewer with an own request in flight (the option-b non-admin path,
-//     cinatra#1302). Carries the pending-count pill.
-//   • Configuration — the cog → /configuration entry, admin-only.
-// The group renders when EITHER item is present, and is null when neither is.
-// Exported for unit tests (the availability-driven Approvals split is the
-// load-bearing behavior of cinatra#1047).
+// The Admin group, rendered ABOVE Intelligence (top of the rail). After the E8
+// cutover (cinatra#1558) the standalone "Approvals" nav item + its registry-
+// driven pill were removed per the notifications design spec §VII — approvals
+// now live only in `/notifications` (reached via the bell + repointed config
+// cards). The group is admin-only: its sole item is the cog → /configuration.
+// Exported for unit tests.
 export function buildAdminGroup(opts: SidebarOpts): { title: string; items: NavItem[] } | null {
   const items: NavItem[] = [];
-  if (opts.approvalsNavVisible) {
-    items.push({
-      title: "Approvals",
-      url: "/configuration/approvals",
-      icon: domainIcons.approvals,
-      extra:
-        opts.pendingApprovalsTotal > 0 ? (
-          <SidebarPill count={opts.pendingApprovalsTotal} />
-        ) : undefined,
-    });
-  }
   if (opts.isAdmin) {
     items.push({ title: "Configuration", url: "/configuration", icon: Settings });
   }
@@ -91,7 +60,7 @@ export function buildAdminGroup(opts: SidebarOpts): { title: string; items: NavI
   return { title: "Admin", items };
 }
 
-function buildSidebarData(_opts: SidebarOpts) {
+function buildSidebarData() {
   const groups: { title: string; items: NavItem[] }[] = [];
 
   groups.push({
@@ -286,8 +255,6 @@ export function AppSidebar({
   singleOrg = false,
   hiddenNavTitles,
   isAdmin = false,
-  pendingApprovalsTotal = 0,
-  approvalsNavVisible = false,
 }: {
   connectionReady: boolean;
   userAccentColor?: import("@/lib/extension-accent").ExtensionAccent | null;
@@ -300,36 +267,22 @@ export function AppSidebar({
   hiddenNavTitles?: string[];
   /**
    * Gates the Admin → Configuration entry (and, today, most admin surfaces).
-   * Plumbed from layout.tsx via isPlatformAdmin(session). Approvals no longer
-   * rides this flag — it is availability-driven via approvalsNavVisible.
+   * Plumbed from layout.tsx via isPlatformAdmin(session).
    */
   isAdmin?: boolean;
-  /**
-   * Total count for the Admin → Approvals pill. Resolved server-side in
-   * layout.tsx by summing the ApprovalSource registry's per-source
-   * Inbox-actionable counts for the viewer.
-   */
-  pendingApprovalsTotal?: number;
-  /**
-   * Availability-driven visibility of the Admin → Approvals item: the viewer
-   * has any available source with an actionable Inbox (v1 → admins, unchanged;
-   * a future non-admin-actionable source lights it with no edit here).
-   * Resolved server-side in layout.tsx from the registry.
-   */
-  approvalsNavVisible?: boolean;
 }) {
   const hidden = new Set([
     ...(hiddenNavTitles ?? []),
     ...(singleOrg ? ["Organizations"] : []),
   ]);
-  const adminGroupRaw = buildAdminGroup({ isAdmin, pendingApprovalsTotal, approvalsNavVisible });
+  const adminGroupRaw = buildAdminGroup({ isAdmin });
   const adminGroup = adminGroupRaw
     ? {
         ...adminGroupRaw,
         items: (adminGroupRaw.items as NavItem[]).filter((item) => !hidden.has(item.title)),
       }
     : null;
-  const navGroups = buildSidebarData({ isAdmin, pendingApprovalsTotal, approvalsNavVisible })
+  const navGroups = buildSidebarData()
     .map((group) => ({
       ...group,
       items: (group.items as NavItem[]).filter((item) => !hidden.has(item.title)),

@@ -17,10 +17,6 @@ const PAGES: ReadonlyArray<{ file: string; section: string }> = [
     section: "permissions",
   },
   { file: "src/app/projects/[projectId]/agents/page.tsx", section: "agents" },
-  {
-    file: "src/app/projects/[projectId]/customers/page.tsx",
-    section: "customers",
-  },
 ];
 
 describe("project detail pages adopt the shared ProjectSubnav", () => {

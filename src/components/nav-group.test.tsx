@@ -82,20 +82,23 @@ describe("checkIsActive — collapsible groups and sub-items", () => {
 });
 
 describe("checkIsActive — overlapping links resolve to the most specific (cinatra#581)", () => {
-  // Admin group: two leaf links where one url is a prefix of the other.
-  const adminLeafUrls = ["/configuration/approvals", "/configuration"];
-  const approvals: NavLink = {
-    title: "Approvals",
-    url: "/configuration/approvals",
+  // Two leaf links where one url is a prefix of the other. (The former example
+  // used /configuration/approvals; that leaf was retired in the E8 cutover,
+  // cinatra#1558 — swapped for another real nested config route with the same
+  // prefix-overlap shape so the cinatra#581 resolution stays covered.)
+  const adminLeafUrls = ["/configuration/access-control", "/configuration"];
+  const accessControl: NavLink = {
+    title: "Access Control",
+    url: "/configuration/access-control",
   };
   const configuration: NavLink = { title: "Configuration", url: "/configuration" };
 
-  it("on /configuration/approvals only the deeper sibling is active", () => {
+  it("on /configuration/access-control only the deeper sibling is active", () => {
     expect(
-      checkIsActive("/configuration/approvals", approvals, false, adminLeafUrls),
+      checkIsActive("/configuration/access-control", accessControl, false, adminLeafUrls),
     ).toBe(true);
     expect(
-      checkIsActive("/configuration/approvals", configuration, false, adminLeafUrls),
+      checkIsActive("/configuration/access-control", configuration, false, adminLeafUrls),
     ).toBe(false);
   });
 
@@ -104,13 +107,13 @@ describe("checkIsActive — overlapping links resolve to the most specific (cina
       checkIsActive("/configuration/general", configuration, false, adminLeafUrls),
     ).toBe(true);
     expect(
-      checkIsActive("/configuration/general", approvals, false, adminLeafUrls),
+      checkIsActive("/configuration/general", accessControl, false, adminLeafUrls),
     ).toBe(false);
   });
 
   it("on exactly /configuration only Configuration is active", () => {
     expect(checkIsActive("/configuration", configuration, false, adminLeafUrls)).toBe(true);
-    expect(checkIsActive("/configuration", approvals, false, adminLeafUrls)).toBe(false);
+    expect(checkIsActive("/configuration", accessControl, false, adminLeafUrls)).toBe(false);
   });
 
   // Data collapsible group: sub-items "/data" and "/data/types" overlap.

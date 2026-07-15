@@ -20,7 +20,14 @@ export type DashboardPageAnchor =
   | "agents"
   | "organizations"
   | "projects"
-  | "teams";
+  | "teams"
+  // Detail-surface anchors for the reusable entity Dashboards tab (cinatra#701).
+  // These carry no href page actions; their primary controls are the dashboard
+  // select + "+ New dashboard", rendered from `EntityDashboardsContext`.
+  | "personal"
+  | "project-detail"
+  | "team-detail"
+  | "org-detail";
 
 const DashboardPageAnchorContext = createContext<DashboardPageAnchor | undefined>(
   undefined,

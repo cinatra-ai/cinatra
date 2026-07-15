@@ -3,11 +3,6 @@ import { notFound } from "next/navigation";
 
 import * as authSession from "@/lib/auth-session";
 const { requireAuthSession } = authSession;
-import {
-  readOrgsWithTeamsForUser,
-  readProjectsForUser,
-  readTeamsByIdsForOrg,
-} from "@/lib/better-auth-db";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
@@ -21,21 +16,14 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ProjectSubnav } from "@/components/project-subnav";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
-import type { AccessComboboxProps } from "@/components/access-combobox";
-
-type AvailableScopes = AccessComboboxProps["availableScopes"];
-
 import { AccessVsOwnershipNote } from "@/components/access-vs-ownership-note";
-import {
-  collectAccessStateTeamIds,
-  mergeResolvedTeams,
-} from "./access-team-hydration";
 import { ProjectPermissionsTabClient } from "./permissions-tab-client";
 import {
   readProjectOwnerViews,
   listProjectAccessAction,
   type ProjectAccessRow,
 } from "./actions";
+import { listGuestRows, type GuestRow } from "./guest-actions";
 
 export const metadata: Metadata = { title: "Project permissions" };
 
@@ -117,14 +105,9 @@ export default async function ProjectPermissionsPage({ params }: Props) {
     coOwnerViews = [];
   }
 
-  // Available scopes for the AccessCombobox — server-resolved, never
-  // queried from the client. canGrantWorkspace stays admin-only (matches
-  // the runs UI conservative ship). Defensive try/catch keeps the page
-  // renderable when Better Auth probes fail.
-  // Defensive call — `isPlatformAdmin` may be unavailable in unit-test
-  // mocks of `@/lib/auth-session`; treat absence as "not admin".
-  // Defer admin probe — vi.mock("@/lib/auth-session") in unit tests may
-  // omit `isPlatformAdmin`; treat any throw / absence as "not admin".
+  // Platform-admin probe drives `canEdit`. Defensive call —
+  // `isPlatformAdmin` may be unavailable in unit-test mocks of
+  // `@/lib/auth-session`; treat any throw / absence as "not admin".
   let isAdmin = false;
   try {
     const fn = (authSession as unknown as { isPlatformAdmin?: (s: unknown) => boolean })
@@ -133,16 +116,6 @@ export default async function ProjectPermissionsPage({ params }: Props) {
   } catch {
     isAdmin = false;
   }
-  const orgs = userId
-    ? await readOrgsWithTeamsForUser(userId).catch(() => [])
-    : [];
-  const projectScopes =
-    userId && orgId
-      ? await readProjectsForUser(userId, orgId).catch(() => [])
-      : [];
-  // Active org's teams + name for the access-combobox shape.
-  const activeOrg = orgs.find((o) => o.id === orgId) ?? orgs[0];
-  const viewerTeams = activeOrg?.teams ?? [];
 
   // Owner short-circuit drives canEdit.
   const canEdit = isAdmin || project.ownerId === userId;
@@ -155,48 +128,13 @@ export default async function ProjectPermissionsPage({ params }: Props) {
   const accessResult = await listProjectAccessAction(project.id);
   if (accessResult.ok) projectAccessRows = accessResult.items;
 
-  // Translate the row's (ownerLevel, ownerId) into the canonical access
-  // expression the combobox understands.
-  const initialAccess = ((): string => {
-    if (ownerLevel === "user") return "owner";
-    if (ownerLevel === "team") return `team:${project.ownerId}`;
-    if (ownerLevel === "organization") return `org:${project.ownerId}`;
-    if (ownerLevel === "workspace") return "workspace";
-    return "owner";
-  })();
-
-  // Selection hydration (cinatra#1508 / #1509 §4.1, codex F5): `viewerTeams`
-  // only carries the VIEWER's memberships, so a team referenced by the
-  // project's stored access state would render as "Unknown team" for
-  // non-members. Resolve names server-side for exactly that CLOSED,
-  // server-derived id set (access expression + project_access rows — never a
-  // client-supplied id), bounded by the PROJECT's own org. The viewer already
-  // passed `project.read` above, so naming a team that is already attached to
-  // this project's access state inside its own org discloses nothing new. Ids
-  // failing the org check (or deleted teams) stay unresolved and keep the
-  // explicit "Unknown team" fallback. Defensive catch: a Better Auth outage
-  // degrades to the unhydrated view rather than 500ing the page.
-  const accessStateTeamIds = collectAccessStateTeamIds(
-    initialAccess,
-    projectAccessRows,
-  );
-  const unresolvedTeamIds = accessStateTeamIds.filter(
-    (id) => !viewerTeams.some((t) => t.id === id),
-  );
-  // An org-less project has no boundary to resolve within — skip and keep the
-  // "Unknown team" fallback (fail closed, never widen the lookup).
-  const projectOrgId = project.organizationId;
-  const resolvedAccessTeams =
-    unresolvedTeamIds.length > 0 && projectOrgId
-      ? await readTeamsByIdsForOrg(unresolvedTeamIds, projectOrgId).catch(() => [])
-      : [];
-
-  const availableScopes: AvailableScopes = {
-    teams: mergeResolvedTeams(viewerTeams, resolvedAccessTeams),
-    projects: projectScopes,
-    orgName: activeOrg?.name ?? "",
-    workspaceExposed: isAdmin,
-  };
+  // Guest rows are ADMIN-ONLY (guest emails are never shown to read-only
+  // members): loaded only under canEdit — listGuestRows re-asserts
+  // server-side — and degraded to empty on failure like the grants above.
+  let guestRows: GuestRow[] = [];
+  if (canEdit) {
+    guestRows = await listGuestRows(project.id).catch(() => []);
+  }
 
   return (
     <Main className="min-h-screen">
@@ -218,13 +156,12 @@ export default async function ProjectPermissionsPage({ params }: Props) {
           activeOrgId={orgId}
           projectId={project.id}
           projectName={project.name}
-          initialAccess={initialAccess}
           canEdit={canEdit}
-          availableScopes={availableScopes}
           resourceOwner={owner}
           coOwners={coOwnerViews}
           currentUserId={userId}
           projectAccessRows={projectAccessRows}
+          guestRows={guestRows}
         />
       </PageContent>
     </Main>

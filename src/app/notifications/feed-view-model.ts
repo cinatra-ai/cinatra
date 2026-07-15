@@ -25,8 +25,9 @@ import type { AppNotification } from "@cinatra-ai/notifications/types";
 import type { RowEligibility } from "@/app/configuration/approvals/sources/types";
 import {
   AGENT_SOURCE_ID,
+  PROMOTION_SOURCE_ID,
   WORKFLOW_SOURCE_ID,
-} from "@/app/configuration/approvals/resolve-active-view";
+} from "@/app/configuration/approvals/sources/source-ids";
 import {
   collapseByJobId,
   getInProgressItems,
@@ -63,6 +64,7 @@ export type ApprovalDecideKind =
   | "agent"
   | "host-port"
   | "dynamic-type"
+  | "promotion"
   | "marketplace-moderate"
   | "none";
 
@@ -118,6 +120,12 @@ export function approvalDecideKind(sourceId: string): ApprovalDecideKind {
       return "host-port";
     case DYNAMIC_TYPE_VISIBILITY_SOURCE_ID:
       return "dynamic-type";
+    case PROMOTION_SOURCE_ID:
+      // One shared source for every row-scope promotion flow (#1560); an inbox
+      // row's subject type rides its id — the generic promotion decide affordance
+      // forwards the CAS `version` so the subject backend's edit-after-view guard
+      // holds across memory (#1381) / artifact (#1437) / … alike.
+      return "promotion";
     case MARKETPLACE_SUBMISSION_MODERATION_SOURCE_ID:
     case MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID:
       return "marketplace-moderate";

@@ -1,12 +1,22 @@
 /**
  * `/projects/[projectId]/permissions` route must:
  *   - 404-hide when actor lacks `project.read`
- *   - render ScopeBadge + AccessCombobox + ProjectSharingPanel when allowed
+ *   - render ScopeBadge + ProjectSharingPanel + the Project access grants
+ *     section when allowed (the retired Access section is removed —
+ *     cinatra#1509, Open Decision 3 = Remove)
  *   - wrap content in Main / PageHeader / PageContent
  */
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
+
+// guest-actions imports @/lib/auth (top-level-await better-auth boot) — that
+// module is always mocked in the vitest sandbox, so mock the actions surface.
+vi.mock("../guest-actions", () => ({
+  inviteGuestByEmailAction: async () => ({ ok: false, error: "unknown" }),
+  revokeGuestAction: async () => ({ ok: false }),
+  listGuestRows: async () => [],
+}));
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: vi.fn(),
@@ -53,7 +63,7 @@ describe("permissions page RSC", () => {
     ).rejects.toThrow(/NEXT_NOT_FOUND/);
   });
 
-  it("renders ScopeBadge + AccessCombobox + ProjectSharingPanel inside Main/PageHeader/PageContent when allowed", async () => {
+  it("renders ScopeBadge + ProjectSharingPanel + grants section (no retired Access section) when allowed", async () => {
     const { default: PermissionsPage } = await import("../page");
 
     const { requireAuthSession } = await import("@/lib/auth-session");
@@ -74,7 +84,8 @@ describe("permissions page RSC", () => {
     expect(html).toMatch(/<main/);
     expect(html).toMatch(/Demo project/);
     expect(html).toMatch(/data-testid="scope-badge"/);
-    expect(html).toMatch(/data-testid="access-combobox"/);
+    expect(html).not.toMatch(/data-testid="access-combobox"/);
     expect(html).toMatch(/data-testid="project-sharing-panel"/);
+    expect(html).toMatch(/data-testid="project-access-section"/);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Path-gated Playwright config for the notifications flyout UAT.
+ * Path-gated Playwright config for the notifications bell UAT.
  *
  * Mirrors the shape of the dashboards suite config — port 3100
  * by default, single-worker, reuse-existing-dev-server locally. Run

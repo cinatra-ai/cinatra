@@ -46,7 +46,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { MarketplaceNotConnectedGroup } from "@/app/configuration/approvals/marketplace-group-views";
+import { MarketplaceNotConnectedGroup } from "./marketplace-not-connected-group";
 
 // Outcome → the real StatusPill status that visualises it (the manifest outcome
 // token itself is asserted on data-outcome; the pill ties it to a real
