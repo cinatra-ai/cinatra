@@ -625,27 +625,27 @@ export async function publishAgentPackageFromGitDir(
  * Distinct from `publishAgentPackageFromGitDir`: it does NOT require/compile a
  * `cinatra/oas.json` and does NOT build the agent-shaped distManifest/distPayload
  * (no agent_templates coupling). It publishes the source package dir as-is for
- * a declarative kind (workflow / artifact / skill) — reading name/version/cinatra
+ * a declarative kind (artifact / skill) — reading name/version/cinatra
  * from the dir's package.json, carrying the `cinatra` block through to the
  * distribution manifest, and reusing the same tarball-from-dir + npm-registry
  * PUT path. Connector (code-bearing) kinds are NOT accepted — they are gated on
  * SDK-P0 (#162). The same last-resort credential sibling-scan as the agent path
  * runs before any tarball is built.
  */
-const DECLARATIVE_PUBLISHABLE_KINDS = new Set(["workflow", "artifact", "skill"]);
+const DECLARATIVE_PUBLISHABLE_KINDS = new Set(["artifact", "skill"]);
 
 export async function publishExtensionPackageFromDir(
   input: {
     packageDir: string;
     /** The declarative kind being published. Must match the dir's package.json#cinatra.kind. */
-    kind: "workflow" | "artifact" | "skill";
+    kind: "artifact" | "skill";
   },
   config?: VerdaccioConfig,
 ): Promise<PublishAgentPackageResult> {
   const resolvedConfig = ensureConfig(config, "publishExtensionPackageFromDir");
   if (!DECLARATIVE_PUBLISHABLE_KINDS.has(input.kind)) {
     throw new Error(
-      `publishExtensionPackageFromDir only publishes declarative kinds (workflow|artifact|skill); got "${input.kind}".`,
+      `publishExtensionPackageFromDir only publishes declarative kinds (artifact|skill); got "${input.kind}".`,
     );
   }
 
@@ -693,9 +693,9 @@ export async function publishExtensionPackageFromDir(
     typeof pkgJson.license === "string" && pkgJson.license.trim().length > 0 ? pkgJson.license : undefined;
 
   // Distribution manifest carries the declarative `cinatra` block through
-  // verbatim (kind + apiVersion are authoritative; workflowVersion/dependencies
-  // pass through) so the registry manifest reader reports the correct kind and
-  // the marketplace `?tab=<kind>` filter includes the package.
+  // verbatim (kind + apiVersion are authoritative; additive fields such as
+  // dependencies pass through) so the registry manifest reader reports the
+  // correct kind and the marketplace `?tab=<kind>` filter includes the package.
   const distManifest: Record<string, unknown> = {
     name: packageName,
     version: packageVersion,

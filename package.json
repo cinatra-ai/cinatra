@@ -226,7 +226,6 @@
     "test:e2e:agents-run": "playwright test -c tests/e2e/config/agents-run.config.ts",
     "test:e2e:notifications": "playwright test -c tests/e2e/config/notifications.config.ts",
     "test:e2e:rbac": "playwright test -c tests/e2e/config/rbac.config.ts",
-    "test:e2e:workflows": "playwright test -c tests/e2e/config/workflows.config.ts",
     "test:e2e:wp-drupal": "playwright test -c tests/e2e/config/wp-drupal-uat.config.ts",
     "test:e2e:design": "playwright test -c tests/e2e/config/design.config.ts",
     "test:e2e:design:update": "playwright test -c tests/e2e/config/design.config.ts --update-snapshots",
@@ -239,8 +238,8 @@
     "design:tokens:write": "node scripts/design/snapshot-tokens.mjs --write"
   },
   "dependencies": {
-    "@better-auth/oauth-provider": "^1.6.19",
-    "@better-auth/passkey": "^1.6.19",
+    "@better-auth/oauth-provider": "^1.6.23",
+    "@better-auth/passkey": "^1.6.23",
     "@cfworker/json-schema": "^4.1.1",
     "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/connectors": "workspace:*",
@@ -289,7 +288,7 @@
     "@sentry/opentelemetry": "^10.58.0",
     "@tanstack/react-query": "^5.101.0",
     "@trpc/server": "^11.17.0",
-    "better-auth": "^1.6.19",
+    "better-auth": "^1.6.23",
     "bpmn-moddle": "10.0.0",
     "bullmq": "^5.80.1",
     "cheerio": "^1.2.0",

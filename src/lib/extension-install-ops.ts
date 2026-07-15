@@ -447,6 +447,29 @@ export async function failInstallOp(
 }
 
 /**
+ * Journal-unwind an orphaned (crash-abandoned) install op at boot: mark it
+ * `failed` then `rolled_back` so it is no longer unfinalized and can never be
+ * mistaken for an in-flight install. Best-effort + idempotent — a transient DB
+ * error is logged, never thrown (the boot sweep must not crash boot). The
+ * kind-specific data rollback each install path owned lives in that path (the
+ * general pipeline's materialized artifacts are GC'd by the store reaper); this
+ * is the shared journal-side compensation the boot sweep applies to every
+ * unfinalized op. (Re-homed from the removed workflow install saga, minus its
+ * workflow-only dashboard archival — #1035.)
+ */
+export async function compensateOrphanInstallOp(
+  op: { installOpId: string; packageName: string },
+  deps?: InstallOpsDeps,
+): Promise<void> {
+  try {
+    await failInstallOp(op.installOpId, deps);
+    await advanceInstallOpPhase({ installOpId: op.installOpId, phase: "rolled_back" }, deps);
+  } catch (e) {
+    console.error(`[install-ops] boot-cleanup (journal unwind) failed for ${op.packageName}:`, e);
+  }
+}
+
+/**
  * Read the ANCHOR install-op for a (package, org), or null (cinatra#158). The
  * trust gate (`resolveInstallAnchor`) + the `isUpdate` detection in the install
  * pipeline/saga + the batch ledger consume this. With the append-only journal it

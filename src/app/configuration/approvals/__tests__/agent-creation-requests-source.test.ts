@@ -1,5 +1,5 @@
 /**
- * Behaviour + authorization proof for the two v1 ApprovalSource adapters.
+ * Behaviour + authorization proof for the agent-creation-requests ApprovalSource adapter.
  *
  * Agent-creation-requests source:
  *  - NON-ADMIN Inbox performs NO admin fetch and returns an empty ready
@@ -15,9 +15,6 @@
  *  - "Your requests" default window = in-flight + last-30-days decided, with a
  *    whitelisted ?status= history filter;
  *  - appliesTo gates direction WITHOUT a privileged fetch.
- *
- * Workflow legacy passthrough: Inbox-only; a Mine fetch is an empty ready
- * envelope; a decide call is a benign refusal (decided from the workflow page).
  *
  * The store / admin-count / connector-config / decision-helper dependencies are
  * mocked so the adapters are exercised with no DB. AgentDecisionActions is
@@ -67,15 +64,10 @@ vi.mock("../agent-decision-actions", () => ({
 vi.mock("@cinatra-ai/agents/mcp-handlers", () => ({
   createAgentBuilderPrimitiveHandlers: () => ({}),
 }));
-vi.mock("@cinatra-ai/workflows/store", () => ({
-  listPendingApprovalsForOrg: vi.fn(async () => []),
-  countPendingWorkflowApprovalsForOrg: vi.fn(async () => 0),
-}));
 
 import { listAgentCreationRequests } from "@/lib/agent-creation-requests-store";
 import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
 import { agentCreationRequestsSource } from "../sources/agent-creation-requests";
-import { workflowLegacyPassthroughSource } from "../sources/workflow-legacy-passthrough";
 import type { ApprovalRow, ApprovalViewer, Direction } from "../sources/types";
 
 const admin: ApprovalViewer = { userId: "u-admin", orgId: "org-1", isAdmin: true };
@@ -426,25 +418,5 @@ describe("agentCreationRequestsSource.counts", () => {
       inbox: 1,
       mine: 2,
     });
-  });
-});
-
-describe("workflowLegacyPassthroughSource", () => {
-  it("is Inbox-only (no v1 'Your requests' view)", () => {
-    expect(workflowLegacyPassthroughSource.appliesTo(member, "inbox")).toBe(true);
-    expect(workflowLegacyPassthroughSource.appliesTo(admin, "mine")).toBe(false);
-  });
-
-  it("fetchMine is an empty ready envelope", async () => {
-    const env = await workflowLegacyPassthroughSource.fetchMine(admin);
-    expect(env).toMatchObject({ availability: "ready", rows: [], actions: [] });
-  });
-
-  it("decide is a benign refusal (decided from the workflow page)", async () => {
-    const r = await workflowLegacyPassthroughSource.actions.decide(
-      { rowId: "x", action: "approve" },
-      admin,
-    );
-    expect(r).toMatchObject({ ok: false, kind: "refused", code: "not_supported" });
   });
 });

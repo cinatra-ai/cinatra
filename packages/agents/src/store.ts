@@ -197,12 +197,10 @@ export type AgentRunRecord = {
   // write inside the run inherits `objects.project_id = projectId`
   // (substrate-excluded types stay NULL).
   projectId: string | null;
-  // idempotent agent-task dispatch provenance. NULL for every
-  // run not created by the release-workflows engine. Surfaced so the engine's
-  // agent_task executor can verify the child run it polls is the one it spawned.
+  // idempotent child-run dispatch key. NULL for every run not created via an
+  // idempotent dispatch. Surfaced so a dispatcher can verify the child run it
+  // polls is the one it spawned.
   idempotencyKey: string | null;
-  workflowId: string | null;
-  workflowTaskId: string | null;
   // Persisted agent-run OBO scope-ceiling chain, derived at run creation from the
   // locked template anchor + org + project launch. NULL for a corrupt anchor
   // (fails closed at mint) or a pre-backfill row. Parsed from the JSON-as-text
@@ -295,15 +293,12 @@ export type CreateAgentRunInput = {
   //  • Registry server action (`runFromRegistry`): NULL (out-of-project
   //    server-action invocation).
   projectId?: string | null;
-  // idempotent agent-task dispatch (additive; all optional).
-  // When the release-workflows engine dispatches an agent_task it passes a
-  // run-scoped idempotencyKey (`${workflowId}:${taskId}:${attemptNo}`) plus the
-  // workflow/task provenance. A retried at-least-once dispatch with the same key
-  // resolves to the SAME child run via the partial-unique index rather than
-  // spawning a duplicate. Omitted by every legacy caller → behavior unchanged.
+  // idempotent child-run dispatch (additive; optional).
+  // When a dispatcher spawns a child run it passes a run-scoped idempotencyKey.
+  // A retried at-least-once dispatch with the same key resolves to the SAME
+  // child run via the partial-unique index rather than spawning a duplicate.
+  // Omitted by every top-level caller → behavior unchanged.
   idempotencyKey?: string;
-  workflowId?: string;
-  workflowTaskId?: string;
   // delegated execution-actor snapshot.
   // JSON-serializable identity captured at instantiate. The run-worker
   // replays it at re-authz time. Optional — legacy callers (test fixtures,
@@ -1359,11 +1354,9 @@ export async function createAgentRun(
     // run-worker entry can read `run.projectId` and set the inheritance
     // frame before any artifact/object write.
     projectId: input.projectId ?? null,
-    // idempotent agent-task dispatch provenance (nullable;
-    // only the release-workflows engine populates these).
+    // idempotent child-run dispatch key (nullable; only an idempotent
+    // dispatcher populates it).
     idempotencyKey: input.idempotencyKey ?? null,
-    workflowId: input.workflowId ?? null,
-    workflowTaskId: input.workflowTaskId ?? null,
     // delegated execution-actor snapshot.
     // Persist whatever the caller supplied; the run-worker reads this at
     // re-authz time to reconstruct the originating user's authority.
@@ -1380,9 +1373,9 @@ export async function createAgentRun(
     return deserializeRun(row);
   }
 
-  // race-safe idempotent insert. The reconciler dispatches
-  // agent_task work at-least-once (BullMQ retries + crash recovery), so the
-  // SAME (workflowId:taskId:attemptNo) key can arrive on two concurrent
+  // race-safe idempotent insert. A dispatcher may dispatch child work
+  // at-least-once (BullMQ retries + crash recovery), so the SAME idempotency
+  // key can arrive on two concurrent
   // workers. The partial-unique index `agent_runs_idempotency_key_uniq`
   // guarantees one child run per key; the loser of the race catches the unique
   // violation (pg 23505), re-reads, and verifies provenance before returning
@@ -1404,14 +1397,12 @@ export async function createAgentRun(
     // Violation on a different constraint (e.g. the primary-key `id`) — there is
     // no matching idempotency row to return, so re-surface the original error.
     if (!existing) throw insertErr;
-    // Provenance invariants: the existing run MUST belong to the same tenant,
-    // template, and workflow task. A mismatch means the key was reused across
-    // unrelated runs — fail closed rather than return someone else's run.
+    // Provenance invariants: the existing run MUST belong to the same tenant
+    // and template. A mismatch means the key was reused across unrelated runs —
+    // fail closed rather than return someone else's run.
     if (
       existing.orgId !== input.orgId ||
-      existing.templateId !== input.templateId ||
-      existing.workflowId !== (input.workflowId ?? null) ||
-      existing.workflowTaskId !== (input.workflowTaskId ?? null)
+      existing.templateId !== input.templateId
     ) {
       throw new Error(
         `[createAgentRun] idempotency key collision with mismatched provenance ` +

@@ -1,5 +1,7 @@
 // Canonical extension manifest types.
 //
+import type { ExtensionKind as DependencyEdgeKind } from "@cinatra-ai/sdk-extensions/dependencies";
+//
 // The single source of truth for "what extension is installed and from where".
 // One canonical row per (org, owner, package) carries status instead of
 // per-kind shadow status columns (agent_templates / skill_packages /
@@ -152,10 +154,10 @@ export type ExtensionDependency = {
   packageName: string;
   // The depended-on extension's kind, so `dependencies` carries cross-kind edges
   // without a separate lookup. Optional for backward compatibility with rows
-  // persisted before this field existed. Structurally mirrors the SDK draft
-  // contract (`@cinatra-ai/sdk-extensions` `dependencies.ts`); the two unify at
-  // the ABI freeze with the SDK as the single owner.
-  kind?: ExtensionKind;
+  // persisted before this field existed. The dependency-edge kind is owned by
+  // the SDK draft contract (`@cinatra-ai/sdk-extensions` `dependencies.ts`) so
+  // the two dependency shapes stay assignable across the ABI boundary.
+  kind?: DependencyEdgeKind;
   edgeType: DependencyEdgeType;
   versionConstraint: VersionConstraint;
   requirement: DependencyRequirement;

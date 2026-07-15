@@ -1,0 +1,22 @@
+{
+  "seq": "0048",
+  "file": "core/core__0048_drop-workflow-tables.mjs",
+  "summary": "Drop the workflow subsystem from existing databases (epic #1035, Slice D; folded into the Slice C producer-stop PR #1617 per the schema-migration gate's atomicity requirement). Slice C stripped the fresh-schema DDL in drizzle-store.ts so fresh installs are born without it; this migration removes it from upgraded deployments, where CREATE TABLE IF NOT EXISTS / an already-added CHECK are no-ops. Clean break (epic mandate — drop, not zombie; owner-approved): (1) DELETE workflow-kind rows from extension_co_owners / extension_access_policy (polymorphic resource_id, no FK) and installed_extension (no inbound FK) so the narrowed CHECKs validate; (2) narrow installed_extension_kind_chk and both extension-grant resource_kind CHECKs (*_kind_check_v3) to the four surviving kinds (agent|connector|artifact|skill / drop 'workflow'), matching the post-strip bootstrap shape; (3) drop agent_runs.workflow_id + workflow_task_id and the agent_runs_workflow_id_idx index (nullable text, no FK; idempotency keeps the generic idempotency_key, provenance is org_id+template_id); (4) drop the 10 workflow tables in reverse FK order with CASCADE (self-contained cluster; no external references). Every statement is guarded/idempotent; runs in the runner's default single transaction. down() is irreversible by design (one-shot clean-break; roll back by reverting Slice C/D + restoring from backup).",
+  "destructive": true,
+  "tables": [
+    "workflow_template",
+    "workflow",
+    "workflow_task",
+    "workflow_dependency",
+    "workflow_gate",
+    "workflow_event",
+    "workflow_task_attempt",
+    "workflow_dispatch_lease",
+    "workflow_artifact",
+    "workflow_approval",
+    "agent_runs",
+    "installed_extension",
+    "extension_co_owners",
+    "extension_access_policy"
+  ]
+}

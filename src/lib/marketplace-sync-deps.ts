@@ -167,7 +167,7 @@ export async function buildMarketplaceSyncDeps(input: {
     },
     getPackageSource: async (packageName) => {
       // Kind-agnostic extraction. `getAgentPackage` would throw for
-      // skill/connector/artifact/workflow packages (no agent.json
+      // skill/connector/artifact packages (no agent.json
       // payload), silently dropping them from the catalog. Use the
       // kind-agnostic pair instead:
       //   - getPublishedExtensionSummary: packument fetch, returns the

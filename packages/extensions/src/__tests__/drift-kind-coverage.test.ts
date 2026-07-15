@@ -36,9 +36,13 @@ describe("kind-coverage invariants", () => {
       skill: "createSkillExtensionHandler",
       connector: "createConnectorExtensionHandler",
       artifact: "createArtifactExtensionHandler",
-      workflow: "createWorkflowExtensionHandler",
     };
     for (const kind of REQUIRED_KINDS) {
+      // #1035 Slice C removed the kind:"workflow" host handler together with the
+      // workflow extension kind. The "workflow" literal is still carried in
+      // canonical-types until the in-app consumer narrowing (Slice E), so in this
+      // transitional window it has NO handler-bootstrap factory.
+      if (kind === "workflow") continue;
       const factory = expected[kind];
       expect(
         src,

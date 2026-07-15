@@ -185,39 +185,6 @@ describe("isDelegatedChatMcpToolAllowed", () => {
     }
   });
 
-  // Release workflow proposal-only and read tools are chat-invocable.
-  it("allows the release-workflow proposal-only + read tools", () => {
-    for (const name of [
-      "workflow_template_list",
-      "workflow_template_instantiate",
-      "workflow_draft_create", // proposal override (carries 'create')
-      "workflow_draft_update", // proposal override (carries 'update')
-      "workflow_draft_get",
-      "workflow_draft_list",
-      "workflow_validate",
-      "workflow_preview",
-      "workflow_status_get",
-      "workflow_status_list",
-      "workflow_cascade_preview",
-      "workflow_copy",
-      "workflow_save_as_template",
-    ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
-    }
-  });
-
-  it("denies release-workflow lifecycle tools (start/approve/reject are workflow-page/human-only)", () => {
-    for (const name of [
-      "workflow_start",
-      "workflow_approve",
-      "workflow_reject",
-      "workflow_cancel",
-      "workflow_delete",
-    ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
-    }
-  });
-
   it("denies the unified approvals_* tools — a decision stays on the rendered approval surface, never a chat auto-approve (#1048)", () => {
     // `approvals_decide` is denied by the `decide` verb TOKEN (same rationale as
     // stop/resume: a prompt-injected chat must never render a binding approval);

@@ -18,6 +18,9 @@ const h = vi.hoisted(() => ({
   transaction: vi.fn(),
   setActiveOrganization: vi.fn(async () => ({})),
   headers: vi.fn(async () => new Headers()),
+  // Default TRUE: the provisioned world (cinatra#1566) — the creator's
+  // membership insert carries role='admin'. The degrade case flips it.
+  teamMemberRoleColumnExists: vi.fn(async () => true),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -27,6 +30,7 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: { transaction: h.transaction },
   readTeamCreatableOrganizationsForUser: h.readTeamCreatableOrganizationsForUser,
+  teamMemberRoleColumnExists: h.teamMemberRoleColumnExists,
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -51,7 +55,35 @@ const OTHER_ORG = "org-other";
 
 /** A tx.execute() stub whose INSERT ... RETURNING returns `rows`. */
 function txWithRows(rows: Array<{ id: string }>) {
-  return { execute: vi.fn(async () => ({ rows })) };
+  return { execute: vi.fn(async (_sql: unknown) => ({ rows })) };
+}
+
+/** Concatenated static text of a recorded drizzle `sql` tree (best-effort —
+ *  the team-member-actions walker; drizzle SQL objects are cyclic and
+ *  symbol-keyed, so JSON.stringify would throw). */
+function sqlText(root: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<object>();
+  const walk = (node: unknown): void => {
+    if (typeof node === "string") {
+      parts.push(node);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    if (seen.has(node as object)) return;
+    seen.add(node as object);
+    for (const key of Reflect.ownKeys(node as object)) {
+      let value: unknown;
+      try {
+        value = (node as Record<PropertyKey, unknown>)[key];
+      } catch {
+        continue;
+      }
+      walk(value);
+    }
+  };
+  walk(root);
+  return parts.join(" ");
 }
 
 /** Run the action and return the redirect destination it unwound to. */
@@ -86,6 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.setActiveOrganization.mockResolvedValue({});
   h.headers.mockResolvedValue(new Headers());
+  h.teamMemberRoleColumnExists.mockImplementation(async () => true);
   // Both orgs are in the caller's creatable (owner/admin) set.
   h.readTeamCreatableOrganizationsForUser.mockResolvedValue([
     { id: ACTIVE_ORG, name: "Active", slug: "active" },
@@ -155,6 +188,34 @@ describe("createTeamAction active-org destination guard", () => {
 
     expect(dest).toBe("/not-authorized");
     expect(h.setActiveOrganization).not.toHaveBeenCalled();
+  });
+
+  it("inserts the creator's membership with role='admin' when the role column is provisioned (#1566)", async () => {
+    mockSession(ACTIVE_ORG);
+    const tx = txWithRows([{ id: "team-1" }]);
+    h.transaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
+
+    await runAndCaptureRedirect(formFor(ACTIVE_ORG));
+
+    // 2 statements: the team insert, then the creator membership insert.
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+    const memberInsert = sqlText(tx.execute.mock.calls[1]?.[0]);
+    expect(memberInsert).toContain('"role"');
+    expect(memberInsert).toContain("'admin'");
+  });
+
+  it("falls back to the roleless membership insert when the role column is absent (degrade; the migration backfill promotes the creator later)", async () => {
+    mockSession(ACTIVE_ORG);
+    h.teamMemberRoleColumnExists.mockImplementation(async () => false);
+    const tx = txWithRows([{ id: "team-1" }]);
+    h.transaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
+
+    await runAndCaptureRedirect(formFor(ACTIVE_ORG));
+
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+    const memberInsert = sqlText(tx.execute.mock.calls[1]?.[0]);
+    expect(memberInsert).not.toContain('"role"');
+    expect(memberInsert).not.toContain("'admin'");
   });
 
   it("fails visibly when the switch rejects post-create (no silent /teams redirect)", async () => {

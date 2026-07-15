@@ -397,7 +397,7 @@ export function normalizeDetailChangelog(raw: unknown): MarketplaceDetailChangel
   return out;
 }
 
-const DETAIL_DEPENDENCY_KIND_SLUGS = new Set(["agent", "skill", "connector", "artifact", "workflow"]);
+const DETAIL_DEPENDENCY_KIND_SLUGS = new Set(["agent", "skill", "connector", "artifact"]);
 
 /**
  * Project the wire `dependencies` field (`cinatra.dependencies` — NEVER the

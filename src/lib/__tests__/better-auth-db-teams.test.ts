@@ -12,17 +12,24 @@ describe("better-auth team helpers", () => {
     expect(names).toEqual(["createdAt", "id", "name", "organizationId", "slug", "updatedAt"]);
   });
 
-  it("exports betterAuthTeamMembers with EXACTLY id, teamId, userId, createdAt - no organizationId, no role", async () => {
-    // Pitfall 1 mitigation: live psql confirmed teamMember has only these four
-    // columns. Adding organizationId or role to the Drizzle table here would
-    // not fail at compile time but would throw at first query.
+  it("exports betterAuthTeamMembers with EXACTLY id, teamId, userId, createdAt, role - no organizationId", async () => {
+    // Pitfall 1 mitigation: adding a column to the Drizzle table that does
+    // not exist in the live DB would not fail at compile time but would throw
+    // at first query. `role` is the app-owned column provisioned by
+    // `scripts/better-auth-migrate.mts` (cinatra#1566); it may be ABSENT on
+    // not-yet-migrated deployments, so every query that selects it must be
+    // guarded by `teamMemberRoleColumnExists()`.
     const mod = await import("@/lib/better-auth-db");
     const { getTableColumns } = await import("drizzle-orm");
     const cols = getTableColumns(mod.betterAuthTeamMembers);
     const names = Object.keys(cols).sort();
-    expect(names).toEqual(["createdAt", "id", "teamId", "userId"]);
+    expect(names).toEqual(["createdAt", "id", "role", "teamId", "userId"]);
     expect(names).not.toContain("organizationId");
-    expect(names).not.toContain("role");
+  });
+
+  it("exports the teamMemberRoleColumnExists guard for the app-owned role column", async () => {
+    const mod = await import("@/lib/better-auth-db");
+    expect(typeof mod.teamMemberRoleColumnExists).toBe("function");
   });
 
   it("exports readTeamsForUser as an async function with arity 2", async () => {

@@ -46,6 +46,6 @@ describe("portlet component parity (cinatra#660)", () => {
   });
 
   it("the COMPONENT_MAP is non-trivial (regex actually matched keys)", () => {
-    expect(componentMapKeysFromSource().size).toBeGreaterThanOrEqual(9);
+    expect(componentMapKeysFromSource().size).toBeGreaterThanOrEqual(7);
   });
 });

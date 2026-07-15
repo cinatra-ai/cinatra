@@ -45,11 +45,20 @@ function AlertDialogOverlay({
 
 function AlertDialogContent({
   className,
+  showOverlay = true,
   ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
+}: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
+  /**
+   * Render the dimming backdrop inside the content portal. Defaults to `true`:
+   * alert dialogs are always modal (destructive confirmations block the flow),
+   * so the backdrop is on by default and matches `DialogContent`. The opt-out
+   * exists only for API symmetry with `DialogContent`.
+   */
+  showOverlay?: boolean
+}) {
   return (
     <AlertDialogPortal>
-      <AlertDialogOverlay />
+      {showOverlay && <AlertDialogOverlay />}
       <AlertDialogPrimitive.Content
         data-slot='alert-dialog-content'
         className={cn(

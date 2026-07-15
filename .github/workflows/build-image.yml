@@ -506,88 +506,19 @@ jobs:
     needs: detect
     if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    services:
-      postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-      SUPABASE_SCHEMA: cinatra
+    # TRANSITIONAL STUB (cinatra 1035 Slice C): the @cinatra-ai/workflows package
+    # (the release-workflows BPMN engine + its unit/integration suite) was deleted
+    # with the workflow extension kind, so there is no suite left to run. This
+    # REQUIRED check is kept green as a stub so the package removal lands without a
+    # branch-protection change; the job + its required-context are fully retired
+    # in Slice F. The BPMN CI gate itself was retired with the workflow engine in
+    # this PR (#1035 Slice C).
+    timeout-minutes: 5
     steps:
-      - name: Guard — detect must have succeeded
-        if: ${{ needs.detect.result != 'success' }}
+      - name: Release workflows suite retired (package removed in cinatra 1035 Slice C)
         run: |
-          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
-          exit 1
+          echo "@cinatra-ai/workflows was removed in cinatra 1035 Slice C; the release-workflows test suite is retired. Full job + required-check removal lands in Slice F."
 
-      - name: Docs-only stub
-        if: ${{ needs.detect.outputs.skip == 'true' }}
-        run: echo "Docs-only or draft PR — reporting Release workflows tests as a green stub (the real suite runs on code/mixed PRs)."
-
-      - if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up pnpm
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - name: Set up Node.js
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '24'
-          cache: 'pnpm'
-
-      - name: Clone companion extension repos
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: ./.github/actions/clone-extensions
-
-      - name: Install dependencies
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: pnpm install --frozen-lockfile
-
-      - name: Unit tests (102 specs)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: cd packages/workflows && pnpm test
-
-      - name: Provision Better Auth tables (public schema)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        # The cinatra schema's DDL contains cross-schema FKs to `public.user`
-        # (Better-Auth-owned), e.g. skill_package_co_owners.user_id. The
-        # integration tests apply the cinatra DDL in beforeAll, but that DDL
-        # fails on a fresh CI Postgres ("relation public.user does not exist")
-        # unless the Better Auth public schema is provisioned first — same
-        # pattern as the e2e jobs.
-        run: node scripts/apply-public-schema.mjs
-
-      - name: Integration tests (73 specs)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        # The release-workflows integration suite applies the cinatra schema's
-        # DDL in beforeAll against the service-container Postgres (public.* is
-        # already provisioned by the step above).
-        run: cd packages/workflows && pnpm test:integration
-
-  # Extension-anchor lifecycle DB tests (cinatra#7, required-set shrink).
-  # Runs the DB-gated lifecycle invariant suites against a real Postgres
-  # service container: the upgraded-existing-DB demotion proof (the fixture
-  # seeds activation metadata BEFORE migrations/core/core__0004 and asserts
-  # byte-level preservation + idempotency) and the fresh-prod-setup proof
-  # (the REAL anchor seeder over an image-shaped record set creates anchors
-  # for ONLY the declared required set, locked, never touching stale optional
-  # rows). The suites self-skip without a real SUPABASE_DB_URL, so the
-  # CINATRA_DB_INTEGRATION_TESTS flag alone can never go green vacuously —
-  # the service container makes them REAL here.
   extension-lifecycle-db-tests:
     name: Extension-anchor lifecycle DB tests
     needs: detect
@@ -1281,7 +1212,6 @@ jobs:
           src/components/__tests__/schema-config-connector-form.test.tsx
           src/lib/__tests__/extension-install-ops.test.ts
           src/lib/__tests__/extension-install-resolution.test.ts
-          src/lib/__tests__/extension-workflow-install-saga.test.ts
           src/lib/__tests__/connector-runtime-ui-resolve.test.ts
           src/lib/__tests__/connector-setup-pages-parity.test.ts
           src/lib/__tests__/connector-ui-render.test.ts
@@ -1300,7 +1230,6 @@ jobs:
       - name: Runtime installer package-scoped unit tests
         run: |
           cd packages/objects && pnpm exec vitest run src/__tests__/registry-package-provenance.test.ts --no-coverage && cd ../..
-          cd packages/workflows && pnpm exec vitest run src/__tests__/workflow-archive-in-use-guard.test.ts --no-coverage && cd ../..
           cd packages/dashboards && pnpm exec vitest run src/extension/__tests__/cube-guard.test.ts --no-coverage && cd ../..
           cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts tests/registry-auth-options.test.ts tests/registry-auth.integration.test.ts --no-coverage && cd ../..
           cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
@@ -1443,15 +1372,6 @@ jobs:
         env:
           JOBS_DASHBOARD_DIFF_BASE: ${{ steps.base.outputs.base }}
         run: node scripts/audit/configuration-jobs-dashboard-banned.mjs
-
-      # Cinatra BPMN Profile 1.0 install gate. Every kind:"workflow" extension
-      # must ship exactly one canonical cinatra/workflow.bpmn (no inline JSON
-      # definition), declare an integer cinatra.workflowVersion, and that
-      # sidecar must parse + validate against Profile 1.0 + compile to a
-      # lossless WorkflowSpec. Run under tsx so the gate can import the
-      # TypeScript BPMN substrate source directly.
-      - name: Workflow BPMN Profile 1.0 gate
-        run: node --import tsx scripts/audit/workflow-bpmn-gate.mjs
 
       # Design packages pack smoke.
       # Runs `pnpm pack` on @cinatra-ai/design + @cinatra-ai/sdk-ui and
@@ -1798,214 +1718,21 @@ jobs:
     name: Workflows browser e2e
     needs: detect
     if: ${{ always() }}
-    # Opt-in larger-runner lever (see `e2e-rbac` above for the full rationale):
-    # CI_BUILD_RUNNER || ubuntu-latest. Zero-risk no-op until the variable is set.
-    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
-    # Mirrors `e2e-rbac` above. The release-workflows browser suite seeds a
-    # paused, attempt-bearing workflow via pg (no LLM/connector keys) and walks
-    # the index + detail pages. Always-on package gates remain the 100+ unit and
-    # 73 integration tests run in `test`; this is the representative end-to-end
-    # arm. The architectural reasons for the shape of this job (prod build,
-    # standalone server, public-schema seed, setup-bypass) are documented on
-    # the RBAC job — kept identical here so the two stay in sync.
-    timeout-minutes: 45
-    services:
-      postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-      SUPABASE_SCHEMA: cinatra
-      REDIS_URL: redis://127.0.0.1:6379
-      BETTER_AUTH_SECRET: workflows-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxxxxxxxxxx
-      BETTER_AUTH_URL: http://localhost:3000
-      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
-      NEXT_PUBLIC_SITE_URL: http://localhost:3000
-      OPENAI_API_KEY: sk-test-placeholder
-      CINATRA_RUNTIME_MODE: development
-      A2A_DEV_BYPASS: "true"
-      CINATRA_E2E_SETUP_BYPASS: "true"
+    runs-on: ubuntu-latest
+    # TRANSITIONAL STUB (#1035 Slice C): the /workflows management route and its
+    # backing tables were removed together with the workflow extension kind, so
+    # the release-workflows browser suite no longer has a surface to exercise.
+    # This REQUIRED check is kept green as a stub so the route/table removal does
+    # not need a branch-protection change to land; the job, its
+    # `.github/gate-suite.json` requiredContext, the mirror in
+    # scripts/ci/merge-group-coverage-guard.mjs, and the branch-protection
+    # required_status_check are fully retired in #1035 Slice F. The BPMN CI gate
+    # itself was retired with the workflow engine in this PR (#1035 Slice C).
+    timeout-minutes: 5
     steps:
-      - name: Guard — detect must have succeeded
-        if: ${{ needs.detect.result != 'success' }}
+      - name: Workflows e2e retired (route removed in cinatra 1035 Slice C)
         run: |
-          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
-          exit 1
-
-      - name: Docs-only stub
-        if: ${{ needs.detect.outputs.skip == 'true' }}
-        run: echo "Docs-only or draft PR — reporting Workflows browser e2e as a green stub (the real suite runs on code/mixed PRs)."
-
-      - if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up pnpm
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - name: Set up Node.js
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '24'
-          cache: 'pnpm'
-
-      - name: Clone companion extension repos
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: ./.github/actions/clone-extensions
-
-      - name: Install dependencies
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: pnpm install --frozen-lockfile
-
-      # Cache the Playwright browser download (~175 MiB chromium + ffmpeg +
-      # headless-shell). Pinned to the @playwright/test version via the
-      # lockfile hash so a version bump invalidates the cache. Saves
-      # 30-90s per e2e job when warm.
-      - name: Cache Playwright browsers
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: playwright-${{ runner.os }}-
-
-      - name: Install Playwright Chromium
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: pnpm exec playwright install --with-deps chromium
-
-      # Reuse Next.js's incremental build cache across runs. Keyed by
-      # lockfile + next.config.ts (so a config bump invalidates) and primed
-      # by the most-recent matching restore-key. Saves 1-3 min on `pnpm build`
-      # when warm.
-      - name: Cache Next.js build cache
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .next/cache
-          key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
-          restore-keys: |
-            nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-
-            nextjs-prod-${{ runner.os }}-
-
-      - name: Provision Better Auth tables (public schema)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: node scripts/apply-public-schema.mjs
-
-      - name: Add CI build swap (default-runner only)
-        # Best-effort 4G swap on the default ubuntu-latest path only (see the
-        # RBAC e2e job above for the full rationale). Skipped on a larger
-        # CI_BUILD_RUNNER; a swap-setup failure never fails the build.
-        if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
-        run: |
-          set -uxo pipefail
-          SWAPFILE=/swapfile-ci-build
-          # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
-          # if/else makes it best-effort — any failure exits the step 0 with a warning.
-          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
-            && sudo chmod 600 "$SWAPFILE" \
-            && sudo mkswap "$SWAPFILE" \
-            && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
-          else
-            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
-          fi
-
-      - name: Build app (production)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        # Step-level cap (see the RBAC e2e build step above): catch a memory-thrash
-        # HANG instead of eating the 45-min job cap. Bumped 15 -> 20 (a healthy
-        # cold-CI build now runs ~10-15 min; the 15-min cap FALSE-cancelled
-        # legitimately-slow builds on contended runners — the observed e2e flake).
-        timeout-minutes: 20
-        env:
-          # ~3GB worker heap — 4096 over-committed this 7GB runner with sidecars
-          # (swap-thrash → hang); see the RBAC e2e build step for the rationale.
-          NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
-
-      - name: Start production server on port 3000
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: |
-          cp -r .next/static .next/standalone/.next/static
-          [ -d public ] && cp -r public .next/standalone/public || true
-          (cd .next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js > /tmp/dev.log 2>&1) &
-          echo "prod server launched as PID $!"
-
-      - name: Wait for server ready (prod boot + DB schema provisioning)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: |
-          for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
-            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
-            sleep 5
-          done
-          echo "::error::server did not become ready in 5 min"
-          tail -200 /tmp/dev.log
-          exit 1
-
-      - name: Run Workflows Playwright e2e
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        id: e2e
-        env:
-          E2E_BASE_URL: http://localhost:3000
-          E2E_PORT: "3000"
-          E2E_REUSE_SERVER: "1"
-        run: |
-          set +e
-          timeout --kill-after=60 780 pnpm test:e2e:workflows
-          code=$?
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          echo "playwright exited with ${code}"
-          exit 0
-
-      - name: Upload Playwright report
-        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: workflows-playwright-report
-          path: |
-            playwright-report
-            test-results
-          retention-days: 7
-
-      - name: Upload dev server log
-        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: workflows-dev-server-log
-          path: /tmp/dev.log
-          retention-days: 7
-
-      - name: Assert Workflows e2e passed
-        if: ${{ needs.detect.outputs.skip != 'true' }}
-        run: |
-          code="${{ steps.e2e.outputs.code }}"
-          if [ "$code" != "0" ]; then
-            echo "::error::Workflows e2e failed or timed out (exit ${code})"
-            exit 1
-          fi
-          echo "Workflows e2e passed"
+          echo "The /workflows surface was removed in cinatra 1035 Slice C; this browser e2e is retired. Full job + required-check removal lands in Slice F."
 
   build:
     # Gate the image build on the test job so a failing typecheck or unit-test

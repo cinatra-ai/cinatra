@@ -166,22 +166,6 @@ const ALLOWED_EXACT = new Set<string>([
   "dashboards_cube_validate",
   "dashboards_cube_load",
   "dashboards_cube_chart",
-  // Workflow proposal-only authoring + read.
-  // The two mutating-verb tools (draft_create/_update) are in
-  // ALLOWED_PROPOSAL_OVERRIDE below (they carry create/update tokens). These
-  // are the no-verb-token reads + non-destructive proposal tools. NONE of
-  // start/approve/reject are listed (deny-by-default keeps them unreachable).
-  "workflow_template_list",
-  "workflow_template_instantiate",
-  "workflow_draft_get",
-  "workflow_draft_list",
-  "workflow_validate",
-  "workflow_preview",
-  "workflow_status_get",
-  "workflow_status_list",
-  "workflow_cascade_preview",
-  "workflow_copy",
-  "workflow_save_as_template",
 ]);
 
 // Explicit proposal-only OVERRIDE: vetted draft-authoring tools
@@ -195,13 +179,10 @@ const ALLOWED_EXACT = new Set<string>([
 // check asserts the relationship; removing
 // a name here without removing the matching CarveOut (or vice-versa) fails CI.
 const ALLOWED_PROPOSAL_OVERRIDE = new Set<string>([
-  "workflow_draft_create",
-  "workflow_draft_update",
   // Dashboard authoring from chat — handler enforces actor + canWrite + config
   // validation + audit row in one transaction (mutation-service.ts:154-214).
-  // An enterprise-intelligence-platform
-  // chat should be able to author analytics views in addition to workflow
-  // drafts. Publish/archive stay denied (the publish/archive verb tokens have
+  // An enterprise-intelligence-platform chat should be able to author analytics
+  // views. Publish/archive stay denied (the publish/archive verb tokens have
   // no CarveOut → caught by DENIED_VERB_TOKENS below).
   "dashboards_create",
   "dashboards_update",

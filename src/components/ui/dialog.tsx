@@ -49,12 +49,23 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  showOverlay = true,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /**
+   * Render the dimming backdrop inside the content portal. Defaults to `true`
+   * so every modal dialog gets a consistent backdrop without the caller having
+   * to remember to add one (matching `SheetContent` and `AlertDialogContent`,
+   * which render their overlay by default). Pass `showOverlay={false}` for the
+   * rare non-modal case that manages its own scrim (e.g. `AppDialog`, which
+   * uses `modal={false}` plus a bespoke content-area-only overlay).
+   */
+  showOverlay?: boolean
 }) {
   return (
     <DialogPortal>
+      {showOverlay && <DialogOverlay />}
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

@@ -1022,7 +1022,6 @@ const HOST_RESERVED_PACKAGES: ReadonlySet<string> = new Set([
   "@cinatra-ai/trigger",
   "@cinatra-ai/trigger-email-send",
   "@cinatra-ai/webhooks",
-  "@cinatra-ai/workflows",
 ]);
 
 function isNfc(s: string): boolean {

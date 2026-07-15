@@ -8,6 +8,12 @@
 export async function readTeamsForUser(
   _userId: string,
   _orgId: string,
-): Promise<Array<{ id: string; name: string }>> {
+): Promise<Array<{ id: string; name: string; role?: "admin" | "member" | null }>> {
   return [];
+}
+
+/** cinatra#1566 — the app-owned `teamMember.role` column guard. Default
+ *  `false` = the un-provisioned degrade (roleless membership). */
+export async function teamMemberRoleColumnExists(): Promise<boolean> {
+  return false;
 }

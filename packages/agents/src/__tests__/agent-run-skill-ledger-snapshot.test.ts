@@ -118,8 +118,6 @@ function makeRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     orgId: "org-test",
     projectId: null,
     idempotencyKey: null,
-    workflowId: null,
-    workflowTaskId: null,
     oboCeiling: null,
     dependentInstallId: null,
     ...overrides,

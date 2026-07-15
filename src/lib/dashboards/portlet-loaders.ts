@@ -11,11 +11,10 @@ import { listObjectsByFilter, getObjectById, type ObjectRecord } from "@/lib/obj
 import { listArtifacts, getArtifact } from "@/lib/artifacts/artifact-service";
 import { isPreviewInlineMime } from "@/lib/artifacts/artifact-read";
 import { listEventsForObject } from "@/lib/object-history/eligibility";
-import { readWorkflow, listWorkflows } from "@cinatra-ai/workflows/store";
 import { readBlogPostsProjectById } from "@/lib/blog/store";
 import { isBackgroundJobActive } from "@/lib/background-jobs";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
-import { resolvePortletAuthz, objectResourceCheck, canReadObject, type PortletAuthz } from "@/lib/dashboards/portlet-authz";
+import { resolvePortletAuthz, objectResourceCheck, canReadObject } from "@/lib/dashboards/portlet-authz";
 import {
   BINARY_GENERATION_PRIMITIVE_PAIRS,
   BINARY_GENERATION_STATUS_MESSAGES,
@@ -140,75 +139,6 @@ export async function loadObjectVersionHistoryPortlet(args: {
       actorKind: e.actorKind,
       fieldValue: refOf(e.afterSnapshot),
     }));
-}
-
-// ---------------------------------------------------------------------------
-// Workflow-status — read-only status summary. single mode (workflowId)
-// returns the workflow + its tasks; list mode (projectId) returns the project's
-// workflows. Scope: org match REQUIRED; project-scoped rows require the actor to
-// hold a project read grant (or org_owner/org_admin), never broadened.
-// ---------------------------------------------------------------------------
-function canReadWorkflowScope(row: { orgId: string; projectId: string | null }, authz: PortletAuthz): boolean {
-  if (!authz.orgId || row.orgId !== authz.orgId) return false;
-  if (!row.projectId) return true;
-  const role = authz.roleHints?.orgRole;
-  if (role === "org_owner" || role === "org_admin") return true;
-  const grants = authz.actorContext?.projectGrants ?? [];
-  const projectIds = authz.actorContext?.projectIds ?? [];
-  return grants.some((g) => g.projectId === row.projectId) || projectIds.includes(row.projectId);
-}
-
-export type PortletWorkflowTask = {
-  key: string;
-  title: string;
-  status: string;
-  plannedStartUtc: string | null;
-  plannedEndUtc: string | null;
-  actualStartUtc: string | null;
-  actualEndUtc: string | null;
-};
-export type PortletWorkflowSingle = {
-  mode: "single";
-  workflowId: string;
-  name: string;
-  status: string;
-  tasks: PortletWorkflowTask[];
-};
-export type PortletWorkflowSummary = { workflowId: string; name: string; status: string };
-export type PortletWorkflowList = { mode: "list"; workflows: PortletWorkflowSummary[] };
-
-export async function loadWorkflowStatusSingle(args: { workflowId: string }): Promise<PortletWorkflowSingle | null> {
-  const authz = await resolvePortletAuthz();
-  if (!authz.orgId) return null;
-  const res = await readWorkflow(args.workflowId);
-  if (!res) return null;
-  if (!canReadWorkflowScope({ orgId: res.workflow.orgId, projectId: res.workflow.projectId }, authz)) return null;
-  return {
-    mode: "single",
-    workflowId: res.workflow.id,
-    name: res.workflow.name,
-    status: res.workflow.status,
-    tasks: res.tasks.map((t) => ({
-      key: t.key,
-      title: t.title,
-      status: t.status,
-      plannedStartUtc: t.plannedStartUtc?.toISOString() ?? null,
-      plannedEndUtc: t.plannedEndUtc?.toISOString() ?? null,
-      actualStartUtc: t.actualStartUtc?.toISOString() ?? null,
-      actualEndUtc: t.actualEndUtc?.toISOString() ?? null,
-    })),
-  };
-}
-
-export async function loadWorkflowStatusList(args: { projectId: string }): Promise<PortletWorkflowList> {
-  const authz = await resolvePortletAuthz();
-  if (!authz.orgId) return { mode: "list", workflows: [] };
-  // Verify project read access first — never broaden to the whole org.
-  if (!canReadWorkflowScope({ orgId: authz.orgId, projectId: args.projectId }, authz)) {
-    return { mode: "list", workflows: [] };
-  }
-  const rows = await listWorkflows({ orgId: authz.orgId, projectId: args.projectId });
-  return { mode: "list", workflows: rows.map((w) => ({ workflowId: w.id, name: w.name, status: w.status })) };
 }
 
 // ---------------------------------------------------------------------------

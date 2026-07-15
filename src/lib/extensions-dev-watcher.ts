@@ -106,11 +106,11 @@ type LoadResult = {
   agentChanged: boolean;
   /** What kind the package dir resolved to. `unknown` = no oas.json and
    *  no recognizable `cinatra.kind` in package.json. */
-  kind: "agent" | "skill" | "connector" | "artifact" | "workflow" | "unknown";
+  kind: "agent" | "skill" | "connector" | "artifact" | "unknown";
   /** Number of SKILL.md entries registered (skill kind only). */
   skillsRegistered: number;
   pkgDirName: string;
-  // Populated for skill/connector/artifact/workflow kinds (after
+  // Populated for skill/connector/artifact kinds (after
   // package.json is parsed) so the boot scan can log per-package lines at
   // parity with the per-agent
   // `[cinatra:extensions:agent] @cinatra-ai/<name> v<version>` lines. Also
@@ -119,7 +119,7 @@ type LoadResult = {
   // undefined on the pre-parse `unknown` returns (no package.json, or
   // unparseable JSON — no name available). All extension-load logs share
   // the unified `[cinatra:extensions:<kind>]` scheme (kind-specific:
-  // agent|skill|connector|artifact|workflow|unknown) for kind-bound lines,
+  // agent|skill|connector|artifact|unknown) for kind-bound lines,
   // flat `[cinatra:extensions]` for scan/watcher/generic lines; this is a
   // log-string-only convention (zero behavior change). Agent kind keeps
   // its own internal ensureAgentPackageFromGitFile log (now
@@ -370,24 +370,6 @@ async function loadOnePackage(
     };
   }
 
-  // --- workflow kind: declarative marketplace template. Like the
-  //     connector kind, there is no scanner-side install step here —
-  //     workflow templates are handled by the workflow marketplace
-  //     install path (`installWorkflowTemplate` in
-  //     `packages/workflows/src/extension-ops.ts`). Identify it
-  //     explicitly so the watcher logs a truthful "no-op, install via
-  //     marketplace" line instead of falling through to "unknown".
-  if (pkgJson.cinatra?.kind === "workflow") {
-    return {
-      agentChanged: false,
-      kind: "workflow",
-      skillsRegistered: 0,
-      pkgDirName,
-      packageName: pkgJson.name,
-      packageVersion: pkgJson.version,
-    };
-  }
-
   // --- skill kind: package.json cinatra.kind === "skill" → register each
   //     skills/<slug>/SKILL.md into the catalog.
   if (pkgJson.cinatra?.kind !== "skill")
@@ -463,7 +445,6 @@ export async function loadAllExtensionPackages(
   let skillsRegistered = 0;
   let connectorPkgs = 0;
   let artifactPkgs = 0;
-  let workflowPkgs = 0;
   for (const vendorEntry of vendorEntries) {
     if (!vendorEntry.isDirectory()) continue;
     if (vendorEntry.name === "node_modules" || vendorEntry.name.startsWith("."))
@@ -515,13 +496,6 @@ export async function loadAllExtensionPackages(
             `object-registry bridge; ${res.skillsRegistered} co-located ` +
             `SKILL.md registered)`,
         );
-      } else if (res.kind === "workflow") {
-        workflowPkgs += 1;
-        console.info(
-          `[cinatra:extensions:workflow] ${res.packageName ?? res.pkgDirName} ` +
-            `v${res.packageVersion ?? "?"} — workflow template (handled by the ` +
-            `workflow marketplace install path / installWorkflowTemplate, not by this scan)`,
-        );
         // Safety net: unknown-kind packages are logged so mis-declared
         // packages are visible. packageName/packageVersion may be undefined
         // when no package.json exists — the ?? fallbacks handle that.
@@ -541,9 +515,7 @@ export async function loadAllExtensionPackages(
       `bridge; their co-located auditor-pattern skill bundles registered ` +
       `into the catalog); ${connectorPkgs} connector ` +
       `package(s) present (workspace-compiled — wired by ` +
-      `register-host-connector-services at boot, not by this scan); ` +
-      `${workflowPkgs} workflow template(s) present (handled by the ` +
-      `workflow marketplace install path / installWorkflowTemplate, not by this scan).`,
+      `register-host-connector-services at boot, not by this scan).`,
   );
 
   // Surface a dev-boot diagnostic when an app-root declared vendoredSkillBundle's
@@ -681,11 +653,6 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
             console.info(
               `[cinatra:extensions:artifact] ${vendorSlug} changed (artifact type — ` +
                 `object-registry bridge re-ran; ${n} artifact type(s) registered)`,
-            );
-          } else if (res.kind === "workflow") {
-            console.info(
-              `[cinatra:extensions:workflow] ${vendorSlug} changed (workflow template — ` +
-                `handled by the workflow marketplace install path / installWorkflowTemplate, no live reload)`,
             );
           } else {
             console.info(

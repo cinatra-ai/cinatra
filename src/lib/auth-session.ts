@@ -219,12 +219,42 @@ export async function buildCanDoOptsFromSession(
 
 import { buildActorContext } from "@/lib/authz/enforce";
 import type { ActorContext, ProjectGrant } from "@/lib/authz/actor-context";
-import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db";
+import {
+  readTeamsForUser,
+  readProjectGrantsForUser,
+  type TeamMembershipRow,
+} from "@/lib/better-auth-db";
+
+/**
+ * Map the DB-vocabulary team memberships (`role: 'admin' | 'member'`) to the
+ * kernel's `teamRoles` axis (`'team_admin' | 'member'`) — the read-boundary
+ * translation for the app-owned `teamMember.role` column (cinatra#1566).
+ *
+ * Returns `undefined` when NO row carried a role field — i.e. the column is
+ * not provisioned on this deployment — preserving the kernel's
+ * "undefined means not resolved" degrade (a team-owned implicit grant then
+ * stays `{read, team}`, exactly the pre-#1566 behavior). Built on property
+ * PRESENCE, not truthiness: a `null` role (out-of-vocabulary value) resolves
+ * to 'member' — never over-grants.
+ */
+function toKernelTeamRoles(
+  teams: TeamMembershipRow[],
+): Record<string, "team_admin" | "member"> | undefined {
+  let resolved = false;
+  const map: Record<string, "team_admin" | "member"> = {};
+  for (const team of teams) {
+    if (team.role === undefined) continue;
+    resolved = true;
+    map[team.id] = team.role === "admin" ? "team_admin" : "member";
+  }
+  return resolved ? map : undefined;
+}
 
 /**
  * Resolve the canonical project grants AND the caller's active-organization
- * team memberships for a session, in a SINGLE team read, threaded into
- * `buildActorContext` via `opts.projectGrants` + `opts.teamIds`.
+ * team memberships (+ per-team roles) for a session, in a SINGLE team read,
+ * threaded into `buildActorContext` via `opts.projectGrants` + `opts.teamIds`
+ * + `opts.teamRoles`.
  *
  * Project resolution in the session lineage gives chat actions / skills pages
  * via `requireActorContext` project visibility. Existing callers that ignore
@@ -239,9 +269,11 @@ import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db
  *    match in `requireResourceAccess` (#1486; fences #1416 AC7). The SAME
  *    `readTeamsForUser` result feeds both — a session actor resolution
  *    performs exactly ONE team read, no duplicate query.
- *  - `teamRoles` — NOT resolvable: `public."teamMember"` has no `role`
- *    column (Better Auth team plugin stores no per-team role; verified in
- *    better-auth-db.ts:93). Missing teamRoles degrade a team-owned implicit
+ *  - `teamRoles` — via the SAME `readTeamsForUser` read: the app-owned
+ *    `teamMember.role` column (cinatra#1566) rides the single team query and
+ *    is mapped to kernel vocabulary by `toKernelTeamRoles`. On a deployment
+ *    where the column is not provisioned yet the rows carry no role and
+ *    `teamRoles` stays `undefined`, which degrades a team-owned implicit
  *    grant to `{read, team}` — safe (never over-grants) and preserves the
  *    binary projectIds back-compat (the project still appears in projectGrants
  *    → projectIds).
@@ -259,7 +291,11 @@ import { readTeamsForUser, readProjectGrantsForUser } from "@/lib/better-auth-db
  */
 async function resolveSessionGrantsAndTeams(
   session: { user?: { id?: string | null } | null; session?: { activeOrganizationId?: string | null } | null },
-): Promise<{ projectGrants: ProjectGrant[]; teamIds: string[] }> {
+): Promise<{
+  projectGrants: ProjectGrant[];
+  teamIds: string[];
+  teamRoles?: Record<string, "team_admin" | "member">;
+}> {
   const userId = session.user?.id ?? null;
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!userId || !orgId) return { projectGrants: [], teamIds: [] };
@@ -268,11 +304,17 @@ async function resolveSessionGrantsAndTeams(
   );
   const teams = await readTeamsForUser(userId, orgId);
   const teamIds = teams.map((t) => t.id);
+  const teamRoles = toKernelTeamRoles(teams);
   const projectGrants = await readProjectGrantsForUser(userId, orgId, {
     teamIds,
+    ...(teamRoles ? { teamRoles } : {}),
     ...(orgRole ? { orgRole } : {}),
   });
-  return { projectGrants, teamIds };
+  return {
+    projectGrants,
+    teamIds,
+    ...(teamRoles ? { teamRoles } : {}),
+  };
 }
 
 /**
@@ -283,9 +325,11 @@ export async function getActorContext(): Promise<ActorContext | undefined> {
   const session = await getAuthSession();
   if (!session) return undefined;
   const orgRole = await resolveOrgRoleForSession(session);
-  const { projectGrants, teamIds } = await resolveSessionGrantsAndTeams(session);
+  const { projectGrants, teamIds, teamRoles } =
+    await resolveSessionGrantsAndTeams(session);
   return buildActorContext(session, {
     teamIds,
+    ...(teamRoles ? { teamRoles } : {}),
     ...(orgRole ? { orgRole } : {}),
     projectGrants,
   });
@@ -298,9 +342,11 @@ export async function getActorContext(): Promise<ActorContext | undefined> {
 export async function requireActorContext(): Promise<ActorContext> {
   const session = await requireAuthSession();
   const orgRole = await resolveOrgRoleForSession(session);
-  const { projectGrants, teamIds } = await resolveSessionGrantsAndTeams(session);
+  const { projectGrants, teamIds, teamRoles } =
+    await resolveSessionGrantsAndTeams(session);
   return buildActorContext(session, {
     teamIds,
+    ...(teamRoles ? { teamRoles } : {}),
     ...(orgRole ? { orgRole } : {}),
     projectGrants,
   });
@@ -398,10 +444,15 @@ export async function resolveUserContextForUserId(
   // self-anchored owner clauses). The caller of resolveUserContextForUserId
   // is responsible for supplying an authoritative active org.
   let projectGrants: ProjectGrant[] = [];
+  let teamRoles: Record<string, "team_admin" | "member"> | undefined;
   if (activeOrganizationId) {
     const teams = await readTeamsForUser(userId, activeOrganizationId);
+    // Same read-boundary mapping as the cookie session path — without it,
+    // MCP/Bearer-authenticated humans would never surface as team admins.
+    teamRoles = toKernelTeamRoles(teams);
     projectGrants = await readProjectGrantsForUser(userId, activeOrganizationId, {
       teamIds: teams.map((t) => t.id),
+      ...(teamRoles ? { teamRoles } : {}),
       ...(orgRole ? { orgRole } : {}),
     });
   } else {
@@ -414,6 +465,7 @@ export async function resolveUserContextForUserId(
   }
 
   const actorContext = buildActorContext(syntheticSession, {
+    ...(teamRoles ? { teamRoles } : {}),
     ...(orgRole ? { orgRole } : {}),
     projectGrants,
   });

@@ -120,8 +120,6 @@ function makeRun(
     projectId: null,
     // Idempotent agent-task dispatch provenance (null = not a workflow run).
     idempotencyKey: null,
-    workflowId: null,
-    workflowTaskId: null,
     oboCeiling: null,
     dependentInstallId: null,
   };

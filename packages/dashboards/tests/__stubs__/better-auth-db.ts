@@ -8,3 +8,9 @@
 export async function listAccessibleOrgIdsForUser(_userId: string): Promise<string[]> {
   return [];
 }
+
+/** cinatra#1566 — the app-owned `teamMember.role` column guard. Default
+ *  `false` = the un-provisioned degrade (roleless membership). */
+export async function teamMemberRoleColumnExists(): Promise<boolean> {
+  return false;
+}

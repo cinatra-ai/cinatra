@@ -26,8 +26,6 @@ import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogTrigger,
-  DialogPortal,
-  DialogOverlay,
   DialogContent,
   DialogClose,
   DialogTitle,
@@ -345,11 +343,9 @@ export function MarketplaceDetailModal({
           )}
         </DialogTrigger>
       )}
-      {/* Overlay stops below the navbar (top-16). Portalled so it escapes any
-          transformed card ancestor and dims the whole viewport below the nav. */}
-      <DialogPortal>
-        <DialogOverlay />
-      </DialogPortal>
+      {/* Backdrop comes from DialogContent's default overlay (portalled to
+          body, so it escapes any transformed card ancestor and dims the whole
+          viewport below the top-16 navbar). */}
       <DialogContent
         showCloseButton={false}
         // The hero renders the visible title; a screen-reader title is always

@@ -1165,7 +1165,7 @@ describe("installExtensionFromRegistry — dependency edges become real (#180)",
     edgeType: "runtime" | "install-time" | "peer";
     versionConstraint: { kind: "semver-range"; range: string };
     requirement: "required" | "optional";
-    kind?: "agent" | "connector" | "artifact" | "skill" | "workflow";
+    kind?: "agent" | "connector" | "artifact" | "skill";
   };
   const EDGES: Edge[] = [
     {
