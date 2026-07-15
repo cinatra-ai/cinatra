@@ -179,7 +179,7 @@ jobs:
       # `router.replace("/setup")` on every authenticated route after
       # hydration. This env var is the documented browser-e2e affordance
       # at `src/lib/setup-wizard.ts`; also set by `build-image.yml`'s
-      # RBAC + Workflows e2e jobs.
+      # RBAC browser e2e job.
       CINATRA_E2E_SETUP_BYPASS: "true"
       # Dev-mode boot: this smoke runs a STANDALONE repo build (`pnpm build` +
       # `node server.js`), NOT the Docker image, so it never bakes the

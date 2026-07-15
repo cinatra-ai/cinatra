@@ -38,7 +38,6 @@ describe("ProjectSubnav", () => {
     trigger(html, `/projects/${PROJECT_ID}`, "Overview");
     trigger(html, `/projects/${PROJECT_ID}/permissions`, "Permissions");
     trigger(html, `/projects/${PROJECT_ID}/agents`, "Agents");
-    trigger(html, `/projects/${PROJECT_ID}/customers`, "Customers");
   });
 
   it("marks exactly the active section active, for every section", () => {

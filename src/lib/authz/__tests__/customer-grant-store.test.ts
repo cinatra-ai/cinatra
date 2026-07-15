@@ -19,8 +19,18 @@ const selectWhere = vi.fn();
 const selectFrom = vi.fn(() => ({ where: selectWhere }));
 const selectMock = vi.fn(() => ({ from: selectFrom }));
 
+// grant/revoke run inside ONE transaction (cinatra#1501: the same-org trigger
+// must see the backing role_grant; no orphan on partial failure) — the mock tx
+// exposes the same statement surface.
+const dbShape = {
+  insert: insertMock,
+  execute: executeMock,
+  delete: deleteMock,
+  select: selectMock,
+  transaction: (cb: (tx: unknown) => Promise<unknown>) => cb(dbShape),
+};
 vi.mock("drizzle-orm/node-postgres", () => ({
-  drizzle: () => ({ insert: insertMock, execute: executeMock, delete: deleteMock, select: selectMock }),
+  drizzle: () => dbShape,
 }));
 vi.mock("pg", () => ({ Pool: class {} }));
 

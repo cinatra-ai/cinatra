@@ -15,7 +15,7 @@
 // checkout — the generated-artifact drift battery + static audit gates. It does
 // NOT run the DB-tier suites, the browser e2e, or the operator-upgrade proof:
 // those need Postgres/Redis/Docker and are owned by the push-event `build-image`
-// CI (test:root, RBAC/workflows e2e, schema-migration gate, node --test gates)
+// CI (test:root, RBAC e2e, schema-migration gate, node --test gates)
 // and by `scripts/ci/upgrade-proof.sh` (closeout W3, cinatra#74). The summary
 // names those out-of-scope batteries so a reader knows where the rest lives.
 //
