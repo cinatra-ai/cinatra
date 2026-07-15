@@ -92,6 +92,18 @@ export { createAgentsPrimitiveHandlers, createAgentBuilderPrimitiveHandlers } fr
 export { registerAgentBuilderPrimitives } from "./mcp/registry";
 export { sanitizePackageNameToToolName, setLiveAgentManifestProvider } from "./mcp/agent-tools-registry";
 export type { LiveAgentManifestProvider } from "./mcp/agent-tools-registry";
+// Run human-wait notifier seam (cinatra #1559 / notifications epic E9). The host
+// injects the durable-notification write path via `setRunWaitNotifier`;
+// `transitionRunStatus` drives it on every human-gate enter/leave.
+export {
+  setRunWaitNotifier,
+  classifyRunWaitTransition,
+} from "./run-wait-notifier";
+export type {
+  RunWaitNotifier,
+  RunHumanWaitReason,
+  RunWaitClassification,
+} from "./run-wait-notifier";
 export {
   runAgentBuilderExecutionJob,
   assertOrchestratorReady,

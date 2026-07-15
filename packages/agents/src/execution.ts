@@ -1294,8 +1294,14 @@ async function runAgentBuilderExecutionJobInner(
       // the run for human input instead of failing it. The message surfaces which
       // optional sub-agents are missing; a human installs them and resumes via the
       // existing pending_input → queued path (which re-runs this gate, now green).
+      //
+      // This is the ONE `pending_input` reason that is a GENUINE human wait, so
+      // it is flagged `humanWaitGate: true` — the run-wait notifier (cinatra
+      // #1559 / E9) mints a durable actionable notification for it. Every other
+      // `pending_input` reason leaves the flag unset and does NOT notify.
       await transitionRunStatus(runId, "queued", "pending_input", {
         error: err.message,
+        humanWaitGate: true,
       });
       return;
     }

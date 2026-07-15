@@ -4,16 +4,16 @@ import { Queue, Worker, type JobsOptions, type Job } from "bullmq";
 import IORedis from "ioredis";
 import { readMetadataValueFromDatabase, writeMetadataValueToDatabase } from "@/lib/database";
 import type { ActorContext } from "@/lib/authz/actor-context";
-// Side-effect import registers the notifications host adapters before the
-// first @cinatra-ai/notifications/server use on the
-// worker path (the BullMQ worker is eagerly started from
-// src/instrumentation.node.ts:361 -> this module; the :1062/:1114 dynamic
-// /server imports reach the writers and import NEITHER the facade NOR the
-// stream route). This is a permitted top-level @/lib host import: it pulls
-// ONLY the TRUE-LEAF @cinatra-ai/notifications/host-adapters (zero deps, no
-// server graph, no @/lib/auth) — the PACKAGE server helpers stay behind the
-// existing dynamic await import("@cinatra-ai/notifications/server") calls.
+// Side-effect import registers the notifications host adapters before the first
+// @cinatra-ai/notifications/server use on the worker path (the BullMQ worker is
+// eagerly started from src/instrumentation.node.ts:361 -> this module; the
+// :1062/:1114 dynamic /server imports reach the writers and import NEITHER the
+// facade NOR the stream route). Permitted top-level @/lib host import: pulls ONLY
+// the TRUE-LEAF @cinatra-ai/notifications/host-adapters (zero deps, no server
+// graph, no @/lib/auth); the PACKAGE server helpers stay behind dynamic imports.
 import "@/lib/notifications-host";
+// Wire the run human-wait notifier seam (cinatra #1559 / E9); idempotent with the same import in src/instrumentation.node.ts.
+import "@/lib/register-run-wait-notifier";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
 import { dispatchRegisteredJob } from "@/lib/background-jobs-registry";
 
