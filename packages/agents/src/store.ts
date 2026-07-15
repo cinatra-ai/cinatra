@@ -16,10 +16,7 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
-// Run human-wait notification lifecycle seam (cinatra #1559 / E9). Runtime
-// edge store → run-wait-notifier only; run-wait-notifier's `AgentRunStatus`
-// import is type-only (erased) so there is no runtime cycle.
-import { dispatchRunWaitTransition } from "./run-wait-notifier";
+import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   agentTemplates,
@@ -1681,15 +1678,7 @@ export async function transitionRunStatus(
     startedAt?: Date;
     completedAt?: Date;
     stepResults?: unknown[];
-    /**
-     * Marks a `→pending_input` transition as a GENUINE human-wait gate (the
-     * stop-run-hitl pause, cinatra #1058 — a human must install optional
-     * sub-agents and resume). Only that one `pending_input` reason sets this;
-     * every other `pending_input` reason (setup, trigger editing, failed-run
-     * reset, enqueue-compensation) leaves it unset so it does NOT notify. Not a
-     * DB column — `updateAgentRunStatus` whitelists patch fields and ignores it;
-     * it only feeds the run-wait-notifier classification below.
-     */
+    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. */
     humanWaitGate?: boolean;
   },
 ): Promise<void> {
@@ -1710,20 +1699,9 @@ export async function transitionRunStatus(
       await updateAgentRunStatus(runId, to, meta as Partial<AgentRunRecord> | undefined);
     }
   } finally {
-    // Run human-wait notification lifecycle (cinatra #1559 / E9). Emit-on-enter
-    // / clear-on-leave for genuine human gates, driven from this single
-    // canonical status seam. In `finally` so it STILL fires when the meta/
-    // terminal side-effect above throws — the status-column CAS already
-    // committed the new state, so the run genuinely entered/left the gate and a
-    // retry would lose the CAS (missing the emit or, worse, the terminal clear).
-    // Best-effort + host-injected: a no-op when no host wired a notifier, and a
-    // notification failure can never fail this transition.
-    await dispatchRunWaitTransition({
-      runId,
-      from,
-      to,
-      humanWaitGate: meta?.humanWaitGate === true,
-    });
+    // Run human-wait notify (#1559/E9) in `finally` so a terminal clear still fires
+    // if the side-effect above throws (status CAS already committed). Best-effort no-op.
+    await dispatchRunWaitTransition({ runId, from, to, humanWaitGate: meta?.humanWaitGate === true });
   }
 }
 
