@@ -21,6 +21,21 @@ vi.mock("@/lib/connector-access-resolver", () => ({
   resolveConnectorCanonicalAccessSync: () => ({ status: "absent" }),
 }));
 
+// Sibling to the resolver mock above: on the "absent"/legacy-fallback path
+// enforceConnectorPolicy reads the deprecated connector_access_policy table via
+// readConnectorAccessPolicy — a REAL synchronous pg worker (runPostgresQueriesSync
+// spawns a worker_thread that require()s `pg` and TCP-connects). This unit test
+// has NO DB, so stub that read to "no row" — the SAME pre-migration state the
+// resolver mock already simulates — so the assertions below exercise the pure
+// catalog-default fallback hermetically. Without it, every descriptor spawns a
+// sync pg worker; the two all-descriptor loops accumulate ~40 worker spawns and,
+// under wholesale-suite CPU contention, exceed the 30s per-test ceiling (a
+// synchronous test that blocks in Atomics.wait → "Test timed out in 30000ms").
+vi.mock("@/lib/connector-policy-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/connector-policy-store")>()),
+  readConnectorAccessPolicy: () => undefined,
+}));
+
 import { enforceConnectorPolicy } from "@/lib/connector-policy";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import { parseConnectorAccessConfig } from "@cinatra-ai/sdk-extensions/access-config";

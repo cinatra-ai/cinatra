@@ -3,9 +3,11 @@
 // ---------------------------------------------------------------------------
 // Project permissions tab client.
 //
-// Single border-line rounded-card card with the Ownership section on top and
-// the Project access (N:M grants) section below. shadcn primitives + semantic
-// tokens only — no inline palette, no parallel layout.
+// Single border-line rounded-card card with the Ownership section on top,
+// the Project access (N:M grants) section below, and — for project admins —
+// the Guests section at the bottom (cinatra#1501: external access lives HERE,
+// not on a separate tab). shadcn primitives + semantic tokens only — no
+// inline palette, no parallel layout.
 //
 // The legacy ownership-ratchet "Access" section is REMOVED (owner ratified
 // Open Decision 3 = Remove, cinatra#1509): visibility is managed exclusively
@@ -58,6 +60,11 @@ import {
   withoutGrantedPrincipal,
   type GrantPrincipalLevel,
 } from "./grant-candidates";
+import {
+  inviteGuestByEmailAction,
+  revokeGuestAction,
+  type GuestRow,
+} from "./guest-actions";
 
 // ---------------------------------------------------------------------------
 // Public prop types
@@ -78,6 +85,12 @@ export type ProjectPermissionsTabClientProps = {
    * handler because the owner is implicit and never stored.
    */
   projectAccessRows: ProjectAccessRow[];
+  /**
+   * Guest (external) grants — ADMIN-ONLY data: the page loader fetches these
+   * only under canEdit (guest emails are never shown to read-only members),
+   * and the section renders only under canEdit.
+   */
+  guestRows: GuestRow[];
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +107,7 @@ export function ProjectPermissionsTabClient({
   coOwners,
   currentUserId,
   projectAccessRows,
+  guestRows,
 }: ProjectPermissionsTabClientProps) {
   // Defer mounting the ownership panel until after hydration. The panel
   // calls `useRouter()` which requires the App Router context — that
@@ -142,6 +156,9 @@ export function ProjectPermissionsTabClient({
         canEdit={canEdit}
         rows={projectAccessRows}
       />
+
+      {/* Guests (external, email-invited — cinatra#1501) ------------------- */}
+      {canEdit && <ProjectGuestsSection projectId={projectId} rows={guestRows} />}
     </div>
   );
 }
@@ -625,6 +642,190 @@ function ProjectAccessSection({ projectId, canEdit, rows }: ProjectAccessSection
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Guests section (cinatra#1501).
+//
+// External people, invited BY EMAIL, get the read-only guest grant (the authz
+// kernel's project-scoped "customer" role + a read project_access row) — they
+// are never organization members. Rendered for project admins only; the
+// invite errors mirror guest-actions' classification (an org member or an
+// already-authorized user is pointed at Project access above instead of being
+// relabeled a guest).
+// ---------------------------------------------------------------------------
+
+type ProjectGuestsSectionProps = {
+  projectId: string;
+  rows: GuestRow[];
+};
+
+const GUEST_INVITE_ERROR_COPY: Record<string, string> = {
+  "invalid-email": "Enter a valid email address.",
+  "already-member":
+    "This email belongs to an organization member — grant access in Project access above.",
+  "already-has-access":
+    "This person already has access to this project (see Project access above).",
+  "registration-closed":
+    "Registration is closed on this instance — only a platform admin can invite a new guest email.",
+  forbidden: "Project admin required.",
+  unknown: "Could not invite the guest. Please try again.",
+};
+
+function ProjectGuestsSection({ projectId, rows }: ProjectGuestsSectionProps) {
+  const [pending, startTransition] = useTransition();
+  const [email, setEmail] = useState("");
+  const [expiresAt, setExpiresAt] = useState("");
+  // Session echo (same pattern as ProjectAccessSection's sessionGrants): the
+  // server rows only refresh on navigation, so invites/revokes in THIS
+  // session are reflected locally.
+  const [sessionRows, setSessionRows] = useState<GuestRow[]>([]);
+  const [revokedIds, setRevokedIds] = useState<string[]>([]);
+  const effectiveRows = [
+    ...rows.filter((r) => !sessionRows.some((s) => s.subjectUserId === r.subjectUserId)),
+    ...sessionRows,
+  ].filter((r) => !revokedIds.includes(r.subjectUserId));
+
+  const handleInvite = () => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      toast.error("Enter the guest's email address.");
+      return;
+    }
+    startTransition(async () => {
+      const r = await inviteGuestByEmailAction(projectId, trimmed, expiresAt || null);
+      if (!r.ok) {
+        toast.error(GUEST_INVITE_ERROR_COPY[r.error] ?? GUEST_INVITE_ERROR_COPY.unknown);
+        return;
+      }
+      if (r.guest.existed) {
+        toast.success("Access granted — this email already had an account.");
+      } else if (r.resetEmailSent) {
+        toast.success("Guest invited — they'll receive an email to set their password.");
+      } else {
+        toast.warning(
+          "Guest created, but the invite email could not be sent — they can use “Forgot password” on the sign-in page.",
+        );
+      }
+      setSessionRows((prev) => [
+        ...prev.filter((s) => s.subjectUserId !== r.guest.userId),
+        {
+          subjectUserId: r.guest.userId,
+          name: r.guest.name,
+          email: r.guest.email,
+          grantedAt: new Date().toISOString(),
+          expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+        },
+      ]);
+      setRevokedIds((prev) => prev.filter((id) => id !== r.guest.userId));
+      setEmail("");
+      setExpiresAt("");
+    });
+  };
+
+  const handleRevoke = (subjectUserId: string) => {
+    startTransition(async () => {
+      const r = await revokeGuestAction(projectId, subjectUserId);
+      if (!r.ok) {
+        toast.error("Could not revoke guest access.");
+        return;
+      }
+      toast.success("Guest access revoked.");
+      setRevokedIds((prev) => [...prev, subjectUserId]);
+    });
+  };
+
+  return (
+    <div
+      data-testid="project-guests-section"
+      className="flex flex-col gap-4 border-t border-line pt-6"
+    >
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-foreground">Guests</h2>
+        <p className="text-xs text-muted-foreground">
+          Invite people outside your organization by email. Guests get read-only access to
+          this project only — they are not organization members. New guests receive an email
+          to set their password; access can be time-bounded and revoked any time.
+        </p>
+      </div>
+
+      {effectiveRows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No guests yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {effectiveRows.map((row) => (
+            <li
+              key={row.subjectUserId}
+              className="soft-panel flex items-center justify-between gap-3 px-4 py-2"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="truncate text-sm text-foreground">
+                  {row.name || row.email || row.subjectUserId}
+                </span>
+                {row.name && row.email && (
+                  <span className="truncate text-xs text-muted-foreground">{row.email}</span>
+                )}
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  since {new Date(row.grantedAt).toLocaleDateString()}
+                </span>
+                {row.expiresAt && (
+                  <Badge variant="outline">
+                    {/* Date-only expiries are stored as UTC midnight — render
+                        in UTC so the shown day never shifts across timezones. */}
+                    expires {new Date(row.expiresAt).toLocaleDateString(undefined, { timeZone: "UTC" })}
+                  </Badge>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={pending}
+                onClick={() => handleRevoke(row.subjectUserId)}
+              >
+                Revoke
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <div className="flex flex-col gap-1 sm:col-span-2">
+          <Label htmlFor="guest-email">Email</Label>
+          <Input
+            id="guest-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={pending}
+            placeholder="guest@example.com"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="guest-expiry">Expiry (optional)</Label>
+          <Input
+            id="guest-expiry"
+            type="date"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+            disabled={pending}
+          />
+        </div>
+        <div className="flex items-end justify-end sm:col-span-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={pending || !email.trim()}
+            onClick={handleInvite}
+          >
+            Invite guest
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

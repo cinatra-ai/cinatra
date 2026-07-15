@@ -1,4 +1,5 @@
 import type { ZodType } from "zod";
+import type { ArtifactUiManifest } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 // ---------------------------------------------------------------------------
 // Object categories
@@ -182,6 +183,15 @@ export type SemanticArtifactManifest = {
    * artifact extension (representation forms only) declares none.
    */
   objectTypes?: ArtifactObjectTypeClaim[];
+  /**
+   * The versioned `cinatra.artifact.ui` block (cinatra#1621, epic #1620):
+   * extension-shipped renderers for the v1 `detail`/`preview` slots. Optional;
+   * parsed FIELD-TOLERANTLY (an invalid `ui` degrades-with-diagnostic and
+   * never drops this manifest's type registration / `objectTypes` claims). The
+   * `ArtifactUiManifest` shape is SHARED from the sdk-extensions leaf so this
+   * host-side copy and the SDK's `SemanticArtifactManifest` stay identical.
+   */
+  ui?: ArtifactUiManifest;
 };
 
 /**

@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------------------
 // @cinatra-ai/notifications/client — BROWSER-SAFE barrel.
 //
-// Re-exports the pure flyout-state helpers + the `"use client"` flyout
-// component. NO `server-only` import anywhere in this graph (flyout-state.ts
-// + notifications-flyout.tsx are both browser-safe; the only types imported
-// come from ./types which is pure).
+// Re-exports the pure notification-state helpers + the `"use client"` bell
+// (badge + link, no flyout — the flyout was retired in the E8 cutover,
+// cinatra#1558) and the standalone config-needs row. NO `server-only` import
+// anywhere in this graph; the only types imported come from ./types which is
+// pure.
 // ---------------------------------------------------------------------------
 
 export {
@@ -30,10 +31,11 @@ export type {
 export {
   NotificationsProvider,
   NotificationsBellTrigger,
-  // Exported for the design-fixtures render surface (the bell config-needs row
-  // in isolation); the app itself renders it via the flyout tree.
-  ConfigurationNeedsRow,
-} from "./notifications-flyout";
+} from "./notifications-provider";
+
+// Exported for the design-fixtures render surface (the bell config-needs row in
+// isolation, `bell-config-needs-row`). Standalone since the flyout retirement.
+export { ConfigurationNeedsRow } from "./configuration-needs-row";
 
 // The shared client store the flyout consumes and the future /notifications
 // v2 page (E7) will mount against — the extracted poll/SSE/mark-read state

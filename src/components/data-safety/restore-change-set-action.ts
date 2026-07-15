@@ -1,9 +1,6 @@
 "use server";
 
-import {
-  requireAuthSession,
-  resolveOrgRoleForSession,
-} from "@/lib/auth-session";
+import { requireAuthSession } from "@/lib/auth-session";
 import {
   loadChangeSet,
   resolveExternalFreshness,
@@ -11,8 +8,11 @@ import {
   type HistoryActor,
 } from "@/lib/object-history";
 import { assertChangeSetRestoreAccess } from "@/lib/object-history/server-views";
+import {
+  isSessionEligibleForTargetedRestore,
+  resolveSessionRestoreAuthz,
+} from "@/lib/object-history/restore-eligibility";
 import { AuthzError } from "@/lib/authz/errors";
-import { actorFromSession } from "@/lib/authz/build-actor-context";
 
 // Server action: invoke change_set_undo. Mirrors the MCP handler's per-
 // object authz loop + pre-fetches external freshness. NEVER exposes a
@@ -36,10 +36,9 @@ export async function restoreChangeSetAction(input: {
   }
   // Build a PrimitiveActorContext from the session + resolve the org role
   // hint so enforceResourceAccess sees the user's full role grants.
-  // Without this, org-owned events are over-denied.
-  const primitiveActor = actorFromSession(session);
-  const orgRole = await resolveOrgRoleForSession(session);
-  const roleHints = orgRole ? { orgRole } : undefined;
+  // Without this, org-owned events are over-denied. Shared with the entry-
+  // affordance eligibility gate so both decide access with the identical actor.
+  const { primitiveActor, roleHints } = await resolveSessionRestoreAuthz(session);
   const actor: HistoryActor = {
     actorId: session.user.id,
     actorKind: "user",
@@ -85,4 +84,15 @@ export async function restoreChangeSetAction(input: {
   } catch (e) {
     return { ok: false, reason: (e as Error).message };
   }
+}
+
+// Server action for the "Saved · Undo" toast (§VI): answers whether the acting
+// user is eligible to restore `changeSetId` as a TARGETED restore, so the
+// client toast can render its Undo affordance ONLY for an eligible actor
+// (per-object-authorized, still restorable, no admin bypass). Delegates to the
+// shared gate so it can never diverge from the confirm path's authorization.
+export async function canRestoreChangeSetAction(input: {
+  changeSetId: string;
+}): Promise<{ eligible: boolean }> {
+  return { eligible: await isSessionEligibleForTargetedRestore(input.changeSetId) };
 }

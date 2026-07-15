@@ -1193,6 +1193,13 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_template_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id) WHERE extension_id IS NOT NULL AND is_template = true` },
     // One INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_instance_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id, project_id) WHERE extension_id IS NOT NULL AND project_id IS NOT NULL` },
+    // Per-entity multi-dashboard model (cinatra#700): additive columns + partial indexes only (bootstrap owns additive evolution per migrations/README.md); the transformational one-time coexistence backfill is versioned migration core__0049, which runs AFTER this bootstrap so these partial unique indexes already exist + enforce when it commits.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS entity_type text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS entity_id text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboards_entity_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE entity_type IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_default_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE is_default = true AND entity_type IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_name_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id, name) WHERE entity_type IS NOT NULL` },
     // agent_registry_entries, agent_share_bindings, agent_forks for @cinatra/agent-builder registry
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_registry_entries" (
       id text PRIMARY KEY,
@@ -2338,9 +2345,20 @@ $body$` },
           RETURN NEW;
         END IF;
         IF NEW.principal_level = 'user' THEN
+          -- Org members qualify directly. A non-member user-level READ row is
+          -- valid ONLY when backed by a live project-scoped customer grant
+          -- (the guest model, cinatra#1501: guests are never org members —
+          -- role_grant is written first, in the same transaction).
           IF NOT EXISTS (
-            SELECT 1 FROM public.member m WHERE m."userId" = NEW.principal_id AND m."organizationId" = proj_org) THEN
-            RAISE EXCEPTION 'project_access: user % is not a member of project org %', NEW.principal_id, proj_org;
+            SELECT 1 FROM public.member m WHERE m."userId" = NEW.principal_id AND m."organizationId" = proj_org)
+          AND NOT (NEW.role = 'read' AND EXISTS (
+            SELECT 1 FROM "${schemaName.replaceAll('"', '""')}"."role_grant" rg
+             WHERE rg.subject_user_id = NEW.principal_id
+               AND rg.role = 'customer'
+               AND rg.scope_level = 'project'
+               AND rg.scope_record_id = NEW.project_id
+               AND (rg.expires_at IS NULL OR rg.expires_at > now()))) THEN
+            RAISE EXCEPTION 'project_access: user % is not a member of project org % (and holds no live customer grant)', NEW.principal_id, proj_org;
           END IF;
         ELSIF NEW.principal_level = 'team' THEN
           IF NOT EXISTS (

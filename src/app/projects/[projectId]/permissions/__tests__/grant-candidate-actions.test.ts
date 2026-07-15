@@ -4,7 +4,7 @@
  * Truths locked here:
  *  - all three candidate actions are gated on the grantProjectAccessAction
  *    authority (project admin/owner via projectGrants, or platform admin —
- *    the customers/actions.ts assertProjectAdmin precedent); a non-admin gets
+ *    the guest-actions.ts assertProjectAdmin precedent); a non-admin gets
  *    `forbidden` and NO candidate data,
  *  - a missing project raises the IDENTICAL `forbidden` (no existence oracle),
  *  - the boundary is the PROJECT's organizationId, never the viewer's active

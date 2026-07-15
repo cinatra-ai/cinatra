@@ -1,6 +1,47 @@
 import type { NextConfig } from "next";
 
 // ---------------------------------------------------------------------------
+// cinatra#1506 — pin `sonner` to a single resolved module instance under
+// Turbopack.
+//
+// `sonner` keeps its live toast store in a module-level singleton that BOTH the
+// `toast()` emitter and the mounted <Toaster> subscriber must share. `sonner`
+// is a peerDependency of @cinatra-ai/sdk-ui, so pnpm materialises a
+// package-local peer symlink (packages/sdk-ui/node_modules/sonner) beside the
+// host's root node_modules/sonner. On dev machines that run several git
+// worktrees off one pnpm parent, those two symlinks can resolve to DIFFERENT
+// physical copies of sonner. Turbopack keys module identity by resolved path,
+// so it then instantiates TWO sonner modules: the sdk-ui `toast()` pushes to
+// one store while the host <Toaster> subscribes to the other, and no toast ever
+// paints — every SearchParamToast flash→toast island (host + connectors) is
+// invisible in local dev.
+//
+// Aliasing every bare `sonner` request to the single host-resolved package
+// directory collapses both import sites onto one module instance, restoring the
+// shared store. Both files that may import sonner directly (the sdk-ui toast
+// wrapper and src/components/ui/sonner.tsx) import it as the bare specifier, so
+// a single alias covers them.
+//
+// Production impact: Next 16.2 `next build` also uses Turbopack, so this alias
+// applies there too — by design. On the clean, single-worktree install that CI
+// and production images build from, both import sites already resolve to the one
+// canonical sonner copy, so the alias resolves to that same module and build
+// resolution + runtime behaviour are unchanged; it only ever diverts a request
+// that would otherwise land on a stray peer copy. So the production build path
+// is unaffected in the case that matters (clean install) and strictly hardened
+// otherwise.
+//
+// The alias value is a STATIC root-relative request (resolved against
+// turbopack.root === process.cwd()). It deliberately does NO filesystem work at
+// config-eval time (no require.resolve / path.*) so the `output: "standalone"`
+// file tracer doesn't flag next.config.ts as dynamically touching the fs. sonner
+// is a direct dependency of the host, so `./node_modules/sonner` always exists
+// (a pnpm symlink to the single .pnpm copy), and Turbopack resolves the package
+// from there via its exports map.
+// ---------------------------------------------------------------------------
+const SONNER_ALIAS = "./node_modules/sonner";
+
+// ---------------------------------------------------------------------------
 // Required environment variables — fail fast at server startup.
 // ---------------------------------------------------------------------------
 const REQUIRED_ENV: string[] = [
@@ -49,6 +90,8 @@ const nextConfig: NextConfig = {
   },
   turbopack: {
     root: process.cwd(),
+    // cinatra#1506: force a single `sonner` module instance (see the block above).
+    resolveAlias: { sonner: SONNER_ALIAS },
   },
   // Next.js 16 blocks cross-origin access to `_next/*` dev resources by default.
   // The dev server self-identifies as `localhost`, so requests from `127.0.0.1`
@@ -371,26 +414,44 @@ const nextConfig: NextConfig = {
         permanent: true,
       },
       // analytics-routes-retire-allowlist-end
-      // — Approvals consolidation. The standalone /approvals page
-      // and /configuration/agents/approvals index are retired in favor of
-      // the unified /configuration/approvals tabbed page. Detail pages at
-      // /configuration/agents/approvals/[id] keep their path unchanged.
+      // — Approvals consolidation (E8 cutover, cinatra#1558). Approvals were
+      // unified into the /notifications surface; the standalone
+      // /configuration/approvals page (+ its ?tab= / ?direction= machinery), the
+      // legacy /approvals page, and the /configuration/agents/approvals INDEX
+      // are all retired → /notifications. The per-approval detail page
+      // /configuration/agents/approvals/[id] SURVIVES unchanged.
       {
         source: "/approvals",
-        destination: "/configuration/approvals?tab=workflows",
+        destination: "/notifications",
         permanent: true,
       },
+      // The agent-approvals INDEX (exact) → the unified feed. Exact source, so
+      // it never swallows the surviving /configuration/agents/approvals/[id].
       {
         source: "/configuration/agents/approvals",
-        destination: "/configuration/approvals?tab=agents",
+        destination: "/notifications",
         permanent: true,
       },
-      // Reciprocal: the alternative new-location detail path. We kept the
-      // existing path, so anyone arriving via the new-shape URL gets routed
-      // to the canonical detail page.
+      // Reciprocal old detail shape → the canonical (surviving) detail page.
+      // MUST precede the /configuration/approvals/:path* wildcard below so the
+      // detail redirect is not swallowed by the page retirement (specific
+      // detail route before the wildcard).
       {
         source: "/configuration/approvals/agents/:id",
         destination: "/configuration/agents/approvals/:id",
+        permanent: true,
+      },
+      // The retired inbox page (direct load) → the unified feed.
+      {
+        source: "/configuration/approvals",
+        destination: "/notifications",
+        permanent: true,
+      },
+      // Any legacy deep link UNDER the retired page (incl. ?tab= / ?direction=,
+      // which fall through harmlessly) → the unified feed.
+      {
+        source: "/configuration/approvals/:path*",
+        destination: "/notifications",
         permanent: true,
       },
       // /desk renamed to /personal.

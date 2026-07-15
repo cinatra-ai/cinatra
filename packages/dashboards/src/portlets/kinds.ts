@@ -39,6 +39,26 @@ export function isAnalyticsPortletKind(kind: string): boolean {
 }
 
 /**
+ * Entity-summary portlet kinds (cinatra#702). The default "Overview" dashboard
+ * (epic #699) renders an entity's CURRENT summary info AS PORTLETS — identity /
+ * metadata + counts — instead of a single analytics keystone. These two kinds
+ * are the reusable building blocks a project/team/org Overview composes:
+ *   - `entity-metadata` — a labeled identity/metadata list (definition list).
+ *   - `entity-count`    — a row of count / stat tiles.
+ * Both are PURE PRESENTATION (`resource: "none"` — zero server read; the value
+ * comes pre-composed in `config.items`) and RENDER-ONLY (`renderOnly: true`):
+ * the mutation service refuses to persist them, so a saved dashboard row can
+ * never serve a stale or authorization-obsolete summary. Surfaces build the
+ * envelope FRESH per render (see `seed-configs/overview-config.ts`) and hand it
+ * straight to `PortletHost`, so the values are always live. The client
+ * components import NO `drizzle-cube/client` (Layer-4 boundary respected
+ * trivially). */
+export const ENTITY_METADATA_PORTLET_KIND = "entity-metadata" as const;
+export const ENTITY_COUNT_PORTLET_KIND = "entity-count" as const;
+/** Registered version for the entity-summary kinds (shares the core version). */
+export const ENTITY_SUMMARY_PORTLET_VERSION = PORTLET_VERSION;
+
+/**
  * The portlet kinds for which the host bundles a CLIENT component (the keys of
  * `COMPONENT_MAP` in `src/components/dashboards/portlet-host.tsx`, plus the
  * `analytics`/`cube-dashboard` keystone kinds rendered by the embedded grid).
@@ -56,6 +76,8 @@ export const PORTLET_KINDS_WITH_BUNDLED_COMPONENT = [
   "artifact-edit-text",
   "artifact-edit-binary-prompt",
   "agent-launcher",
+  ENTITY_METADATA_PORTLET_KIND,
+  ENTITY_COUNT_PORTLET_KIND,
   ANALYTICS_PORTLET_KIND,
   ANALYTICS_PORTLET_KIND_ALIAS,
 ] as const;
@@ -228,6 +250,41 @@ function reqConfigString(portlet: PortletInstanceForValidation, key: string, cod
     : [{ code, message: `portlet config.${key} is required` }];
 }
 
+/**
+ * Install-time validation for the entity-summary kinds (cinatra#702). Every
+ * consumed field is checked so a malformed summary fails closed:
+ *   - `config.items` is a NON-EMPTY array;
+ *   - each item is `{ label: non-empty string, value: string | finite number }`;
+ *   - the optional `config.title` is a string when present.
+ * No `href` / link field exists on the item shape — summaries carry plain
+ * label/value only, so there is no redirect / `javascript:`-URL surface. */
+function validateSummaryItems(p: PortletInstanceForValidation, code: string): PortletConfigError[] {
+  const errs: PortletConfigError[] = [];
+  if (p.config.title !== undefined && typeof p.config.title !== "string") {
+    errs.push({ code, message: "config.title must be a string when present" });
+  }
+  const items = p.config.items;
+  if (!Array.isArray(items) || items.length === 0) {
+    errs.push({ code, message: "config.items must be a non-empty array of { label, value }" });
+    return errs;
+  }
+  items.forEach((raw, i) => {
+    if (typeof raw !== "object" || raw === null) {
+      errs.push({ code, message: `config.items[${i}] must be an object { label, value }` });
+      return;
+    }
+    const item = raw as Record<string, unknown>;
+    if (typeof item.label !== "string" || item.label.length === 0) {
+      errs.push({ code, message: `config.items[${i}].label must be a non-empty string` });
+    }
+    const v = item.value;
+    if (typeof v !== "string" && !(typeof v === "number" && Number.isFinite(v))) {
+      errs.push({ code, message: `config.items[${i}].value must be a string or finite number` });
+    }
+  });
+  return errs;
+}
+
 export function registerCorePortletKinds(): void {
   // object-list — list cinatra.objects by config typeId + query.
   registerPortletKind({
@@ -317,6 +374,30 @@ export function registerCorePortletKinds(): void {
       typeof p.config.agentRef === "string" || typeof p.config.agentPackage === "string"
         ? []
         : [{ code: "port_agent_launcher_missing_agent", message: "config.agentRef or config.agentPackage is required" }],
+  });
+
+  // entity-metadata / entity-count (cinatra#702) — the render-only Overview
+  // summary building blocks. `resource: "none"` (no server read; the value is
+  // pre-composed into config.items by the surface). `renderOnly: true` bars
+  // them from EVERY persist path (the mutation service rejects them) so a saved
+  // row can never serve a stale / authorization-obsolete summary.
+  registerPortletKind({
+    kind: ENTITY_METADATA_PORTLET_KIND,
+    version: PORTLET_VERSION,
+    scopePolicy: { scopeFrom: "session", resource: "none" },
+    inputKeys: [],
+    outputKeys: [],
+    renderOnly: true,
+    validateConfig: (p) => validateSummaryItems(p, "port_entity_metadata_invalid_items"),
+  });
+  registerPortletKind({
+    kind: ENTITY_COUNT_PORTLET_KIND,
+    version: PORTLET_VERSION,
+    scopePolicy: { scopeFrom: "session", resource: "none" },
+    inputKeys: [],
+    outputKeys: [],
+    renderOnly: true,
+    validateConfig: (p) => validateSummaryItems(p, "port_entity_count_invalid_items"),
   });
 
   // analytics (keystone, cinatra#325) — embeds a WHOLE drizzle-cube
