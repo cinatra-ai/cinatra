@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseArtifactUi } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import { artifactObjectTypeClaimManifestSchema } from "./claims";
 import type { SemanticArtifactManifest, SemanticArtifactRef } from "./types";
 
@@ -81,6 +82,22 @@ export const semanticArtifactManifestSchema: z.ZodType<SemanticArtifactManifest>
     // can't silently overmatch (>1 => never) or undermatch (<0 =>
     // always).
     matcherConfidenceThreshold: z.number().min(0).max(1).optional(),
+    // BEGIN artifact-ui-mirror (cinatra#1621, epic #1620) — kept byte-identical
+    // across packages/objects/src/semantic-manifest.ts and
+    // packages/extensions/src/artifact-handler.ts (the same lock-step
+    // convention the objectTypes block uses; the objects↔extensions import
+    // cycle forbids sharing the schema itself). The versioned
+    // `cinatra.artifact.ui` block is carried here as RAW `unknown` so a
+    // malformed `ui` can NEVER fail this strict manifest parse and drop the
+    // extension's type registration / `objectTypes` claims (cinatra#1621 — the
+    // whole-parse-rejection bug this slice fixes). The tolerant validation +
+    // sanitized degradation live in the sdk-extensions LEAF (`parseArtifactUi`,
+    // imported by both mirror sides): the boot path degrades-with-diagnostic and
+    // KEEPS the claims; the publish/conformance gate rejects fail-closed on the
+    // same result. Unknown NON-`ui` keys keep today's strict rejection. The
+    // mirror test pins this block byte-identical.
+    ui: z.unknown().optional(),
+    // END artifact-ui-mirror
     // BEGIN objectTypes-claims-mirror (cinatra#1432) — this block is kept
     // byte-identical across packages/objects/src/semantic-manifest.ts and
     // packages/extensions/src/artifact-handler.ts (the established lock-step
@@ -129,10 +146,23 @@ export function isDefaultArtifactType(extension: string | null | undefined): boo
   return extension === DEFAULT_ARTIFACT_EXTENSION;
 }
 
-/** Substrate-rejecting parser. Returns the manifest or a flat error list. */
+/**
+ * Substrate-rejecting parser. Returns the manifest or a flat error list.
+ *
+ * The `cinatra.artifact.ui` block is parsed FIELD-TOLERANTLY (cinatra#1621):
+ * the strict schema carries `ui` as raw `unknown` (so a malformed `ui` can't
+ * reject the whole manifest and drop the type registration / `objectTypes`
+ * claims — the bug this slice fixes), and this parser then validates it via the
+ * leaf `parseArtifactUi`. On success the typed `ui` is attached; on failure the
+ * manifest is returned WITHOUT `ui` (degrade to generic rendering) and a
+ * sanitized `diagnostics` entry is surfaced for the caller (the boot bridge) to
+ * log. Unknown NON-`ui` keys keep today's strict whole-parse rejection.
+ */
 export function parseSemanticArtifactManifest(
   input: unknown,
-): { ok: true; manifest: SemanticArtifactManifest } | { ok: false; errors: string[] } {
+):
+  | { ok: true; manifest: SemanticArtifactManifest; diagnostics?: string[] }
+  | { ok: false; errors: string[] } {
   // Fail loud on the substrate shape rather than silently dropping its keys
   // (.strict() already rejects, but this gives a precise semantic-drift
   // diagnostic).
@@ -145,9 +175,43 @@ export function parseSemanticArtifactManifest(
     };
   }
   const r = semanticArtifactManifestSchema.safeParse(input);
-  if (r.success) return { ok: true, manifest: r.data };
-  return {
-    ok: false,
-    errors: r.error.issues.map((i) => `${i.path.join(".") || "<root>"} ${i.message}`),
-  };
+  if (!r.success) {
+    return {
+      ok: false,
+      errors: r.error.issues.map((i) => `${i.path.join(".") || "<root>"} ${i.message}`),
+    };
+  }
+  const manifest = r.data;
+  // Field-tolerant `ui` validation (raw `unknown` came through the strict
+  // schema above). Degrade — never reject the surrounding manifest.
+  const rawUi = (manifest as { ui?: unknown }).ui;
+  if (rawUi === undefined) return { ok: true, manifest };
+  const uiResult = parseArtifactUi(rawUi);
+  if (uiResult.ok) {
+    (manifest as { ui?: unknown }).ui = uiResult.ui;
+    return { ok: true, manifest };
+  }
+  // Drop the unsupported `ui` (generic rendering) and keep everything else —
+  // type registration + claims survive.
+  (manifest as { ui?: unknown }).ui = undefined;
+  return { ok: true, manifest, diagnostics: [uiResult.diagnostic] };
+}
+
+/**
+ * PUBLISH/authoring verdict wrapper (cinatra#1621). The authoring path
+ * (`artifact_source_validate`/compile/publish) is FAIL-CLOSED on the
+ * `cinatra.artifact.ui` block: unlike the boot path — which DEGRADES an
+ * unsupported ui (dropping it with a diagnostic, claims intact) — a
+ * chat-authored package with a malformed ui must be REJECTED. Any ui diagnostic
+ * from {@link parseSemanticArtifactManifest} becomes a validation error here.
+ * (Kept in the objects leaf, not the caller, so the giant agents MCP-handlers
+ * bottleneck file does not grow — cinatra file-size ratchet.)
+ */
+export function validateSemanticArtifactManifestForPublish(
+  input: unknown,
+): { valid: boolean; errors: string[] } {
+  const r = parseSemanticArtifactManifest(input);
+  if (!r.ok) return { valid: false, errors: r.errors };
+  if (r.diagnostics && r.diagnostics.length > 0) return { valid: false, errors: r.diagnostics };
+  return { valid: true, errors: [] };
 }

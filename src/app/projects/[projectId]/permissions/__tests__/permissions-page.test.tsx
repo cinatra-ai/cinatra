@@ -10,6 +10,14 @@ import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 
+// guest-actions imports @/lib/auth (top-level-await better-auth boot) — that
+// module is always mocked in the vitest sandbox, so mock the actions surface.
+vi.mock("../guest-actions", () => ({
+  inviteGuestByEmailAction: async () => ({ ok: false, error: "unknown" }),
+  revokeGuestAction: async () => ({ ok: false }),
+  listGuestRows: async () => [],
+}));
+
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: vi.fn(),
 }));

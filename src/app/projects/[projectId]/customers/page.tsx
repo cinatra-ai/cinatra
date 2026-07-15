@@ -1,58 +1,11 @@
-import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 
-import { Main } from "@/components/layout/main";
-import { PageHeader } from "@/components/page-header";
-import { PageContent } from "@/components/page-content";
-import { ProjectSubnav } from "@/components/project-subnav";
-import { AccessVsOwnershipNote } from "@/components/access-vs-ownership-note";
-import { readProjectById } from "@/lib/projects-store";
+// cinatra#1501: the Customers tab is folded into the Permissions tab as the
+// "Guests" section (owner direction on PR #1619). This route survives only as
+// a redirect so old links and bookmarks keep working.
+type Props = { params: Promise<{ projectId: string }> };
 
-import { CustomersClient, type CustomerGrant } from "./customers-client";
-import { listCustomerGrants } from "./actions";
-
-export const metadata: Metadata = { title: "Project customers" };
-
-type Props = {
-  params: Promise<{ projectId: string }>;
-};
-
-/**
- * Customer / external access management for a project. Lists
- * customer grants and lets a project admin invite / revoke. Project-admin
- * gated inside listCustomerGrants → assertProjectAdmin.
- */
-export default async function ProjectCustomersPage({ params }: Props) {
+export default async function ProjectCustomersRedirect({ params }: Props) {
   const { projectId } = await params;
-  const project = await readProjectById(projectId).catch(() => null);
-  if (!project) notFound();
-
-  let grants: CustomerGrant[] = [];
-  try {
-    const rows = await listCustomerGrants(projectId);
-    grants = rows.map((r) => ({
-      subjectUserId: r.subjectUserId,
-      grantedAt: r.grantedAt.toISOString(),
-      expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
-    }));
-  } catch {
-    // Non-admin or store unavailable → render the empty surface (the
-    // server actions re-check admin on every mutation).
-    grants = [];
-  }
-
-  return (
-    <Main className="min-h-screen">
-      <PageHeader
-        title={project.name}
-        description="Invite external users to this project with scoped, read-mostly, revocable access."
-        divider={false}
-      />
-      <ProjectSubnav projectId={project.id} activeSection="customers" />
-      <PageContent className="flex flex-col gap-6 pb-8">
-        <AccessVsOwnershipNote />
-        <CustomersClient projectId={project.id} initialGrants={grants} />
-      </PageContent>
-    </Main>
-  );
+  redirect(`/projects/${projectId}/permissions`);
 }

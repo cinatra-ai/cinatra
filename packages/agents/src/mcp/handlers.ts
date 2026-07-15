@@ -251,7 +251,7 @@ import {
   enqueueInlineForAgent,
   cleanupForAgent,
 } from "@cinatra-ai/skills";
-import { createDeterministicObjectsClient, parseSemanticArtifactManifest } from "@cinatra-ai/objects";
+import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
 import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
@@ -4548,19 +4548,17 @@ function resolveArtifactPackagePathForRead(packageSlug: string): { path: string;
 }
 
 // Validate a `cinatra.artifact` semantic manifest BLOCK (the artifact PACKAGE's
-// declarative definition). A pure, in-shape validator:
-// no persistence, fail-closed. The canonical schema lives in @cinatra-ai/objects
-// (parseSemanticArtifactManifest) — the SAME parser the install-time artifact
-// handler uses — so chat-authored packages are held to the install contract.
+// declarative definition). Pure, no persistence, fail-closed — delegates to the
+// canonical @cinatra-ai/objects verdict wrapper, so chat-authored packages are
+// held to the SAME install/publish contract (incl. the cinatra.artifact.ui rule).
 function validateArtifactManifestContent(
   cinatraArtifact: unknown,
 ): { valid: boolean; errors: string[] } {
   if (cinatraArtifact === undefined || cinatraArtifact === null) {
     return { valid: false, errors: ["package.json#cinatra.artifact is required for an artifact package (the semantic manifest: accepts/satisfies/templates/skills/agentDependencies)."] };
   }
-  const result = parseSemanticArtifactManifest(cinatraArtifact);
-  if (result.ok) return { valid: true, errors: [] };
-  return { valid: false, errors: result.errors };
+  // Fail-closed verdict, incl. a malformed cinatra.artifact.ui (cinatra#1621; boot degrades, publish rejects).
+  return validateSemanticArtifactManifestForPublish(cinatraArtifact);
 }
 
 // Full ON-DISK artifact-package validation — reads package.json#cinatra and runs

@@ -109,7 +109,7 @@ SIGNING is producer-pending** until the marketplace v2 signer ships. When it
 lands, its acceptance tests MUST consume the cinatra normative fixture bytes
 (`src/lib/__tests__/fixtures/materialization-plan/`) verbatim.
 
-## Install flow (both paths: registry pipeline AND workflow saga)
+## Install flow (registry pipeline)
 
 1. `resolveIntegrity` returns the raw packument plan; the host parses it
    FAIL-CLOSED (`extension-materialization-plan-core.ts`), binds

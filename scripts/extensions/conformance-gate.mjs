@@ -294,6 +294,10 @@ function checkManifest(pkgDir, pkg, rules) {
         detail: "artifact-kind extensions must not declare cinatra.sdkAbiRange (metadata-only kind; absent is the only conformant state).",
       });
     }
+    // cinatra.artifact.ui (cinatra#1621): the versioned renderer block. NESTED
+    // (cinatra.artifact.ui.sdkAbiRange), so it is NOT the top-level
+    // artifact-sdkAbiRange ban above — that stays. Derived, fail-closed checks.
+    findings.push(...checkArtifactUi(pkgDir, pkg, rules));
   } else if (kind === "connector") {
     findings.push(...checkConnectorAccessConfig(pkgDir, rules));
     findings.push(...checkWebhooksDeclaration(pkg));
@@ -310,6 +314,157 @@ function checkManifest(pkgDir, pkg, rules) {
   }
   // kind === "workflow" | "skill": metadata-only, no rule (#979 addendum).
 
+  return findings;
+}
+
+// cinatra#1621 — the versioned `cinatra.artifact.ui` renderer block, FAIL-CLOSED
+// at the publish/conformance gate (the boot path degrades-with-diagnostic on the
+// SAME shape). Every rule DERIVES from the live leaf source (the slot enum, the
+// ui ABI version, the generated sdkAbiRange — loaded in `loadLiveRules`), never
+// a re-listed literal. Mirrors the leaf's `parseArtifactUi`/`isContainedEntryPath`
+// as regex/JS (the checker runs on bare `node`, no TS toolchain).
+const ARTIFACT_UI_ALLOWED_KEYS = new Set(["abiVersion", "sdkAbiRange", "renderers"]);
+const ARTIFACT_UI_RENDERER_ALLOWED_KEYS = new Set(["entry", "propsApiVersion", "representations"]);
+
+function isUiEntryContained(entry) {
+  if (typeof entry !== "string" || entry.length === 0) return false;
+  if (!entry.startsWith("./")) return false;
+  if (entry.includes("\\")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(entry)) return false; // protocol / URL
+  const segments = entry.slice(2).split("/");
+  return !segments.some((s) => s === "" || s === "." || s === "..");
+}
+
+function checkArtifactUi(pkgDir, pkg, rules) {
+  const findings = [];
+  const file = "package.json";
+  const artifact = pkg?.cinatra?.artifact;
+  const ui = artifact && typeof artifact === "object" ? artifact.ui : undefined;
+  if (ui === undefined) return findings; // ui is optional
+  if (typeof ui !== "object" || ui === null || Array.isArray(ui)) {
+    findings.push({
+      rule: "manifest.artifact-ui-shape",
+      file,
+      detail: "cinatra.artifact.ui must be an object ({ abiVersion, sdkAbiRange, renderers }).",
+    });
+    return findings;
+  }
+  // Reject extra TOP-LEVEL ui keys, matching the leaf schema's `.strict()` (so
+  // the gate is never LOOSER than the boot/handler verdict).
+  const extraUiKeys = Object.keys(ui).filter((k) => !ARTIFACT_UI_ALLOWED_KEYS.has(k));
+  if (extraUiKeys.length > 0) {
+    findings.push({
+      rule: "manifest.artifact-ui-extraneous-key",
+      file,
+      detail: `cinatra.artifact.ui may only declare { abiVersion, sdkAbiRange, renderers }; unexpected key(s): ${extraUiKeys.join(", ")}.`,
+    });
+  }
+  if (ui.abiVersion !== rules.artifactUiAbiVersion) {
+    findings.push({
+      rule: "manifest.artifact-ui-abi-version",
+      file,
+      detail: `cinatra.artifact.ui.abiVersion must be exactly ${rules.artifactUiAbiVersion} (got ${JSON.stringify(ui.abiVersion)}).`,
+    });
+  }
+  if (ui.sdkAbiRange !== rules.artifactUiSdkAbiRange) {
+    findings.push({
+      rule: "manifest.artifact-ui-sdk-abi-range",
+      file,
+      detail: `cinatra.artifact.ui.sdkAbiRange must be the GENERATED value "${rules.artifactUiSdkAbiRange}" (computed from the canonical SDK ABI — never hand-written); got ${JSON.stringify(ui.sdkAbiRange)}.`,
+    });
+  }
+  const renderers = ui.renderers;
+  if (
+    typeof renderers !== "object" ||
+    renderers === null ||
+    Array.isArray(renderers) ||
+    Object.keys(renderers).length === 0
+  ) {
+    findings.push({
+      rule: "manifest.artifact-ui-renderers-empty",
+      file,
+      detail: `cinatra.artifact.ui.renderers must be a NON-EMPTY partial map over the v1 slot enum {${[...rules.artifactUiSlots].join(", ")}}.`,
+    });
+    return findings;
+  }
+  for (const [slot, renderer] of Object.entries(renderers)) {
+    const at = `cinatra.artifact.ui.renderers.${slot}`;
+    if (!rules.artifactUiSlots.has(slot)) {
+      const reserved = rules.artifactUiReservedSlots.has(slot);
+      findings.push({
+        rule: "manifest.artifact-ui-unknown-slot",
+        file,
+        detail: `${slot} is not a v1 renderer slot (v1 = ${[...rules.artifactUiSlots].join(", ")})${reserved ? " — RESERVED for a later wave and rejected in v1" : ""}.`,
+      });
+      continue;
+    }
+    if (typeof renderer !== "object" || renderer === null || Array.isArray(renderer)) {
+      findings.push({
+        rule: "manifest.artifact-ui-renderer-shape",
+        file,
+        detail: `${at} must be an object ({ entry, propsApiVersion[, representations] }).`,
+      });
+      continue;
+    }
+    const extra = Object.keys(renderer).filter((k) => !ARTIFACT_UI_RENDERER_ALLOWED_KEYS.has(k));
+    if (extra.length > 0) {
+      findings.push({
+        rule: "manifest.artifact-ui-renderer-ports",
+        file,
+        detail: `${at} declares disallowed field(s) [${extra.join(", ")}] — v1 renderers request NO host ports and carry only { entry, propsApiVersion, representations? } (a read-only renderer port needs an ABI-major process).`,
+      });
+    }
+    if (typeof renderer.entry !== "string" || !isUiEntryContained(renderer.entry)) {
+      findings.push({
+        rule: "manifest.artifact-ui-entry-uncontained",
+        file,
+        detail: `${at}.entry must be a package-relative, path-contained subpath ("./…", no "..", no absolute path or URL); got ${JSON.stringify(renderer.entry)}.`,
+      });
+    } else {
+      const rel = renderer.entry.replace(/^\.\//, "");
+      const resolved = existsSync(join(pkgDir, rel))
+        ? rel
+        : candidateFile(pkgDir, rel.replace(/\.[^./]+$/, ""));
+      if (!resolved) {
+        findings.push({
+          rule: "manifest.artifact-ui-entry-unresolved",
+          file,
+          detail: `${at}.entry "${renderer.entry}" does not resolve to a file in the package (must resolve via the package's exports/files).`,
+        });
+      } else if (!isInScope(resolved, pkg.files)) {
+        findings.push({
+          rule: "manifest.artifact-ui-entry-out-of-scope",
+          file,
+          detail: `${at}.entry "${renderer.entry}" resolves outside the published "files" allowlist — it would not ship in the package tarball.`,
+        });
+      }
+    }
+    if (
+      typeof renderer.propsApiVersion !== "number" ||
+      !Number.isInteger(renderer.propsApiVersion) ||
+      renderer.propsApiVersion < 1
+    ) {
+      findings.push({
+        rule: "manifest.artifact-ui-props-api-version",
+        file,
+        detail: `${at}.propsApiVersion must be an integer >= 1 (got ${JSON.stringify(renderer.propsApiVersion)}).`,
+      });
+    }
+    if (renderer.representations !== undefined) {
+      const reps = renderer.representations;
+      if (
+        !Array.isArray(reps) ||
+        reps.length === 0 ||
+        !reps.every((r) => typeof r === "string" && r.length > 0)
+      ) {
+        findings.push({
+          rule: "manifest.artifact-ui-representations",
+          file,
+          detail: `${at}.representations, when present, must be a non-empty array of MIME pattern strings.`,
+        });
+      }
+    }
+  }
   return findings;
 }
 

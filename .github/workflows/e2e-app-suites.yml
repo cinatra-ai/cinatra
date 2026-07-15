@@ -12,8 +12,8 @@ name: App e2e suites (render-smoke, notifications, agents invariants)
 #                         agents-run suite (every /api/llm-bridge ApiNode
 #                         declares data.cinatra_llm). No server / DB / browser.
 #
-# The two browser suites reuse the SAME shape the RBAC / Workflows browser
-# e2e jobs in build-image.yml already use — production build + standalone
+# The two browser suites reuse the SAME shape the RBAC browser
+# e2e job in build-image.yml already uses — production build + standalone
 # server + Postgres/Redis service containers + public-schema provisioning —
 # so they run against a fast, steady prod server instead of a cold-compiling
 # `pnpm dev` (the reason render-smoke "timed out locally"). Rationale for each

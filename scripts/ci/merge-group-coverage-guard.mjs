@@ -55,8 +55,6 @@ import { fileURLToPath } from "node:url";
 // harmless (the guard is a superset check).
 export const REQUIRED_CONTEXTS = [
   "RBAC browser e2e",
-  "Workflows browser e2e",
-  "Release workflows tests",
   "RBAC authz unit tests",
   "CRM migration gates",
   "/agents Playwright smoke",

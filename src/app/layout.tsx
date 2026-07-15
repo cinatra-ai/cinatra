@@ -91,14 +91,14 @@ export default async function RootLayout({
   // instance never wrongly hides sign-up.
   let signUpEnabled = true;
   const hiddenNavTitles: string[] = [];
-  // Sidebar Approvals nav, resolved server-side from the ApprovalSource
-  // registry (not a hard-wired count): the pill total = sum of every available
-  // source's Inbox-actionable count for the viewer; visibility = the viewer has
-  // any available source with an actionable Inbox (v1 → admins; a future
-  // non-admin-actionable source lights it with no sidebar edit). Both default
-  // to the hidden/empty state on any resolution error.
+  // The notifications bell badge's approvals contribution (E8 cutover,
+  // cinatra#1558, spec §IV): the viewer's Inbox-actionable approval count across
+  // the ApprovalSource registry. The standalone sidebar "Approvals" nav item was
+  // removed (§VII); this SAME count now rides the bell badge (combined with the
+  // E6 store's unread notifications) so "what needs the viewer" — including a
+  // pending approval that needs their decision — is never signal-less. Defaults
+  // to 0 on any resolution error.
   let pendingApprovalsTotal = 0;
-  let approvalsNavVisible = false;
   try {
     const [
       setupCompleteResult,
@@ -164,7 +164,24 @@ export default async function RootLayout({
         // `@cinatra-ai/agents/mcp-handlers` + the client decision-action
         // components) would be compiled into EVERY route via this root layout
         // and OOM `next build`. The nav registry enumerates the same source
-        // list, so the badge still lights for a new source with no sidebar edit.
+        // list, so the count still reflects a new source with no edit here.
+        // Post-#1558 the resolved `total` feeds the BELL badge (spec §IV), not
+        // a sidebar pill; `visible` is unused (the bell always renders).
+        //
+        // EXACTNESS BOUND (carried over verbatim from the retired sidebar pill —
+        // NOT introduced here): `summary.total` is the import-light sum of each
+        // available source's `counts().inbox`. For the v1 local sources the inbox
+        // applies only to viewers who can decide, so total == the §IV
+        // viewer-eligibility ("Needs action") count. It CAN diverge only if a
+        // source begins emitting PER-ROW eligibility (a marketplace row a viewer
+        // may see but not decide): the /notifications feed row-filters those out
+        // of "Needs action" (`feed-view-model.ts` — both `can_approve` and
+        // `can_reject` false), whereas this light inbox count cannot without
+        // pulling per-row eligibility into the root-layout graph (the exact thing
+        // the import-light split forbids). No source emits per-row eligibility
+        // today, so the counts match now; reconciling the bell badge with the
+        // feed's row-level "Needs action" once one does is E11 conformance
+        // (#1561 — badge⇔feed parity), not resolvable in this layout pass.
         const [{ availableNavSources }, { summarizeApprovalsNav }] = await Promise.all([
           import("@/app/configuration/approvals/sources/nav-registry"),
           import("@/app/configuration/approvals/nav-summary"),
@@ -172,9 +189,8 @@ export default async function RootLayout({
         const viewer = { userId: session.user.id, orgId, isAdmin };
         const summary = await summarizeApprovalsNav(await availableNavSources(viewer), viewer);
         pendingApprovalsTotal = summary.total;
-        approvalsNavVisible = summary.visible;
       } catch {
-        // Soft-fail — the nav item stays hidden and the pill stays empty.
+        // Soft-fail — the bell's approvals contribution stays 0.
       }
     }
   } catch (err) {
@@ -199,7 +215,6 @@ export default async function RootLayout({
             singleOrg={singleOrg}
             hiddenNavTitles={hiddenNavTitles}
             pendingApprovalsTotal={pendingApprovalsTotal}
-            approvalsNavVisible={approvalsNavVisible}
           >
             {children}
           </AppShell>

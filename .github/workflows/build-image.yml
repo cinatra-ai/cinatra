@@ -202,11 +202,6 @@ jobs:
           CINATRA_TEST_DB_URL: ${{ secrets.CINATRA_TEST_DB_URL }}
         run: cd packages/agents && pnpm test:integration
 
-      # The release-workflows unit + integration tests live in the dedicated
-      # `release-workflows-tests` job below with its own Postgres service
-      # container. That topology lets the suite gate independently of the
-      # agents-suite baseline.
-
   # Full packages/skills unit suite (#1359). Runs in its OWN top-level job —
   # NOT appended to `test` — for the same reason as rbac-authz-unit / auth-
   # schema-drift: the shared `test` job has a well-known packages/agents
@@ -489,35 +484,6 @@ jobs:
 
       - name: Gate classifier tests (labelled fixture corpus + unit edges)
         run: node --test scripts/audit/__tests__/schema-migration-gate.test.mjs
-
-  # Release Workflows package gate — unit (102) + integration (73) tests.
-  # Dedicated job (mirrors `rbac-resolver-unit` + the e2e jobs' service-
-  # container pattern) so the suite gates independently of the well-known
-  # packages/agents baseline failure (`package_version_oas_pkg_drift`) that
-  # otherwise short-circuits the shared `test` job before these run. The
-  # integration tests use a real Postgres provided by a service container —
-  # no `CINATRA_TEST_DB_URL` secret needed.
-  #
-  # REQUIRED status check on `main`. Always runs; the Postgres service image is
-  # only started on a real (non-docs) run so a docs-only PR green-stubs with no
-  # container.
-  release-workflows-tests:
-    name: Release workflows tests
-    needs: detect
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    # TRANSITIONAL STUB (cinatra 1035 Slice C): the @cinatra-ai/workflows package
-    # (the release-workflows BPMN engine + its unit/integration suite) was deleted
-    # with the workflow extension kind, so there is no suite left to run. This
-    # REQUIRED check is kept green as a stub so the package removal lands without a
-    # branch-protection change; the job + its required-context are fully retired
-    # in Slice F. The BPMN CI gate itself was retired with the workflow engine in
-    # this PR (#1035 Slice C).
-    timeout-minutes: 5
-    steps:
-      - name: Release workflows suite retired (package removed in cinatra 1035 Slice C)
-        run: |
-          echo "@cinatra-ai/workflows was removed in cinatra 1035 Slice C; the release-workflows test suite is retired. Full job + required-check removal lands in Slice F."
 
   extension-lifecycle-db-tests:
     name: Extension-anchor lifecycle DB tests
@@ -1714,26 +1680,6 @@ jobs:
           fi
           echo "RBAC e2e passed"
 
-  workflows-e2e:
-    name: Workflows browser e2e
-    needs: detect
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    # TRANSITIONAL STUB (#1035 Slice C): the /workflows management route and its
-    # backing tables were removed together with the workflow extension kind, so
-    # the release-workflows browser suite no longer has a surface to exercise.
-    # This REQUIRED check is kept green as a stub so the route/table removal does
-    # not need a branch-protection change to land; the job, its
-    # `.github/gate-suite.json` requiredContext, the mirror in
-    # scripts/ci/merge-group-coverage-guard.mjs, and the branch-protection
-    # required_status_check are fully retired in #1035 Slice F. The BPMN CI gate
-    # itself was retired with the workflow engine in this PR (#1035 Slice C).
-    timeout-minutes: 5
-    steps:
-      - name: Workflows e2e retired (route removed in cinatra 1035 Slice C)
-        run: |
-          echo "The /workflows surface was removed in cinatra 1035 Slice C; this browser e2e is retired. Full job + required-check removal lands in Slice F."
-
   build:
     # Gate the image build on the test job so a failing typecheck or unit-test
     # run blocks publishing the image, including the `latest` tag on main.
@@ -1855,9 +1801,9 @@ jobs:
   # All three re-export from the gha cache that `build` populated
   # (cache-to: type=gha,mode=max), so none of them rebuilds the image; they are
   # pure cache re-exports gated on `needs: build` (so the boot-e2e still gates
-  # every publish). None is a REQUIRED status check — the four required checks
-  # (detect/test/e2e-rbac/workflows-e2e) are untouched, so a PR's mergeability
-  # is unaffected; on a PR/merge_group run all three are skipped by their `if:`.
+  # every publish). None is a REQUIRED status check — the required checks
+  # (detect/test/e2e-rbac) are untouched, so a PR's mergeability is unaffected;
+  # on a PR/merge_group run all three are skipped by their `if:`.
   # ---------------------------------------------------------------------------
 
   # UNGATED non-release publish: main-branch `:latest` + branch/sha tags +

@@ -397,3 +397,160 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
     rmSync(pkgDir, { recursive: true, force: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra.artifact.ui — the versioned renderer block (cinatra#1621, epic #1620).
+// ---------------------------------------------------------------------------
+
+const UI_RULES = loadLiveRules(REPO_ROOT);
+const GEN_UI_RANGE = UI_RULES.artifactUiSdkAbiRange;
+
+function artifactUiFixture({ ui, files = ["src", "cinatra"], entryFile = "src/detail.tsx", withEntryFile = true } = {}) {
+  const pkg = {
+    name: "@cinatra-ai/fixture-artifact",
+    version: "0.0.1",
+    license: "Apache-2.0",
+    files,
+    main: "src/index.ts",
+    cinatra: {
+      kind: "artifact",
+      apiVersion: "cinatra.ai/v1",
+      artifact: {
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        ...(ui !== undefined ? { ui } : {}),
+      },
+    },
+  };
+  const out = {
+    "package.json": JSON.stringify(pkg, null, 2),
+    "README.md": "# Fixture Artifact\n",
+    "src/index.ts": "export {};\n",
+  };
+  if (withEntryFile) out[entryFile] = "export default function R() { return null; }\n";
+  return out;
+}
+
+const validUiBlock = () => ({
+  abiVersion: UI_RULES.artifactUiAbiVersion,
+  sdkAbiRange: GEN_UI_RANGE,
+  renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+});
+
+describe("conformance-gate — artifact-ui rule derivation (cinatra#1621)", () => {
+  it("derives the v1 slot enum, ui ABI version, and generated sdkAbiRange from live leaf source", () => {
+    expect(UI_RULES.ok).toBe(true);
+    expect(UI_RULES.artifactUiSlots.has("detail")).toBe(true);
+    expect(UI_RULES.artifactUiSlots.has("preview")).toBe(true);
+    expect(UI_RULES.artifactUiReservedSlots.has("listRow")).toBe(true);
+    expect(UI_RULES.artifactUiAbiVersion).toBe(1);
+    expect(GEN_UI_RANGE).toMatch(/^\^\d+\.\d+\.\d+$/);
+  });
+});
+
+describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", () => {
+  it("conforms cleanly with a valid v1 ui block (entry ships via files)", () => {
+    const pkgDir = writeFixture(artifactUiFixture({ ui: validUiBlock() }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a renderer requesting host ports (v1 declares none)", () => {
+    const ui = validUiBlock();
+    ui.renderers.detail.ports = ["settings"];
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-renderer-ports")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a RESERVED slot (listRow) in v1", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { listRow: { entry: "./src/detail.tsx", propsApiVersion: 1 } } };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-unknown-slot")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a hand-written sdkAbiRange that is not the generated value", () => {
+    const ui = { ...validUiBlock(), sdkAbiRange: "^2" };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-sdk-abi-range")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a host-SATISFIABLE but non-canonical range at the gate (publish pins the exact generated value; the host tolerates it)", () => {
+    const ui = { ...validUiBlock(), sdkAbiRange: "^2.0.0" };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-sdk-abi-range")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an extraneous TOP-LEVEL ui key (gate is never looser than the leaf .strict())", () => {
+    const ui = { ...validUiBlock(), somethingElse: true };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-extraneous-key")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags the wrong ui abiVersion", () => {
+    const ui = { ...validUiBlock(), abiVersion: 2 };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-abi-version")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an entry that does not ship in the package (unresolved)", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { detail: { entry: "./src/missing.tsx", propsApiVersion: 1 } } };
+    const pkgDir = writeFixture(artifactUiFixture({ ui, withEntryFile: false }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-unresolved")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an uncontained (traversing) entry", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { detail: { entry: "../escape.tsx", propsApiVersion: 1 } } };
+    const pkgDir = writeFixture(artifactUiFixture({ ui, withEntryFile: false }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-uncontained")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an entry that resolves OUTSIDE the published files allowlist", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { detail: { entry: "./tools/detail.tsx", propsApiVersion: 1 } } };
+    const files = artifactUiFixture({ ui, withEntryFile: false });
+    files["tools/detail.tsx"] = "export default function R() { return null; }\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-entry-out-of-scope")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("still bans a TOP-LEVEL cinatra.sdkAbiRange on an artifact (nested ui.sdkAbiRange is separate)", () => {
+    const files = artifactUiFixture({ ui: validUiBlock() });
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.cinatra.sdkAbiRange = "^2";
+    files["package.json"] = JSON.stringify(pkg, null, 2);
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-sdk-abi-range-present")).toBe(true);
+    // The nested ui block itself is still conformant.
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});
