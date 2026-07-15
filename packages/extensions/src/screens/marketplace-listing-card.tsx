@@ -9,6 +9,11 @@ import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { type ExtensionAccent } from "@/lib/extension-accent";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { safeHttpUrl } from "@/lib/marketplace-detail-view";
+import {
+  resolveVendorPresentation,
+  VENDOR_BY_CONNECTIVE,
+  VENDOR_MISSING_LABEL,
+} from "@/lib/vendor-presentation";
 import { cn } from "@/lib/utils";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveCardPriceLabel } from "./marketplace-card-model";
@@ -62,19 +67,6 @@ export function installCountLabel(count: number | null): string | null {
 }
 
 /**
- * Publisher fallback when the catalog entry carries no vendor block: the
- * package scope IS the vendor namespace on the marketplace (e.g.
- * "@cinatra-ai/…" → "cinatra-ai"), so the line still reads "{Type} by
- * {scope}" instead of dropping the publisher entirely. No VERIFIED mark in
- * this case — a derived namespace is not a verified vendor identity.
- */
-function scopeFromPackageName(packageName: string): string {
-  const slash = packageName.indexOf("/");
-  const scope = slash > 0 ? packageName.slice(0, slash) : packageName;
-  return scope.replace(/^@/, "");
-}
-
-/**
  * Stars + numeric average + (count) — the LEFT meta column's rating row (spec
  * §IV L477: filled `#f5a623` amber / empty `#d0cbbd` warm-grey). Stars fill to
  * the rounded average, using the named `text-rating-star` /
@@ -123,17 +115,27 @@ function RatingRow({
  * off the body block). Everything reads WHITE on the category ground — the
  * kind emblem, the kind label, the vendor and the circled-check VERIFIED mark
  * all inherit the banner's `currentColor` (the banner sets the white `fg`), so
- * the byline recolours to match the name. The vendor stays a link out to its
- * marketplace store (scheme-guarded — a non-http(s) store URL degrades to plain
- * text); the VERIFIED mark shows only for a catalog-carried vendor (a derived
- * package-scope namespace is not a verified vendor identity).
+ * the byline recolours to match the name.
+ *
+ * The vendor label comes ONLY from `resolveVendorPresentation` (cinatra#1528) —
+ * this surface never derives a label from the package scope or a slug. A
+ * `known` vendor renders its display name (a link out to its scheme-guarded
+ * marketplace store when a valid `storeUrl` is present, plain text otherwise);
+ * a `missing` vendor renders the localized placeholder as PLAIN, unlinked text.
+ * The VERIFIED mark shows ONLY when the vendor resolves `known` — a missing
+ * display name reads as unavailable data, not as an unverified vendor.
  */
 function PublisherLine({ card }: { card: MarketplaceCardData }) {
-  const vendorName = card.vendor?.name ?? scopeFromPackageName(card.packageName);
-  const storeUrl = safeHttpUrl(card.vendor?.storeUrl);
+  const vendor = resolveVendorPresentation(
+    { name: card.vendor?.name, storeUrl: card.vendor?.storeUrl },
+    { surface: "marketplace-listing-card", ref: card.packageName },
+  );
+  const storeUrl = vendor.kind === "known" ? safeHttpUrl(vendor.storeUrl) : null;
+  const vendorLabel = vendor.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL;
   return (
     <div
       data-slot="extension-card-publisher"
+      data-vendor-state={vendor.kind}
       // On the coloured banner: `text-current` so kind/label/vendor/check all
       // inherit the banner's white (or archived-muted) ground colour. `text-xs`
       // is the app's sanctioned byline size (named-token/standard-size gate).
@@ -144,24 +146,29 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
       </span>
       <span className="overflow-hidden text-ellipsis">
         <span>{card.kindLabel}</span>
-        {" by "}
+        {` ${VENDOR_BY_CONNECTIVE} `}
         {storeUrl ? (
           <Link
             href={storeUrl}
             target="_blank"
             rel="noopener noreferrer"
+            data-slot="extension-card-vendor-label"
             className="font-semibold text-current hover:underline"
           >
-            {vendorName}
+            {vendorLabel}
           </Link>
         ) : (
-          <span className="font-semibold text-current">{vendorName}</span>
+          <span data-slot="extension-card-vendor-label" className="font-semibold text-current">
+            {vendorLabel}
+          </span>
         )}
       </span>
-      {card.vendor && (
+      {vendor.kind === "known" && (
         // The circled-check VERIFIED mark — the spec drawing renders the check
         // alone, with no visible "VERIFIED" copy; the accessible name + native
         // tooltip carry the meaning. White on the banner ground (text-current).
+        // Shown ONLY for a resolved `known` vendor; a missing display name is
+        // unavailable data, never a (silently unverified) vendor identity.
         <span
           data-slot="extension-card-verified"
           className="inline-flex shrink-0"
