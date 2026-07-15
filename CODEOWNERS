@@ -1,29 +1,23 @@
 # Cinatra code owners.
-# Listed owners are requested for review on pull requests that touch matching paths.
-# Reference: https://docs.github.com/articles/about-code-owners
+# Listed owners are requested for review on pull requests that touch matching
+# paths. Reference: https://docs.github.com/articles/about-code-owners
 #
-# Order matters: the last matching pattern takes precedence, so the more
-# specific, security-relevant rules are listed after the broad ones.
-
-# Default owner for everything in the repository.
-*                   @groganz @megajustice
-
-# Documentation.
-/docs/              @groganz @megajustice
-
-# Application source.
-/src/               @groganz @megajustice
-
-# Workspace packages.
-/packages/          @groganz @megajustice
-
-# Repository automation and scripts.
-/.github/           @groganz @megajustice
-/scripts/           @groganz @megajustice
+# Routing policy:
+#   - Routine paths intentionally have NO code owner. They match no rule in this
+#     file, so no review is auto-requested for anyone on ordinary changes.
+#   - Security-relevant / supply-chain surfaces request both the owner
+#     (@groganz) and the org review account (@megajustice).
+#
+# NOTE: CODEOWNERS governs review *routing* only. High-risk paths (defined in
+# .github/gate-suite.json -> highRiskPaths, e.g. .github/**, CODEOWNERS, auth,
+# migrations, release/publish) INDEPENDENTLY require a maintainer-tier approval
+# enforced by the truthful-attribution-gate, regardless of this file's routing.
 
 # Security-relevant surfaces.
-# CI/CD definitions and dependency manifests gate the supply chain, so changes
-# here always require Code Owner review.
+# Repository automation, CI/CD definitions, and dependency manifests gate the
+# supply chain and governance, so changes here request both the owner
+# (@groganz) and the org review account (@megajustice).
+/.github/           @groganz @megajustice
 /SECURITY.md        @groganz @megajustice
 /.github/workflows/ @groganz @megajustice
 /package.json       @groganz @megajustice
