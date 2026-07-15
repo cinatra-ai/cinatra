@@ -120,13 +120,51 @@ export async function orgMembershipExists(input: {
 }
 
 /**
- * Decode the `sub` claim from a verified Bearer JWT without re-verifying the
- * signature (the token was already verified by `verifyAuthorizationHeader` at
- * the transport). Returns the `sub` string ONLY — this is the human user id for
- * an authorization_code token and is ABSENT on a client_credentials token, so a
- * defined return value is the reliable "human token" discriminator (see the
- * grant-discrimination note above; `azp`/`client_id` cannot discriminate). Any
- * malformed header / non-3-part token / non-string `sub` → undefined.
+ * True iff a live `public.user` row exists for the exact `id`. Gates the human
+ * authorization_code arm so a decoded `sub` composes an identity ONLY when it
+ * names a real, pre-registered principal — mirroring the service-account arm,
+ * which requires a real `service_accounts` row before yielding ANY id. The
+ * `sub` is decoded from the raw header WITHOUT a signature check, and the normal
+ * OAuth verify (`verifyMcpAccessToken`) is skipped on the dev-admin trusted-host
+ * bypass path; without this gate the arm would stamp a fully caller-supplied
+ * `userId` (an arbitrary or entirely non-existent id) onto the request
+ * context/audit on that path. FAIL-CLOSED: any DB error returns `false` (→ the
+ * arm does not fire and resolution falls through), so a transient failure can
+ * never admit an unverified subject.
+ */
+export async function userExists(input: {
+  userId: string;
+  pool: ActorIdentityPool;
+}): Promise<boolean> {
+  const { userId, pool } = input;
+  try {
+    const result = await pool.query<{ one: number }>(
+      'SELECT 1 AS one FROM public."user" WHERE id = $1 LIMIT 1',
+      [userId],
+    );
+    return result.rows.length > 0;
+  } catch (error) {
+    // Fail CLOSED: an existence-check error must NOT compose the identity.
+    console.warn("[actor-identity] user existence check failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * Decode the `sub` claim from a Bearer JWT payload WITHOUT verifying the
+ * signature. On the normal remote path the token was already verified by
+ * `verifyMcpAccessToken` at the transport, but that check is SKIPPED on the
+ * dev-admin trusted-host bypass — so a decoded `sub` is NOT proof of a verified
+ * caller and MUST NOT be trusted as an identity on its own. The caller composes
+ * it only behind `userExists` (a live `public.user` gate), exactly as the
+ * service-account arm requires a real `service_accounts` row. Returns the `sub`
+ * string ONLY — present for an authorization_code token, ABSENT on a
+ * client_credentials token, so a defined return value is the reliable "human
+ * token" grant discriminator (see the grant-discrimination note above;
+ * `azp`/`client_id` cannot discriminate). Any malformed header / non-3-part
+ * token / non-string `sub` → undefined.
  */
 export function decodeBearerSub(
   authorizationHeader: string | null | undefined,
@@ -212,18 +250,28 @@ export async function resolveActorIdentity(
   //    return orgId:null here and never override that coherent source.
   if (sessionUser?.id) return { userId: sessionUser.id, orgId: null };
 
-  // 1b. Human authorization_code Bearer path (#1592). A verified token whose
-  //     `sub` claim is present carries the real `public.user.id` — this grant
-  //     (and ONLY this grant) is minted with a user row, so `sub` is the
-  //     reliable discriminator (`azp` is set for both grants; see the module
-  //     note). The userId is the decoded `sub`; the org is SERVER-DERIVED with
-  //     the SAME fail-closed discipline as the service-account arm — composed
-  //     ONLY when the user has exactly one live `public.member` row (sole
-  //     membership), else org-less. This arm runs BEFORE the service-account
-  //     arm so a token carrying both `azp` and `sub` (the real authorization_code
-  //     shape) is never misrouted into `readServiceAccount(azp)`.
+  // 1b. Human authorization_code Bearer path (#1592). A token whose `sub` claim
+  //     is present carries the real `public.user.id` — this grant (and ONLY this
+  //     grant) is minted with a user row, so `sub` is the reliable discriminator
+  //     (`azp` is set for both grants; see the module note). The userId is the
+  //     decoded `sub`, composed ONLY behind a live `public.user` existence gate
+  //     (`userExists`): the `sub` is decoded WITHOUT a signature check and the
+  //     OAuth verify is skipped on the dev-admin trusted-host bypass, so an
+  //     un-gated arm would let an unauthenticated caller stamp an arbitrary or
+  //     non-existent `userId` onto the request context/audit. Requiring a real
+  //     user row mirrors the service-account arm (which requires a real
+  //     `service_accounts` row) and reduces the residual to naming a
+  //     pre-registered principal — never a fabricated id. The org is
+  //     SERVER-DERIVED with the SAME fail-closed discipline — composed ONLY when
+  //     the user has exactly one live `public.member` row (sole membership),
+  //     else org-less. This arm runs BEFORE the service-account arm so a token
+  //     carrying both `azp` and `sub` (the real authorization_code shape) is
+  //     never misrouted into `readServiceAccount(azp)`. If the `sub` names no
+  //     live user, the arm does not fire and resolution falls through (the
+  //     pre-#1592 behavior: only a real `service_accounts` match can yield an
+  //     identity from an unverified header).
   const bearerSub = decodeBearerSub(authHeader);
-  if (bearerSub) {
+  if (bearerSub && (await userExists({ userId: bearerSub, pool }))) {
     const orgId = await resolveSoleOrgMembership({ userId: bearerSub, pool });
     return { userId: bearerSub, orgId };
   }
