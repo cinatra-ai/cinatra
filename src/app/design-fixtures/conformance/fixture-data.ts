@@ -68,13 +68,17 @@ export const CONFORMANCE_CARD_FIXTURES: ConformanceCardFixture[] = [
     ctaDelayMs: 0,
   },
   {
+    // Spec demo card changed kind workflow → agent (design#71,
+    // specs/app-extensions.html §III: data-state="kind:agent"). The fixture kind
+    // flips with it; the cardDriver auto-derives the required kind:agent state
+    // variant + the "Agent" publisher-byline label from kindSlug/kindLabel.
     surfaceId: "extension-listing-card-update",
-    packageName: "@cinatra-fixtures/weekly-digest",
+    packageName: "@cinatra-fixtures/pipeline-board",
     packageVersion: "3.0.0",
-    displayName: "Weekly Digest Workflow",
-    description: "Assembles and schedules the weekly digest run.",
-    kindSlug: "workflow",
-    kindLabel: "Workflow",
+    displayName: "Revenue Pulse Agent",
+    description: "Live revenue, churn and pipeline metrics, refreshed from your billing and CRM.",
+    kindSlug: "agent",
+    kindLabel: "Agent",
     sdkAbiRange: "*",
     installed: { version: "2.2.0", isArchived: false },
     ctaDelayMs: 250,
@@ -144,3 +148,49 @@ export const CONFORMANCE_BUTTON_VARIANTS = [
   "destructive",
   "link",
 ] as const;
+
+/**
+ * Post-install "needs configuration" callout fixture (cinatra#1057 surface,
+ * conformance id `install-config-needs-callout`; design#71
+ * specs/app-extensions.html §VI). A freshly-installed AGENT with an
+ * unconfigured REQUIRED connector dependency wears the greyed needs-review
+ * treatment, and a thin status strip attached to the bottom of its §III card
+ * lists each unconfigured connector by its human `manifest.displayName`, linked
+ * to that connector's own `/connectors/<vendor>/<slug>/setup` page (the
+ * `configure -> connector-setup` affordance). The `empty` variant (every
+ * required connector configured) drops the strip and returns the card to its
+ * active colours.
+ *
+ * The connector `displayName` deliberately shares NO token with its `slug` or
+ * `packageName`, so the name-binding assertion proves the strip binds the
+ * displayName — never the slug or package name (the same anti-lookalike
+ * discipline the seeded connector-grid fixture uses).
+ */
+export const CONFORMANCE_INSTALL_CONFIG_CALLOUT = {
+  surfaceId: "install-config-needs-callout",
+  /** The host agent the strip hangs off — greyed, cannot-run until configured. */
+  agent: {
+    packageName: "@cinatra-fixtures/apollo-prospecting-agent",
+    displayName: "Apollo Prospecting Agent",
+    description:
+      "Finds prospecting contacts by organisation and title, then upserts each into your CRM.",
+    kindLabel: "Agent",
+    // Bare semver (the sibling card fixtures' convention) — the §VI spec line's
+    // v-prefix is the card caller's; this string is fixture-cosmetic, asserted
+    // by no driver.
+    version: "1.2.0",
+    vendorName: "Cinatra Fixtures",
+  },
+  /** The single unconfigured REQUIRED connector dependency the strip lists. */
+  connector: {
+    packageName: "@cinatra-fixtures/prospecting-data-connector",
+    displayName: "Apollo",
+    slug: "prospecting-data",
+    /**
+     * Deep-link to the connector's OWN setup page — the real
+     * `/connectors/<vendor>/<slug>/setup` route the affordance routes to
+     * (outcome: connector-setup).
+     */
+    settingsHref: "/connectors/cinatra-fixtures/prospecting-data/setup",
+  },
+} as const;

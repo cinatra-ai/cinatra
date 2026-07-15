@@ -26,6 +26,22 @@
 import { z } from "zod";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
+// ---------------------------------------------------------------------------
+// Server-action boundary rule (cinatra#1602 — the enforced picker contract).
+//
+// For these kinds an access target is MANDATORY at the server install action
+// (installExtensionPackageFormAction). An ABSENT accessTarget is REJECTED
+// fail-closed — the action refuses to persist the implicit per-kind default
+// (WORKSPACE_DEFAULT for artifact/workflow; the config.json-derived default for
+// a connector), which would be a silent workspace-wide grant. The kind is
+// resolved from the installed canonical row (the pre-install packument probe is
+// unreliable) and a fresh install is rolled back on refusal. This is the
+// defense-in-depth boundary behind the UI pickers (#1541): every caller —
+// including a batch installer / MCP tool / admin script that bypasses the UI —
+// hits the same refusal. Kinds NOT in this set have no access semantics and keep
+// the direct install path unchanged.
+// ---------------------------------------------------------------------------
+
 /** The kinds whose marketplace install offers the pre-install access selector. */
 export const INSTALL_ACCESS_TARGET_KINDS = [
   "connector",
