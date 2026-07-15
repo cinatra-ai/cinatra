@@ -16,6 +16,17 @@
 export const AGENT_SOURCE_ID = "agent-creation-requests";
 
 /**
+ * The single shared promotion source id (cinatra#1560, E10). ONE ApprovalSource
+ * federates every row-scope promotion flow (memory #1381, artifact #1437, …)
+ * behind a subject-type discriminator carried in the row id
+ * (`<subjectType>:<subjectId>`, see `promotion-subjects.ts`), so the flows plug
+ * a subject-type adapter into ONE source rather than each shipping its own. Kept
+ * here (import-light) so both the feed view-model and the source can name it
+ * without dragging the heavy decide/render surface.
+ */
+export const PROMOTION_SOURCE_ID = "promotion-requests";
+
+/**
  * The legacy workflow source id. The workflow approval source itself was
  * deleted whole by #1035; the id survives only as the constant the feed
  * view-model uses to recognise (and gate) any residual workflow-legacy row.
