@@ -62,6 +62,7 @@ import {
 } from "@/lib/marketplace-detail-view";
 import { getPublicMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
 import { isRedirectError } from "./is-redirect-error";
+import { MarketplaceModalByline } from "./marketplace-modal-byline";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import {
   buildMarketplaceFailureCopy,
@@ -555,39 +556,17 @@ function ModalHero({
           {card.displayName || detail.displayName}
         </h2>
         {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
-            vendor as a semibold primary link (no underline at rest) out to
-            its marketplace store. */}
-        <p className="flex items-center gap-1.25 text-sm text-muted-foreground">
-          <span aria-hidden="true" className="shrink-0" style={{ color: bg }}>
-            {extensionKindEmblem(card.kindSlug, "size-3.5")}
-          </span>
-          <span className="min-w-0 truncate">
-            {/* data-slot: conformance stable-id contract (cinatra#986) — §V
-                byline kind label (per-kind state variant assertions). */}
-            <span data-slot="marketplace-modal-kind" className="text-foreground">
-              {detail.kindLabel}
-            </span>
-            {detail.vendor ? (
-              <>
-                {" by "}
-                {detail.vendor.storeUrl ? (
-                  <Link
-                    href={detail.vendor.storeUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-semibold text-primary hover:underline hover:underline-offset-2"
-                  >
-                    {detail.vendor.name || detail.vendor.slug}
-                  </Link>
-                ) : (
-                  <span className="font-semibold text-foreground">
-                    {detail.vendor.name || detail.vendor.slug}
-                  </span>
-                )}
-              </>
-            ) : null}
-          </span>
-        </p>
+            vendor label resolved through the single vendor-presentation resolver
+            (cinatra#1528) — a known vendor links out to its store; a missing
+            display name renders the localized placeholder as plain text, never
+            the vendor slug and never a dropped clause. */}
+        <MarketplaceModalByline
+          kindSlug={card.kindSlug}
+          kindLabel={detail.kindLabel}
+          vendor={detail.vendor}
+          accentColor={bg}
+          packageName={detail.packageName}
+        />
       </div>
       {/* 0.5.0 §II price: pinned to the TOP of the centred header (self-start +
           4px top pad) even though the name/byline block centres against the logo. */}

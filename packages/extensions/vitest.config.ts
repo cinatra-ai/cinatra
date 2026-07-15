@@ -173,6 +173,9 @@ export default defineConfig({
       "@/lib/extension-accent": path.join(__dirname, "../../src/lib/extension-accent.ts"),
       "@/lib/extension-compat-badge": path.join(__dirname, "../../src/lib/extension-compat-badge.ts"),
       "@/lib/marketplace-detail-view": path.join(__dirname, "../../src/lib/marketplace-detail-view.ts"),
+      // Pure vendor-byline resolver (cinatra#1528) — a leaf module (no heavy
+      // deps), mapped to real source so the §I/§II byline tests exercise it.
+      "@/lib/vendor-presentation": path.join(__dirname, "../../src/lib/vendor-presentation.ts"),
       "@/lib/utils": path.join(__dirname, "../../src/lib/utils.ts"),
     },
   },

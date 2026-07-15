@@ -84,7 +84,12 @@
         {
           "file": "packages/extensions/src/screens/marketplace-detail-modal.tsx",
           "literals": [
-            "data-slot=\"marketplace-modal-name\"",
+            "data-slot=\"marketplace-modal-name\""
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/marketplace-modal-byline.tsx",
+          "literals": [
             "data-slot=\"marketplace-modal-kind\""
           ]
         }
