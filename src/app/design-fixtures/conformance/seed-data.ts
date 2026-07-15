@@ -73,7 +73,27 @@ export type SeededInstalledExtension = {
   displayName: string;
   description: string;
   vendor: string;
+  /**
+   * The verdaccio source registryUrl this row installs under (cinatra#1572).
+   * Optional — defaults to SEEDED_SOURCE_REGISTRY_URL. Distinct URLs let the
+   * seeded §VI harness prove the source-indicator CRUX — a marketplace-identity
+   * row and an instance-identity row (plus a matches-neither `unknown` row)
+   * rendered TOGETHER — without changing any cardinality constant.
+   */
+  registryUrl?: string;
 };
+
+// Distinct, fake (`.invalid`) registry identities assigned to two seeded rows so
+// the seeded §VI harness can later prove the source-indicator crux — a
+// marketplace-identity row and an instance-identity row (plus matches-neither
+// `unknown` rows) — WITHOUT changing any cardinality constant (cinatra#1572 AC8
+// data prerequisite). Declared BEFORE the seed array (module temporal-dead-zone).
+// `.invalid` hosts guarantee no real private hostname ever appears. The
+// seeded-fixture RENDER of the indicator + its pixel baseline ride the paired
+// design-surface follow-up (sequenced behind the spec update), so only the DATA
+// lands here.
+const SEEDED_MARKETPLACE_REGISTRY_URL = "https://design-marketplace.invalid/registry";
+const SEEDED_INSTANCE_REGISTRY_URL = "https://design-instance.invalid/registry";
 
 export const SEEDED_INSTALLED_EXTENSIONS: SeededInstalledExtension[] = [
   {
@@ -85,6 +105,8 @@ export const SEEDED_INSTALLED_EXTENSIONS: SeededInstalledExtension[] = [
     displayName: "Horizon Research Copilot",
     description: "Plans retrievals and drafts cited answers from team sources.",
     vendor: "Cinatra Fixtures",
+    // Marketplace-identity registry → "from marketplace".
+    registryUrl: SEEDED_MARKETPLACE_REGISTRY_URL,
   },
   {
     base: "minutes-digest",
@@ -95,6 +117,9 @@ export const SEEDED_INSTALLED_EXTENSIONS: SeededInstalledExtension[] = [
     displayName: "Standup Note Condenser",
     description: "Turns raw meeting transcripts into action items.",
     vendor: "Cinatra Fixtures",
+    // Instance local-registry identity → "from your instance". Paired with the
+    // marketplace row above, this is the crux the render fence proves.
+    registryUrl: SEEDED_INSTANCE_REGISTRY_URL,
   },
   {
     base: "release-cadence",
