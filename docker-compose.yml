@@ -133,10 +133,16 @@ services:
     # manifest.v2+json), so a digest pin adds no cross-arch portability cost.
     # Re-resolve the digest at bump time with:
     #   docker buildx imagetools inspect nangohq/nango-server:hosted
-    # Renovate owns bumps (it already tracks nangohq/nango-server). The hosted
-    # deployment re-resolves and smokes its own digest independently — do not
-    # hand-sync the two. Resolved 2026-06-23. See docs/internals/workflows/upgrade-track.md.
-    image: nangohq/nango-server:hosted@sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869
+    # CONVERGED PIN POLICY (supersedes the earlier "pinned independently, do
+    # not hand-sync" note): this compose and the hosted deployment now converge
+    # on ONE validated digest per reconcile window. `hosted` is a fast-moving
+    # tag; a digest is VALIDATED only after the hosted deployment's OAuth
+    # connect -> decrypt -> connector round-trip smoke passes on it, and this
+    # public pin follows the validated digest — never a blind re-resolve of the
+    # moving tag. The works-after nango arm (CI) proves the synthetic
+    # connection-store round-trip on the candidate; the OAuth smoke is a
+    # deploy-time gate. Converged 2026-07-11. See docs/internals/workflows/upgrade-track.md.
+    image: nangohq/nango-server:hosted@sha256:fa3db52396f1ddba8fd7c7c0203c8226916042442a0dd782f8848354c1f95198
     # Keep the connector backend alive across the intermittent qemu SIGSEGVs the
     # amd64-only image hits on arm64 dev hosts. `unless-stopped` (NOT
     # `on-failure:N`, which exhausts its retry budget and returns to
