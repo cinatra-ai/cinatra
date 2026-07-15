@@ -44,6 +44,8 @@ import {
 } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { resolveVendorPresentation } from "@/lib/vendor-presentation";
+// §VI byline source indicator (cinatra#1572): the pure provenance classifier.
+import { classifyExtensionSource } from "./extension-source-label";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 // §III per-extension update-available chip (cinatra#1041 outcome 3): the
@@ -105,6 +107,7 @@ export async function RegistryCatalogScreen({
     active: activeRows,
     archived: archivedRows,
     scope,
+    registryIdentities,
   } = await loadInstalledCardRows(session, { query });
 
   // Recent dependency-install batches (cinatra #209 item 2, surfaces 2 & 3):
@@ -387,6 +390,12 @@ export async function RegistryCatalogScreen({
         { name: row.vendor },
         { surface: "registry-catalog-screen", ref: row.packageName },
       )}
+      // §VI source indicator (cinatra#1572): classify each row's provenance from
+      // its canonical source + the configured registry identities, rendered as
+      // an independent byline element alongside the resolved vendor presentation.
+      // A null canonical or a verdaccio matching neither configured identity
+      // resolves to the neutral "source unknown".
+      source={classifyExtensionSource(row.canonical, registryIdentities)}
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}
