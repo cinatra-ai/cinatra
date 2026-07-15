@@ -77,6 +77,22 @@
         }
       ]
     },
+    "install-config-needs-callout": {
+      "manifest": "app-extensions",
+      "selector": "[data-slot=\"install-config-needs-callout\"] (the §VI needs-review strip on the InstalledExtensionCard); name field + configure affordance: the connector link [data-field=\"manifest.displayName\"] deep-linked to /connectors/<vendor>/<slug>/setup; empty variant: the strip is absent from the active card",
+      "requires": [
+        {
+          "file": "src/components/extensions/installed-extension-card.tsx",
+          "literals": [
+            "data-slot=\"install-config-needs-callout\"",
+            "data-conformance=\"install-config-needs-callout\"",
+            "data-field=\"manifest.displayName\"",
+            "data-slot=\"installed-extension-card\"",
+            "data-needs-review=\"\""
+          ]
+        }
+      ]
+    },
     "extension-detail-modal": {
       "manifest": "app-extensions",
       "selector": "role=dialog; name: [data-slot=\"marketplace-modal-name\"]; kind byline: [data-slot=\"marketplace-modal-kind\"]; footer CTA: the real MarketplaceInstallForm submit",

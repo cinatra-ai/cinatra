@@ -271,6 +271,7 @@
     { "alias": "@cinatra-ai/extensions/screens/update-plan-model", "target": "./packages/extensions/src/screens/update-plan-model.ts" },
     { "alias": "@cinatra-ai/extensions/screens/extensions-marketplace-client", "target": "./packages/extensions/src/screens/extensions-marketplace-client.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/installed-empty-states", "target": "./packages/extensions/src/screens/installed-empty-states.tsx" },
+    { "alias": "@cinatra-ai/extensions/screens/extension-source-label", "target": "./packages/extensions/src/screens/extension-source-label.ts" },
     { "alias": "@cinatra-ai/extensions/screens/extension-settings-view", "target": "./packages/extensions/src/screens/extension-settings-view.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/extension-access-control", "target": "./packages/extensions/src/screens/extension-access-control.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/installed-rows", "target": "./packages/extensions/src/screens/installed-rows.ts" },

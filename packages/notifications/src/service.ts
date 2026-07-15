@@ -172,6 +172,102 @@ export function listNotificationsByDedupeKeyPrefixForUser(args: {
     .filter((r): r is NotificationRecord => Boolean(r));
 }
 
+/**
+ * Keyset ("seek") boundary for {@link listNotificationsKeysetForUser}. The feed
+ * is ordered `created_at DESC, id DESC`; a boundary selects the rows that come
+ * strictly AFTER a cursor position in that order.
+ *
+ * Three modes exist because the notifications stream is merged with a SECOND
+ * stream (the read-time-federated pending approvals) into one chronological
+ * `/notifications` feed (cinatra#1555). The union orders by MILLISECOND-epoch
+ * (a canonical UTC ms ISO cursor), while `created_at` is stored at microsecond
+ * precision — so every bound truncates the column to milliseconds
+ * (`date_trunc('milliseconds', created_at)`) to agree with the union comparator,
+ * with an index-usable `created_at < (createdAt + 1ms)` range narrowing the
+ * scan. When the cursor lands in the OTHER stream, the equal-instant
+ * notification rows relate to it wholesale (all after, or all before):
+ *
+ *   - `row`               — cursor IS a notification: strict ms tuple
+ *                           `(date_trunc('ms',created_at), id) < (createdAt, id)`.
+ *   - `createdAtInclusive`— cursor is an approval that sorts BEFORE notifications
+ *                           at its instant (its `sourceKey` < the notification
+ *                           sourceKey), so EVERY notification in that millisecond
+ *                           is still ahead: `created_at < createdAt + 1ms`.
+ *   - `createdAtExclusive`— cursor is an approval that sorts AFTER notifications
+ *                           at its instant, so none in that millisecond remain:
+ *                           `created_at < createdAt`.
+ *
+ * All three are index-friendly against `notifications_user_created_id_idx`
+ * (`(user_id, created_at DESC, id DESC)`): the `created_at < …` range uses the
+ * index, and the ms-truncated ORDER BY resolves via an incremental sort over
+ * the already-ordered scan.
+ */
+export type NotificationsKeysetBefore =
+  | { boundary: "row"; createdAt: string; id: string }
+  | { boundary: "createdAtInclusive"; createdAt: string }
+  | { boundary: "createdAtExclusive"; createdAt: string };
+
+/**
+ * Keyset-paginated read of a user's notifications, newest first
+ * (`created_at DESC, id DESC`), for the unified `/notifications` feed
+ * (cinatra#1555). Unlike {@link listNotificationsForUser} — which returns the
+ * fixed 200-newest window with NO cursor — this walks the full history a page at
+ * a time via a stable seek boundary, so a merge with the pending-approval stream
+ * never dups or skips at a page edge. `limit` is clamped to
+ * `[1, NOTIFICATIONS_PER_USER_LIMIT]`. Backed by `notifications_user_created_id_idx`.
+ */
+export function listNotificationsKeysetForUser(args: {
+  userId: string;
+  limit: number;
+  before?: NotificationsKeysetBefore;
+}): NotificationRecord[] {
+  if (!args.userId) return [];
+  const limit = Math.min(
+    Math.max(Math.trunc(args.limit) || 0, 1),
+    NOTIFICATIONS_PER_USER_LIMIT,
+  );
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+
+  const where: string[] = ["user_id = $1"];
+  const values: unknown[] = [args.userId];
+  const before = args.before;
+  if (before) {
+    // `values.push` returns the new length, i.e. the 1-based param index.
+    const c = values.push(before.createdAt);
+    if (before.boundary === "row") {
+      const cid = values.push(before.id);
+      where.push(
+        `created_at < ($${c}::timestamptz + interval '1 millisecond') ` +
+          `AND (date_trunc('milliseconds', created_at), id) < ($${c}::timestamptz, $${cid}::text)`,
+      );
+    } else if (before.boundary === "createdAtInclusive") {
+      where.push(`created_at < ($${c}::timestamptz + interval '1 millisecond')`);
+    } else {
+      where.push(`created_at < $${c}::timestamptz`);
+    }
+  }
+  values.push(limit);
+
+  const [result] = host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at
+          FROM ${schemaQualified("notifications")}
+          WHERE ${where.join(" AND ")}
+          ORDER BY date_trunc('milliseconds', created_at) DESC, id DESC
+          LIMIT $${values.length}`,
+        values,
+      },
+    ],
+  });
+  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
+  return rows
+    .map(rowToRecord)
+    .filter((r): r is NotificationRecord => Boolean(r));
+}
+
 export function countUnreadForUser(userId: string): number {
   if (!userId) return 0;
   const host = getNotificationsHostAdapters();

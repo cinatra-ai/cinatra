@@ -19,6 +19,8 @@ import {
   hasAdminToken,
   isRegisteredVendor,
   resolveAdminToken,
+  resolveOwnVendorApplicationCreatedAt,
+  resolveOwnVendorApplicationId,
   toRowEligibility,
 } from "./marketplace-shared";
 import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
@@ -34,7 +36,15 @@ import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
 // ---------------------------------------------------------------------------
 
 const SOURCE_ID = MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID;
-const LIST_LIMIT = 50;
+// Per-request page size for the cursor-paginated drain (the marketplace caps a
+// single vendor_application_list_admin call at this many rows and returns a
+// `next_cursor` for the rest — see MAX_PAGES).
+const PAGE_LIMIT = 50;
+// Safety bound on the pagination drain so a runaway `next_cursor` (a
+// misbehaving marketplace that never returns null) can never loop unbounded.
+// PAGE_LIMIT * MAX_PAGES = 2000 pending applications is far beyond any real
+// moderation backlog; the queue is expected to be small.
+const MAX_PAGES = 40;
 
 const MODERATE_ACTIONS: ApprovalAction[] = [
   { id: "approve", label: "Approve", enforcement: "action-time" },
@@ -61,7 +71,16 @@ function statusVariant(status: string): MarketplaceBadgeVariant {
   }
 }
 
-function toRow(r: MarketplaceVendorApplicationAdminRow): ApprovalRow {
+// `ownAppId` / `ownCreatedAt` align the ONE row that is this instance's own
+// application (also visible via the self-status mirror) onto the SAME local
+// timestamp both adapters resolve, so the unified feed's deduped keyset cursor
+// is stable no matter which mirror fetched it (cinatra#1555). Every OTHER
+// vendor's row keeps the authoritative remote `applied_at`.
+function toRow(
+  r: MarketplaceVendorApplicationAdminRow,
+  ownAppId: string | undefined,
+  ownCreatedAt: string,
+): ApprovalRow {
   const raw: VendorAppRaw = {
     scope: r.scope,
     tier: r.tier,
@@ -74,7 +93,7 @@ function toRow(r: MarketplaceVendorApplicationAdminRow): ApprovalRow {
     title: r.display_name,
     subtitle: r.scope,
     status: r.status,
-    createdAt: r.applied_at,
+    createdAt: ownAppId && r.application_id === ownAppId ? ownCreatedAt : r.applied_at,
     eligibility: toRowEligibility(r.eligibility),
     raw,
   };
@@ -103,8 +122,28 @@ export const marketplaceVendorAppModerationSource: ApprovalSource = {
     const sectionToken = isRegisteredVendor() ? resolveAdminToken() : undefined;
     return guardedFetch(viewer, sectionToken, MODERATE_ACTIONS, async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
-      const out = await client.vendorApplicationListAdmin({ status: ["applied"], limit: LIST_LIMIT });
-      return out.rows.map(toRow);
+      // Drain the cursor (E5 #1555): the endpoint returns at most PAGE_LIMIT rows
+      // per call plus a `next_cursor` for the remainder. The prior single call
+      // silently truncated the moderation queue at 50; follow `next_cursor` until
+      // it is null (bounded by MAX_PAGES) so the unified feed sees every pending
+      // application, not just the newest page.
+      const rows: MarketplaceVendorApplicationAdminRow[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const out = await client.vendorApplicationListAdmin({
+          status: ["applied"],
+          limit: PAGE_LIMIT,
+          ...(cursor ? { cursor } : {}),
+        });
+        rows.push(...out.rows);
+        if (!out.next_cursor) break;
+        cursor = out.next_cursor;
+      }
+      // Resolve the instance's own application identity ONCE (local, no network)
+      // so its row aligns with the self-status mirror's timestamp.
+      const ownAppId = resolveOwnVendorApplicationId();
+      const ownCreatedAt = resolveOwnVendorApplicationCreatedAt();
+      return rows.map((r) => toRow(r, ownAppId, ownCreatedAt));
     });
   },
 

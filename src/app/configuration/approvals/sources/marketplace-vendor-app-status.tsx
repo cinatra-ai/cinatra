@@ -14,6 +14,7 @@ import {
   guardedFetch,
   hasVendorToken,
   isRegisteredVendor,
+  resolveOwnVendorApplicationCreatedAt,
   resolveVendorToken,
 } from "./marketplace-shared";
 import type { ApprovalRow, ApprovalSource } from "./types";
@@ -80,8 +81,12 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
     return guardedFetch(viewer, sectionToken, [], async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const status = await client.vendorApplicationStatus();
-      // "none" = no application row exists for this instance → empty section.
-      if (status.state === "none") return [];
+      // Pending-only (E5 #1555): the unified feed surfaces the instance's own
+      // vendor application only while it is in flight. `applied` is the sole
+      // pending state; a decided/terminal application (approved / rejected) and
+      // the "none" (no-row) sentinel leave the list — matching the contract's
+      // `counts()`, which already counts only `state === "applied"`.
+      if (status.state !== "applied") return [];
       const raw: StatusRaw = {
         tier: status.tier ?? null,
         decisionReason: status.decision_reason ?? null,
@@ -93,7 +98,12 @@ export const marketplaceVendorAppStatusSource: ApprovalSource = {
         sourceId: SOURCE_ID,
         title: status.scope ?? "Vendor application",
         status: status.state,
-        createdAt: status.decided_at ?? "",
+        // A REAL, sortable createdAt for the chronological merge (E5 #1555),
+        // resolved from LOCAL durable state — the SAME value the moderator-queue
+        // mirror emits for this instance's own application, so the deduped feed
+        // row's keyset cursor is stable regardless of which mirror fetched it
+        // (the old bug shipped `createdAt: ""`, unsortable).
+        createdAt: resolveOwnVendorApplicationCreatedAt(),
         raw,
       };
       return [row];

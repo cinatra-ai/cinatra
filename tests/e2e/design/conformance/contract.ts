@@ -23,6 +23,7 @@ import { expect, request as playwrightRequest, type Locator, type Page } from "@
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_CARD_FIXTURES,
+  CONFORMANCE_INSTALL_CONFIG_CALLOUT,
   CONFORMANCE_STATUS_PILL_STATUSES,
   type ConformanceCardFixture,
 } from "../../../../src/app/design-fixtures/conformance/fixture-data";
@@ -583,6 +584,110 @@ const EXTENSION_DETAIL_MODAL_DRIVER: SurfaceDriver = {
 };
 
 // ---------------------------------------------------------------------------
+// Post-install "needs configuration" callout (cinatra#1057; surface
+// install-config-needs-callout, design#71 specs/app-extensions.html §VI).
+// Mounted on the base conformance harness by
+// src/app/design-fixtures/conformance/install-config-needs-fixture.tsx, which
+// renders the REAL InstalledExtensionCard + NeedsReviewStrip: an agent with an
+// unconfigured required CONNECTOR dependency wears the greyed needs-review
+// treatment and a bottom strip listing each connector by its displayName,
+// deep-linked to that connector's own setup page. Two harness variants:
+// `populated` (one unconfigured connector → the strip) and `empty` (all
+// configured → no strip, active card).
+// ---------------------------------------------------------------------------
+
+const INSTALL_CONFIG_CALLOUT_SLOT = '[data-slot="install-config-needs-callout"]';
+
+const INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(
+      '[data-surface-id="install-config-needs-callout"][data-variant="populated"]',
+    ),
+  present: async (_page, root) => {
+    const strip = root.locator(INSTALL_CONFIG_CALLOUT_SLOT);
+    await expect(strip).toBeVisible();
+    // The spec's centred needs-review framing (design#71 §VI) — never a bare
+    // list; the strip is the "Set up connections first:" callout.
+    await expect(strip).toContainText("Set up connections first:");
+  },
+  fields: {
+    // name = manifest.displayName — the strip lists each required connector by
+    // its human displayName (the SAME name the §I ListingCard + Connectors grid
+    // render), NEVER the package name or slug. The fixture's displayName shares
+    // no token with either, so the binding cannot false-green on a lookalike.
+    name: {
+      source: "manifest.displayName",
+      assert: async (_page, root) => {
+        const nameLink = root.locator(
+          `${INSTALL_CONFIG_CALLOUT_SLOT} [data-field="manifest.displayName"]`,
+        );
+        await expect(nameLink).toHaveText(CONFORMANCE_INSTALL_CONFIG_CALLOUT.connector.displayName);
+        await expect(nameLink).not.toContainText(
+          CONFORMANCE_INSTALL_CONFIG_CALLOUT.connector.packageName,
+        );
+        await expect(nameLink).not.toContainText(
+          CONFORMANCE_INSTALL_CONFIG_CALLOUT.connector.slug,
+        );
+      },
+    },
+  },
+  actions: {
+    // configure -> connector-setup: the displayName affordance is an actionable
+    // link deep-linked to THAT connector's own setup page
+    // (/connectors/<vendor>/<slug>/setup). The outcome is a NAVIGATION target,
+    // not an in-place mutation (the spec is explicit the strip is a follow-up
+    // reminder, never a gate) — so the outcome is proven by the affordance's
+    // resolved destination, exactly as the spec depicts it (`<a href=…>`).
+    configure: {
+      outcome: "connector-setup",
+      run: async (_page, root) => {
+        const link = root
+          .locator(INSTALL_CONFIG_CALLOUT_SLOT)
+          .getByRole("link", {
+            name: CONFORMANCE_INSTALL_CONFIG_CALLOUT.connector.displayName,
+            exact: true,
+          });
+        await expect(link).toBeVisible();
+        await expect(link).toHaveAttribute(
+          "href",
+          CONFORMANCE_INSTALL_CONFIG_CALLOUT.connector.settingsHref,
+        );
+      },
+    },
+  },
+  states: {
+    // kind:connector — the listed dependency is a CONNECTOR: its setup deep-link
+    // resolves under the Connectors surface (/connectors/<vendor>/<slug>/setup),
+    // the connector kind's own configuration home. summarizeConfigurationNeeds
+    // only ever surfaces required CONNECTOR dependencies, so a callout that
+    // renders at all is a connector-kind callout by construction; asserting the
+    // route namespace pins that classification.
+    "kind:connector": async (_page, root) => {
+      const link = root
+        .locator(INSTALL_CONFIG_CALLOUT_SLOT)
+        .getByRole("link", {
+          name: CONFORMANCE_INSTALL_CONFIG_CALLOUT.connector.displayName,
+          exact: true,
+        });
+      await expect(link).toHaveAttribute("href", /^\/connectors\/.+\/setup$/);
+    },
+    // empty — every required connector configured: the card returns to its
+    // normal active (non-greyed) treatment and the strip is ABSENT (the caller
+    // stops passing configurationNeeds).
+    empty: async (page) => {
+      const emptyRoot = page.locator(
+        '[data-surface-id="install-config-needs-callout"][data-variant="empty"]',
+      );
+      const card = emptyRoot.locator('[data-slot="installed-extension-card"]');
+      await expect(card).toBeVisible();
+      await expect(card).not.toHaveAttribute("data-needs-review", "");
+      await expect(emptyRoot.locator(INSTALL_CONFIG_CALLOUT_SLOT)).toHaveCount(0);
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Approvals + Scheduling drivers (cinatra#1043) — the surfaces the app manifest
 // gained at spec 4d7b3505. Mounted on the base conformance harness by
 // src/app/design-fixtures/conformance/approvals-scheduling-fixtures.tsx. Their
@@ -771,6 +876,7 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-listing-grid": EXTENSION_LISTING_GRID_DRIVER,
   "installed-extensions-list": INSTALLED_EXTENSIONS_LIST_DRIVER,
   "installed-extensions-filter": INSTALLED_EXTENSIONS_FILTER_DRIVER,
+  "install-config-needs-callout": INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER,
   "connector-grid": CONNECTOR_GRID_DRIVER,
   "connector-connection-filter": CONNECTOR_CONNECTION_FILTER_DRIVER,
   "extension-detail-modal": EXTENSION_DETAIL_MODAL_DRIVER,

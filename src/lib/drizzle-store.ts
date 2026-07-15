@@ -759,6 +759,16 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS notifications_user_unread_idx ON "${schemaName.replaceAll('"', '""')}"."notifications" (user_id, read_at, created_at DESC) WHERE user_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS notifications_topic_created_idx ON "${schemaName.replaceAll('"', '""')}"."notifications" (topic, created_at DESC) WHERE topic IS NOT NULL` },
+    // Keyset ("seek") pagination for the unified /notifications feed (cinatra#1555).
+    // The union read walks the FULL history newest-first via
+    //   WHERE user_id = $1 AND (created_at, id) < ($2, $3)
+    //   ORDER BY created_at DESC, id DESC
+    // (plus the createdAt-only boundary variants used at a cross-stream tie), so
+    // it needs the (created_at DESC, id DESC) sort keys co-located under user_id.
+    // ADDITIVE index on an existing table (no data transform) — belongs in this
+    // idempotent bootstrap block, NOT a numbered migrations/core/ module (see
+    // migrations/README.md's additive-vs-transformational split).
+    { text: `CREATE INDEX IF NOT EXISTS notifications_user_created_id_idx ON "${schemaName.replaceAll('"', '""')}"."notifications" (user_id, created_at DESC, id DESC) WHERE user_id IS NOT NULL` },
     // Prevent BullMQ retries from creating duplicate
     // notifications for the same (user, source job, kind) tuple. Partial
     // unique index so rows without a source_job_id remain unconstrained.
