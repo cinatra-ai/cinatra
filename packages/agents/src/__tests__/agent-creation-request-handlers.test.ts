@@ -561,6 +561,9 @@ describe("agent_creation_request handlers", () => {
       expect(input.body).toContain("@test/test-agent");
       expect(input.body).toContain("stored reason");
       expect(input.body).not.toContain("caller raw reason");
+      // #1555: the decision notification now deep-links to the request detail
+      // route (E2 opened it to author read access), enabling mark-read-on-nav.
+      expect(input.href).toBe("/configuration/agents/approvals/req-1");
       // Dedupe key is decision-cycle-stable: decidedAt is part of the key, so
       // a later re-decision (after an author edit) mints a fresh key.
       expect(input.dedupeKey).toBe(
@@ -602,6 +605,8 @@ describe("agent_creation_request handlers", () => {
       expect(recipient).toEqual({ kind: "user", userId: "user-author" });
       expect(input.title).toMatch(/approved/i);
       expect(input.kind).toBe("success");
+      // #1555: deep-link to the (now author-readable) request detail route.
+      expect(input.href).toBe("/configuration/agents/approvals/req-1");
       // approve persists no rejection reason — the body must not invent one
       // from raw caller input.
       expect(input.body).not.toMatch(/reason/i);
