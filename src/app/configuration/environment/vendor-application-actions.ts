@@ -231,6 +231,14 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
       ...identity,
       vendorApplicationId: applicationId,
       vendorState: "applied",
+      // Stamp the apply moment for the unified feed's chronological sort
+      // (cinatra#1555). The remote self-status endpoint carries no
+      // applied/submitted timestamp, so this durable local field is the sortable
+      // `createdAt` the pending vendor-application approval row reads. A fresh
+      // application always re-stamps `now` (a prior application's timestamp must
+      // not carry over onto a new id); the committed cm-success write below
+      // preserves it via the durable-field merge.
+      vendorApplicationAppliedAt: new Date().toISOString(),
       // A fresh application must never inherit a stale repair-stuck flag from
       // a prior application id. Reset to null on the persist-first write so a
       // subsequently-thrown cm call (which keeps this marker) doesn't make the
@@ -416,6 +424,9 @@ export async function cancelVendorApplicationAction(formData: FormData): Promise
     ...fresh,
     vendorState: "none",
     vendorApplicationId: null,
+    // The application is gone; its apply-timestamp is moot. Clear it (concrete
+    // null) so a later fresh application re-stamps its own (cinatra#1555).
+    vendorApplicationAppliedAt: null,
     // The application is gone; any stuck-recovery flag tied to it is moot.
     vendorApplicationRepairStuckAt: null,
     // Cancellation ends ownership: clear the persist-first nonce so no stale
@@ -483,11 +494,21 @@ export async function refreshVendorApplicationStatusAction(): Promise<void> {
       ? status.repair_stuck_at
       : null;
 
+  // Keep the apply-timestamp in sync with the reconciled state (cinatra#1555):
+  // while `applied`, preserve an existing stamp or BACKFILL one for a legacy row
+  // that applied before the field existed (so the unified feed gets a sortable
+  // `createdAt`); on any non-applied state clear it (concrete null).
+  const nextAppliedAt: string | null =
+    nextVendorState === "applied"
+      ? (fresh.vendorApplicationAppliedAt ?? new Date().toISOString())
+      : null;
+
   writeInstanceIdentity({
     ...fresh,
     vendorState: nextVendorState,
     vendorScope: status.scope ?? fresh.vendorScope ?? null,
     vendorApplicationId: nextApplicationId,
+    vendorApplicationAppliedAt: nextAppliedAt,
     vendorApplicationRepairStuckAt: nextRepairStuckAt,
   });
   invalidateInstanceIdentityCache();

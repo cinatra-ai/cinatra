@@ -138,6 +138,7 @@ const DURABLE_FIELD_NAMES = [
   "vendorState",
   "vendorScope",
   "vendorApplicationId",
+  "vendorApplicationAppliedAt",
   "vendorApplicationRepairStuckAt",
   "vendorApplicationPersistNonce",
 ] as const;
@@ -196,6 +197,19 @@ export type InstanceIdentity = {
    * cm-side application id for cross-reference.
    */
   vendorApplicationId?: string | null;
+  /**
+   * ISO timestamp of when THIS instance opened its current vendor application
+   * (the "apply" moment). Stamped by `applyVendorApplicationAction` in the same
+   * persist-first write that sets `vendorState: "applied"`, backfilled by the
+   * status-refresh action, and cleared on cancel. It exists because the remote
+   * self-status endpoint (`vendorApplicationStatus`) carries no applied/submitted
+   * timestamp — only `decided_at`, which is null precisely while the application
+   * is still `applied`. The unified approvals/notifications feed (cinatra#1555)
+   * sorts the pending vendor-application row by this value; without it the row
+   * shipped an unsortable empty `createdAt`. Durable (preserved by the merge
+   * loop); a concrete `null` clears it.
+   */
+  vendorApplicationAppliedAt?: string | null;
   /**
    * ISO timestamp recorded when the marketplace reports this instance's
    * vendor application as terminally stuck in recovery (the recovery-attempt
@@ -398,6 +412,10 @@ export function readInstanceIdentity(): InstanceIdentity | null {
       raw.vendorApplicationId === undefined
         ? undefined
         : (raw.vendorApplicationId as string | null),
+    vendorApplicationAppliedAt:
+      raw.vendorApplicationAppliedAt === undefined
+        ? undefined
+        : (raw.vendorApplicationAppliedAt as string | null),
     vendorApplicationRepairStuckAt:
       raw.vendorApplicationRepairStuckAt === undefined
         ? undefined

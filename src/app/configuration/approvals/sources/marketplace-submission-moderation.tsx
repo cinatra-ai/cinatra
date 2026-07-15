@@ -35,7 +35,17 @@ import type { ApprovalAction, ApprovalRow, ApprovalSource } from "./types";
 // ---------------------------------------------------------------------------
 
 const SOURCE_ID = MARKETPLACE_SUBMISSION_MODERATION_SOURCE_ID;
-const LIST_LIMIT = 200;
+// Per-request page size for the offset-paginated drain. Unlike vendor-app
+// moderation, `extension_submission_list_admin` exposes only `offset` (no
+// cursor) and its output carries no `next_cursor`/`total` signal, so "more
+// remain" is inferred structurally: a FULL page (=== PAGE_LIMIT) may have more
+// behind it; a SHORT page is the end. (E5 #1555 decision: paginate via offset —
+// the alternative of documenting the cap in-surface was not taken.)
+const PAGE_LIMIT = 200;
+// Safety bound on the offset drain so a marketplace that always returns a full
+// page can never loop unbounded. PAGE_LIMIT * MAX_PAGES = 4000 pending
+// submissions is far beyond any real moderation backlog.
+const MAX_PAGES = 20;
 
 const MODERATE_ACTIONS: ApprovalAction[] = [
   { id: "approve", label: "Approve", enforcement: "action-time" },
@@ -100,8 +110,22 @@ export const marketplaceSubmissionModerationSource: ApprovalSource = {
     const showVendorCopy = isRegisteredVendor();
     return guardedFetch(viewer, resolveAdminToken(), MODERATE_ACTIONS, async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
-      const out = await client.extensionSubmissionListAdmin({ status: "pending", limit: LIST_LIMIT });
-      return out.submissions.map((s) => toRow(s, showVendorCopy));
+      // Offset-paginated drain (E5 #1555): the prior single call silently
+      // truncated the moderation queue at 200. Walk `offset` a page at a time
+      // and stop on the first SHORT page (fewer than PAGE_LIMIT rows ⇒ no more
+      // behind it), bounded by MAX_PAGES, so the unified feed sees every pending
+      // submission.
+      const submissions: MarketplaceAdminSubmission[] = [];
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const out = await client.extensionSubmissionListAdmin({
+          status: "pending",
+          limit: PAGE_LIMIT,
+          offset: page * PAGE_LIMIT,
+        });
+        submissions.push(...out.submissions);
+        if (out.submissions.length < PAGE_LIMIT) break;
+      }
+      return submissions.map((s) => toRow(s, showVendorCopy));
     });
   },
 

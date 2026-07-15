@@ -425,8 +425,11 @@ async function notifyAuthorOfDecision(after: AgentCreationRequestRow): Promise<v
           `Your agent creation request '${after.packageName}' was ${decided}.` +
           (reason ? ` Reason: ${reason}` : ""),
         kind: decided === "approved" ? "success" : "warning",
-        // No href: the request detail page is admin-only; authors follow up
-        // via the chat `agent_creation_request_get/list` primitives.
+        // Deep-link to the request detail route. E2 (#1552) opened this page to
+        // author-or-admin read access (it no longer calls requireAdminSession),
+        // so the author who receives this notification can now follow the href;
+        // the unified /notifications surface uses it for mark-read-on-navigate.
+        href: `/configuration/agents/approvals/${after.id}`,
         dedupeKey: `agent-creation-request:${after.id}:${decided}:${after.decidedAt ?? ""}`,
       },
     );

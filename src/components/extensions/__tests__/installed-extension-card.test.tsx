@@ -31,6 +31,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ACCENT_PALETTE } from "@/lib/extension-accent";
 import { resolveVendorPresentation, type VendorPresentation } from "@/lib/vendor-presentation";
+import type { ExtensionSourceLabel } from "@cinatra-ai/extensions/screens/extension-source-label";
 
 // cinatra#1528: VendorPresentation is BRANDED — only resolveVendorPresentation
 // mints one, so these render tests build their `known` fixtures through the
@@ -641,5 +642,93 @@ describe("InstalledExtensionCard — post-install needs-review strip", () => {
     // …with the three panels kept in their own inner row so the strip can span
     // the full width beneath them.
     expect(html).toContain(INNER_ROW_WRAPPER);
+  });
+});
+
+// ── §VI byline source indicator (cinatra#1572) ──────────────────────────────
+// The source indicator renders as its OWN byline element, INDEPENDENT of the
+// #1528 vendor presentation: it sits alongside the resolved vendor (a
+// missing-vendor placeholder never suppresses it) and is omitted entirely for
+// non-§VI callers. `vendor` is the branded VendorPresentation contract (#1528),
+// so these fixtures build a `known` vendor through `knownVendor` and OMIT it to
+// exercise the missing-vendor placeholder path (the card reads the discriminated
+// prop directly, so an omitted vendor logs nothing).
+describe("InstalledExtensionCard — byline source indicator (cinatra#1572)", () => {
+  const marketplaceSource: ExtensionSourceLabel = {
+    kind: "marketplace",
+    label: "from marketplace",
+    tooltip: "Origin classified from the configured marketplace registry identity.",
+  };
+  const unknownSource: ExtensionSourceLabel = {
+    kind: "unknown",
+    label: "source unknown",
+    tooltip: "This extension's origin could not be determined.",
+  };
+
+  function renderCard(props: {
+    vendor?: VendorPresentation;
+    source?: ExtensionSourceLabel;
+  }): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="Web Research Agent"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindLabel="Agent"
+        vendor={props.vendor}
+        source={props.source}
+      />,
+    );
+  }
+
+  it("renders the source as its OWN byline element carrying the semantic label + kind", () => {
+    const html = renderCard({ vendor: knownVendor("Acme"), source: marketplaceSource });
+    expect(html).toContain('data-slot="installed-extension-source-label"');
+    expect(html).toContain('data-source-kind="marketplace"');
+    expect(html).toContain("from marketplace");
+    // The kind + vendor each remain their own element too (AC5).
+    expect(html).toContain('data-slot="installed-extension-kind-label"');
+    expect(html).toContain('data-slot="installed-extension-vendor-label"');
+  });
+
+  it("renders the source indicator independently of the vendor byline — a missing-vendor placeholder never suppresses it (AC2/AC5)", () => {
+    // With the #1528 contract an absent vendor renders the localized placeholder
+    // (not an omitted element); the source indicator must still render alongside
+    // it, proving the source lane is independent of the vendor state.
+    const html = renderCard({ source: marketplaceSource });
+    expect(html).toContain('data-slot="installed-extension-vendor-label"');
+    expect(html).toContain("Unknown vendor");
+    expect(html).toContain('data-slot="installed-extension-source-label"');
+    expect(html).toContain("from marketplace");
+  });
+
+  it("renders the neutral unknown state as its own element", () => {
+    const html = renderCard({ source: unknownSource });
+    expect(html).toContain('data-source-kind="unknown"');
+    expect(html).toContain("source unknown");
+  });
+
+  it("omits the source element entirely when no source is provided (non-§VI callers unchanged)", () => {
+    const html = renderCard({ vendor: knownVendor("Acme") });
+    expect(html).not.toContain('data-slot="installed-extension-source-label"');
+    expect(html).not.toContain("data-source-kind");
+  });
+
+  it("never renders a raw registryUrl — only the semantic label (AC5b)", () => {
+    const html = renderCard({
+      source: {
+        kind: "instance",
+        label: "from your instance",
+        // A realistic tooltip; deliberately carries no host so the assertion
+        // below isolates the URL-leak surface.
+        tooltip: "Published to this instance's own local registry.",
+      },
+    });
+    // The card is handed a semantic label object, never a URL — assert nothing
+    // URL-shaped (a scheme, or a private host) leaked into the rendered byline.
+    expect(html).toContain("from your instance");
+    expect(html).not.toContain("://");
+    expect(html).not.toContain("127.0.0.1");
+    expect(html).not.toContain(".invalid");
   });
 });

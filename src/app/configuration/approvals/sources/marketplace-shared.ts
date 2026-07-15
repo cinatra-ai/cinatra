@@ -171,6 +171,44 @@ export function isRegisteredVendor(): boolean {
   }
 }
 
+/**
+ * The instance's own cm-side vendor-application id, or `undefined` (LOCAL read,
+ * no network). Used ONLY to recognize the instance's OWN application row inside
+ * the moderator queue so its `createdAt` can be aligned with the self-status
+ * mirror — see {@link resolveOwnVendorApplicationCreatedAt}.
+ */
+export function resolveOwnVendorApplicationId(): string | undefined {
+  try {
+    const id = readInstanceIdentity()?.vendorApplicationId;
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Canonical sortable `createdAt` for the instance's OWN vendor application
+ * (LOCAL read, no network). The unified feed (cinatra#1555) deduplicates the
+ * instance's own application across TWO adapters — the moderator queue
+ * (`marketplace-vendor-app-moderation`, keyed on the remote `applied_at`) and
+ * the self-status mirror (`marketplace-vendor-app-status`). For the keyset
+ * cursor to be STABLE regardless of which mirror fetched the row, BOTH must emit
+ * the SAME timestamp. The marketplace self-status endpoint exposes no
+ * applied/submitted timestamp, so this LOCAL value is the single source of
+ * truth: the durable `vendorApplicationAppliedAt` stamped at apply, falling back
+ * to the instance `createdAt` for legacy rows, then the unix epoch (never an
+ * unsortable empty string). Deliberately IGNORES the remote `applied_at` so the
+ * two mirrors can never disagree.
+ */
+export function resolveOwnVendorApplicationCreatedAt(): string {
+  try {
+    const identity = readInstanceIdentity();
+    return identity?.vendorApplicationAppliedAt || identity?.createdAt || new Date(0).toISOString();
+  } catch {
+    return new Date(0).toISOString();
+  }
+}
+
 /** True when ANY marketplace credential resolves. When false the whole
  *  marketplace group collapses to one "not connected" state and fires no remote
  *  calls. (An instance token implies a vendor token, but all three are checked

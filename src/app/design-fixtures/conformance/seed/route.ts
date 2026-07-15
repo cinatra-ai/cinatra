@@ -82,6 +82,8 @@ type TargetRow = {
   kind: InstalledExtension["kind"];
   status: "active" | "archived";
   version: string;
+  /** verdaccio source registryUrl (cinatra#1572); defaults to SEEDED_SOURCE_REGISTRY_URL. */
+  registryUrl: string;
 };
 
 function targetRows(runId: string): TargetRow[] {
@@ -91,6 +93,7 @@ function targetRows(runId: string): TargetRow[] {
     kind: seed.kind,
     status: seed.status,
     version: seed.version,
+    registryUrl: seed.registryUrl ?? SEEDED_SOURCE_REGISTRY_URL,
   }));
 }
 
@@ -112,7 +115,7 @@ function matchesTarget(row: InstalledExtension, target: TargetRow): boolean {
     row.source.type === "verdaccio" &&
     row.source.version === target.version &&
     row.source.packageName === target.packageName &&
-    row.source.registryUrl === SEEDED_SOURCE_REGISTRY_URL &&
+    row.source.registryUrl === target.registryUrl &&
     row.source.integrity === SEEDED_SOURCE_INTEGRITY
   );
 }
@@ -145,7 +148,7 @@ async function installTargetRow(store: Store, target: TargetRow, runId: string):
       kind: target.kind,
       source: {
         type: "verdaccio",
-        registryUrl: SEEDED_SOURCE_REGISTRY_URL,
+        registryUrl: target.registryUrl,
         packageName: target.packageName,
         version: target.version,
         integrity: SEEDED_SOURCE_INTEGRITY,

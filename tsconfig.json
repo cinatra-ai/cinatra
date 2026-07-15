@@ -283,6 +283,7 @@
       "@cinatra-ai/extensions/screens/update-plan-model": ["./packages/extensions/src/screens/update-plan-model.ts"],
       "@cinatra-ai/extensions/screens/extensions-marketplace-client": ["./packages/extensions/src/screens/extensions-marketplace-client.tsx"],
       "@cinatra-ai/extensions/screens/installed-empty-states": ["./packages/extensions/src/screens/installed-empty-states.tsx"],
+      "@cinatra-ai/extensions/screens/extension-source-label": ["./packages/extensions/src/screens/extension-source-label.ts"],
       "@cinatra-ai/extensions/screens/extension-settings-view": ["./packages/extensions/src/screens/extension-settings-view.tsx"],
       "@cinatra-ai/extensions/screens/extension-access-control": ["./packages/extensions/src/screens/extension-access-control.tsx"],
       "@cinatra-ai/extensions/screens/installed-rows": ["./packages/extensions/src/screens/installed-rows.ts"],
