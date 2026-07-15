@@ -128,6 +128,24 @@ export type ExtensionInstallScopeDialogProps = {
   /** Server action passed by the server-component caller. */
   installAction: ExtensionInstallAction;
   triggerClassName?: string;
+  /**
+   * Opt-in controlled open (cinatra#1541). When provided, the dialog's open
+   * state is externally controlled and its built-in "Install now" trigger
+   * button is SUPPRESSED — the caller (the §II extension-detail modal footer)
+   * drives open from its OWN "Install now" CTA so the scope dialog layers
+   * ABOVE the already-open modal. The §I/§IV card omits both and stays
+   * uncontrolled with its built-in trigger (byte-identical behaviour).
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * Forwarded to the dialog's DialogContent (cinatra#1541). Radix modal content
+   * restores focus to its REGISTERED trigger on close and preventDefaults the
+   * browser's own restore; a controlled caller suppresses that trigger, so it
+   * passes this to return focus to its OWN CTA instead (the card omits it and
+   * keeps Radix's default trigger-focus restore).
+   */
+  onCloseAutoFocus?: (event: Event) => void;
 };
 
 export function ExtensionInstallScopeDialog({
@@ -142,8 +160,16 @@ export function ExtensionInstallScopeDialog({
   defaultFailureMessage,
   installAction,
   triggerClassName,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  onCloseAutoFocus,
 }: ExtensionInstallScopeDialogProps) {
-  const [open, setOpen] = useState(false);
+  // Opt-in controlled open (cinatra#1541). When `controlledOpen` is passed the
+  // §II modal footer owns the open state and drives it from its own CTA;
+  // otherwise the dialog owns its own state exactly as before (the card path).
+  const isControlled = controlledOpen !== undefined;
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
   const [value, setValue] = useState<string>(defaultValue ?? "");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -237,7 +263,7 @@ export function ExtensionInstallScopeDialog({
       if (isRedirectError(error)) {
         // SUCCESS — toast, close, re-throw so Next.js navigates.
         toast.success(`Installed ${name} for ${scopeLabelFor(target, value)}`);
-        setOpen(false);
+        handleOpenChange(false);
         throw error;
       }
       // Unexpected THROWN failure (message masked in production) — show the
@@ -247,7 +273,10 @@ export function ExtensionInstallScopeDialog({
   }
 
   const handleOpenChange = (next: boolean) => {
-    setOpen(next);
+    // Controlled callers (cinatra#1541) own the open state; uncontrolled
+    // callers (the card) keep the local state.
+    if (isControlled) controlledOnOpenChange?.(next);
+    else setUncontrolledOpen(next);
     if (!next) {
       // Reset transient state on close.
       setErrorMessage(null);
@@ -257,12 +286,17 @@ export function ExtensionInstallScopeDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button type="button" size="sm" className={triggerClassName}>
-          Install now
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
+      {isControlled ? null : (
+        // Uncontrolled (card) trigger only. A controlled caller drives open
+        // from its own CTA, so the built-in button is suppressed — the scope
+        // dialog then layers above the caller's already-open modal.
+        <DialogTrigger asChild>
+          <Button type="button" size="sm" className={triggerClassName}>
+            Install now
+          </Button>
+        </DialogTrigger>
+      )}
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Install {name}</DialogTitle>
         </DialogHeader>
