@@ -76,6 +76,52 @@ function logMarketplaceFailureForOperator(
   );
 }
 
+/**
+ * Build the actor for a COMPENSATING uninstall (an install-rollback), with the
+ * membership standing the rollback actually needs.
+ *
+ * The primary install/uninstall UI actor is a minimal AUDIT envelope carrying no
+ * membership roles, but the P5 row-scoped lifecycle standing gate
+ * (resolveLifecycleTargetRow → assertActorWriteStandingOverRow) requires the
+ * actor to hold destructive-write standing over the org-anchored row before it
+ * will remove it. So a role-less actor's rollback is deterministically REFUSED,
+ * which — for a fail-closed install-rollback — would leave the fresh install at
+ * the broader default. We therefore attach the caller's REAL org role (resolved
+ * from the trusted session, never client input) so the compensating uninstall
+ * takes the ORG-SCOPED soft/archive path over THIS org's own row.
+ *
+ * We deliberately do NOT attach platformRole: platform standing routes uninstall
+ * to the PACKAGE-GLOBAL hard-delete branch, which tears down EVERY org's row for
+ * the package — a cross-org over-reach for what must be a single-org rollback. A
+ * caller without org-owner/org-admin standing cannot compensate; the rollback
+ * then honestly reports the partial state rather than over-reaching.
+ */
+async function buildInstallRollbackActor(
+  session: Awaited<ReturnType<typeof requireAdminSession>>,
+  baseActor: Actor,
+  packageName: string,
+): Promise<Actor> {
+  // TOTAL by contract — must NEVER throw. Both rollback sites call this OUTSIDE
+  // their error handling, so a thrown membership-lookup error would escape the
+  // compensation and leave the fresh install at the broader default with a
+  // masked server-action error. On any resolution failure, fall back to the base
+  // actor: the rollback then proceeds on whatever standing it already carries, or
+  // is refused and honestly reported as access-partial — never an unhandled throw.
+  try {
+    const { buildCanDoOptsFromSession } = await import("@/lib/auth-session");
+    const { orgRole } = await buildCanDoOptsFromSession(session);
+    return orgRole ? { ...baseActor, orgRole } : baseActor;
+  } catch (roleErr) {
+    logMarketplaceFailureForOperator(
+      "install-rollback-actor",
+      packageName,
+      "unrecoverable",
+      roleErr,
+    );
+    return baseActor;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Operator diagnostics at the classification chokepoint (cinatra#1539).
 //
@@ -549,11 +595,17 @@ export async function installExtensionPackageFormAction(input: {
   /**
    * Pre-install access selection (cinatra#805) — the org / team / project
    * target rows plus the always-offered workspace scopes (cinatra#1527:
-   * "workspace" / "admin", platform-admin-only). OPTIONAL: absent → exactly the
-   * legacy behavior (install with the implicit per-kind default access, no
-   * policy write). Present → server-gated (fail-closed) and persisted through
-   * setExtensionInstallAccess after a successful install. Only the connector /
-   * artifact / workflow kinds accept it.
+   * "workspace" / "admin", platform-admin-only). Present → server-gated
+   * (fail-closed) and persisted through setExtensionInstallAccess after a
+   * successful install.
+   *
+   * OPTIONAL, but MANDATORY for an install-access-target kind (connector /
+   * artifact / workflow — isInstallAccessTargetKind): when absent for such a
+   * kind the action REFUSES the install (cinatra#1602, fail-closed) rather than
+   * defaulting to the broadest per-kind grant (WORKSPACE_DEFAULT) — the kind is
+   * resolved from the installed canonical row and the install is rolled back.
+   * Absent for a NON-access kind → the unchanged legacy direct install (no
+   * policy write). See the install-access-target contract note.
    */
   accessTarget?: {
     level: "organization" | "team" | "project" | "workspace" | "admin";
@@ -737,11 +789,18 @@ export async function installExtensionPackageFormAction(input: {
           }
           // Compensate: roll the fresh install back so a narrower-than-default
           // selection can never silently fail open to workspace access. (Root
-          // package only — auto-installed dependencies are shared and stay.)
+          // package only — auto-installed dependencies are shared and stay.) The
+          // rollback actor carries org-scoped standing so the P5 lifecycle gate
+          // permits removing the org's own row (a role-less actor is refused).
+          const rollbackActor = await buildInstallRollbackActor(
+            session,
+            actor,
+            input.packageName,
+          );
           const rollback = await uninstallExtensionPackage(
             input.packageName,
             input.packageVersion,
-            actor,
+            rollbackActor,
           );
           if (!rollback.success) {
             logMarketplaceFailureForOperator(
@@ -764,17 +823,204 @@ export async function installExtensionPackageFormAction(input: {
       return outcome;
     }
   } else {
-    // Legacy path (no access target) — behavior unchanged.
-    const result = await installExtensionPackage(input.packageName, input.packageVersion, actor);
-    if (!result.success) {
-      // cinatra#685: RETURN the classified category instead of throwing. A thrown
-      // server-action message is masked in production (digest only) so it cannot
-      // carry the cause to the client; a returned value is delivered intact. The
-      // raw technical error stays operator-side (logs), never in the user toast.
-      const category = result.failureCategory ?? "unrecoverable";
-      logMarketplaceFailureForOperator("install", input.packageName, category, result.error);
-      // #1539: carry the chokepoint diagnostic reference to the client toast.
-      return { ok: false, category, reference: result.reference };
+    // -------------------------------------------------------------------------
+    // No access target supplied.
+    //
+    // FAIL-CLOSED (issue #1602 — defense-in-depth follow-up of #1541): an
+    // install-access-target kind (connector / artifact / workflow via
+    // isInstallAccessTargetKind) installed WITHOUT a target would fall through to
+    // the implicit per-kind default, which for these kinds is the BROADEST grant
+    // (WORKSPACE_DEFAULT) — a silent workspace-wide grant. #1541 closed the two
+    // UI call sites (card, modal), but the invariant "every caller remembers to
+    // pass the target" already broke once. The server action is the ENFORCED
+    // boundary for the picker contract: a non-UI / future caller (batch
+    // installer, MCP tool, admin script, a new surface) that omits the target is
+    // REFUSED here, never silently defaulted.
+    //
+    // The kind is only reliably known POST-install: a pre-install packument probe
+    // falls back to "agent" for a registry that cannot serve the packument (or a
+    // legacy package without `cinatra.kind`) — see the note in the access branch
+    // above — so it cannot gate this pre-install. We therefore install under the
+    // per-package lock (the SAME re-entrant lock the access branch, dispatcher
+    // install, and uninstall hold — nested acquires run inline), then resolve the
+    // AUTHORITATIVE kind from the installed canonical row(s); if it is an
+    // access-target kind, REJECT and compensate — roll the fresh install back so
+    // nothing is left at the broader default, unless a live row already existed
+    // (never destroy it).
+    //
+    // Kind resolution is ORG-AGNOSTIC (readInstalledExtensionsByPackageName) —
+    // kind is a package-level manifest property, uniform across every install of
+    // the package — so the refusal holds even with no active org (a fail-open gap
+    // an org-anchored-only lookup would leave). The pre-install snapshot that
+    // protects a pre-existing install from rollback IS org-anchored (only that
+    // org's row must be spared), skipped when there is no active org.
+    //
+    // Non-access kinds (agent / skill / connection / …) are UNAFFECTED: their
+    // resolved kind is not in the access-target set, so the unchanged direct path
+    // proceeds to the redirect below.
+    // -------------------------------------------------------------------------
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    const outcome = await withInstallLock(
+      input.packageName,
+      async (): Promise<MarketplaceInstallActionResult | "installed"> => {
+        const {
+          readInstalledExtensionByIdentity,
+          readInstalledExtensionsByPackageName,
+        } = await import("./canonical-store");
+        // Snapshot BEFORE the install (under the lock) so a re-install of an
+        // already-installed access-target package is never rolled back by the
+        // fail-closed compensation below. Access-target kinds are ORG-ANCHORED
+        // (install-access-target.ts) — the same identity the access branch uses;
+        // skipped when there is no active org (nothing org-anchored to protect).
+        const identity = orgId
+          ? {
+              organizationId: orgId,
+              ownerLevel: "organization" as const,
+              ownerId: orgId,
+              packageName: input.packageName,
+            }
+          : null;
+        const preRow = identity
+          ? await readInstalledExtensionByIdentity(identity)
+          : null;
+        const hadLiveRowBefore =
+          preRow != null &&
+          (preRow.status === "active" || preRow.status === "locked");
+
+        const result = await installExtensionPackage(
+          input.packageName,
+          input.packageVersion,
+          actor,
+        );
+        if (!result.success) {
+          // cinatra#685: RETURN the classified category instead of throwing. A
+          // thrown server-action message is masked in production (digest only) so
+          // it cannot carry the cause to the client; a returned value is delivered
+          // intact. The raw technical error stays operator-side (logs).
+          const category = result.failureCategory ?? "unrecoverable";
+          logMarketplaceFailureForOperator(
+            "install",
+            input.packageName,
+            category,
+            result.error,
+          );
+          // #1539: carry the chokepoint diagnostic reference to the client toast.
+          return { ok: false, category, reference: result.reference };
+        }
+
+        // Resolve the installed kind under a FAIL-CLOSED guard. A successful
+        // install always writes a canonical row; kind is a package-level manifest
+        // property, so ANY row resolves it (readInstalledExtensionsByPackageName
+        // is org-agnostic — the refusal holds even with no active org). We refuse
+        // unless we can POSITIVELY confirm a non-access kind: a read failure, no
+        // row at all (anomalous after a success), or ANY access-target row all
+        // mean "cannot prove this is safe to leave at the default" → compensate.
+        // `.find()` is deterministic even for a — never-expected — heterogeneous
+        // result (a single access-target row is enough to refuse).
+        let requiresAccessTarget: boolean;
+        let resolvedKind: string;
+        try {
+          const rows = await readInstalledExtensionsByPackageName(
+            input.packageName,
+          );
+          const accessRow = rows.find((extension) =>
+            isInstallAccessTargetKind(extension.kind),
+          );
+          if (accessRow) {
+            requiresAccessTarget = true;
+            resolvedKind = accessRow.kind;
+          } else if (rows.length === 0) {
+            // Anomalous: a successful install with no canonical row. Cannot verify
+            // the kind → fail closed rather than assume a non-access kind.
+            requiresAccessTarget = true;
+            resolvedKind = "unresolved";
+          } else {
+            requiresAccessTarget = false;
+            resolvedKind = rows[0]?.kind ?? "unknown";
+          }
+        } catch (resolveErr) {
+          // A post-install kind-resolution failure is fail-closed — we cannot
+          // prove a non-access kind, so compensate below rather than proceed and
+          // risk leaving an access-target kind at the broadest default.
+          requiresAccessTarget = true;
+          resolvedKind = "unresolved";
+          logMarketplaceFailureForOperator(
+            "install-access-resolve",
+            input.packageName,
+            "unrecoverable",
+            resolveErr,
+          );
+        }
+
+        if (!requiresAccessTarget) {
+          // Non-access kind — legacy direct path, unchanged outcome.
+          return "installed";
+        }
+
+        // #1602: an access-target (or unverifiable) kind was installed with NO
+        // access target. Refuse rather than persist the broadest per-kind default.
+        logMarketplaceFailureForOperator(
+          "install-access-required",
+          input.packageName,
+          "unrecoverable",
+          new Error(
+            `installed kind "${resolvedKind}" requires an explicit install ` +
+              "access target; refusing to default to the workspace-wide grant (#1602).",
+          ),
+        );
+        if (hadLiveRowBefore) {
+          // A live install already existed — never destroy it; its prior access
+          // policy stands. (A plain install writes NO access policy — install-
+          // access-target.ts — so a re-install cannot have widened it.) No NET
+          // change was made; the caller's omission is still refused (supply a
+          // target and retry).
+          return {
+            ok: false,
+            category: "unrecoverable",
+            stage: "access-required",
+          };
+        }
+        // Compensate: roll the fresh install back so an absent target can never
+        // silently fail open to workspace access. (Root package only —
+        // auto-installed dependencies are shared and stay.) The rollback actor
+        // carries org-scoped standing so the P5 lifecycle gate permits removing
+        // the org's own row (a role-less actor is refused → would leak the row).
+        const rollbackActor = await buildInstallRollbackActor(
+          session,
+          actor,
+          input.packageName,
+        );
+        const rollback = await uninstallExtensionPackage(
+          input.packageName,
+          input.packageVersion,
+          rollbackActor,
+        );
+        if (!rollback.success) {
+          // Irreducible corner (identical to the access branch): the compensating
+          // uninstall itself failed, so the extension remains installed with the
+          // per-kind DEFAULT (workspace) access. Report the partial state honestly
+          // — the operator log carries the details for manual remediation.
+          logMarketplaceFailureForOperator(
+            "install-access-rollback",
+            input.packageName,
+            "unrecoverable",
+            rollback.error,
+          );
+          return {
+            ok: false,
+            category: "unrecoverable",
+            stage: "access-partial",
+          };
+        }
+        return {
+          ok: false,
+          category: "unrecoverable",
+          stage: "access-required",
+        };
+      },
+    );
+    if (outcome !== "installed") {
+      return outcome;
     }
   }
 
