@@ -1,6 +1,6 @@
 /**
- * jsdom shims for the AccessComboboxHierarchical behavioural render test
- * (access-combobox-hierarchical-multi-open.test.tsx).
+ * jsdom shims for the AccessCombobox behavioural render tests
+ * (access-combobox-multi-open.test.tsx, access-combobox-selection-mode.test.tsx).
  *
  * The real picker mounts Radix Popover/Tooltip (Popper → ResizeObserver,
  * pointer-capture) and a cmdk Command list (scrollIntoView on the active

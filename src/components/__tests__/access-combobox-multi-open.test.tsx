@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// Behavioural regression test for the multi-select access picker's TRIGGER
-// (cinatra#1261). Renders the REAL AccessComboboxHierarchical in `multiple`
-// mode under jsdom and drives the trigger with a real click, asserting the
-// popover actually OPENS (aria-expanded → true, option rows rendered).
+// Behavioural regression test for the unified access picker's multi-select
+// TRIGGER — selectionMode="multiple" (cinatra#1607; formerly cinatra#1261 on
+// AccessComboboxHierarchical). Renders the REAL AccessCombobox under jsdom and
+// drives the trigger with a real click, asserting the popover actually OPENS
+// (aria-expanded → true, option rows rendered).
 //
 // This is the test that would have caught the shipped blocker: when a
 // multi-selection summarises to a composed label (selection.length > 1) the
@@ -11,23 +12,23 @@
 // PopoverTrigger's Slot merged the popover's open handler + ref onto
 // <TooltipProvider> — which renders no DOM node and forwards nothing — and the
 // multi-scope trigger could never be opened. A source-text/props-shape test
-// cannot see that; only
-// clicking a rendered 2+-selection trigger and observing the popover does.
+// cannot see that; only clicking a rendered 2+-selection trigger and observing
+// the popover does.
 //
 // The single-selection open path (bare PopoverTrigger → Button) is asserted
 // alongside as the control that was always working, so a future regression on
 // EITHER trigger shape fails here.
 //
 //   pnpm exec vitest run \
-//     src/components/__tests__/access-combobox-hierarchical-multi-open.test.tsx
+//     src/components/__tests__/access-combobox-multi-open.test.tsx
 
 import "./access-picker-jsdom-shims";
 import { afterEach, describe, it, expect } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
-  AccessComboboxHierarchical,
+  AccessCombobox,
   type AvailableScopes,
-} from "@/components/access-combobox-hierarchical";
+} from "@/components/access-combobox";
 
 const SCOPES: AvailableScopes = {
   orgs: [
@@ -47,13 +48,13 @@ const SCOPES: AvailableScopes = {
 
 afterEach(() => cleanup());
 
-describe("AccessComboboxHierarchical multi-select trigger opens (cinatra#1261)", () => {
+describe("AccessCombobox multi-select trigger opens (cinatra#1607 / #1261)", () => {
   it("opens the popover from a multi-scope trigger (2+ selections)", () => {
     // selection.length > 1 → the tooltip-wrapped trigger, the shape that was
     // broken. resolveAccessSummary renders the composed "1 project, 1 team".
     render(
-      <AccessComboboxHierarchical
-        multiple
+      <AccessCombobox
+        selectionMode="multiple"
         value={["team:team-rev", "project:proj-atlas"]}
         onChange={() => {}}
         scopes={SCOPES}
@@ -82,8 +83,8 @@ describe("AccessComboboxHierarchical multi-select trigger opens (cinatra#1261)",
     // selection.length === 1 → the bare PopoverTrigger → Button path, which was
     // always working; asserted so a regression on either shape is caught here.
     render(
-      <AccessComboboxHierarchical
-        multiple
+      <AccessCombobox
+        selectionMode="multiple"
         value={["team:team-rev"]}
         onChange={() => {}}
         scopes={SCOPES}

@@ -2,8 +2,8 @@
 
 // ---------------------------------------------------------------------------
 // ScopeFilterCombobox — the shared scope dropdown used by the /connectors and
-// /skills list pages. It wraps AccessComboboxHierarchical in checkbox
-// MULTI-select mode (cinatra#1074, multi-scope W5) and owns the `?scope=` URL
+// /skills list pages. It wraps the unified AccessCombobox in checkbox
+// selectionMode="multiple" (cinatra#1074, multi-scope W5) and owns the `?scope=` URL
 // param: it reads the current selection from props (server-resolved by the
 // canonical parser) and, on change, writes the comma-joined selection back to
 // the URL while preserving every other query param. The default selection
@@ -21,9 +21,9 @@
 import { useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  AccessComboboxHierarchical,
+  AccessCombobox,
   type AvailableScopes,
-} from "@/components/access-combobox-hierarchical";
+} from "@/components/access-combobox";
 import {
   comboboxValueToScopeToken,
   scopeFilterComboboxRowState,
@@ -84,9 +84,9 @@ export function ScopeFilterCombobox({
   }
 
   return (
-    <AccessComboboxHierarchical
+    <AccessCombobox
       id={id}
-      multiple
+      selectionMode="multiple"
       value={selection.map(scopeTokenToComboboxValue)}
       onChange={handleChange}
       toggleSelection={toggleScopeFilterComboboxValue}

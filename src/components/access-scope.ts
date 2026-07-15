@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Pure (server- and client-safe) access-scope label helpers.
 //
-// Split out of access-combobox-hierarchical.tsx (a "use client" module) so that
-// server components and shared libs can resolve scope labels without pulling a
-// client component into their graph. The combobox re-exports these for existing
-// callers.
+// Split out of the access picker (a "use client" module) so that server
+// components and shared libs can resolve scope labels without pulling a client
+// component into their graph. The unified access-combobox.tsx re-exports these
+// for existing callers.
 //
 // Labels are title-case ("Workspace: All", "Workspace: Admins only", etc.) and
 // are the single source of truth for the trigger, the dropdown rows, and any

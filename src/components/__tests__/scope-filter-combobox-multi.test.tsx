@@ -2,7 +2,7 @@
  * Source-text contract test for the multi-select scope-FILTER writers
  * (cinatra#1074, multi-scope W5 UI half): the shared <ScopeFilterCombobox>
  * (/connectors) and the <SkillsToolbar> scope picker (/skills). Mirrors the
- * sibling access-combobox-hierarchical-*.test.tsx convention (source-text —
+ * sibling access-combobox-multi-*.test.tsx convention (source-text —
  * @testing-library/react is not available from the root package.json); the
  * BEHAVIOUR of the filter toggle/row-state/serializer logic is covered by
  * real unit tests in src/lib/__tests__/scope-filter.test.ts.
@@ -26,7 +26,7 @@ const TOOLBAR = readFileSync("packages/skills/src/skills-toolbar.tsx", "utf-8");
 
 describe("ScopeFilterCombobox multi-select writer (cinatra#1074 W5)", () => {
   it("mounts the picker in multiple mode with the FILTER-mode overrides", () => {
-    expect(COMBOBOX).toMatch(/<AccessComboboxHierarchical[\s\S]*?multiple/);
+    expect(COMBOBOX).toMatch(/<AccessCombobox[\s\S]*?selectionMode="multiple"/);
     expect(COMBOBOX).toMatch(/toggleSelection=\{toggleScopeFilterComboboxValue\}/);
     expect(COMBOBOX).toMatch(/rowState=\{scopeFilterComboboxRowState\}/);
     // No grant-mode toggle import may creep in.
@@ -53,7 +53,7 @@ describe("ScopeFilterCombobox multi-select writer (cinatra#1074 W5)", () => {
 
 describe("SkillsToolbar multi-select scope writer (cinatra#1074 W5)", () => {
   it("mounts the picker in multiple mode with the FILTER-mode overrides", () => {
-    expect(TOOLBAR).toMatch(/<AccessComboboxHierarchical[\s\S]*?multiple/);
+    expect(TOOLBAR).toMatch(/<AccessCombobox[\s\S]*?selectionMode="multiple"/);
     expect(TOOLBAR).toMatch(/toggleSelection=\{toggleScopeFilterComboboxValue\}/);
     expect(TOOLBAR).toMatch(/rowState=\{scopeFilterComboboxRowState\}/);
     expect(TOOLBAR).not.toMatch(/toggleAccessSelection/);

@@ -18,9 +18,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
-  AccessComboboxHierarchical,
+  AccessCombobox,
   type AvailableScopes,
-} from "@/components/access-combobox-hierarchical";
+} from "@/components/access-combobox";
 
 export function ExtensionAccessControl({
   initialValue,
@@ -47,8 +47,8 @@ export function ExtensionAccessControl({
       <label htmlFor="extension-access-picker" className="text-sm text-foreground">
         Who can access this extension?
       </label>
-      <AccessComboboxHierarchical
-        multiple
+      <AccessCombobox
+        selectionMode="multiple"
         id="extension-access-picker"
         value={value}
         onChange={(next) => {

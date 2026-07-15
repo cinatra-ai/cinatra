@@ -1,28 +1,27 @@
 /**
- * Source-text contract test for AccessComboboxHierarchical's flyout search ✕
- * clear button (cinatra#1014, design system §VII "Connectors").
+ * Source-text contract test for the unified AccessCombobox multi-select flyout
+ * search ✕ clear button (cinatra#1607; formerly cinatra#1014 on
+ * AccessComboboxHierarchical, design system §VII "Connectors").
  *
  * Component tests in this repo use source-file text assertions
- * (@testing-library/react is not available from the root package.json) —
- * mirrors access-combobox-hierarchical-disabled-scopes.test.tsx.
+ * (@testing-library/react is not available from the root package.json).
  *
  * Truths locked here:
  *  - the flyout search Input keeps its existing placeholder/behaviour
- *    ("stays exactly as-is" per the issue) except for the added clear
- *    affordance
+ *    ("stays exactly as-is") except for the clear affordance
  *  - a ✕ (lucide X) button appears ONLY while `search` holds a query
  *  - clicking it resets the search state to "" (clearing the filter)
- *  - the rest of the popover (grouped rows, group-only dividers,
- *    selected-row bg-surface-muted highlight) is untouched by this change
+ *  - the rest of the popover (grouped rows, group-only dividers, selected-row
+ *    highlight) is untouched
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 
-const SOURCE = readFileSync("src/components/access-combobox-hierarchical.tsx", "utf-8");
+const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
 
-describe("AccessComboboxHierarchical search clear button (cinatra#1014)", () => {
-  it("imports the lucide X icon", () => {
-    expect(SOURCE).toMatch(/import \{ Check, ChevronDown, X \} from "lucide-react"/);
+describe("AccessCombobox multi-select search clear button (cinatra#1607 / #1014)", () => {
+  it("imports the lucide X icon (alongside the single-mode Check/ChevronDown/Lock)", () => {
+    expect(SOURCE).toMatch(/import \{ Check, ChevronDown, Lock, X \} from "lucide-react"/);
   });
 
   it("keeps the existing 'Search…' placeholder on the flyout search Input", () => {
@@ -46,8 +45,7 @@ describe("AccessComboboxHierarchical search clear button (cinatra#1014)", () => 
   });
 
   it("does not disturb the grouped-row / popover styling this issue leaves as-is", () => {
-    // Selected/hover row highlight and group-only CommandSeparator dividers
-    // are unchanged by the search-field edit.
+    // Selected/hover row highlight and group-only CommandSeparator dividers.
     expect(SOURCE).toContain("hover:bg-surface-muted");
     expect(SOURCE).toContain("<CommandSeparator />");
   });

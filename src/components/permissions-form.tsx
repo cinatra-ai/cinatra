@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // PermissionsForm.
 //
-// Generic widget that composes the existing AccessComboboxHierarchical (the
+// Generic widget that composes the unified AccessCombobox (selectionMode="multiple", the
 // hierarchical "Only me / Project / Team / Organization / Workspace" picker)
 // with an ownership panel (owner + co-owners list, lazy-loaded user search).
 // Designed to be reused for every resource that carries an
@@ -65,10 +65,10 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import {
-  AccessComboboxHierarchical,
+  AccessCombobox,
   resolveAccessSummary,
   type AvailableScopes,
-} from "@/components/access-combobox-hierarchical";
+} from "@/components/access-combobox";
 import type {
   AgentAuthPolicy,
   AgentAuthPolicyVisibility,
@@ -522,8 +522,8 @@ export function PermissionsForm({
               control={control}
               name="access"
               render={({ field: f }) => (
-                <AccessComboboxHierarchical
-                  multiple
+                <AccessCombobox
+                  selectionMode="multiple"
                   value={f.value}
                   onChange={f.onChange}
                   scopes={availableScopes}

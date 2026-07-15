@@ -27,7 +27,7 @@ import {
   type OwnerView,
   type PermissionsFormResult,
 } from "@/components/permissions-form";
-import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
+import type { AvailableScopes } from "@/components/access-combobox";
 
 export type ExtensionPermissionsClientProps = {
   kind: ExtensionKind;
