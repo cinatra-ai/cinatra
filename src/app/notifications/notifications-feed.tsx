@@ -150,10 +150,15 @@ export function NotificationsFeed({
   //     and RESUBMITTED under the same id with a NEW version is a distinct
   //     incarnation and is NOT hidden by the earlier decision.
   //   • `readOverrides` — a per-notification mark-read timestamp (single opens).
-  //   • `markAllReadAt` — a mark-all-read WATERMARK: PATCH `{all:true}` marks
-  //     every unread row read server-side, so any notification created at/before
-  //     the watermark (including older rows loaded LATER via load-more) is read,
-  //     even before the PATCH is observable.
+  //   • `markAllReadAt` — a mark-all-read WATERMARK (a server `createdAt`): PATCH
+  //     `{beforeId}` marks read only the unread rows THROUGH the newest-loaded
+  //     notification server-side, so any notification created at/before the
+  //     watermark (including older rows loaded LATER via load-more) is read even
+  //     before the PATCH is observable, while a row created AFTER the boundary
+  //     (e.g. inserted concurrently before the PATCH lands) is NOT marked read
+  //     server-side (cinatra#1557). The overlay compares this ms-precision string
+  //     inclusively; the SERVER bound is resolved at microsecond precision from
+  //     `beforeId`, so a same-millisecond concurrent insert can't slip in.
   const [decidedKeys, setDecidedKeys] = useState<Set<string>>(() => new Set());
   const [readOverrides, setReadOverrides] = useState<Map<string, string>>(
     () => new Map(),
@@ -221,21 +226,23 @@ export function NotificationsFeed({
 
   function handleMarkAllRead(): void {
     if (derivation.unreadCount === 0) return;
-    // A watermark, not a per-id snapshot: PATCH `{all:true}` marks EVERY unread
-    // notification read server-side, so a later load-more of older-but-unread
-    // rows must show read too. The boundary is a SERVER timestamp — the newest
-    // loaded notification's `createdAt` (items are newest-first) — NOT the
-    // browser clock, so the cutoff is authoritative against the server-issued
-    // `createdAt`s it is compared to (no clock-skew misclassification). Every
-    // row the feed can reach is <= this boundary (load-more only fetches OLDER
-    // rows); a genuinely newer notification is only reachable via a full reload,
-    // where the server's authoritative `readAt` re-syncs it. `max` keeps the
-    // latest boundary across repeats.
+    // A watermark, not a per-id snapshot, and NOT a blanket `{all:true}`: PATCH
+    // `{beforeId}` marks read only the unread rows THROUGH the newest-LOADED
+    // notification server-side, so a later load-more of older-but-unread rows
+    // shows read too. The boundary is the newest LOADED notification (items are
+    // newest-first); its `createdAt` (a SERVER timestamp, not the browser clock)
+    // drives the optimistic overlay, while its `id` is what the SERVER resolves to
+    // a microsecond-precision `(created_at, id)` bound — so a notification created
+    // AFTER the loaded boundary but before the PATCH lands (even within the same
+    // millisecond) is never marked read despite never being loaded; it re-syncs as
+    // unread on reload from the server's authoritative `readAt` (cinatra#1557).
+    // Every row the feed can reach is <= this boundary (load-more only fetches
+    // OLDER rows). `max` keeps the latest overlay boundary across repeats.
     const newestNotif = items.find((v) => v.kind === "notification");
-    if (!newestNotif) return;
+    if (!newestNotif || newestNotif.kind !== "notification") return;
     const boundary = newestNotif.createdAt;
     setMarkAllReadAt((prev) => (prev && prev > boundary ? prev : boundary));
-    patchNotifications({ all: true });
+    patchNotifications({ beforeId: newestNotif.notification.id });
   }
 
   function handleDecided(key: string, version?: string): void {

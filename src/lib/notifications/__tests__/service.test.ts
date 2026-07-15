@@ -14,6 +14,7 @@ import {
   listNotificationsForUser,
   listNotificationsKeysetForUser,
   markAllNotificationsReadForUser,
+  markNotificationsReadThroughForUser,
   markNotificationReadForUser,
   markNotificationsReadByHrefPrefixForUser,
   setNotificationsHostAdapters,
@@ -473,6 +474,61 @@ describe("markAllNotificationsReadForUser", () => {
 
   it("no-ops when userId is empty", () => {
     markAllNotificationsReadForUser("");
+    expect(runQueriesMock).not.toHaveBeenCalled();
+  });
+});
+
+// The scoped mark-all-read watermark for the /notifications v2 feed
+// (cinatra#1557). Bounding the UPDATE to the boundary row's FULL-precision
+// `created_at` — resolved server-side from `boundaryId` — is what closes the
+// read-state race. The predicate marks STRICTLY-older rows plus the boundary row
+// itself (`n.created_at < b.created_at OR n.id = b.id`); it does NOT tie-break by
+// the random-UUID `id`, so a notification inserted CONCURRENTLY at or after the
+// boundary's microsecond is provably outside the WHERE regardless of its UUID,
+// and this single atomic UPDATE can never mark it read.
+describe("markNotificationsReadThroughForUser", () => {
+  it("UPDATE is scoped to the caller's unread rows STRICTLY older than the boundary (plus the boundary itself), resolved from boundaryId", () => {
+    markNotificationsReadThroughForUser({ userId: "u-9", boundaryId: "n-boundary" });
+    expect(runQueriesMock).toHaveBeenCalledTimes(1);
+    const sql = lastSql();
+    expect(sql).toContain("UPDATE");
+    expect(sql).toContain("n.user_id = $1");
+    expect(sql).toContain("n.read_at IS NULL");
+    // The boundary row is joined (its id is the PK) and BOTH sides are scoped to
+    // the caller — no cross-user row is reachable, and the boundary can only be
+    // the caller's own row.
+    expect(sql).toContain("FROM");
+    expect(sql).toContain("AS b");
+    expect(sql).toContain("b.id = $2");
+    expect(sql).toContain("b.user_id = $1");
+    // Strict microsecond comparison + boundary identity — NO id tie-break (random
+    // UUIDs can't order simultaneous rows), NO ms-truncation. A same-microsecond
+    // concurrent insert is excluded regardless of its UUID.
+    expect(sql).toContain("(n.created_at < b.created_at OR n.id = b.id)");
+    expect(sql).not.toContain("(n.created_at, n.id) <=");
+    expect(sql).not.toContain("date_trunc");
+    expect(sql).not.toContain("interval '1 millisecond'");
+    expect(lastValues()).toEqual(["u-9", "n-boundary"]);
+  });
+
+  it("never issues a blanket all-rows UPDATE — the boundary bound always follows read_at IS NULL", () => {
+    markNotificationsReadThroughForUser({ userId: "u-9", boundaryId: "n-boundary" });
+    // The blanket path (markAllNotificationsReadForUser) terminates at
+    // `read_at IS NULL`. Here the strict-boundary bound must follow it, so a row
+    // at/after the boundary's microsecond is never in scope.
+    const normalized = lastSql().replace(/\s+/g, " ");
+    expect(normalized).toContain(
+      "n.read_at IS NULL AND (n.created_at < b.created_at OR n.id = b.id)",
+    );
+  });
+
+  it("no-ops when userId is empty", () => {
+    markNotificationsReadThroughForUser({ userId: "", boundaryId: "n-boundary" });
+    expect(runQueriesMock).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the boundaryId is empty (fail-closed: never widens to all)", () => {
+    markNotificationsReadThroughForUser({ userId: "u-9", boundaryId: "" });
     expect(runQueriesMock).not.toHaveBeenCalled();
   });
 });

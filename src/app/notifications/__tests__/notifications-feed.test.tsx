@@ -111,6 +111,16 @@ function buttonByText(root: ParentNode, text: string): HTMLButtonElement | undef
   ) as HTMLButtonElement | undefined;
 }
 
+/** The JSON bodies of every PATCH the stubbed global `fetch` received. */
+function patchBodies(): unknown[] {
+  const fetchMock = globalThis.fetch as unknown as {
+    mock: { calls: [string, RequestInit | undefined][] };
+  };
+  return fetchMock.mock.calls
+    .filter(([, init]) => init?.method === "PATCH")
+    .map(([, init]) => JSON.parse(init!.body as string));
+}
+
 beforeEach(() => {
   loadMore.mockClear();
   vi.stubGlobal(
@@ -324,6 +334,15 @@ describe("NotificationsFeed — mark-all-read watermark (§ read-state)", () => 
       click(buttonByText(container, "Mark all read"));
       await Promise.resolve();
     });
+
+    // The PATCH carries the newest-LOADED notification's `id` as the boundary —
+    // NOT a blanket `{ all: true }` — so the server resolves that row's full-
+    // precision (created_at, id) and marks read only rows through it, leaving a
+    // row created after the boundary (a concurrent insert) untouched (cinatra#1557).
+    // This is the client half of the server-scoped fix.
+    expect(patchBodies()).toContainEqual({ beforeId: "n1" });
+    expect(patchBodies()).not.toContainEqual({ all: true });
+
     // Load the older page AFTER mark-all.
     await act(async () => {
       click(buttonByText(container, "Load more"));
@@ -337,5 +356,23 @@ describe("NotificationsFeed — mark-all-read watermark (§ read-state)", () => 
       await Promise.resolve();
     });
     expect(container.querySelectorAll('[data-conformance-id="notification-row"]').length).toBe(0);
+  });
+
+  it("sends the newest-LOADED notification id as the boundary, never a blanket all:true, even with many rows", async () => {
+    const container = await mount(
+      feed([
+        notifVM({ id: "n-new", kind: "info", createdAt: "2026-05-15T05:00:00.000Z" }),
+        notifVM({ id: "n-mid", kind: "info", createdAt: "2026-05-15T04:30:00.000Z" }),
+        notifVM({ id: "n-old", kind: "info", createdAt: "2026-05-15T04:00:00.000Z" }),
+      ]),
+    );
+
+    await act(async () => {
+      click(buttonByText(container, "Mark all read"));
+      await Promise.resolve();
+    });
+
+    // Exactly one PATCH, carrying the NEWEST row's id as the boundary.
+    expect(patchBodies()).toEqual([{ beforeId: "n-new" }]);
   });
 });
