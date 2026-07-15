@@ -398,6 +398,66 @@ export async function listAccessibleOrgIdsForUser(userId: string): Promise<strin
 }
 
 /**
+ * Return every organization the user is a member of as `{ id, name }`,
+ * sorted case-insensitively by name.
+ *
+ * Same membership predicate as `listAccessibleOrgIdsForUser` above, widened
+ * to carry the display name in ONE member→organization INNER JOIN (the
+ * `readOrgsWithTeamsForUser` step-1 shape — a single statement, no N+1).
+ * Backs the sidebar organization switcher's popover list. Returns [] when
+ * the user has no memberships.
+ */
+export async function listOrganizationsForUser(
+  userId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const rows = await betterAuthDb
+    .select({
+      id: betterAuthOrganizations.id,
+      name: betterAuthOrganizations.name,
+    })
+    .from(betterAuthMembers)
+    .innerJoin(
+      betterAuthOrganizations,
+      eq(betterAuthMembers.organizationId, betterAuthOrganizations.id),
+    )
+    .where(eq(betterAuthMembers.userId, userId));
+  return rows
+    .map((r) => ({ id: r.id, name: r.name ?? "" }))
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+}
+
+/**
+ * Resolve an organization's display name, MEMBERSHIP-SCOPED: the name is
+ * returned only while `userId` is currently a member of `orgId` (one indexed
+ * member→organization JOIN). A stale session `activeOrganizationId` — e.g.
+ * the user was removed from the org after it became active — resolves to
+ * `null` instead of disclosing the org's name. `null` also covers unknown
+ * org ids and NULL names.
+ */
+export async function readOrganizationNameForUser(
+  userId: string,
+  orgId: string,
+): Promise<string | null> {
+  const rows = await betterAuthDb
+    .select({ name: betterAuthOrganizations.name })
+    .from(betterAuthMembers)
+    .innerJoin(
+      betterAuthOrganizations,
+      eq(betterAuthMembers.organizationId, betterAuthOrganizations.id),
+    )
+    .where(
+      and(
+        eq(betterAuthMembers.userId, userId),
+        eq(betterAuthMembers.organizationId, orgId),
+      ),
+    )
+    .limit(1);
+  return rows[0]?.name ?? null;
+}
+
+/**
  * Return all orgs the user belongs to, each with the teams they are a member
  * of within that org.
  *

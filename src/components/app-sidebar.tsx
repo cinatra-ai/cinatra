@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/sidebar";
 import { NavGroup } from "@/components/nav-group";
 import { NavUser } from "@/components/nav-user";
+import { OrgSwitcher } from "@/components/org-switcher";
 import { type NavItem } from "@/components/layout-types";
 import { ANALYTICS_CATEGORIES, ANALYTICS_CATEGORY_PATHS } from "@/lib/section-nav";
 
@@ -284,6 +285,8 @@ export function AppSidebar({
   connectionReady: _connectionReady,
   userAccentColor = null,
   singleOrg = false,
+  activeOrgName = null,
+  canCreateOrganizations = false,
   hiddenNavTitles,
   isAdmin = false,
   pendingApprovalsTotal = 0,
@@ -294,6 +297,17 @@ export function AppSidebar({
   // When single-org mode is on, the "Organizations" entry is hidden for
   // everyone (resolved server-side in layout.tsx via isSingleOrgMode()).
   singleOrg?: boolean;
+  /**
+   * Display name of the session's active organization, resolved server-side
+   * in layout.tsx (membership-scoped, fail-soft to null). Feeds the
+   * always-visible tier of the org-switcher block.
+   */
+  activeOrgName?: string | null;
+  /**
+   * Gates the switcher's "Create organization" item. Same server-resolved
+   * flag as the global "+" menu entry (layout.tsx — false in single-org mode).
+   */
+  canCreateOrganizations?: boolean;
   // Top-level nav titles the actor has no read access to. Computed
   // server-side in layout.tsx via canSeeNavTarget(); the sidebar hides them
   // rather than relying on "click → 403".
@@ -363,6 +377,18 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
+        {/* Active-organization context block (cinatra#1502): compact switcher
+            at the top of the rail. Hidden entirely in single-org mode — the
+            same server-resolved gating that hides the Organizations nav item
+            below. */}
+        {!singleOrg ? (
+          <SidebarGroup className="pb-0">
+            <OrgSwitcher
+              activeOrgName={activeOrgName}
+              canCreateOrganizations={canCreateOrganizations}
+            />
+          </SidebarGroup>
+        ) : null}
         {/* Admin group renders first (above Intelligence) for platform admins. */}
         {adminGroup ? <NavGroup {...adminGroup} className="pt-0" /> : null}
         {/* Chat renders separately — it has a dynamic thread sub-menu NavGroup can't express */}

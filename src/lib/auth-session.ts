@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { auth, ensureGoogleAvatarSync, ensureInitialAdminBootstrap, ensureDefaultOrganizationMembership, ensureAssistantBootstrap } from "@/lib/auth";
-import { betterAuthDb, betterAuthMembers } from "@/lib/better-auth-db";
+import { betterAuthDb, betterAuthMembers, readOrganizationNameForUser } from "@/lib/better-auth-db";
 import { notifPerf, notifPerfNote, notifPerfNow } from "@cinatra-ai/notifications/perf-log";
 
 // Run once per server process to seed any missing built-in assistant users
@@ -182,6 +182,31 @@ export async function resolveOrgRoleForSession(
   const orgId = session.session?.activeOrganizationId ?? undefined;
   if (!orgId) return undefined;
   return cachedResolveOrgRole(orgId, session.user.id);
+}
+
+/**
+ * Per-request cached, membership-scoped active-org name lookup — same
+ * per-render memo scope as `cachedResolveOrgRole` above, keyed by
+ * `(userId, orgId)`.
+ */
+const cachedReadOrganizationNameForUser = cache(readOrganizationNameForUser);
+
+/**
+ * Resolve the display name of the session's active organization for shared
+ * chrome (the sidebar's organization switcher block).
+ *
+ * Returns `null` when the session has no active org, when the user is no
+ * longer a member of it (the underlying lookup is membership-scoped, so a
+ * stale `activeOrganizationId` never discloses an org name), or when the
+ * lookup fails (fail-soft — the label degrades, matching the root layout's
+ * posture for its other session-dependent reads).
+ */
+export async function resolveActiveOrganizationName(
+  session: SessionWithUserAndActiveOrg,
+): Promise<string | null> {
+  const orgId = session.session?.activeOrganizationId ?? null;
+  if (!orgId) return null;
+  return cachedReadOrganizationNameForUser(session.user.id, orgId).catch(() => null);
 }
 
 /**

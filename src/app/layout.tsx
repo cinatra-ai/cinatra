@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Manrope, Geist, Archivo, JetBrains_Mono } from "next/font/google";
 import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 import { AppShell } from "@/components/app-shell";
-import { buildCanDoOptsFromSession, getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { buildCanDoOptsFromSession, getAuthSession, isPlatformAdmin, resolveActiveOrganizationName } from "@/lib/auth-session";
 import { canDo } from "@/lib/authz";
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { isRegistrationClosed, isSingleOrgMode } from "@/lib/authz/instance-mode";
@@ -85,6 +85,10 @@ export default async function RootLayout({
   let userAccentColor: ExtensionAccent | null = null;
   // Server-resolved nav gating.
   let singleOrg = false;
+  // Active-organization display name for the sidebar's org-switcher block —
+  // membership-scoped and per-request cached (resolveActiveOrganizationName);
+  // fail-soft to null so the switcher label degrades instead of erroring.
+  let activeOrgName: string | null = null;
   // D7 — suppress the sign-up surface in the root AuthUIProvider when
   // registration is closed AND the instance is past bootstrap (≥1 human user).
   // Defaults to true (sign-up shown) on any resolution error so an open
@@ -142,6 +146,9 @@ export default async function RootLayout({
       // Persisted Avatar accent falls back to null (muted-ground Avatar) when
       // the column is absent or unset.
       userAccentColor = await getUserAccentColor(session.user.id).catch(() => null);
+      // Active-org name for the sidebar switcher block — one indexed,
+      // membership-scoped lookup per root-layout render (fail-soft inside).
+      activeOrgName = await resolveActiveOrganizationName(session);
       // Hide nav targets the actor can't read. Analytics (cost/usage metrics)
       // is admin-tier; hide for non-admins rather than relying on a 403 at
       // the page.
@@ -197,6 +204,7 @@ export default async function RootLayout({
             isAdmin={isAdmin}
             userAccentColor={userAccentColor}
             singleOrg={singleOrg}
+            activeOrgName={activeOrgName}
             hiddenNavTitles={hiddenNavTitles}
             pendingApprovalsTotal={pendingApprovalsTotal}
             approvalsNavVisible={approvalsNavVisible}

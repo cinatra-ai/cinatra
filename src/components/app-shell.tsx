@@ -143,6 +143,7 @@ export function AppShell({
   isAdmin = false,
   userAccentColor = null,
   singleOrg = false,
+  activeOrgName = null,
   hiddenNavTitles,
   pendingApprovalsTotal = 0,
   approvalsNavVisible = false,
@@ -156,6 +157,11 @@ export function AppShell({
   userAccentColor?: import("@/lib/extension-accent").ExtensionAccent | null;
   // Server-resolved nav gating.
   singleOrg?: boolean;
+  /**
+   * Active-organization display name for the sidebar's org-switcher block,
+   * resolved server-side in layout.tsx (membership-scoped, fail-soft null).
+   */
+  activeOrgName?: string | null;
   hiddenNavTitles?: string[];
   /**
    * Sum of the viewer's Inbox-actionable approval counts across the
@@ -481,6 +487,8 @@ export function AppShell({
         connectionReady={connectionReady}
         userAccentColor={userAccentColor}
         singleOrg={singleOrg}
+        activeOrgName={activeOrgName}
+        canCreateOrganizations={canCreateOrganizations}
         hiddenNavTitles={hiddenNavTitles}
         isAdmin={isAdmin}
         pendingApprovalsTotal={pendingApprovalsTotal}
