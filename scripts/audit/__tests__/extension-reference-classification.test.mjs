@@ -39,6 +39,12 @@ describe("extension-reference classification taxonomy", () => {
       // generation (agent-binding-kinds.mjs) and byte-pinned by --check like
       // every other generated file.
       "src/lib/generated/agent-bindings.ts",
+      // Artifact-renderer dispatch spine (cinatra#1629, epic #1620 S2): the
+      // literal-import BUILD table of extension-shipped cinatra.artifact.ui
+      // renderer modules (keyed <pkg>::<slot>). Same owner-ruled generated-tree
+      // exempt class, same --check byte pin. Inert until an artifact declares
+      // `ui` (S3+/M1).
+      "src/lib/generated/artifact-renderers.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",

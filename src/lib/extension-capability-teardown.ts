@@ -8,7 +8,9 @@ import "server-only";
 // (agents/skills/workflows + separate-repo connector packages). It depends only
 // on the host-owned `invalidate*ForPackage` registries — the kinds that have an
 // in-process `register(ctx)` channel: { MCP tools, capability providers,
-// ctx.ui surfaces/actions, object types, runtime dashboard cubes/portlet kinds }.
+// ctx.ui surfaces/actions, object types, runtime dashboard cubes/portlet kinds,
+// artifact renderer registrations (semantic detail renderers + representation
+// providers, cinatra#1629) }.
 // It ALSO clears the version-keyed serving retention (cinatra#1392 Gap 1) — the
 // SAME four register-channel kinds retained per (packageName, version) for
 // non-default side-by-side serving — in lockstep, so a torn-down package stops
@@ -48,6 +50,7 @@ function clearVersionKeyedServingForPackage(packageName: string): string[] {
 }
 import { invalidateExtensionUiForPackage, hasExtensionUiForPackage } from "@/lib/extension-ui-registry";
 import { invalidateObjectTypesForPackage } from "@/lib/extension-object-types-teardown";
+import { invalidateArtifactRenderersForPackage } from "@/lib/extension-artifact-renderers-teardown";
 import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
 // Runtime dashboard-cube + portlet-kind registries (cinatra#660). These are pure
 // in-memory maps; unregistering is cheap and importing them does NOT build the
@@ -79,6 +82,8 @@ import { clearMcpCubeToolsForReconcile } from "@cinatra-ai/dashboards/cubes-mcp-
 export function teardownExtensionCapabilities(packageName: string): {
   removedTools: string[];
   removedTypes: string[];
+  removedRendererTypes: string[];
+  removedRepresentationProviders: number;
   removedCubes: string[];
   removedPortletKinds: string[];
   removedVersionKeyedServing: string[];
@@ -101,6 +106,13 @@ export function teardownExtensionCapabilities(packageName: string): {
   // Deregister the package's object types so an archived/uninstalled extension's
   // types stop resolving/listing in the running process without a restart.
   const removedTypes = invalidateObjectTypesForPackage(packageName);
+  // Renderer dispatch spine (cinatra#1629): retire the package's semantic detail
+  // renderers + representation providers from the two arbitration registries so
+  // a torn-down extension stops resolving to a renderer (the floor covers a
+  // stale worker). BOTH are operator-observable capability surfaces, so they
+  // count toward the guarded control-plane generation bump below.
+  const { removedSemanticTypes: removedRendererTypes, removedRepresentationProviders } =
+    invalidateArtifactRenderersForPackage(packageName);
   // Runtime dashboard cubes + portlet kinds (cinatra#660): unregister so a
   // disabled/uninstalled extension's runtime cube stops serving (the serve-gate
   // also denies it via the now-non-live install row) and its portlet kind stops
@@ -124,6 +136,8 @@ export function teardownExtensionCapabilities(packageName: string): {
   if (
     removedTools.length > 0 ||
     removedTypes.length > 0 ||
+    removedRendererTypes.length > 0 ||
+    removedRepresentationProviders > 0 ||
     hadUi ||
     hadProviders ||
     removedCubes.length > 0 ||
@@ -131,5 +145,13 @@ export function teardownExtensionCapabilities(packageName: string): {
   ) {
     bumpActivationGeneration("teardown", packageName);
   }
-  return { removedTools, removedTypes, removedCubes, removedPortletKinds, removedVersionKeyedServing };
+  return {
+    removedTools,
+    removedTypes,
+    removedRendererTypes,
+    removedRepresentationProviders,
+    removedCubes,
+    removedPortletKinds,
+    removedVersionKeyedServing,
+  };
 }

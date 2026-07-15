@@ -412,6 +412,7 @@
       "@cinatra-ai/objects/namespace": ["./packages/objects/src/namespace.ts"],
       "@cinatra-ai/objects/claims": ["./packages/objects/src/claims.ts"],
       "@cinatra-ai/objects/effective-identity": ["./packages/objects/src/effective-identity.ts"],
+      "@cinatra-ai/objects/artifact-renderer-registry": ["./packages/objects/src/artifact-renderer-registry.ts"],
       "@cinatra-ai/objects/auto-registrar": ["./packages/objects/src/auto-registrar.ts"],
       "@cinatra-ai/objects/registry": ["./packages/objects/src/registry.ts"],
       "@cinatra-ai/objects/sync-adapters/registry": ["./packages/objects/src/sync-adapters/registry.ts"],
