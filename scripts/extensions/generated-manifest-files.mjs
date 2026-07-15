@@ -54,6 +54,12 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // extension declares cinatra.streams.
   "src/lib/generated/streams.server.ts",
   "src/lib/generated/stream-public-paths.ts",
+  // Artifact-renderer dispatch spine (cinatra#1629, epic #1620 S2): the
+  // literal-import BUILD table of extension-shipped `cinatra.artifact.ui`
+  // renderer modules, keyed `<pkg>::<slot>`. The host dispatch resolves a row
+  // to a key here; a runtime-installed claimant whose key is absent is the
+  // "requires rebuild" degrade. Empty until an artifact declares `ui` (S3+/M1).
+  "src/lib/generated/artifact-renderers.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing
   // it here adds no exemption surface — it puts the file under the same

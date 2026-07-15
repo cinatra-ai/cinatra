@@ -8,6 +8,7 @@ import { objectTypeRegistry } from "../registry";
 import type { ArtifactObjectTypeClaim, SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources } from "../claims";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
+import { semanticRendererRegistry } from "../artifact-renderer-registry";
 import {
   GenericObjectListRow,
   GenericObjectCard,
@@ -215,7 +216,35 @@ function registerOneArtifactDir(dir: string): boolean {
   if (descriptor.objectTypes && descriptor.objectTypes.length > 0) {
     registerClaimValidators(descriptor.objectTypes, `${pkg.name}:artifact`, pkg.name);
   }
+  // Renderer dispatch spine (cinatra#1629, epic #1620 S2): if the manifest
+  // declares a `cinatra.artifact.ui.renderers.detail` view, register the
+  // extension's SEMANTIC detail renderer for its type(s). Per-org arbitration is
+  // the effective-identity winner's job at resolve time; this table just records
+  // "this extension ships a detail renderer for type T". Retired on
+  // archive/uninstall via the capability-teardown path (removeByPackage). The
+  // ORG-SCOPED representation-provider registrations bind at install/activation
+  // (M1/S4), not here. A malformed `ui` is already degraded away above (the
+  // manifest keeps `ui: undefined`), so this only fires for a valid detail view.
+  registerSemanticRenderers(descriptor, `${pkg.name}:artifact`, pkg.name);
   return true;
+}
+
+// Register the extension's semantic `detail` renderer for its umbrella artifact
+// type AND every claimed object type — all keyed to the same generated build
+// entry (an extension ships ONE detail renderer). Idempotent replace-by-type.
+function registerSemanticRenderers(
+  descriptor: SemanticArtifactManifest,
+  umbrellaType: string,
+  packageName: string,
+): void {
+  if (!descriptor.ui?.renderers?.detail) return;
+  const typeIds = new Set<string>([umbrellaType]);
+  for (const claim of descriptor.objectTypes ?? []) typeIds.add(claim.type);
+  for (const objectTypeId of typeIds) {
+    // The registry derives the generated-map key from the package + slot — a
+    // claimant can only ever resolve to its OWN detail module.
+    semanticRendererRegistry.register({ objectTypeId, packageName });
+  }
 }
 
 /**

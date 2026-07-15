@@ -47,15 +47,17 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import { buildArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 
-import { objectTypeRegistry } from "@cinatra-ai/objects";
-
-import { pickHandler } from "./pick-handler";
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
 import {
   pickArtifactRenderer,
   isSelectionPreparing,
+  type ArtifactRenderDispatch,
 } from "./renderer-dispatch";
+import { resolveArtifactDispatchInputs } from "./renderer-resolution";
+import { ExtensionRendererSlot } from "./extension-renderer-slot";
+import { RendererDegradedNotice } from "./renderer-degraded-notice";
 import { MarkdownHandler } from "./handlers/markdown-handler";
 import { PlainTextHandler } from "./handlers/plain-text-handler";
 import { PdfHandler } from "./handlers/pdf-handler";
@@ -67,10 +69,17 @@ import { FallbackHandler } from "./handlers/fallback-handler";
 
 export const dynamic = "force-dynamic";
 
-type PageProps = { params: Promise<{ id: string }> };
+type PageProps = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
-export default async function ArtifactDetailPage({ params }: PageProps) {
+export default async function ArtifactDetailPage({ params, searchParams }: PageProps) {
   const { id } = await params;
+  // `?renderer=generic` forces the generic floor — the recovery link the
+  // route-segment error boundary (error.tsx) points at, and a manual escape
+  // hatch. It never mounts the extension renderer (cinatra#1629 S2, AC-4).
+  const forceGeneric = (await searchParams)?.renderer === "generic";
   const session = await getAuthSession();
   if (!session) redirect("/sign-in");
   const orgId = session.session?.activeOrganizationId;
@@ -98,29 +107,6 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     : null;
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
-  const handler = pickHandler(mime);
-
-  // §III renderer dispatch by effective identity (cinatra#1431): typed renderer
-  // → MIME handler → generic fallback ("there is always a renderer"). Read
-  // authorization is already enforced above by `getArtifact` (canonical
-  // `object.read`) — a row the viewer may not read never reaches here. The
-  // typed branch activates once claimed typed rows carry a base type with a
-  // registered detail renderer (email/list claimant extensions, #1434/#1435);
-  // the generic artifact type ships none, so today's rows dispatch to the MIME
-  // handler or the generic fallback. The dispatch decision is unit-tested in
-  // `renderer-dispatch.test.ts`.
-  const hasTypedRenderer = Boolean(
-    objectTypeRegistry.resolve(artifact.objectType)?.renderers?.detail,
-  );
-  const dispatch = pickArtifactRenderer({
-    identity: artifact.effectiveIdentity,
-    hasTypedRenderer,
-    mime,
-  });
-  // Activation barrier (§III): selection (pin / add-to-context) requires a
-  // settled binding; a catalog browse-only identity shows "Preparing" until it
-  // lands. Open still renders the row read-only.
-  const selectionPreparing = isSelectionPreparing(artifact.effectiveIdentity);
   const previewHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/preview`
     : null;
@@ -128,16 +114,53 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     ? `/api/artifacts/${id}/versions/${revisionId}/content`
     : null;
 
+  // Renderer dispatch spine (cinatra#1629, epic #1620 S2): the pre-spine
+  // always-true `hasTypedRenderer` signal is REPLACED by claimant-keyed
+  // resolution through the two arbitration registries + the generated build map.
+  // Precedence (total): semantic detail renderer (per-org effective-identity
+  // winner) → representation viewer (org-scoped provider / first-party host
+  // default) → generic fallback; a runtime-installed-but-unbuilt claimant
+  // degrades to requires-rebuild. Read authorization is already enforced above —
+  // a row the viewer may not read never reaches here. Unit-tested in
+  // `renderer-dispatch.test.ts`; resolution seam in `renderer-resolution.ts`.
+  const dispatch: ArtifactRenderDispatch = forceGeneric
+    ? { kind: "fallback" }
+    : pickArtifactRenderer(
+        resolveArtifactDispatchInputs({
+          orgId,
+          baseType: artifact.objectType,
+          identity: artifact.effectiveIdentity,
+          mime,
+        }),
+      );
+
+  // Activation barrier (§III): selection (pin / add-to-context) requires a
+  // settled binding; a catalog browse-only identity shows "Preparing" until it
+  // lands. Open still renders the row read-only.
+  const selectionPreparing = isSelectionPreparing(artifact.effectiveIdentity);
+
   // UA hint for the PDF handler: known-iOS clients skip the broken
   // `<embed>` from the very first render (the client corrects the hint
   // post-hydration — iPadOS-as-Mac is indistinguishable server-side).
   // The page is already `force-dynamic`, so reading headers adds nothing.
   const pdfInitialFallback =
-    handler === "pdf"
+    dispatch.kind === "mime" && dispatch.handler === "pdf"
       ? isIosUserAgent((await headers()).get("user-agent") ?? "")
       : false;
 
   const title = artifact.title ?? artifact.artifactId;
+
+  // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
+  // extension-shipped renderer; the host context never crosses into it.
+  const rendererProps = buildArtifactRendererProps({
+    artifact,
+    representation: revisionId ? { revisionId, mime } : null,
+    previewHref,
+    downloadHref,
+  });
+
+  // The generic floor — reused by every degrade path so the body is never blank.
+  const genericFloor = <FallbackHandler artifact={artifact} mime={mime} />;
 
   return (
     <Main className="min-h-screen">
@@ -189,43 +212,75 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
           </span>
         ) : null}
         {(() => {
-          if (!previewHref) {
-            return <FallbackHandler artifact={artifact} mime={mime} />;
-          }
-          switch (handler) {
-            case "markdown":
+          switch (dispatch.kind) {
+            // Extension-shipped semantic detail renderer or representation
+            // viewer — mounted through the failure-isolated loader; degrades to
+            // the generic floor + a sanitized notice on any pre-render failure.
+            case "semantic":
+            case "representation":
               return (
-                <MarkdownHandler
-                  artifactId={id}
-                  revisionId={revisionId as string}
-                  orgId={orgId}
+                <ExtensionRendererSlot
+                  generatedKey={dispatch.generatedKey}
+                  packageName={dispatch.packageName}
+                  slot={dispatch.kind === "semantic" ? "detail" : "preview"}
+                  props={rendererProps}
+                  fallback={genericFloor}
                 />
               );
-            case "text":
+            // A runtime-installed claimant whose module is absent from this
+            // build: generic floor + a "requires rebuild" notice (never blank).
+            case "requires-rebuild":
               return (
-                <PlainTextHandler
-                  artifactId={id}
-                  revisionId={revisionId as string}
-                  orgId={orgId}
-                />
+                <>
+                  <RendererDegradedNotice
+                    packageName={dispatch.packageName}
+                    slot={dispatch.slot}
+                    failureClass="not-built"
+                  />
+                  {genericFloor}
+                </>
               );
-            case "pdf":
-              return (
-                <PdfHandler
-                  previewHref={previewHref}
-                  downloadHref={downloadHref as string}
-                  initialFallback={pdfInitialFallback}
-                />
-              );
-            case "image":
-              return <ImageHandler previewHref={previewHref} alt={title} />;
-            case "video":
-              return <VideoHandler previewHref={previewHref} />;
-            case "audio":
-              return <AudioHandler previewHref={previewHref} />;
+            // First-party host MIME handler (the always-effective default).
+            case "mime": {
+              if (!previewHref) return genericFloor;
+              switch (dispatch.handler) {
+                case "markdown":
+                  return (
+                    <MarkdownHandler
+                      artifactId={id}
+                      revisionId={revisionId as string}
+                      orgId={orgId}
+                    />
+                  );
+                case "text":
+                  return (
+                    <PlainTextHandler
+                      artifactId={id}
+                      revisionId={revisionId as string}
+                      orgId={orgId}
+                    />
+                  );
+                case "pdf":
+                  return (
+                    <PdfHandler
+                      previewHref={previewHref}
+                      downloadHref={downloadHref as string}
+                      initialFallback={pdfInitialFallback}
+                    />
+                  );
+                case "image":
+                  return <ImageHandler previewHref={previewHref} alt={title} />;
+                case "video":
+                  return <VideoHandler previewHref={previewHref} />;
+                case "audio":
+                  return <AudioHandler previewHref={previewHref} />;
+                default:
+                  return genericFloor;
+              }
+            }
             case "fallback":
             default:
-              return <FallbackHandler artifact={artifact} mime={mime} />;
+              return genericFloor;
           }
         })()}
       </PageContent>

@@ -27,6 +27,7 @@ import {
   GENERATED_CONNECTOR_SETTINGS_PAGES,
   GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,
 } from "../connector-setup-pages";
+import { GENERATED_ARTIFACT_RENDERERS } from "../artifact-renderers";
 
 const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>> = {
   GENERATED_EXTENSION_SERVER_ENTRIES,
@@ -43,6 +44,7 @@ const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>
   GENERATED_CONNECTOR_SETUP_PAGES,
   GENERATED_CONNECTOR_SETTINGS_PAGES,
   GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,
+  GENERATED_ARTIFACT_RENDERERS,
 };
 
 const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [
