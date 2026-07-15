@@ -772,7 +772,9 @@ function ProjectGuestsSection({ projectId, rows }: ProjectGuestsSectionProps) {
                 </span>
                 {row.expiresAt && (
                   <Badge variant="outline">
-                    expires {new Date(row.expiresAt).toLocaleDateString()}
+                    {/* Date-only expiries are stored as UTC midnight — render
+                        in UTC so the shown day never shifts across timezones. */}
+                    expires {new Date(row.expiresAt).toLocaleDateString(undefined, { timeZone: "UTC" })}
                   </Badge>
                 )}
               </div>

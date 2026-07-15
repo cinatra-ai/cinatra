@@ -22,8 +22,9 @@
 // closed-registration-gate.ts) is honored, never tunneled:
 //   - signUpEmail (public-path semantics; allowed while registration is open)
 //   - on REGISTRATION_CLOSED: a PLATFORM-admin inviter retries via the admin
-//     plugin's /admin/create-user (the gate's always-allowed D1 context, with
-//     the actor's own headers); anyone else gets a structured
+//     plugin's create-user endpoint (ADMIN_CREATE_USER_PATH — the gate's
+//     always-allowed D1 context, with the actor's own headers); anyone else
+//     gets a structured
 //     "registration-closed" error (existing accounts stay grantable).
 // The new guest then receives a password-reset email (existing
 // sendResetPassword wiring) to set their own password. A send failure does
@@ -148,8 +149,9 @@ async function createGuestAccount(input: {
     if (isRegistrationClosedError(err)) {
       if (!input.platformAdmin) return { error: "registration-closed" };
       try {
-        // Sanctioned D1 context: the admin plugin's /admin/create-user, under
-        // the acting platform admin's own session headers.
+        // Sanctioned D1 context: the admin plugin's create-user endpoint
+        // (ADMIN_CREATE_USER_PATH), under the acting platform admin's own
+        // session headers.
         const created = await auth.api.createUser({
           body: { email: input.email, password, name, role: "user" },
           headers: await headers(),
@@ -192,9 +194,11 @@ export async function inviteGuestByEmailAction(
       const alreadyGuest = guestGrants.some((g) => g.subjectUserId === existing.id);
       if (!alreadyGuest) {
         // Any effective access WITHOUT a guest grant = standard authorization
-        // (a direct user-level Project access row) — do not relabel it.
+        // (a direct user-level row OR team-derived access) — do not relabel
+        // it. The subject's own team memberships matter here, not the actor's.
+        const subjectTeams = await readTeamsForUser(existing.id, orgId).catch(() => []);
         const subjectGrants = await readProjectGrantsForUser(existing.id, orgId, {
-          teamIds: [],
+          teamIds: subjectTeams.map((t) => t.id),
         }).catch(() => []);
         if (subjectGrants.some((g) => g.projectId === projectId)) {
           return { ok: false, error: "already-has-access" };

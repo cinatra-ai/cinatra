@@ -162,21 +162,42 @@ test.describe("single-org mode", () => {
   });
 });
 
-test.describe("project admin grant → revoke customer", () => {
-  test("invite a customer then revoke them", async ({ page }) => {
-    await page.goto(`/projects/${SEED.projectId}/customers`, { waitUntil: "domcontentloaded" });
+test.describe("project admin grant → revoke guest (cinatra#1501)", () => {
+  // A FRESH external email, deliberately NOT the seeded customer fixture: the
+  // seeded customer is an org member (the session-resolution workaround in
+  // auth.setup.ts), and the ratified guest model classifies org members as
+  // "already a member" instead of granting. Inviting an unknown email
+  // exercises the full new path — account creation + guest grant — for real.
+  const GUEST_EMAIL = `rbac-guest-uat-${Date.now().toString(36)}@local.test`;
+
+  test("invite a guest by email then revoke them", async ({ page }) => {
+    await page.goto(`/projects/${SEED.projectId}/permissions`, { waitUntil: "domcontentloaded" });
     await waitForHydration(page);
 
-    // Invite. The server action does a Postgres write + revalidatePath which
-    // re-compiles in dev mode — give it generous headroom over the default 10s.
-    await page.getByRole("button", { name: /invite customer/i }).click();
-    await page.getByLabel(/customer user id/i).fill(SEED.customerUserId);
-    await page.getByRole("button", { name: /^invite$/i }).click();
-    await expect(page.getByText(SEED.customerUserId)).toBeVisible({ timeout: 60_000 });
+    const guests = page.getByTestId("project-guests-section");
+    await expect(guests).toBeVisible({ timeout: 30_000 });
+
+    // Invite. The server action does account creation + two Postgres writes +
+    // revalidatePath which re-compiles in dev mode — generous headroom.
+    await guests.locator("#guest-email").fill(GUEST_EMAIL);
+    await guests.getByRole("button", { name: /invite guest/i }).click();
+    await expect(guests.getByText(GUEST_EMAIL, { exact: false })).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // The seeded ORG-MEMBER customer must be rejected by classification —
+    // never relabeled a guest.
+    await guests.locator("#guest-email").fill(process.env.E2E_RBAC_CUSTOMER_EMAIL ?? "rbac-customer-uat@local.test");
+    await guests.getByRole("button", { name: /invite guest/i }).click();
+    await expect(
+      page.getByText(/belongs to an organization member/i),
+    ).toBeVisible({ timeout: 60_000 });
 
     // Revoke (same dev-mode budget as invite). 60s headroom — the dev-mode
     // server action + revalidatePath can spike above 30s on cold CI.
-    await page.getByRole("button", { name: /revoke/i }).first().click();
-    await expect(page.getByText(SEED.customerUserId)).toHaveCount(0, { timeout: 60_000 });
+    await guests.getByRole("button", { name: /revoke/i }).first().click();
+    await expect(guests.getByText(GUEST_EMAIL, { exact: false })).toHaveCount(0, {
+      timeout: 60_000,
+    });
   });
 });

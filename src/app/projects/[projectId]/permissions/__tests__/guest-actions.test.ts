@@ -7,8 +7,8 @@
 //  3. Unknown emails create the account through the SANCTIONED paths only:
 //     signUpEmail (public-path semantics — respects the closed-registration
 //     gate) with a ≥12-char random password; on REGISTRATION_CLOSED a
-//     platform-admin inviter falls back to the admin plugin's
-//     /admin/create-user (D1) with the actor's headers, anyone else gets a
+//     platform-admin inviter falls back to the admin plugin's create-user
+//     endpoint (ADMIN_CREATE_USER_PATH, D1) with the actor's headers, anyone else gets a
 //     structured "registration-closed" error. Create races re-read by email.
 //  4. New guests get a password-reset email (redirectTo the reset view); a
 //     send failure is surfaced as resetEmailSent:false, never unwound.
@@ -216,7 +216,7 @@ describe("inviteGuestByEmailAction — account creation", () => {
     expect(h.grantCustomerAccess).not.toHaveBeenCalled();
   });
 
-  it("REGISTRATION_CLOSED + platform admin → sanctioned /admin/create-user fallback with actor headers", async () => {
+  it("REGISTRATION_CLOSED + platform admin → sanctioned admin create-user (D1) fallback with actor headers", async () => {
     primeAdminSession({ platformAdmin: true });
     h.readUserByEmail.mockResolvedValue(null);
     h.signUpEmail.mockRejectedValue(registrationClosedError());
