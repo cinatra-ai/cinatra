@@ -5,8 +5,10 @@
 //     already-member; existing guest here → idempotent refresh; other project
 //     access → already-has-access; only a truly external account is granted.
 //  3. Unknown emails create the account through the SANCTIONED paths only:
-//     signUpEmail (public-path semantics — respects the closed-registration
-//     gate) with a ≥12-char random password; on REGISTRATION_CLOSED a
+//     a SELF-FETCH of the public sign-up endpoint (public-path semantics —
+//     respects the closed-registration gate; keeps the auto-sign-in cookie
+//     OFF the inviting admin's response) with a ≥12-char random password; on
+//     REGISTRATION_CLOSED a
 //     platform-admin inviter falls back to the admin plugin's create-user
 //     endpoint (ADMIN_CREATE_USER_PATH, D1) with the actor's headers, anyone else gets a
 //     structured "registration-closed" error. Create races re-read by email.
@@ -15,7 +17,7 @@
 //  5. Guests are never org members — no membership write exists in the module.
 //
 // Driven against explicit mocks; @/lib/auth is never imported for real.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   requireAuthSession: vi.fn(),
@@ -94,18 +96,30 @@ function primeAdminSession(opts: { platformAdmin?: boolean } = {}) {
   ]);
 }
 
-function registrationClosedError() {
-  const err = new Error("closed") as Error & { body?: { code?: string } };
-  err.body = { code: "REGISTRATION_CLOSED" };
-  return err;
+// The public sign-up leg is a SELF-FETCH (session-hijack fix: auth.api.signUpEmail
+// inside a server action would set the new guest's session cookie on the
+// inviting admin's response via nextCookies). Tests stub global fetch.
+const fetchMock = vi.fn();
+
+function signUpFetchResponse(status: number, body: unknown) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("fetch", fetchMock);
   h.headers.mockResolvedValue(new Headers());
   h.listCustomerGrantsForProject.mockResolvedValue([]);
   h.grantCustomerAccess.mockResolvedValue(undefined);
   h.requestPasswordReset.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("inviteGuestByEmailAction — gating and validation", () => {
@@ -183,19 +197,27 @@ describe("inviteGuestByEmailAction — existing-account classification", () => {
 });
 
 describe("inviteGuestByEmailAction — account creation", () => {
-  it("creates via signUpEmail (≥12-char random password), grants, and sends the reset email", async () => {
+  it("creates via the public sign-up SELF-FETCH (≥12-char random password), grants, and sends the reset email", async () => {
     primeAdminSession();
     h.readUserByEmail.mockResolvedValue(null);
-    h.signUpEmail.mockResolvedValue({ user: { id: "u-new" } });
+    fetchMock.mockResolvedValue(signUpFetchResponse(200, { user: { id: "u-new" } }));
     const r = await inviteGuestByEmailAction(PROJECT, "New@Guest.com", null);
     expect(r).toEqual({
       ok: true,
       guest: { userId: "u-new", email: "new@guest.com", name: null, existed: false },
       resetEmailSent: true,
     });
-    const body = h.signUpEmail.mock.calls[0][0].body;
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/auth/sign-up/email");
+    expect(init.method).toBe("POST");
+    // better-auth CSRF: auth POSTs need a trusted Origin.
+    expect(init.headers.origin).toMatch(/^https?:\/\//);
+    const body = JSON.parse(init.body);
     expect(body.email).toBe("new@guest.com");
     expect(body.password.length).toBeGreaterThanOrEqual(12);
+    // Session-hijack regression guard: the in-process sign-up API (which would
+    // set the guest's session cookie on the admin's response) must NOT be used.
+    expect(h.signUpEmail).not.toHaveBeenCalled();
     expect(h.grantCustomerAccess).toHaveBeenCalledWith(
       expect.objectContaining({ subjectUserId: "u-new" }),
     );
@@ -209,7 +231,7 @@ describe("inviteGuestByEmailAction — account creation", () => {
   it("REGISTRATION_CLOSED + non-platform-admin → structured registration-closed", async () => {
     primeAdminSession({ platformAdmin: false });
     h.readUserByEmail.mockResolvedValue(null);
-    h.signUpEmail.mockRejectedValue(registrationClosedError());
+    fetchMock.mockResolvedValue(signUpFetchResponse(403, { code: "REGISTRATION_CLOSED" }));
     const r = await inviteGuestByEmailAction(PROJECT, "n@g.com", null);
     expect(r).toEqual({ ok: false, error: "registration-closed" });
     expect(h.createUser).not.toHaveBeenCalled();
@@ -219,7 +241,7 @@ describe("inviteGuestByEmailAction — account creation", () => {
   it("REGISTRATION_CLOSED + platform admin → sanctioned admin create-user (D1) fallback with actor headers", async () => {
     primeAdminSession({ platformAdmin: true });
     h.readUserByEmail.mockResolvedValue(null);
-    h.signUpEmail.mockRejectedValue(registrationClosedError());
+    fetchMock.mockResolvedValue(signUpFetchResponse(403, { code: "REGISTRATION_CLOSED" }));
     h.createUser.mockResolvedValue({ user: { id: "u-admin-made" } });
     const r = await inviteGuestByEmailAction(PROJECT, "n@g.com", null);
     expect(r).toMatchObject({ ok: true, guest: { userId: "u-admin-made", existed: false } });
@@ -228,12 +250,12 @@ describe("inviteGuestByEmailAction — account creation", () => {
     );
   });
 
-  it("create race: signUpEmail fails, re-read by email finds the row → grant proceeds", async () => {
+  it("create race: sign-up self-fetch fails, re-read by email finds the row → grant proceeds", async () => {
     primeAdminSession();
     h.readUserByEmail
       .mockResolvedValueOnce(null) // initial lookup
       .mockResolvedValueOnce({ id: "u-raced", name: null, email: "r@x.com" }); // post-failure re-read
-    h.signUpEmail.mockRejectedValue(new Error("duplicate key"));
+    fetchMock.mockRejectedValue(new Error("network down"));
     const r = await inviteGuestByEmailAction(PROJECT, "r@x.com", null);
     expect(r).toMatchObject({ ok: true, guest: { userId: "u-raced" } });
     expect(h.grantCustomerAccess).toHaveBeenCalledWith(
@@ -244,7 +266,7 @@ describe("inviteGuestByEmailAction — account creation", () => {
   it("reset-email failure is surfaced (resetEmailSent:false) without unwinding the invite", async () => {
     primeAdminSession();
     h.readUserByEmail.mockResolvedValue(null);
-    h.signUpEmail.mockResolvedValue({ user: { id: "u-new2" } });
+    fetchMock.mockResolvedValue(signUpFetchResponse(200, { user: { id: "u-new2" } }));
     h.requestPasswordReset.mockRejectedValue(new Error("smtp down"));
     const r = await inviteGuestByEmailAction(PROJECT, "n2@g.com", null);
     expect(r).toMatchObject({ ok: true, resetEmailSent: false });

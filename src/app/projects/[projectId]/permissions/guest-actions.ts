@@ -122,14 +122,18 @@ function isPlausibleEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function isRegistrationClosedError(err: unknown): boolean {
-  const body = (err as { body?: { code?: unknown } } | null)?.body;
-  return body?.code === REGISTRATION_CLOSED_CODE;
-}
-
 /**
  * Create the guest's user row through the sanctioned creation paths (see the
  * module header). Returns the created/raced user id.
+ *
+ * ⚠️ The public sign-up goes over a SELF-FETCH to our own auth endpoint, NOT
+ * `auth.api.signUpEmail`: inside a server action the nextCookies plugin
+ * copies every internal Set-Cookie into THIS response, and signUpEmail
+ * auto-signs-in the new user — the inviting admin's browser would become the
+ * guest's session (CI-reproduced). With the self-fetch the auto-sign-in
+ * cookie dies with the discarded fetch response; the gate still evaluates
+ * its real public-path posture. The admin-plugin fallback creates no session,
+ * so it stays an in-process `auth.api` call.
  */
 async function createGuestAccount(input: {
   email: string;
@@ -139,36 +143,56 @@ async function createGuestAccount(input: {
   // ≥ minPasswordLength (12); the guest never learns it — they set their own
   // via the reset email. base64url of 24 bytes = 32 chars.
   const password = randomBytes(24).toString("base64url");
+  let registrationClosed = false;
   try {
-    const signedUp = await auth.api.signUpEmail({
-      body: { email: input.email, password, name },
+    const base = new URL(
+      process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+    );
+    const res = await fetch(new URL("/api/auth/sign-up/email", base), {
+      method: "POST",
+      // better-auth's CSRF check requires a trusted Origin on auth POSTs.
+      headers: { "content-type": "application/json", origin: base.origin },
+      body: JSON.stringify({ email: input.email, password, name }),
+      signal: AbortSignal.timeout(15_000),
+      cache: "no-store",
     });
-    const userId = signedUp?.user?.id;
-    if (userId) return { userId };
-    console.error("[guest-invite] signUpEmail returned no user id", { keys: Object.keys(signedUp ?? {}) });
-  } catch (err) {
-    if (isRegistrationClosedError(err)) {
-      if (!input.platformAdmin) return { error: "registration-closed" };
-      try {
-        // Sanctioned D1 context: the admin plugin's create-user endpoint
-        // (ADMIN_CREATE_USER_PATH), under the acting platform admin's own
-        // session headers.
-        const created = await auth.api.createUser({
-          body: { email: input.email, password, name, role: "user" },
-          headers: await headers(),
-        });
-        const adminCreatedId = created?.user?.id;
-        if (adminCreatedId) return { userId: adminCreatedId };
-      } catch (adminErr) {
-        // fall through to the race re-read below
-        console.error("[guest-invite] admin create-user fallback failed", adminErr);
-      }
+    if (res.ok) {
+      const signedUp = (await res.json().catch(() => null)) as { user?: { id?: string } } | null;
+      const userId = signedUp?.user?.id;
+      if (userId) return { userId };
+      console.error("[guest-invite] sign-up self-fetch ok but no user id", {
+        keys: Object.keys(signedUp ?? {}),
+      });
     } else {
-      console.error("[guest-invite] signUpEmail failed (non-registration-closed)", err);
+      const body = (await res.json().catch(() => null)) as { code?: string } | null;
+      registrationClosed = body?.code === REGISTRATION_CLOSED_CODE;
+      if (!registrationClosed) {
+        console.error("[guest-invite] sign-up self-fetch failed", res.status, body?.code);
+      }
     }
-    // Duplicate/race (a concurrent invite may have created the row between
-    // our read and the signUp — dev-auto-setup.ts precedent): re-read by email.
+  } catch (err) {
+    console.error("[guest-invite] sign-up self-fetch errored", err);
   }
+  if (registrationClosed) {
+    if (!input.platformAdmin) return { error: "registration-closed" };
+    try {
+      // Sanctioned D1 context: the admin plugin's create-user endpoint
+      // (ADMIN_CREATE_USER_PATH), under the acting platform admin's own
+      // session headers. Creates NO session — hijack-free in-process.
+      const created = await auth.api.createUser({
+        body: { email: input.email, password, name, role: "user" },
+        headers: await headers(),
+      });
+      const adminCreatedId = created?.user?.id;
+      if (adminCreatedId) return { userId: adminCreatedId };
+    } catch (adminErr) {
+      // fall through to the race re-read below
+      console.error("[guest-invite] admin create-user fallback failed", adminErr);
+    }
+  }
+  // Duplicate/race (a concurrent invite may have created the row between our
+  // read and the sign-up), or a transient self-fetch failure after the row
+  // landed: re-read by email.
   const raced = await readUserByEmail(input.email);
   if (raced) return { userId: raced.id };
   return { error: "unknown" };
