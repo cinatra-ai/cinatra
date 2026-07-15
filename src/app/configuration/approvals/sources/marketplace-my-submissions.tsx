@@ -91,7 +91,13 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
     return guardedFetch(viewer, resolveInstanceToken(), WITHDRAW_ACTIONS, async (token) => {
       const client = createHttpMarketplaceMcpClient({ token });
       const out = await client.extensionSubmissionListSelf();
-      return out.submissions.map(toRow);
+      // Pending-only (E5 #1555): the unified feed surfaces a submission only
+      // while it is awaiting moderator review — a decided/terminal row leaves
+      // the list the instant it is decided. `extensionSubmissionListSelf()`
+      // takes no server-side status filter, so the pending predicate is applied
+      // client-side here. This also aligns `fetchMine` with the contract's
+      // `counts()`, which already counts only `status === "pending"`.
+      return out.submissions.filter((s) => s.status === "pending").map(toRow);
     });
   },
 
