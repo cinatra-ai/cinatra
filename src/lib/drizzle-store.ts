@@ -1193,6 +1193,13 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_template_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id) WHERE extension_id IS NOT NULL AND is_template = true` },
     // One INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_instance_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id, project_id) WHERE extension_id IS NOT NULL AND project_id IS NOT NULL` },
+    // Per-entity multi-dashboard model (cinatra#700): additive columns + partial indexes only (bootstrap owns additive evolution per migrations/README.md); the transformational one-time coexistence backfill is versioned migration core__0048, which runs AFTER this bootstrap so these partial unique indexes already exist + enforce when it commits.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS entity_type text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS entity_id text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS is_default boolean NOT NULL DEFAULT false` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboards_entity_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE entity_type IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_default_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id) WHERE is_default = true AND entity_type IS NOT NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_entity_name_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (organization_id, entity_type, entity_id, owner_level, owner_id, name) WHERE entity_type IS NOT NULL` },
     // agent_registry_entries, agent_share_bindings, agent_forks for @cinatra/agent-builder registry
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_registry_entries" (
       id text PRIMARY KEY,
