@@ -73,9 +73,15 @@ export type MarketplaceInstallActionResult = {
    * open to workspace access. "access-partial" = the access write failed AND
    * the compensating uninstall ALSO failed — the extension is installed with
    * the per-kind DEFAULT (workspace) access; the operator log carries the
-   * details.
+   * details. "access-required" = the install SUCCEEDED for an access-target
+   * kind (connector/artifact/workflow) but NO access target was supplied, so
+   * the action REFUSED to persist the broadest per-kind default (a silent
+   * workspace-wide grant) and made no net change — the fresh install was rolled
+   * back, or a pre-existing install was left untouched (cinatra#1602,
+   * defense-in-depth follow-up of #1541). The caller must supply an access
+   * target and retry.
    */
-  stage?: "install" | "access" | "access-partial";
+  stage?: "install" | "access" | "access-partial" | "access-required";
 };
 
 /**
@@ -494,20 +500,26 @@ export function marketplaceFailureCopy(
 
 /**
  * Copy for an install-access failure (cinatra#805) — the install itself
- * succeeded but applying the selected pre-install access failed. Two shapes:
+ * succeeded but applying the selected pre-install access failed. Three shapes:
  *  - "access": the fresh install was ROLLED BACK (fail-closed) — nothing is
  *    installed; retrying is safe.
  *  - "access-partial": the rollback was impossible (pre-existing install) or
  *    itself failed — the extension IS installed, with its default access.
+ *  - "access-required": an access-target kind was installed with NO access
+ *    target, so the action refused to default to the broadest grant and made no
+ *    net change (cinatra#1602); the admin must choose an access scope and retry.
  * Same copy rules as marketplaceFailureCopy: plain language, no jargon, never
  * asserts a cause it cannot be sure of.
  */
 export function installAccessStageFailureCopy(
-  stage: "access" | "access-partial",
+  stage: "access" | "access-partial" | "access-required",
   displayName: string,
 ): string {
   if (stage === "access") {
     return `Couldn't apply the selected access for ${displayName}, so nothing was installed. Please try again.`;
+  }
+  if (stage === "access-required") {
+    return `${displayName} can't be installed without choosing who can access it. Select an access scope and try again.`;
   }
   return `${displayName} was installed, but the selected access couldn't be applied — it currently uses the default access for everyone in your workspace. Contact your administrator if that's not what you want.`;
 }
