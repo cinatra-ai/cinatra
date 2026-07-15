@@ -20,9 +20,24 @@
  * Race-freedom + auth checks live in the mutation service.
  */
 import { getAuthSession } from "@/lib/auth-session";
+import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 
 import { buildSecurityContextFromSession } from "./auth/security-context";
-import { upsertDashboardConfig } from "./mutation-service";
+import {
+  upsertDashboardConfig,
+  listDashboardsForEntity,
+  getEntityDashboard,
+  createEntityDashboard,
+  renameDashboard,
+  deleteEntityDashboard,
+  ensureOverview,
+  updateDashboard,
+  DashboardNameConflictError,
+  DashboardOverviewProtectedError,
+  DashboardForbiddenError,
+  DashboardNotFoundError,
+  DashboardInvalidEntityError,
+} from "./mutation-service";
 import { DASHBOARD_CONFIG_V12_VERSION } from "./extension/dashboard-config-v12";
 import { buildAgentsDashboardId } from "./components/seed-configs/agents-default";
 import { buildProjectsDashboardId } from "./components/seed-configs/projects-default";
@@ -30,7 +45,21 @@ import { buildTeamsDashboardId } from "./components/seed-configs/teams-default";
 import { buildOrganizationsDashboardId } from "./components/seed-configs/organizations-default";
 import { buildArtifactsDashboardId } from "./components/seed-configs/artifacts-default";
 import { buildPersonalDashboardId } from "./components/seed-configs/personal-default";
-import type { DashboardActor } from "./permissions";
+import { resolveDashboardAccess, type DashboardActor } from "./permissions";
+import {
+  isKnownEntityType,
+  type DashboardEntityRef,
+} from "./store/entity-identity";
+import type { DashboardRow } from "./store/schema";
+import type { DashboardConfigV1_1 } from "./store/dashboard-config";
+import { readDcConfigFromRow } from "./v12-envelope";
+import type {
+  DeletedEntityDashboard,
+  EntityDashboardMutationReason,
+  EntityDashboardSummary,
+  EntityDashboardsList,
+  MutatedEntityDashboard,
+} from "./entity-dashboards-contract";
 
 export async function saveAgentsDashboardAction(config: unknown): Promise<void> {
   const session = await getAuthSession();
@@ -120,4 +149,223 @@ export async function saveArtifactsDashboardAction(config: unknown): Promise<voi
 
 export async function savePersonalDashboardAction(config: unknown): Promise<void> {
   await saveCinatraDashboardAction(buildPersonalDashboardId, "Personal", config);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// cinatra#701 — generic entity Dashboards-tab server actions.
+//
+// A hosting screen (#703 personal, #704 team, #705 org, #706 project) binds its
+// SERVER-DERIVED entity ref into these (`action.bind(null, ref)`), so the ref
+// crosses to the client Next-ENCRYPTED and the client never authors the owner
+// axis. Two guards make this safe (codex round-0):
+//   1. `resolveDashboardAccess` re-derives canRead/canWrite from the row's owner
+//      fields against the SESSION actor on every call — fail-closed regardless
+//      of the ref; and
+//   2. every id-taking action re-loads the row and confirms it belongs to the
+//      bound ref (`rowMatchesRef`) BEFORE mutating, so a valid id from a
+//      DIFFERENT surface the actor also writes cannot be mutated through this
+//      surface's binding (confinement).
+// The list carries a server-derived `canWrite` per row + a surface `canCreate`,
+// so the UI gates edit/create — never an unconditional `editable`.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** A minimal valid empty drizzle-cube config — the read fallback for a row
+ *  whose stored config is absent/corrupt (created rows carry a valid config). */
+const EMPTY_ENTITY_DC = {
+  portlets: [] as unknown[],
+  layoutMode: "grid",
+  grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+} as unknown as DashboardConfigV1_1;
+
+/** Build the role-aware dashboards actor from the session (teamIds + orgRole).
+ *  teamRoles is not resolved from the session actor — team-OWNED Overviews are a
+ *  #704 concern that extends the actor there; user/org ownership is complete. */
+async function requireEntityDashboardActor(): Promise<DashboardActor> {
+  const { actor: authz, orgId, userId } = await buildDashboardActorFromSession();
+  if (!orgId) throw new Error("entity dashboards: no active organization");
+  const orgRole =
+    authz.orgRole === "owner" || authz.orgRole === "org_owner"
+      ? "owner"
+      : authz.orgRole === "admin" || authz.orgRole === "org_admin"
+        ? "admin"
+        : authz.orgRole === "member"
+          ? "member"
+          : undefined;
+  return {
+    userId,
+    organizationId: orgId,
+    teamIds: authz.teamIds ?? [],
+    ...(orgRole ? { orgRole } : {}),
+  };
+}
+
+function assertValidRef(ref: DashboardEntityRef): void {
+  if (
+    !isKnownEntityType(ref.entityType) ||
+    !ref.entityId ||
+    !ref.ownerLevel ||
+    !ref.ownerId
+  ) {
+    throw new Error("entity dashboards: invalid entity ref");
+  }
+}
+
+/** Confinement: the row's immutable owner axis must equal the bound ref. */
+function rowMatchesRef(row: DashboardRow, ref: DashboardEntityRef): boolean {
+  return (
+    row.entityType === ref.entityType &&
+    row.entityId === ref.entityId &&
+    row.ownerLevel === ref.ownerLevel &&
+    row.ownerId === ref.ownerId
+  );
+}
+
+function toSummary(row: DashboardRow, actor: DashboardActor): EntityDashboardSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    isDefault: row.isDefault,
+    canWrite: resolveDashboardAccess(row, actor).canWrite,
+  };
+}
+
+/** Whether the actor may CREATE a dashboard for this ref. Mirrors the service's
+ *  create authz (a private, non-default pseudo row owned per the ref, run
+ *  through the shared resolver); for a human/session actor the resolver reads
+ *  only organizationId, ownerLevel, ownerId, visibility. */
+function canCreateForRef(ref: DashboardEntityRef, actor: DashboardActor): boolean {
+  const pseudo = {
+    organizationId: actor.organizationId,
+    ownerLevel: ref.ownerLevel,
+    ownerId: ref.ownerId,
+    visibility: "private",
+    projectId: null,
+  } as unknown as DashboardRow;
+  return resolveDashboardAccess(pseudo, actor).canWrite;
+}
+
+/** Map an expected mutation failure to a client reason; `null` = unexpected. */
+function classifyMutationError(e: unknown): EntityDashboardMutationReason | null {
+  if (e instanceof DashboardNameConflictError) return "name-conflict";
+  if (e instanceof DashboardOverviewProtectedError) return "protected";
+  if (e instanceof DashboardForbiddenError) return "denied";
+  if (e instanceof DashboardNotFoundError) return "not-found";
+  if (e instanceof DashboardInvalidEntityError) {
+    return /reserved/i.test(String(e.message)) ? "name-reserved" : "name-required";
+  }
+  return null;
+}
+
+/** Ensured Overview-inclusive list + capabilities for the dropdown. */
+export async function listEntityDashboardsAction(
+  ref: DashboardEntityRef,
+): Promise<EntityDashboardsList> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  const rows = await listDashboardsForEntity(ref, actor);
+  return {
+    dashboards: rows.map((r) => toSummary(r, actor)),
+    canCreate: canCreateForRef(ref, actor),
+  };
+}
+
+/** Idempotently ensure the non-removable Overview exists (surface calls this,
+ *  with its entity-summary seed once #702 lands, BEFORE listing). */
+export async function ensureEntityOverviewAction(
+  ref: DashboardEntityRef,
+  seedConfig?: unknown,
+): Promise<EntityDashboardSummary> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  const row = await ensureOverview(
+    { ref, ...(seedConfig !== undefined ? { seedConfig } : {}) },
+    actor,
+  );
+  return toSummary(row, actor);
+}
+
+/** The unwrapped drizzle-cube config for one dashboard id (ref-confined). */
+export async function getEntityDashboardConfigAction(
+  ref: DashboardEntityRef,
+  id: string,
+): Promise<DashboardConfigV1_1> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  const row = await getEntityDashboard(id, actor);
+  if (!row || !rowMatchesRef(row, ref)) throw new DashboardNotFoundError(id);
+  return readDcConfigFromRow<DashboardConfigV1_1>(row, EMPTY_ENTITY_DC);
+}
+
+/** Create a named (non-default) dashboard, seeded empty. */
+export async function createEntityDashboardAction(
+  ref: DashboardEntityRef,
+  name: string,
+): Promise<MutatedEntityDashboard> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  try {
+    const row = await createEntityDashboard({ ref, name }, actor);
+    return { ok: true, dashboard: toSummary(row, actor) };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    return { ok: false, reason };
+  }
+}
+
+/** Rename a dashboard (ref-confined; the service denies the Overview default). */
+export async function renameEntityDashboardAction(
+  ref: DashboardEntityRef,
+  id: string,
+  name: string,
+): Promise<MutatedEntityDashboard> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  const existing = await getEntityDashboard(id, actor);
+  if (!existing || !rowMatchesRef(existing, ref)) {
+    return { ok: false, reason: "not-found" };
+  }
+  try {
+    const row = await renameDashboard(id, name, actor);
+    return { ok: true, dashboard: toSummary(row, actor) };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    return { ok: false, reason };
+  }
+}
+
+/** Delete a dashboard (ref-confined; the service denies the Overview default). */
+export async function deleteEntityDashboardAction(
+  ref: DashboardEntityRef,
+  id: string,
+): Promise<DeletedEntityDashboard> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  const existing = await getEntityDashboard(id, actor);
+  if (!existing || !rowMatchesRef(existing, ref)) {
+    return { ok: false, reason: "not-found" };
+  }
+  try {
+    await deleteEntityDashboard(id, actor);
+    return { ok: true };
+  } catch (e) {
+    const reason = classifyMutationError(e);
+    if (!reason) throw e;
+    return { ok: false, reason };
+  }
+}
+
+/** Persist the selected dashboard's edited config (config-only patch is
+ *  Overview-safe; the service re-envelopes against the existing row). */
+export async function saveEntityDashboardConfigAction(
+  ref: DashboardEntityRef,
+  id: string,
+  config: unknown,
+): Promise<void> {
+  assertValidRef(ref);
+  const actor = await requireEntityDashboardActor();
+  const existing = await getEntityDashboard(id, actor);
+  if (!existing || !rowMatchesRef(existing, ref)) throw new DashboardNotFoundError(id);
+  await updateDashboard(id, { config }, actor);
 }

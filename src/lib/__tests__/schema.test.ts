@@ -81,6 +81,15 @@ describe("project-scoped schema migration", () => {
     expect(fn).toContain("only workspace grant is allowed for org-null projects");
     // (c) org-bound project → workspace grant rejected
     expect(fn).toContain("workspace grant not allowed on org-bound project");
+    // (d) guest carve-out (cinatra#1501): a non-member user-level row is valid
+    // ONLY as a READ grant backed by a live project-scoped customer role_grant
+    expect(fn).toContain("NEW.role = 'read'");
+    expect(fn).toContain('"cinatra_test"."role_grant"');
+    expect(fn).toContain("rg.role = 'customer'");
+    expect(fn).toContain("rg.scope_level = 'project'");
+    expect(fn).toContain("rg.scope_record_id = NEW.project_id");
+    expect(fn).toContain("rg.expires_at IS NULL OR rg.expires_at > now()");
+    expect(fn).toContain("holds no live customer grant");
     // workspace lookup index
     expect(has("project_access_workspace_idx")).toBe(true);
     expect(has("WHERE principal_level = 'workspace' AND principal_id = '__workspace__'")).toBe(true);

@@ -2345,9 +2345,20 @@ $body$` },
           RETURN NEW;
         END IF;
         IF NEW.principal_level = 'user' THEN
+          -- Org members qualify directly. A non-member user-level READ row is
+          -- valid ONLY when backed by a live project-scoped customer grant
+          -- (the guest model, cinatra#1501: guests are never org members —
+          -- role_grant is written first, in the same transaction).
           IF NOT EXISTS (
-            SELECT 1 FROM public.member m WHERE m."userId" = NEW.principal_id AND m."organizationId" = proj_org) THEN
-            RAISE EXCEPTION 'project_access: user % is not a member of project org %', NEW.principal_id, proj_org;
+            SELECT 1 FROM public.member m WHERE m."userId" = NEW.principal_id AND m."organizationId" = proj_org)
+          AND NOT (NEW.role = 'read' AND EXISTS (
+            SELECT 1 FROM "${schemaName.replaceAll('"', '""')}"."role_grant" rg
+             WHERE rg.subject_user_id = NEW.principal_id
+               AND rg.role = 'customer'
+               AND rg.scope_level = 'project'
+               AND rg.scope_record_id = NEW.project_id
+               AND (rg.expires_at IS NULL OR rg.expires_at > now()))) THEN
+            RAISE EXCEPTION 'project_access: user % is not a member of project org % (and holds no live customer grant)', NEW.principal_id, proj_org;
           END IF;
         ELSIF NEW.principal_level = 'team' THEN
           IF NOT EXISTS (
