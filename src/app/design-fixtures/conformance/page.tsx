@@ -11,6 +11,7 @@ import { buildConfigurationNeedsNotificationInput } from "@/lib/agent-configurat
 import { ConformanceCardFixtures } from "./card-fixtures";
 import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixture";
 import { ConnectorSetupConformanceFixture } from "./connector-setup-fixture";
+import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
@@ -143,6 +144,17 @@ export default function ConformanceHarnessPage() {
           </CardHeader>
           <CardContent>
             <ConnectorSetupConformanceFixture />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Post-install needs-configuration callout (surface: install-config-needs-callout)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <InstallConfigNeedsConformanceFixture />
           </CardContent>
         </Card>
 
