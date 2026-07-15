@@ -126,8 +126,19 @@ export interface UnifiedFeedCursor {
 
 export interface UnifiedFeedPage {
   items: UnifiedFeedItem[];
-  /** Null when the feed is exhausted. */
+  /** Null when the feed is exhausted OR when the page is `degraded` (an
+   *  incomplete approval snapshot yields no sound keyset cursor — see below). */
   nextCursor: UnifiedFeedCursor | null;
+  /** True when at least one pending-approval source failed to load, so the
+   *  approval half of this page is INCOMPLETE. A degraded page still returns the
+   *  rows that DID load (notifications + the surviving sources, correctly
+   *  ordered) but NEVER a `nextCursor`: a keyset cursor derived from a partial
+   *  snapshot is unsound (it would permanently filter the failed source's
+   *  above-cursor rows out of later pages once it recovers). The caller shows the
+   *  partial page + a retry affordance and re-requests the SAME cursor —
+   *  REPLACING this partial segment with the retry's result — rather than paging
+   *  forward or appending. */
+  degraded: boolean;
 }
 
 /** Injectable seams so the merge is unit-testable without a DB or the real
@@ -296,21 +307,39 @@ function toNotificationItem(n: AppNotification): UnifiedFeedItem {
 // Pending-approval collection
 // ---------------------------------------------------------------------------
 
+/** Outcome of one pending-approval collection pass. `complete` is false when ANY
+ *  applicable source's `fetchInbox`/`fetchMine` threw (its rows — possibly a full
+ *  multi-page drain — are absent), so the merge must treat the resulting cursor
+ *  as UNSOUND (see {@link loadUnifiedFeedPage}). */
+interface CollectedApprovals {
+  items: UnifiedFeedItem[];
+  complete: boolean;
+}
+
 /**
  * Fetch and dedup the full pending-approval set for the viewer. Read-time
  * federated (small N) — re-fetched on every page so the deduped set is
  * deterministic and cursor-stable. Pending-only is guaranteed by the source
  * contract (pending-only `fetchInbox`; `fetchMine` called with the pending
- * status); the union does not re-filter by status. A per-source failure is
- * logged and skipped (the feed degrades gracefully rather than 500ing on one
- * bad remote source — mirrors the page's safe per-section loader).
+ * status); the union does not re-filter by status.
+ *
+ * A per-source failure is logged, skipped, and RECORDED as `complete: false` (a
+ * failing source may drain over several pages — any throw, at any page, drops
+ * that source's ENTIRE contribution for this pass, not one row). The feed then
+ * degrades gracefully rather than 500ing on one bad remote source — BUT, unlike
+ * the page's per-section loader (each section owns an independent cursor), this
+ * is ONE merged keyset stream, so an incomplete approval half cannot yield a
+ * sound union cursor. `loadUnifiedFeedPage` therefore suppresses `nextCursor`
+ * on an incomplete pass instead of silently advancing past the failed source's
+ * rows (which would filter them out of every later page until a full reload).
  */
 async function collectPendingApprovals(
   viewer: ApprovalViewer,
   sources: ApprovalSource[],
-): Promise<UnifiedFeedItem[]> {
+): Promise<CollectedApprovals> {
   const inbox: TaggedApproval[] = [];
   const mine: TaggedApproval[] = [];
+  let complete = true;
 
   await Promise.all(
     sources.map(async (source) => {
@@ -319,6 +348,7 @@ async function collectPendingApprovals(
           const env = await source.fetchInbox(viewer);
           for (const row of env.rows) inbox.push({ row, direction: "inbox" });
         } catch (err) {
+          complete = false;
           logSourceError(source.id, "inbox", err);
         }
       }
@@ -327,13 +357,14 @@ async function collectPendingApprovals(
           const env = await source.fetchMine(viewer, { status: PENDING_MINE_STATUS });
           for (const row of env.rows) mine.push({ row, direction: "mine" });
         } catch (err) {
+          complete = false;
           logSourceError(source.id, "mine", err);
         }
       }
     }),
   );
 
-  return dedupeApprovals(inbox, mine).map(toApprovalItem);
+  return { items: dedupeApprovals(inbox, mine).map(toApprovalItem), complete };
 }
 
 function logSourceError(sourceId: string, direction: Direction, err: unknown): void {
@@ -349,10 +380,24 @@ function logSourceError(sourceId: string, direction: Direction, err: unknown): v
 
 /**
  * Load one page of the unified notifications + pending-approvals feed, newest
- * first, resumed from `cursor`. Stable keyset pagination: no duplicate or
- * skipped row at a page boundary, even under concurrent inserts, because the
- * union cursor is an absolute total-order position that filters BOTH streams
- * exactly (approvals in memory; notifications via the derived seek boundary).
+ * first, resumed from `cursor`.
+ *
+ * Stable keyset pagination over the COMPLETE inputs: no duplicate or skipped row
+ * at a page boundary, even under concurrent inserts, because the union cursor is
+ * an absolute total-order position that filters BOTH streams exactly (the
+ * in-memory approval set; notifications via the derived seek boundary). This
+ * holds for the two keyset-ordered halves; it does NOT promise atomicity for a
+ * source that itself drains a non-keyset remote (the marketplace moderation
+ * queues offset-paginate a remote that exposes no cursor — a best-effort
+ * snapshot subject to offset pagination's inherent race, bounded and self-
+ * healing on reload).
+ *
+ * Soundness under source failure: if the approval collection is INCOMPLETE (any
+ * source threw — see {@link collectPendingApprovals}), the page is returned
+ * `degraded: true` with `nextCursor: null`. Advancing a cursor over a partial
+ * snapshot is unsound — the failed source's above-cursor rows would be filtered
+ * out of every later page once it recovers — so the feed never pages forward
+ * from an incomplete pass; the caller retries the SAME cursor instead.
  */
 export async function loadUnifiedFeedPage(
   viewer: ApprovalViewer,
@@ -365,9 +410,9 @@ export async function loadUnifiedFeedPage(
 
   const sources = deps.sources ?? (await availableSources(viewer));
 
-  // Tier 1 — the complete pending-approval set (small N), then keep only rows
-  // strictly after the cursor.
-  const allApprovals = await collectPendingApprovals(viewer, sources);
+  // Tier 1 — the pending-approval set (small N), then keep only rows strictly
+  // after the cursor. `complete` is false when any source failed to load.
+  const { items: allApprovals, complete } = await collectPendingApprovals(viewer, sources);
   const approvalsAfter = cursor
     ? allApprovals.filter((item) => isAfterCursor(cursor, item))
     : allApprovals;
@@ -384,10 +429,12 @@ export async function loadUnifiedFeedPage(
   // window — so `candidates.length > limit` means the feed is not yet exhausted.
   const candidates = [...approvalsAfter, ...notifications].sort(compareUnifiedDesc);
   const items = candidates.slice(0, limit);
-  const hasMore = candidates.length > limit;
+  // Only advance the cursor over a COMPLETE approval snapshot: an incomplete
+  // pass yields no sound keyset position, so a degraded page never pages forward.
+  const hasMore = complete && candidates.length > limit;
   const nextCursor = hasMore && items.length > 0 ? cursorOf(items[items.length - 1]) : null;
 
-  return { items, nextCursor };
+  return { items, nextCursor, degraded: !complete };
 }
 
 // ---------------------------------------------------------------------------

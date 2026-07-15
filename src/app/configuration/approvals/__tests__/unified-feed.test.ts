@@ -307,7 +307,7 @@ describe("loadUnifiedFeedPage — merge, dedup, source-delegated pending", () =>
     expect(page.items.map((i) => i.sourceKey).sort()).toEqual([SUBMISSION_KEY, "host-port-grants"].sort());
   });
 
-  it("a throwing source is skipped, not fatal", async () => {
+  it("a throwing source degrades the page: surviving rows still returned, but NO unsound cursor", async () => {
     const throwing = fakeSource("host-port-grants", { inbox: [], throwOn: "inbox" });
     const ok = fakeSource("agent-creation-requests", {
       inbox: [arow("agent-creation-requests", "ok", "2026-01-01T00:00:00Z")],
@@ -316,7 +316,62 @@ describe("loadUnifiedFeedPage — merge, dedup, source-delegated pending", () =>
       limit: 10,
       deps: { sources: [throwing, ok], listNotifications: makeNotifReader({ rows: [] }) },
     });
+    // The surviving source's rows are still shown — the feed does not 500 on one
+    // bad source...
     expect(page.items.map((i) => i.id)).toEqual(["ok"]);
+    // ...but the page is flagged degraded and hands out NO cursor: an incomplete
+    // approval snapshot cannot yield a sound keyset position.
+    expect(page.degraded).toBe(true);
+    expect(page.nextCursor).toBeNull();
+  });
+});
+
+// --- integration: soundness under source failure ----------------------------
+
+describe("degraded pages never advance the cursor (keyset soundness under failure)", () => {
+  it("a transiently-failing source is not silently skipped on a later page — the degraded page suppresses the cursor, so a retry recovers its rows (#1555)", async () => {
+    // A marketplace-style source that throws on its FIRST fetch, then recovers
+    // and returns a row NEWER than every notification — exactly the row a naive
+    // "advance the cursor anyway" would filter out of every later page forever.
+    let mCalls = 0;
+    const mRow = arow(SUBMISSION_MODERATION, "m-new", "2026-01-09T00:00:00Z");
+    const flaky: ApprovalSource = {
+      ...fakeSource(SUBMISSION_MODERATION, { inbox: [] }),
+      async fetchInbox() {
+        mCalls += 1;
+        if (mCalls === 1) throw new Error("marketplace 503");
+        return { availability: "ready", rows: [mRow], actions: [] };
+      },
+    };
+    const store = {
+      rows: [
+        notif("n1", "2026-01-05T00:00:00Z"),
+        notif("n2", "2026-01-03T00:00:00Z"),
+        notif("n3", "2026-01-01T00:00:00Z"),
+      ],
+    };
+    const reader = makeNotifReader(store);
+
+    // Page 1 — the source is down: degraded, surviving notifications shown, and
+    // NO cursor (so the client cannot page forward over the incomplete snapshot).
+    const p1 = await loadUnifiedFeedPage(viewer, {
+      limit: 2,
+      deps: { sources: [flaky], listNotifications: reader },
+    });
+    expect(p1.degraded).toBe(true);
+    expect(p1.nextCursor).toBeNull();
+    expect(p1.items.every((i) => i.kind === "notification")).toBe(true); // m-new absent while down
+
+    // Retry the SAME (null) cursor now that the source recovered: a sound,
+    // complete page — m-new (the newest row) is at the TOP, nothing lost to a
+    // stale advanced cursor, and the cursor is handed out again.
+    const retry = await loadUnifiedFeedPage(viewer, {
+      limit: 2,
+      deps: { sources: [flaky], listNotifications: reader },
+    });
+    expect(retry.degraded).toBe(false);
+    expect(retry.items[0].id).toBe("m-new");
+    expect(retry.nextCursor).not.toBeNull();
   });
 });
 
