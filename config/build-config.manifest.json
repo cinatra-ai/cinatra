@@ -187,6 +187,7 @@
     { "alias": "@cinatra-ai/dashboards", "target": "./packages/dashboards/src/index.ts" },
     { "alias": "@cinatra-ai/dashboards/module", "target": "./packages/dashboards/src/integration/module.ts" },
     { "alias": "@cinatra-ai/dashboards/extension-materialization", "target": "./packages/dashboards/src/extension-materialization.ts" },
+    { "alias": "@cinatra-ai/dashboards/overview-config", "target": "./packages/dashboards/src/components/seed-configs/overview-config.ts" },
     { "alias": "@cinatra-ai/dashboards/screens", "target": "./packages/dashboards/src/screens/index.tsx" },
     { "alias": "@cinatra-ai/dashboards/store", "target": "./packages/dashboards/src/store/index.ts" },
     { "alias": "@cinatra-ai/dashboards/mcp", "target": "./packages/dashboards/src/mcp/index.ts" },

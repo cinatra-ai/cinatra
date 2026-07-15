@@ -3,12 +3,15 @@ import {
   registerCorePortletKinds,
   ANALYTICS_PORTLET_KIND,
   ANALYTICS_PORTLET_KIND_ALIAS,
+  ENTITY_METADATA_PORTLET_KIND,
+  ENTITY_COUNT_PORTLET_KIND,
   isAnalyticsPortletKind,
 } from "../portlets/kinds";
 import {
   getPortletKind,
   validatePortletConfig,
   getPortletKindDescriptor,
+  isRenderOnlyPortletKind,
 } from "../portlets/registry";
 import { validateDashboardConfigV12, DASHBOARD_CONFIG_V12_VERSION } from "../extension/dashboard-config-v12";
 
@@ -62,6 +65,51 @@ describe("core portlet kinds", () => {
   it("launcher kinds allow arbitrary input keys", () => {
     expect(getPortletKind("agent-launcher", V)!.allowsArbitraryInputs).toBe(true);
     expect(getPortletKind("object-list", V)!.allowsArbitraryInputs).toBeUndefined();
+  });
+});
+
+// Entity-summary Overview building blocks (cinatra#702): render-only,
+// zero-server-read presentation kinds whose config carries the pre-composed
+// items the surface fetched.
+describe("entity-summary portlet kinds (cinatra#702)", () => {
+  for (const kind of [ENTITY_METADATA_PORTLET_KIND, ENTITY_COUNT_PORTLET_KIND]) {
+    it(`${kind} registers render-only with a no-read session policy`, () => {
+      const e = getPortletKind(kind, V);
+      expect(e, kind).toBeDefined();
+      expect(e!.scopePolicy.scopeFrom).toBe("session");
+      // No server read → resource "none", no op, no wiring.
+      expect(e!.scopePolicy.resource).toBe("none");
+      expect(e!.scopePolicy.op).toBeUndefined();
+      expect(e!.inputKeys).toEqual([]);
+      expect(e!.outputKeys).toEqual([]);
+      expect(e!.renderOnly).toBe(true);
+      expect(isRenderOnlyPortletKind(kind, V)).toBe(true);
+    });
+
+    it(`${kind} accepts a well-formed items config`, () => {
+      expect(vc(kind, { items: [{ label: "Name", value: "Platform" }] })).toEqual([]);
+      // finite number values (counts) and an optional title are allowed.
+      expect(vc(kind, { title: "Team", items: [{ label: "Members", value: 5 }] })).toEqual([]);
+    });
+
+    it(`${kind} fails closed on a missing/empty/malformed items config`, () => {
+      expect(vc(kind, {}).length).toBeGreaterThan(0);
+      expect(vc(kind, { items: [] }).length).toBeGreaterThan(0);
+      // non-array items.
+      expect(vc(kind, { items: "nope" }).length).toBeGreaterThan(0);
+      // blank label.
+      expect(vc(kind, { items: [{ label: "", value: "x" }] }).length).toBeGreaterThan(0);
+      // non-string / non-finite value.
+      expect(vc(kind, { items: [{ label: "L", value: {} }] }).length).toBeGreaterThan(0);
+      expect(vc(kind, { items: [{ label: "L", value: Number.POSITIVE_INFINITY }] }).length).toBeGreaterThan(0);
+      // non-string title.
+      expect(vc(kind, { title: 7, items: [{ label: "L", value: "x" }] }).length).toBeGreaterThan(0);
+    });
+  }
+
+  it("normal kinds are NOT render-only", () => {
+    expect(isRenderOnlyPortletKind("object-detail", V)).toBe(false);
+    expect(isRenderOnlyPortletKind(ANALYTICS_PORTLET_KIND, V)).toBe(false);
   });
 });
 

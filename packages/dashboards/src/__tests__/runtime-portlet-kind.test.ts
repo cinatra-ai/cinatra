@@ -56,6 +56,23 @@ describe("registerRuntimePortletKind", () => {
     if (!r.ok) expect(r.code).toBe("portlet_renders_as_no_component");
   });
 
+  it("REJECTS rendersAs targeting a RENDER-ONLY kind (no persist-guard bypass, cinatra#702)", () => {
+    // entity-metadata/entity-count have bundled components (so hasComponentFor
+    // passes) but are render-only — a runtime alias would be a PERSISTABLE kind
+    // rendering through the ephemeral component, bypassing the assertConfigV12
+    // persist guard. Must fail closed.
+    for (const target of ["entity-metadata", "entity-count"]) {
+      const r = registerRuntimePortletKind(
+        { kind: `ext_${target}`, version: V, rendersAs: target, sourcePackageName: "@x/pkg", activationGeneration: 1 },
+        { hasComponentFor },
+      );
+      expect(r.ok, target).toBe(false);
+      if (!r.ok) expect(r.code).toBe("portlet_renders_as_render_only");
+      // and nothing was registered.
+      expect(getPortletKind(`ext_${target}`, V)).toBeUndefined();
+    }
+  });
+
   it("REJECTS a runtime kind colliding with a BUNDLED kind id", () => {
     const r = registerRuntimePortletKind(
       { kind: "object-list", version: V, rendersAs: "object-detail", sourcePackageName: "@x/pkg", activationGeneration: 1 },

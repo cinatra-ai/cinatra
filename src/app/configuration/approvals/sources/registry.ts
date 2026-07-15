@@ -3,6 +3,7 @@ import "server-only";
 import { agentCreationRequestsSource } from "./agent-creation-requests";
 import { hostPortGrantsSource } from "./host-port-grants";
 import { dynamicTypeArtifactVisibilitySource } from "./dynamic-type-artifact-visibility";
+import { promotionRequestsSource } from "./promotion-requests";
 import { marketplaceSubmissionModerationSource } from "./marketplace-submission-moderation";
 import { marketplaceVendorAppModerationSource } from "./marketplace-vendor-app-moderation";
 import { marketplaceMySubmissionsSource } from "./marketplace-my-submissions";
@@ -13,18 +14,23 @@ import type { ApprovalSource, ApprovalViewer } from "./types";
 // Ordered approval-source registry. Local sources first, then the marketplace
 // group. The array order is the section render order within each direction tab:
 //   Inbox         → agent, host-port grants, dynamic-type coverage,
-//                   submission-moderation, vendor-app-moderation
-//   Your requests → agent, my-submissions, vendor-app-status
+//                   promotion requests, submission-moderation,
+//                   vendor-app-moderation
+//   Your requests → agent, promotion requests, my-submissions,
+//                   vendor-app-status
 // A source is removed by deleting its adapter file + its entry here (the
 // workflow passthrough was deleted whole by #1035). The four marketplace sources
 // share `group: "marketplace"` so the page collapses them into ONE "not
-// connected" state + ONE footer when no marketplace credential resolves.
+// connected" state + ONE footer when no marketplace credential resolves. The
+// shared promotion source (#1560) is DORMANT (availability `not_configured`)
+// until #1381/#1437 plug a subject backend, so it contributes nothing until then.
 // ---------------------------------------------------------------------------
 
 export const approvalSourceRegistry: ApprovalSource[] = [
   agentCreationRequestsSource,
   hostPortGrantsSource,
   dynamicTypeArtifactVisibilitySource,
+  promotionRequestsSource,
   marketplaceSubmissionModerationSource,
   marketplaceVendorAppModerationSource,
   marketplaceMySubmissionsSource,
