@@ -81,7 +81,11 @@ export async function RegistryCatalogScreen({
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
 
   // URL-driven tab selection. Server-side narrowing: only "archived" is
-  // accepted; any other value falls through to "active".
+  // accepted; any other value falls through to "active". A locked/system
+  // extension is live, so it renders in the Active partition by design — a
+  // dedicated "Locked" view (which would concentrate these cards) is the
+  // separate status-filter expansion (cinatra#1571, blocked by #1570), not a
+  // narrowing this screen adds here.
   const tab = resolvedSearchParams?.tab === "archived" ? "archived" : "active";
   // §V settings-row deep link (cinatra#1041): `?update=<packageName>` opens the
   // matching row's detail modal directly (its footer carries the update flow

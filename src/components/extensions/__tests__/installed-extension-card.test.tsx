@@ -25,6 +25,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   InstalledExtensionCard,
+  InstalledStatusIndicator,
   UpdateAvailableChip,
 } from "../installed-extension-card";
 import { Button } from "@/components/ui/button";
@@ -278,6 +279,67 @@ function renderWithUpdate(over: Record<string, unknown>): string {
     />,
   );
 }
+
+// ---------------------------------------------------------------------------
+// §VI InstalledStatusIndicator — the three lifecycle glyphs (cinatra#1570).
+// The reported bug: a LOCKED (system-live) row rendered the SAME green check
+// as an Active row, so the two were indistinguishable but for the text label.
+// The fix gives locked its own green LOCK glyph (it IS live → still green),
+// distinct from the active check; archived keeps its muted cross. These pins
+// fail loudly if locked ever silently re-shares the active check again, and
+// guard that the active/archived glyphs are untouched.
+// ---------------------------------------------------------------------------
+describe("InstalledStatusIndicator — §VI lifecycle glyphs (cinatra#1570)", () => {
+  const render = (status: "active" | "locked" | "archived") =>
+    renderToStaticMarkup(<InstalledStatusIndicator status={status} />);
+
+  it("active → a green check, labelled Active, with no lock and no system tooltip", () => {
+    const html = render("active");
+    expect(html).toContain('data-status="active"');
+    expect(html).toContain("lucide-check");
+    expect(html).not.toContain("lucide-lock");
+    expect(html).toContain("text-success");
+    expect(html).not.toContain("text-muted-foreground");
+    expect(html).toContain(">Active<");
+    expect(html).not.toContain("title=");
+  });
+
+  it("locked → a green LOCK, labelled Locked, distinct from the active check (the #1570 fix)", () => {
+    const html = render("locked");
+    expect(html).toContain('data-status="locked"');
+    // Its own glyph — the lock, NEVER the active row's check.
+    expect(html).toContain("lucide-lock");
+    expect(html).not.toContain("lucide-check");
+    // Still green: a system extension is live.
+    expect(html).toContain("text-success");
+    expect(html).not.toContain("text-muted-foreground");
+    // Label + the system tooltip are retained unchanged.
+    expect(html).toContain(">Locked<");
+    expect(html).toContain(
+      'title="System extension — always active; cannot be archived or uninstalled."',
+    );
+  });
+
+  it("archived → a muted cross, labelled Archived (untouched by the lock branch)", () => {
+    const html = render("archived");
+    expect(html).toContain('data-status="archived"');
+    expect(html).toContain("lucide-x");
+    expect(html).not.toContain("lucide-lock");
+    expect(html).not.toContain("lucide-check");
+    expect(html).toContain("text-muted-foreground");
+    expect(html).not.toContain("text-success");
+    expect(html).toContain(">Archived<");
+  });
+
+  it("every status keeps the canonical badge kicker treatment (named tokens only)", () => {
+    for (const status of ["active", "locked", "archived"] as const) {
+      const html = render(status);
+      expect(html).toContain("font-mono");
+      expect(html).toContain("text-badge-2xs");
+      expect(html).toContain("uppercase");
+    }
+  });
+});
 
 describe("UpdateAvailableChip (§III blue action-accent chip)", () => {
   it("renders the status-indicator badge treatment in the --info blue accent with a data-status hook", () => {
