@@ -60,10 +60,11 @@ import { toast } from "@/lib/cinatra-toast";
 //
 // Exports:
 // - `NotificationsProvider` — owns the notification state machine
-//   (polling + SSE + ephemeral merge + per-route mark-as-read) and
-//   provides both the public `NotificationContext` (consumed by
-//   `useNotify()` for toast-from-forms) and an internal
-//   `NotificationsStateContext` consumed by `NotificationsBellTrigger`.
+//   (polling + SSE + per-route mark-as-read) and provides both the
+//   public `NotificationContext` (consumed by `useNotify()` for
+//   toast-from-forms — a pure toast call that never writes bell state)
+//   and an internal `NotificationsStateContext` consumed by
+//   `NotificationsBellTrigger`.
 // - `NotificationsBellTrigger` — the bell icon + popover. Rendered in
 //   `app-shell.tsx`'s header.
 // - `useNotificationsState` — internal context hook for the bell trigger
@@ -144,9 +145,6 @@ export function NotificationsProvider({
   const pathname = usePathname();
 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [ephemeralNotifications, setEphemeralNotifications] = useState<
-    AppNotification[]
-  >([]);
   const [open, setOpen] = useState(false);
 
   // Version counter every mutation bumps. ALL GET writers (polling,
@@ -156,49 +154,18 @@ export function NotificationsProvider({
   // restore the pre-mutation snapshot.
   const mutationVersionRef = useNotificationsMutationVersion();
 
-  // Merge server-polled + ephemeral, deduping by id, newest first.
-  // Ephemeral items survive polling cycles (the polling effect only updates
-  // `notifications`, never `ephemeralNotifications`).
-  const mergedNotifications = useMemo<AppNotification[]>(() => {
-    const serverIds = new Set(notifications.map((n) => n.id));
-    const ephemeralNotInServer = ephemeralNotifications.filter(
-      (n) => !serverIds.has(n.id),
-    );
-    return [...ephemeralNotInServer, ...notifications].sort((left, right) =>
-      right.createdAt.localeCompare(left.createdAt),
-    );
-  }, [notifications, ephemeralNotifications]);
-
   // -----------------------------------------------------------------------
-  // addNotification — ephemeral local notification + sonner toast.
+  // addNotification — a pure sonner toast call.
   //
   // This is the `useNotify().addNotification` surface used by every form
   // save path in the app (the "saved successfully" / "save failed" toasts).
-  // The toast input is intentionally narrow (`success | error | warning`)
-  // `info` rows are server-side only and belong to the In-progress tab, not
-  // sonner.
+  // It fires a toast and nothing else: it does NOT mutate any bell-visible
+  // state, synthesize an `AppNotification` row/id/`readAt`, or light the bell
+  // badge. The bell renders ONLY server-polled/SSE-pushed rows. The toast
+  // input is intentionally narrow (`success | error | warning`); `info` rows
+  // are server-side only and belong to the In-progress tab, not sonner.
   // -----------------------------------------------------------------------
   const addNotification = useCallback((input: AddNotificationInput) => {
-    const notification: AppNotification = {
-      id:
-        typeof crypto !== "undefined" && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      title: input.title,
-      body: input.body,
-      kind: input.kind,
-      href: input.href,
-      createdAt: new Date().toISOString(),
-      // Mark ephemeral notifications as already-read — the toast itself is
-      // the notification; we don't want the bell badge to light up for
-      // items the user already saw.
-      readAt: new Date().toISOString(),
-    };
-
-    setEphemeralNotifications((previous) =>
-      [notification, ...previous].slice(0, 50),
-    );
-
     const toastFn =
       input.kind === "error"
         ? toast.error
@@ -429,13 +396,13 @@ export function NotificationsProvider({
 
   const stateValue = useMemo<NotificationsStateContextValue>(
     () => ({
-      notifications: mergedNotifications,
+      notifications,
       open,
       setOpen,
       markRead,
       markAllRead,
     }),
-    [mergedNotifications, open, markRead, markAllRead],
+    [notifications, open, markRead, markAllRead],
   );
 
   return (
