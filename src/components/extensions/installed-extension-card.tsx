@@ -15,6 +15,7 @@ import {
   VENDOR_MISSING_LABEL,
   type VendorPresentation,
 } from "@/lib/vendor-presentation";
+import type { ExtensionSourceLabel } from "@cinatra-ai/extensions/screens/extension-source-label";
 
 /**
  * InstalledExtensionCard — the design system's "Installed extensions" card
@@ -61,6 +62,18 @@ export type InstalledExtensionCardProps = {
    * unlinked text.
    */
   vendor?: VendorPresentation;
+  /**
+   * §VI byline SOURCE indicator (cinatra#1572) — the extension's provenance
+   * class (marketplace / your-instance / GitHub / in-tree build / bundled /
+   * unknown), resolved by the caller through `classifyExtensionSource`. Renders
+   * as its OWN byline element, INDEPENDENT of `vendor`: it sits alongside the
+   * resolved vendor presentation and is never gated on the vendor state, so a
+   * missing-vendor placeholder never suppresses it. Carries only the semantic
+   * label — never the raw registryUrl (AC5b). Omitted by non-§VI callers (§VII
+   * agents, marketplace) → no source element renders, so those surfaces are
+   * byte-identical.
+   */
+  source?: ExtensionSourceLabel;
   description?: string | null;
   /** Already-formatted version text (the v-prefixed formatting is the caller's). */
   version?: string | null;
@@ -275,6 +288,7 @@ export function InstalledExtensionCard({
   kindIcon,
   kindLabel,
   vendor,
+  source,
   description,
   version,
   status,
@@ -328,7 +342,9 @@ export function InstalledExtensionCard({
               </span>
             )}
             <span className="overflow-hidden text-ellipsis">
-              <span className="font-medium">{kindLabel}</span>
+              <span data-slot="installed-extension-kind-label" className="font-medium">
+                {kindLabel}
+              </span>
               {/* The "{Kind} by {Vendor}" byline ALWAYS renders (cinatra#1528):
                   a known vendor shows its display name; a missing/omitted vendor
                   shows the localized placeholder — never a silently dropped
@@ -337,6 +353,23 @@ export function InstalledExtensionCard({
               <span data-slot="installed-extension-vendor-label" className="font-medium">
                 {vendor?.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL}
               </span>
+              {/* §VI SOURCE indicator (cinatra#1572): an INDEPENDENT byline
+                  element rendered whenever the caller supplies `source`. It sits
+                  alongside the resolved vendor presentation (#1528) and is NEVER
+                  gated on the vendor state — a missing-vendor placeholder never
+                  suppresses it. A neutral, informational label (not a trust
+                  badge, AC1a); the raw registryUrl never reaches the DOM (AC5b). */}
+              {source && (
+                <span
+                  data-slot="installed-extension-source-label"
+                  data-source-kind={source.kind}
+                  className="font-normal"
+                  title={source.tooltip}
+                >
+                  {" · "}
+                  {source.label}
+                </span>
+              )}
             </span>
           </div>
         }

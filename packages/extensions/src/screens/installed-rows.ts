@@ -42,6 +42,13 @@ import type { ExtensionKind, InstalledExtension } from "../canonical-types";
 import { sourceVersion } from "../lifecycle-ui";
 import { resolveInstalledVendorName } from "./installed-vendor";
 import { resolveInstalledDisplayName } from "./installed-display-name";
+// §VI source indicator (cinatra#1572) — the pure provenance classifier + the
+// resolver that maps the instance-identity registry slots to the two
+// authoritative identities the classifier compares against.
+import {
+  resolveConfiguredRegistryIdentities,
+  type ConfiguredRegistryIdentities,
+} from "./extension-source-label";
 // The per-extension Settings route builder lives in the pure model module
 // (unit-testable without the server-only loader graph); re-exported here for
 // the card + any existing importer.
@@ -324,6 +331,13 @@ export type LoadedInstalledCardRows = {
   availableByName: Map<string, AgentPackageSummary>;
   /** Resolved per-actor discovery scope (the caller reuses `organizationId`). */
   scope: ExtensionDiscoveryScope;
+  /**
+   * The two authoritative configured registry identities (marketplace remote +
+   * instance local slot) the §VI card's source indicator (cinatra#1572)
+   * classifies each row's verdaccio registryUrl against. ADDITIVE — the §V
+   * Settings page consumer ignores it, so that surface is unchanged (AC4).
+   */
+  registryIdentities: ConfiguredRegistryIdentities;
 };
 
 /**
@@ -345,6 +359,21 @@ export async function loadInstalledCardRows(
   // instanceNamespace, so an unapproved consumer can't impersonate a vendor.
   const identity = readInstanceIdentity();
   const vendorScope = getEffectiveViewerScope(identity);
+
+  // §VI source indicator (cinatra#1572): resolve the two configured registry
+  // identities ONCE from the CONFIGURED slots only (AC1: "from marketplace" is a
+  // match against the *configured* marketplace identity). The marketplace
+  // identity is the remote slot URL, else null — no product-default host guess;
+  // the legacy top-level `registryUrl` is intentionally NOT threaded here (the
+  // identity read shim already routes a legacy remote into `registries.remote`
+  // and a legacy loopback into `registries.local`, so reusing it would collapse
+  // both identities and mislabel a local-registry row as marketplace,
+  // codex#1572). The instance identity is the local slot only. A verdaccio row
+  // matching neither configured identity resolves to `unknown`.
+  const registryIdentities = resolveConfiguredRegistryIdentities({
+    remoteUrl: identity?.registries?.remote?.url ?? null,
+    localUrl: identity?.registries?.local?.url ?? null,
+  });
 
   // Resolve the per-actor discovery context once (session → actor + visibility
   // scope). Each per-kind reader facet applies this resolved scope.
@@ -480,5 +509,5 @@ export async function loadInstalledCardRows(
     }),
   ]);
 
-  return { active, archived, availableByName, scope };
+  return { active, archived, availableByName, scope, registryIdentities };
 }
