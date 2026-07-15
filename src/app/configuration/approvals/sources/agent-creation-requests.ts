@@ -12,7 +12,7 @@ import {
 } from "@/lib/agent-creation-requests-store";
 
 import { decideAgentCreationRequest } from "../decision-helpers";
-import { AGENT_SOURCE_ID } from "../resolve-active-view";
+import { AGENT_SOURCE_ID } from "./source-ids";
 import { AgentDecisionActions } from "../agent-decision-actions";
 import {
   agentCreationRequestsContract,

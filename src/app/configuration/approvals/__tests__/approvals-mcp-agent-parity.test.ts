@@ -50,7 +50,7 @@ const AGENT_APPROVE_SCOPE = { level: "organization" as const, id: "org-1" };
 // the light decision-helper (no UI/DB graph).
 vi.mock("../sources/registry", async () => {
   const { decideAgentCreationRequest } = await import("../decision-helpers");
-  const { AGENT_SOURCE_ID } = await import("../resolve-active-view");
+  const { AGENT_SOURCE_ID } = await import("../sources/source-ids");
   const source = {
     id: AGENT_SOURCE_ID,
     title: "Agent creation requests",
@@ -66,7 +66,7 @@ vi.mock("../sources/registry", async () => {
 });
 
 import { registerApprovalsPrimitives } from "../approvals-mcp";
-import { AGENT_SOURCE_ID } from "../resolve-active-view";
+import { AGENT_SOURCE_ID } from "../sources/source-ids";
 
 type Envelope = { content: unknown; structuredContent: Record<string, unknown> };
 type Handler = (input: unknown) => Promise<Envelope>;

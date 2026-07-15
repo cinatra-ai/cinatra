@@ -4,7 +4,7 @@ import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
 import { listAgentCreationRequests } from "@/lib/agent-creation-requests-store";
 
-import { AGENT_SOURCE_ID } from "../resolve-active-view";
+import { AGENT_SOURCE_ID } from "./source-ids";
 import type { ApprovalNavSource, ApprovalViewer, SourceCounts } from "./types";
 
 // ---------------------------------------------------------------------------
