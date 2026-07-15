@@ -19,7 +19,7 @@
  * serialize on the row lock and revision_number is computed atomically.
  */
 import "server-only";
-import { eq, max, sql, and } from "drizzle-orm";
+import { eq, max, sql, and, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { CURRENT_CONFIG_VERSION } from "./store/dashboard-config";
@@ -39,6 +39,14 @@ import type {
   OwnerLevel,
   Visibility,
 } from "./store/schema";
+import {
+  OVERVIEW_DASHBOARD_NAME,
+  buildOverviewDashboardId,
+  compareDashboardsForList,
+  isKnownEntityType,
+  parseCanonicalOverviewId,
+  type DashboardEntityRef,
+} from "./store/entity-identity";
 import {
   validateDashboardConfigV12,
   DASHBOARD_CONFIG_V12_VERSION,
@@ -76,6 +84,40 @@ export class DashboardConfigInvalidError extends Error {
   }
 }
 
+/**
+ * Thrown when a mutation targets the non-removable "Overview" default in a way
+ * that would remove or rename it (delete / archive / rename). The Overview is
+ * server-enforced (cinatra#700) — this is the hard stop for every write surface
+ * (server actions, MCP, AI jobs), not a UI-only affordance.
+ */
+export class DashboardOverviewProtectedError extends Error {
+  readonly code = "dashboard_overview_protected";
+  constructor(operation: string, dashboardId: string) {
+    super(`${operation} denied: the Overview default (${dashboardId}) cannot be removed or renamed`);
+    this.name = "DashboardOverviewProtectedError";
+  }
+}
+
+/** Thrown when a create/rename would collide with an existing dashboard name
+ *  within the same (org, entity, owner). */
+export class DashboardNameConflictError extends Error {
+  readonly code = "dashboard_name_conflict";
+  constructor(readonly name: string) {
+    super(`A dashboard named "${name}" already exists for this entity`);
+    this.name = "DashboardNameConflictError";
+  }
+}
+
+/** Thrown when an entity-dashboard mutation is given an invalid entity ref or
+ *  name (unknown entityType, empty entityId/ownerId, empty/reserved name). */
+export class DashboardInvalidEntityError extends Error {
+  readonly code = "dashboard_invalid_entity";
+  constructor(message: string) {
+    super(message);
+    this.name = "DashboardInvalidEntityError";
+  }
+}
+
 export type CreateDashboardInput = {
   readonly id?: string; // optional — randomUUID() if absent
   readonly name: string;
@@ -105,6 +147,8 @@ type AuditOp =
   | "dashboards.update"
   | "dashboards.publish"
   | "dashboards.archive"
+  | "dashboards.rename"
+  | "dashboards.delete"
   | "dashboards.materialize_template"
   | "dashboards.materialize_instance"
   | "dashboards.extension_archive"
@@ -301,6 +345,9 @@ export async function createDashboard(
     extensionId: null,
     isTemplate: false,
     templateScope: null,
+    entityType: null,
+    entityId: null,
+    isDefault: false,
   };
   const access = resolveDashboardAccess(pseudo, actor);
   if (!access.canWrite) {
@@ -371,7 +418,23 @@ export async function updateDashboard(
       next.configJson = config as never;
       next.configVersion = configVersion;
     }
-    if (patch.name !== undefined) next.name = patch.name;
+    if (patch.name !== undefined) {
+      // Overview invariant (cinatra#700) — enforced on the GENERIC update path
+      // too, since it is MCP-reachable (dashboards_update forwards `name`):
+      //   - the is_default Overview can never be renamed; and
+      //   - no non-default ENTITY dashboard may claim the reserved "Overview"
+      //     name (which would block a later ensureOverview insert). Non-entity
+      //     rows (entity_type NULL — legacy/extension) keep the old free rename.
+      if (row.isDefault) {
+        throw new DashboardOverviewProtectedError("dashboards.update", id);
+      }
+      if (row.entityType != null && patch.name.trim() === OVERVIEW_DASHBOARD_NAME) {
+        throw new DashboardInvalidEntityError(
+          `"${OVERVIEW_DASHBOARD_NAME}" is reserved for the non-removable default dashboard`,
+        );
+      }
+      next.name = patch.name;
+    }
     if (patch.description !== undefined) next.description = patch.description;
     if (patch.visibility !== undefined) next.visibility = patch.visibility;
 
@@ -461,6 +524,11 @@ export async function archiveDashboard(
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
       throw new DashboardForbiddenError("dashboards.archive", id);
+    }
+    // Non-removable Overview default (cinatra#700) — server-enforced on the
+    // archive path, not only hidden in the UI.
+    if (row.isDefault) {
+      throw new DashboardOverviewProtectedError("dashboards.archive", id);
     }
 
     const prevStatus = row.status;
@@ -581,6 +649,9 @@ export async function upsertDashboardConfig(
         extensionId: null,
         isTemplate: false,
         templateScope: null,
+        entityType: null,
+        entityId: null,
+        isDefault: false,
       };
       const access = resolveDashboardAccess(pseudo, actor);
       if (!access.canWrite) {
@@ -605,22 +676,56 @@ export async function upsertDashboardConfig(
       fallbackScopeOwnerLevel: effectiveOwnerLevel,
     });
 
+    // cinatra#700 COEXISTENCE: a CANONICAL legacy per-surface save id
+    // (`system-<surface>:<org>:<user>`) IS that entity's Overview. Stamp the
+    // entity mapping (entity_type/entity_id/is_default) + the reserved name here
+    // so a save that lands on a FRESH install, or AFTER the one-time coexistence
+    // migration already ran, still produces a properly-mapped, listable,
+    // non-removable Overview instead of an orphaned unmapped row that a later
+    // `ensureOverview` would double-create. The id converges with
+    // `buildOverviewDashboardId` (same `system-…` id), so both paths hit the SAME
+    // row via ON CONFLICT (id).
+    //
+    // FAIL-CLOSED (do NOT stamp) unless the id is the EXACT canonical shape AND
+    // it agrees with the tenant + owner it would be stamped under AND any
+    // existing row is operator-authored — so a malformed/wrong-org/wrong-owner
+    // `system-…` id, an extension/template/project row, or a non-user owner is
+    // never coerced into a default (which could otherwise create a default under
+    // a non-canonical id and later collide with the canonical one on
+    // dashboards_entity_default_uniq). A non-canonical id just writes a plain
+    // unmapped row, exactly as before.
+    const effectiveOwnerId = patch.ownerId ?? existing?.ownerId ?? actor.userId;
+    const canonical = parseCanonicalOverviewId(id);
+    const isCanonicalOverview =
+      canonical !== null &&
+      canonical.entityId === actor.organizationId &&
+      canonical.ownerId === effectiveOwnerId &&
+      effectiveOwnerLevel === "user" &&
+      (!existing ||
+        (existing.extensionId == null && !existing.isTemplate && existing.projectId == null));
+    const overviewMapping = isCanonicalOverview
+      ? { entityType: canonical.entityType, entityId: actor.organizationId, isDefault: true as const }
+      : null;
+
     // 3. INSERT ... ON CONFLICT DO UPDATE — atomic upsert.
     const insertRow: NewDashboardRow = {
       id,
-      name: patch.name ?? existing?.name ?? "Untitled",
+      name: overviewMapping ? OVERVIEW_DASHBOARD_NAME : (patch.name ?? existing?.name ?? "Untitled"),
       description: existing?.description ?? null,
       configJson: nextConfig as never,
       configVersion,
       dashboardVersion: (existing?.dashboardVersion ?? 0) + 1,
       publishedRevisionNumber: existing?.publishedRevisionNumber ?? null,
       ownerLevel: effectiveOwnerLevel,
-      ownerId: patch.ownerId ?? existing?.ownerId ?? actor.userId,
+      ownerId: effectiveOwnerId,
       organizationId: actor.organizationId,
       visibility: patch.visibility ?? existing?.visibility ?? "private",
       status: existing?.status ?? "draft",
       createdBy: existing?.createdBy ?? actor.userId,
       updatedBy: actor.userId,
+      entityType: overviewMapping?.entityType ?? existing?.entityType ?? null,
+      entityId: overviewMapping?.entityId ?? existing?.entityId ?? null,
+      isDefault: overviewMapping?.isDefault ?? existing?.isDefault ?? false,
     };
     const updateSet: Record<string, unknown> = {
       configJson: nextConfig as never,
@@ -629,7 +734,23 @@ export async function upsertDashboardConfig(
       updatedBy: actor.userId,
       dashboardVersion: sql`${dashboards.dashboardVersion} + 1`,
     };
-    if (patch.name !== undefined) updateSet.name = patch.name;
+    if (overviewMapping) {
+      // Repair/keep the mapping on every save (idempotent) so a pre-migration
+      // unmapped row is healed on its next save, and the Overview name is fixed.
+      updateSet.entityType = overviewMapping.entityType;
+      updateSet.entityId = overviewMapping.entityId;
+      updateSet.isDefault = true;
+      updateSet.name = OVERVIEW_DASHBOARD_NAME;
+    } else if (patch.name !== undefined && !existing?.isDefault) {
+      // Overview invariant on the generic (non-legacy) upsert path: a non-default
+      // ENTITY row may not claim the reserved "Overview" name.
+      if (existing?.entityType != null && patch.name.trim() === OVERVIEW_DASHBOARD_NAME) {
+        throw new DashboardInvalidEntityError(
+          `"${OVERVIEW_DASHBOARD_NAME}" is reserved for the non-removable default dashboard`,
+        );
+      }
+      updateSet.name = patch.name;
+    }
     if (patch.visibility !== undefined) updateSet.visibility = patch.visibility;
 
     const [row] = await tx
@@ -652,6 +773,439 @@ export async function upsertDashboardConfig(
       metadata: { upsert: true, dashboardVersion: row.dashboardVersion },
     });
     return row;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Per-entity multi-dashboard surface (cinatra#700).
+//
+// Identity is the composite (entityType, entityId, ownerLevel, ownerId, name)
+// within the actor's org, replacing the single deterministic per-user id. Each
+// entity carries exactly ONE non-removable "Overview" default (`is_default`),
+// enforced HERE (server layer) — not merely hidden in the UI, so an MCP / server
+// action / AI job cannot delete, archive, or rename it. The single-writer +
+// same-TX audit invariants hold as for every other mutation above.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** A minimal valid, empty drizzle-cube config seeded into a fresh dashboard. */
+const EMPTY_ENTITY_DASHBOARD_DC = {
+  portlets: [] as unknown[],
+  layoutMode: "grid",
+  grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+} as const;
+
+/** Statuses that appear in the per-entity dropdown (an archived dashboard is hidden). */
+const LISTABLE_STATUSES = ["draft", "published"] as const;
+
+/** True if `e` (or anything in its `cause` chain) is a Postgres unique-violation
+ *  (23505). Drizzle wraps the driver error, so the code can sit on `.cause`. */
+function isUniqueViolation(e: unknown): boolean {
+  let cur: unknown = e;
+  for (let depth = 0; depth < 6 && cur != null; depth += 1) {
+    if ((cur as { code?: string }).code === "23505") return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function assertValidEntityRef(ref: DashboardEntityRef): void {
+  if (!isKnownEntityType(ref.entityType)) {
+    throw new DashboardInvalidEntityError(`Unknown entityType "${String(ref.entityType)}"`);
+  }
+  if (!ref.entityId) throw new DashboardInvalidEntityError("entityId is required");
+  if (!ref.ownerId) throw new DashboardInvalidEntityError("ownerId is required");
+}
+
+/** Validate + normalize a user-supplied dashboard name for create/rename. The
+ *  reserved "Overview" name belongs to the default and can never be claimed. */
+function assertCreatableName(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) throw new DashboardInvalidEntityError("name is required");
+  if (trimmed === OVERVIEW_DASHBOARD_NAME) {
+    throw new DashboardInvalidEntityError(
+      `"${OVERVIEW_DASHBOARD_NAME}" is reserved for the non-removable default dashboard`,
+    );
+  }
+  return trimmed;
+}
+
+/** Build a full DashboardRow for an ownership-only auth pre-check (the real row
+ *  doesn't exist yet). Config content is never inspected for auth. */
+function buildAuthPseudoRow(args: {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly ownerLevel: OwnerLevel;
+  readonly ownerId: string;
+  readonly visibility: Visibility;
+  readonly config: unknown;
+  readonly configVersion: string;
+  readonly name: string;
+  readonly entityType: string | null;
+  readonly entityId: string | null;
+  readonly isDefault: boolean;
+  readonly createdBy: string;
+}): DashboardRow {
+  return {
+    id: args.id,
+    name: args.name,
+    description: null,
+    configJson: args.config as never,
+    configVersion: args.configVersion,
+    dashboardVersion: 1,
+    publishedRevisionNumber: null,
+    ownerLevel: args.ownerLevel,
+    ownerId: args.ownerId,
+    organizationId: args.organizationId,
+    visibility: args.visibility,
+    status: "draft",
+    createdBy: args.createdBy,
+    updatedBy: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    publishedAt: null,
+    archivedAt: null,
+    projectId: null,
+    extensionId: null,
+    isTemplate: false,
+    templateScope: null,
+    entityType: args.entityType,
+    entityId: args.entityId,
+    isDefault: args.isDefault,
+  };
+}
+
+/** Locate the Overview default for (org, entity, owner) under the caller's TX. */
+async function findDefaultRow(
+  q: DashboardsDb,
+  organizationId: string,
+  ref: DashboardEntityRef,
+): Promise<DashboardRow | undefined> {
+  const rows = await q
+    .select()
+    .from(dashboards)
+    .where(
+      and(
+        eq(dashboards.organizationId, organizationId),
+        eq(dashboards.entityType, ref.entityType),
+        eq(dashboards.entityId, ref.entityId),
+        eq(dashboards.ownerLevel, ref.ownerLevel),
+        eq(dashboards.ownerId, ref.ownerId),
+        eq(dashboards.isDefault, true),
+      ),
+    )
+    .limit(1);
+  return rows[0];
+}
+
+/**
+ * List every dashboard for (entity, owner) the actor may read, Overview first.
+ * Fail-closed: an incomplete ref/actor, a cross-tenant actor, or an actor the
+ * shared owner/visibility/OBO resolver denies all yield ZERO rows. The exact
+ * (org, entity, owner) composite is the primary scope; `resolveDashboardAccess`
+ * is re-applied per row as defense in depth.
+ */
+export async function listDashboardsForEntity(
+  ref: DashboardEntityRef,
+  actor: DashboardActor,
+): Promise<DashboardRow[]> {
+  if (
+    !actor.organizationId ||
+    !ref.entityId ||
+    !ref.ownerId ||
+    !isKnownEntityType(ref.entityType)
+  ) {
+    return [];
+  }
+  const db = getDashboardsDb();
+  const rows = await db
+    .select()
+    .from(dashboards)
+    .where(
+      and(
+        eq(dashboards.organizationId, actor.organizationId),
+        eq(dashboards.entityType, ref.entityType),
+        eq(dashboards.entityId, ref.entityId),
+        eq(dashboards.ownerLevel, ref.ownerLevel),
+        eq(dashboards.ownerId, ref.ownerId),
+        inArray(dashboards.status, LISTABLE_STATUSES as unknown as string[]),
+      ),
+    );
+  const readable = rows.filter((r) => resolveDashboardAccess(r, actor).canRead);
+  return readable.sort(compareDashboardsForList);
+}
+
+/**
+ * Fetch ONE dashboard by id for selection, gated by the shared read resolver.
+ * Returns `undefined` (not throw) when the row is absent OR the actor may not
+ * read it — the caller cannot distinguish the two (no existence leak).
+ */
+export async function getEntityDashboard(
+  id: string,
+  actor: DashboardActor,
+): Promise<DashboardRow | undefined> {
+  const db = getDashboardsDb();
+  const rows = await db.select().from(dashboards).where(eq(dashboards.id, id)).limit(1);
+  const row = rows[0];
+  if (!row) return undefined;
+  if (!resolveDashboardAccess(row, actor).canRead) return undefined;
+  return row;
+}
+
+export type EnsureOverviewInput = {
+  readonly ref: DashboardEntityRef;
+  /** Bare drizzle-cube config to seed a NEW Overview with (wrapped into the
+   *  apiVersion 1.2 envelope). Ignored when the Overview already exists. Defaults to empty. */
+  readonly seedConfig?: unknown;
+  readonly visibility?: Visibility;
+};
+
+/**
+ * Idempotent find-or-create of an entity's non-removable Overview default.
+ * Serialized on the (org, entity, owner) composite by a transaction-scoped
+ * advisory lock, so concurrent callers converge on the SAME row — and the
+ * partial UNIQUE index (`dashboards_entity_default_uniq`) is the DB backstop for
+ * "at most one default". A pre-existing migrated legacy row (absorbed by the
+ * #700 backfill as the Overview) is found by the composite here, so a live
+ * `system-<surface>:…` row is NEVER double-created.
+ */
+export async function ensureOverview(
+  input: EnsureOverviewInput,
+  actor: DashboardActor,
+): Promise<DashboardRow> {
+  const { ref } = input;
+  assertValidEntityRef(ref);
+  const orgId = actor.organizationId;
+  if (!orgId) throw new DashboardInvalidEntityError("actor.organizationId is required");
+
+  const lockKey = ["overview", orgId, ref.entityType, ref.entityId, ref.ownerLevel, ref.ownerId].join(":");
+
+  const db = getDashboardsDb();
+  return db.transaction(async (tx) => {
+    // Serialize concurrent ensures on the composite; released at COMMIT/ROLLBACK.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+
+    const found = await findDefaultRow(tx as unknown as DashboardsDb, orgId, ref);
+    if (found) return found;
+
+    const { config, configVersion } = await normalizeConfigForWrite({
+      config: input.seedConfig ?? EMPTY_ENTITY_DASHBOARD_DC,
+      hasConfig: true,
+      requestedVersion: CURRENT_CONFIG_VERSION,
+      fallbackScopeOwnerLevel: ref.ownerLevel,
+    });
+    const id = buildOverviewDashboardId(ref);
+    const visibility: Visibility = input.visibility ?? "private";
+
+    const pseudo = buildAuthPseudoRow({
+      id,
+      organizationId: orgId,
+      ownerLevel: ref.ownerLevel,
+      ownerId: ref.ownerId,
+      visibility,
+      config,
+      configVersion,
+      name: OVERVIEW_DASHBOARD_NAME,
+      entityType: ref.entityType,
+      entityId: ref.entityId,
+      isDefault: true,
+      createdBy: actor.userId,
+    });
+    if (!resolveDashboardAccess(pseudo, actor).canWrite) {
+      throw new DashboardForbiddenError("dashboards.create", id);
+    }
+
+    // Under the advisory lock the probe→insert is exclusive for this composite,
+    // so no concurrent writer can slip in a second default between them.
+    const [row] = await tx
+      .insert(dashboards)
+      .values({
+        id,
+        name: OVERVIEW_DASHBOARD_NAME,
+        configJson: config as never,
+        configVersion,
+        ownerLevel: ref.ownerLevel,
+        ownerId: ref.ownerId,
+        organizationId: orgId,
+        visibility,
+        status: "draft",
+        createdBy: actor.userId,
+        entityType: ref.entityType,
+        entityId: ref.entityId,
+        isDefault: true,
+      } as NewDashboardRow)
+      .returning();
+
+    await writeAudit(tx as unknown as DashboardsDb, {
+      operation: "dashboards.create",
+      actor,
+      row,
+      metadata: { overview: true, entityType: ref.entityType, entityId: ref.entityId },
+    });
+    return row;
+  });
+}
+
+export type CreateEntityDashboardInput = {
+  readonly ref: DashboardEntityRef;
+  readonly name: string;
+  /** Bare drizzle-cube config to seed with (wrapped into apiVersion 1.2). Defaults to empty. */
+  readonly seedConfig?: unknown;
+  readonly visibility?: Visibility;
+};
+
+/**
+ * Create a NEW named (non-default) dashboard for (entity, owner). The name must
+ * be non-empty and is unique within (org, entity, owner) — a collision throws
+ * `DashboardNameConflictError`. "Overview" is reserved for the default.
+ */
+export async function createEntityDashboard(
+  input: CreateEntityDashboardInput,
+  actor: DashboardActor,
+): Promise<DashboardRow> {
+  assertValidEntityRef(input.ref);
+  const name = assertCreatableName(input.name);
+  const orgId = actor.organizationId;
+  if (!orgId) throw new DashboardInvalidEntityError("actor.organizationId is required");
+
+  const { config, configVersion } = await normalizeConfigForWrite({
+    config: input.seedConfig ?? EMPTY_ENTITY_DASHBOARD_DC,
+    hasConfig: true,
+    requestedVersion: CURRENT_CONFIG_VERSION,
+    fallbackScopeOwnerLevel: input.ref.ownerLevel,
+  });
+  // Always a fresh random id, so the ONLY unique index a non-default create can
+  // hit is the name index — making a 23505 unambiguously a name conflict (a
+  // random-UUID primary-key collision is not a reachable case).
+  const id = randomUUID();
+  const visibility: Visibility = input.visibility ?? "private";
+
+  const pseudo = buildAuthPseudoRow({
+    id,
+    organizationId: orgId,
+    ownerLevel: input.ref.ownerLevel,
+    ownerId: input.ref.ownerId,
+    visibility,
+    config,
+    configVersion,
+    name,
+    entityType: input.ref.entityType,
+    entityId: input.ref.entityId,
+    isDefault: false,
+    createdBy: actor.userId,
+  });
+  if (!resolveDashboardAccess(pseudo, actor).canWrite) {
+    throw new DashboardForbiddenError("dashboards.create", id);
+  }
+
+  const db = getDashboardsDb();
+  try {
+    return await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(dashboards)
+        .values({
+          id,
+          name,
+          configJson: config as never,
+          configVersion,
+          ownerLevel: input.ref.ownerLevel,
+          ownerId: input.ref.ownerId,
+          organizationId: orgId,
+          visibility,
+          status: "draft",
+          createdBy: actor.userId,
+          entityType: input.ref.entityType,
+          entityId: input.ref.entityId,
+          isDefault: false,
+        } as NewDashboardRow)
+        .returning();
+      await writeAudit(tx as unknown as DashboardsDb, {
+        operation: "dashboards.create",
+        actor,
+        row,
+        metadata: { entityType: input.ref.entityType, entityId: input.ref.entityId, name },
+      });
+      return row;
+    });
+  } catch (e) {
+    // The only unique index a non-default create can hit is the name index.
+    if (isUniqueViolation(e)) throw new DashboardNameConflictError(name);
+    throw e;
+  }
+}
+
+/**
+ * Rename a dashboard. DENIED for the Overview default (server-enforced). The new
+ * name is validated (non-empty, not the reserved "Overview") and must stay
+ * unique within (org, entity, owner) — a collision throws
+ * `DashboardNameConflictError`.
+ */
+export async function renameDashboard(
+  id: string,
+  newName: string,
+  actor: DashboardActor,
+): Promise<DashboardRow> {
+  const name = assertCreatableName(newName);
+  const db = getDashboardsDb();
+  try {
+    return await db.transaction(async (tx) => {
+      const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+      if (!row) throw new DashboardNotFoundError(id);
+      if (!resolveDashboardAccess(row, actor).canWrite) {
+        throw new DashboardForbiddenError("dashboards.rename", id);
+      }
+      if (row.isDefault) {
+        throw new DashboardOverviewProtectedError("dashboards.rename", id);
+      }
+      const [updated] = await tx
+        .update(dashboards)
+        .set({
+          name,
+          updatedAt: new Date(),
+          updatedBy: actor.userId,
+          dashboardVersion: row.dashboardVersion + 1,
+        })
+        .where(eq(dashboards.id, id))
+        .returning();
+      await writeAudit(tx as unknown as DashboardsDb, {
+        operation: "dashboards.rename",
+        actor,
+        row: updated,
+        metadata: { previousName: row.name, name },
+      });
+      return updated;
+    });
+  } catch (e) {
+    if (isUniqueViolation(e)) throw new DashboardNameConflictError(name);
+    throw e;
+  }
+}
+
+/**
+ * Hard-delete a dashboard (cascades its revisions). DENIED for the Overview
+ * default (server-enforced). The audit event is written BEFORE the row is gone;
+ * `audit_events.resource_id` is a text reference (no FK), so it survives.
+ */
+export async function deleteEntityDashboard(
+  id: string,
+  actor: DashboardActor,
+): Promise<void> {
+  const db = getDashboardsDb();
+  await db.transaction(async (tx) => {
+    const row = await selectForUpdate(tx as unknown as DashboardsDb, id);
+    if (!row) throw new DashboardNotFoundError(id);
+    if (!resolveDashboardAccess(row, actor).canWrite) {
+      throw new DashboardForbiddenError("dashboards.delete", id);
+    }
+    if (row.isDefault) {
+      throw new DashboardOverviewProtectedError("dashboards.delete", id);
+    }
+    await writeAudit(tx as unknown as DashboardsDb, {
+      operation: "dashboards.delete",
+      actor,
+      row,
+      metadata: { name: row.name, entityType: row.entityType, entityId: row.entityId },
+    });
+    await tx.delete(dashboards).where(eq(dashboards.id, id));
   });
 }
 

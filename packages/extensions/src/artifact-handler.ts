@@ -15,7 +15,10 @@ import {
   validateObjectTypeClaimSchemaSources,
   type ArtifactObjectTypeClaimManifest,
 } from "@cinatra-ai/objects/claims";
-import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-ai/sdk-extensions/artifact-contract";
+import {
+  ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS,
+  parseArtifactUi,
+} from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 // Validate the SEMANTIC artifact manifest. An artifact extension declares a
 // semantic work-product type; representation details live under
@@ -75,6 +78,22 @@ const artifactDescriptorSchema = z
     // `matcherConfidenceThreshold`. The objects↔extensions import cycle
     // forbids sharing; the parity test pins both copies.
     matcherConfidenceThreshold: z.number().min(0).max(1).optional(),
+    // BEGIN artifact-ui-mirror (cinatra#1621, epic #1620) — kept byte-identical
+    // across packages/objects/src/semantic-manifest.ts and
+    // packages/extensions/src/artifact-handler.ts (the same lock-step
+    // convention the objectTypes block uses; the objects↔extensions import
+    // cycle forbids sharing the schema itself). The versioned
+    // `cinatra.artifact.ui` block is carried here as RAW `unknown` so a
+    // malformed `ui` can NEVER fail this strict manifest parse and drop the
+    // extension's type registration / `objectTypes` claims (cinatra#1621 — the
+    // whole-parse-rejection bug this slice fixes). The tolerant validation +
+    // sanitized degradation live in the sdk-extensions LEAF (`parseArtifactUi`,
+    // imported by both mirror sides): the boot path degrades-with-diagnostic and
+    // KEEPS the claims; the publish/conformance gate rejects fail-closed on the
+    // same result. Unknown NON-`ui` keys keep today's strict rejection. The
+    // mirror test pins this block byte-identical.
+    ui: z.unknown().optional(),
+    // END artifact-ui-mirror
     // BEGIN objectTypes-claims-mirror (cinatra#1432) — this block is kept
     // byte-identical across packages/objects/src/semantic-manifest.ts and
     // packages/extensions/src/artifact-handler.ts (the established lock-step
@@ -317,6 +336,26 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
           errors.push(
             `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles,displayName,vendor}; ` +
               `unexpected key(s): ${extraneous.join(", ")}`,
+          );
+        }
+      }
+      // cinatra.artifact.ui (cinatra#1621, epic #1620): FAIL-CLOSED at the
+      // publish/conformance gate. The strict descriptor schema carries `ui` as
+      // raw `unknown` so a malformed block degrades at BOOT without dropping the
+      // extension's type registration / claims; here — the authoring/publish
+      // validation path — the SAME invalid block is REJECTED outright. Boot and
+      // this gate share the ONE leaf `parseArtifactUi` verdict.
+      const artifactDescriptor = cinatra?.artifact;
+      if (
+        artifactDescriptor != null &&
+        typeof artifactDescriptor === "object" &&
+        (artifactDescriptor as { ui?: unknown }).ui !== undefined
+      ) {
+        const uiResult = parseArtifactUi((artifactDescriptor as { ui?: unknown }).ui);
+        if (!uiResult.ok) {
+          errors.push(
+            `cinatra.artifact.ui is rejected at the publish/conformance gate ` +
+              `(it degrades to generic rendering at runtime): ${uiResult.diagnostic}`,
           );
         }
       }
