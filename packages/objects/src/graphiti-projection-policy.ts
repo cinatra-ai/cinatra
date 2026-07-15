@@ -31,18 +31,22 @@ export function deriveProjectionGroupId(orgId: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Memory-scope projection lanes (cinatra#1379, epic #1373).
+// Scope projection lanes (cinatra#1379 memory + cinatra#1436 artifact, epic
+// #1424/#1373).
 //
-// `@cinatra-ai/memory:concept` rows NEST under the existing per-org lane
-// (`deriveProjectionGroupId` above — unchanged for every non-memory type) so a
-// concept's Graphiti lane is derived SERVER-SIDE from its canonical scope
-// columns (owner_level / owner_id / visibility / project_id). There is NO
-// client-supplied lane surface: a caller never names a lane; the projector and
-// the recall handler both compute it here from persisted scope, so the two can
-// never diverge.
+// A LANE-ELIGIBLE row NESTS under the existing per-org lane
+// (`deriveProjectionGroupId` above — unchanged for every non-lane-eligible
+// type) so the row's Graphiti lane is derived SERVER-SIDE from its canonical
+// scope columns (owner_level / owner_id / visibility / project_id). Lane-
+// eligible = `@cinatra-ai/memory:concept` (#1379) UNION the generic artifact
+// object type UNION any claimed type whose winning disposition is artifact-safe
+// / faceted (#1436). There is NO client-supplied lane surface: a caller never
+// names a lane; the projector and the recall handler both compute it here from
+// persisted scope, so the two can never diverge.
 //
-// Derivation table (memory rows only) — mirrors buildOwnershipFilter's read
-// axes so a row lands in a lane its authorized readers are actually entitled to:
+// Derivation table (every lane-eligible row) — mirrors buildOwnershipFilter's
+// read axes so a row lands in a lane its authorized readers are actually
+// entitled to:
 //   visibility='public'                                     -> terminal skip
 //   ownerLevel='user' AND visibility in {private,team}      -> <org-lane>-user-<ownerId>
 //   ownerLevel='team'                                       -> <org-lane>-team-<ownerId>
@@ -53,17 +57,22 @@ export function deriveProjectionGroupId(orgId: string | null): string {
 // ("visibility='team' rows are team-owned by construction"), so a visibility=
 // 'team' row that is NOT team-owned is readable by no team — only by its owning
 // principal via the owner axis. A user-owned such row therefore nests in the
-// OWNING USER's lane (which deriveEntitledMemoryLanes actually names), never a
+// OWNING USER's lane (which deriveEntitledLanes actually names), never a
 // phantom `-team-<userId>` lane no actor's entitlement set could ever reach.
 // Project axis (orthogonal): any base lane for a row carrying project_id is
 // suffixed `-proj-<projectId>`; rows without a project stay in the ambient base
 // lane. Public is checked FIRST (a public row is never projected regardless of
 // owner level); an unclassifiable scope fails CLOSED (skip, never broaden).
+//
+// This is the SINGLE pure scope->lane function #1436 reuses for artifact rows —
+// NOT an independent artifact-specific branch (which could reintroduce the
+// phantom-team-lane bug the #1379 adversarial panel caught). `deriveMemoryConceptLane`
+// remains an alias below for the #1379 suite / documentation of the memory case.
 // ---------------------------------------------------------------------------
 
-/** The canonical scope of a memory-concept row, read straight off the
+/** The canonical scope of a lane-eligible row, read straight off the
  * `objects` row (no client input). */
-export type MemoryConceptScope = {
+export type ScopeLaneInput = {
   ownerLevel: string | null;
   ownerId: string | null;
   visibility: string | null;
@@ -73,7 +82,7 @@ export type MemoryConceptScope = {
 /** Lane derivation outcome: a concrete lane, or a terminal skip (public /
  * unclassifiable — same shape the projector already uses for source-gate and
  * claim skips). */
-export type MemoryLaneDerivation =
+export type ScopeLaneDerivation =
   | { kind: "lane"; groupId: string }
   | { kind: "skip"; reason: string };
 
@@ -83,22 +92,22 @@ function withProjectAxis(baseLane: string, projectId: string | null): string {
 }
 
 /**
- * Server-derive the Graphiti lane for a `@cinatra-ai/memory:concept` row from
- * its canonical scope. Nests under `deriveProjectionGroupId(orgId)` — it never
- * replaces the org lane, and non-memory types keep using the org lane directly.
+ * Server-derive the Graphiti lane for a lane-eligible row from its canonical
+ * scope. Nests under `deriveProjectionGroupId(orgId)` — it never replaces the
+ * org lane, and non-lane-eligible types keep using the org lane directly.
  * Returns a terminal `skip` for `visibility='public'` (not projected in this
  * iteration) and for any scope that matches none of the classes (fail-closed:
  * an unclassifiable or ownerId-less user/team scope is never projected rather
  * than leaked into a wrong or malformed lane).
  */
-export function deriveMemoryConceptLane(
+export function deriveScopeLane(
   orgId: string | null,
-  scope: MemoryConceptScope,
-): MemoryLaneDerivation {
-  // Public rows are terminal-skipped BEFORE any lane math — a public concept
-  // is not projected in this iteration regardless of its owner level.
+  scope: ScopeLaneInput,
+): ScopeLaneDerivation {
+  // Public rows are terminal-skipped BEFORE any lane math — a public row is
+  // not projected in this iteration regardless of its owner level.
   if (scope.visibility === "public") {
-    return { kind: "skip", reason: "memory concept visibility='public' is not projected in this iteration" };
+    return { kind: "skip", reason: "scope visibility='public' is not projected in this iteration" };
   }
   const base = deriveProjectionGroupId(orgId);
 
@@ -114,7 +123,7 @@ export function deriveMemoryConceptLane(
     (scope.visibility === "private" || scope.visibility === "team")
   ) {
     if (!scope.ownerId) {
-      return { kind: "skip", reason: "user memory concept has no ownerId — cannot form a user lane" };
+      return { kind: "skip", reason: "user-owned scope has no ownerId — cannot form a user lane" };
     }
     return { kind: "lane", groupId: withProjectAxis(`${base}-user-${scope.ownerId}`, scope.projectId) };
   }
@@ -124,13 +133,13 @@ export function deriveMemoryConceptLane(
   // without being team-readable (see the derivation-table note above).
   if (scope.ownerLevel === "team") {
     if (!scope.ownerId) {
-      return { kind: "skip", reason: "team memory concept has no ownerId — cannot form a team lane" };
+      return { kind: "skip", reason: "team-owned scope has no ownerId — cannot form a team lane" };
     }
     return { kind: "lane", groupId: withProjectAxis(`${base}-team-${scope.ownerId}`, scope.projectId) };
   }
 
-  // org / workspace: the ambient org lane (memory nests here alongside every
-  // non-memory type's ambient projection).
+  // org / workspace: the ambient org lane (a lane-eligible row nests here
+  // alongside every non-lane-eligible type's ambient projection).
   if (
     scope.visibility === "organization" ||
     scope.ownerLevel === "organization" ||
@@ -143,12 +152,18 @@ export function deriveMemoryConceptLane(
   // owner_level/visibility enum combination) is never projected.
   return {
     kind: "skip",
-    reason: `unclassifiable memory concept scope (ownerLevel=${scope.ownerLevel}, visibility=${scope.visibility}) — not projected`,
+    reason: `unclassifiable scope (ownerLevel=${scope.ownerLevel}, visibility=${scope.visibility}) — not projected`,
   };
 }
 
-/** The actor's server-derived entitlement context for a memory recall. */
-export type MemoryLaneEntitlement = {
+/** Back-compat alias: the #1379 memory-lane suite + memory-case documentation
+ * name the derivation `deriveMemoryConceptLane`. It IS `deriveScopeLane` — the
+ * one pure scope->lane function every lane-eligible type (memory + artifact)
+ * shares; there is no memory-specific derivation. */
+export const deriveMemoryConceptLane = deriveScopeLane;
+
+/** The actor's server-derived entitlement context for a lane-scoped recall. */
+export type LaneEntitlement = {
   orgId: string | null;
   /** The actor's user id (null for a sessionless/system caller). */
   userId: string | null;
@@ -160,14 +175,17 @@ export type MemoryLaneEntitlement = {
 
 /**
  * Server-derive the set of Graphiti lanes a caller is entitled to read for a
- * memory recall: the ambient org lane + the caller's own user lane + a team
- * lane for EVERY team the caller belongs to. When a projectId is in the call's
- * context, each entitled base lane is ALSO supplied in its `-proj-<id>` form so
- * project-scoped concepts surface alongside ambient ones. A lane the caller is
- * not entitled to (an unentitled team, an unentitled project) is never in the
- * result. Deterministic order; deduplicated.
+ * lane-scoped recall (memory #1379, artifact #1436): the ambient org lane + the
+ * caller's own user lane + a team lane for EVERY team the caller belongs to.
+ * When a projectId is in the call's context, each entitled base lane is ALSO
+ * supplied in its `-proj-<id>` form so project-scoped rows surface alongside
+ * ambient ones. A lane the caller is not entitled to (an unentitled team, an
+ * unentitled project) is never in the result. Deterministic order;
+ * deduplicated. The lane set is relevance scoping, NOT the authz boundary — the
+ * recall handler still re-fetches every candidate through the Postgres
+ * ownership filter + per-row object.read.
  */
-export function deriveEntitledMemoryLanes(entitlement: MemoryLaneEntitlement): string[] {
+export function deriveEntitledLanes(entitlement: LaneEntitlement): string[] {
   const base = deriveProjectionGroupId(entitlement.orgId);
   const baseLanes: string[] = [base];
   if (entitlement.userId) baseLanes.push(`${base}-user-${entitlement.userId}`);
@@ -180,6 +198,11 @@ export function deriveEntitledMemoryLanes(entitlement: MemoryLaneEntitlement): s
   }
   return [...lanes];
 }
+
+/** Back-compat alias: the #1379 memory-recall suite names the entitlement
+ * derivation `deriveEntitledMemoryLanes`. It IS `deriveEntitledLanes` — the
+ * lane math is type-agnostic (derived purely from the actor's own scope). */
+export const deriveEntitledMemoryLanes = deriveEntitledLanes;
 
 /** Inverse of deriveProjectionGroupId (the rebuild driver stores org_id on
  * the journal; explicit rollback entry points only have the group id). */

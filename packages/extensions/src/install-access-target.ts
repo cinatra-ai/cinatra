@@ -44,18 +44,28 @@ export function isInstallAccessTargetKind(
 }
 
 export type InstallAccessTarget = {
-  level: "organization" | "team" | "project";
+  // "workspace" / "admin" (cinatra#1527) are the always-offered workspace
+  // scopes — both platform-admin-only to install (assertCanInstallAtTarget).
+  // "user" stays out (it is not an install target). For workspace/admin the id
+  // is the authenticated tenant, re-derived server-side by the install action
+  // (never trusted from the client — issue AC3).
+  level: "organization" | "team" | "project" | "workspace" | "admin";
   id: string;
 };
 
 /**
  * Zod schema for the optional accessTarget the marketplace install action
- * accepts. `level` INTENTIONALLY omits "user" and "workspace" — they are not
- * selectable install targets (parity with the agent-at-scope schema).
+ * accepts. `level` admits the org/team/project targets plus the two
+ * always-offered workspace scopes (cinatra#1527: "workspace" / "admin"). It
+ * INTENTIONALLY omits "user" — it is not a selectable install target. NOTE the
+ * agent-at-scope install schema (makeInstallRegistryAtScopeInputSchema) is
+ * deliberately NARROWER (org/team/project only): workspace/admin map to an
+ * AUDIENCE policy, which the extension canonical row supports but the agent
+ * install's owner-level persistence does not.
  */
 export const InstallAccessTargetSchema: z.ZodType<InstallAccessTarget> =
   z.object({
-    level: z.enum(["organization", "team", "project"]),
+    level: z.enum(["organization", "team", "project", "workspace", "admin"]),
     id: z.string().min(1),
   });
 
@@ -65,11 +75,30 @@ export const InstallAccessTargetSchema: z.ZodType<InstallAccessTarget> =
  * setExtensionInstallAccess apply the kind's install default (workspace for
  * artifact/workflow; the cached cinatra/config.json declaration for a
  * connector — cinatra#955).
+ *
+ * The workspace scopes (cinatra#1527) map to an EXPLICIT audience token so the
+ * install-time selection is never silently downgraded to a per-kind default:
+ *   - workspace → ["workspace"]  (every workspace member — the established
+ *                 workspace visibility tier; see enforce-extension-access).
+ *   - admin     → ["admin"]      (the established OWNER-AWARE admin tier:
+ *                 platform admins + the owning org's admins/owners; a plain
+ *                 member is denied). The target.id is unused here — the
+ *                 audience token carries no id — so a client-forged id cannot
+ *                 influence the persisted policy.
  */
 export function accessTargetToInstallPolicy(
   target: InstallAccessTarget,
 ): AgentAuthPolicy | undefined {
   if (target.level === "organization") return undefined;
+  if (target.level === "workspace" || target.level === "admin") {
+    const audience = target.level; // "workspace" | "admin"
+    return {
+      runListVisibility: [audience],
+      runDataVisibility: [audience],
+      runExecuteVisibility: [audience],
+      allowRunSharing: false,
+    };
+  }
   const visibility =
     target.level === "team"
       ? (`team:${target.id}` as const)

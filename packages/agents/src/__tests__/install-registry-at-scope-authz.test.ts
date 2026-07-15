@@ -704,3 +704,82 @@ describe.skipIf(!HAS_REAL_DB)("installRegistryPackageAtScope — DB read-back (M
     expect(HAS_REAL_DB).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#1527 — workspace/admin install authority at the SHARED gate.
+//
+// These scopes are not reachable through installRegistryPackageAtScope (its
+// Zod schema is org/team/project only), so the role matrix is asserted DIRECTLY
+// against assertCanInstallAtTarget — the security boundary shared with the
+// extension marketplace install action. Positive + negative for every role in
+// the AC2 matrix × both scopes: platform_admin installs; org_owner / org_admin
+// / team_admin / member are ALL rejected server-side, independent of any UI.
+// ---------------------------------------------------------------------------
+describe("assertCanInstallAtTarget — workspace/admin scopes (cinatra#1527)", () => {
+  const WORKSPACE_ID = ORG_A;
+  const roleBag = (
+    extra: Partial<{
+      platformRole: "platform_admin" | "member";
+      orgRole: "org_owner" | "org_admin" | "member";
+      teamRoles: Record<string, "team_admin" | "member">;
+    }>,
+  ) => ({ principalId: "user-x", organizationId: ORG_A, ...extra });
+
+  const scopes = ["workspace", "admin"] as const;
+
+  it.each(scopes)("platform_admin MAY install at %s scope", async (level) => {
+    const { assertCanInstallAtTarget } = await import("../install-target-authz");
+    await expect(
+      assertCanInstallAtTarget(roleBag({ platformRole: "platform_admin" }), {
+        level,
+        id: WORKSPACE_ID,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  const deniedRoles: Array<
+    [string, Partial<Parameters<typeof roleBag>[0]>]
+  > = [
+    ["org_owner", { orgRole: "org_owner" }],
+    ["org_admin", { orgRole: "org_admin" }],
+    ["member", { orgRole: "member" }],
+    ["team_admin", { orgRole: "member", teamRoles: { [TEAM_A]: "team_admin" } }],
+  ];
+
+  for (const level of scopes) {
+    it.each(deniedRoles)(
+      `${level}: %s is DENIED 403 server-side`,
+      async (_label, extra) => {
+        const { assertCanInstallAtTarget } = await import(
+          "../install-target-authz"
+        );
+        await expect(
+          assertCanInstallAtTarget(roleBag(extra), { level, id: WORKSPACE_ID }),
+        ).rejects.toMatchObject({ statusCode: 403, reason: "forbidden" });
+      },
+    );
+  }
+
+  it("tenant gate is a no-op for workspace/admin and never trusts a client id (AC3)", async () => {
+    const { assertTargetBelongsToActiveOrg } = await import(
+      "../install-target-authz"
+    );
+    // A forged/cross-org id resolves cleanly: the workspace is the
+    // authenticated tenant (activeOrgId), derived by the caller — target.id is
+    // never read for these levels, so it can neither leak nor cross tenants.
+    await expect(
+      assertTargetBelongsToActiveOrg(
+        roleBag({ orgRole: "member" }),
+        { level: "workspace", id: "forged-other-org" },
+        ORG_A,
+      ),
+    ).resolves.toEqual({});
+    await expect(
+      assertTargetBelongsToActiveOrg(
+        roleBag({ platformRole: "platform_admin" }),
+        { level: "admin", id: "forged-other-org" },
+        ORG_A,
+      ),
+    ).resolves.toEqual({});
+  });
+});

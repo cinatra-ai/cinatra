@@ -299,6 +299,47 @@ export function resolveClaimWinner<T extends ArbitrableClaim>(
 }
 
 /**
+ * Map a resolved WINNING claim to its projection disposition, with the
+ * fail-closed semantics the graphiti projector applies (cinatra#1427/#1436) —
+ * the SINGLE statement of "how does a winning claim project", so the projector's
+ * per-row write path and resolveClaimProjectionDisposition (which the rebuild
+ * driver and recall handler compose) can never encode a different fail-closed
+ * default:
+ *   - dispositions == null  -> 'artifact-safe' (the default)
+ *   - VALID dispositions     -> the parsed `projection`
+ *   - INVALID dispositions   -> 'artifact-safe' (fail closed DOWN to the
+ *     metadata-only projection, never UP to raw)
+ * Pure — no winner resolution, no I/O.
+ */
+export function claimWinnerProjectionDisposition(
+  winner: Pick<ArbitrableClaim, "dispositions">,
+): "raw" | "artifact-safe" | "none" {
+  if (winner.dispositions == null) return "artifact-safe";
+  const parsed = parseClaimDispositions(winner.dispositions);
+  return parsed.ok ? parsed.dispositions.projection : "artifact-safe";
+}
+
+/**
+ * The winning claim's PROJECTION disposition for one org+type view — winner
+ * arbitration composed with the shared claimWinnerProjectionDisposition rule,
+ * reused by the rebuild driver's lane-eligible / policy-excluded type reads and
+ * the recall handler's artifact-scoped detection. The projector resolves the
+ * winner itself (it needs the winner for the facet body) then applies the SAME
+ * shared rule, so the four surfaces can never disagree:
+ *   - no winning claim -> null (caller keeps the non-claimed path)
+ *   - a winner         -> its claimWinnerProjectionDisposition
+ * Pure — the caller supplies the claim set (read live per-org by each surface).
+ */
+export function resolveClaimProjectionDisposition(
+  claims: readonly ArbitrableClaim[],
+  input: { orgId: string; objectTypeId: string },
+): "raw" | "artifact-safe" | "none" | null {
+  const winner = resolveClaimWinner(claims, input);
+  if (!winner) return null;
+  return claimWinnerProjectionDisposition(winner);
+}
+
+/**
  * The domination rule behind default-claim dormancy (the SQL in the claim
  * store mirrors this — kept here as the single documented statement):
  *

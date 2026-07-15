@@ -46,29 +46,65 @@ describe("accessTargetToInstallPolicy", () => {
       allowRunSharing: false,
     });
   });
+
+  // cinatra#1527 — the always-offered workspace scopes map to an EXPLICIT
+  // audience token (never undefined → never silently a per-kind default). The
+  // id is ignored (audience tokens carry no id).
+  it("workspace target → all three tiers = ['workspace'], sharing off (id ignored)", () => {
+    expect(
+      accessTargetToInstallPolicy({ level: "workspace", id: "ignored" }),
+    ).toEqual({
+      runListVisibility: ["workspace"],
+      runDataVisibility: ["workspace"],
+      runExecuteVisibility: ["workspace"],
+      allowRunSharing: false,
+    });
+  });
+
+  it("admin target → all three tiers = ['admin'], sharing off (id ignored)", () => {
+    expect(
+      accessTargetToInstallPolicy({ level: "admin", id: "ignored" }),
+    ).toEqual({
+      runListVisibility: ["admin"],
+      runDataVisibility: ["admin"],
+      runExecuteVisibility: ["admin"],
+      allowRunSharing: false,
+    });
+  });
 });
 
 describe("InstallAccessTargetSchema", () => {
-  it("accepts the three selectable levels", () => {
-    for (const level of ["organization", "team", "project"] as const) {
+  it("accepts the five selectable levels (cinatra#1527 adds workspace + admin)", () => {
+    for (const level of [
+      "organization",
+      "team",
+      "project",
+      "workspace",
+      "admin",
+    ] as const) {
       expect(
         InstallAccessTargetSchema.safeParse({ level, id: "x" }).success,
       ).toBe(true);
     }
   });
 
-  it("rejects user / workspace / junk levels and empty ids (fail closed before auth)", () => {
+  it("rejects user / junk levels and empty ids (fail closed before auth)", () => {
     expect(
       InstallAccessTargetSchema.safeParse({ level: "user", id: "x" }).success,
     ).toBe(false);
-    expect(
-      InstallAccessTargetSchema.safeParse({ level: "workspace", id: "x" }).success,
-    ).toBe(false);
+    // "org" is the legacy bare token, not a level — still rejected.
     expect(
       InstallAccessTargetSchema.safeParse({ level: "org", id: "x" }).success,
     ).toBe(false);
     expect(
+      InstallAccessTargetSchema.safeParse({ level: "owner", id: "x" }).success,
+    ).toBe(false);
+    expect(
       InstallAccessTargetSchema.safeParse({ level: "team", id: "" }).success,
+    ).toBe(false);
+    // workspace/admin still require a non-empty id (the action re-derives it).
+    expect(
+      InstallAccessTargetSchema.safeParse({ level: "workspace", id: "" }).success,
     ).toBe(false);
     expect(InstallAccessTargetSchema.safeParse(null).success).toBe(false);
   });
@@ -175,6 +211,59 @@ describe("mapped policy → evaluateExtensionAccess enforcement", () => {
         owner,
         actor: memberActor({ teamIds: [] }),
         op: "use",
+      }).allowed,
+    ).toBe(true);
+  });
+
+  // cinatra#1527 — the two workspace scopes are enforced downstream, not just
+  // at install time (issue AC3/AC5). The audience is what evaluateExtensionAccess
+  // actually admits per the mapped policy.
+  it("workspace-scoped policy admits EVERY same-org member (list/read/use/execute)", () => {
+    const policy = accessTargetToInstallPolicy({ level: "workspace", id: ORG })!;
+    for (const op of ["list", "read", "use", "execute"] as const) {
+      expect(
+        evaluateExtensionAccess({
+          kind: "skill",
+          policy,
+          coOwnerUserIds: [],
+          installedByUserId: "installer-1",
+          owner,
+          // A plain member with no team/project membership — workspace = all.
+          actor: memberActor({}),
+          op,
+        }).allowed,
+      ).toBe(true);
+    }
+  });
+
+  it("admin-scoped policy DENIES a plain member and ADMITS a platform admin (no one wider than admins)", () => {
+    const policy = accessTargetToInstallPolicy({ level: "admin", id: ORG })!;
+    const base = {
+      kind: "skill" as const,
+      policy,
+      coOwnerUserIds: [],
+      installedByUserId: "installer-1",
+      owner,
+      op: "read" as const,
+    };
+    // Plain same-org member → DENIED (audience tier, not the cross-org guard).
+    expect(
+      evaluateExtensionAccess({ ...base, actor: memberActor({}) }).allowed,
+    ).toBe(false);
+    // Platform admin → ADMITTED.
+    expect(
+      evaluateExtensionAccess({
+        ...base,
+        actor: memberActor({ platformRole: "platform_admin" }),
+      }).allowed,
+    ).toBe(true);
+    // The established "admin" audience is OWNER-AWARE: the owning org's admin is
+    // also admitted (documented divergence in enforce-extension-access). Locked
+    // here so the semantics are explicit for the paired spec.
+    expect(
+      evaluateExtensionAccess({
+        ...base,
+        actor: memberActor({ orgRole: "org_admin" }),
       }).allowed,
     ).toBe(true);
   });

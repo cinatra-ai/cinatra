@@ -547,14 +547,18 @@ export async function installExtensionPackageFormAction(input: {
   packageName: string;
   packageVersion: string;
   /**
-   * Pre-install access selection (cinatra#805) — the same org / team /
-   * project target rows the agent InstallScopeDialog offers. OPTIONAL:
-   * absent → exactly the legacy behavior (install with the implicit per-kind
-   * default access, no policy write). Present → server-gated (fail-closed)
-   * and persisted through setExtensionInstallAccess after a successful
-   * install. Only the connector / artifact / workflow kinds accept it.
+   * Pre-install access selection (cinatra#805) — the org / team / project
+   * target rows plus the always-offered workspace scopes (cinatra#1527:
+   * "workspace" / "admin", platform-admin-only). OPTIONAL: absent → exactly the
+   * legacy behavior (install with the implicit per-kind default access, no
+   * policy write). Present → server-gated (fail-closed) and persisted through
+   * setExtensionInstallAccess after a successful install. Only the connector /
+   * artifact / workflow kinds accept it.
    */
-  accessTarget?: { level: "organization" | "team" | "project"; id: string };
+  accessTarget?: {
+    level: "organization" | "team" | "project" | "workspace" | "admin";
+    id: string;
+  };
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
@@ -583,6 +587,15 @@ export async function installExtensionPackageFormAction(input: {
         throw new Error(
           "An install access target requires an active organization.",
         );
+      }
+      // cinatra#1527 / issue AC3: the workspace/admin audience is the
+      // authenticated tenant itself. Re-derive its id from the session's active
+      // org and DISCARD any client-supplied id — a client-supplied workspace is
+      // a cross-tenant risk. (accessTargetToInstallPolicy ignores the id for
+      // these levels anyway; this closes the loop so nothing downstream can read
+      // a forged value.)
+      if (accessTarget.level === "workspace" || accessTarget.level === "admin") {
+        accessTarget = { level: accessTarget.level, id: orgId };
       }
       const { buildCanDoOptsFromSession } = await import("@/lib/auth-session");
       const {

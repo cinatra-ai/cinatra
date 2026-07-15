@@ -83,6 +83,18 @@ export type AccessComboboxProps = {
    * removes rows; never alters their semantics).
    */
   installMode?: boolean;
+  /**
+   * cinatra#1527: in installMode, ALSO render the two always-offered workspace
+   * scopes — "Whole Workspace" (value `"workspace"`) and "Admins only" (value
+   * `"admin"`) — as SERVER-DRIVEN target rows: their enabled/disabled + reason
+   * state comes from `disabledScopes` / `disabledReasons` (the buildInstallTargets
+   * rows), exactly like the org/team/project rows, NOT from the client `isAdmin`
+   * gate. Ignored outside installMode (the permissions tab keeps its own
+   * isAdmin-gated workspace row + always-on admin row). Default false so the
+   * agent at-scope install picker, which does not offer these scopes, is
+   * unaffected.
+   */
+  installWorkspaceScopes?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -170,6 +182,7 @@ export function AccessCombobox({
   disabledScopes,
   disabledReasons,
   installMode = false,
+  installWorkspaceScopes = false,
 }: AccessComboboxProps) {
   const [open, setOpen] = useState(false);
 
@@ -459,77 +472,147 @@ export function AccessCombobox({
                 )}
               </CommandGroup>
 
-              {/* Group 5 — Workspace. Hidden in installMode because workspace is not an install target. */}
-              {!installMode && (
-              <CommandGroup
-                className="p-0"
-                heading={
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                    Workspace
-                  </span>
-                }
-              >
-                {isAdmin ? (
-                  <CommandItem
-                    value="workspace"
-                    onSelect={() => {
-                      onValueChange("workspace");
-                      setOpen(false);
-                    }}
-                    className={itemClass("workspace")}
+              {/* Group 5 — Workspace.
+                  • installMode + installWorkspaceScopes (cinatra#1527): a
+                    SERVER-DRIVEN target row (renderTargetRow consults
+                    disabledScopes/disabledReasons — platform-admin-only, disabled
+                    + reason otherwise), exactly like org/team/project.
+                  • non-installMode (permissions tab): the isAdmin-gated row.
+                  • installMode without the scopes (agent picker): hidden. */}
+              {installMode
+                ? installWorkspaceScopes && (
+                    <CommandGroup
+                      className="p-0"
+                      heading={
+                        <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
+                          Workspace
+                        </span>
+                      }
+                    >
+                      {renderTargetRow(
+                        "workspace",
+                        <CommandItem
+                          value="workspace"
+                          onSelect={() => {
+                            onValueChange("workspace");
+                            setOpen(false);
+                          }}
+                          className={itemClass("workspace")}
+                        >
+                          <div className="flex items-center w-full">
+                            <span className="text-foreground whitespace-nowrap">
+                              Whole Workspace
+                            </span>
+                            {renderCheckmark("workspace")}
+                          </div>
+                        </CommandItem>,
+                      )}
+                    </CommandGroup>
+                  )
+                : (
+                  <CommandGroup
+                    className="p-0"
+                    heading={
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
+                        Workspace
+                      </span>
+                    }
                   >
-                    <div className="flex items-center w-full">
-                      <span className="text-foreground whitespace-nowrap">Whole Workspace</span>
-                      {renderCheckmark("workspace")}
-                    </div>
-                  </CommandItem>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
+                    {isAdmin ? (
                       <CommandItem
                         value="workspace"
-                        disabled
-                        className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed"
+                        onSelect={() => {
+                          onValueChange("workspace");
+                          setOpen(false);
+                        }}
+                        className={itemClass("workspace")}
                       >
-                        <div className="flex items-center w-full gap-1">
-                          <span>Whole Workspace</span>
-                          <Lock aria-hidden className="size-3.5" />
+                        <div className="flex items-center w-full">
+                          <span className="text-foreground whitespace-nowrap">Whole Workspace</span>
+                          {renderCheckmark("workspace")}
                         </div>
                       </CommandItem>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" className="max-w-[240px]">
-                      Only platform admins can scope this to the whole workspace.
-                    </TooltipContent>
-                  </Tooltip>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <CommandItem
+                            value="workspace"
+                            disabled
+                            className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed"
+                          >
+                            <div className="flex items-center w-full gap-1">
+                              <span>Whole Workspace</span>
+                              <Lock aria-hidden className="size-3.5" />
+                            </div>
+                          </CommandItem>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-[240px]">
+                          Only platform admins can scope this to the whole workspace.
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </CommandGroup>
                 )}
-              </CommandGroup>
-              )}
 
-              {/* Group 6 — Admin. Hidden in installMode because admin is not an install target. */}
-              {!installMode && (
-              <CommandGroup
-                className="p-0"
-                heading={
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                    Admin
-                  </span>
-                }
-              >
-                <CommandItem
-                  value="admin"
-                  onSelect={() => {
-                    onValueChange("admin");
-                    setOpen(false);
-                  }}
-                  className={itemClass("admin")}
-                >
-                  <div className="flex items-center w-full">
-                    <span className="text-foreground whitespace-nowrap">Admins only</span>
-                    {renderCheckmark("admin")}
-                  </div>
-                </CommandItem>
-              </CommandGroup>
-              )}
+              {/* Group 6 — Admin.
+                  • installMode + installWorkspaceScopes (cinatra#1527):
+                    SERVER-DRIVEN target row (platform-admin-only).
+                  • non-installMode (permissions tab): the always-selectable row.
+                  • installMode without the scopes (agent picker): hidden. */}
+              {installMode
+                ? installWorkspaceScopes && (
+                    <CommandGroup
+                      className="p-0"
+                      heading={
+                        <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
+                          Admin
+                        </span>
+                      }
+                    >
+                      {renderTargetRow(
+                        "admin",
+                        <CommandItem
+                          value="admin"
+                          onSelect={() => {
+                            onValueChange("admin");
+                            setOpen(false);
+                          }}
+                          className={itemClass("admin")}
+                        >
+                          <div className="flex items-center w-full">
+                            <span className="text-foreground whitespace-nowrap">
+                              Admins only
+                            </span>
+                            {renderCheckmark("admin")}
+                          </div>
+                        </CommandItem>,
+                      )}
+                    </CommandGroup>
+                  )
+                : (
+                  <CommandGroup
+                    className="p-0"
+                    heading={
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
+                        Admin
+                      </span>
+                    }
+                  >
+                    <CommandItem
+                      value="admin"
+                      onSelect={() => {
+                        onValueChange("admin");
+                        setOpen(false);
+                      }}
+                      className={itemClass("admin")}
+                    >
+                      <div className="flex items-center w-full">
+                        <span className="text-foreground whitespace-nowrap">Admins only</span>
+                        {renderCheckmark("admin")}
+                      </div>
+                    </CommandItem>
+                  </CommandGroup>
+                )}
             </CommandList>
           </Command>
         </PopoverContent>

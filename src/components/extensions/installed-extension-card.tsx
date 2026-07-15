@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Check, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { Check, Lock, RefreshCw, TriangleAlert, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -144,15 +144,18 @@ export type InstalledExtensionCardProps = {
 
 /**
  * §VI "Installed extensions" status indicator (published design system §VI
- * drawing, refreshed 2026-07-05: "green-check Active / grey-cross
- * Archived"). A check icon (green) for Active/Locked, a cross icon (muted)
- * for Archived, beside the mono, uppercase, letter-spaced label. The earlier
- * "bare dot" reading of this indicator (this branch's prior commits) cited a
- * now-superseded revision of the published reference — the current §VI
- * example markup renders an explicit check/cross `<svg>`, not a bare dot.
- * Active and `locked` (a system extension is live) read green; archived
- * reads muted. The general `LifecycleBadge`/`StatusPill` stays the §VII
- * list/table renderer.
+ * drawing, refreshed 2026-07-05). Three lifecycle glyphs beside the mono,
+ * uppercase, letter-spaced label:
+ *   • active   → a green check;
+ *   • locked   → a green LOCK (cinatra#1570). A system extension IS live, so it
+ *     shares the green `--success` ink, but it now reads DISTINCTLY from a
+ *     normal active row: it cannot be archived or uninstalled (the tooltip
+ *     says so). Previously locked silently reused the active check, making a
+ *     locked row visually identical to an active one but for the text label;
+ *   • archived → a muted cross.
+ * Colour/semantics are pinned by the paired `app-extensions.html` spec update
+ * that lands with this change (design-surface gate). The general
+ * `LifecycleBadge`/`StatusPill` stays the §VII list/table renderer.
  */
 export function InstalledStatusIndicator({
   status,
@@ -160,8 +163,9 @@ export function InstalledStatusIndicator({
   status: "active" | "locked" | "archived";
 }) {
   const archived = status === "archived";
-  const label = archived ? "Archived" : status === "locked" ? "Locked" : "Active";
-  const Icon = archived ? X : Check;
+  const locked = status === "locked";
+  const label = archived ? "Archived" : locked ? "Locked" : "Active";
+  const Icon = archived ? X : locked ? Lock : Check;
   return (
     <span
       data-slot="installed-status-indicator"

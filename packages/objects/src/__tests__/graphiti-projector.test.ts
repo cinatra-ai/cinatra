@@ -131,6 +131,15 @@ describe("projection - append-only on upsert", () => {
         graphiti_projected_version: null,
         source: "route",
         created_at: "2026-01-01T00:00:00Z",
+        // Canonical scope (post-#1428). A generic artifact row now nests under a
+        // scope-derived lane (#1436): org-visible ⇒ the ambient org lane, so
+        // this source-gate row still projects (lane derivation itself is covered
+        // by graphiti-projector-artifact-lanes.test.ts).
+        owner_level: "organization",
+        owner_id: "org-1",
+        visibility: "organization",
+        project_id: null,
+        projected_group_id: null,
       }],
     }]);
     runPg.mockReturnValueOnce([{ rows: [] }]); // semantic_assertion: none yet

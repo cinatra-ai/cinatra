@@ -73,8 +73,15 @@ export async function buildInstallTargetPickerContext(args: {
   session: SessionForPicker;
   orgRole: "org_owner" | "org_admin" | "member" | undefined;
   currentProjectId?: string;
+  /**
+   * cinatra#1527: append the always-offered "Whole Workspace" / "Admins only"
+   * scopes. Passed `true` by the extension marketplace picker; left off (the
+   * default) by the agent at-scope picker, whose install path persists an owner
+   * level rather than an audience policy and so cannot target these scopes.
+   */
+  includeWorkspaceScopes?: boolean;
 }): Promise<InstallTargetPickerContext> {
-  const { session, orgRole, currentProjectId } = args;
+  const { session, orgRole, currentProjectId, includeWorkspaceScopes } = args;
   const activeOrgId = session.session?.activeOrganizationId ?? undefined;
 
   const installActor: InstallActorForTargets = {
@@ -176,6 +183,7 @@ export async function buildInstallTargetPickerContext(args: {
     teams: userTeams,
     projects: projectsForPicker,
     currentProjectId,
+    includeWorkspaceScopes,
   });
   const ownerEntityNames: Record<string, string> = {
     // Multi-scope W1: key the org label on the id-carrying token (matches the
