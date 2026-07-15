@@ -10,14 +10,22 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 //       (BACKGROUND_JOB_NAMES), not a dynamic worker registry, so no job-worker
 //       kind can ever be REGISTERED in-process — hence there is nothing of that
 //       kind to TEAR DOWN. (Same is true structurally for skills/agents/
-//       artifacts/credentials: there is no in-process `register(ctx)` channel
-//       for those kinds, so no in-memory deregistration primitive exists.)
+//       credentials, and for the `ctx.artifacts` PORT: there is no
+//       in-process `register(ctx)` channel for those, so no ctx-driven
+//       deregistration primitive exists. NOTE — artifact RENDERERS are the
+//       exception since cinatra#1629: they register at the BOOT bridge /
+//       activation, not via a `ctx.artifacts` port, and DO have an in-memory
+//       teardown primitive (`invalidateArtifactRenderersForPackage`) wired into
+//       the closure below.)
 //
 //   (b) The per-kind in-memory teardown the host wires into
 //       `setExtensionCapabilityTeardownHook` (src/lib/extensions.ts ~:62-71)
-//       covers EXACTLY the four kinds that DO have an in-process register(ctx)
-//       channel: { MCP tools, capability providers, ctx.ui surfaces/actions,
-//       object types } — and nothing else.
+//       covers the register-channel kinds that DO have an in-process
+//       deregistration primitive: { MCP tools, capability providers, ctx.ui
+//       surfaces/actions, object types, artifact renderers (semantic detail
+//       renderers + representation providers, cinatra#1629) } — plus the runtime
+//       dashboard cubes/portlet kinds + version-keyed serving cleared in
+//       lockstep.
 //
 // The teardown orchestrator in `src/lib/extensions.ts` cannot be imported here:
 // it transitively pulls the full handler graph (agents/skills/workflows +
@@ -56,6 +64,10 @@ import {
 } from "@/lib/extension-ui-registry";
 import { invalidateObjectTypesForPackage } from "@/lib/extension-object-types-teardown";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import {
+  semanticRendererRegistry,
+  representationProviderRegistry,
+} from "@cinatra-ai/objects/artifact-renderer-registry";
 // The EXACT production teardown closure the host wires into
 // `setExtensionCapabilityTeardownHook` (src/lib/extensions.ts ~:87). Imported from
 // the shared lightweight module — NOT a copy — so production wiring drift (a fifth
@@ -72,6 +84,8 @@ afterEach(() => {
   __resetCapabilityRegistry();
   __resetExtensionUiRegistry();
   objectTypeRegistry._clearForTests();
+  semanticRendererRegistry._clearForTests();
+  representationProviderRegistry._clearForTests(true);
 });
 
 describe("per-kind teardown (a) — ctx.jobs.registerWorker is not a supported port", () => {
@@ -138,15 +152,38 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
     registerExtensionUiAction({ packageName: PKG, id: "a", handler: async () => ({}) });
     const TYPE = `${PKG}:t`;
     objectTypeRegistry.register({ type: TYPE, category: "data" } as never, PKG);
+    // Artifact renderers (cinatra#1629): a semantic detail renderer + an
+    // org-scoped representation provider must also retire through the closure.
+    const RTYPE = `${PKG}:artifact`;
+    semanticRendererRegistry.register({ objectTypeId: RTYPE, packageName: PKG });
+    representationProviderRegistry.registerProvider("org_1", {
+      packageName: PKG,
+      pattern: "application/pdf",
+      slot: "preview",
+      generation: 1,
+    });
 
     const result = teardownExtensionCapabilities(PKG);
 
     expect(result.removedTools).toContain("t");
     expect(result.removedTypes).toContain(TYPE);
+    expect(result.removedRendererTypes).toContain(RTYPE);
+    expect(result.removedRepresentationProviders).toBe(1);
     expect(listExtensionMcpTools().some((x) => x.packageName === PKG)).toBe(false);
     expect(resolveCapabilityProviders("cap").some((p) => p.packageName === PKG)).toBe(false);
     expect(resolveExtensionUiAction(PKG, "a")).toBeNull();
     expect(objectTypeRegistry.resolve(TYPE)).toBeNull();
+    // The renderer registrations no longer resolve.
+    expect(
+      semanticRendererRegistry.resolve(RTYPE, {
+        kind: "extension",
+        extension: PKG,
+        basis: "classic",
+        selectable: true,
+        assertionId: "sa_x",
+      }),
+    ).toBeNull();
+    expect(representationProviderRegistry.resolve("org_1", "application/pdf", "preview")).toBeNull();
 
     // Structural-absence invariant: the host module exports NO in-memory
     // `invalidate<kind>ForPackage` for the kinds that have no register(ctx)

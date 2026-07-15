@@ -12,6 +12,7 @@
     "./namespace": "./src/namespace.ts",
     "./claims": "./src/claims.ts",
     "./effective-identity": "./src/effective-identity.ts",
+    "./artifact-renderer-registry": "./src/artifact-renderer-registry.ts",
     "./auto-registrar": "./src/auto-registrar.ts",
     "./registry": "./src/registry.ts",
     "./sync-adapters/registry": "./src/sync-adapters/registry.ts",

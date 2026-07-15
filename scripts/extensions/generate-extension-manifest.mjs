@@ -1849,6 +1849,81 @@ export async function buildManifest() {
     })
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
 
+  // cinatra.artifact.ui renderers (cinatra#1629, epic #1620 S2): a
+  // `kind:"artifact"` extension ships its type's view via
+  // `cinatra.artifact.ui.renderers.{detail,preview}` (the S1 schema). The host
+  // dispatch spine resolves a row to a KEY in this generated build map (the
+  // connector-setup-pages literal-import pattern), keyed `<pkg>::<slot>`. STAGED
+  // + INERT: no bundled artifact declares `ui` yet (the companion-repo kind gate
+  // rejects it until S3), so the emitted map is `{}` on day one. FAIL-CLOSED
+  // like the streams collection: validate the entry resolves to a real,
+  // importable module (tsconfig alias OR package.json exports) so the generated
+  // literal import can never fail at runtime; a runtime-installed claimant that
+  // is absent from the build is the host's "requires rebuild" degrade, not a
+  // generation error. ARTIFACT_UI_RENDER_SLOTS mirrors ARTIFACT_UI_SLOTS in
+  // packages/sdk-extensions/src/artifact-contract.ts (the closed v1 slot enum);
+  // the authoritative slot-enum validation is the S1 publish/conformance gate.
+  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview"];
+  const artifactRenderers = records
+    .filter((r) => r.kind === "artifact")
+    .flatMap((r) => {
+      const artifact = readCinatraManifest(r.sourceDir).artifact;
+      const ui = isObj(artifact) ? artifact.ui : undefined;
+      if (!isObj(ui) || !isObj(ui.renderers)) return [];
+      const pkgJson = JSON.parse(
+        readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"),
+      );
+      const out = [];
+      for (const slot of ARTIFACT_UI_RENDER_SLOTS) {
+        const renderer = ui.renderers[slot];
+        if (renderer === undefined) continue;
+        if (!isObj(renderer) || typeof renderer.entry !== "string") {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.artifact.ui.renderers.${slot} is malformed (entry must be a string)`,
+          );
+        }
+        const entryRel = renderer.entry.replace(/^\.\//, "");
+        const entryPath = join(r.sourceDir, entryRel);
+        const candidates = [entryPath, `${entryPath}.ts`, `${entryPath}.tsx`];
+        const resolved = candidates.find((p) => fileExists(p));
+        if (!resolved) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.artifact.ui.renderers.${slot} entry "${renderer.entry}" ` +
+              `does not resolve to a file (looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+          );
+        }
+        const importSubpath = entryRel.replace(/\.(ts|tsx)$/, "");
+        const specifier = `${r.packageName}/${importSubpath}`;
+        const exportsKey = `./${importSubpath}`;
+        const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.artifact.ui.renderers.${slot} subpath "${specifier}" is not ` +
+              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+              `the generated literal import would fail at runtime`,
+          );
+        }
+        const representations = Array.isArray(renderer.representations)
+          ? renderer.representations.filter((m) => typeof m === "string")
+          : [];
+        const propsApiVersion = Number.isInteger(renderer.propsApiVersion)
+          ? renderer.propsApiVersion
+          : 1;
+        out.push({
+          packageName: r.packageName,
+          slot,
+          specifier,
+          representations,
+          propsApiVersion,
+          resolution: r.resolution,
+        });
+      }
+      return out;
+    })
+    .sort(
+      (a, b) => a.packageName.localeCompare(b.packageName) || a.slot.localeCompare(b.slot),
+    );
+
   // FAIL-CLOSED system-extension coverage (cinatra#35 / IOC-43): the
   // host-owned `cinatra.systemExtensions` declaration (root package.json) is
   // the data source for the locked system set
@@ -1939,6 +2014,7 @@ export async function buildManifest() {
     webhookHooks,
     streamDeclarations,
     chatWidgetModules,
+    artifactRenderers,
     agentFieldRendererBindings,
     agentRoleBindings,
     artifactFloorClaimant: floorClaimant,
@@ -2503,6 +2579,57 @@ function emitConnectorSetupPages(setupPages, settingsPages, skillsSettingsTabs =
   );
 }
 
+// cinatra.artifact.ui renderer literal-import map (cinatra#1629, epic #1620 S2).
+// Keyed `<pkg>::<slot>` (the host `generatedArtifactRendererKey` mirrors this
+// separator). Each entry is a guardedOptional loader — a post-build-absent
+// renderer resolves the standardized degraded result the host renders as
+// "requires rebuild", never a blank. Empty on day one (no bundled artifact
+// declares `cinatra.artifact.ui` yet) — an intentionally empty seam like
+// GENERATED_CLIENT_WIDGETS.
+function emitArtifactRenderers(artifactRenderers) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = artifactRenderers
+    .map((a) => {
+      const key = `${a.packageName}::${a.slot}`;
+      const load =
+        a.resolution === "guardedOptional"
+          ? `guardedExtensionImport(${JSON.stringify(a.specifier)}, () => import(${JSON.stringify(a.specifier)}))`
+          : `() => import(${JSON.stringify(a.specifier)})`;
+      const meta = JSON.stringify({
+        packageName: a.packageName,
+        slot: a.slot,
+        representations: a.representations,
+        propsApiVersion: a.propsApiVersion,
+      }).slice(1, -1); // splice resolution/load into the object literal
+      return `  ${JSON.stringify(key)}: { resolution: ${JSON.stringify(a.resolution)}, ${meta}, load: ${load} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(body) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// Literal dynamic-import map (Turbopack rejects computed import templates).\n` +
+    `// Consumed by the artifact renderer dispatch spine (src/lib/artifacts/\n` +
+    `// artifact-renderer-loader.ts) as the BUILD table of extension-shipped\n` +
+    `// renderer modules. The two arbitration registries\n` +
+    `// (@cinatra-ai/objects/artifact-renderer-registry) resolve a row to a KEY\n` +
+    `// here; a runtime-installed claimant whose key is ABSENT is the "requires\n` +
+    `// rebuild" degrade (rendered generic + diagnostic, never blank).\n` +
+    `export type GeneratedArtifactRendererLoader = () => Promise<unknown>;\n\n` +
+    `export type GeneratedArtifactRendererEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  packageName: string;\n` +
+    `  slot: "detail" | "preview";\n` +
+    `  representations: readonly string[];\n` +
+    `  propsApiVersion: number;\n` +
+    `  load: GeneratedArtifactRendererLoader;\n` +
+    `};\n\n` +
+    `export const GENERATED_ARTIFACT_RENDERERS: Record<string, GeneratedArtifactRendererEntry> = {\n` +
+    (body.length > 0 ? `${body}\n` : ``) +
+    `};\n`
+  );
+}
+
 // The GENERATED guarded-optional-loaders test (cinatra#7). Emitted
 // alongside the maps so the concrete entry list below can never drift from
 // the emitted set (`--check` pins this file byte-exact with the maps; the
@@ -2530,6 +2657,7 @@ function emitGuardedOptionalLoadersTest({
   connectorSetupPages,
   connectorSettingsPages,
   connectorSkillsSettingsTabs,
+  artifactRenderers,
 }) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const expected = [];
@@ -2553,6 +2681,7 @@ function emitGuardedOptionalLoadersTest({
   for (const p of connectorSetupPages) expected.push(["GENERATED_CONNECTOR_SETUP_PAGES", p.slug, p.resolution]);
   for (const p of connectorSettingsPages) expected.push(["GENERATED_CONNECTOR_SETTINGS_PAGES", p.slug, p.resolution]);
   for (const p of connectorSkillsSettingsTabs) expected.push(["GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS", p.slug, p.resolution]);
+  for (const a of artifactRenderers) expected.push(["GENERATED_ARTIFACT_RENDERERS", `${a.packageName}::${a.slot}`, a.resolution]);
   const expectedBody = expected
     .map(([map, key, resolution]) => `  { map: ${JSON.stringify(map)}, key: ${JSON.stringify(key)}, resolution: ${JSON.stringify(resolution)} },`)
     .join("\n");
@@ -2584,7 +2713,8 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
     `  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,\n` +
-    `} from "../connector-setup-pages";\n\n` +
+    `} from "../connector-setup-pages";\n` +
+    `import { GENERATED_ARTIFACT_RENDERERS } from "../artifact-renderers";\n\n` +
     `const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>> = {\n` +
     `  GENERATED_EXTENSION_SERVER_ENTRIES,\n` +
     `  GENERATED_CONNECTOR_ENTRY_MODULES,\n` +
@@ -2600,6 +2730,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
     `  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,\n` +
+    `  GENERATED_ARTIFACT_RENDERERS,\n` +
     `};\n\n` +
     `const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [\n` +
     `${expectedBody}\n];\n\n` +
@@ -2859,6 +2990,7 @@ const OUT_WEBHOOK_META = generatedOutPath("webhook-registry-meta.ts");
 const OUT_STREAMS_SERVER = generatedOutPath("streams.server.ts");
 const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
+const OUT_ARTIFACT_RENDERERS = generatedOutPath("artifact-renderers.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 const OUT_ARTIFACT_FLOOR = generatedOutPath("artifact-floor.ts");
 
@@ -2889,6 +3021,7 @@ async function main() {
     webhookHooks,
     streamDeclarations,
     chatWidgetModules,
+    artifactRenderers,
     agentFieldRendererBindings,
     agentRoleBindings,
     artifactFloorClaimant,
@@ -2904,6 +3037,7 @@ async function main() {
     [OUT_WEBHOOK_META, emitWebhookRegistryMeta(webhookHooks)],
     [OUT_STREAMS_SERVER, emitStreamsServer(streamDeclarations)],
     [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
+    [OUT_ARTIFACT_RENDERERS, emitArtifactRenderers(artifactRenderers)],
     [
       OUT_GUARDED_TEST,
       emitGuardedOptionalLoadersTest({
@@ -2920,6 +3054,7 @@ async function main() {
         connectorSetupPages,
         connectorSettingsPages,
         connectorSkillsSettingsTabs,
+        artifactRenderers,
       }),
     ],
   ];

@@ -39,6 +39,10 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
       // Agent UI bindings + role bindings (cinatra#151 Stage 5).
       "src/lib/generated/agent-bindings.ts",
+      // Artifact-renderer dispatch spine (cinatra#1629, epic #1620 S2): the
+      // literal-import BUILD table of extension-shipped cinatra.artifact.ui
+      // renderer modules. Inert until an artifact declares `ui` (S3+/M1).
+      "src/lib/generated/artifact-renderers.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
