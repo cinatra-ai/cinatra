@@ -7,7 +7,7 @@ import {
   requireAuthSession,
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
-import { betterAuthDb } from "@/lib/better-auth-db";
+import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -57,36 +57,53 @@ export default async function TeamSettingsPage({
   const team = rows.rows?.[0];
   if (!team) notFound();
 
-  // Page gate (cinatra#1567): team members keep their access; org
-  // owners/admins of the TEAM's org (and platform admins) are additionally
-  // let in so they can manage membership — the same widening the teams
-  // dashboard visibility applies (`team-visibility.ts`), decided by the
-  // named interim predicate pending the #1566 team role model.
-  const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
-  const canManage = canManageTeamMembers({
-    platformAdmin: isPlatformAdmin(session),
-    orgRole,
-  });
-  if (!team.is_member && !canManage) redirect("/not-authorized");
-
-  // Members list (roleless — `public."teamMember"` has no role column;
-  // per-member roles are #1566's decision).
+  // Members list, with per-team roles (cinatra#1566) when the app-owned
+  // `teamMember.role` column is provisioned on this deployment. On an
+  // un-migrated deployment the query stays roleless and the page renders
+  // exactly the pre-#1566 surface.
+  const rolesEnabled = await teamMemberRoleColumnExists();
   const memberRows = await betterAuthDb.execute<{
     userId: string;
     name: string | null;
     email: string | null;
-  }>(sql`
-    SELECT tm."userId", u.name, u.email
-      FROM public."teamMember" tm
-      JOIN public."user" u ON u.id = tm."userId"
-     WHERE tm."teamId" = ${team.id}
-     ORDER BY u.name, tm."userId"
-  `);
+    role?: string | null;
+  }>(
+    rolesEnabled
+      ? sql`
+          SELECT tm."userId", u.name, u.email, tm.role
+            FROM public."teamMember" tm
+            JOIN public."user" u ON u.id = tm."userId"
+           WHERE tm."teamId" = ${team.id}
+           ORDER BY u.name, tm."userId"
+        `
+      : sql`
+          SELECT tm."userId", u.name, u.email
+            FROM public."teamMember" tm
+            JOIN public."user" u ON u.id = tm."userId"
+           WHERE tm."teamId" = ${team.id}
+           ORDER BY u.name, tm."userId"
+        `,
+  );
   const members: TeamMemberView[] = (memberRows.rows ?? []).map((row) => ({
     userId: row.userId,
     name: row.name ?? row.email ?? "Unknown",
     email: row.email ?? "",
+    role: rolesEnabled ? (row.role === "admin" ? "admin" : "member") : null,
   }));
+
+  // Page gate (cinatra#1567 + #1566): team members keep their access; team
+  // ADMINS of this team, org owners/admins of the TEAM's org, and platform
+  // admins additionally manage membership — decided by the shared
+  // `canManageTeamMembers` predicate. The viewer's own team role comes from
+  // the member list just fetched (no extra query).
+  const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
+  const viewerRole = members.find((m) => m.userId === session.user.id)?.role;
+  const canManage = canManageTeamMembers({
+    platformAdmin: isPlatformAdmin(session),
+    orgRole,
+    ...(viewerRole ? { teamRole: viewerRole } : {}),
+  });
+  if (!team.is_member && !canManage) redirect("/not-authorized");
 
   return (
     <Main className="min-h-screen">
@@ -116,8 +133,8 @@ export default async function TeamSettingsPage({
             <CardTitle>Members</CardTitle>
             <CardDescription>
               {canManage
-                ? "People on this team. Add members from this organization or remove them — a team keeps at least one member."
-                : "People on this team. Ask an organization owner or admin to add or remove members."}
+                ? "People on this team. Add members from this organization, remove them, or assign the Admin role — a team keeps at least one member."
+                : "People on this team. Ask a team admin or an organization owner/admin to add or remove members."}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -125,6 +142,7 @@ export default async function TeamSettingsPage({
               teamId={team.id}
               members={members}
               canManage={canManage}
+              rolesEnabled={rolesEnabled}
             />
           </CardContent>
         </Card>

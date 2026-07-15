@@ -309,9 +309,17 @@ export const betterAuthMembers = pgTable("member", {
 
 // ---------------------------------------------------------------------------
 // Better Auth team plugin Drizzle bridge.
-// teamMember has ONLY id/teamId/userId/createdAt — NO organizationId, NO role.
-// To get a user's teams scoped to an org, INNER JOIN team and filter by
+// teamMember has id/teamId/userId/createdAt — NO organizationId. To get a
+// user's teams scoped to an org, INNER JOIN team and filter by
 // team.organizationId.
+//
+// `role` ('member' | 'admin') is APP-OWNED, not Better Auth's: the library has
+// no per-team-member role and its teamMember `additionalFields` hook silently
+// provisions nothing (better-auth#5234), so the column is provisioned by the
+// guarded post-step in `scripts/better-auth-migrate.mts` (cinatra#1566). On a
+// deployment that has not re-run `pnpm auth:migrate` the column is ABSENT —
+// every read of it must go through the `teamMemberRoleColumnExists()` guard
+// below (the accent_color precedent) and degrade to roleless membership.
 // ---------------------------------------------------------------------------
 
 export const betterAuthTeams = pgTable("team", {
@@ -330,31 +338,113 @@ export const betterAuthTeamMembers = pgTable("teamMember", {
   teamId: text("teamId").notNull(),
   userId: text("userId").notNull(),
   createdAt: timestamp("createdAt", { withTimezone: true, mode: "date" }),
+  // Live column is NOT NULL DEFAULT 'member' once provisioned; declared
+  // nullable here because it may be ABSENT on not-yet-migrated deployments —
+  // only guarded queries (see teamMemberRoleColumnExists) may select it.
+  role: text("role"),
 });
+
+/**
+ * Process-memoised guard: does `public."teamMember"."role"` exist in the live
+ * DB? App-owned column, provisioned by `scripts/better-auth-migrate.mts`
+ * (cinatra#1566); a deployment that predates it and has not re-run
+ * `pnpm auth:migrate` still lacks the column, and selecting it there would
+ * fail with 42703 on every session resolution. Mirrors the accent_color
+ * existence guard (`src/lib/accent-color-store.ts`) with ONE difference:
+ * only a POSITIVE result is memoised. Column presence is monotonic (nothing
+ * drops it), but a long-lived process may probe `false` BEFORE `auth:migrate`
+ * provisions the column — caching that `false` would freeze the process on
+ * the roleless path forever. `false` (and probe failure) therefore clears the
+ * memo so the next call re-probes.
+ */
+let teamMemberRoleColumnPresent: Promise<boolean> | null = null;
+
+export function teamMemberRoleColumnExists(): Promise<boolean> {
+  if (teamMemberRoleColumnPresent) return teamMemberRoleColumnPresent;
+  const probe: Promise<boolean> = betterAuthPool
+    .query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'teamMember'
+           AND column_name = 'role'
+       ) AS exists`,
+    )
+    .then((result) => {
+      const exists = Boolean(result.rows[0]?.exists);
+      if (!exists && teamMemberRoleColumnPresent === probe) {
+        teamMemberRoleColumnPresent = null;
+      }
+      return exists;
+    })
+    .catch(() => {
+      // Transient DB failure: clear the memo (only if we're still the current
+      // probe) so the next call retries; treat this call as "absent" —
+      // fail-soft to roleless membership (never over-grants).
+      if (teamMemberRoleColumnPresent === probe) {
+        teamMemberRoleColumnPresent = null;
+      }
+      return false;
+    });
+  teamMemberRoleColumnPresent = probe;
+  return probe;
+}
+
+/** A team membership row as seen by `readTeamsForUser`. `role` is `undefined`
+ *  when the role column is not provisioned on this deployment (degrade =
+ *  roleless membership), else `'admin' | 'member'` (`null` only for an
+ *  unexpected out-of-vocabulary value — treated as 'member' downstream). */
+export type TeamMembershipRow = {
+  id: string;
+  name: string;
+  role?: "admin" | "member" | null;
+};
 
 /**
  * Return the teams a user belongs to within a specific org.
  * INNER JOIN is required because public."teamMember" has no organizationId
  * column.
+ *
+ * When the app-owned `role` column is provisioned, each row also carries the
+ * caller's per-team role — same single query, no extra read. Consumers map
+ * `'admin'` to the kernel's `team_admin` at the read boundary
+ * (`src/lib/auth-session.ts`).
  */
 export async function readTeamsForUser(
   userId: string,
   orgId: string,
-): Promise<Array<{ id: string; name: string }>> {
+): Promise<TeamMembershipRow[]> {
+  const membershipFilter = and(
+    eq(betterAuthTeamMembers.userId, userId),
+    eq(betterAuthTeams.organizationId, orgId),
+  );
+  if (!(await teamMemberRoleColumnExists())) {
+    return betterAuthDb
+      .select({ id: betterAuthTeams.id, name: betterAuthTeams.name })
+      .from(betterAuthTeamMembers)
+      .innerJoin(
+        betterAuthTeams,
+        eq(betterAuthTeamMembers.teamId, betterAuthTeams.id),
+      )
+      .where(membershipFilter);
+  }
   const rows = await betterAuthDb
-    .select({ id: betterAuthTeams.id, name: betterAuthTeams.name })
+    .select({
+      id: betterAuthTeams.id,
+      name: betterAuthTeams.name,
+      role: betterAuthTeamMembers.role,
+    })
     .from(betterAuthTeamMembers)
     .innerJoin(
       betterAuthTeams,
       eq(betterAuthTeamMembers.teamId, betterAuthTeams.id),
     )
-    .where(
-      and(
-        eq(betterAuthTeamMembers.userId, userId),
-        eq(betterAuthTeams.organizationId, orgId),
-      ),
-    );
-  return rows;
+    .where(membershipFilter);
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    role: row.role === "admin" || row.role === "member" ? row.role : null,
+  }));
 }
 
 /**

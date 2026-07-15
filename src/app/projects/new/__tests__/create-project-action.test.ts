@@ -109,27 +109,31 @@ describe("createProjectAction team-owner authorization (cinatra#1499 regression)
   });
 
   it("team-membership check selects a real teamMember column (id), matching the live Better Auth schema", () => {
-    // Better Auth's public.\"teamMember\" table is id/teamId/userId/createdAt.
+    // The degrade branch (role column not provisioned) selects id only.
     expect(actionBody).toMatch(/SELECT\s+id\s+FROM\s+public\."teamMember"/);
   });
 
-  it("NEVER selects a non-existent `role` column from teamMember (the root cause of #1499)", () => {
-    // The original bug: `SELECT role FROM public.\"teamMember\"` — Postgres
-    // errored 'column \"role\" does not exist', surfacing as a generic
-    // DB-unreachable toast. Guard against any teamMember query re-introducing
-    // a role selection.
+  it("NEVER selects the role column UNGUARDED (the root cause of #1499)", () => {
+    // The original bug: an unconditional `SELECT role FROM public."teamMember"`
+    // — Postgres errored 'column "role" does not exist' on un-provisioned
+    // deployments, surfacing as a generic DB-unreachable toast. The #1566
+    // role model reads the column, but ONLY behind the
+    // `teamMemberRoleColumnExists()` guard with a roleless fallback branch.
     expect(actionBody).not.toMatch(/SELECT\s+role\s+FROM\s+public\."teamMember"/);
-    // The removed local that derived team-admin from that column must be gone.
-    expect(actionBody).not.toMatch(/teamMemberRole/);
-    expect(actionBody).not.toMatch(/===\s*"admin"\s*\?\s*"team_admin"/);
+    expect(actionBody).toMatch(/teamMemberRoleColumnExists\(\)/);
+    // Both branches present: the role-bearing select AND the roleless degrade.
+    expect(actionBody).toMatch(/SELECT\s+id,\s*role\s+FROM\s+public\."teamMember"/);
   });
 
-  it("authorizes team-owned creation on plain MEMBERSHIP (existence), not a team role", () => {
+  it("authorizes team-owned creation on plain MEMBERSHIP (existence); the role only WIDENS the hint (#1566)", () => {
     // Membership decision is existence-based (rows present), not role-based.
     expect(actionBody).toMatch(/isTeamMember\s*=\s*memberRows\.rows\.length\s*>\s*0/);
     // A confirmed member is mapped to the org-member role so the kernel's
     // `project.create` (granted to `member`) gate passes.
     expect(actionBody).toMatch(/enrichedRoles\.push\("member"\)/);
+    // A confirmed team ADMIN surfaces as the kernel team_admin tier (the
+    // re-wire the interim #1499 patch documented).
+    expect(actionBody).toMatch(/teamMemberRole\s*===\s*"admin"\s*\?\s*"team_admin"\s*:\s*"member"/);
   });
 
   it("denies a non-member with a permission-style error redirect (not the generic DB toast)", () => {

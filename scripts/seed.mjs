@@ -366,6 +366,26 @@ async function seedTeams(orgMap, adminUserId) {
   for (const r of userRows.rows) userByEmail[r.email] = r.id;
   const uid = (email) => userByEmail[email];
 
+  // cinatra#1566: the app-owned `teamMember.role` column is provisioned by
+  // `auth:migrate` (which `make setup` runs before seeding), but a DIRECT
+  // `node scripts/seed.mjs` against a not-yet-migrated dev DB must keep
+  // working — probe once and fall back to the roleless inserts when absent
+  // (the provisioning backfill promotes the earliest member per team later).
+  const roleColumnProbe = await q(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'teamMember'
+         AND column_name = 'role'
+     ) AS "exists"`
+  );
+  const hasRoleColumn = Boolean(roleColumnProbe.rows?.[0]?.exists);
+  if (!hasRoleColumn) {
+    console.warn(
+      '  public."teamMember".role is absent — seeding roleless memberships; run `pnpm auth:migrate` to provision team roles.'
+    );
+  }
+
   const teams = [
     // ── ACME Robotics teams ──────────────────────────────────────────────
     {
@@ -500,6 +520,10 @@ async function seedTeams(orgMap, adminUserId) {
       [team.id, team.name, orgId, team.id]
     );
 
+    // Per-team roles (cinatra#1566): the FIRST listed member is the team's
+    // lead by fixture convention (cf. "Vera is the team lead" above) and gets
+    // role 'admin'; everyone else is a plain 'member'.
+    const leadUserId = team.members.length > 0 ? uid(team.members[0]) : null;
     for (const email of team.members) {
       const userId = uid(email);
       if (!userId) continue;
@@ -514,12 +538,21 @@ async function seedTeams(orgMap, adminUserId) {
         [`mem-${userId}-${team.org}`, orgId, userId]
       );
 
-      await q(
-        `INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [`tm-${team.id}-${userId}`, team.id, userId]
-      );
+      if (hasRoleColumn) {
+        await q(
+          `INSERT INTO public."teamMember" (id, "teamId", "userId", role, "createdAt")
+           VALUES ($1, $2, $3, $4, NOW())
+           ON CONFLICT DO NOTHING`,
+          [`tm-${team.id}-${userId}`, team.id, userId, userId === leadUserId ? "admin" : "member"]
+        );
+      } else {
+        await q(
+          `INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT DO NOTHING`,
+          [`tm-${team.id}-${userId}`, team.id, userId]
+        );
+      }
     }
   }
 
@@ -545,12 +578,23 @@ async function seedTeams(orgMap, adminUserId) {
          ON CONFLICT DO NOTHING`,
         [`mem-${adminUserId}-${team.org}`, orgId, adminUserId]
       );
-      await q(
-        `INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [`tm-${teamId}-${adminUserId}`, teamId, adminUserId]
-      );
+      // Team-admin role for the operator (cinatra#1566) — the one user who
+      // actually demos the role-management UI on the members card.
+      if (hasRoleColumn) {
+        await q(
+          `INSERT INTO public."teamMember" (id, "teamId", "userId", role, "createdAt")
+           VALUES ($1, $2, $3, 'admin', NOW())
+           ON CONFLICT DO NOTHING`,
+          [`tm-${teamId}-${adminUserId}`, teamId, adminUserId]
+        );
+      } else {
+        await q(
+          `INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT DO NOTHING`,
+          [`tm-${teamId}-${adminUserId}`, teamId, adminUserId]
+        );
+      }
     }
     console.log(`  backfilled admin into ${adminTeams.length} teams`);
   }
