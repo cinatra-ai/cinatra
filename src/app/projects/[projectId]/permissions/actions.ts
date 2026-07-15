@@ -7,9 +7,6 @@
 //   - addProjectCoOwnerAction(projectId, userId)      → project.manageMembers
 //   - removeProjectCoOwnerAction(projectId, userId)   → project.manageMembers
 //                                                        + last-owner guard
-//   - updateProjectScopeAction(projectId, ownerLevel, ownerId)
-//                                                       → project.update
-//                                                        + assertScopeRatchet
 //   - searchWorkspaceUsersForProject(projectId, query) → owner-or-coowner-or-admin
 //
 // The authorization gate is always `enforceResourceAccess` on the live row.
@@ -34,8 +31,6 @@ import {
   removeProjectCoOwner,
 } from "@/lib/project-co-owners-store";
 import { readProjectById } from "@/lib/projects-store-dao";
-// `assertScopeRatchet` import + `updateProject` (only used by the disabled
-// `updateProjectScopeAction`) are intentionally absent from this module.
 
 // Server-action wrappers around the project_access_* MCP primitives. These
 // call the handlers in-process and stamp the actor with `projectGrants` so
@@ -56,8 +51,6 @@ import type {
   ProjectRole,
   ProjectAccessSource,
 } from "@/lib/authz/actor-context";
-
-type OwnerLevel = "user" | "team" | "organization" | "workspace";
 
 // `actorFromSession` lives at `@/lib/authz/build-actor-context`.
 
@@ -166,24 +159,6 @@ export async function removeProjectCoOwnerAction(
     if (err instanceof AuthzError) return { ok: false, error: err.reason };
     throw err;
   }
-}
-
-// ---------------------------------------------------------------------------
-// updateProjectScopeAction — ratchet-only ownership change.
-// ---------------------------------------------------------------------------
-// `updateProjectScopeAction` is DISABLED.
-// The promotion-ratchet (one-shot upward ownership transfer) is
-// retired in the N:M access model. Ownership transfer is intentionally
-// not exposed; per-project access is managed via the
-// `project_access_grant` / `project_access_revoke` MCP primitives instead. The
-// function stays exported because the permissions tab UI imports it, but it
-// throws on call so no transfer can land.
-export async function updateProjectScopeAction(
-  _projectId: string,
-  _ownerLevel: OwnerLevel,
-  _ownerId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  throw new Error("ownership ratchet removed — see /projects/[id]/permissions");
 }
 
 // ---------------------------------------------------------------------------
