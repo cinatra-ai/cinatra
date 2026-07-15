@@ -3,30 +3,19 @@
 // ---------------------------------------------------------------------------
 // Project permissions tab client.
 //
-// Replicates the canonical Permissions card pattern from
-// `packages/agent-builder/src/permissions-tab-client.tsx`:
-// single .soft-panel border-line rounded-card cream-bg card with a read-only
-// Access section on top and an Ownership section below. shadcn primitives +
-// semantic tokens only — no inline palette, no parallel layout.
+// Single border-line rounded-card card with the Ownership section on top and
+// the Project access (N:M grants) section below. shadcn primitives + semantic
+// tokens only — no inline palette, no parallel layout.
 //
-// The Access section is GENUINELY read-only (cinatra#1509 §4.1, codex F4):
-// the legacy ownership-ratchet save path is retired server-side, so the
-// combobox renders `disabled` unconditionally as a display of the current
-// visibility — no form, no no-op Save. Grants are managed via the Project
-// access section below. Full removal of the section is an owner decision
-// (design Open Decision 3), so it stays visible for context.
+// The legacy ownership-ratchet "Access" section is REMOVED (owner ratified
+// Open Decision 3 = Remove, cinatra#1509): visibility is managed exclusively
+// through the Project access grants below.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState, useTransition } from "react";
 
 import { toast } from "@/lib/cinatra-toast";
 import { Button } from "@/components/ui/button";
-import {
-  AccessCombobox,
-  type AccessComboboxProps,
-} from "@/components/access-combobox";
-
-type AvailableScopes = AccessComboboxProps["availableScopes"];
 import {
   ResourceOwnershipPanel,
   type OwnerView,
@@ -78,14 +67,8 @@ export type ProjectPermissionsTabClientProps = {
   activeOrgId: string | null;
   projectId: string;
   projectName: string;
-  /**
-   * Current visibility expression displayed (read-only) by the
-   * AccessCombobox.
-   */
-  initialAccess: string;
   /** Whether the viewing actor may edit ownership / co-owners. */
   canEdit: boolean;
-  availableScopes: AvailableScopes;
   resourceOwner: OwnerView | null;
   coOwners: OwnerView[];
   currentUserId: string | null;
@@ -105,10 +88,8 @@ export function ProjectPermissionsTabClient({
   activeOrgId,
   projectId,
   // `projectName` stays in the props type (the page passes it; useful to any
-  // future copy) but is not destructured — the read-only caption is static.
-  initialAccess,
+  // future copy) but is not destructured — nothing renders it today.
   canEdit,
-  availableScopes,
   resourceOwner,
   coOwners,
   currentUserId,
@@ -127,26 +108,6 @@ export function ProjectPermissionsTabClient({
 
   return (
     <div className="rounded-card border border-line px-6 py-5 flex flex-col gap-6 bg-surface">
-      {/* Access section --------------------------------------------------
-          Read-only display of the current visibility (cinatra#1509 §4.1,
-          codex F4). The legacy ratchet save path is retired server-side
-          (its server action throws), so the combobox is disabled
-          unconditionally — no form, no no-op submit/toast. Visibility is
-          managed through the Project access section below. */}
-      <div data-testid="access-combobox" className="flex flex-col gap-4">
-        <h2 className="text-base font-semibold text-foreground">Access</h2>
-        <p className="text-xs text-muted-foreground -mt-2">
-          Current visibility — managed via Project access below.
-        </p>
-        <AccessCombobox
-          value={initialAccess}
-          onValueChange={() => {}}
-          availableScopes={availableScopes}
-          isAdmin={availableScopes.workspaceExposed}
-          disabled
-        />
-      </div>
-
       {/* Ownership section --------------------------------------------- */}
       <div data-testid="project-sharing-panel">
         {mounted ? (
@@ -202,8 +163,7 @@ type ProjectAccessSectionProps = {
 
 // Lazily-fetched candidate state for the team / organization pickers. The
 // candidates come from the dedicated grant-candidate server actions (never
-// from `availableScopes`, which only carries the VIEWER's memberships —
-// cinatra#1509 §4.2, codex F6).
+// from the viewer's own memberships — cinatra#1509 §4.2, codex F6).
 type TeamCandidatesState = {
   status: "idle" | "loading" | "ready" | "error";
   items: GrantTeamCandidate[];

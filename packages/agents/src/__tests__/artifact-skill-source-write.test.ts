@@ -102,11 +102,18 @@ vi.mock("@cinatra-ai/mcp-client", () => ({
 }));
 
 import { createAgentBuilderPrimitiveHandlers } from "../mcp/handlers";
+import { ARTIFACT_UI_SDK_ABI_RANGE } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 // Minimal VALID semantic artifact manifest (accepts ≥1 representation form).
 const VALID_ARTIFACT_MANIFEST = {
   accepts: { file: { mimeTypes: ["text/markdown", "text/plain"] } },
   matcherConfidenceThreshold: 0.7,
+};
+// A valid v1 cinatra.artifact.ui block (host-satisfiable generated range).
+const VALID_ARTIFACT_UI = {
+  abiVersion: 1,
+  sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+  renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
 };
 const VALID_SKILL_MD = "---\nname: demo-skill\ndescription: A demo skill.\n---\nDo the demo thing.";
 
@@ -204,6 +211,31 @@ describe("artifact_source_* — declarative artifact PACKAGE authoring", () => {
     )) as { valid?: boolean; errors?: string[] };
     expect(result.valid).toBe(true);
     expect(result.errors).toEqual([]);
+  });
+
+  it("artifact_source_validate ACCEPTS a valid cinatra.artifact.ui block (cinatra#1621)", async () => {
+    const handler = createAgentBuilderPrimitiveHandlers()["artifact_source_validate"];
+    const result = (await handler(
+      req("artifact_source_validate", {
+        content: JSON.stringify({ ...VALID_ARTIFACT_MANIFEST, ui: VALID_ARTIFACT_UI }),
+      }),
+    )) as { valid?: boolean; errors?: string[] };
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("artifact_source_validate REJECTS a malformed cinatra.artifact.ui — FAIL-CLOSED at publish (cinatra#1621)", async () => {
+    // The boot path DEGRADES this ui (drops it, keeps claims); the authoring /
+    // publish path must instead REJECT it. Malformed: wrong abiVersion + empty
+    // renderers.
+    const handler = createAgentBuilderPrimitiveHandlers()["artifact_source_validate"];
+    const result = (await handler(
+      req("artifact_source_validate", {
+        content: JSON.stringify({ ...VALID_ARTIFACT_MANIFEST, ui: { abiVersion: 2, renderers: {} } }),
+      }),
+    )) as { valid?: boolean; errors?: string[] };
+    expect(result.valid).toBe(false);
+    expect((result.errors ?? []).join(" ")).toMatch(/cinatra\.artifact\.ui is invalid/);
   });
 
   it("write → compile runs the full on-disk manifest validation", async () => {

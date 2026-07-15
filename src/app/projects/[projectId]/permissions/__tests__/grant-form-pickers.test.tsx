@@ -41,14 +41,7 @@ function renderTab(): string {
       activeOrgId="org-1"
       projectId="proj-1"
       projectName="Demo project"
-      initialAccess="owner"
       canEdit={true}
-      availableScopes={{
-        teams: [],
-        projects: [],
-        orgName: "Acme Corp",
-        workspaceExposed: false,
-      }}
       resourceOwner={null}
       coOwners={[]}
       currentUserId="user-owner"
