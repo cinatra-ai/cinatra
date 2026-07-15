@@ -104,10 +104,10 @@ import "@/lib/register-pm-providers";
 import "@/lib/register-pm-work-store-providers";
 
 // Publish the host-side blog ROUTING services (`@cinatra-ai/host:blog-routing`)
-// and keep the SDK blog-connector slot bound (routing into the `blog-connector`
-// capability). The blog facade extension configures itself at serverEntry
-// activation.
+// and keep the SDK blog-connector slot bound; the facade self-configures at serverEntry.
 import "@/lib/register-blog-providers";
+// Wire the run human-wait notifier seam (cinatra #1559 / E9); worker path in background-jobs.ts.
+import "@/lib/register-run-wait-notifier";
 
 import { installFatalErrorHandlers } from "@/lib/boot/fatal-error-policy";
 import { runBoot } from "@/lib/boot/boot-orchestrator";

@@ -16,6 +16,7 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
+import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   agentTemplates,
@@ -1677,6 +1678,8 @@ export async function transitionRunStatus(
     startedAt?: Date;
     completedAt?: Date;
     stepResults?: unknown[];
+    /** Flags the ONE genuine human-wait `→pending_input` (stop-run-hitl, #1058) so it notifies; every other `pending_input` reason leaves it unset. Not a DB column — only feeds the run-wait-notifier classification below. */
+    humanWaitGate?: boolean;
   },
 ): Promise<void> {
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
@@ -1686,13 +1689,19 @@ export async function transitionRunStatus(
   if (!won) {
     throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
   }
-  // Delegate terminal-state side-effects + meta patching to updateAgentRunStatus.
-  // The CAS already wrote the status column; re-writing it here is a no-op that
-  // still runs the terminal-detection branch (expireRunStream) and meta-patch
-  // logic. Skip the call for non-terminal transitions with no meta (the CAS's
-  // single UPDATE was enough).
-  if (meta || TERMINAL_RUN_STATUSES.has(to)) {
-    await updateAgentRunStatus(runId, to, meta as Partial<AgentRunRecord> | undefined);
+  try {
+    // Delegate terminal-state side-effects + meta patching to
+    // updateAgentRunStatus. The CAS already wrote the status column; re-writing
+    // it here is a no-op that still runs the terminal-detection branch
+    // (expireRunStream) and meta-patch logic. Skip the call for non-terminal
+    // transitions with no meta (the CAS's single UPDATE was enough).
+    if (meta || TERMINAL_RUN_STATUSES.has(to)) {
+      await updateAgentRunStatus(runId, to, meta as Partial<AgentRunRecord> | undefined);
+    }
+  } finally {
+    // Run human-wait notify (#1559/E9) in `finally` so a terminal clear still fires
+    // if the side-effect above throws (status CAS already committed). Best-effort no-op.
+    await dispatchRunWaitTransition({ runId, from, to, humanWaitGate: meta?.humanWaitGate === true });
   }
 }
 
