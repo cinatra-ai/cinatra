@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -57,15 +57,30 @@ export function AgentDecisionActions({
   rowId,
   expectedVersion,
   detailsHref,
+  onDecided,
 }: {
   sourceId: string;
   rowId: string;
   expectedVersion: string;
   detailsHref: string;
+  /** OPTIONAL — fired once when the decision succeeds. The unified
+   *  `/notifications` feed (E7) uses it to drop the decided row optimistically;
+   *  the `/configuration/approvals` page omits it and relies on revalidation. */
+  onDecided?: () => void;
 }) {
   const [state, formAction, pending] = useActionState(decideApprovalRow, INITIAL);
   const [rejecting, setRejecting] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
+
+  // Notify the host exactly once, on the false→true `state.ok` transition. The
+  // ref latch makes it exactly-once regardless of `onDecided` identity churn.
+  const decidedRef = useRef(false);
+  useEffect(() => {
+    if (state.ok && !decidedRef.current) {
+      decidedRef.current = true;
+      onDecided?.();
+    }
+  }, [state.ok, onDecided]);
 
   // Access-scope picker context — server-computed, loaded lazily on first open
   // so the row list is not burdened with a per-row picker build.

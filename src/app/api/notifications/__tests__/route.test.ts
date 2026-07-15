@@ -9,11 +9,13 @@ vi.mock("@/lib/auth-session", () => ({
 
 const listNotificationsMock = vi.fn();
 const markAllMock = vi.fn();
+const markThroughMock = vi.fn();
 const markReadMock = vi.fn();
 const markByHrefMock = vi.fn();
 vi.mock("@/lib/notifications", () => ({
   listNotifications: () => listNotificationsMock(),
   markAllNotificationsRead: () => markAllMock(),
+  markNotificationsReadThrough: (id: string) => markThroughMock(id),
   markNotificationRead: (id: string) => markReadMock(id),
   markNotificationsReadByHrefPrefix: (h: string) => markByHrefMock(h),
 }));
@@ -24,6 +26,7 @@ beforeEach(() => {
   getAuthSessionMock.mockReset();
   listNotificationsMock.mockReset();
   markAllMock.mockReset();
+  markThroughMock.mockReset();
   markReadMock.mockReset();
   markByHrefMock.mockReset();
 });
@@ -115,11 +118,37 @@ describe("PATCH /api/notifications", () => {
     expect(markAllMock).not.toHaveBeenCalled();
   });
 
-  it("delegates mark-all when {all:true}", async () => {
+  it("delegates mark-all when {all:true} (the flyout's blanket path is preserved)", async () => {
     getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
     const res = await PATCH(buildRequest({ all: true }));
     expect(res.status).toBe(200);
     expect(markAllMock).toHaveBeenCalledTimes(1);
+    expect(markThroughMock).not.toHaveBeenCalled();
+  });
+
+  it("delegates the scoped watermark when {beforeId} (the /notifications v2 feed)", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ beforeId: "n-boundary" }));
+    expect(res.status).toBe(200);
+    expect(markThroughMock).toHaveBeenCalledWith("n-boundary");
+    // Scoped watermark NEVER falls through to the blanket all-rows path.
+    expect(markAllMock).not.toHaveBeenCalled();
+  });
+
+  it("fail-CLOSED: an empty {beforeId} is 400 and never widens to mark-all", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ beforeId: "" }));
+    expect(res.status).toBe(400);
+    expect(markThroughMock).not.toHaveBeenCalled();
+    expect(markAllMock).not.toHaveBeenCalled();
+  });
+
+  it("fail-CLOSED: {beforeId} takes precedence over {all} — a payload cannot escalate the scoped path", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ beforeId: "n-boundary", all: true }));
+    expect(res.status).toBe(200);
+    expect(markThroughMock).toHaveBeenCalledWith("n-boundary");
+    expect(markAllMock).not.toHaveBeenCalled();
   });
 
   it("delegates mark-by-id when {id}", async () => {

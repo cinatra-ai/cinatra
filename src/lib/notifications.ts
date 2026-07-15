@@ -41,6 +41,7 @@ import {
   listNotificationsForUser,
   listNotificationsKeysetForUser,
   markAllNotificationsReadForUser,
+  markNotificationsReadThroughForUser,
   markNotificationReadForUser,
   markNotificationsReadByHrefPrefixForUser,
 } from "@cinatra-ai/notifications/server";
@@ -239,4 +240,21 @@ export async function markAllNotificationsRead(): Promise<void> {
   const userId = await resolveCurrentUserId();
   if (!userId) return;
   markAllNotificationsReadForUser(userId);
+}
+
+/**
+ * Scoped mark-all-read for the /notifications v2 feed: marks read only the
+ * caller's unread notifications through (up to and including) the boundary row
+ * `boundaryId` — the newest-LOADED notification. The boundary is resolved to its
+ * full-precision `(created_at, id)` server-side, so bounding the mutation to the
+ * loaded watermark — rather than a blanket all-rows update — prevents a
+ * notification created after the loaded boundary but before this PATCH from being
+ * marked read despite never being loaded (cinatra#1557).
+ */
+export async function markNotificationsReadThrough(
+  boundaryId: string,
+): Promise<void> {
+  const userId = await resolveCurrentUserId();
+  if (!userId || !boundaryId) return;
+  markNotificationsReadThroughForUser({ userId, boundaryId });
 }

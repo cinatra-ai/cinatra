@@ -31,6 +31,7 @@ export {
   listNotificationsByDedupeKeyPrefixForUser,
   listNotificationsKeysetForUser,
   markAllNotificationsReadForUser,
+  markNotificationsReadThroughForUser,
   markNotificationReadForUser,
   markNotificationsReadByHrefPrefixForUser,
   deleteNotificationsByDedupeKeyForUser,

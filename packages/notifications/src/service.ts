@@ -560,6 +560,75 @@ export function markAllNotificationsReadForUser(userId: string): void {
   });
 }
 
+/**
+ * Mark read every UNREAD notification for a user THROUGH (up to and including) a
+ * boundary row — the newest-LOADED notification on the /notifications v2 feed,
+ * identified by its `id`. Unlike {@link markAllNotificationsReadForUser}, the
+ * UPDATE is bounded to the loaded watermark, so a notification created AFTER the
+ * boundary — e.g. inserted CONCURRENTLY between the feed's page load and this
+ * PATCH — is never marked read despite never being loaded. On reload it re-syncs
+ * as genuinely unread. This closes the mark-all-read read-state race for the v2
+ * surface (cinatra#1557); the blanket flyout path keeps its own all-rows
+ * semantics.
+ *
+ * The boundary is passed as an `id`, NOT a timestamp, and resolved to its
+ * FULL-precision `created_at` inside the statement by joining the boundary row.
+ * This is deliberate: `created_at` is stored at microsecond precision, but the
+ * client only ever sees it ms-truncated (via `.toISOString()`). A ms-granular
+ * timestamp watermark cannot distinguish the boundary row from a DIFFERENT row
+ * inserted later within the SAME millisecond, so such a concurrent insert would
+ * be wrongly marked read.
+ *
+ * The predicate is `n.created_at < b.created_at OR n.id = b.id` — mark read every
+ * row STRICTLY older than the boundary, PLUS the boundary row itself. It does NOT
+ * tie-break simultaneous rows by `id`: notification ids are random UUIDs, so a
+ * row inserted at the EXACT same microsecond as the boundary but never loaded
+ * could have a UUID that sorts below the boundary's and would be wrongly included
+ * by a `(created_at, id) <= (…)` tuple. Requiring `created_at` to be STRICTLY
+ * less (or the row to BE the boundary) means no non-boundary row sharing or
+ * exceeding the boundary's microsecond is ever marked read — closing the race for
+ * any concurrent insert regardless of UUID ordering. The only rows this leaves
+ * unmarked that the optimistic client overlay marked read are loaded rows sharing
+ * the boundary's exact microsecond (vanishingly rare, and genuinely ambiguous in
+ * order); they self-heal to the server's authoritative `readAt` on reload.
+ *
+ * Both `n` and `b` are scoped to `user_id = $1`, so the boundary can never be
+ * another user's row and no cross-user row is ever touched. A boundary `id` that
+ * is unknown / not owned by the caller yields zero join rows → zero rows updated
+ * (fail-CLOSED: never widens to a blanket update). Index-supported by
+ * `(user_id, created_at DESC, id DESC)` (drizzle-store.ts).
+ */
+export function markNotificationsReadThroughForUser(args: {
+  userId: string;
+  boundaryId: string;
+}): void {
+  if (!args.userId || !args.boundaryId) return;
+  const table = schemaQualified("notifications");
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+  host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [
+      {
+        // `UPDATE ... FROM b` joins the boundary row (b.id is the PK → 0 or 1
+        // row) and reads its full-precision `created_at`. Strictly-older rows
+        // plus the boundary row itself are marked read; a row at/after the
+        // boundary's microsecond (a concurrent insert) is excluded regardless of
+        // its random UUID.
+        text: `UPDATE ${table} AS n
+          SET read_at = COALESCE(n.read_at, now())
+          FROM ${table} AS b
+          WHERE b.id = $2
+            AND b.user_id = $1
+            AND n.user_id = $1
+            AND n.read_at IS NULL
+            AND (n.created_at < b.created_at OR n.id = b.id)`,
+        values: [args.userId, args.boundaryId],
+      },
+    ],
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Agent-creation progress event log — one row per (run, milestone).
 //

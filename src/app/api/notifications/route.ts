@@ -4,6 +4,7 @@ import { getAuthSession } from "@/lib/auth-session";
 import {
   listNotifications,
   markAllNotificationsRead,
+  markNotificationsReadThrough,
   markNotificationRead,
   markNotificationsReadByHrefPrefix,
 } from "@/lib/notifications";
@@ -43,8 +44,26 @@ export async function PATCH(request: Request) {
   const userIdOrResponse = await requireUserId();
   if (typeof userIdOrResponse !== "string") return userIdOrResponse;
   const body = (await request.json().catch(() => null)) as
-    | { id?: string; href?: string; all?: boolean }
+    | { id?: string; href?: string; all?: boolean; beforeId?: string }
     | null;
+  // Scoped mark-all-read watermark (the /notifications v2 feed): mark read only
+  // the caller's unread rows THROUGH the newest-LOADED notification, identified
+  // by `beforeId`. The server resolves that row's full-precision (created_at, id)
+  // and bounds the UPDATE to it, so a notification created AFTER the boundary but
+  // before this PATCH executes is never marked read (cinatra#1557 read-state
+  // race). Checked BEFORE `all` and fail-CLOSED: a present-but-invalid `beforeId`
+  // is rejected, and an unknown/foreign id marks nothing — never widened to a
+  // blanket all-rows update. The flyout keeps its deliberate `{ all: true }`.
+  if (body?.beforeId !== undefined) {
+    if (typeof body.beforeId !== "string" || body.beforeId === "") {
+      return NextResponse.json(
+        { error: "A valid `beforeId` is required." },
+        { status: 400 },
+      );
+    }
+    await markNotificationsReadThrough(body.beforeId);
+    return NextResponse.json({ ok: true });
+  }
   if (body?.all) {
     await markAllNotificationsRead();
     return NextResponse.json({ ok: true });
