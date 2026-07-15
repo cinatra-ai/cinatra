@@ -28,7 +28,7 @@ import {
   PermissionsFormDraft,
   type PermissionsFormDraftValue,
 } from "@/components/permissions-form-draft";
-import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
+import type { AvailableScopes } from "@/components/access-combobox";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
 // "Latest code from the default branch" is represented as an empty ref so it

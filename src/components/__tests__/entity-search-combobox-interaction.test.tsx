@@ -15,7 +15,7 @@
 //     keeps the list open; close is Escape / outside click / selection.
 //
 // Renders the REAL component (real cmdk + Radix under the shims), mirroring
-// access-combobox-hierarchical-multi-open.test.tsx.
+// access-combobox-multi-open.test.tsx.
 //
 //   pnpm exec vitest run \
 //     src/components/__tests__/entity-search-combobox-interaction.test.tsx

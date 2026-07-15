@@ -35,7 +35,7 @@ import {
   type PermissionsFormDraftValue,
 } from "@/components/permissions-form-draft";
 import { searchExtensionCoOwnerCandidates } from "@cinatra-ai/extensions/permissions-actions";
-import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
+import type { AvailableScopes } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
 
 // Minimal client-side ZIP reader

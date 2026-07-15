@@ -1,43 +1,51 @@
 /**
- * Source-text contract test for AccessComboboxHierarchical's checkbox
- * multi-select mode (cinatra#1072, multi-scope W3). Component tests in this
- * repo use source-file text assertions (@testing-library/react is not
- * available from the root package.json) — mirrors the sibling
- * access-combobox-hierarchical-*.test.tsx files. The BEHAVIOUR of the toggle +
- * implication logic is covered by real unit tests in access-selection.test.ts;
- * this file locks the picker's WIRING of that logic + the render contract.
+ * Source-text contract test for the unified AccessCombobox's checkbox
+ * multi-select mode — `selectionMode="multiple"` (cinatra#1607 AC1; formerly the
+ * standalone AccessComboboxHierarchical, cinatra#1072 multi-scope W3). Component
+ * tests in this repo use source-file text assertions (@testing-library/react is
+ * not available from the root package.json); the BEHAVIOUR of the toggle +
+ * implication logic is covered by real unit tests in access-selection.test.ts,
+ * and the trigger-open behaviour by access-combobox-multi-open.test.tsx. This
+ * file locks the picker's WIRING of that logic + the render contract.
  *
  * Truths locked here:
- *  - a discriminated `multiple` prop union: multi ⇒ value: string[] /
- *    onChange(string[]); single (default) ⇒ value: string / onChange(string)
+ *  - ONE picker component parameterized by `selectionMode` — no separate
+ *    AccessComboboxHierarchical export survives the consolidation
+ *  - a discriminated `selectionMode` prop union: "multiple" ⇒ value: string[] /
+ *    onChange(string[]); "single" (default) ⇒ value: string /
+ *    onValueChange(string)
  *  - multi rows lead with a <Checkbox> and DROP the trailing Check icon
  *  - toggling a multi row goes through the pure toggleAccessSelection and keeps
  *    the popover OPEN (single mode still closes on select)
  *  - the row checked/disabled state comes from the pure accessRowState
  *  - the trigger renders resolveAccessSummary; N>1 surfaces the full list in a
  *    Tooltip
- *  - single-mode behaviour (trailing Check, close-on-select, width overlay) is
- *    preserved for the untouched filter-surface callers
+ *  - the pure label helpers are re-exported for existing callers
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import * as Mod from "@/components/access-combobox-hierarchical";
+import * as Mod from "@/components/access-combobox";
 
-const SOURCE = readFileSync("src/components/access-combobox-hierarchical.tsx", "utf-8");
+const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
 
-describe("AccessComboboxHierarchical checkbox multi-select (cinatra#1072)", () => {
-  it("module loads and exports the component", () => {
-    expect(typeof Mod.AccessComboboxHierarchical).toBe("function");
+describe("AccessCombobox checkbox multi-select — selectionMode=\"multiple\" (cinatra#1607 / #1072)", () => {
+  it("exposes ONE picker component and no residual hierarchical export", () => {
+    expect(typeof Mod.AccessCombobox).toBe("function");
+    expect(
+      (Mod as Record<string, unknown>).AccessComboboxHierarchical,
+    ).toBeUndefined();
+    // The dispatcher branches on the selectionMode discriminant.
+    expect(SOURCE).toMatch(/props\.selectionMode === "multiple"/);
   });
 
-  it("exposes a discriminated `multiple` prop union (array value in multi mode)", () => {
-    expect(SOURCE).toMatch(/multiple:\s*true/);
-    expect(SOURCE).toMatch(/multiple\?:\s*false/);
+  it("exposes a discriminated `selectionMode` prop union (array value in multi mode)", () => {
+    expect(SOURCE).toMatch(/selectionMode:\s*"multiple"/);
+    expect(SOURCE).toMatch(/selectionMode\?:\s*"single"/);
     expect(SOURCE).toMatch(/value:\s*string\[\]/);
     expect(SOURCE).toMatch(/onChange:\s*\(next:\s*string\[\]\)\s*=>\s*void/);
-    // single mode keeps the scalar shape for the filter callers
+    // single mode keeps the scalar shape for the flat/install/permissions callers
     expect(SOURCE).toMatch(/value:\s*string;/);
-    expect(SOURCE).toMatch(/onChange:\s*\(next:\s*string\)\s*=>\s*void/);
+    expect(SOURCE).toMatch(/onValueChange:\s*\(value:\s*string\)\s*=>\s*void/);
   });
 
   it("renders a leading Checkbox in multi rows and no trailing Check there", () => {
@@ -58,21 +66,19 @@ describe("AccessComboboxHierarchical checkbox multi-select (cinatra#1072)", () =
     expect(SOURCE).toMatch(
       /import \{[\s\S]*toggleAccessSelection[\s\S]*\} from "@\/components\/access-scope"/,
     );
-    // Grant-mode fallback: an omitted override MUST delegate to the pure
-    // grant helper (cinatra#1074 W5 made the semantics injectable; grant
-    // surfaces pass no override and must stay behaviour-identical).
-    expect(SOURCE).toMatch(/props\.toggleSelection \?\?/);
-    expect(SOURCE).toMatch(/toggleAccessSelection\(value,\s*current\)/);
+    // Grant-mode fallback: an omitted override MUST delegate to the pure grant
+    // helper (cinatra#1074 W5 made the semantics injectable; grant surfaces pass
+    // no override and must stay behaviour-identical).
+    expect(SOURCE).toMatch(/toggleSelection \?\?/);
+    expect(SOURCE).toMatch(/toggleAccessSelection\(v,\s*current\)/);
     // the multi onSelect branch does NOT close the popover
     expect(SOURCE).toMatch(/Popover stays OPEN on toggle/);
     // single mode still closes on select
-    expect(SOURCE).toMatch(/props\.onChange\(itemValue\);\s*\n\s*setOpen\(false\)/);
+    expect(SOURCE).toMatch(/onValueChange\(itemValue\);\s*\n\s*setOpen\(false\)/);
   });
 
   it("derives row checked/disabled state from the pure accessRowState BY DEFAULT (grant mode)", () => {
-    expect(SOURCE).toMatch(
-      /\(props\.rowState \?\? accessRowState\)\(itemValue,\s*selection,\s*scopes\)/,
-    );
+    expect(SOURCE).toMatch(/\(rowState \?\? accessRowState\)\(/);
   });
 
   it("multi mode accepts FILTER-surface overrides (cinatra#1074 W5) as optional props", () => {
@@ -90,15 +96,9 @@ describe("AccessComboboxHierarchical checkbox multi-select (cinatra#1072)", () =
     expect(SOURCE).toMatch(/multiSelection\.length > 1/);
   });
 
-  it("preserves single-mode behaviour for the untouched filter callers", () => {
-    // trailing Check + selected-row bg + width-overlay template stay intact
-    expect(SOURCE).toMatch(/renderSingleRow/);
-    expect(SOURCE).toMatch(/Hidden width template/);
-  });
-
   it("re-exports the pure label helpers for existing callers", () => {
     expect(SOURCE).toMatch(
-      /export \{ resolveAccessParts, resolveAccessLabel, resolveAccessSummary \}/,
+      /export \{ resolveAccessParts, resolveAccessSummary \} from "@\/components\/access-scope"/,
     );
   });
 });

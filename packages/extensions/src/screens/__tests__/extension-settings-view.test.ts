@@ -66,9 +66,12 @@ describe("§V — the four groups, safest → most dangerous", () => {
 });
 
 describe("§V — Permissions: 'Who can access this extension?'", () => {
-  it("the access control asks the §V question and reuses the install-scope picker", () => {
+  it("the access control asks the §V question and reuses the unified access picker", () => {
     expect(ACCESS).toContain("Who can access this extension?");
-    expect(ACCESS).toContain("AccessComboboxHierarchical");
+    // cinatra#1607: the two pickers consolidated onto one AccessCombobox driven
+    // by selectionMode; this grant surface uses the multi-select mode.
+    expect(ACCESS).toContain("AccessCombobox");
+    expect(ACCESS).toContain('selectionMode="multiple"');
   });
   it("the loader wires the sanctioned read/save actions with the v1 lockstep policy", () => {
     expect(SCREEN).toContain("readExtensionAccessPolicy");
