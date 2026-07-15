@@ -8,9 +8,7 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type MutableRefObject,
   type ReactNode,
 } from "react";
 
@@ -21,7 +19,6 @@ import { Bell, Copy, TriangleAlert } from "lucide-react";
 
 import type { AppNotification } from "./types";
 import {
-  applySseNotification,
   collapseByJobId,
   getInProgressItems,
   getUnreadItems,
@@ -30,6 +27,10 @@ import {
   getConfigurationNeedsMetadata,
   type ConfigurationNeedsConnector,
 } from "./flyout-state";
+import {
+  createNotificationsStore,
+  useNotificationsStore,
+} from "./notifications-store";
 import {
   NotificationContext,
   type AddNotificationInput,
@@ -59,27 +60,19 @@ import { toast } from "@/lib/cinatra-toast";
 // In progress tabs.
 //
 // Exports:
-// - `NotificationsProvider` — owns the notification state machine
-//   (polling + SSE + per-route mark-as-read) and provides both the
-//   public `NotificationContext` (consumed by `useNotify()` for
-//   toast-from-forms — a pure toast call that never writes bell state)
-//   and an internal `NotificationsStateContext` consumed by
-//   `NotificationsBellTrigger`.
+// - `NotificationsProvider` — CONSUMES the shared notifications client store
+//   (`./notifications-store`), which owns the imperative state machine
+//   (polling + SSE + mutation-version guard + mark-read/mark-all + per-route
+//   mark-as-read). The provider wires the store into both the public
+//   `NotificationContext` (consumed by `useNotify()` for toast-from-forms — a
+//   pure toast call that never writes bell state) and an internal
+//   `NotificationsStateContext` consumed by `NotificationsBellTrigger`. The
+//   same store instance is reused by the future `/notifications` v2 page (E7).
 // - `NotificationsBellTrigger` — the bell icon + popover. Rendered in
 //   `app-shell.tsx`'s header.
 // - `useNotificationsState` — internal context hook for the bell trigger
 //   (not exported from the package surface; lives in this module only).
 // ---------------------------------------------------------------------------
-
-const NOTIFICATIONS_POLL_INTERVAL_MS = 30_000;
-
-// Opaque mutation counter the refresh-on-open effect bumps past so a slow GET
-// response can't clobber an optimistic markRead / markAllRead update that
-// fired after the GET started.
-function useNotificationsMutationVersion(): MutableRefObject<number> {
-  const ref = useRef<number>(0);
-  return ref;
-}
 
 type NotificationsStateContextValue = {
   notifications: AppNotification[];
@@ -134,7 +127,7 @@ async function copyToClipboard(text: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Provider — owns the notification state machine.
+// Provider — consumes the shared notifications client store.
 // ---------------------------------------------------------------------------
 
 export function NotificationsProvider({
@@ -144,15 +137,17 @@ export function NotificationsProvider({
 }): React.ReactElement {
   const pathname = usePathname();
 
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  // The shared client store owns the imperative state machine (30s poll +
+  // focus/visibility + open-triggered refetch, SSE subscribe with dedupe, the
+  // mutation-version optimistic guard, mark-read/mark-all PATCH, and the
+  // per-route mark-read PATCH). One instance per provider; the bell below and
+  // the future /notifications v2 page (E7) read the same instance. The
+  // reactive `notifications` slice is the server-polled/SSE-pushed rows — the
+  // only rows the bell renders (`useNotify().addNotification` is a pure toast
+  // call and never writes bell state).
+  const [store] = useState(() => createNotificationsStore());
+  const { notifications } = useNotificationsStore(store);
   const [open, setOpen] = useState(false);
-
-  // Version counter every mutation bumps. ALL GET writers (polling,
-  // focus/visibility, refresh-on-open) capture the version at fetch start and
-  // drop their response if the version has changed since — otherwise a slow
-  // GET resolving after an optimistic `markRead`/`markAllRead` would silently
-  // restore the pre-mutation snapshot.
-  const mutationVersionRef = useNotificationsMutationVersion();
 
   // -----------------------------------------------------------------------
   // addNotification — a pure sonner toast call.
@@ -190,99 +185,11 @@ export function NotificationsProvider({
     [addNotification, openFlyout],
   );
 
-  // -----------------------------------------------------------------------
-  // Polling (30 s + focus + visibilitychange) + SSE push.
-  // -----------------------------------------------------------------------
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadNotifications(): Promise<void> {
-      if (typeof document !== "undefined" && document.hidden) return;
-      // Capture the mutation version at fetch start. If it changes before
-      // the response arrives, an optimistic `markRead` / `markAllRead`
-      // happened in the meantime and we drop the response rather than
-      // clobber the optimistic state.
-      const startVersion = mutationVersionRef.current;
-      try {
-        const response = await fetch("/api/notifications", {
-          method: "GET",
-          cache: "no-store",
-        });
-        const payload = (await response.json().catch(() => null)) as
-          | { notifications?: AppNotification[] }
-          | null;
-        if (!response.ok || cancelled) return;
-        if (mutationVersionRef.current !== startVersion) return;
-        setNotifications(payload?.notifications ?? []);
-      } catch {
-        // Ignore polling failures — SSE + next focus event will catch up.
-      }
-    }
-
-    void loadNotifications();
-    const interval = window.setInterval(
-      loadNotifications,
-      NOTIFICATIONS_POLL_INTERVAL_MS,
-    );
-    const onFocus = (): void => {
-      void loadNotifications();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-
-    // SSE pushes new notifications into the same `notifications` state the
-    // poll fills, so the UI works identically whether the data arrived via
-    // push or pull. The poll remains the safety net.
-    //
-    // Native EventSource handles reconnect automatically with the browser's
-    // default retry policy; we deliberately do NOT layer manual retry on
-    // top — that fights the browser and produces duplicate connections on
-    // transient errors.
-    let eventSource: EventSource | null = null;
-    if (
-      typeof window !== "undefined" &&
-      typeof window.EventSource === "function"
-    ) {
-      try {
-        eventSource = new window.EventSource("/api/notifications/stream");
-        eventSource.addEventListener("notification", (ev) => {
-          if (cancelled) return;
-          const data = (ev as MessageEvent).data;
-          if (typeof data !== "string" || !data) return;
-          let parsed: AppNotification | null = null;
-          try {
-            parsed = JSON.parse(data) as AppNotification;
-          } catch {
-            return;
-          }
-          if (!parsed?.id || !parsed?.title) return;
-          // Dedupe-prepend via the pure helper. Keeps the multi-tab
-          // independence invariant pinned by the regression test at
-          // src/lib/notifications/__tests__/flyout-state.test.ts.
-          setNotifications((current) => applySseNotification(current, parsed));
-        });
-        eventSource.addEventListener("error", () => {
-          // Native reconnect — polling continues as the fallback.
-        });
-      } catch {
-        eventSource = null;
-      }
-    }
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
-      if (eventSource) {
-        try {
-          eventSource.close();
-        } catch {
-          // ignore
-        }
-      }
-    };
-  }, [mutationVersionRef]);
+  // Attach the store's live sources on mount: the 30s poll +
+  // focus/visibilitychange refetch and the SSE `notification` subscription
+  // (the dedupe-prepend + mutation-version guard live in the store). The
+  // returned teardown detaches all of them on unmount.
+  useEffect(() => store.start(), [store]);
 
   // Toast action button event ↔ flyout open.
   useEffect(() => {
@@ -292,117 +199,35 @@ export function NotificationsProvider({
       document.removeEventListener("cinatra:open-notifications", handler);
   }, []);
 
-  // When the flyout opens, refresh once (the poll cycle may be up to 30 s out).
-  // Same version-guard as the polling effect (declared at the top of the
-  // Provider) so a slow refresh-on-open response can't clobber an
-  // optimistic mark mutation that fired after the fetch started.
+  // When the flyout opens, revalidate once (the poll cycle may be up to 30 s
+  // out). The store's version guard drops the response if an optimistic mark
+  // mutation fired after the fetch started.
   useEffect(() => {
     if (!open) return;
-    const startVersion = mutationVersionRef.current;
-    void fetch("/api/notifications", { method: "GET", cache: "no-store" })
-      .then((response) => response.json())
-      .then((payload: { notifications?: AppNotification[] }) => {
-        if (mutationVersionRef.current !== startVersion) {
-          // A mutation happened after this fetch started — drop the response
-          // rather than clobber the optimistic state.
-          return;
-        }
-        setNotifications(payload.notifications ?? []);
-      })
-      .catch(() => {
-        // ignore
-      });
-  }, [mutationVersionRef, open]);
+    store.revalidate();
+  }, [open, store]);
 
-  // Per-route auto-mark-read: any unread notification whose href matches
-  // the current pathname is marked read both locally and via PATCH so the
-  // bell badge stays accurate while we navigate.
-  //
-  // This effect intentionally calls setState inside its body — it's the
-  // optimistic local update mirroring the server PATCH so the badge count
-  // updates immediately. The early-return on `matchingUnread.length === 0`
-  // guarantees idempotence: after the setState fires, the next render's
-  // effect sees no matches and exits without re-entering.
-  //
+  // Per-route auto-mark-read: the store marks read (locally + via PATCH) any
+  // unread row whose href matches the current pathname so the bell badge stays
+  // accurate while we navigate. `notifications` is the reactive input — the
+  // effect re-runs when the store's rows change so a newly-arrived unread row
+  // matching the current path is marked read too. `markReadByPathname`
+  // early-returns when nothing matches, which guarantees idempotence: after it
+  // fires, the next render's rows change re-runs this effect, which finds no
+  // matches and exits.
   useEffect(() => {
-    const matchingUnread = notifications.filter((notification) => {
-      if (notification.readAt || !notification.href) return false;
-      return (
-        notification.href === pathname ||
-        pathname.startsWith(`${notification.href}/`)
-      );
-    });
-    if (matchingUnread.length === 0) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional optimistic mirror of the server PATCH; guarded by early-return above.
-    setNotifications((current) =>
-      current.map((notification) =>
-        matchingUnread.some((item) => item.id === notification.id)
-          ? {
-              ...notification,
-              readAt: notification.readAt ?? new Date().toISOString(),
-            }
-          : notification,
-      ),
-    );
-    void fetch("/api/notifications", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ href: pathname }),
-    });
-  }, [notifications, pathname]);
-
-  // -----------------------------------------------------------------------
-  // Mutations exposed to the bell trigger.
-  //
-  // Each mutation bumps `mutationVersionRef` so the refresh-on-open guard
-  // drops any GET response that started before the mutation. Without this
-  // guard, a slow refresh-on-open could resolve AFTER an optimistic update
-  // and silently restore the pre-mutation snapshot.
-  // -----------------------------------------------------------------------
-  const markRead = useCallback((id: string): void => {
-    mutationVersionRef.current += 1;
-    setNotifications((current) =>
-      current.map((notification) =>
-        notification.id === id
-          ? {
-              ...notification,
-              readAt: notification.readAt ?? new Date().toISOString(),
-            }
-          : notification,
-      ),
-    );
-    void fetch("/api/notifications", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-  }, [mutationVersionRef]);
-
-  const markAllRead = useCallback((): void => {
-    mutationVersionRef.current += 1;
-    const readAt = new Date().toISOString();
-    setNotifications((current) =>
-      current.map((notification) => ({
-        ...notification,
-        readAt: notification.readAt ?? readAt,
-      })),
-    );
-    void fetch("/api/notifications", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ all: true }),
-    });
-  }, [mutationVersionRef]);
+    store.markReadByPathname(pathname, notifications);
+  }, [store, pathname, notifications]);
 
   const stateValue = useMemo<NotificationsStateContextValue>(
     () => ({
       notifications,
       open,
       setOpen,
-      markRead,
-      markAllRead,
+      markRead: store.markRead,
+      markAllRead: store.markAllRead,
     }),
-    [notifications, open, markRead, markAllRead],
+    [notifications, open, store],
   );
 
   return (
