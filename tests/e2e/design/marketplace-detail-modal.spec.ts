@@ -216,7 +216,23 @@ test.describe("§V detail modal — chrome/header tokens (no-regression composit
 });
 
 test.describe("§V detail modal — install access-scope dialog (cinatra#1541)", () => {
-  test("footer Install now opens the access-scope dialog layered above the modal; dismiss returns to the modal", async ({
+  // AC4 nested-dialog invariants, each asserted on the live layered render:
+  //   - the scope dialog renders ABOVE the detail modal (both mounted);
+  //   - focus MOVES INTO the scope dialog on open and RETURNS to the modal CTA
+  //     on close;
+  //   - only the TOP dialog handles Escape (a second Escape then closes the
+  //     detail modal) — dismissing the child must not dismiss both;
+  //   - TAB focus is trapped inside the scope dialog and cannot escape to the
+  //     modal or the page beneath;
+  //   - body scroll stays LOCKED until BOTH dialogs are closed;
+  //   - the child is accessible (found by role WHILE the modal is mounted
+  //     beneath ⇒ NOT hidden by the parent's aria-hidden/inert) and operable.
+  // The scope dialog reuses the shared `@/components/ui/dialog` primitive, which
+  // renders no bespoke dimming overlay of its own — the backdrop is the shared-
+  // component concern tracked by #1500/#1518, so outside-dismissal (overlay-
+  // click) parity rides that shared work; the Escape assertions below already
+  // prove that only the TOP dialog dismisses.
+  test("footer Install now opens the access-scope dialog layered above the modal; nested-dialog invariants hold", async ({
     page,
   }) => {
     const modal = await openModal(page, "modal-fixture-connector");
@@ -226,6 +242,11 @@ test.describe("§V detail modal — install access-scope dialog (cinatra#1541)",
     // behaviour, not a relabel).
     const footerCta = modal.getByRole("button", { name: "Install now" });
     await expect(footerCta).toBeEnabled();
+
+    // Baseline: the detail modal alone already locks body scroll (Radix modal
+    // Dialog → react-remove-scroll sets `body[data-scroll-locked]`).
+    const scrollLocked = page.locator("body[data-scroll-locked]");
+    await expect(scrollLocked).toHaveCount(1);
 
     // AC1/AC6: clicking it opens the pre-install access-scope dialog
     // (cinatra#805) — a SECOND dialog LAYERED above the modal, NOT a direct
@@ -239,6 +260,30 @@ test.describe("§V detail modal — install access-scope dialog (cinatra#1541)",
     // the scope dialog layers above, it does not replace the modal).
     await expect(page.locator(HERO)).toBeVisible();
 
+    // AC4: focus MOVES INTO the scope dialog on open — it lands on a focusable
+    // inside the layered dialog (Radix autofocuses the first tabbable). We assert
+    // this via the child, not the parent CTA: while the child is open Radix
+    // aria-hides the parent modal (hideOthers), so the parent CTA is
+    // intentionally not exposed by role — which is exactly the parent-side of the
+    // aria-hidden invariant asserted next.
+    await expect(scopeDialog.locator(":focus")).toHaveCount(1);
+
+    // AC4: the child dialog is accessible while the parent modal sits beneath it
+    // (found by role above ⇒ not hidden by the parent's aria-hidden/inert) and
+    // its controls are operable.
+    await expect(scopeDialog.getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+    // AC4: body scroll STAYS locked while both dialogs are open.
+    await expect(scrollLocked).toHaveCount(1);
+
+    // AC4: TAB focus is TRAPPED inside the scope dialog — tabbing past every
+    // focusable wraps back inside and never escapes to the modal or the page
+    // beneath (6 presses exceed the dialog's focusable count, forcing a wrap).
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(scopeDialog.locator(":focus")).toHaveCount(1);
+
     // AC4: only the TOP dialog handles Escape — the scope dialog dismisses and
     // the detail modal stays open (dismissing the child must not dismiss both).
     await page.keyboard.press("Escape");
@@ -248,8 +293,15 @@ test.describe("§V detail modal — install access-scope dialog (cinatra#1541)",
     // AC4: focus returns to the modal's own CTA when the scope dialog closes.
     await expect(footerCta).toBeFocused();
 
+    // AC4: body scroll STAYS locked after the child closes because the detail
+    // modal is still open — it releases only once BOTH dialogs are closed.
+    await expect(scrollLocked).toHaveCount(1);
+
     // AC4: a SECOND Escape then closes the detail modal itself.
     await page.keyboard.press("Escape");
     await expect(page.locator(HERO)).toBeHidden();
+
+    // AC4: with BOTH dialogs closed, the body scroll lock is released.
+    await expect(scrollLocked).toHaveCount(0);
   });
 });
