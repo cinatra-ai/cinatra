@@ -59,6 +59,8 @@ import {
   useDashboardPageAnchor,
   type DashboardPageAnchor,
 } from "./dashboard-page-anchor";
+import { useEntityDashboards } from "./entity-dashboards-context";
+import { EntityDashboardsToolbarControls } from "./entity-dashboard-toolbar-controls";
 
 export type DashboardPageAction = {
   /** Stable id — also the `data-cinatra-page-action` hook the scoped CSS
@@ -104,10 +106,20 @@ export const DASHBOARD_PAGE_ACTIONS: Readonly<
     { id: "new-project", href: "/projects/new", label: "New project", icon: Plus },
   ],
   teams: [{ id: "new-team", href: "/teams/new", label: "New team", icon: Plus }],
+  // cinatra#701 — the entity Dashboards-tab detail surfaces carry no href page
+  // actions; their primary controls (dashboard select + "+ New dashboard") come
+  // from `EntityDashboardsContext` and render via `EntityDashboardsToolbarControls`.
+  personal: [],
+  "project-detail": [],
+  "team-detail": [],
+  "org-detail": [],
 };
 
 export function CinatraDashboardToolbar() {
   const pageAnchor = useDashboardPageAnchor();
+  // Present only inside an entity Dashboards-tab shell (cinatra#701); `null`
+  // everywhere else, so existing single-dashboard surfaces are unaffected.
+  const entityDashboards = useEntityDashboards();
   const {
     editable,
     isEditMode,
@@ -133,8 +145,16 @@ export function CinatraDashboardToolbar() {
   const showLayoutToggle = editable && isEditMode && allowedModes.length > 1;
   const showEditControls = editable && isEditMode;
 
-  // Read-only surface with no route actions: nothing to show.
-  if (!editable && pageActions.length === 0) return null;
+  // Whether any control precedes the layout/edit groups on the left — used to
+  // decide the inter-group separators below.
+  const hasLeadingControls = entityDashboards != null || pageActions.length > 0;
+
+  // Read-only surface with no route actions AND no entity-dashboards controls:
+  // nothing to show. (An entity Dashboards tab always renders — its select is a
+  // primary control independent of edit capability.)
+  if (!editable && pageActions.length === 0 && entityDashboards == null) {
+    return null;
+  }
 
   return (
     <Toolbar
@@ -142,6 +162,12 @@ export function CinatraDashboardToolbar() {
       data-cinatra-dashboard-toolbar="true"
       className={`sticky top-0 z-10 ${filterBarFollows ? "mb-1.5" : "mb-4"}`}
     >
+      {/* Entity Dashboards-tab controls (select + New dashboard), cinatra#701.
+          Renders nothing when no entity shell is mounted. */}
+      {entityDashboards != null && <EntityDashboardsToolbarControls />}
+
+      {pageActions.length > 0 && entityDashboards != null && <ToolbarSeparator />}
+
       {pageActions.length > 0 && (
         <ToolbarGroup>
           {pageActions.map((action) => {
@@ -164,7 +190,7 @@ export function CinatraDashboardToolbar() {
 
       {showLayoutToggle && (
         <>
-          {pageActions.length > 0 && <ToolbarSeparator />}
+          {hasLeadingControls && <ToolbarSeparator />}
           <ToolbarGroup role="group" aria-label="Layout mode">
             <ToolbarButton
               active={layoutMode === "grid"}
@@ -188,7 +214,7 @@ export function CinatraDashboardToolbar() {
 
       {showEditControls && (
         <>
-          {(pageActions.length > 0 || showLayoutToggle) && <ToolbarSeparator />}
+          {(hasLeadingControls || showLayoutToggle) && <ToolbarSeparator />}
           <ToolbarGroup>
             <ToolbarButton onClick={handleAddText}>
               <Type aria-hidden="true" className="size-3.5 shrink-0" />
