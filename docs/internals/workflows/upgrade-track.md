@@ -192,8 +192,10 @@ story could change).
 |---|---|---|
 | `eslint.config.mjs` (react `settings.version`) | hard-sets `settings.react.version` to a fixed string because `eslint-plugin-react@7.37.5` (via `eslint-config-next`) calls the removed ESLint-9 `context.getFilename()` under ESLint 10 when version is `"detect"` | an `eslint-plugin-react` release that is ESLint-10-compatible (this is the gating workaround for the ESLint 10 major). Minor drift to align: that fixed string is `19.2.5` while the overrides pin react `19.2.6` — harmless (it only skips detection) but worth aligning on the next touch |
 | `packages/dashboards/src/mcp-cubes/registry.ts` | an `any`-cast to attach drizzle-cube `_meta` past the MCP SDK's narrow `Tool` type | an MCP SDK release that exposes a typed annotations/meta slot (and/or drizzle-cube typing) |
-| `packages/workflows/src/bpmn/bpmn-moddle.d.ts` | a minimal ambient `.d.ts` because `bpmn-moddle` (v10, exact-pinned `10.0.0`) ships no types | a `bpmn-moddle` release that ships its own TypeScript types (tied to the bpmn-moddle major) |
 | `src/app/artifacts/[id]/handlers/pdf-promise-with-resolvers-polyfill.ts` | a `Promise.withResolvers` polyfill for the react-pdf / pdfjs-dist path on older Safari | a **browser baseline** move (Safari 17.4+, Mar 2024) — runtime/browser-version-tied, **not** a dependency upgrade; remove when the supported-browser floor moves past Safari 17.4. Listed for completeness; out of scope for the dependency-majors track |
+
+(The `bpmn-moddle` ambient-`.d.ts` workaround that was formerly listed here was
+retired by the workflow-kind engine removal — see §4.6.)
 
 **Not version-tied** (recorded so a reader knows they were considered and why
 they are excluded from the obsoleted-by-version table):
@@ -221,6 +223,19 @@ relative to the scanned `main` (Renovate had not re-scanned since the GANTT
 removal merged). It resolves itself on Renovate's next scan — no manual edit is
 needed; it is flagged here only so a reader does not re-add the dependency
 chasing a phantom update.
+
+The `bpmn-moddle` ambient-`.d.ts` workaround (formerly §4.5:
+`packages/workflows/src/bpmn/bpmn-moddle.d.ts`, a hand-written type shim because
+`bpmn-moddle@10.0.0` ships no types) was **retired by the workflow-kind engine
+removal** (cinatra#1035): the whole `packages/workflows/` tree — the only code
+that imported `bpmn-moddle` — is gone from `main`, so the shim it needed no
+longer exists and there is no remaining path to type. The `bpmn-moddle`
+dependency itself is now **orphaned** — still pinned at `10.0.0` in the root
+`package.json` but imported by nothing (verified on the scanned `main`: zero
+`import`/`require` of `bpmn-moddle` across `src/`, `packages/`, and `scripts/`).
+Dropping that leftover pin is a dead-dependency cleanup for the dependency
+track, **not** an upgrade workaround; it is noted here only so a reader treats
+the pin as removable dead weight rather than a live obsoleted-by-version entry.
 
 ---
 
