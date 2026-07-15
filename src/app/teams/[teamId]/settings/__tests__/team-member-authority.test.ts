@@ -1,13 +1,15 @@
 /**
- * canManageTeamMembers — the named interim authority predicate for team
- * membership management (cinatra#1567, pending the #1566 role model).
+ * canManageTeamMembers — the named authority predicate for team membership
+ * management (cinatra#1567, extended by the #1566 role model).
  *
  * Truths locked here:
  *  - platform admin passes regardless of org role (independent authority);
  *  - org_owner / org_admin of the team's org pass;
- *  - plain `member`, no membership (`undefined`), and unknown role strings
- *    all fail CLOSED — the same allowlist stance as the team-visibility
- *    widening (`TEAM_WIDENING_ORG_ROLES`).
+ *  - a TEAM ADMIN of the team passes (teamRole 'admin' — #1566), even as a
+ *    plain org member;
+ *  - plain `member` (org or team tier), no membership (`undefined`), and
+ *    unknown role strings all fail CLOSED — the same allowlist stance as the
+ *    team-visibility widening (`TEAM_WIDENING_ORG_ROLES`).
  */
 import { describe, expect, it } from "vitest";
 
@@ -47,6 +49,48 @@ describe("canManageTeamMembers", () => {
         platformAdmin: false,
         // an unknown role string must not widen (fail closed)
         orgRole: "superuser" as unknown as "member",
+      }),
+    ).toBe(false);
+  });
+
+  it("grants a TEAM ADMIN of the team even as a plain org member (#1566)", () => {
+    expect(
+      canManageTeamMembers({
+        platformAdmin: false,
+        orgRole: "member",
+        teamRole: "admin",
+      }),
+    ).toBe(true);
+    expect(
+      canManageTeamMembers({
+        platformAdmin: false,
+        orgRole: undefined,
+        teamRole: "admin",
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed for plain team members and missing team role", () => {
+    expect(
+      canManageTeamMembers({
+        platformAdmin: false,
+        orgRole: "member",
+        teamRole: "member",
+      }),
+    ).toBe(false);
+    expect(
+      canManageTeamMembers({
+        platformAdmin: false,
+        orgRole: undefined,
+        teamRole: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      canManageTeamMembers({
+        platformAdmin: false,
+        orgRole: "member",
+        // an unknown team-role string must not widen (fail closed)
+        teamRole: "superadmin" as unknown as "member",
       }),
     ).toBe(false);
   });

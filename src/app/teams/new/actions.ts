@@ -9,6 +9,7 @@ import { requireAuthSession } from "@/lib/auth-session";
 import {
   betterAuthDb,
   readTeamCreatableOrganizationsForUser,
+  teamMemberRoleColumnExists,
 } from "@/lib/better-auth-db";
 import { toTeamSlugBase } from "./team-slug";
 
@@ -40,6 +41,14 @@ export async function createTeamAction(formData: FormData) {
   const now = new Date();
   const slugBase = toTeamSlugBase(name);
 
+  // The creator becomes the team's admin (cinatra#1566). On a deployment
+  // where the app-owned role column is not provisioned yet, fall back to the
+  // roleless insert — the provisioning backfill promotes the earliest member
+  // (= this creator) to 'admin' when `pnpm auth:migrate` next runs, so the
+  // degrade self-heals. Probed OUTSIDE the transaction: a failed statement
+  // would abort the whole tx.
+  const hasRoleColumn = await teamMemberRoleColumnExists();
+
   // team + teamMember are one semantic unit — wrap in a transaction so a
   // failure leaves no orphan team. `slug` is NOT NULL + unique per org, so
   // allocate it race-safely via ON CONFLICT DO NOTHING + an incrementing
@@ -63,10 +72,17 @@ export async function createTeamAction(formData: FormData) {
       return { ok: false as const };
     }
 
-    await tx.execute(sql`
-      INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
-      VALUES (${teamMemberId}, ${teamId}, ${session.user.id}, ${now})
-    `);
+    if (hasRoleColumn) {
+      await tx.execute(sql`
+        INSERT INTO public."teamMember" (id, "teamId", "userId", "role", "createdAt")
+        VALUES (${teamMemberId}, ${teamId}, ${session.user.id}, 'admin', ${now})
+      `);
+    } else {
+      await tx.execute(sql`
+        INSERT INTO public."teamMember" (id, "teamId", "userId", "createdAt")
+        VALUES (${teamMemberId}, ${teamId}, ${session.user.id}, ${now})
+      `);
+    }
     return { ok: true as const };
   });
 
