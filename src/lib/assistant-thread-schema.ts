@@ -77,6 +77,10 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       END $$` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_threads_org_updated_idx ON "${s}"."assistant_threads" (org_id, updated_at DESC, id)` },
     { text: `CREATE INDEX IF NOT EXISTS assistant_turns_thread_created_idx ON "${s}"."assistant_turns" (thread_id, created_at, id)` },
+    // run_id → turn lookup for the AG-UI run-stream authorization path
+    // (cinatra#1216 S2). PARTIAL: legacy-mirror rows carry run_id NULL and
+    // dominate the table — only runtime-minted turn rows enter the index.
+    { text: `CREATE INDEX IF NOT EXISTS assistant_turns_run_id_idx ON "${s}"."assistant_turns" (run_id) WHERE run_id IS NOT NULL` },
   ];
 }
 

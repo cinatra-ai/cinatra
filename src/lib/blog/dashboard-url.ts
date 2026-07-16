@@ -3,9 +3,11 @@ import "server-only";
 import {
   listOrgDashboardRows,
   excludeProjectTemplates,
+  filterRenderableDashboards,
 } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { resolveExtensionRole } from "@/lib/extension-roles";
+import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
 
 const DASHBOARDS_INDEX_URL = "/dashboards";
 
@@ -33,8 +35,11 @@ export async function resolveBlogDashboardUrl(
   const rows = await listOrgDashboardRows(organizationId);
   // Exclude project-scope TEMPLATE rows — those never render directly (the
   // dashboard detail page 404s them); only their per-project instances are
-  // operational.
-  const blogRows = excludeProjectTemplates(rows).filter(
+  // operational. Then apply the ALL-READER liveness/status gate (cinatra#1628):
+  // never resolve a deep-link to an orphaned/archived extension dashboard whose
+  // detail route would 404 anyway — degrade to the dashboards index instead.
+  const isPackageLive = await resolveLiveExtensionPredicate(organizationId);
+  const blogRows = filterRenderableDashboards(excludeProjectTemplates(rows), isPackageLive).filter(
     (r) => r.extensionId === blogDashboardOwner,
   );
 

@@ -384,6 +384,7 @@ export default defineConfig({
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
+      "scripts/audit/__tests__/workspace-deps-resolve.test.mjs",
       "scripts/audit/__tests__/file-size-ratchet.test.mjs",
       "scripts/audit/__tests__/route-graph-ratchet.test.mjs",
       "scripts/audit/__tests__/manifest-resolve.test.mjs",

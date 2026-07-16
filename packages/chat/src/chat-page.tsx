@@ -56,7 +56,7 @@ import {
   generateId,
   deriveThreadTitle,
   extractAgentName,
-} from "./chat-persistence";
+} from "./ag-ui-chat-client";
 import {
   parseSseEventBlock,
   extractAgentRunId,
@@ -86,8 +86,19 @@ import {
   collectNewlyTaggedIds,
   resolveDispatchPlan,
 } from "./chat-routing";
+// The unified AG-UI wire (cinatra#1218, epic #1216 S2): the headless client
+// drives the full turn lifecycle over the S3 reducer behind a small UI port
+// (driveAssistantChatTurn); persistence fetch helpers are co-located there
+// (formerly ./chat-persistence — see the module's route-graph note). The
+// bespoke wire below stays behind the `streamWire` flag until the
+// parity-gated deletes land.
+import {
+  driveAssistantChatTurn,
+  ensureAssistantChatWireNegotiated,
+  uploadChatAttachments,
+} from "./ag-ui-chat-client";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
-import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill } from "./chat-badges";
+import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
@@ -107,49 +118,9 @@ const ChatMessagesView = dynamic(
 // unit-tested). The component imports `selectChatBadges` +
 // `chatEmptyStateCaption` and feeds the result into the badge cloud / h1.
 
-// ---------------------------------------------------------------------------
-// Greeting
-// ---------------------------------------------------------------------------
-
-const CINATRA_QUOTES = [
-  "I did it my way.",
-  "The best is yet to come.",
-  "Fly me to the moon.",
-  "That's life — you're riding high in April, shipped in May.",
-  "Start spreading the news.",
-  "And now, the end is near, and so I face the final deploy.",
-  "I've got you under my skin — err, my API.",
-  "Come fly with me, let's fly, let's fly away.",
-  "Luck be a lady tonight.",
-  "The best revenge is massive success.",
-  "You gotta love livin', baby, 'cause dyin' is a pain in the ass.",
-  "I'm not the type to be pushed around. — Cinatra",
-  "Alcohol may be man's worst enemy, but the bible says love your enemy.",
-  "Don't hide your scars. They make you who you are.",
-  "I feel sorry for people who don't drink. When they wake up, that's as good as they're gonna feel all day.",
-  "The big lesson in life is never be scared of anyone or anything. — Cinatra",
-  "You only go around once, but if you play your cards right, once is enough.",
-  "May you live to be 100 and may the last voice you hear be mine. — Cinatra",
-  "Cock your hat — angles are attitudes.",
-];
-
-function getGreeting() {
-  const hour = new Date().getHours();
-  const pick = (options: string[]) => options[Math.floor(Math.random() * options.length)];
-
-  // ~1 in 6 chance to show a Cinatra quote instead of a regular greeting.
-  if (Math.random() < 1 / 6) {
-    return pick(CINATRA_QUOTES);
-  }
-
-  if (hour < 5) return pick(["Burning the midnight oil?", "Late night session?", "Night owl mode."]);
-  if (hour < 12) return pick(["Good morning.", "Morning. What are we building?", "Fresh start. What's the plan?"]);
-  if (hour < 17) return pick(["Good afternoon.", "How can I help?", "What's next on the list?"]);
-  if (hour < 21) return pick(["Good evening.", "Evening session. What do you need?", "How can I help?"]);
-  return pick(["Working late?", "Late one tonight?", "Night shift. What do you need?"]);
-}
-
-const DEFAULT_GREETING = "How can I help?";
+// The greeting/quote selection lives in ./chat-badges (pure, alongside the
+// other empty-state copy selection) — moved there by cinatra#1218 to keep
+// this tracked bottleneck file inside its file-size ceiling.
 
 // ---------------------------------------------------------------------------
 // Main chat page
@@ -172,9 +143,16 @@ type ChatPageProps = {
    *  (a legitimate state when no widget-bearing extension is live). */
   widgets?: WidgetDefinition[];
   widgetManifests?: WidgetManifest[];
+  /** Which stream wire drives default Cinatra turns (cinatra#1218, #1216 S2).
+   *  `"ag-ui"` = the unified assistant stream (headless client + S3 reducer);
+   *  `"legacy"` = the bespoke chat-stream-events wire (the retained
+   *  kill-switch until the parity-gated deletes land). Defaults to legacy so
+   *  non-/chat mounts are unaffected; the /chat page mount resolves the env
+   *  flag server-side and passes it here. */
+  streamWire?: "ag-ui" | "legacy";
 };
 
-export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, streamWire = "legacy" }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -213,42 +191,8 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // cleared by the next sendMessage().
   const [pendingAttachments, setPendingAttachments] = useState<LlmAttachmentRef[]>([]);
   const handleAttachmentsSelected = useCallback(async (files: File[]) => {
-    const refs: LlmAttachmentRef[] = [];
-    for (const file of files) {
-      try {
-        const r = await fetch("/api/artifacts/upload", {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": file.type || "application/octet-stream",
-            "X-Artifact-Filename": file.name,
-            "X-Artifact-Title": file.name,
-          },
-          body: file,
-        });
-        const j = (await r.json().catch(() => null)) as
-          | { ok?: boolean; ref?: LlmAttachmentRef }
-          | null;
-        if (r.ok && j?.ok && j.ref) {
-          // The server's ArtifactRef is the minimal {artifactId,
-          // representationRevisionId, digest, mime, originKind} shape.
-          // Enrich with the original File metadata so the host-side
-          // providerUpload (attachment-resolver-ports.ts) can pass a
-          // real filename to OpenAI/Anthropic/Gemini Files-API
-          // — otherwise it falls back to ref.artifactId (a UUID),
-          // and OpenAI rejects the file with "context stuffing file
-          // type ... but got none" because the .pdf extension is lost.
-          refs.push({
-            ...j.ref,
-            filename: file.name,
-            title: file.name,
-            size: file.size,
-          });
-        }
-      } catch {
-        // Network/parse failures are swallowed; the user can retry the file.
-      }
-    }
+    // Upload-over-fetch lives in the client transport module (cinatra#1218).
+    const refs = await uploadChatAttachments(files);
     if (refs.length > 0) {
       setPendingAttachments((prev) => [...prev, ...refs]);
     }
@@ -688,10 +632,74 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     }
   }
 
+  // The AG-UI wire selector (cinatra#1218): "ag-ui" routes default Cinatra
+  // turns through the unified stream; a failed fail-closed handshake (S1
+  // CONTRACT.md §5) pins this ref to the retained legacy wire.
+  const streamWireRef = useRef<"ag-ui" | "legacy">(streamWire);
+
+  // AG-UI stream driver (cinatra#1218) — the unified-wire counterpart of the
+  // bespoke streamResponse below, lifecycle-identical; the turn drive lives
+  // headlessly in ./ag-ui-chat-client. This wrapper owns registry + guard.
+  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string) {
+    const assistantId = generateId();
+    const abortController = new AbortController();
+    // The ORIGIN thread is the one this turn was dispatched FOR (captured
+    // BEFORE the handshake await) — re-reading the ref here would guard
+    // against the WRONG thread after a switch during that await.
+    const originThreadId = threadId;
+    const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
+    try {
+      beginStream(assistantId, abortController);
+      await driveAssistantChatTurn({
+        threadId,
+        assistantId,
+        authorUserId,
+        slack: isSlackModeRef.current,
+        signal: abortController.signal,
+        messages: contextMessages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          ...(m.attachments && m.attachments.length > 0
+            ? { attachments: m.attachments }
+            : {}),
+        })),
+        ui: {
+          updateMessages: (updater) =>
+            setMessages((prev) => (stillOnOriginThread() ? updater(prev) : prev)),
+          setTypingIndicator: (on) =>
+            setTypingIndicators((prev) => {
+              const m = new Map(prev);
+              if (on) m.set(assistantId, handle ?? "Assistant");
+              else m.delete(assistantId);
+              return m;
+            }),
+          isWidgetRefreshTool: (name) => widgetRuntime.isWidgetRefreshTool(name),
+          onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
+        },
+      });
+    } finally {
+      endStream(assistantId);
+    }
+  }
+
   // Thin SSE driver — connection handling, the read loop, and the
   // thread-switch/abort guards live here; every per-event message transform is
   // a pure, unit-tested applier in ./chat-stream-events.
   async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/chat", authorUserId?: string) {
+    // Unified-wire delegation (cinatra#1218): default Cinatra turns ride the
+    // AG-UI stream when the cutover flag is on and the fail-closed handshake
+    // succeeds (a failure pins the page to the retained legacy wire).
+    // Mention/external/bridge dispatches stay on their legacy endpoints in
+    // this stage (S5/delete-stage scope). The thread always exists here.
+    if (endpoint === "/api/chat" && streamWireRef.current === "ag-ui") {
+      const agUiThreadId = activeThreadIdRef.current;
+      if (agUiThreadId) {
+        if (await ensureAssistantChatWireNegotiated()) {
+          return streamAgUiResponse(contextMessages, agUiThreadId, handle, authorUserId);
+        }
+        streamWireRef.current = "legacy";
+      }
+    }
     const assistantId = generateId();
     const abortController = new AbortController();
     // Capture the thread that spawned this stream. Every async patch below
@@ -1375,6 +1383,20 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   }, []);
   const handleEditStarted = useCallback(() => setRequestEditMessageId(null), []);
 
+  // Shared autosave prop for both PromptField mounts (hoisted — cinatra#1218).
+  const autosaveProp = autosaveVisible ? {
+    enabled: autosaveEnabled,
+    canToggle: autosaveCanToggle,
+    onToggle: (enabled: boolean) => {
+      setAutosaveEnabled(enabled);
+      void fetch("/api/chat/autosave", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+    },
+  } : undefined;
+
   // ----- Empty state -----
   // Only show the start screen when no thread is selected. When activeThreadId is
   // set (thread clicked) but messages haven't loaded from the API yet, fall through
@@ -1412,18 +1434,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
                   showStatusMessage={false}
                   mentionables={mentionables}
                   onAttachmentsSelected={handleAttachmentsSelected}
-                  autosave={autosaveVisible ? {
-                    enabled: autosaveEnabled,
-                    canToggle: autosaveCanToggle,
-                    onToggle: (enabled) => {
-                      setAutosaveEnabled(enabled);
-                      void fetch("/api/chat/autosave", {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ enabled }),
-                      });
-                    },
-                  } : undefined}
+                  autosave={autosaveProp}
                 />
                 <SkillBadgeCloud
                   badges={selectChatBadges(initialMode)}
@@ -1509,18 +1520,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
               showStatusMessage={false}
               mentionables={mentionables}
               onAttachmentsSelected={handleAttachmentsSelected}
-              autosave={autosaveVisible ? {
-                enabled: autosaveEnabled,
-                canToggle: autosaveCanToggle,
-                onToggle: (enabled) => {
-                  setAutosaveEnabled(enabled);
-                  void fetch("/api/chat/autosave", {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ enabled }),
-                  });
-                },
-              } : undefined}
+              autosave={autosaveProp}
             />
           </div>
         </div>

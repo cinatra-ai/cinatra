@@ -329,6 +329,32 @@ export function updateAssistantTurn(
   });
 }
 
+/** Resolve a turn by its AG-UI `run_id` (the durable-log key). Used by the
+ *  assistant run-stream route (cinatra#1216 S2) to authorize a resume/tail
+ *  subscription: run_id → turn → thread → the thread's access policy. Uses the
+ *  partial run_id index (`assistant_turns_run_id_idx`); mirror rows have
+ *  run_id NULL and never match. Returns the newest match defensively (run_id
+ *  is minted per-turn by the runtime and should be unique). */
+export function findAssistantTurnByRunId(runId: string): AssistantTurn | null {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, created_at, updated_at
+               FROM "${schema}"."assistant_turns"
+               WHERE run_id = $1
+               ORDER BY created_at DESC, id
+               LIMIT 1`,
+        values: [runId],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  return row ? mapAssistantTurnRow(row) : null;
+}
+
 /** List a thread's turns in creation order (uses the per-thread index). */
 export function listAssistantTurns(threadId: string): AssistantTurn[] {
   ensurePostgresSchema();

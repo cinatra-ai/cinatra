@@ -10,6 +10,7 @@
 import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
 import type { ConsumedPrimitive } from "./consumes";
+import type { DashboardContributionManifest } from "./dashboard-contribution-contract";
 
 /**
  * UI hot-pluggability classification (narrowed per cinatra#782 — the connector
@@ -181,6 +182,19 @@ export type CinatraManifest = {
    */
   envOverrides?: Record<string, string>;
 
+  /**
+   * Versioned dashboard-contribution claim (cinatra#1628, S11a). Authored on
+   * `kind:"agent"` ONLY — the successor carrier that re-homes extension-shipped
+   * dashboards off the removed `kind:"workflow"` install path. IDENTITY +
+   * versioning + adoption; the dashboard CONTENT stays in the existing
+   * `cinatra/dashboard.json` sidecar. Carried through UNVALIDATED as DATA (the
+   * same discipline as `accessConfig`/`envOverrides`); the host validates it
+   * fail-closed + field-tolerantly via `parseDashboardContribution` (the
+   * sdk-extensions leaf) at consumption — see
+   * `NormalizedExtensionRecord.dashboardContribution`.
+   */
+  dashboardContribution?: DashboardContributionManifest;
+
   // ---- dependency graph (canonical) ----
   /** Canonical cross-kind dependency edges. */
   dependencies?: ExtensionDependency[];
@@ -314,6 +328,19 @@ export type NormalizedExtensionRecord = {
    * must never trust this field without that validation.
    */
   envOverrides?: Record<string, string> | null;
+  /**
+   * RAW `cinatra.dashboardContribution` pass-through (cinatra#1628, S11a), or
+   * `null` when the package declares none / for a non-`agent` kind. OPTIONAL on
+   * the type (strictly additive; the record shape is ABI-frozen). Carried
+   * UNVALIDATED as data — the host validates it fail-closed + field-tolerantly
+   * via `parseDashboardContribution` (the sdk-extensions leaf) at consumption
+   * (the reader-gate liveness oracle + the S11b reconciler); a consumer must
+   * never trust this field without that validation. The generator EMISSION of
+   * this field + the reconciler that consumes it land in S11b — S11a ships the
+   * versioned leaf + this ABI-additive carry so the record type cannot silently
+   * drop the claim.
+   */
+  dashboardContribution?: Record<string, unknown> | null;
 };
 
 export function isUiSurfaceKind(value: unknown): value is UiSurfaceKind {
