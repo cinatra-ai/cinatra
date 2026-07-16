@@ -869,8 +869,300 @@ const SCHEDULING_TRIGGER_TAB_DRIVER: SurfaceDriver = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// /notifications unified-surface drivers (cinatra#1549 E11-AC2) — the nine
+// surfaces of conformance/app-notifications.json (design@2bcc2c7e). Mounted on
+// the base conformance harness by
+// src/app/design-fixtures/conformance/notifications-conformance-fixtures.tsx.
+// The real /notifications screen resolves its rows through an authenticated
+// session + the ApprovalSource registry + the E6 client store (unreachable on
+// the standalone harness, same as the approvals/scheduling surfaces), so each
+// surface is modelled with the REAL design-system primitives the live feed is
+// built from (the §II row shell, the §III filter chips, the §IV badge-only
+// bell, the §V "No notifications" empty, the §VI degraded line) plus the REAL
+// shipped loading skeletons (src/app/notifications/notifications-skeletons.tsx,
+// packages/notifications/src/bell-skeleton.tsx); each action is exercised to its
+// specified outcome on the harness `data-outcome` instrumentation.
+// ---------------------------------------------------------------------------
+
+const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("notifications-list"),
+  present: async (_page, root) => {
+    await expect(root.locator("ul li").first()).toBeVisible();
+  },
+  fields: {
+    // title = item.title — the row title renders the item's title, NEVER its id
+    // (the fixture item's id shares no token with the title, so a driver reading
+    // the wrong field could not false-green).
+    title: {
+      source: "item.title",
+      assert: async (_page, root) => {
+        const title = root.locator('[data-field="item.title"]');
+        await expect(title).toHaveText("Prospect list finished — 240 rows");
+        await expect(title).not.toContainText("notif-");
+      },
+    },
+  },
+  actions: {
+    // decide-approval -> decided: the eligible approval row's inline decide
+    // settles the row (§ decided-row-disappears); the harness reflects the
+    // specified outcome on data-outcome.
+    "decide-approval": {
+      outcome: "decided",
+      run: async (_page, root) => {
+        await clickUntil(
+          root.getByRole("button", { name: "Review & approve", exact: true }),
+          async () => {
+            await expect(root).toHaveAttribute("data-outcome", "decided", { timeout: 2_000 });
+          },
+        );
+      },
+    },
+  },
+  states: {
+    // The one universal empty state — exactly "No notifications" (§V).
+    empty: async (page) => {
+      await expect(
+        page.locator('[data-surface-id="notifications-list"][data-variant="empty"]'),
+      ).toContainText("No notifications");
+    },
+    // The single inline degraded line (§VI) above an otherwise-rendered list.
+    error: async (page) => {
+      await expect(
+        page.locator('[data-surface-id="notifications-list"][data-variant="error"]'),
+      ).toContainText("some approvals are currently unavailable");
+    },
+    // The real list skeleton (notifications-skeletons.tsx) mid-load.
+    loading: async (page) => {
+      await expect(
+        page
+          .locator('[data-surface-id="notifications-list"][data-variant="loading"]')
+          .locator('[data-slot="feed-row-skeleton"]')
+          .first(),
+      ).toBeVisible();
+    },
+  },
+};
+
+const NOTIFICATIONS_FILTERS_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("notifications-filters"),
+  present: async (_page, root) => {
+    for (const label of ["All", "Needs action", "Unread", "In progress"]) {
+      await expect(root.getByRole("button", { name: new RegExp(`^${label}`) })).toBeVisible();
+    }
+  },
+  fields: {},
+  actions: {
+    // filter -> filtered: selecting a chip narrows the ONE list in place — the
+    // surviving rows are a strict subset (approvals, which carry no read-state,
+    // never survive the Unread filter). Reflected on data-outcome.
+    filter: {
+      outcome: "filtered",
+      run: async (_page, root) => {
+        const rows = root.locator('[data-slot="filtered-rows"] li');
+        const before = await rows.count();
+        await clickUntil(root.getByRole("button", { name: /^Unread/ }), async () => {
+          await expect(root).toHaveAttribute("data-outcome", "filtered", { timeout: 2_000 });
+        });
+        expect(await rows.count()).toBeLessThan(before);
+        await expect(
+          root.locator('[data-slot="filtered-rows"] li[data-row-kind="approval"]'),
+        ).toHaveCount(0);
+      },
+    },
+  },
+  states: {},
+};
+
+const NOTIFICATION_ROW_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("notification-row"),
+  present: async (_page, root) => {
+    await expect(root.getByText("Import finished")).toBeVisible();
+    // A notification row carries the read-dot (§II) — approvals never do.
+    await expect(root.getByLabel("Unread")).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {
+    loading: async (page) => {
+      await expect(
+        page
+          .locator('[data-surface-id="notification-row"][data-variant="loading"]')
+          .locator('[data-slot="feed-row-skeleton"]'),
+      ).toBeVisible();
+    },
+  },
+};
+
+const APPROVAL_ROW_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("approval-row"),
+  present: async (_page, root) => {
+    await expect(root.getByText("Approve connector install")).toBeVisible();
+    // An approval row carries the eligibility status pill (§II), never a read-dot.
+    await expect(root.getByText("Awaiting you")).toBeVisible();
+  },
+  fields: {},
+  actions: {
+    "decide-approval": {
+      outcome: "decided",
+      run: async (_page, root) => {
+        await clickUntil(
+          root.getByRole("button", { name: "Review & approve", exact: true }),
+          async () => {
+            await expect(root).toHaveAttribute("data-outcome", "decided", { timeout: 2_000 });
+          },
+        );
+      },
+    },
+  },
+  states: {
+    loading: async (page) => {
+      await expect(
+        page
+          .locator('[data-surface-id="approval-row"][data-variant="loading"]')
+          .locator('[data-slot="feed-row-skeleton"]'),
+      ).toBeVisible();
+    },
+  },
+};
+
+const NOTIFICATIONS_FILTER_RAIL_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator('[data-surface-id="notifications-filter-rail"][data-variant="loading"]'),
+  present: async (_page, root) => {
+    await expect(
+      root.locator('[data-conformance-id="notifications-filter-rail"]'),
+    ).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {
+    // The real filter-rail skeleton (§III): the labelled group in its aria-busy
+    // loading state with four chip-shaped Skeleton placeholders.
+    loading: async (_page, root) => {
+      const rail = root.locator(
+        '[data-conformance-id="notifications-filter-rail"][data-state="loading"]',
+      );
+      await expect(rail).toHaveAttribute("aria-busy", "true");
+      await expect(rail.locator('[data-slot="skeleton"]')).toHaveCount(4);
+    },
+  },
+};
+
+const NOTIFICATIONS_BELL_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: harnessRoot("notifications-bell"),
+  present: async (_page, root) => {
+    await expect(root.getByRole("link", { name: /^Notifications/ })).toBeVisible();
+  },
+  fields: {},
+  actions: {
+    // open -> navigated: the bell is a badge + link (no flyout, §IV); the
+    // outcome is the navigation TARGET (/notifications), proven by the resolved
+    // href exactly as the spec depicts it (same pattern as install-config
+    // configure -> connector-setup).
+    open: {
+      outcome: "navigated",
+      run: async (_page, root) => {
+        await expect(root.getByRole("link", { name: /^Notifications/ })).toHaveAttribute(
+          "href",
+          "/notifications",
+        );
+      },
+    },
+  },
+  states: {
+    // The real bell loading presentation (packages/notifications bell-skeleton).
+    loading: async (page) => {
+      const skeleton = page.locator(
+        '[data-surface-id="notifications-bell"][data-variant="loading"] [data-conformance-id="notifications-bell"][data-state="loading"]',
+      );
+      await expect(skeleton).toHaveAttribute("aria-busy", "true");
+      await expect(skeleton.locator('[data-slot="skeleton"]')).toBeVisible();
+    },
+  },
+};
+
+const NOTIFICATIONS_EMPTY_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="notifications-empty"][data-variant="empty"]'),
+  present: async (_page, root) => {
+    await expect(root).toContainText("No notifications");
+  },
+  fields: {},
+  actions: {},
+  states: {
+    empty: async (_page, root) => {
+      await expect(root).toContainText("No notifications");
+    },
+  },
+};
+
+const NOTIFICATIONS_VENDOR_GATE_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator('[data-surface-id="notifications-vendor-gate"][data-variant="empty"]'),
+  present: async (_page, root) => {
+    // Non-vacuous: the non-vendor instance DOES render its notifications +
+    // approvals (the absence is of VENDOR content, not of all content).
+    await expect(root.locator("[data-source-id]")).toHaveCount(2);
+    await expect(root.getByText("Approve access scope for Outreach agent")).toBeVisible();
+  },
+  fields: {},
+  actions: {},
+  states: {
+    // Absence contract (§V): the rendered source-id set is EXACTLY the
+    // non-vendor set; NEITHER vendor-gated source id (marketplace-vendor-app-
+    // status / -moderation, gated behind isRegisteredVendor) appears. A leaked
+    // vendor row would carry one of those ids and break the exact-set check, so
+    // this is not a vacuous assertion over a marker that never exists.
+    empty: async (_page, root) => {
+      const gated = ((await root.getAttribute("data-vendor-gated-source-ids")) ?? "")
+        .split(" ")
+        .filter(Boolean);
+      expect(gated.length).toBeGreaterThan(0);
+      for (const sourceId of gated) {
+        await expect(root.locator(`[data-source-id="${sourceId}"]`)).toHaveCount(0);
+      }
+      await expect(root.locator("[data-source-id]")).toHaveCount(2);
+      await expect(root.locator('[data-source-id="agent-creation-requests"]')).toHaveCount(1);
+      await expect(root.locator('[data-source-id="notification"]')).toHaveCount(1);
+    },
+  },
+};
+
+const NOTIFICATIONS_DEGRADED_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator('[data-surface-id="notifications-degraded"][data-variant="error"]'),
+  present: async (_page, root) => {
+    await expect(root).toContainText("some approvals are currently unavailable");
+  },
+  fields: {},
+  actions: {},
+  states: {
+    error: async (_page, root) => {
+      await expect(root).toContainText("some approvals are currently unavailable");
+    },
+  },
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
+  "notifications-list": NOTIFICATIONS_LIST_DRIVER,
+  "notifications-filters": NOTIFICATIONS_FILTERS_DRIVER,
+  "notification-row": NOTIFICATION_ROW_DRIVER,
+  "approval-row": APPROVAL_ROW_DRIVER,
+  "notifications-filter-rail": NOTIFICATIONS_FILTER_RAIL_DRIVER,
+  "notifications-bell": NOTIFICATIONS_BELL_DRIVER,
+  "notifications-empty": NOTIFICATIONS_EMPTY_DRIVER,
+  "notifications-vendor-gate": NOTIFICATIONS_VENDOR_GATE_DRIVER,
+  "notifications-degraded": NOTIFICATIONS_DEGRADED_DRIVER,
   "status-pills": STATUS_PILLS_DRIVER,
   "button-variants": BUTTON_VARIANTS_DRIVER,
   "extension-listing-grid": EXTENSION_LISTING_GRID_DRIVER,
