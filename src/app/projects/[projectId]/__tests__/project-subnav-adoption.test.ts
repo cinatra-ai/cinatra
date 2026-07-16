@@ -1,24 +1,23 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 
-// Shared project-local nav adoption contract (cinatra#1504, updated #706).
+// Shared project-local nav adoption contract (cinatra#1504, updated #706/#707).
 //
-// The route-based section pages (/permissions, /agents) still render the SHARED
-// <ProjectSubnav> with their own section marked active under a divider-less
-// PageHeader. Guards against the regression class where each page grows its own
-// ad-hoc header-button nav that drifts from its siblings.
+// The remaining route-based section page (/permissions) still renders the
+// SHARED <ProjectSubnav> with its own section marked active under a
+// divider-less PageHeader. Guards against the regression class where each page
+// grows its own ad-hoc header-button nav that drifts from its siblings.
 //
 // The detail surface `/projects/[projectId]` moved to an IN-PAGE tablist
 // (#706 — "Dashboards" + "Permissions"), so it no longer adopts the route
-// subnav; its own contract is asserted separately below. Folding /customers and
-// deleting the /agents route + button is the later cleanup slice (#707).
+// subnav; its own contract is asserted separately below. The /customers and
+// /agents routes + buttons were removed in the #707 cleanup slice.
 
 const PAGES: ReadonlyArray<{ file: string; section: string }> = [
   {
     file: "src/app/projects/[projectId]/permissions/page.tsx",
     section: "permissions",
   },
-  { file: "src/app/projects/[projectId]/agents/page.tsx", section: "agents" },
 ];
 
 describe("project route-section pages adopt the shared ProjectSubnav", () => {

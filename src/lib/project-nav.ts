@@ -8,8 +8,7 @@
 // (src/lib/agents-nav.ts) and ANALYTICS_NAV (src/lib/section-nav.ts).
 export type ProjectSectionValue =
   | "overview"
-  | "permissions"
-  | "agents";
+  | "permissions";
 
 export type ProjectNavItem = {
   /** Stable key for the active-section state. */
@@ -28,6 +27,5 @@ export function projectNav(projectId: string): readonly ProjectNavItem[] {
   return [
     { value: "overview", label: "Overview", href: base },
     { value: "permissions", label: "Permissions", href: `${base}/permissions` },
-    { value: "agents", label: "Agents", href: `${base}/agents` },
   ];
 }
