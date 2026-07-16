@@ -1036,9 +1036,15 @@ jobs:
       # Extensions publish ONLY through the marketplace proxy; the registry is
       # the install-backend behind a listing, never a publish target a workflow
       # drives. This standing gate fails CI if ANY workflow `run:` step EXECUTES
-      # `npm/pnpm/yarn publish` (an ECHOED instruction string is allowed). The
-      # one canary that violated it (verdaccio-publish-proof.yml) is RETIRED —
-      # no filename exemptions. Companion tests guard the content-aware parser.
+      # `npm/pnpm/yarn publish` (an ECHOED instruction string is allowed).
+      # It ships exactly ONE ratified carve-out (ops#512 option A, owner decision
+      # 2026-07-16): the hub registry-token-refresh CONSUMER PROOF
+      # (verdaccio-publish-proof.yml). That carve-out is NOT a filename exemption
+      # — the gate pins it to the EXACT canonical content of that workflow, so any
+      # executable change (a second publish, a mutated package name, a redirected
+      # registry, an added trigger) re-arms the ban. The workflow and the gate
+      # move together. Companion tests guard the content-aware parser AND the
+      # exception (real file exempt; every mutation re-armed).
       - name: Verdaccio publish-execution ban gate
         run: node scripts/audit/verdaccio-publish-ban.mjs
 

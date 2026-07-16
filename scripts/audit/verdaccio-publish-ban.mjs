@@ -137,9 +137,20 @@
  *     `env`/`sudo`/`time`/`nice`/`corepack`/`npx`/`bash -c`/`env -S` — ARE
  *     stripped and their wrapped publish IS caught.)
  *
- * NO filename-based exemptions — this gate does not whitelist specific
- * workflow filenames. No publish-EXECUTING workflow is exempted; the repo
- * ships none.
+ * NO filename-based exemptions — this gate does not whitelist a workflow by
+ * NAME. It ships exactly ONE ratified carve-out (ops#512 option A, owner
+ * decision 2026-07-16): the hub registry-token-refresh CONSUMER PROOF
+ * (`.github/workflows/verdaccio-publish-proof.yml`). That carve-out is NOT a
+ * filename allowlist and NOT a set of raw-text heuristics — it is pinned to the
+ * EXACT CONTENT of that ratified workflow: the single publish is suppressed only
+ * when the file at that exact path, folded to LF, equals the known-good proof
+ * byte-for-byte — which inherently fixes the dispatch-only trigger, the single
+ * publish of the fixed canary `@cinatra-ai/registry-token-refresh-canary`, and
+ * the env-secret registry. ANY edit (a copy at another path, an added trigger, a
+ * different or dynamically-built package name, a second/indirected publish, a
+ * redirected registry, even a comment/whitespace change) fails the equality and
+ * re-arms the ban. See
+ * applyCanaryProofException below. No OTHER publish-EXECUTING workflow is exempt.
  *
  * Usage:
  *   node scripts/audit/verdaccio-publish-ban.mjs
@@ -1513,7 +1524,11 @@ function collectAnchors(lines) {
  * @returns {Array<{ line: number, content: string, registryHint: boolean }>}
  */
 export function scanWorkflowText(text) {
-  const lines = text.split("\n");
+  // Normalize line endings FIRST: CRLF and a lone CR are both YAML line breaks.
+  // Splitting on `\n` alone would leave a trailing `\r` on every line of a CRLF
+  // `run: |` block scalar, so an executed `npm publish` there would slip the
+  // per-line analysis undetected (a CRLF-based ban evasion). Fold both to `\n`.
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   const offenders = [];
   const anchors = collectAnchors(lines);
   const indentOf = (s) => s.length - s.replace(/^\s+/, "").length;
@@ -1829,6 +1844,212 @@ function listCompositeActionFiles(dir) {
 }
 
 /**
+ * THE ONE RATIFIED EXCEPTION (ops#512 option A — owner decision 2026-07-16).
+ *
+ * WHY AN EXCEPTION EXISTS AT ALL. The hub's blue/green registry-token-refresh
+ * service (ops/runbooks/registry-token-refresh.md, prereq 4) needs a
+ * CONSUMER-SIDE propagation proof: after it flips the release-manager publish
+ * token it must confirm the new token can ACTUALLY publish — `npm whoami`
+ * alone proves only that the token authenticates, not that it carries publish
+ * authority. The only faithful proof is a real canary publish+unpublish. That
+ * is a genuine, owner-ratified operational need, not a workflow that "wants" to
+ * publish an extension — so the standing publish-EXECUTION ban gets exactly ONE
+ * carve-out, and it is machine-enforced here rather than trusted to a comment.
+ *
+ * WHY THIS CARVE-OUT IS SAFE, AND WHY IT IS NOT A "filename exemption". The
+ * gate's doctrine is "NO filename-based exemptions" — a bare name allowlist
+ * would let anyone re-add an arbitrary publish under the blessed filename. Nor
+ * can a security carve-out be a set of raw-text heuristics over a shell script:
+ * `npm publish` publishes whatever the working `package.json` says at RUNTIME,
+ * and that name / the registry / an extra publish can all be assembled at
+ * runtime (dynamic `npm pkg set "${k}=${v}"`, `printf -v REGISTRY_URL …`, an
+ * invoked script) — the very statically-undecidable class this scanner already
+ * lists as out of scope. A heuristic allow-check would leave those exact holes.
+ *
+ * So the exemption is pinned to the EXACT CONTENT of the one ratified workflow:
+ * it applies only when the file at the sanctioned path, folded to LF, equals
+ * `CANARY_PROOF_CANONICAL` BYTE-FOR-BYTE. Nothing is stripped — trailing
+ * whitespace, blank lines, and comments are all significant, because inside the
+ * `run:` block scalar a trailing space after a `\` continuation, or a comment/
+ * blank inserted between continuation lines, changes what the shell executes.
+ * This is maximal content verification — it inherently fixes the trigger
+ * (`workflow_dispatch` only), the single publish, the fixed canary package
+ * literal, the env-secret registry, and every other byte. ANY edit — a second
+ * publish, a mutated/dynamic package name, a redirected registry, an added
+ * trigger, a var reassignment, even a comment or whitespace change — fails the
+ * equality and RE-ARMS the ban (goes RED). The gate and the one publish it
+ * allows are therefore edited and reviewed together; the companion "on-disk file
+ * is exempt" test detects any un-paired drift. The marketplace proxy +
+ * credential broker still re-validate publish authority server-side regardless —
+ * this remains one content-pinned hole and nothing more.
+ */
+const RATIFIED_CANARY_EXCEPTION = Object.freeze({
+  // Exact repo-relative path of the sole sanctioned publish-executing workflow.
+  file: ".github/workflows/verdaccio-publish-proof.yml",
+  // The single fixed canary package it publishes/unpublishes (documentation;
+  // enforced structurally by the canonical-content equality below).
+  package: "@cinatra-ai/registry-token-refresh-canary",
+});
+
+/**
+ * Fold every line-ending form YAML/the shell recognize (CRLF, lone CR, LF) to a
+ * single `\n`, so a workflow's content can be compared to the canonical
+ * regardless of checkout EOL, and a bare `\r` cannot smuggle a break that the
+ * comparison misses.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function foldEol(text) {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/**
+ * The EXACT content of the ratified `.github/workflows/verdaccio-publish-proof.yml`
+ * (EOL-folded to `\n`). The exemption applies ONLY when the scanned file folds to
+ * this byte-for-byte — NOTHING is stripped, so trailing whitespace, blank lines,
+ * and comments are all significant (a trailing space after a `\` line
+ * continuation, or a comment/blank inserted inside the `run:` block, changes what
+ * the shell executes). Any edit whatsoever re-arms the ban. Generated FROM that
+ * file; the companion test asserts the on-disk file still equals this, so the two
+ * cannot drift un-noticed — the one publish-executing workflow and the gate that
+ * permits it are edited and owner-reviewed together.
+ */
+const CANARY_PROOF_CANONICAL = [
+  "name: verdaccio-publish-proof",
+  "",
+  "# Consumer-side propagation proof for the hub blue/green registry-token-refresh",
+  "# service (ops/runbooks/registry-token-refresh.md, prereq 4). The refresh host",
+  "# dispatches this AFTER it flips VERDACCIO_PUBLISH_TOKEN / _NEXT and binds the",
+  "# exact run it dispatched via the `nonce` echoed into run-name (it selects the",
+  "# run whose display title contains the nonce, never a concurrent run).",
+  "#",
+  "# It executes a REAL canary publish+unpublish of the single fixed package",
+  "# `@cinatra-ai/registry-token-refresh-canary` — `npm whoami` alone proves only",
+  "# that the rotated token authenticates, not that it carries publish authority,",
+  "# which is the whole point of the propagation proof in refresh steps 5/7.",
+  "#",
+  "# This is the ONE workflow exempted from the standing publish-EXECUTION ban",
+  "# (scripts/audit/verdaccio-publish-ban.mjs). That exemption is content-verified,",
+  "# not filename-based: it holds ONLY while this file stays dispatch-only, targets",
+  "# exactly this canary package, resolves its registry from the release-manager",
+  "# env secret, and performs exactly one publish. Ratified by the owner in ops#512",
+  "# (option A, 2026-07-16). Do NOT add another trigger, package, or publish step",
+  "# here — any such change re-arms the ban and fails required CI.",
+  "run-name: \"verdaccio-publish-proof ${{ inputs.secret }} ${{ inputs.nonce }}\"",
+  "",
+  "on:",
+  "  workflow_dispatch:",
+  "    inputs:",
+  "      secret:",
+  "        description: \"Which release-manager token to prove\"",
+  "        required: true",
+  "        type: choice",
+  "        options: [next, active]",
+  "      nonce:",
+  "        description: \"Opaque run-binding nonce from the refresh host\"",
+  "        required: true",
+  "        type: string",
+  "",
+  "permissions:",
+  "  contents: read",
+  "",
+  "jobs:",
+  "  # Job id is deliberately NOT `proof` — that check-name is the required",
+  "  # `proof` context posted by works-after-proof.yml; a second `proof` job would",
+  "  # make the required context ambiguous (merge-group-coverage-guard fails closed).",
+  "  canary-proof:",
+  "    runs-on: ubuntu-latest",
+  "    timeout-minutes: 10",
+  "    # Reads VERDACCIO_REGISTRY_URL + VERDACCIO_PUBLISH_TOKEN / _NEXT from this",
+  "    # environment. The env must carry NO required-reviewer protection, else the",
+  "    # host's automated proof dispatch blocks (runbook prereq 7).",
+  "    environment: release-manager",
+  "    steps:",
+  "      - name: Set up Node.js",
+  "        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0",
+  "        with:",
+  "          node-version: 20",
+  "",
+  "      - name: Prove token authenticates + canary publish/unpublish",
+  "        env:",
+  "          REGISTRY_URL: ${{ secrets.VERDACCIO_REGISTRY_URL }}",
+  "          # Prove the NEXT (candidate) token or the ACTIVE token, per input.",
+  "          PUBLISH_TOKEN: ${{ inputs.secret == 'next' && secrets.VERDACCIO_PUBLISH_TOKEN_NEXT || secrets.VERDACCIO_PUBLISH_TOKEN }}",
+  "        run: |",
+  "          set -euo pipefail",
+  "",
+  "          host=\"${REGISTRY_URL#https://}\"",
+  "          npm config set \"//${host}/:_authToken=${PUBLISH_TOKEN}\"",
+  "          npm config set \"@cinatra-ai:registry=${REGISTRY_URL}\"",
+  "",
+  "          # Authentication check (does NOT prove publish authority on its own).",
+  "          npm whoami --registry \"${REGISTRY_URL}\"",
+  "",
+  "          # Build the fixed canary in a throwaway dir: a real, minimal, publishable",
+  "          # scoped package. `npm init -y` writes package.json; `npm pkg set` fixes",
+  "          # the name + a unique per-run prerelease version; a README gives the",
+  "          # tarball a non-empty payload.",
+  "          work=\"$(mktemp -d)\"",
+  "          cd \"${work}\"",
+  "          ver=\"0.0.0-proof.${{ github.run_id }}.${{ github.run_attempt }}\"",
+  "          npm init -y >/dev/null",
+  "          npm pkg set name=\"@cinatra-ai/registry-token-refresh-canary\" version=\"${ver}\"",
+  "          printf 'registry-token-refresh propagation canary — safe to unpublish.\\n' > README.md",
+  "",
+  "          # Failure-safe cleanup: unpublish the exact version we published, even if",
+  "          # a later step fails. The guard ensures we only unpublish after a",
+  "          # successful publish; a cleanup failure warns (do not mask the real exit).",
+  "          published=0",
+  "          cleanup() {",
+  "            if [ \"${published}\" = \"1\" ]; then",
+  "              npm unpublish \"@cinatra-ai/registry-token-refresh-canary@${ver}\" \\",
+  "                --registry \"${REGISTRY_URL}\" \\",
+  "                || echo \"::warning::canary unpublish failed for ${ver}; verify + prune manually\"",
+  "            fi",
+  "          }",
+  "          trap cleanup EXIT",
+  "",
+  "          # THE PROOF: a real publish (not --dry-run) with the rotated token.",
+  "          npm publish --registry \"${REGISTRY_URL}\"",
+  "          published=1",
+  "",
+].join("\n");
+
+/**
+ * Given a scanned file's name, its raw text, and the banned `run:`-publish hits
+ * scanWorkflowText found in it, return the hits that REMAIN banned after the one
+ * ratified exception (ops#512 option A) is applied. For any file that is not the
+ * exact sanctioned canary proof, or that fails ANY structural constraint above,
+ * the hits are returned UNCHANGED (i.e. still reported). Only the exact,
+ * content-verified canary shape suppresses its single publish hit.
+ *
+ * @param {string} fileName - repo-relative path of the scanned file
+ * @param {string} text - the file's raw text
+ * @param {Array<{ line: number, content: string, registryHint: boolean }>} hits
+ * @returns {Array<{ line: number, content: string, registryHint: boolean }>}
+ */
+export function applyCanaryProofException(fileName, text, hits) {
+  // 1. EXACT PATH — no other file (or a same-named copy elsewhere) qualifies.
+  if (fileName !== RATIFIED_CANARY_EXCEPTION.file) return hits;
+
+  // 2. EXACT CONTENT — the file, folded to LF, must equal the ratified proof
+  //    BYTE-FOR-BYTE. Nothing is stripped, so ANY change — an added trigger, a
+  //    mutated/dynamic package name, a second/redirected publish, a comment or
+  //    blank or trailing-space edit inside the `run:` block that alters shell
+  //    execution — fails this equality and re-arms the ban. This subsumes every
+  //    structural constraint (trigger, package, registry, single publish) and
+  //    closes the runtime-indirection + block-scalar-continuation classes a
+  //    line-stripping heuristic cannot.
+  if (foldEol(text) !== CANARY_PROOF_CANONICAL) return hits;
+
+  // The file IS the ratified canary proof — it executes exactly the one
+  // sanctioned canary publish. Suppress it; every other file / any edit at all
+  // is reported exactly as before.
+  return [];
+}
+
+/**
  * Scan every workflow file under workflowsDir AND every local composite action
  * under actionsDir.
  *
@@ -1853,7 +2074,11 @@ export function scanWorkflows(workflowsDir = WORKFLOWS_DIR, actionsDir = ACTIONS
       return;
     }
     const fileName = relName(absPath);
-    for (const hit of scanWorkflowText(text)) {
+    // Apply the one ratified, content-verified exception (ops#512 option A)
+    // BEFORE recording offenders — it suppresses ONLY the sanctioned canary
+    // publish in the sanctioned file, and leaves every other hit untouched.
+    const hits = applyCanaryProofException(fileName, text, scanWorkflowText(text));
+    for (const hit of hits) {
       offenders.push({ file: fileName, ...hit });
     }
   };
