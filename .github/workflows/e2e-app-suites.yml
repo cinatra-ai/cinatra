@@ -22,22 +22,25 @@ name: App e2e suites (render-smoke, notifications, agents invariants)
 # TRIGGER SCOPE — deliberate split:
 #   - agents-run-invariants runs on every PR / push / merge_group: it is a pure
 #     static check and is genuinely green on a hermetic runner.
-#   - render-smoke-e2e and notifications-e2e run on `workflow_dispatch` ONLY.
-#     The wiring is correct and proven (they build, boot the prod server, run,
-#     and upload artifacts), but on a BARE CI instance the suites themselves are
-#     not yet green — they encode expectations that only hold on a fully-seeded
-#     local dev instance. Their first real CI run surfaced genuine failures:
+#   - notifications-e2e runs on the detect gate (every non-docs, non-draft PR /
+#     push / merge_group). The suite was REWRITTEN for the unified /notifications
+#     v2 surface (cinatra#1561, E11 of the #1549 epic): the old flyout-tabs UAT
+#     (the "the tabs do not render on a fresh instance" blocker below) is retired
+#     with the flyout itself (E8, #1558), and the new suite SEEDS both substrates
+#     it asserts on (the notifications table AND the local agent-creation approval
+#     source) directly via pg, plus provisions its own admin+org viewer — so it
+#     is green on a BARE CI instance. It is the durable production-build re-proof
+#     of the unified surface that proof-session evidence certified on the dev
+#     runtime (disclosed on #1558).
+#   - render-smoke-e2e still runs on `workflow_dispatch` ONLY. Its wiring is
+#     proven, but the suite is not yet green on a bare CI instance:
 #       * render-smoke: `/configuration/extensions` and
 #         `/connectors/cinatra-ai/twenty-connector/setup` return HTTP 500 on a
 #         fresh instance (2 of ~90 routes).
-#       * notifications: the flyout tabs (All / Unread / In progress) do not
-#         render on a fresh instance (the pg seed runs, but the tabs are absent).
-#     Auto-triggering them now would paint every PR red for pre-existing product
-#     state, not for the PR's own change. They are left as opt-in manual runs
-#     until those are fixed or the suites learn to seed the missing state — an
-#     explicit follow-up decision. Flip the `if:` on each job back to the detect
-#     gate (and add the build-image docs-only green-STUB if made required) to
-#     auto-enable them once green.
+#     Auto-triggering it now would paint every PR red for pre-existing product
+#     state, not for the PR's own change. It is left as an opt-in manual run until
+#     that is fixed. Flip its `if:` back to the detect gate (and add the
+#     build-image docs-only green-STUB if made required) to auto-enable it.
 #
 # NON-REQUIRED by design: none of these are required status checks. Promoting
 # one to required additionally needs the docs-only green-STUB pattern from
@@ -291,18 +294,24 @@ jobs:
           echo "render-smoke e2e passed"
 
   # -------------------------------------------------------------------------
-  # notifications-e2e — the notifications-flyout + workflow-approval UATs.
-  # Both seed their rows directly via pg, so the standard Postgres + Redis
-  # service containers are all the infra they need. Same prod-build shape.
+  # notifications-e2e — the unified /notifications v2 conformance UAT (E11,
+  # cinatra#1561): the feed list (interleave / chips / eligibility / empty /
+  # degraded+retry), the bell badge+link, the E8 redirects, mark-all boundary
+  # semantics, the E9 human-wait row, and the reject decide round-trip. The suite
+  # seeds its rows directly via pg (the notifications table AND the local agent-
+  # creation approval source) and provisions its own admin+org viewer, so the
+  # standard Postgres + Redis service containers are all the infra it needs.
+  # Same prod-build shape.
   # -------------------------------------------------------------------------
   notifications-e2e:
     name: Notifications browser e2e
     needs: detect
-    # workflow_dispatch ONLY — see the TRIGGER SCOPE note in the header. The
-    # wiring is proven, but the suite is not yet green on a bare CI instance
-    # (the flyout tabs do not render). Change back to
-    # `needs.detect.outputs.skip != 'true'` to auto-enable once that is fixed.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # Auto-run on the detect gate (non-docs, non-draft PR / push / merge_group).
+    # The E11 rewrite (cinatra#1561) made this suite green on a bare CI instance
+    # — see the TRIGGER SCOPE note in the header. NON-REQUIRED by design (see the
+    # NON-REQUIRED note): promoting it to required additionally needs the
+    # build-image docs-only green-STUB so a docs-only PR reports green.
+    if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     services:
