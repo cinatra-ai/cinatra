@@ -60,6 +60,17 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // to a key here; a runtime-installed claimant whose key is absent is the
   // "requires rebuild" degrade. Empty until an artifact declares `ui` (S3+/M1).
   "src/lib/generated/artifact-renderers.ts",
+  // Field-renderer component dispatch spine (cinatra#1625, epic #1620 S8 — M3):
+  // the CLIENT-safe literal-import BUILD table of extension-shipped HITL
+  // field-renderer modules, keyed by field-renderer BINDING id (own keyspace,
+  // separate from artifact-renderers.ts and from the neutral KIND table). The
+  // host resolution consults this map first and falls back to
+  // SchemaFieldRenderer when a present binding's module is absent/degraded.
+  // Empty until a claimant agent declares cinatra.fieldRenderers[].component
+  // (per-claimant companion slices). Unlike artifact-renderers.ts this map is
+  // CLIENT-consumed, so it does NOT route through the server-only
+  // guardedExtensionImport and is NOT in the guarded-optional-loaders test.
+  "src/lib/generated/field-renderer-components.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing
   // it here adds no exemption surface — it puts the file under the same

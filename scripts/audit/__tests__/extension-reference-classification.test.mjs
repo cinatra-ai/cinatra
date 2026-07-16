@@ -48,6 +48,13 @@ describe("extension-reference classification taxonomy", () => {
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
+      // Field-renderer component dispatch spine (cinatra#1625, epic #1620 S8 —
+      // M3): the CLIENT-safe literal-import BUILD table of extension-shipped HITL
+      // field-renderer modules (keyed by field-renderer binding id). Same
+      // owner-ruled generated-tree exempt class, same --check byte pin. Inert
+      // until an agent declares cinatra.fieldRenderers[].component (per-claimant
+      // companion slices).
+      "src/lib/generated/field-renderer-components.ts",
       // Neutral stream primitives capability (cinatra#344): the host-owned
       // generated maps for the generic /api/streams/<slug> route —
       // stream-public-paths.ts (import-free slug-only auth-exemption list),

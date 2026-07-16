@@ -1977,6 +1977,69 @@ export async function buildManifest() {
     mergeRoleDeclarations(roleDeclarations);
   bindingErrors.push(...mergeErrors, ...roleErrors);
 
+  // Field-renderer COMPONENT map (cinatra#1625, epic #1620 S8 — M3 spine): the
+  // literal-import BUILD table of extension-shipped field-renderer components,
+  // keyed by the EXISTING binding id (own keyspace, SEPARATE from the neutral
+  // KIND table AND from GENERATED_ARTIFACT_RENDERERS). A binding whose declaring
+  // extension set `cinatra.fieldRenderers[].component` migrated its renderer OUT
+  // of packages/agents; the host resolution consults this map first and falls
+  // back to SchemaFieldRenderer when the module is absent/degraded (AC4 floor).
+  // STAGED + EMPTY on day one: no bundled agent declares `component` yet (the
+  // per-claimant companion slices add it). FAIL-CLOSED like the artifact-ui
+  // collection: validate the subpath resolves to a real, importable module so
+  // the generated literal import can never fail at runtime. Presence-aware —
+  // only on-disk declaring packages contribute; a runtime-installed migrated
+  // claimant absent from the build is simply not in the map (its binding
+  // resolves to the host KIND component if still present, else the floor).
+  const recordByName = new Map(records.map((r) => [r.packageName, r]));
+  const fieldRendererComponents = [];
+  for (const b of agentFieldRendererBindings) {
+    if (b.component === undefined) continue;
+    const rec = recordByName.get(b.declaredBy);
+    if (!rec) {
+      bindingErrors.push(
+        `[extension-manifest] ${b.declaredBy} declares a cinatra.fieldRenderers component for ${b.id} but is not a generated manifest record`,
+      );
+      continue;
+    }
+    const entryRel = b.component.entry.replace(/^\.\//, "");
+    const entryPath = join(rec.sourceDir, entryRel);
+    const candidates = [entryPath, `${entryPath}.ts`, `${entryPath}.tsx`];
+    const resolved = candidates.find((p) => fileExists(p));
+    if (!resolved) {
+      bindingErrors.push(
+        `[extension-manifest] ${rec.packageName} cinatra.fieldRenderers component entry "${b.component.entry}" ` +
+          `(binding ${b.id}) does not resolve to a file (looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+      );
+      continue;
+    }
+    const importSubpath = entryRel.replace(/\.(ts|tsx)$/, "");
+    const specifier = `${rec.packageName}/${importSubpath}`;
+    const exportsKey = `./${importSubpath}`;
+    const pkgJson = JSON.parse(
+      readFileSync(join(REPO_ROOT, rec.sourceDir, "package.json"), "utf8"),
+    );
+    const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+    if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+      bindingErrors.push(
+        `[extension-manifest] ${rec.packageName} cinatra.fieldRenderers component subpath "${specifier}" ` +
+          `(binding ${b.id}) is not resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+          `the generated literal import would fail at runtime`,
+      );
+      continue;
+    }
+    fieldRendererComponents.push({
+      bindingId: b.id,
+      packageName: rec.packageName,
+      specifier,
+      resolution: rec.resolution,
+      propsApiVersion: Number.isInteger(b.component.propsApiVersion)
+        ? b.component.propsApiVersion
+        : 1,
+    });
+  }
+  fieldRendererComponents.sort((a, b) => a.bindingId.localeCompare(b.bindingId));
+
   // Semantic-floor artifact binding (cinatra#151 Stage 6). The floor type is
   // STRUCTURAL — every artifact carries it as the eligible fallback, so its
   // role claim must exist in EVERY universe: exactly one claimant (the
@@ -2016,6 +2079,7 @@ export async function buildManifest() {
     chatWidgetModules,
     artifactRenderers,
     agentFieldRendererBindings,
+    fieldRendererComponents,
     agentRoleBindings,
     artifactFloorClaimant: floorClaimant,
   };
@@ -2630,6 +2694,60 @@ function emitArtifactRenderers(artifactRenderers) {
   );
 }
 
+// Field-renderer component literal-import map (cinatra#1625, epic #1620 S8 —
+// M3 spine). Mirrors the GENERATED_ARTIFACT_RENDERERS literal-import MECHANICS
+// (connector-setup-pages pattern) in a SEPARATE keyspace keyed by field-renderer
+// BINDING id, with ONE deliberate boundary difference: field renderers are
+// interactive CLIENT components registered into the client-side field-renderer
+// registry (packages/agents/src/register-default-renderers.ts, reached via the
+// "safe in use-client" @cinatra-ai/agents/client-entry). `guardedExtensionImport`
+// and the standardized degraded-result guard are `import "server-only"`, so this
+// CLIENT-consumed map cannot route through them; each loader is a plain literal
+// dynamic import and the client resolution wiring
+// (packages/agents/src/field-renderer-components.ts) owns the graceful degrade to
+// the SchemaFieldRenderer floor (AC4: never blank/crash). The `resolution`
+// classification is retained as diagnostic metadata (a guardedOptional package
+// is a legitimately-optional claimant; a required one should never be absent).
+// This map is NOT part of the generated guarded-optional-loaders test (that pins
+// server-only guard routing). Empty until a claimant declares
+// cinatra.fieldRenderers[].component (per-claimant companion slices).
+export function emitFieldRendererComponents(fieldRendererComponents) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = fieldRendererComponents
+    .map((c) => {
+      const load = `() => import(${JSON.stringify(c.specifier)})`;
+      const meta =
+        `packageName: ${JSON.stringify(c.packageName)}, propsApiVersion: ${c.propsApiVersion}`;
+      return `  ${JSON.stringify(c.bindingId)}: { resolution: ${JSON.stringify(c.resolution)}, ${meta}, load: ${load} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}` +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// Literal dynamic-import map (Turbopack rejects computed import templates).\n` +
+    `// Consumed by the field-renderer component resolution wiring\n` +
+    `// (packages/agents/src/field-renderer-components.ts) as the BUILD table of\n` +
+    `// extension-shipped HITL field-renderer modules, keyed by the field-renderer\n` +
+    `// BINDING id (own keyspace, separate from GENERATED_ARTIFACT_RENDERERS and\n` +
+    `// from the neutral KIND table). A binding ABSENT from this map resolves to\n` +
+    `// its host KIND component (behavior-preserving); a binding PRESENT here whose\n` +
+    `// module is absent/degraded falls back to SchemaFieldRenderer (the never-blank\n` +
+    `// floor). CLIENT-safe by construction: each loader is a plain literal dynamic\n` +
+    `// import — the server-only guardedExtensionImport is intentionally NOT used\n` +
+    `// (see the emitter header in the generator).\n` +
+    `export type GeneratedFieldRendererComponentLoader = () => Promise<unknown>;\n\n` +
+    `export type GeneratedFieldRendererComponentEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  packageName: string;\n` +
+    `  propsApiVersion: number;\n` +
+    `  load: GeneratedFieldRendererComponentLoader;\n` +
+    `};\n\n` +
+    `export const GENERATED_FIELD_RENDERER_COMPONENTS: Record<string, GeneratedFieldRendererComponentEntry> = {\n` +
+    (body.length > 0 ? `${body}\n` : ``) +
+    `};\n`
+  );
+}
+
 // The GENERATED guarded-optional-loaders test (cinatra#7). Emitted
 // alongside the maps so the concrete entry list below can never drift from
 // the emitted set (`--check` pins this file byte-exact with the maps; the
@@ -2991,6 +3109,7 @@ const OUT_STREAMS_SERVER = generatedOutPath("streams.server.ts");
 const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 const OUT_ARTIFACT_RENDERERS = generatedOutPath("artifact-renderers.ts");
+const OUT_FIELD_RENDERER_COMPONENTS = generatedOutPath("field-renderer-components.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 const OUT_ARTIFACT_FLOOR = generatedOutPath("artifact-floor.ts");
 
@@ -3023,6 +3142,7 @@ async function main() {
     chatWidgetModules,
     artifactRenderers,
     agentFieldRendererBindings,
+    fieldRendererComponents,
     agentRoleBindings,
     artifactFloorClaimant,
   } = await buildManifest();
@@ -3038,6 +3158,7 @@ async function main() {
     [OUT_STREAMS_SERVER, emitStreamsServer(streamDeclarations)],
     [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
     [OUT_ARTIFACT_RENDERERS, emitArtifactRenderers(artifactRenderers)],
+    [OUT_FIELD_RENDERER_COMPONENTS, emitFieldRendererComponents(fieldRendererComponents)],
     [
       OUT_GUARDED_TEST,
       emitGuardedOptionalLoadersTest({
