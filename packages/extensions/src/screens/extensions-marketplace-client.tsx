@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   Toolbar,
   ToolbarGroup,
@@ -11,6 +11,7 @@ import {
   ToolbarSearchGroup,
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
+import { MARKETPLACE_TABS, resolveMarketplaceTab } from "./marketplace-tab-model";
 import {
   Empty,
   EmptyHeader,
@@ -31,8 +32,10 @@ type CardMeta = {
   title: string;
   description: string | null;
   // Storefront-parity: author is dropped. `kind` is the normalized slug
-  // (includes "unknown" for contexts/dashboards/unmapped — shown only under "All").
-  kind: "agent" | "skill" | "connector" | "artifact" | "workflow" | "unknown" | null;
+  // (the four extension kinds, plus "unknown" for contexts/dashboards/unmapped
+  // AND the removed "workflow" kind — cinatra#1035; "unknown" cards show only
+  // under "All").
+  kind: "agent" | "skill" | "connector" | "artifact" | "unknown" | null;
 };
 
 type Props = {
@@ -57,7 +60,15 @@ export function MarketplaceGridLoadingFallback() {
 export function ExtensionsMarketplaceClient({ cards }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") ?? "all";
+  const rawTab = searchParams.get("tab");
+  // Canonicalize the tab query value. A stale/bookmarked `?tab=workflow` (the
+  // removed kind — cinatra#1035) resolves to the default "all" tab and is
+  // flagged stale so the effect below strips it — the route stays valid (never
+  // a 404, never a dead/empty tab). Any OTHER unknown value also renders "all"
+  // but is NOT flagged stale: the grid leaves a value it never owned in the URL
+  // (see resolveMarketplaceTab) so it can't clobber a co-mounted surface's
+  // `?tab=` — e.g. the installed-extensions filter's `?tab=archived`.
+  const { activeTab: tab, stale: tabStale } = resolveMarketplaceTab(rawTab);
   const search = (searchParams.get("q") ?? "").toLowerCase();
 
   const setParam = (key: string, value: string | null) => {
@@ -66,6 +77,18 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
     else next.set(key, value);
     router.replace(`?${next.toString()}`, { scroll: false });
   };
+
+  // Strip a stale `?tab=` value — ONLY a removed marketplace tab value (the
+  // retired "workflow") is flagged stale — from the URL so the canonical route
+  // carries no obsolete query. A foreign value the grid never owned is left
+  // in place (tabStale is false). Keyed on `rawTab` (via useSearchParams, which
+  // is reactive to a direct load, a client-side navigation, AND back/forward),
+  // so all three navigation paths canonicalize; `setParam("tab", null)` is a
+  // `router.replace`, so it never pushes history.
+  useEffect(() => {
+    if (tabStale) setParam("tab", null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawTab, tabStale]);
 
   // Debounce search input to avoid a router.replace on every keystroke.
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,20 +109,11 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
 
   const visibleCount = cards.filter((c) => matches(c.meta)).length;
 
-  const tabs: Array<{ value: string; label: string }> = [
-    { value: "all", label: "All" },
-    { value: "agent", label: "Agents" },
-    { value: "skill", label: "Skills" },
-    { value: "connector", label: "Connectors" },
-    { value: "artifact", label: "Artifacts" },
-    { value: "workflow", label: "Workflows" },
-  ];
-
   return (
     <div className="flex flex-col gap-6">
       <Toolbar aria-label="Marketplace filters">
         <ToolbarGroup>
-          {tabs.map((t) => (
+          {MARKETPLACE_TABS.map((t) => (
             <ToolbarButton
               key={t.value}
               active={tab === t.value}

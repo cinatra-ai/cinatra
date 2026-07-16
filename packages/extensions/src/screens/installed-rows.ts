@@ -56,6 +56,14 @@ import { settingsHrefFor } from "./extension-settings-model";
 
 export { settingsHrefFor };
 
+// The `workflow` entry is a transitional-bridge tail (cinatra#1035): the
+// canonical `ExtensionKind` still carries "workflow" until Slice G retires the
+// two static-manifest workflow dev-extensions, so this exhaustive
+// `Record<ExtensionKind, …>` must keep the key. It is NEVER indexed at runtime —
+// KIND_ORDER (below) excludes workflow, there is no workflow reader facet, and
+// the core__0048 CHECK rejects new workflow rows — so no "Workflow" label is
+// ever collected or rendered. The key is dropped with the ExtensionKind narrow
+// in Slice G.
 export const KIND_LABEL: Record<ExtensionKind, string> = {
   agent: "Agent",
   skill: "Skill",
@@ -64,13 +72,17 @@ export const KIND_LABEL: Record<ExtensionKind, string> = {
   workflow: "Workflow",
 };
 
-/** Stable render order: kinds in the platform's canonical order, then name. */
+/**
+ * Stable render order: the four extension kinds in the platform's canonical
+ * order, then name. The removed "workflow" kind is excluded (cinatra#1035), so
+ * `loadInstalledCardRows` never collects a workflow row — a persisted workflow
+ * install (which the core__0048 migration disposed of) surfaces nowhere.
+ */
 export const KIND_ORDER: ExtensionKind[] = [
   "agent",
   "skill",
   "connector",
   "artifact",
-  "workflow",
 ];
 
 export type InstalledCardRow = {
@@ -145,11 +157,6 @@ type ArtifactDescriptorLike = {
   /** … listArchived returns package-level fallback rows. */
   packageName?: string;
 };
-type WorkflowTemplateLike = {
-  packageName?: string | null;
-  name?: string;
-  description?: string | null;
-};
 
 /**
  * Collapse a kind's native descriptors into per-package card rows, hydrating
@@ -194,12 +201,10 @@ function collapseKindRows(input: {
     } else if (kind === "artifact") {
       const a = descriptor as ArtifactDescriptorLike;
       packageName = a.packageName ?? (a.type ? a.type.split(":")[0] : null);
-    } else {
-      const w = descriptor as WorkflowTemplateLike;
-      packageName = w.packageName ?? null;
-      nativeName = w.name ?? null;
-      nativeDescription = w.description ?? null;
     }
+    // No `else`: KIND_ORDER only drives the four extension kinds. A descriptor
+    // for any other (bridge-tolerated) kind leaves packageName null and is
+    // skipped below — never crashing on an unexpected kind (cinatra#1035).
     if (!packageName) continue;
 
     const existing = byPackage.get(packageName);
@@ -238,7 +243,7 @@ function collapseKindRows(input: {
       kind,
       packageName,
       // §VI card title. The artifact-kind descriptor carries no name (unlike
-      // agent/skill/connector/workflow), and a locked/system extension has no
+      // agent/skill/connector), and a locked/system extension has no
       // marketplace catalog summary — so its self-declared `cinatra.displayName`
       // (the same generated static manifest `vendorFor` reads for the byline)
       // is the source that rescues it from falling to the raw package name

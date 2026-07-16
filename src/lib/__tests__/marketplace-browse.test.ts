@@ -303,6 +303,41 @@ describe("loadPublicMarketplaceDetail", () => {
     expect(res.detail.iconUrl).toBe("https://cdn.example/i.png");
   });
 
+  it("forces the neutral 'Extension' label for a served 'workflow' kind — the wire kindLabel is not trusted (cinatra#1035)", async () => {
+    // The storefront may still serve a workflow detail until the Slice B delist.
+    // Its detail modal byline must NOT read "Workflow …" even when the wire
+    // ships kindLabel "Workflow": a removed/unmapped kind forces "Extension".
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/legacy-pipeline",
+      name: "@vendor/legacy-pipeline",
+      kind: "workflow",
+      currentVisibility: "public",
+      displayName: "Legacy Pipeline",
+      kindLabel: "Workflow",
+      latestVersion: "0.9.0",
+      description: "A retired workflow extension.",
+      longDescription: null,
+      readmeMarkdown: null,
+      license: "MIT",
+      commerceBadge: { text: "Open source", variant: "oss", license: "MIT" },
+      freshnessAt: null,
+      installCount: null,
+      permalink: null,
+      sdkAbiRange: null,
+      iconUrl: null,
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: { name: "Acme", slug: "acme", storeUrl: null },
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/legacy-pipeline");
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.displayName).toBe("Legacy Pipeline");
+    expect(res.detail.kindLabel).toBe("Extension");
+  });
+
   it("projects compatibleUpTo/changelog/dependencies (§V modal fields, cinatra#989)", async () => {
     publicDetailMock.mockResolvedValue({
       packageName: "@vendor/weather-agent",

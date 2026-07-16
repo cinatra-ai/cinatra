@@ -13,11 +13,11 @@ import type { InstalledUpdateChipState } from "./installed-update-chip";
 
 /** The kinds whose access policy is keyed by the canonical install row — the
  * identity install (setExtensionInstallAccess) and enforcement both use. Agent
- * / skill access lives on their own dedicated surfaces. */
+ * / skill access lives on their own dedicated surfaces. The removed "workflow"
+ * kind is gone (cinatra#1035). */
 export const ACCESS_POLICY_KINDS: readonly ExtensionKind[] = [
   "connector",
   "artifact",
-  "workflow",
 ];
 
 export const VALID_SETTINGS_KINDS: readonly ExtensionKind[] = [
@@ -25,7 +25,6 @@ export const VALID_SETTINGS_KINDS: readonly ExtensionKind[] = [
   "skill",
   "connector",
   "artifact",
-  "workflow",
 ];
 
 /**

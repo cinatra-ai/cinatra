@@ -29,7 +29,7 @@ export type ConformanceCardFixture = {
    */
   displayName: string;
   description: string;
-  kindSlug: "agent" | "skill" | "workflow" | "connector" | "artifact";
+  kindSlug: "agent" | "skill" | "connector" | "artifact";
   kindLabel: string;
   /** Declared ABI range: "*" reads compatible; an unsatisfiable range reads incompatible. */
   sdkAbiRange: string | null;

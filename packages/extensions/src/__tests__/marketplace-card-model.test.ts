@@ -139,11 +139,27 @@ describe("catalogEntryToCardData", () => {
     expect(card!.detailHref).toBe("/configuration/marketplace/cinatra-ai/blog-skills");
   });
 
-  it("normalizes unmapped kinds to unknown/Extension and still renders", () => {
-    // kind_label intentionally empty so the mapper must fall back centrally.
+  it("normalizes unmapped kinds to unknown/Extension and DOES NOT trust the wire kind_label", () => {
+    // A NON-EMPTY wire label must NOT reintroduce an unmapped kind's label:
+    // an unknown kind forces the neutral "Extension" regardless of the wire.
     const card = catalogEntryToCardData(
-      catalogEntry({ kind_slug: "context" as never, kind_label: "" }),
+      catalogEntry({ kind_slug: "context" as never, kind_label: "Context" }),
     );
+    expect(card!.kindSlug).toBe("unknown");
+    expect(card!.kindLabel).toBe("Extension");
+  });
+
+  it("tolerates a catalog entry unexpectedly carrying the removed 'workflow' kind — degrades to unknown, never renders a 'Workflow' label, never crashes (cinatra#1035)", () => {
+    // The producer stopped emitting workflow entries (Slice C+D), but the
+    // storefront may still serve one until the Slice B delist. A stray workflow
+    // entry must normalize to the neutral "unknown" card (shown only under
+    // "All") and NEVER render a "Workflow" label — even when the wire ships a
+    // non-empty kind_label "Workflow" (the wire label is not trusted for an
+    // unknown kind), and never throw.
+    const card = catalogEntryToCardData(
+      catalogEntry({ kind_slug: "workflow" as never, kind_label: "Workflow" }),
+    );
+    expect(card).not.toBeNull();
     expect(card!.kindSlug).toBe("unknown");
     expect(card!.kindLabel).toBe("Extension");
   });
