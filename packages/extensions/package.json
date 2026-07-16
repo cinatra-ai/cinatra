@@ -62,7 +62,6 @@
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/registries": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",
-    "@cinatra-ai/workflows": "workspace:*",
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.22.0",
