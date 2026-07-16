@@ -13,6 +13,7 @@ import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixt
 import { ConnectorSetupConformanceFixture } from "./connector-setup-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
+import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -162,6 +163,13 @@ export default function ConformanceHarnessPage() {
             approvals-inbox, approvals-your-requests, approvals-marketplace-states,
             scheduling-step, scheduling-trigger-tab. */}
         <ApprovalsSchedulingConformanceFixtures />
+
+        {/* /notifications unified-surface surfaces (conformance/app-notifications.json,
+            design@2bcc2c7e; cinatra#1549 E11-AC2): notifications-list,
+            notifications-filters, notification-row, approval-row,
+            notifications-filter-rail, notifications-bell, notifications-empty,
+            notifications-vendor-gate, notifications-degraded. */}
+        <NotificationsConformanceFixtures />
       </PageContent>
     </Main>
   );

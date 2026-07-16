@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "1.0.0",
+  "spec": "specs/app-notifications.html",
+  "contentHash": "sha256:962096a191d167fbed4e84b50d6fbe9421d5afe10bc0f9b2fae52d2c18ed48c5",
+  "surfaces": [
+    {
+      "id": "notifications-list",
+      "fields": [
+        {
+          "field": "title",
+          "source": "item.title"
+        }
+      ],
+      "actions": [
+        {
+          "action": "decide-approval",
+          "outcome": "decided"
+        }
+      ],
+      "states": [
+        "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "notifications-filters",
+      "fields": [],
+      "actions": [
+        {
+          "action": "filter",
+          "outcome": "filtered"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "notification-row",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "approval-row",
+      "fields": [],
+      "actions": [
+        {
+          "action": "decide-approval",
+          "outcome": "decided"
+        }
+      ],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "notifications-filter-rail",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "notifications-bell",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open",
+          "outcome": "navigated"
+        }
+      ],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "notifications-empty",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "notifications-vendor-gate",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "notifications-degraded",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    }
+  ]
+}
