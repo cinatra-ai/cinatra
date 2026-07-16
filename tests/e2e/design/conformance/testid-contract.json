@@ -69,11 +69,11 @@
     },
     "installed-extensions-filter": {
       "manifest": "app-extensions",
-      "selector": "combobox [aria-label=\"Filter installed extensions by state\"] (URL-driven ?tab= server filter)",
+      "selector": "combobox [aria-label=\"Filter installed extensions by state\"] (URL-driven ?tab= server filter: all|active|locked|archived, cinatra#1571)",
       "requires": [
         {
           "file": "src/components/extensions/extensions-tab-select.tsx",
-          "literals": ["aria-label=\"Filter installed extensions by state\"", "tab=archived"]
+          "literals": ["aria-label=\"Filter installed extensions by state\"", "tab=${tab}"]
         }
       ]
     },

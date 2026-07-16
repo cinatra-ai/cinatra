@@ -7,8 +7,14 @@ import { requireAuthSession } from "@/lib/auth-session";
 // (the modal renders its own graceful `notfound` state instead).
 import { MarketplaceDetailModal } from "./marketplace-detail-modal";
 // §VI empty states — extracted (cinatra#986) so the design-conformance seeded
-// harness renders the SAME presentations this screen does.
-import { ActiveEmptyState, ArchivedEmptyState } from "./installed-empty-states";
+// harness renders the SAME presentations this screen does. Locked/All added with
+// the full status filter (cinatra#1571).
+import {
+  ActiveEmptyState,
+  AllEmptyState,
+  ArchivedEmptyState,
+  LockedEmptyState,
+} from "./installed-empty-states";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { marketplaceDetailHref } from "./marketplace-card-model";
 // Installed-extension row model + loader — the SHARED hydration path the
@@ -16,10 +22,15 @@ import { marketplaceDetailHref } from "./marketplace-card-model";
 // and its settings header never disagree on display fields (cinatra#1114).
 import {
   KIND_LABEL,
+  KIND_ORDER,
   loadInstalledCardRows,
   rowKey,
   type InstalledCardRow,
 } from "./installed-rows";
+// §VI status filter (cinatra#1571): the pure `?tab=` contract — the option set +
+// its order + the URL-value canonicalizer, shared with the ExtensionsTabSelect
+// control so the pushed URL and the partition rendered here never disagree.
+import { resolveInstalledTab } from "@/components/extensions/installed-tab-model";
 // §II modal-footer update flow (cinatra#1041 outcome 2): the dry-run planner
 // action + the batch-routed apply, bound per row for the update-available state.
 import { updateExtensionPackageFormAction } from "../actions";
@@ -83,13 +94,16 @@ export async function RegistryCatalogScreen({
 
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
 
-  // URL-driven tab selection. Server-side narrowing: only "archived" is
-  // accepted; any other value falls through to "active". A locked/system
-  // extension is live, so it renders in the Active partition by design — a
-  // dedicated "Locked" view (which would concentrate these cards) is the
-  // separate status-filter expansion (cinatra#1571, blocked by #1570), not a
-  // narrowing this screen adds here.
-  const tab = resolvedSearchParams?.tab === "archived" ? "archived" : "active";
+  // URL-driven status filter (cinatra#1571): the full status set All / Active /
+  // Locked / Archived. `resolveInstalledTab` is the single canonicalizer (shared
+  // with the ExtensionsTabSelect control): absent / no-query → the default
+  // "active" view; all|active|locked|archived → that view; any invalid/unknown
+  // value → the default "active" view (a defined, tested fallback — never a 404,
+  // never a misrender). Locked/system extensions are live but now get their OWN
+  // view, so the status views are a clean partition (Active / Locked / Archived
+  // are disjoint by status; All is their union) — no row dropped or duplicated
+  // across views (AC5).
+  const tab = resolveInstalledTab(resolvedSearchParams?.tab);
   // §V settings-row deep link (cinatra#1041): `?update=<packageName>` opens the
   // matching row's detail modal directly (its footer carries the update flow
   // when one is available — otherwise the modal opens details-only, graceful).
@@ -381,7 +395,13 @@ export async function RegistryCatalogScreen({
 
   const renderCard = (row: InstalledCardRow, isArchived: boolean) => (
     <InstalledExtensionCard
-      key={rowKey(row.kind, row.packageName)}
+      // Key includes status: the loader deliberately surfaces the SAME
+      // kind/packageName once live and once archived when a package is live under
+      // one visible install identity and archived under another (installed-rows.ts
+      // "live wins is per-IDENTITY"). The All view (cinatra#1571) renders both in
+      // one list, so keying by kind/packageName alone would collide — status
+      // disambiguates the two cards. Per-tab views are unaffected (one status each).
+      key={`${rowKey(row.kind, row.packageName)}::${row.status}`}
       name={row.displayName}
       accentColor={deriveExtensionAccent(row.packageName)}
       emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
@@ -420,6 +440,33 @@ export async function RegistryCatalogScreen({
     />
   );
 
+  // §VI status-filter partition (cinatra#1571). The loader's `activeRows` is the
+  // LIVE set (status active OR locked); split it by status so Locked gets its
+  // OWN view and Active shows only truly-active rows. "All" is the union of every
+  // status, re-sorted by the shared kind-then-name order. The three status views
+  // are disjoint (each row lands in exactly ONE of Active / Locked / Archived)
+  // and All is their union — so no row is dropped or duplicated across views, and
+  // the counts add up (AC5). NOTE: the full `activeRows` set still feeds the
+  // update-chip + configuration-needs derivations above (a locked required-in-
+  // prod agent can still need configuration), so only the RENDERED partition
+  // narrows here.
+  const activeOnlyRows = activeRows.filter((row) => row.status === "active");
+  const lockedRows = activeRows.filter((row) => row.status === "locked");
+  const allRows = [...activeRows, ...archivedRows].sort((a, b) => {
+    const kindDelta = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
+    if (kindDelta !== 0) return kindDelta;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  const { rows, emptyState } =
+    tab === "all"
+      ? { rows: allRows, emptyState: <AllEmptyState /> }
+      : tab === "locked"
+        ? { rows: lockedRows, emptyState: <LockedEmptyState /> }
+        : tab === "archived"
+          ? { rows: archivedRows, emptyState: <ArchivedEmptyState /> }
+          : { rows: activeOnlyRows, emptyState: <ActiveEmptyState /> };
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -429,7 +476,7 @@ export async function RegistryCatalogScreen({
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         {/* Toolbar layout per the design system's Installed-extensions
-            section: the Active/Archived status filter on the left;
+            section: the All/Active/Locked/Archived status filter on the left;
             "Marketplace" + "Upload" on the right. */}
         <Toolbar aria-label="Extensions filters">
           <ToolbarGroup>
@@ -452,31 +499,31 @@ export async function RegistryCatalogScreen({
           </ToolbarGroup>
         </Toolbar>
 
-        {tab === "active" ? (
-          <div className="flex flex-col gap-6">
-            {/* Recent dependency-install batches: per-member progress +
-                compensation outcomes from the durable ledger (cinatra #209
-                item 2, surfaces 2 & 3). Renders nothing when there are no
-                batches. While any batch is non-terminal, poll
-                router.refresh() so the server snapshot below stays live
-                (cinatra #851 finding 3). */}
-            <InstallBatchLiveRefresh active={hasActiveInstallBatch(recentBatches)} />
-            <InstallBatchPanel batches={recentBatches} />
-            {activeRows.length === 0 ? (
-              <ActiveEmptyState />
-            ) : (
-              <div className="grid gap-3">{activeRows.map((row) => renderCard(row, false))}</div>
-            )}
-          </div>
-        ) : (
-          <div>
-            {archivedRows.length === 0 ? (
-              <ArchivedEmptyState />
-            ) : (
-              <div className="grid gap-3">{archivedRows.map((row) => renderCard(row, true))}</div>
-            )}
-          </div>
-        )}
+        <div className="flex flex-col gap-6">
+          {/* Recent dependency-install batches: per-member progress +
+              compensation outcomes from the durable ledger (cinatra #209
+              item 2, surfaces 2 & 3). Rendered on the default Active view (where
+              a fresh install lands), unchanged by the status-filter expansion.
+              Renders nothing when there are no batches. While any batch is
+              non-terminal, poll router.refresh() so the server snapshot below
+              stays live (cinatra #851 finding 3). */}
+          {tab === "active" ? (
+            <>
+              <InstallBatchLiveRefresh active={hasActiveInstallBatch(recentBatches)} />
+              <InstallBatchPanel batches={recentBatches} />
+            </>
+          ) : null}
+          {rows.length === 0 ? (
+            emptyState
+          ) : (
+            <div className="grid gap-3">
+              {/* `isArchived` is per-row (row.status), NOT per-tab: under the
+                  mixed "All" view an archived row is still greyed and a
+                  live/locked row still live. */}
+              {rows.map((row) => renderCard(row, row.status === "archived"))}
+            </div>
+          )}
+        </div>
       </PageContent>
     </Main>
   );
