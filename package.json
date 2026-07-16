@@ -34,6 +34,7 @@
       "@cinatra-ai/apollo-connector": "https://github.com/cinatra-ai/apollo-connector.git",
       "@cinatra-ai/apollo-prospecting-agent": "https://github.com/cinatra-ai/apollo-prospecting-agent.git",
       "@cinatra-ai/assistant-skills": "https://github.com/cinatra-ai/assistant-skills.git",
+      "@cinatra-ai/audio-artifact": "https://github.com/cinatra-ai/audio-artifact.git",
       "@cinatra-ai/auditor-agent": "https://github.com/cinatra-ai/auditor-agent.git",
       "@cinatra-ai/author-agent": "https://github.com/cinatra-ai/author-agent.git",
       "@cinatra-ai/blog-connector": "https://github.com/cinatra-ai/blog-connector.git",
@@ -74,6 +75,7 @@
       "@cinatra-ai/gmail-connector": "https://github.com/cinatra-ai/gmail-connector.git",
       "@cinatra-ai/google-calendar-connector": "https://github.com/cinatra-ai/google-calendar-connector.git",
       "@cinatra-ai/google-oauth-connector": "https://github.com/cinatra-ai/google-oauth-connector.git",
+      "@cinatra-ai/image-artifact": "https://github.com/cinatra-ai/image-artifact.git",
       "@cinatra-ai/linkedin-connector": "https://github.com/cinatra-ai/linkedin-connector.git",
       "@cinatra-ai/linkedin-oauth-connector": "https://github.com/cinatra-ai/linkedin-oauth-connector.git",
       "@cinatra-ai/lint-policy-agent": "https://github.com/cinatra-ai/lint-policy-agent.git",
@@ -87,6 +89,7 @@
       "@cinatra-ai/media-transcript-agent": "https://github.com/cinatra-ai/media-transcript-agent.git",
       "@cinatra-ai/nango-connector": "https://github.com/cinatra-ai/nango-connector.git",
       "@cinatra-ai/openai-connector": "https://github.com/cinatra-ai/openai-connector.git",
+      "@cinatra-ai/pdf-artifact": "https://github.com/cinatra-ai/pdf-artifact.git",
       "@cinatra-ai/plane-connector": "https://github.com/cinatra-ai/plane-connector.git",
       "@cinatra-ai/planner-agent": "https://github.com/cinatra-ai/planner-agent.git",
       "@cinatra-ai/product-portfolio-artifact": "https://github.com/cinatra-ai/product-portfolio-artifact.git",
@@ -101,6 +104,7 @@
       "@cinatra-ai/social-media-connector": "https://github.com/cinatra-ai/social-media-connector.git",
       "@cinatra-ai/tailscale-connector": "https://github.com/cinatra-ai/tailscale-connector.git",
       "@cinatra-ai/twenty-connector": "https://github.com/cinatra-ai/twenty-connector.git",
+      "@cinatra-ai/video-artifact": "https://github.com/cinatra-ai/video-artifact.git",
       "@cinatra-ai/web-research-agent": "https://github.com/cinatra-ai/web-research-agent.git",
       "@cinatra-ai/web-scrape-agent": "https://github.com/cinatra-ai/web-scrape-agent.git",
       "@cinatra-ai/wordpress-agent": "https://github.com/cinatra-ai/wordpress-agent.git",
@@ -117,7 +121,11 @@
       "@cinatra-ai/lint-policy-agent",
       "@cinatra-ai/security-reviewer-agent",
       "@cinatra-ai/assistant-skills",
-      "@cinatra-ai/default-artifact"
+      "@cinatra-ai/default-artifact",
+      "@cinatra-ai/image-artifact",
+      "@cinatra-ai/pdf-artifact",
+      "@cinatra-ai/audio-artifact",
+      "@cinatra-ai/video-artifact"
     ],
     "extensions": [
       "@cinatra-ai/nango-connector@^0.1.0",
@@ -128,7 +136,11 @@
       "@cinatra-ai/lint-policy-agent@^0.1.0",
       "@cinatra-ai/security-reviewer-agent@^0.1.0",
       "@cinatra-ai/assistant-skills@^0.1.0",
-      "@cinatra-ai/default-artifact@^0.1.0"
+      "@cinatra-ai/default-artifact@^0.1.0",
+      "@cinatra-ai/image-artifact@^0.1.0",
+      "@cinatra-ai/pdf-artifact@^0.1.0",
+      "@cinatra-ai/audio-artifact@^0.1.0",
+      "@cinatra-ai/video-artifact@^0.1.0"
     ],
     "registryPolicy": {
       "temporary": false,
