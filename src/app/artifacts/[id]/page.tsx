@@ -56,7 +56,7 @@ import {
   type ArtifactRenderDispatch,
 } from "./renderer-dispatch";
 import { resolveArtifactDispatchInputs } from "./renderer-resolution";
-import { ExtensionRendererSlot } from "./extension-renderer-slot";
+import { ExtensionRendererMount } from "./extension-renderer-mount";
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
 import { MarkdownHandler } from "./handlers/markdown-handler";
 import { PlainTextHandler } from "./handlers/plain-text-handler";
@@ -214,12 +214,15 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
         {(() => {
           switch (dispatch.kind) {
             // Extension-shipped semantic detail renderer or representation
-            // viewer — mounted through the failure-isolated loader; degrades to
-            // the generic floor + a sanitized notice on any pre-render failure.
+            // viewer — MOUNTED through `ExtensionRendererMount`, which classifies
+            // the loadable path: the build-map SSR fast path (system/first-party
+            // bases) OR the main-realm dynamic client loader (marketplace-
+            // installed, zero host rebuild). Either degrades to the generic floor
+            // + a sanitized notice on any pre-render/pre-import failure.
             case "semantic":
             case "representation":
               return (
-                <ExtensionRendererSlot
+                <ExtensionRendererMount
                   generatedKey={dispatch.generatedKey}
                   packageName={dispatch.packageName}
                   slot={dispatch.kind === "semantic" ? "detail" : "preview"}
