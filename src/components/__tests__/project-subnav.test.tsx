@@ -1,7 +1,7 @@
 /**
- * ProjectSubnav — the shared Overview / Permissions / Agents / Customers
- * section bar rendered on every /projects/[projectId] detail page
- * (cinatra#1504).
+ * ProjectSubnav — the shared Overview / Permissions section bar rendered on
+ * the /projects/[projectId] route-section sub-pages (cinatra#1504; the
+ * Customers + Agents sections were removed in #707).
  *
  * Mirrors the established route-tab pattern (src/components/agents-tab-nav.tsx):
  * each tab renders as a real <Link> (a full route navigation), and the active
@@ -31,13 +31,15 @@ function trigger(html: string, href: string, label: string): string {
 }
 
 describe("ProjectSubnav", () => {
-  it("renders all four sibling sections with the correct hrefs", () => {
+  it("renders both sibling sections with the correct hrefs", () => {
     const html = renderToStaticMarkup(
       <ProjectSubnav projectId={PROJECT_ID} activeSection="overview" />,
     );
     trigger(html, `/projects/${PROJECT_ID}`, "Overview");
     trigger(html, `/projects/${PROJECT_ID}/permissions`, "Permissions");
-    trigger(html, `/projects/${PROJECT_ID}/agents`, "Agents");
+    // The Agents (and Customers) sections were removed in #707.
+    expect(html).not.toContain(`/projects/${PROJECT_ID}/agents`);
+    expect(html).not.toContain(`/projects/${PROJECT_ID}/customers`);
   });
 
   it("marks exactly the active section active, for every section", () => {
@@ -59,7 +61,7 @@ describe("ProjectSubnav", () => {
     }
   });
 
-  it("keeps the four-tab row horizontally scrollable on narrow viewports", () => {
+  it("keeps the section row horizontally scrollable on narrow viewports", () => {
     const html = renderToStaticMarkup(
       <ProjectSubnav projectId={PROJECT_ID} activeSection="overview" />,
     );

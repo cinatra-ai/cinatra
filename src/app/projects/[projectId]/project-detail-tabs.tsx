@@ -10,10 +10,11 @@
  *     whose non-removable default "Overview" renders the project's current
  *     metadata + sealed-room counts as portlets (#702).
  *   - "Permissions" — today's project permissions content (ownership, N:M
- *     project-access grants, and — for admins — external guest grants).
+ *     project-access grants, and — for admins — external guest grants, the
+ *     folded-in former project Customers surface).
  *
- * Route deletions and the customers fold are the SEPARATE cleanup slice (#707);
- * this component adds the tabs only and deletes nothing.
+ * The customers fold plus the /customers and /agents route deletions landed in
+ * the #707 cleanup slice; this component renders the two tabs.
  */
 import { Tabs, TabsListRow, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AccessVsOwnershipNote } from "@/components/access-vs-ownership-note";

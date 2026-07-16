@@ -66,10 +66,12 @@ type Props = {
 //      (`*.project_id = $projectId`), so the numbers match what the sealed room
 //      exposes through its tooling.
 //   3. A "Permissions" tab — today's project permissions content (ownership,
-//      N:M project-access grants, and — for admins — external guest grants).
+//      N:M project-access grants, and — for admins — external guest grants;
+//      the folded-in Guests section is the former project Customers surface).
 //
-// Route deletions (/customers, /agents) and the customers fold are the SEPARATE
-// cleanup slice (#707); nothing is deleted here.
+// The legacy /customers and /agents routes + their nav buttons were removed in
+// the #707 cleanup slice (customers folded into the Permissions Guests section
+// in #1640; /customers 404s with no redirect).
 // ---------------------------------------------------------------------------
 
 const VALID_OWNER_LEVELS: ReadonlySet<string> = new Set([
