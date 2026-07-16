@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Suspense, type ComponentType } from "react";
 import { NangoManagedApiCard } from "@cinatra-ai/sdk-ui/nango";
+import Link from "next/link";
+
 import { maskApiKey } from "./mask-api-key";
 import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango-system";
 import { PageHeader } from "@/components/page-header";
@@ -167,14 +169,14 @@ async function OpenAIModalContent() {
             <FieldDescription>
               Scope API usage to a specific OpenAI project — not a Cinatra
               project. Leave blank to use the key&apos;s default. Find it under{" "}
-              <a
+              <Link
                 href="https://platform.openai.com/settings/organization/projects"
                 target="_blank"
-                rel="noreferrer"
-                className="underline"
+                rel="noopener noreferrer"
+                className="text-primary underline"
               >
                 OpenAI platform settings
-              </a>
+              </Link>
               .
             </FieldDescription>
           </Field>
