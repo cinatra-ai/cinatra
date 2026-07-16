@@ -236,6 +236,46 @@ function normalizeCardVendor(
 }
 
 /**
+ * Trim + case-fold a candidate for anti-lookalike IDENTITY comparison. npm
+ * names are lowercase by spec (`SCOPED_NPM_NAME_RE`), but a catalog value that
+ * echoes the identity may vary case, so both sides are folded before the
+ * equality test. Case-fold ONLY — no hyphen/underscore→space rewrite — so a
+ * genuine human name that merely de-hyphenates the slug ("Blog Skills" vs the
+ * slug "blog-skills") stays DISTINCT and still wins tier-1.
+ */
+function foldIdentity(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+/**
+ * True when `candidate` is the package IDENTITY wearing a `display_name` — the
+ * raw scoped npm name, or one of the machine-identifier forms the codebase
+ * ALREADY derives from it:
+ *   - the exact scoped name (`@cinatra-ai/mcp-client-connector`);
+ *   - the detail-route form with the leading "@" dropped
+ *     (`cinatra-ai/mcp-client-connector`, `marketplaceDetailHref`);
+ *   - the unscoped slug (`mcp-client-connector`, `deriveIconSlug`).
+ *
+ * These are exactly the identity transformations the app performs elsewhere;
+ * treating a `display_name` equal to any of them as the machine identifier (not
+ * a human name) is the SAME anti-lookalike discipline the vendor byline applies
+ * — it never lets a slug / package scope stand in for a human display name
+ * (cinatra#1528 / #1589). Compared trim- and case-insensitively (`foldIdentity`)
+ * but NOT prettified: the raw slug "blog-skills" matches, while a genuinely
+ * distinct catalog name ("MCP Clients", "Blog Skills") does not.
+ */
+function isPackageNameLookalike(candidate: string, packageName: string): boolean {
+  const folded = foldIdentity(candidate);
+  if (folded.length === 0) return false;
+  const pkg = foldIdentity(packageName);
+  if (folded === pkg) return true; // exact scoped npm name
+  if (folded === pkg.replace(/^@/, "")) return true; // detail-route form (marketplaceDetailHref)
+  const slug = deriveIconSlug(packageName); // unscoped slug (deriveIconSlug)
+  if (slug !== null && folded === foldIdentity(slug)) return true;
+  return false;
+}
+
+/**
  * Resolve the card's human display name in the design-spec fallback order
  * (cinatra#1605). Every rendered name on `/configuration/marketplace` — the
  * listing-card title, the install popup title, and the detail modal, which all
@@ -244,11 +284,21 @@ function normalizeCardVendor(
  *
  * Highest priority first:
  *   1. a NON-EMPTY, trimmed catalog `display_name` — the current marketplace
- *      data wins (a listed package keeps the name it already rendered);
+ *      data wins (a listed package keeps the name it already rendered) — UNLESS
+ *      that value merely echoes the package IDENTITY (the raw scoped name, or a
+ *      machine-identifier form the app derives from it — `isPackageNameLookalike`).
+ *      Such a value is NOT a human name, so it is treated as ABSENT and tier 2
+ *      fires. This is the cinatra#1605 live finding: the production storefront
+ *      stores the package name AS `display_name` for 54/83 entries, so a plain
+ *      "non-empty wins" leaked the raw package name for the majority of
+ *      extensions and the manifest rescue never fired. (The DURABLE fix is the
+ *      catalog backfill — mkt#217 / mkt#229, on the release wave; this is the
+ *      app-side defensive resolution.)
  *   2. the extension's SELF-DECLARED `cinatra.displayName` from the generated
  *      static manifest, matched by EXACT package identity in the browse loader —
- *      this rescues a bundled extension whose catalog entry omits the field
- *      (e.g. `@cinatra-ai/default-artifact` → "Default Artifact");
+ *      this rescues a bundled extension whose catalog entry omits (or echoes the
+ *      package name in) the field (e.g. `@cinatra-ai/default-artifact` →
+ *      "Default Artifact");
  *   3. the raw package name — a TRUE LAST RESORT, meaning neither the catalog
  *      nor the static manifest supplied a human name (a data gap, not a routine
  *      state). Shown verbatim: never prettified into a fake human name, and the
@@ -257,15 +307,22 @@ function normalizeCardVendor(
  *
  * Blank / whitespace values at any tier are treated as absent
  * (`normalizeOptionalString`), so a `"  "` catalog `display_name` falls through
- * to the manifest rather than rendering as an empty title.
+ * to the manifest rather than rendering as an empty title. A genuinely distinct
+ * catalog name always wins tier 1.
  */
 export function resolveCardDisplayName(
   catalogDisplayName: string | null | undefined,
   manifestDisplayName: string | null | undefined,
   packageName: string,
 ): string {
+  const catalog = normalizeOptionalString(catalogDisplayName);
+  // A catalog value that merely echoes the package identity is treated as
+  // ABSENT (cinatra#1605), so the manifest rescue below can fire instead of
+  // rendering the raw package name as if it were a human name.
+  const catalogHumanName =
+    catalog !== null && !isPackageNameLookalike(catalog, packageName) ? catalog : null;
   return (
-    normalizeOptionalString(catalogDisplayName) ??
+    catalogHumanName ??
     normalizeOptionalString(manifestDisplayName) ??
     packageName
   );
