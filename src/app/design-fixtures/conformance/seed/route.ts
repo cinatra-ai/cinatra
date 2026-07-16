@@ -59,6 +59,30 @@ const SEED_ACTOR: TransitionOpts = {
   reason: "cinatra#986 design-conformance seeded-fixture provisioning",
 };
 
+// Locked fixture rows (cinatra#1571) reject every destructive op (force_delete /
+// archive / …) by the lifecycle matrix. The seed OWNS every @cinatra-e2e/<runId>
+// row, so both convergence-teardown and the DELETE cleanup must UNLOCK a locked
+// row first — platform-admin + allowUnlock, scoped to the seed's own namespace —
+// or a locked seed could never be removed or transitioned out of the kit.
+const SEED_UNLOCK: TransitionOpts = {
+  actor: { source: "design-conformance-seed", roles: ["platform_admin"] },
+  reason: "cinatra#1571 seed teardown — unlock a locked fixture row before removal",
+  allowUnlock: true,
+};
+
+/**
+ * Destructively remove a seeded namespace row, unlocking a locked row first
+ * (the lifecycle matrix rejects force_delete on a locked row). Used by both the
+ * POST stale-row sweep and the DELETE per-run cleanup so a locked fixture row
+ * never wedges convergence or teardown.
+ */
+async function forceRemoveRow(store: Store, row: InstalledExtension): Promise<void> {
+  if (row.status === "locked") {
+    await store.transitionExtensionLifecycle(row.id, "unlock", SEED_UNLOCK);
+  }
+  await store.transitionExtensionLifecycle(row.id, "force_delete", SEED_ACTOR);
+}
+
 function seedingEnabled(): boolean {
   if (process.env.NODE_ENV !== "production") return true;
   return process.env.CINATRA_E2E_SETUP_BYPASS === "true";
@@ -80,7 +104,7 @@ type TargetRow = {
   id: string;
   packageName: string;
   kind: InstalledExtension["kind"];
-  status: "active" | "archived";
+  status: "active" | "locked" | "archived";
   version: string;
   /** verdaccio source registryUrl (cinatra#1572); defaults to SEEDED_SOURCE_REGISTRY_URL. */
   registryUrl: string;
@@ -162,6 +186,11 @@ async function installTargetRow(store: Store, target: TargetRow, runId: string):
   );
   if (target.status === "archived") {
     await store.transitionExtensionLifecycle(target.id, "archive", SEED_ACTOR);
+  } else if (target.status === "locked") {
+    // The REAL `lock` lifecycle transition (admin/required-in-prod semantics) —
+    // the only way to seed a status === 'locked' row so the Locked view
+    // (cinatra#1571) and the All view have a genuine locked card to render.
+    await store.transitionExtensionLifecycle(target.id, "lock", SEED_ACTOR);
   }
 }
 
@@ -185,7 +214,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   for (const row of existing) {
     const target = targetById.get(row.id);
     if (target && matchesTarget(row, target)) continue;
-    await store.transitionExtensionLifecycle(row.id, "force_delete", SEED_ACTOR);
+    await forceRemoveRow(store, row);
     removed += 1;
   }
 
@@ -218,11 +247,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       continue;
     }
     if (row.status !== target.status) {
-      await store.transitionExtensionLifecycle(
-        target.id,
-        target.status === "archived" ? "archive" : "activate",
-        SEED_ACTOR,
-      );
+      // Converge a survivor's status to its committed target. A fresh locked
+      // base is locked at install time (installTargetRow); this path runs only
+      // for a base whose committed status CHANGED across commits. A LOCKED
+      // survivor rejects 'archive' and stays locked through 'activate' (only an
+      // admin unlock demotes locked→active), so a locked survivor moving to any
+      // non-locked target must be UNLOCKED first (seed-owned, platform-admin);
+      // it is then active and the target op applies cleanly.
+      if (row.status === "locked" && target.status !== "locked") {
+        await store.transitionExtensionLifecycle(target.id, "unlock", SEED_UNLOCK);
+      }
+      const op =
+        target.status === "archived"
+          ? "archive"
+          : target.status === "locked"
+            ? "lock"
+            : "activate";
+      await store.transitionExtensionLifecycle(target.id, op, SEED_ACTOR);
       transitioned += 1;
     }
   }
@@ -239,7 +280,7 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
   const store = await loadStore();
   const existing = await namespaceRows(store, runId);
   for (const row of existing) {
-    await store.transitionExtensionLifecycle(row.id, "force_delete", SEED_ACTOR);
+    await forceRemoveRow(store, row);
   }
   return NextResponse.json({ runId, removed: existing.length });
 }

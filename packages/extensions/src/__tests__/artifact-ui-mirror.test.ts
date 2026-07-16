@@ -108,4 +108,32 @@ describe("handler.validate — cinatra.artifact.ui fail-closed at publish", () =
     );
     expect(r.valid).toBe(false);
   });
+
+  // cinatra#1623 (S5): registryItems flow through the SAME leaf verdict.
+  it("accepts a registryItems-only ui block (no renderers — the S5 relaxation)", async () => {
+    const r = await validate(
+      artifactManifest({
+        abiVersion: 1,
+        sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+        registryItems: [
+          { name: "stat-tile", entry: "./src/registry/stat-tile.tsx", type: "registry:ui", description: "A KPI tile." },
+        ],
+      }),
+    );
+    expect(r.valid).toBe(true);
+  });
+
+  it("REJECTS a malformed registryItem (bad component name) fail-closed at publish", async () => {
+    const r = await validate(
+      artifactManifest({
+        abiVersion: 1,
+        sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+        registryItems: [
+          { name: "StatTile", entry: "./src/registry/stat-tile.tsx", type: "registry:ui", description: "bad name." },
+        ],
+      }),
+    );
+    expect(r.valid).toBe(false);
+    expect((r.errors ?? []).join(" ")).toMatch(/cinatra\.artifact\.ui is rejected/);
+  });
 });

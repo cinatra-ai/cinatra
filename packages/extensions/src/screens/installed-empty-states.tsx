@@ -1,4 +1,4 @@
-import { Archive, Package } from "lucide-react";
+import { Archive, Lock, Package } from "lucide-react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,42 @@ export function ArchivedEmptyState() {
         Extensions uninstalled after first use appear here. Their run history
         remains intact.
       </p>
+    </div>
+  );
+}
+
+export function LockedEmptyState() {
+  return (
+    <div
+      data-testid="installed-extensions-empty"
+      data-tab="locked"
+      className="soft-panel rounded-card flex flex-col items-center justify-center py-16 text-center gap-3"
+    >
+      <Lock className="h-8 w-8 text-muted-foreground" />
+      <p className="font-semibold text-foreground">No locked extensions</p>
+      <p className="text-sm text-muted-foreground">
+        Required and system extensions that cannot be archived appear here when
+        locked.
+      </p>
+    </div>
+  );
+}
+
+export function AllEmptyState() {
+  return (
+    <div
+      data-testid="installed-extensions-empty"
+      data-tab="all"
+      className="soft-panel rounded-card flex flex-col items-center justify-center py-16 text-center gap-3"
+    >
+      <Package className="h-8 w-8 text-muted-foreground" />
+      <p className="font-semibold text-foreground">No extensions installed</p>
+      <p className="text-sm text-muted-foreground">
+        Nothing is installed in any state yet. Browse the marketplace to add one.
+      </p>
+      <Button asChild variant="outline" size="sm">
+        <Link href="/configuration/marketplace">Browse marketplace</Link>
+      </Button>
     </div>
   );
 }

@@ -18,10 +18,12 @@
 //   EXACT CARDINALITY — every cardinality-bearing surface has its own count
 //   constant, and counts of collections that could be cross-wired are
 //   pairwise DISTINCT (grid 6 ≠ installed-active 4 ≠ installed-archived 2 ≠
-//   connectors-connected 3 ≠ connectors-disconnected 5), so a driver counting
-//   the wrong collection cannot accidentally pass. (grid dropped 7→6 and the
-//   installed-active workflow row became a connector when the 'workflow' kind
-//   was removed — cinatra#1035 — both preserving the distinctness.)
+//   installed-locked 1 ≠ installed-all 7 ≠ connectors-connected 3 ≠
+//   connectors-disconnected 5), so a driver counting the wrong collection
+//   cannot accidentally pass. (grid dropped 7→6 and the installed-active
+//   workflow row became a connector when the 'workflow' kind was removed —
+//   cinatra#1035; the status filter added the Locked view + one locked row —
+//   cinatra#1571 — all preserving the distinctness.)
 //
 //   PER-RUN ISOLATION — DB-backed seeds are namespaced by a run id
 //   (CINATRA_CONFORMANCE_RUN_ID; "local" fallback). Provisioning converges the
@@ -72,7 +74,9 @@ export type SeededInstalledExtension = {
   // be seeded into the canonical store (cinatra#1035).
   kind: "agent" | "skill" | "connector" | "artifact";
   kindLabel: string;
-  status: "active" | "archived";
+  // 'locked' added with the status filter's Locked view (cinatra#1571): a
+  // required/system extension the status partition now surfaces on its own.
+  status: "active" | "locked" | "archived";
   version: string;
   /** Anti-lookalike: shares no token with `base`. */
   displayName: string;
@@ -152,6 +156,22 @@ export const SEEDED_INSTALLED_EXTENSIONS: SeededInstalledExtension[] = [
     vendor: "Cinatra Fixtures",
   },
   {
+    // The ONLY locked row: proves the Locked view (cinatra#1571) surfaces
+    // status === 'locked' rows on their own AND that they also appear under All
+    // — a status the previous binary Active/Archived filter could never isolate.
+    // An agent (platform-anchored, so no org-anchor invariant), locked by the
+    // seed route through the REAL `lock` lifecycle transition. Keeps the counts
+    // pairwise-distinct: active 4, locked 1, archived 2, all 7.
+    base: "sentinel-guard",
+    kind: "agent",
+    kindLabel: "Agent",
+    status: "locked",
+    version: "1.0.0",
+    displayName: "Perimeter Watchtower",
+    description: "Required policy agent that cannot be archived while in force.",
+    vendor: "Cinatra Fixtures",
+  },
+  {
     base: "ledger-link",
     kind: "connector",
     kindLabel: "Connector",
@@ -177,9 +197,14 @@ export const SEEDED_INSTALLED_ACTIVE_COUNT = SEEDED_INSTALLED_EXTENSIONS.filter(
   (r) => r.status === "active",
 ).length; // 4 (workflow active row → active connector — cinatra#1035; stays 4 to
 // keep the pairwise-distinct cardinality invariant, see the header note)
+export const SEEDED_INSTALLED_LOCKED_COUNT = SEEDED_INSTALLED_EXTENSIONS.filter(
+  (r) => r.status === "locked",
+).length; // 1 (the Locked view, cinatra#1571 — distinct from every other count)
 export const SEEDED_INSTALLED_ARCHIVED_COUNT = SEEDED_INSTALLED_EXTENSIONS.filter(
   (r) => r.status === "archived",
 ).length; // 2
+/** Every installed row regardless of status — the "All" view (cinatra#1571). */
+export const SEEDED_INSTALLED_ALL_COUNT = SEEDED_INSTALLED_EXTENSIONS.length; // 7
 
 /** Registry/source provenance constants for the seeded verdaccio rows. */
 export const SEEDED_SOURCE_REGISTRY_URL = "https://design-conformance.invalid/registry";

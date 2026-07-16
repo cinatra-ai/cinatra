@@ -25,7 +25,7 @@ describe("parseSemanticArtifactManifest — cinatra.artifact.ui tolerance", () =
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.manifest.ui).toBeDefined();
-      expect(r.manifest.ui?.renderers.detail?.entry).toBe("./src/detail.tsx");
+      expect(r.manifest.ui?.renderers?.detail?.entry).toBe("./src/detail.tsx");
       expect(r.diagnostics).toBeUndefined();
     }
   });

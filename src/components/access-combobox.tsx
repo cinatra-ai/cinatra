@@ -30,7 +30,7 @@
 // remain; a single universal upstream data model is NOT required).
 // ---------------------------------------------------------------------------
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Check, ChevronDown, Lock, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -68,12 +68,29 @@ import {
   type AvailableScopes,
   type AccessRowState,
 } from "@/components/access-scope";
+// Containment algebra (cinatra#1607 §VI): the first-class `parentScope` +
+// `allowedScopes` narrowing, in the pure sibling module. Both modes consult it;
+// with no constraint supplied the predicate admits everything (a no-op).
+import {
+  hasContainment,
+  isScopeOffered,
+  reconcileSelection,
+  type AllowedScopes,
+  type ContainmentConstraints,
+  type ContainmentContext,
+  type ScopeIdentity,
+} from "@/components/access-containment";
 
 // Re-export the pure helpers + nested-scope types so callers that imported them
 // from the former `access-combobox-hierarchical` module keep a stable path
 // through the unified picker module (cinatra#1607).
 export { resolveAccessParts, resolveAccessSummary } from "@/components/access-scope";
 export type { AvailableScopes, AccessRowState } from "@/components/access-scope";
+export type {
+  AllowedScopes,
+  ScopeIdentity,
+  ScopeKind,
+} from "@/components/access-containment";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,6 +166,20 @@ export type AccessComboboxProps = {
    * unaffected.
    */
   installWorkspaceScopes?: boolean;
+  /**
+   * Containment (cinatra#1607 §VI). `parentScope` restricts the offered options
+   * to strict descendants of the parent, plus Personal always (§6.1): an org
+   * parent → only its teams/projects; a leaf/Personal/unknown parent →
+   * Personal-only (fail closed, §6.3). Typed `{ kind, id }` (§6.7), distinct
+   * from the selected `value`. Default: no parent → all options.
+   */
+  parentScope?: ScopeIdentity | null;
+  /**
+   * Lower-level containment constraint (§6.4) — a set of typed identities or a
+   * predicate, intersected with `parentScope`. The agent-run form's three-field
+   * visibility intersection maps onto THIS, not onto a single `parentScope`.
+   */
+  allowedScopes?: AllowedScopes;
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +232,15 @@ export type AccessComboboxMultiProps = {
     selection: readonly string[],
     scopes: AvailableScopes,
   ) => AccessRowState;
+  /**
+   * Containment (cinatra#1607 §VI) — same contract as the single mode.
+   * `parentScope` narrows offered options to strict descendants + Personal
+   * always (§6.1); `allowedScopes` is the lower-level set/predicate (§6.4),
+   * intersected. On a containment change an out-of-scope selection is dropped
+   * and the invalidation surfaced inline (§6.6), never silently retained.
+   */
+  parentScope?: ScopeIdentity | null;
+  allowedScopes?: AllowedScopes;
 };
 
 /** The unified picker's discriminated prop contract (cinatra#1607). */
@@ -278,20 +318,21 @@ export function AccessCombobox(props: AnyAccessComboboxProps) {
 }
 
 /**
- * Single-select (flat) access-level combobox extracted from
- * permissions-tab-client.tsx. Presentational only — no auth decisions, no
- * session reads, no fetch calls.
+ * Single-select (flat) access-level combobox. Presentational only — no auth
+ * decisions, no session reads, no fetch calls.
  *
- * Hierarchy (cinatra#1509 §3.3, narrow → broad — typed headings, no bare org
- * name):
- *   1. "Only me" (no group heading)
- *   2. Projects group — heading "Projects"; rendered if there are projects or
- *      an unhydrated project selection to synthesize
- *   3. Teams group — heading "Teams"; rendered if there are teams or an
- *      unhydrated team selection to synthesize (ABOVE the org row)
- *   4. Organization group — heading "Organization: <name>"; always rendered
- *   5. Workspace group — disabled + tooltip for non-admins
- *   6. Admin group
+ * Row list (spec app-permissions.html §III / §3.2, narrow → broad — NO group
+ * headings; every row is scope-PREFIXED; consecutive groups divided by a
+ * hairline separator):
+ *   1. Personal:     "Only me"          (hidden in installMode)
+ *   2. Project:      <name> rows        (or a synthesized "Unknown project")
+ *   3. Team:         <name> rows        (or a synthesized "Unknown team")
+ *   4. Organization: <name>             (always rendered)
+ *   5. Workspace:    "All" then "Admins only" (one shared group)
+ *
+ * Containment (spec §VI): `parentScope` / `allowedScopes` narrow the offered
+ * org/team/project/workspace rows to within a parent (Personal never dropped);
+ * an out-of-scope selection is reconciled away and surfaced inline (§6.6).
  */
 function AccessComboboxSingleSelect({
   value,
@@ -304,6 +345,8 @@ function AccessComboboxSingleSelect({
   disabledReasons,
   installMode = false,
   installWorkspaceScopes = false,
+  parentScope,
+  allowedScopes,
 }: AccessComboboxProps) {
   const [open, setOpen] = useState(false);
 
@@ -318,6 +361,53 @@ function AccessComboboxSingleSelect({
   // (`orgId` undefined — e.g. the read-only Permissions tab, popover disabled).
   // A stray empty-tail `org:` click is rejected by the value→target adapter guard.
   const orgRowValue = orgId != null ? `org:${orgId}` : "org";
+
+  // ---------------------------------------------------------------------------
+  // Containment (spec §VI). With no constraint the predicate admits everything
+  // (a no-op — the shipped behaviour); with a `parentScope` / `allowedScopes`
+  // it narrows the offered org/team/project/workspace rows. The flat shape is
+  // single-org, so every team belongs to the active org.
+  // ---------------------------------------------------------------------------
+  const constraints: ContainmentConstraints = { parentScope, allowedScopes };
+  const containmentOn = hasContainment(constraints);
+  const containmentCtx: ContainmentContext = React.useMemo(
+    () => ({
+      knownOrgIds: new Set(orgId != null ? [orgId] : []),
+      // Flat shape is single-org: every flat team AND project belongs to the
+      // active org.
+      teamOrgOf: (teamId: string) =>
+        teams.some((t) => t.id === teamId) ? orgId ?? undefined : undefined,
+      projectOrgOf: (projectId: string) =>
+        projects.some((p) => p.id === projectId) ? orgId ?? undefined : undefined,
+    }),
+    [orgId, teams, projects],
+  );
+  const offered = (token: string) =>
+    !containmentOn || isScopeOffered(token, constraints, containmentCtx);
+
+  // §6.6 reconciliation. `outOfScope` is recomputed EACH RENDER from the live
+  // value + constraints + data, so a change to ANY of them — including a new
+  // `allowedScopes` predicate a serialized key could not distinguish, a `value`
+  // that goes out of scope under unchanged constraints, or scope-data changes —
+  // is caught. The inline NOTE is set via React's render-time adjust-state
+  // pattern (bounded: it flips at most once), so it triggers a re-render and
+  // persists past the clear until the next pick; the actual CLEAR is the effect's
+  // job (sync the parent — the allowed effect shape).
+  const outOfScope = containmentOn && !!value && !offered(value);
+  const [invalidated, setInvalidated] = useState(false);
+  if (outOfScope && !invalidated) setInvalidated(true);
+  else if (!containmentOn && invalidated) setInvalidated(false); // containment removed → drop a stale note
+  useEffect(() => {
+    if (outOfScope) onValueChange("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outOfScope, value]);
+
+  // Commit a selection: clear any prior invalidation note, propagate, close.
+  const commit = (v: string) => {
+    setInvalidated(false);
+    onValueChange(v);
+    setOpen(false);
+  };
 
   const selected = resolveAccessLabel(value, availableScopes);
 
@@ -407,21 +497,216 @@ function AccessComboboxSingleSelect({
   // (rowValue === the current value, so `itemClass` marks it selected and
   // `renderCheckmark` shows its check). Label is the shared "Unknown …"
   // fallback (§4.0-a) — never a raw id.
-  const renderSynthRow = (rowValue: string, label: string) => (
-    <CommandItem
-      value={rowValue}
-      onSelect={() => {
-        onValueChange(rowValue);
-        setOpen(false);
-      }}
-      className={itemClass(rowValue)}
-    >
+  // Scope-prefixed row label (spec §2.3 / §3.2): `<Scope>: <name>`, no heading.
+  // The muted title-case prefix matches the multi-mode row prefix so the two
+  // modes read consistently.
+  const rowLabel = (prefix: string, name: string) => (
+    <span className="flex items-baseline gap-1 min-w-0">
+      <span className="text-xs tracking-wide text-muted-foreground shrink-0">
+        {prefix}:
+      </span>
+      <span className="text-foreground whitespace-nowrap">{name}</span>
+    </span>
+  );
+
+  // A synthesized, checked, selectable row for an unhydrated selection
+  // (rowValue === the current value, so `itemClass` marks it selected and
+  // `renderCheckmark` shows its check). Scope-prefixed (§3.4) with the shared
+  // "Unknown …" fallback (§2.4) — never a raw id.
+  const renderSynthRow = (rowValue: string, prefix: string, name: string) => (
+    <CommandItem value={rowValue} onSelect={() => commit(rowValue)} className={itemClass(rowValue)}>
       <div className="flex items-center w-full">
-        <span className="text-foreground whitespace-nowrap">{label}</span>
+        {rowLabel(prefix, name)}
         {renderCheckmark(rowValue)}
       </div>
     </CommandItem>
   );
+
+  // ---------------------------------------------------------------------------
+  // Assemble the scope groups, narrow → broad, containment-filtered (spec §3.2).
+  // NO group headings; each row is scope-prefixed; consecutive groups divided by
+  // a hairline separator inserted between them at render.
+  // ---------------------------------------------------------------------------
+  const offeredProjects = projects.filter((p) => offered(`project:${p.id}`));
+  const offeredTeams = teams.filter((t) => offered(`team:${t.id}`));
+  const synthProjectOffered = needsSynthProject && offered(value);
+  const synthTeamOffered = needsSynthTeam && offered(value);
+
+  const groupNodes: Array<{ key: string; node: React.ReactNode }> = [];
+
+  // (1) Personal — hidden in installMode (owner is not an install target, §3.7).
+  if (!installMode) {
+    groupNodes.push({
+      key: "personal",
+      node: (
+        <CommandGroup className="p-0">
+          <CommandItem value="owner" onSelect={() => commit("owner")} className={itemClass("owner")}>
+            <div className="flex items-center w-full">
+              {rowLabel("Personal", "Only me")}
+              {renderCheckmark("owner")}
+            </div>
+          </CommandItem>
+        </CommandGroup>
+      ),
+    });
+  }
+
+  // (2) Project — rendered when there are (offered) projects OR an unhydrated
+  //     project selection to synthesize.
+  if (offeredProjects.length > 0 || synthProjectOffered) {
+    groupNodes.push({
+      key: "project",
+      node: (
+        <CommandGroup className="p-0">
+          {offeredProjects.map((p) => {
+            const itemValue = `project:${p.id}`;
+            const item = (
+              <CommandItem key={p.id} value={itemValue} onSelect={() => commit(itemValue)} className={itemClass(itemValue)}>
+                <div className="flex items-center w-full">
+                  {rowLabel("Project", p.name)}
+                  {renderCheckmark(itemValue)}
+                </div>
+              </CommandItem>
+            );
+            return <React.Fragment key={p.id}>{renderTargetRow(itemValue, item)}</React.Fragment>;
+          })}
+          {synthProjectOffered && renderSynthRow(value, "Project", unknownScopeEntityName("project"))}
+        </CommandGroup>
+      ),
+    });
+  }
+
+  // (3) Team — its own group above the org row (narrow → broad).
+  if (offeredTeams.length > 0 || synthTeamOffered) {
+    groupNodes.push({
+      key: "team",
+      node: (
+        <CommandGroup className="p-0">
+          {offeredTeams.map((t) => {
+            const itemValue = `team:${t.id}`;
+            const item = (
+              <CommandItem key={t.id} value={itemValue} onSelect={() => commit(itemValue)} className={itemClass(itemValue)}>
+                <div className="flex items-center w-full">
+                  {rowLabel("Team", t.name)}
+                  {renderCheckmark(itemValue)}
+                </div>
+              </CommandItem>
+            );
+            return <React.Fragment key={t.id}>{renderTargetRow(itemValue, item)}</React.Fragment>;
+          })}
+          {synthTeamOffered && renderSynthRow(value, "Team", unknownScopeEntityName("team"))}
+        </CommandGroup>
+      ),
+    });
+  }
+
+  // (4) Organization — id-carrying `org:<id>` value so the selected-state,
+  //     checkmark, and disabledScopes lookup match the server-built target rows.
+  //     Always rendered UNLESS containment excludes the org itself (§6.1).
+  if (offered(orgRowValue)) {
+    groupNodes.push({
+      key: "org",
+      node: (
+        <CommandGroup className="p-0">
+          {renderTargetRow(
+            orgRowValue,
+            <CommandItem value={orgRowValue} onSelect={() => commit(orgRowValue)} className={itemClass(orgRowValue)}>
+              <div className="flex items-center w-full">
+                {rowLabel("Organization", resolvedOrgName)}
+                {renderCheckmark(orgRowValue)}
+              </div>
+            </CommandItem>,
+          )}
+        </CommandGroup>
+      ),
+    });
+  }
+
+  // (5) Workspace — the "All" then "Admins only" rows share ONE group (§3.2).
+  //     • installMode: shown only with installWorkspaceScopes, as SERVER-DRIVEN
+  //       target rows (renderTargetRow consults disabledScopes/disabledReasons).
+  //     • non-installMode (permissions tab): the isAdmin-gated "All" row + the
+  //       always-selectable "Admins only" row (§3.9).
+  //     Both rows drop out under an org / personal containment parent (§6.1).
+  const workspaceOffered = offered("workspace");
+  const adminOffered = offered("admin");
+  const showWorkspaceGroup = installMode
+    ? installWorkspaceScopes && (workspaceOffered || adminOffered)
+    : workspaceOffered || adminOffered;
+  if (showWorkspaceGroup) {
+    groupNodes.push({
+      key: "workspace",
+      node: (
+        <CommandGroup className="p-0">
+          {installMode ? (
+            <>
+              {workspaceOffered &&
+                renderTargetRow(
+                  "workspace",
+                  <CommandItem value="workspace" onSelect={() => commit("workspace")} className={itemClass("workspace")}>
+                    <div className="flex items-center w-full">
+                      {rowLabel("Workspace", "All")}
+                      {renderCheckmark("workspace")}
+                    </div>
+                  </CommandItem>,
+                )}
+              {adminOffered &&
+                renderTargetRow(
+                  "admin",
+                  <CommandItem value="admin" onSelect={() => commit("admin")} className={itemClass("admin")}>
+                    <div className="flex items-center w-full">
+                      {rowLabel("Workspace", "Admins only")}
+                      {renderCheckmark("admin")}
+                    </div>
+                  </CommandItem>,
+                )}
+            </>
+          ) : (
+            <>
+              {workspaceOffered &&
+                (isAdmin ? (
+                  <CommandItem value="workspace" onSelect={() => commit("workspace")} className={itemClass("workspace")}>
+                    <div className="flex items-center w-full">
+                      {rowLabel("Workspace", "All")}
+                      {renderCheckmark("workspace")}
+                    </div>
+                  </CommandItem>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <CommandItem
+                        value="workspace"
+                        disabled
+                        className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed"
+                      >
+                        <div className="flex items-center w-full gap-1">
+                          <span className="flex items-baseline gap-1 min-w-0">
+                            <span className="text-xs tracking-wide text-muted-foreground shrink-0">Workspace:</span>
+                            <span className="whitespace-nowrap">All</span>
+                          </span>
+                          <Lock aria-hidden className="size-3.5 ml-auto" />
+                        </div>
+                      </CommandItem>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-[240px]">
+                      Only platform admins can scope this to the whole workspace.
+                    </TooltipContent>
+                  </Tooltip>
+                ))}
+              {adminOffered && (
+                <CommandItem value="admin" onSelect={() => commit("admin")} className={itemClass("admin")}>
+                  <div className="flex items-center w-full">
+                    {rowLabel("Workspace", "Admins only")}
+                    {renderCheckmark("admin")}
+                  </div>
+                </CommandItem>
+              )}
+            </>
+          )}
+        </CommandGroup>
+      ),
+    });
+  }
 
   return (
     <TooltipProvider>
@@ -435,10 +720,13 @@ function AccessComboboxSingleSelect({
             aria-expanded={open}
             disabled={disabled}
             // No `h-9` override: the shared form-control height is the Button
-            // default (`h-8`), matching Input + the hierarchical picker trigger
+            // default (`h-8`), matching Input + the multi-select trigger
             // (cinatra#1509 §3.2 — the mechanism behind #1505's misaligned rows).
             className="w-full justify-between rounded-control border-line font-normal"
           >
+            {/* Trigger prefix (spec §3.1): only Team / Project carry the
+                uppercase `<Type>:` prefix; Personal / Organization / Workspace
+                resolve to a bare name. */}
             <span className="flex items-center min-w-0 gap-1">
               {selected.type && (
                 <span className="text-xs uppercase tracking-wide text-muted-foreground shrink-0">
@@ -457,287 +745,23 @@ function AccessComboboxSingleSelect({
           <Command shouldFilter={false}>
             <CommandList className="max-h-72">
               <CommandEmpty>No matches.</CommandEmpty>
-
-              {/* Group 1 — Only me (no heading). Hidden in installMode because owner is not an install target. */}
-              {!installMode && (
-                <CommandGroup className="p-0">
-                  <CommandItem
-                    value="owner"
-                    onSelect={() => {
-                      onValueChange("owner");
-                      setOpen(false);
-                    }}
-                    className={itemClass("owner")}
-                  >
-                    <div className="flex items-center w-full">
-                      <span className="text-foreground whitespace-nowrap">Only me</span>
-                      {renderCheckmark("owner")}
-                    </div>
-                  </CommandItem>
-                </CommandGroup>
-              )}
-
-              {/* Group 2 — Projects (typed heading; rendered when there are
-                  projects OR an unhydrated project selection to synthesize) */}
-              {(projects.length > 0 || needsSynthProject) && (
-                <CommandGroup
-                  className="p-0"
-                  heading={
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                      Projects
-                    </span>
-                  }
-                >
-                  {projects.map((p) => {
-                    const itemValue = `project:${p.id}`;
-                    const item = (
-                      <CommandItem
-                        key={p.id}
-                        value={itemValue}
-                        onSelect={() => {
-                          onValueChange(itemValue);
-                          setOpen(false);
-                        }}
-                        className={itemClass(itemValue)}
-                      >
-                        <div className="flex items-center w-full">
-                          <span className="text-foreground whitespace-nowrap">{p.name}</span>
-                          {renderCheckmark(itemValue)}
-                        </div>
-                      </CommandItem>
-                    );
-                    return (
-                      <React.Fragment key={p.id}>
-                        {renderTargetRow(itemValue, item)}
-                      </React.Fragment>
-                    );
-                  })}
-                  {needsSynthProject &&
-                    renderSynthRow(value, unknownScopeEntityName("project"))}
-                </CommandGroup>
-              )}
-
-              {/* Group 3 — Teams (typed heading, ABOVE the org row per the
-                  #1508 hierarchy Only me → Projects → Teams → Organization →
-                  Workspace → Admin; rendered when there are teams OR an
-                  unhydrated team selection to synthesize) */}
-              {(teams.length > 0 || needsSynthTeam) && (
-                <CommandGroup
-                  className="p-0"
-                  heading={
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                      Teams
-                    </span>
-                  }
-                >
-                  {teams.map((t) => {
-                    const itemValue = `team:${t.id}`;
-                    const item = (
-                      <CommandItem
-                        key={t.id}
-                        value={itemValue}
-                        onSelect={() => {
-                          onValueChange(itemValue);
-                          setOpen(false);
-                        }}
-                        className={itemClass(itemValue)}
-                      >
-                        <div className="flex items-center w-full">
-                          <span className="text-foreground whitespace-nowrap">{t.name}</span>
-                          {renderCheckmark(itemValue)}
-                        </div>
-                      </CommandItem>
-                    );
-                    return (
-                      <React.Fragment key={t.id}>
-                        {renderTargetRow(itemValue, item)}
-                      </React.Fragment>
-                    );
-                  })}
-                  {needsSynthTeam &&
-                    renderSynthRow(value, unknownScopeEntityName("team"))}
-                </CommandGroup>
-              )}
-
-              {/* Group 4 — Organization (typed heading `Organization: <name>`,
-                  never a bare org name — this is #1508's "Default" heading fix.
-                  Always rendered) */}
-              <CommandGroup
-                className="p-0"
-                heading={
-                  <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                    Organization: {resolvedOrgName}
-                  </span>
-                }
-              >
-                {/* Org item — id-carrying `org:<id>` value (multi-scope W1) so
-                    the selected-state, checkmark, and disabledScopes lookup all
-                    match the server-built install-target rows. */}
-                {renderTargetRow(
-                  orgRowValue,
-                  <CommandItem
-                    value={orgRowValue}
-                    onSelect={() => {
-                      onValueChange(orgRowValue);
-                      setOpen(false);
-                    }}
-                    className={itemClass(orgRowValue)}
-                  >
-                    <div className="flex items-center w-full">
-                      <span className="text-foreground whitespace-nowrap">
-                        Anyone in {resolvedOrgName}
-                      </span>
-                      {renderCheckmark(orgRowValue)}
-                    </div>
-                  </CommandItem>,
-                )}
-              </CommandGroup>
-
-              {/* Group 5 — Workspace.
-                  • installMode + installWorkspaceScopes (cinatra#1527): a
-                    SERVER-DRIVEN target row (renderTargetRow consults
-                    disabledScopes/disabledReasons — platform-admin-only, disabled
-                    + reason otherwise), exactly like org/team/project.
-                  • non-installMode (permissions tab): the isAdmin-gated row.
-                  • installMode without the scopes (agent picker): hidden. */}
-              {installMode
-                ? installWorkspaceScopes && (
-                    <CommandGroup
-                      className="p-0"
-                      heading={
-                        <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                          Workspace
-                        </span>
-                      }
-                    >
-                      {renderTargetRow(
-                        "workspace",
-                        <CommandItem
-                          value="workspace"
-                          onSelect={() => {
-                            onValueChange("workspace");
-                            setOpen(false);
-                          }}
-                          className={itemClass("workspace")}
-                        >
-                          <div className="flex items-center w-full">
-                            <span className="text-foreground whitespace-nowrap">
-                              Whole Workspace
-                            </span>
-                            {renderCheckmark("workspace")}
-                          </div>
-                        </CommandItem>,
-                      )}
-                    </CommandGroup>
-                  )
-                : (
-                  <CommandGroup
-                    className="p-0"
-                    heading={
-                      <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                        Workspace
-                      </span>
-                    }
-                  >
-                    {isAdmin ? (
-                      <CommandItem
-                        value="workspace"
-                        onSelect={() => {
-                          onValueChange("workspace");
-                          setOpen(false);
-                        }}
-                        className={itemClass("workspace")}
-                      >
-                        <div className="flex items-center w-full">
-                          <span className="text-foreground whitespace-nowrap">Whole Workspace</span>
-                          {renderCheckmark("workspace")}
-                        </div>
-                      </CommandItem>
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <CommandItem
-                            value="workspace"
-                            disabled
-                            className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed"
-                          >
-                            <div className="flex items-center w-full gap-1">
-                              <span>Whole Workspace</span>
-                              <Lock aria-hidden className="size-3.5" />
-                            </div>
-                          </CommandItem>
-                        </TooltipTrigger>
-                        <TooltipContent side="right" className="max-w-[240px]">
-                          Only platform admins can scope this to the whole workspace.
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                  </CommandGroup>
-                )}
-
-              {/* Group 6 — Admin.
-                  • installMode + installWorkspaceScopes (cinatra#1527):
-                    SERVER-DRIVEN target row (platform-admin-only).
-                  • non-installMode (permissions tab): the always-selectable row.
-                  • installMode without the scopes (agent picker): hidden. */}
-              {installMode
-                ? installWorkspaceScopes && (
-                    <CommandGroup
-                      className="p-0"
-                      heading={
-                        <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                          Admin
-                        </span>
-                      }
-                    >
-                      {renderTargetRow(
-                        "admin",
-                        <CommandItem
-                          value="admin"
-                          onSelect={() => {
-                            onValueChange("admin");
-                            setOpen(false);
-                          }}
-                          className={itemClass("admin")}
-                        >
-                          <div className="flex items-center w-full">
-                            <span className="text-foreground whitespace-nowrap">
-                              Admins only
-                            </span>
-                            {renderCheckmark("admin")}
-                          </div>
-                        </CommandItem>,
-                      )}
-                    </CommandGroup>
-                  )
-                : (
-                  <CommandGroup
-                    className="p-0"
-                    heading={
-                      <span className="text-xs uppercase tracking-wide text-muted-foreground px-3 py-1 block">
-                        Admin
-                      </span>
-                    }
-                  >
-                    <CommandItem
-                      value="admin"
-                      onSelect={() => {
-                        onValueChange("admin");
-                        setOpen(false);
-                      }}
-                      className={itemClass("admin")}
-                    >
-                      <div className="flex items-center w-full">
-                        <span className="text-foreground whitespace-nowrap">Admins only</span>
-                        {renderCheckmark("admin")}
-                      </div>
-                    </CommandItem>
-                  </CommandGroup>
-                )}
+              {groupNodes.map((grp, i) => (
+                <React.Fragment key={grp.key}>
+                  {i > 0 && <CommandSeparator />}
+                  {grp.node}
+                </React.Fragment>
+              ))}
             </CommandList>
           </Command>
         </PopoverContent>
       </Popover>
+      {/* §6.6 reconciliation surface: the invalidation of an out-of-scope
+          selection is shown inline, never silently retained. */}
+      {invalidated && (
+        <p role="status" className="mt-1.5 text-xs text-muted-foreground">
+          The previous selection is no longer available in this scope. Choose a new one.
+        </p>
+      )}
     </TooltipProvider>
   );
 }
@@ -762,21 +786,65 @@ function AccessComboboxMultiSelect({
   disabledReasons,
   toggleSelection,
   rowState,
+  parentScope,
+  allowedScopes,
 }: AccessComboboxMultiProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+
+  // ---------------------------------------------------------------------------
+  // Containment (spec §VI). With no constraint the predicate admits everything
+  // (a no-op). The nested shape gives team→org parentage directly.
+  // ---------------------------------------------------------------------------
+  const constraints: ContainmentConstraints = { parentScope, allowedScopes };
+  const containmentOn = hasContainment(constraints);
+  const containmentCtx: ContainmentContext = React.useMemo(
+    () => ({
+      knownOrgIds: new Set(scopes.orgs.map((o) => o.id)),
+      teamOrgOf: (teamId: string) =>
+        scopes.orgs.find((o) => o.teams.some((t) => t.id === teamId))?.id,
+    }),
+    [scopes],
+  );
+  const offered = (token: string) =>
+    !containmentOn || isScopeOffered(token, constraints, containmentCtx);
+
   const matches = (text: string) => {
     if (search.trim().length === 0) return true;
     return text.toLowerCase().includes(search.trim().toLowerCase());
   };
-  const filteredProjects = scopes.projects.filter((p) => matches(`project ${p.name}`));
+  const filteredProjects = scopes.projects.filter(
+    (p) => offered(`project:${p.id}`) && matches(`project ${p.name}`),
+  );
   const filteredTeams = scopes.orgs
     .flatMap((org) => org.teams.map((t) => ({ org, t })))
-    .filter(({ org, t }) => matches(`team ${org.name} ${t.name}`));
-  const filteredOrgs = scopes.orgs.filter((o) => matches(`organization ${o.name}`));
-  const showOnlyMe = matches("only me");
-  const showWorkspaceAll = matches("workspace all");
-  const showAdminsOnly = showAdmin && matches("workspace admins only");
+    .filter(({ org, t }) => offered(`team:${t.id}`) && matches(`team ${org.name} ${t.name}`));
+  const filteredOrgs = scopes.orgs.filter(
+    (o) => offered(`org:${o.id}`) && matches(`organization ${o.name}`),
+  );
+  const showOnlyMe = matches("only me"); // Personal is never dropped by containment (§6.2).
+  const showWorkspaceAll = offered("workspace") && matches("workspace all");
+  const showAdminsOnly = showAdmin && offered("admin") && matches("workspace admins only");
+
+  // §6.6 reconciliation. `reconciled` is recomputed EACH RENDER from the live
+  // value + constraints + data, so any relevant change (a new `allowedScopes`
+  // predicate, a `value` that drifts out of scope, or scope-data changes) is
+  // caught — not just a serialized-key change. The inline NOTE is set via the
+  // render-time adjust-state pattern (bounded); the CLEAR (drop the out-of-scope
+  // tokens) is the effect's job, keyed on the actual value + drop signatures.
+  const reconciled = containmentOn
+    ? reconcileSelection(value, constraints, containmentCtx)
+    : { kept: value as string[], dropped: [] as string[] };
+  const hasDrift = reconciled.dropped.length > 0;
+  const [invalidated, setInvalidated] = useState(false);
+  if (hasDrift && !invalidated) setInvalidated(true);
+  else if (!containmentOn && invalidated) setInvalidated(false); // containment removed → drop a stale note
+  const valueSig = value.join("|");
+  const dropSig = reconciled.dropped.join("|");
+  useEffect(() => {
+    if (hasDrift) onChange(reconciled.kept);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valueSig, dropSig]);
 
   // Explicit selection as an array (multi mode uses the value verbatim). The
   // toggle + implication logic lives in the pure, unit-tested access-scope
@@ -784,6 +852,7 @@ function AccessComboboxMultiSelect({
   const selection: string[] = value;
 
   const toggleMulti = (itemValue: string) => {
+    setInvalidated(false);
     // Default (grant mode): owner + workspace are EXCLUSIVE; scoped tokens +
     // admin add/remove and canonicalise. Implied rows are disabled, so this
     // only fires on a row whose checked state equals its explicit membership.
@@ -927,6 +996,7 @@ function AccessComboboxMultiSelect({
   );
 
   return (
+    <>
     <Popover open={open} onOpenChange={(next) => !disabled && setOpen(next)}>
       {/* N>1 selections surface the full list in a tooltip on the trigger.
           BOTH triggers must compose onto the SAME real DOM node: PopoverTrigger's
@@ -1043,5 +1113,13 @@ function AccessComboboxMultiSelect({
         </Command>
       </PopoverContent>
     </Popover>
+    {/* §6.6 reconciliation surface: out-of-scope selections were dropped and the
+        invalidation is shown inline, never silently retained. */}
+    {invalidated && (
+      <p role="status" className="mt-1.5 text-xs text-muted-foreground">
+        Some selections were removed because they are no longer in scope.
+      </p>
+    )}
+    </>
   );
 }

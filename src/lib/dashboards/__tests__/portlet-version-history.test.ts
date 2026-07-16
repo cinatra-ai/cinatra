@@ -25,7 +25,6 @@ vi.mock("@/lib/objects-store", () => ({ listObjectsByFilter: vi.fn(() => []), ge
 vi.mock("@/lib/artifacts/artifact-service", () => ({ listArtifacts: vi.fn(() => []), getArtifact: vi.fn(() => null) }));
 vi.mock("@/lib/object-history/eligibility", () => ({ listEventsForObject: h.eventsSpy }));
 vi.mock("@/lib/authz/enforce-resource-access", () => ({ enforceResourceAccess: vi.fn(async () => undefined) }));
-vi.mock("@cinatra-ai/workflows/store", () => ({ readWorkflow: vi.fn(), listWorkflows: vi.fn(async () => []) }));
 
 import { loadObjectVersionHistoryPortlet } from "../portlet-loaders";
 

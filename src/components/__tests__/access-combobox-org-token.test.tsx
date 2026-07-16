@@ -152,13 +152,16 @@ describe("AccessCombobox org row — id-carrying value wiring (AC3)", () => {
     // orgRowValue so its selected-state and disabled-scope lookup match an
     // org:<id> selection.
     expect(SOURCE).toMatch(/value=\{orgRowValue\}/);
-    expect(SOURCE).toMatch(/onValueChange\(orgRowValue\)/);
+    // Post-#1607 the row select goes through the `commit` helper (set value +
+    // clear any invalidation note + close), so the org row wires commit(orgRowValue).
+    expect(SOURCE).toMatch(/commit\(orgRowValue\)/);
     expect(SOURCE).toMatch(/renderTargetRow\(\s*orgRowValue,/);
     expect(SOURCE).toMatch(/itemClass\(orgRowValue\)/);
     expect(SOURCE).toMatch(/renderCheckmark\(orgRowValue\)/);
     // No literal org CommandItem value / onSelect writing the retired token.
     expect(SOURCE).not.toMatch(/value="org"/);
     expect(SOURCE).not.toMatch(/onValueChange\("org"\)/);
+    expect(SOURCE).not.toMatch(/commit\("org"\)/);
   });
 });
 
