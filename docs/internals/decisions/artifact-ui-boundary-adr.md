@@ -6,8 +6,10 @@
 - Scope: WHICH side of the host/extension line owns type-specific artifact
   presentation, and the CI machinery that keeps that line from re-inverting —
   NOT the runtime loader that executes an extension renderer (that is the
-  companion [artifact-renderer RSC contract](../contracts/artifact-renderer-rsc-contract.md)
-  and the M1 dynamic-loader work, still landing)
+  companion [artifact-renderer RSC contract](../contracts/artifact-renderer-rsc-contract.md);
+  the M1 dynamic-loader machinery landed in Slice A, `47780a05`, #1672, as a
+  dormant seam — the live dynamic render awaits the Slice B
+  `@cinatra-ai/json-artifact` fixture)
 - Supersedes: the earlier **"metadata-only artifact extension / core owns every
   renderer"** boundary that the public docs, glossary, and objects-layer
   reference still taught before epic #1620 (the S10 rewrite, #1627, retires that
@@ -208,33 +210,40 @@ the bundled discovery scan
 as-is; marketplace installs register by manifest `cinatra.kind === "artifact"`,
 dir-name-agnostic.
 
-## Relationship to the dynamic renderer loader (PLANNED — plan of record #1630)
+## Relationship to the dynamic renderer loader (Slice A landed as a dormant seam — plan of record #1630)
 
 This ADR is the **boundary**; it is deliberately silent on HOW an extension
-renderer executes at runtime, which is the M1 dynamic-loader work. That work is
-**not yet landed** (Slice A is on PR #1672, unmerged; the ratified plan of record
-is the final comment on #1630, 2026-07-16). Recorded here only so the boundary is
-read in the right frame:
+renderer executes at runtime, which is the M1 dynamic-loader work. Slice A of that
+work **landed** (`47780a05`, #1672) as a **dormant seam** — the loader machinery,
+the client seam, the digest-pinned serving route, the widened predicate, and the
+`no-variable-url-dynamic-import` ratchet are all in `main`, but no renderer flows
+through the seam yet (the runtime asset registry is empty). The **live** dynamic
+render awaits the Slice B `@cinatra-ai/json-artifact` dynamic fixture (owner-gated;
+the ratified plan of record is the final comment on #1630, 2026-07-16); the four
+system bases in that wave stay **build-bundled** — see the next bullet. Recorded
+here only so the boundary is read in the right frame:
 
 - The four **system bases** (image/pdf/audio/video) stay **build-bundled** and
   mount through `GENERATED_ARTIFACT_RENDERERS` (the SSR/RSC fast path). A
-  marketplace-installed renderer is **planned** to execute in the **main realm**
-  (the host page), loaded by a client seam via a native `import(runtimeURL)` — a
-  *runtime URL*, not a static/computed specifier, so **G4 stays structurally
-  intact**: the ESLint renderer-entry ban is not engaged, and the plan adds a
-  second sanctioned seam (a `no-variable-url-dynamic-import` ratchet confining
-  variable-URL `import()` to that one client loader).
+  marketplace-installed renderer will execute in the **main realm** (the host
+  page), loaded by the client seam (landed in Slice A) via a native `import(runtimeURL)`
+  — a *runtime URL*, not a static/computed specifier, so **G4 stays structurally
+  intact**: the ESLint renderer-entry ban is not engaged, and Slice A added the
+  second sanctioned seam (the `no-variable-url-dynamic-import` ratchet confining
+  variable-URL `import()` to that one client loader). No renderer runs through the
+  seam until Slice B ships one.
 - Because main-realm code has the page's authority, the plan's ratified security
   posture is the **admission chain, not an execution boundary**; a malicious
   renderer that survives admission is **XSS-equivalent**. That accepted risk is a
   runtime-trust decision that belongs with — and extends — the
   [no-sandbox third-party-trust ADR](./no-sandbox-third-party-trust-adr.md), not
   this boundary ADR.
-- Under the plan the `renderer-resolution.ts` `built` predicate widens to
-  `loadable = inBuildMap OR inRuntimeAssetRegistry`, and `requires-rebuild` is
-  reclassified as a transient/error alias carrying side-data reasons. **None of
-  that has landed at the SHA this ADR is written against** (`72aab923` + the S6
-  merge); the boundary and its gates above are landed and CI-enforced today.
+- The `renderer-resolution.ts` `built` predicate now widens to
+  `loadable = inBuildMap OR inRuntimeAssetRegistry` (Slice A, `47780a05`), and
+  `requires-rebuild` is reclassified as a transient/error alias carrying side-data
+  reasons. That predicate + the loader machinery **landed** in Slice A; what has
+  NOT landed is a real renderer exercising the dynamic path end-to-end (Slice B).
+  The boundary and its gates above are landed and CI-enforced today.
 
 ## Consequences
 
