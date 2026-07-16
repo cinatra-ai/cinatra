@@ -77,6 +77,8 @@ const REMOVE_ERROR_COPY: Record<
   already_member: "Already a member of this team.",
   not_a_member: "Not a member of this team.",
   last_member: "A team keeps at least one member — add someone else first.",
+  last_admin:
+    "A team keeps at least one admin — make someone else an admin first.",
   role_unavailable:
     "Team roles are not provisioned on this deployment yet.",
   unknown_error: "Something went wrong. Try again.",
