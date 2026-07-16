@@ -36,6 +36,7 @@ import {
   getDashboardsDb,
 } from "../store/db";
 import type { DashboardRow, DashboardStatus } from "../store/schema";
+import { isDashboardRowRenderable } from "../store/extension-dashboard-reads";
 import {
   dashboardsArchiveSchema,
   dashboardsCreateSchema,
@@ -140,6 +141,19 @@ function toDto(row: DashboardRow): DashboardDto {
 
 const ACTIVE_STATUSES: DashboardStatus[] = ["draft", "published"];
 
+// ALL-READER gate (cinatra#1628, S11a) for the MCP read primitives. Resolve the
+// app-side liveness oracle lazily (keeps the canonical-store out of this module's
+// static graph, matching the existing `@/lib` coupling here). The MCP readers
+// apply the SAME full `isDashboardRowRenderable` gate as the routes: an EXTENSION
+// row that is archived (orphan-swept / lifecycle-archived) OR whose package is no
+// longer installed+active is denied — even when the caller explicitly requests
+// `status: archived`, so an orphaned/archived extension dashboard never leaks via
+// MCP. Operator-authored rows are untouched — their own `status` filter governs.
+async function resolveMcpLivePredicate(organizationId: string | null | undefined) {
+  const { resolveLiveExtensionPredicate } = await import("@/lib/dashboards/live-extension-oracle");
+  return resolveLiveExtensionPredicate(organizationId);
+}
+
 export function createDashboardPrimitiveHandlers() {
   return {
     // ─────────────────────────────────────────────────────────────────────
@@ -201,8 +215,9 @@ export function createDashboardPrimitiveHandlers() {
         .where(and(...conditions));
       const total = totalRows[0]?.n ?? 0;
 
+      const isPackageLive = await resolveMcpLivePredicate(actor.organizationId);
       const visible = slice.filter(
-        (row) => resolveDashboardAccess(row, actor).canRead,
+        (row) => resolveDashboardAccess(row, actor).canRead && isDashboardRowRenderable(row, isPackageLive),
       );
 
       return buildListPage(visible.map(toDto), total, offset, limit);
@@ -243,6 +258,14 @@ export function createDashboardPrimitiveHandlers() {
       const access = resolveDashboardAccess(row, actor);
       if (!access.canRead) {
         return { error: { code: "forbidden", message: "Access denied" } };
+      }
+      // ALL-READER gate (cinatra#1628): an archived or orphaned EXTENSION row
+      // (its package no longer installed+active) is not_found via MCP too (no
+      // existence leak — same shape as the missing-row case above). Operator rows
+      // pass (their own status handling governs).
+      const isPackageLive = await resolveMcpLivePredicate(actor.organizationId);
+      if (!isDashboardRowRenderable(row, isPackageLive)) {
+        return { error: { code: "not_found", message: `Dashboard not found: ${input.dashboardId}` } };
       }
 
       const revs = await db

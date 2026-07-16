@@ -1308,6 +1308,20 @@ class ExtensionRegistryImpl {
     if (!isPlatformAdminActor(actor)) {
       await handler.archive(ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
+      // cinatra#1628 (S11a): archive this (package, org)'s extension dashboards on
+      // the committed archive transition (re-homes the step W5/#1035 dropped).
+      // Org-scoped via `row.organizationId` — never the org-less teardown hook.
+      // Awaited + idempotent + best-effort (the reader gate + migration sweep
+      // backstop it).
+      {
+        const { fireExtensionDashboardLifecycle } = await import("./dashboard-lifecycle-hook");
+        await fireExtensionDashboardLifecycle({
+          packageName: ref.packageName,
+          organizationId: row.organizationId,
+          transition: "archive",
+          actorPrincipalId: actor.userId,
+        });
+      }
       // F9 (cinatra#1277): NO package-global capability teardown on the
       // org-admin SOFT path. `fireExtensionCapabilityTeardown` deregisters the
       // package's in-memory register(ctx) registrations PACKAGE-GLOBALLY (the
@@ -1332,6 +1346,17 @@ class ExtensionRegistryImpl {
     if (used || cascade.archivedDependentExists) {
       await handler.archive(ref, actor);
       await syncCanonicalRowTransition(row, "archive", actor);
+      // cinatra#1628 (S11a): org-scoped dashboard archival on the committed
+      // archive transition (see the org-admin branch above for rationale).
+      {
+        const { fireExtensionDashboardLifecycle } = await import("./dashboard-lifecycle-hook");
+        await fireExtensionDashboardLifecycle({
+          packageName: ref.packageName,
+          organizationId: row.organizationId,
+          transition: "archive",
+          actorPrincipalId: actor.userId,
+        });
+      }
       // Process-local deregistration (in-memory only; DB rows preserved,
       // archive is restorable). Best-effort + host-injected (no-op in workers).
       fireExtensionCapabilityTeardown(ref.packageName);
@@ -1397,6 +1422,18 @@ class ExtensionRegistryImpl {
     const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).archive(ref, actor);
     await syncCanonicalRowTransition(row, "archive", actor);
+    // cinatra#1628 (S11a): archive this (package, org)'s extension dashboards on
+    // the committed explicit-archive transition. Org-scoped, awaited, idempotent,
+    // best-effort (the reader gate + migration sweep backstop it).
+    {
+      const { fireExtensionDashboardLifecycle } = await import("./dashboard-lifecycle-hook");
+      await fireExtensionDashboardLifecycle({
+        packageName: ref.packageName,
+        organizationId: row.organizationId,
+        transition: "archive",
+        actorPrincipalId: actor.userId,
+      });
+    }
     // Process-local deregistration of the package's in-memory register(ctx)
     // registrations so an explicitly-archived extension stops being
     // listable/invocable/resolvable in the running process without a restart.
@@ -1438,6 +1475,18 @@ class ExtensionRegistryImpl {
     const row = await resolveLifecycleTargetRow(ref.packageName, actor);
     await this.resolve(typeId).restore(ref, actor);
     await syncCanonicalRowTransition(row, "activate", actor);
+    // cinatra#1628 (S11a): un-archive this (package, org)'s extension dashboards on
+    // the committed restore transition — the symmetric inverse of the archive
+    // fires above. Org-scoped, awaited, idempotent, best-effort.
+    {
+      const { fireExtensionDashboardLifecycle } = await import("./dashboard-lifecycle-hook");
+      await fireExtensionDashboardLifecycle({
+        packageName: ref.packageName,
+        organizationId: row.organizationId,
+        transition: "restore",
+        actorPrincipalId: actor.userId,
+      });
+    }
 
     // Only a hot-loadable-module kind re-registers in-process; other kinds ship no
     // runtime module (their handler.restore already re-surfaced them).
@@ -1627,4 +1676,16 @@ export {
   fireExtensionDataTeardown,
 } from "./data-teardown-hook";
 export type { ExtensionDataTeardownHook } from "./data-teardown-hook";
+// Org-scoped dashboard archive/restore seam (cinatra#1628, S11a). Host-injected;
+// the dispatcher fires it after a ROW-SCOPED archive/restore transition commits,
+// re-homing the dashboard-archival step W5/#1035 dropped — with exact
+// (install, org) identity, NOT the org-less capability teardown hook.
+export {
+  setExtensionDashboardLifecycleHook,
+  fireExtensionDashboardLifecycle,
+} from "./dashboard-lifecycle-hook";
+export type {
+  ExtensionDashboardLifecycleHook,
+  ExtensionDashboardLifecycleTransition,
+} from "./dashboard-lifecycle-hook";
 export { readEffectiveStatusByPackageNames } from "./canonical-store";
