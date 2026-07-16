@@ -3631,6 +3631,42 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS agent_creation_request_org_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_creation_request" (org_id, status)` },
     { text: `CREATE INDEX IF NOT EXISTS agent_creation_request_author_idx ON "${schemaName.replaceAll('"', '""')}"."agent_creation_request" (author_id, status)` },
     { text: `CREATE INDEX IF NOT EXISTS agent_creation_request_resolved_approvers_gin ON "${schemaName.replaceAll('"', '""')}"."agent_creation_request" USING gin (resolved_approver_ids)` },
+    // Artifact row-scope promotion (cinatra#1437, epic #1424). Pending
+    // requests to WIDEN an individual artifact row's visibility (private →
+    // team | organization) through the shared approvals surface. Mirrors the
+    // agent_creation_request lifecycle: pending state lives ONLY on this row;
+    // the artifact OBJECT is widened + re-projected only when an admin approve
+    // passes the CAS/never-narrow/secret-scan gates. `row_version` is the
+    // objects.version captured at request time — the CAS anchor an
+    // edit-after-request supersedes. State machine:
+    // pending → approved | rejected | superseded (terminal).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (
+      id                 text PRIMARY KEY,
+      org_id             text NOT NULL,
+      object_id          text NOT NULL,
+      object_title       text NOT NULL,
+      requested_by       text NOT NULL,
+      from_visibility    text NOT NULL,
+      to_visibility      text NOT NULL,
+      to_owner_level     text NOT NULL,
+      to_owner_id        text NOT NULL,
+      row_version        integer NOT NULL,
+      status             text NOT NULL DEFAULT 'pending',
+      decided_by         text,
+      decided_at         timestamptz,
+      decision_note      text,
+      created_at         timestamptz NOT NULL DEFAULT now(),
+      updated_at         timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT apr_status_chk CHECK (status IN ('pending','approved','rejected','superseded')),
+      CONSTRAINT apr_to_visibility_chk CHECK (to_visibility IN ('team','organization'))
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_org_status_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (org_id, status)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_requester_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (requested_by, status)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_object_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id)` },
+    // At most ONE pending promotion request per artifact row — a second
+    // request while one is in flight is a constraint-backed conflict, never a
+    // duplicate queue item.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_promotion_request_one_pending ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id) WHERE status = 'pending'` },
     // Data Safety: Undo & Versioning substrate.
     // object_change_event = append-only history with canonical before/after
     // SNAPSHOTS. Emitted in the SAME DB transaction as the
