@@ -1,0 +1,94 @@
+name: verdaccio-publish-proof
+
+# Consumer-side propagation proof for the hub blue/green registry-token-refresh
+# service (ops/runbooks/registry-token-refresh.md, prereq 4). The refresh host
+# dispatches this AFTER it flips VERDACCIO_PUBLISH_TOKEN / _NEXT and binds the
+# exact run it dispatched via the `nonce` echoed into run-name (it selects the
+# run whose display title contains the nonce, never a concurrent run).
+#
+# It executes a REAL canary publish+unpublish of the single fixed package
+# `@cinatra-ai/registry-token-refresh-canary` — `npm whoami` alone proves only
+# that the rotated token authenticates, not that it carries publish authority,
+# which is the whole point of the propagation proof in refresh steps 5/7.
+#
+# This is the ONE workflow exempted from the standing publish-EXECUTION ban
+# (scripts/audit/verdaccio-publish-ban.mjs). That exemption is content-verified,
+# not filename-based: it holds ONLY while this file stays dispatch-only, targets
+# exactly this canary package, resolves its registry from the release-manager
+# env secret, and performs exactly one publish. Ratified by the owner in ops#512
+# (option A, 2026-07-16). Do NOT add another trigger, package, or publish step
+# here — any such change re-arms the ban and fails required CI.
+run-name: "verdaccio-publish-proof ${{ inputs.secret }} ${{ inputs.nonce }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      secret:
+        description: "Which release-manager token to prove"
+        required: true
+        type: choice
+        options: [next, active]
+      nonce:
+        description: "Opaque run-binding nonce from the refresh host"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Reads VERDACCIO_REGISTRY_URL + VERDACCIO_PUBLISH_TOKEN / _NEXT from this
+    # environment. The env must carry NO required-reviewer protection, else the
+    # host's automated proof dispatch blocks (runbook prereq 7).
+    environment: release-manager
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 20
+
+      - name: Prove token authenticates + canary publish/unpublish
+        env:
+          REGISTRY_URL: ${{ secrets.VERDACCIO_REGISTRY_URL }}
+          # Prove the NEXT (candidate) token or the ACTIVE token, per input.
+          PUBLISH_TOKEN: ${{ inputs.secret == 'next' && secrets.VERDACCIO_PUBLISH_TOKEN_NEXT || secrets.VERDACCIO_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          host="${REGISTRY_URL#https://}"
+          npm config set "//${host}/:_authToken=${PUBLISH_TOKEN}"
+          npm config set "@cinatra-ai:registry=${REGISTRY_URL}"
+
+          # Authentication check (does NOT prove publish authority on its own).
+          npm whoami --registry "${REGISTRY_URL}"
+
+          # Build the fixed canary in a throwaway dir: a real, minimal, publishable
+          # scoped package. `npm init -y` writes package.json; `npm pkg set` fixes
+          # the name + a unique per-run prerelease version; a README gives the
+          # tarball a non-empty payload.
+          work="$(mktemp -d)"
+          cd "${work}"
+          ver="0.0.0-proof.${{ github.run_id }}.${{ github.run_attempt }}"
+          npm init -y >/dev/null
+          npm pkg set name="@cinatra-ai/registry-token-refresh-canary" version="${ver}"
+          printf 'registry-token-refresh propagation canary — safe to unpublish.\n' > README.md
+
+          # Failure-safe cleanup: unpublish the exact version we published, even if
+          # a later step fails. The guard ensures we only unpublish after a
+          # successful publish; a cleanup failure warns (do not mask the real exit).
+          published=0
+          cleanup() {
+            if [ "${published}" = "1" ]; then
+              npm unpublish "@cinatra-ai/registry-token-refresh-canary@${ver}" \
+                --registry "${REGISTRY_URL}" \
+                || echo "::warning::canary unpublish failed for ${ver}; verify + prune manually"
+            fi
+          }
+          trap cleanup EXIT
+
+          # THE PROOF: a real publish (not --dry-run) with the rotated token.
+          npm publish --registry "${REGISTRY_URL}"
+          published=1
