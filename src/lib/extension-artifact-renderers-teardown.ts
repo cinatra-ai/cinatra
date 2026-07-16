@@ -15,20 +15,33 @@ import {
   semanticRendererRegistry,
   representationProviderRegistry,
 } from "@cinatra-ai/objects/artifact-renderer-registry";
+import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 
 /**
  * Deregister every artifact-renderer registration a package made — its semantic
- * detail renderers (across all its types) AND its representation providers
- * (across all orgs) — so an archived/uninstalled extension stops resolving to a
- * renderer in the running process without a restart. Returns what was removed so
- * the caller can guard the control-plane generation bump.
+ * detail renderers (across all its types), its representation providers (across
+ * all orgs), AND its main-realm dynamic runtime-asset bindings — so an
+ * archived/uninstalled extension stops resolving to a renderer in the running
+ * process without a restart. Returns what was removed so the caller can guard
+ * the control-plane generation bump.
+ *
+ * REVOCATION-VIA-LIFECYCLE (owner ruling 8, plan §3.1 layer 4 / §5.1.4): the
+ * runtime-asset retire is the dynamic-renderer half of this SAME chokepoint —
+ * there is NO separate kill-switch / signer-revocation registry. Archiving or
+ * deleting an extension drops its admitted runtime binding here; the generation
+ * FLOOR is kept as a tombstone by `retireByPackage`, so a delayed straggler from
+ * the torn-down epoch cannot resurrect it and a live mount degrades to the
+ * never-blank floor on the next resolve (the fail-closed freshness preflight then
+ * blocks a cached re-`import()` — `installedActive`/active-digest go false).
  */
 export function invalidateArtifactRenderersForPackage(packageName: string): {
   removedSemanticTypes: string[];
   removedRepresentationProviders: number;
+  removedRuntimeBindings: number;
 } {
   const removedSemanticTypes = semanticRendererRegistry.removeByPackage(packageName);
   const removedRepresentationProviders =
     representationProviderRegistry.retireProvidersByPackage(packageName);
-  return { removedSemanticTypes, removedRepresentationProviders };
+  const removedRuntimeBindings = runtimeAssetRegistry.retireByPackage(packageName);
+  return { removedSemanticTypes, removedRepresentationProviders, removedRuntimeBindings };
 }

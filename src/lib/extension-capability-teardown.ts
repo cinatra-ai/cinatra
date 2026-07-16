@@ -84,6 +84,7 @@ export function teardownExtensionCapabilities(packageName: string): {
   removedTypes: string[];
   removedRendererTypes: string[];
   removedRepresentationProviders: number;
+  removedRuntimeBindings: number;
   removedCubes: string[];
   removedPortletKinds: string[];
   removedVersionKeyedServing: string[];
@@ -111,8 +112,11 @@ export function teardownExtensionCapabilities(packageName: string): {
   // a torn-down extension stops resolving to a renderer (the floor covers a
   // stale worker). BOTH are operator-observable capability surfaces, so they
   // count toward the guarded control-plane generation bump below.
-  const { removedSemanticTypes: removedRendererTypes, removedRepresentationProviders } =
-    invalidateArtifactRenderersForPackage(packageName);
+  const {
+    removedSemanticTypes: removedRendererTypes,
+    removedRepresentationProviders,
+    removedRuntimeBindings,
+  } = invalidateArtifactRenderersForPackage(packageName);
   // Runtime dashboard cubes + portlet kinds (cinatra#660): unregister so a
   // disabled/uninstalled extension's runtime cube stops serving (the serve-gate
   // also denies it via the now-non-live install row) and its portlet kind stops
@@ -138,6 +142,7 @@ export function teardownExtensionCapabilities(packageName: string): {
     removedTypes.length > 0 ||
     removedRendererTypes.length > 0 ||
     removedRepresentationProviders > 0 ||
+    removedRuntimeBindings > 0 ||
     hadUi ||
     hadProviders ||
     removedCubes.length > 0 ||
@@ -150,6 +155,7 @@ export function teardownExtensionCapabilities(packageName: string): {
     removedTypes,
     removedRendererTypes,
     removedRepresentationProviders,
+    removedRuntimeBindings,
     removedCubes,
     removedPortletKinds,
     removedVersionKeyedServing,
