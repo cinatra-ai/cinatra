@@ -1,21 +1,32 @@
 /**
- * `/personal` screen. Mirrors `organizations-dashboard.tsx`.
+ * `/personal` screen — the user's own multi-dashboard surface (cinatra#703).
  *
- * Migrated from the legacy `DeskDashboardGrid` + `DashboardsClientShell` to the
- * shared `<EmbeddedDrizzleCubeDashboardGrid>` (the single PortletHost grid
- * renderer, #328) so Personal gains the grey portlet toolbar, the
- * Edit-dashboard affordance, and the same empty-state chrome the other
- * Management dashboards have (cinatra#626). Personal is "built from the cards
- * you add", so it seeds an EMPTY grid and persists per-user. No `pageAnchor`
- * and no `PageHeader actions` button: like /organizations it has no
- * route-scoped primary action — adding cards is the portlet toolbar's job.
- * It also keeps the default grid-only layout (no Grid/Rows toggle), matching
- * the ratified `dashboard-modes.test.ts` contract that excludes Personal from
- * rows mode.
+ * The lowest-risk first integration of the epic's model (#699): `/personal`
+ * moves from a single per-user dashboard (Edit/Save only) to the reusable
+ * `<EntityDashboardsShell>` (#701) over the per-entity multi-dashboard data
+ * model (#700), so the toolbar gains the "+ New dashboard" button and the
+ * dashboard-select dropdown. The user can now keep multiple NAMED personal
+ * dashboards, each persisted per-user.
+ *
+ * Personal specifics (per the issue):
+ *   - No entity scoping — personal IS the user's own scope; the ref is USER-
+ *     owned with the ambient org as `entityId` (see `buildPersonalEntityRef`).
+ *   - No Permissions tab, no Overview renderer (#702): the personal Overview is
+ *     just the user's private EMPTY dashboard — the same row the legacy single-id
+ *     save wrote, absorbed as this entity's non-removable Overview by the #700
+ *     backfill — so no entity-summary seed is passed to `ensure`.
+ *   - Grid-only layout is preserved (the shell defaults to `["grid"]`); the
+ *     `dashboard-modes` contract pins this screen to that default (no toggle).
+ *
+ * The Overview must exist BEFORE listing (the shell never ensures — #701), so we
+ * ensure it here, then SSR-seed the shell with the Overview-inclusive list +
+ * the selected Overview config to skip the first client round-trip. The data
+ * source binds the server-derived personal ref into the generic entity actions
+ * (`bindPersonalDashboardsDataSource`), so the ref crosses to the client shell
+ * Next-encrypted and the client never authors the owner axis.
  */
 import "server-only";
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
@@ -24,42 +35,21 @@ import { PageHeader } from "@/components/page-header";
 import { getAuthSession } from "@/lib/auth-session";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
-
-import { dashboards, getDashboardsDb } from "../store/db";
-import { type DashboardConfigV1_1 } from "../store/dashboard-config";
-import { readDcConfigFromRow } from "../v12-envelope";
+import { EntityDashboardsShell } from "../components/entity-dashboards-shell";
+import type { EntityDashboardsDataSource } from "../entity-dashboards-contract";
 import {
-  PERSONAL_DEFAULT_CONFIG,
-  buildPersonalDashboardId,
-} from "../components/seed-configs/personal-default";
-import { EmbeddedDrizzleCubeDashboardGrid } from "../components/embedded-drizzle-cube-dashboard-grid";
-import { savePersonalDashboardAction } from "../actions";
-
-async function loadPersonalConfig(
-  dashboardId: string,
-  organizationId: string,
-  ownerId: string,
-): Promise<DashboardConfigV1_1> {
-  const db = getDashboardsDb();
-  const rows = await db
-    .select()
-    .from(dashboards)
-    .where(
-      and(
-        eq(dashboards.id, dashboardId),
-        eq(dashboards.organizationId, organizationId),
-        eq(dashboards.ownerId, ownerId),
-        eq(dashboards.ownerLevel, "user"),
-      ),
-    )
-    .limit(1);
-  // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
-  // config the grid mounts (an absent/corrupt/non-1.2 row falls back to the
-  // empty seed). #626 renders via EmbeddedDrizzleCubeDashboardGrid (the
-  // PortletHost grid renderer); the data shape stays the bare DC config the
-  // view mounts.
-  return readDcConfigFromRow(rows[0], PERSONAL_DEFAULT_CONFIG);
-}
+  createEntityDashboardAction,
+  deleteEntityDashboardAction,
+  ensureEntityOverviewAction,
+  getEntityDashboardConfigAction,
+  listEntityDashboardsAction,
+  renameEntityDashboardAction,
+  saveEntityDashboardConfigAction,
+} from "../actions";
+import {
+  bindPersonalDashboardsDataSource,
+  buildPersonalEntityRef,
+} from "./personal-dashboard-data-source";
 
 export async function PersonalDashboardPage() {
   const session = await getAuthSession();
@@ -67,25 +57,47 @@ export async function PersonalDashboardPage() {
   if (!ctx) {
     redirect("/sign-in");
   }
-  const dashboardId = buildPersonalDashboardId(ctx.organizationId, ctx.userId);
-  const initialConfig = await loadPersonalConfig(
-    dashboardId,
-    ctx.organizationId,
-    ctx.userId,
+
+  const ref = buildPersonalEntityRef(ctx.organizationId, ctx.userId);
+
+  // Ensure the non-removable Overview exists before listing (the shell does not
+  // ensure). Personal seeds it EMPTY — no entity-summary portlets (#702 is not
+  // needed here). Idempotent: a pre-existing (migrated) row is found, not
+  // double-created.
+  const overview = await ensureEntityOverviewAction(ref);
+
+  // SSR seed: the Overview-inclusive list + the selected Overview's config, so
+  // the shell paints immediately. Both depend only on the ensured Overview id,
+  // so fetch them together.
+  const [list, config] = await Promise.all([
+    listEntityDashboardsAction(ref),
+    getEntityDashboardConfigAction(ref, overview.id),
+  ]);
+
+  const dataSource: EntityDashboardsDataSource = bindPersonalDashboardsDataSource(
+    ref,
+    {
+      listEntityDashboardsAction,
+      getEntityDashboardConfigAction,
+      createEntityDashboardAction,
+      renameEntityDashboardAction,
+      deleteEntityDashboardAction,
+      saveEntityDashboardConfigAction,
+    },
   );
 
   return (
     <Main className="min-h-screen">
       <PageHeader
         title="Personal"
-        description="Your private dashboard, built from the cards you add."
+        description="Your private dashboards, built from the cards you add."
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <EmbeddedDrizzleCubeDashboardGrid
-          dashboard={initialConfig}
-          editable
-          onSave={savePersonalDashboardAction}
+        <EntityDashboardsShell
+          dataSource={dataSource}
+          pageAnchor="personal"
+          initialData={{ list, selectedId: overview.id, config }}
         />
       </PageContent>
     </Main>

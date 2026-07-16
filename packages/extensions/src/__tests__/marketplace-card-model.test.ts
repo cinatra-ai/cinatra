@@ -254,6 +254,65 @@ describe("resolveCardDisplayName — human-name fallback order (cinatra#1605)", 
   });
 });
 
+describe("resolveCardDisplayName — a package-name lookalike catalog value falls through to the manifest (cinatra#1605 live finding)", () => {
+  // The live finding: the production storefront stores the package name AS
+  // `display_name` for 54/83 entries, so a plain "non-empty catalog wins" tier-1
+  // leaked the raw package name and the tier-2 manifest rescue never fired. A
+  // catalog value that merely echoes the package IDENTITY (the exact scoped
+  // name, or a machine-identifier form the app itself derives from it) is treated
+  // as ABSENT so the manifest rescue can fire. The DURABLE fix is the catalog
+  // backfill (mkt#217 / mkt#229, on the release wave); this is the app-side
+  // defensive resolution.
+  const PKG = "@cinatra-ai/mcp-client-connector"; // the live-finding example
+  const SLUG = "mcp-client-connector"; // unscoped slug (deriveIconSlug form)
+  const DEAT = "cinatra-ai/mcp-client-connector"; // detail-route form (leading "@" dropped)
+  const MANIFEST_NAME = "MCP Clients"; // the real bundled manifest name
+
+  it("EQUAL-NAME FALLTHROUGH: a catalog display_name equal to the package name is treated as absent → the manifest name wins", () => {
+    expect(resolveCardDisplayName(PKG, MANIFEST_NAME, PKG)).toBe(MANIFEST_NAME);
+    expect(resolveCardDisplayName(PKG, MANIFEST_NAME, PKG)).not.toBe(PKG);
+    // Trim + case are folded before comparison (npm names are lowercase, but a
+    // catalog lookalike value may carry surrounding space / case variation).
+    expect(resolveCardDisplayName(`  ${PKG}  `, MANIFEST_NAME, PKG)).toBe(MANIFEST_NAME);
+    expect(resolveCardDisplayName(PKG.toUpperCase(), MANIFEST_NAME, PKG)).toBe(MANIFEST_NAME);
+  });
+
+  it("ANTI-LOOKALIKE: each machine-identifier form the app derives (unscoped slug, detail-route form) is treated as absent → the manifest name wins", () => {
+    for (const lookalike of [SLUG, DEAT, SLUG.toUpperCase(), `  ${SLUG}  `, `  ${DEAT}  `]) {
+      expect(resolveCardDisplayName(lookalike, MANIFEST_NAME, PKG)).toBe(MANIFEST_NAME);
+    }
+  });
+
+  it("DISTINCT-NAME PRECEDENCE: a genuinely distinct catalog name still wins tier-1 (the lookalike guard does not over-match)", () => {
+    // A real human name never coincides with any derived identity form.
+    expect(resolveCardDisplayName(MANIFEST_NAME, "Ignored Manifest Name", PKG)).toBe(
+      MANIFEST_NAME,
+    );
+    // Crucially: a human name that merely DE-HYPHENATES the slug is NOT a
+    // lookalike — the fold is case-only (no hyphen/underscore→space rewrite), so
+    // "Blog Skills" ≠ the slug "blog-skills" and the catalog name still wins.
+    const PKG2 = "@cinatra-ai/blog-skills";
+    expect(resolveCardDisplayName("Blog Skills", "Ignored Manifest Name", PKG2)).toBe(
+      "Blog Skills",
+    );
+  });
+
+  it("EQUAL-NAME + NO MANIFEST: still shows the package name VERBATIM as the true last resort (no change to the visible output, never prettified)", () => {
+    // When the catalog echoes the package name and no manifest name exists, the
+    // resolution degrades to the package name shown verbatim — the equal-name
+    // treatment does not alter this final visible result.
+    expect(resolveCardDisplayName(PKG, undefined, PKG)).toBe(PKG);
+    expect(resolveCardDisplayName(SLUG, null, PKG)).toBe(PKG);
+    expect(resolveCardDisplayName(PKG, undefined, PKG)).not.toContain(" ");
+  });
+
+  it("ABSENT-NAME (existing invariant preserved): a blank / whitespace catalog value still falls through — manifest, then package name", () => {
+    expect(resolveCardDisplayName("", MANIFEST_NAME, PKG)).toBe(MANIFEST_NAME);
+    expect(resolveCardDisplayName("   ", MANIFEST_NAME, PKG)).toBe(MANIFEST_NAME);
+    expect(resolveCardDisplayName(undefined, undefined, PKG)).toBe(PKG);
+  });
+});
+
 describe("catalogEntryToCardData — display-name resolution (cinatra#1605)", () => {
   // The install popup title, the listing-card title, and the detail modal all
   // consume `card.displayName`; fixing it at the model covers all three (AC5).
@@ -305,6 +364,18 @@ describe("catalogEntryToCardData — display-name resolution (cinatra#1605)", ()
   it("un-enriched call (no manifest injected) still resolves the catalog display_name", () => {
     const card = catalogEntryToCardData(catalogEntry({ display_name: "Blog Skills" }));
     expect(card!.displayName).toBe("Blog Skills");
+  });
+
+  it("a catalog display_name that ECHOES the package name resolves the injected manifest name end-to-end (cinatra#1605 live finding)", () => {
+    // The production symptom: the storefront stores the package name AS
+    // display_name. The model must treat that as absent and bind the manifest
+    // name, so the card title + install popup show the human name — not the pkg.
+    const card = catalogEntryToCardData(
+      catalogEntry({ package_name: PKG, display_name: PKG }),
+      { manifestDisplayName: MANIFEST_NAME },
+    );
+    expect(card!.displayName).toBe(MANIFEST_NAME);
+    expect(card!.displayName).not.toBe(card!.packageName);
   });
 });
 
