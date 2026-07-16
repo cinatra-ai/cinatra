@@ -369,8 +369,10 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   }, [messages]);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
+  // Also release the auto-scroll lock — it leaked across thread switches (#1702).
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
+    userScrolledUpRef.current = false;
   }, [activeThreadId]);
 
   // Notify ChatThreadPanel of the active thread so it can highlight without router navigation.
@@ -521,18 +523,6 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     }
   }, []);
 
-  // Release the auto-scroll lock when the active thread changes (#1702).
-  // The lock (userScrolledUpRef) is per-container but the container is reused
-  // across threads, so "scrolled up in thread A" used to leak into thread B:
-  // scrollToBottom no-oped on the stale lock and the newly opened thread
-  // rendered at an arbitrary position instead of its latest message. Defined
-  // BEFORE the scroll effect below — effects run in definition order, so on a
-  // render where the thread and its (cached) messages change together the
-  // lock is already clear when scrollToBottom runs.
-  useEffect(() => {
-    userScrolledUpRef.current = false;
-  }, [activeThreadId]);
-
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom]);
@@ -540,9 +530,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // Re-enable auto-scroll when streaming completes so the next response scrolls normally.
   const prevHasActiveStreamRef = useRef(false);
   useEffect(() => {
-    if (prevHasActiveStreamRef.current && !hasActiveStream) {
-      userScrolledUpRef.current = false;
-    }
+    if (prevHasActiveStreamRef.current && !hasActiveStream) userScrolledUpRef.current = false;
     prevHasActiveStreamRef.current = hasActiveStream;
   }, [hasActiveStream]);
 

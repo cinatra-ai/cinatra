@@ -13,14 +13,18 @@ const PKG_ROOT = path.resolve(__dirname, "..", "..");
 const src = readFileSync(path.join(PKG_ROOT, "src", "chat-page.tsx"), "utf8");
 
 describe("chat auto-scroll lock across thread switches", () => {
-  it("releases the scroll lock when the active thread changes", () => {
+  it("releases the scroll lock when the active thread changes (inside the thread-sync effect)", () => {
+    // Folded into the existing activeThreadIdRef sync effect — the file is a
+    // baselined file-size-ratchet bottleneck, so no standalone effect.
     expect(src).toMatch(
-      /useEffect\(\(\) => \{\s*userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
+      /useEffect\(\(\) => \{\s*activeThreadIdRef\.current = activeThreadId;\s*userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
     );
   });
 
   it("runs the release BEFORE the scroll effect so a same-render (cached) thread switch scrolls", () => {
-    const resetIdx = src.search(/\}, \[activeThreadId\]\);/);
+    const resetIdx = src.search(
+      /activeThreadIdRef\.current = activeThreadId;\s*userScrolledUpRef\.current = false;/,
+    );
     const scrollEffectIdx = src.search(
       /scrollToBottom\(\);\s*\}, \[messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom\]\);/,
     );
@@ -33,7 +37,7 @@ describe("chat auto-scroll lock across thread switches", () => {
 
   it("keeps the stream-completion release (the other legitimate reset)", () => {
     expect(src).toMatch(
-      /if \(prevHasActiveStreamRef\.current && !hasActiveStream\) \{\s*userScrolledUpRef\.current = false;/,
+      /if \(prevHasActiveStreamRef\.current && !hasActiveStream\) userScrolledUpRef\.current = false;/,
     );
   });
 });
