@@ -438,6 +438,25 @@ export type {
   ArtifactUiRegistryItemType,
 } from "./artifact-contract";
 
+// The CHAT RENDERABLE-VIEW declaration contract (the `./chat-views-contract`
+// subpath, cinatra#1626 epic #1620 S9/M4): the versioned top-level
+// `cinatra.views` field by which an extension ships the chat renderable-view
+// component for a wire `viewType`. Its OWN ABI version, separate channel from
+// `cinatra.artifact.ui` (the S1 slot enum). Tolerant parse (degrade at runtime /
+// reject at publish), one effective provider per viewType.
+export type {
+  ChatViewsManifest,
+  ChatRenderableViewEntry,
+  ChatViewsParseResult,
+} from "./chat-views-contract";
+export {
+  CHAT_VIEWS_ABI_VERSION,
+  CHAT_VIEW_TYPE_RE,
+  isValidChatViewType,
+  parseChatViews,
+  validateChatViewsForPublish,
+} from "./chat-views-contract";
+
 // The versioned DASHBOARD-CONTRIBUTION manifest contract (the
 // `./dashboard-contribution-contract` subpath, cinatra#1628 S11a) so a
 // `kind:"agent"` extension types its `cinatra.dashboardContribution` claim

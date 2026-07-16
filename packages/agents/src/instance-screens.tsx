@@ -586,15 +586,20 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
     canGrantWorkspace,
   };
 
-  // Pre-filter `availableScopes` for the agent_run permissions
-  // form to only show scopes within the parent agent_template's policy.
-  // Authoritative rejection lives server-side in
-  // `saveExtensionAccessPolicy` (assertAgentRunPolicyContainedByTemplate);
-  // this filter is the UX layer so the dropdown stops inviting users to
-  // pick scopes that would be rejected. Read-side policy resolution stays
-  // unchanged — grandfathered runs remain readable.
-  const { filterAvailableScopesForParentPolicy } = await import("@cinatra-ai/extensions/scope-containment-filter");
-  const runScopedAvailableScopes = filterAvailableScopesForParentPolicy(
+  // Containment (cinatra#1607 §6.4): narrow the agent_run permissions form to
+  // scopes within the parent agent_template's policy via the picker's FIRST-CLASS
+  // `allowedScopes` prop — not a per-site data pre-filter. `AccessCombobox` runs
+  // the same §VI containment algebra as every other picker; this replaces the old
+  // `filterAvailableScopesForParentPolicy` data narrowing (which is now the
+  // internal, equivalence-proven core of `allowedScopeIdentitiesFromPolicy`).
+  // The result is a serializable typed `{ kind, id }[]` — a predicate cannot
+  // cross the Server → Client boundary, an identity list can. Authoritative
+  // rejection still lives server-side in `saveExtensionAccessPolicy`
+  // (assertAgentRunPolicyContainedByTemplate); this is DISPLAY input only (§6.8).
+  // Read-side policy resolution stays unchanged — grandfathered runs remain
+  // readable.
+  const { allowedScopeIdentitiesFromPolicy } = await import("@cinatra-ai/extensions/scope-containment-filter");
+  const runScopeAllowedScopes = allowedScopeIdentitiesFromPolicy(
     availableScopes,
     template.agentAuthPolicy ?? {
       runListVisibility: ["owner"],
@@ -698,7 +703,8 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
           initialPolicy={effectivePolicy}
           owner={runOwner}
           coOwners={coOwners}
-          availableScopes={runScopedAvailableScopes}
+          availableScopes={availableScopes}
+          allowedScopes={runScopeAllowedScopes}
           currentUserId={actorUserId}
           allowSharing={canEdit ? true : effectivePolicy.allowRunSharing}
           removeOwner={async () => {

@@ -82,12 +82,14 @@ function readIfExists(path) {
 export function loadLiveRules(sdkRepoRoot) {
   const hostContextPath = `${sdkRepoRoot}/packages/sdk-extensions/src/host-context.ts`;
   const artifactContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/artifact-contract.ts`;
+  const chatViewsContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/chat-views-contract.ts`;
   const accessConfigPath = `${sdkRepoRoot}/packages/sdk-extensions/src/access-config.ts`;
   const sdkExtensionsPkgPath = `${sdkRepoRoot}/packages/sdk-extensions/package.json`;
   const sdkUiPkgPath = `${sdkRepoRoot}/packages/sdk-ui/package.json`;
 
   const hostContextSrc = readIfExists(hostContextPath);
   const artifactContractSrc = readIfExists(artifactContractPath);
+  const chatViewsContractSrc = readIfExists(chatViewsContractPath);
   const accessConfigSrc = readIfExists(accessConfigPath);
   const sdkExtensionsPkgRaw = readIfExists(sdkExtensionsPkgPath);
   const sdkUiPkgRaw = readIfExists(sdkUiPkgPath);
@@ -95,6 +97,7 @@ export function loadLiveRules(sdkRepoRoot) {
   const missing = [];
   if (!hostContextSrc) missing.push(hostContextPath);
   if (!artifactContractSrc) missing.push(artifactContractPath);
+  if (!chatViewsContractSrc) missing.push(chatViewsContractPath);
   if (!accessConfigSrc) missing.push(accessConfigPath);
   if (!sdkExtensionsPkgRaw) missing.push(sdkExtensionsPkgPath);
   if (!sdkUiPkgRaw) missing.push(sdkUiPkgPath);
@@ -139,6 +142,13 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactContractSrc,
     "ARTIFACT_UI_REGISTRY_ITEM_TYPES",
   );
+  // cinatra.views (cinatra#1626, S9): the chat renderable-view declaration
+  // surface's OWN ABI version, DERIVED from the live leaf source
+  // (chat-views-contract.ts's CHAT_VIEWS_ABI_VERSION) — never a re-listed copy
+  // (#979 addendum principle). The viewType grammar + entry containment are a
+  // one-line regex hand-mirrored in the gate (like `isUiEntryContained`); only
+  // the version literal is derived here.
+  const chatViewsAbiVersion = extractNumberConst(chatViewsContractSrc, "CHAT_VIEWS_ABI_VERSION");
   const sdkAbiVersion =
     typeof sdkExtensionsPkg?.cinatra?.sdkAbiVersion === "string"
       ? sdkExtensionsPkg.cinatra.sdkAbiVersion
@@ -165,6 +175,9 @@ export function loadLiveRules(sdkRepoRoot) {
   if (!artifactUiRegistryItemTypes || artifactUiRegistryItemTypes.length === 0) {
     return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_REGISTRY_ITEM_TYPES" };
   }
+  if (chatViewsAbiVersion === null) {
+    return { ok: false, missing: [], derivationFailed: "CHAT_VIEWS_ABI_VERSION" };
+  }
   // Mirror `generateArtifactUiSdkAbiRange` (leaf): caret over maj.min.patch of
   // the canonical SDK ABI. The generation RULE is one line — drift here can only
   // produce a false CI signal, never a security gap.
@@ -184,6 +197,7 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactUiAbiVersion,
     artifactUiRegistryItemTypes: new Set(artifactUiRegistryItemTypes),
     artifactUiSdkAbiRange,
+    chatViewsAbiVersion,
     sdkExtensionsExports: Object.keys(sdkExtensionsPkg.exports ?? {}),
     sdkUiExports: Object.keys(sdkUiPkg.exports ?? {}),
   };
