@@ -540,6 +540,31 @@ export type {
   OasCinatraLlm,
 } from "./llm-provider-policy";
 
+// llm-providers S1 (#1712) — the versioned provider *declaration* model: the
+// build-known catalog projection (OAS/authoring validation) and the
+// fail-closed live resolver (declaration ∩ activated surface ∩ adapter
+// readiness) that later slices inject into dispatch/preflight. Lives in
+// `llm-provider-policy` (the pure policy leaf) so it adds no new module to a
+// route's reachable first-party graph.
+export {
+  LLM_PROVIDER_ABI_VERSION,
+  NATIVE_MCP_STATUSES,
+  MCP_APPROVAL_MODES,
+  LlmProviderDeclarationSchema,
+  BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS,
+  declarationSatisfiesCapability,
+  resolveEffectiveProviderCapability,
+} from "./llm-provider-policy";
+export type {
+  NativeMcpStatus,
+  McpApprovalMode,
+  LlmProviderDeclaration,
+  LlmProviderCapabilities,
+  LlmProviderModels,
+  LlmProviderNativeMcp,
+  EffectiveCapabilityFactors,
+} from "./llm-provider-policy";
+
 // Read an installed agent's declared LLM-provider requirement (the OAS
 // `metadata.cinatra.llm` block) from the runtime mount — the ratified
 // LLM-provider dependency vocabulary consumed by the host run-enqueue preflight
