@@ -174,6 +174,120 @@
           "literals": ["data-slot='alert'"]
         }
       ]
+    },
+    "notifications-list": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-list\"][data-variant=\"populated\"] (title field: [data-field=\"item.title\"]; decide-approval -> data-outcome=\"decided\"; empty/error/loading variants). Real surface: the [data-conformance-id=\"notifications-list\"] list + the notifications-skeletons loading rows.",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-feed.tsx",
+          "literals": ["data-conformance-id=\"notifications-list\"", "data-conformance-id=\"notifications-empty\""]
+        },
+        {
+          "file": "src/app/notifications/notifications-skeletons.tsx",
+          "literals": ["data-slot=\"feed-row-skeleton\""]
+        }
+      ]
+    },
+    "notifications-filters": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-filters\"][data-variant=\"populated\"] (four chips All/Needs action/Unread/In progress; filter -> data-outcome=\"filtered\"). Real surface: the [data-conformance-id=\"notifications-filters\"] chip group.",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-feed.tsx",
+          "literals": ["data-conformance-id=\"notifications-filters\"", "data-action=\"filter -> filtered\""]
+        }
+      ]
+    },
+    "notification-row": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notification-row\"] (resting row carries the read-dot; loading variant = [data-slot=\"feed-row-skeleton\"]). Real surface: the [data-conformance-id=\"notification-row\"] row shell.",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-feed.tsx",
+          "literals": ["data-conformance-id=\"notification-row\""]
+        },
+        {
+          "file": "src/app/notifications/notifications-skeletons.tsx",
+          "literals": ["data-slot=\"feed-row-skeleton\""]
+        }
+      ]
+    },
+    "approval-row": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"approval-row\"] (eligibility pill; decide-approval -> data-outcome=\"decided\"; loading = [data-slot=\"feed-row-skeleton\"]). Real surface: the [data-conformance-id=\"approval-row\"] row shell + its inline decide slot.",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-feed.tsx",
+          "literals": ["data-conformance-id=\"approval-row\"", "data-action=\"decide-approval -> decided\""]
+        },
+        {
+          "file": "src/app/notifications/notifications-skeletons.tsx",
+          "literals": ["data-slot=\"feed-row-skeleton\""]
+        }
+      ]
+    },
+    "notifications-filter-rail": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-filter-rail\"][data-variant=\"loading\"] (the real NotificationsFilterRailSkeleton — aria-busy labelled group, four chip-shaped [data-slot=\"skeleton\"]).",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-skeletons.tsx",
+          "literals": ["data-conformance-id=\"notifications-filter-rail\"", "data-state=\"loading\""]
+        }
+      ]
+    },
+    "notifications-bell": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-bell\"] (open -> navigated proven by the bell link href=\"/notifications\"; loading = the real NotificationsBellSkeleton). Real surfaces: the NotificationsBellTrigger link + the exported bell-skeleton.",
+      "requires": [
+        {
+          "file": "packages/notifications/src/notifications-provider.tsx",
+          "literals": ["href=\"/notifications\""]
+        },
+        {
+          "file": "packages/notifications/src/bell-skeleton.tsx",
+          "literals": ["data-conformance-id=\"notifications-bell\"", "data-state=\"loading\""]
+        }
+      ]
+    },
+    "notifications-empty": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-empty\"][data-variant=\"empty\"] (exactly \"No notifications\"). Real surface: the [data-conformance-id=\"notifications-empty\"] universal empty state.",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-feed.tsx",
+          "literals": ["data-conformance-id=\"notifications-empty\""]
+        }
+      ]
+    },
+    "notifications-vendor-gate": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-vendor-gate\"][data-variant=\"empty\"] (ABSENCE contract: the rendered [data-source-id] set is exactly the non-vendor set; neither vendor-gated source id appears). Real gate: the registered-vendor predicate the marketplace vendor sources gate their rows on.",
+      "requires": [
+        {
+          "file": "src/app/configuration/approvals/sources/marketplace-shared.ts",
+          "literals": ["export function isRegisteredVendor"]
+        },
+        {
+          "file": "src/app/configuration/approvals/sources/marketplace-vendor-app-status.tsx",
+          "literals": ["isRegisteredVendor()"]
+        },
+        {
+          "file": "src/app/configuration/approvals/sources/marketplace-vendor-app-moderation.tsx",
+          "literals": ["isRegisteredVendor()"]
+        }
+      ]
+    },
+    "notifications-degraded": {
+      "manifest": "app-notifications",
+      "selector": "harness [data-surface-id=\"notifications-degraded\"][data-variant=\"error\"] (the single inline \"some approvals are currently unavailable\" line). Real surface: the [data-conformance-id=\"notifications-degraded\"] degraded line.",
+      "requires": [
+        {
+          "file": "src/app/notifications/notifications-feed.tsx",
+          "literals": ["data-conformance-id=\"notifications-degraded\""]
+        }
+      ]
     }
   },
   "shared": {

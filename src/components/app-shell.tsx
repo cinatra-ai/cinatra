@@ -31,7 +31,7 @@ import {
   humanizePathSegment,
   type BreadcrumbCrumb,
 } from "@/lib/breadcrumb-trail";
-import { Building2, FolderKanban, MessageSquare, Play, Plus, Settings, TriangleAlert, UsersRound, Wrench } from "lucide-react";
+import { Building2, FolderKanban, MessageSquare, Play, Plus, TriangleAlert, UsersRound, Wrench } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 import {
   DropdownMenu,
@@ -49,6 +49,7 @@ import {
   sanitizeEmbedSection,
 } from "@/lib/client-trust";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ConfigurationTopbarCog } from "@/components/configuration-topbar-cog";
 import {
   NotificationsBellTrigger,
   NotificationsProvider,
@@ -482,7 +483,6 @@ export function AppShell({
         userAccentColor={userAccentColor}
         singleOrg={singleOrg}
         hiddenNavTitles={hiddenNavTitles}
-        isAdmin={isAdmin}
       />
       <SidebarInset>
         {/* Spacer: pushes the sticky header (and all page content) into normal flow
@@ -707,10 +707,15 @@ export function AppShell({
               onOpenChange={setCreateOrganizationOpen}
             />
             <ThemeSwitch />
-            {/* Full notification flyout (bell + popover + tabs) */}
+            {/* Configuration (cog) → /configuration — admin-only, positioned
+                immediately LEFT of the bell (DOM / keyboard order: cog → bell).
+                Discoverability only: /configuration stays server-side
+                admin-gated (requireAdminSession), so hiding the cog never
+                substitutes for that check. Configuration left the sidebar in
+                cinatra#1563 (its former "Admin" group is gone as a result). */}
+            <ConfigurationTopbarCog isAdmin={isAdmin} />
+            {/* Notifications bell — badge + link to /notifications (#1558). */}
             <NotificationsBellTrigger />
-            {/* The single home for /configuration access is the Admin sidebar
-                group (Admin → Configuration). */}
             </div>
           </div>
         </header>
