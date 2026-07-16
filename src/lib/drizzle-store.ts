@@ -2174,7 +2174,7 @@ $body$` },
     // 1:1 template<->principal link (#1037 P1.3): assistant_user_id is the bare text id of the
     // Better Auth public."user" assistant principal an agent_kind='assistant' template is registered AS
     // (no cross-schema FK, like assistant_threads.assistant_user_id). Partial UNIQUE over non-null values
-    // enforces the 1:1; executor rows stay NULL and are excluded by the predicate. Transformational half in migration core__0050.
+    // enforces the 1:1; executor rows stay NULL and are excluded by the predicate. Transformational half in migration core__0052.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS assistant_user_id text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_templates_assistant_user_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (assistant_user_id) WHERE assistant_user_id IS NOT NULL` },
     // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay

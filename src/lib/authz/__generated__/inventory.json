@@ -335,17 +335,17 @@
     {
       "primitiveName": "assistant_send",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 876
+      "line": 916
     },
     {
       "primitiveName": "assistant_thread_get",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 886
+      "line": 926
     },
     {
       "primitiveName": "assistant_thread_list",
       "file": "src/lib/assistant-mcp.ts",
-      "line": 881
+      "line": 921
     },
     {
       "primitiveName": "blog_connector_list",

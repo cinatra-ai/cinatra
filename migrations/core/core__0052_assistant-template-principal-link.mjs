@@ -1,4 +1,4 @@
-// core__0050 — the 1:1 agent_templates <-> assistant-user PRINCIPAL link
+// core__0052 — the 1:1 agent_templates <-> assistant-user PRINCIPAL link
 // (cinatra-ai/cinatra#1037 P1.3). Adds `assistant_user_id` to agent_templates:
 // the bare text id of the Better Auth public."user" assistant principal a
 // conversational (`agent_kind='assistant'`) template is registered AS. This is
@@ -26,9 +26,14 @@
 // runs AFTER migrations) — identity minted at boot, never by a migration, exactly
 // like the @cinatra seed and the handle backfill.
 //
-// Gate class NON-destructive (additive): a new nullable column + a partial unique
-// index on that new column — no change to existing data, no NOT NULL on existing
-// rows, no tightened constraint, no rewrite.
+// Gate class DESTRUCTIVE though operationally safe: the schema-migration gate
+// classifies a CREATE UNIQUE INDEX on an existing table (agent_templates) as
+// [unique-index-existing-table] — a unique index can fail outright on existing
+// duplicates. Here it cannot: assistant_user_id is a brand-new column added in
+// the same change, so every pre-existing row reads NULL and the partial
+// predicate (WHERE assistant_user_id IS NOT NULL) matches ZERO existing rows —
+// the index builds with no possible collision. No change to existing data, no
+// NOT NULL on existing rows, no tightened constraint, no rewrite.
 //
 // IDEMPOTENT / LINEAGE-TOLERANT: column IF NOT EXISTS, index IF NOT EXISTS.
 // Unqualified names resolve to the app schema the runner sets on search_path.

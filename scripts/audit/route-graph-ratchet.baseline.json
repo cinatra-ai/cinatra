@@ -1,7 +1,7 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 150,
+    "/sign-in": 1421,
     "/api/mcp": 1458,
     "/chat": 1496,
     "/api/a2a": 1463,
@@ -33,10 +33,10 @@
       "pr": 1579
     },
     "/sign-in": {
-      "from": 149,
-      "to": 150,
-      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts \u2014 the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 149->150 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 \u2014 CI re-verifies on the merged tree.",
-      "pr": 1579
+      "from": 150,
+      "to": 1421,
+      "reason": "cinatra#1037 P1.3/P1.4 built-in assistant principal bootstrap. src/lib/auth.ts ensureAssistantBootstrap now reaches the new module src/lib/assistant-agent-registration.ts (this PR), which mints+links the built-in Cinatra assistant principal via upsertBuiltInAssistantAgentTemplate from the @cinatra-ai/agents store. That store's transitive graph pulls the full host connector/agent registry (store -> auth-policy -> connector-authority -> src/lib/generated/extensions.server.ts, and the agents index barrel -> server-actions -> register-host-connector-services). auth.ts is reachable from EVERY tracked route through @cinatra-ai/permissions/pages, so /sign-in \u2014 previously a thin pre-auth page that never reached the registry (150) \u2014 now statically reaches it. The registration import in auth.ts is DYNAMIC (await import) precisely to code-split this graph off the eager bundle at the bundler level; the route-graph ratchet is a STATIC reachable-first-party-module counter that, by its documented limitation, does NOT model dynamic-import chunk boundaries, so it counts the split graph and /sign-in's static count rises to 1421. No narrow-import fix exists: upsertBuiltInAssistantAgentTemplate lives in the agents store, which intrinsically reaches the connector registry. MEASURED 150->1421 with the companion extension repos cloned pinned (missingCount 0, exactly as CI does via clone-extensions) and deterministic across repeated runs. Absorbed raise 150->1421.",
+      "pr": 1674
     }
   }
 }
