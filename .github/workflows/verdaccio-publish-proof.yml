@@ -37,7 +37,10 @@ permissions:
   contents: read
 
 jobs:
-  proof:
+  # Job id is deliberately NOT `proof` — that check-name is the required
+  # `proof` context posted by works-after-proof.yml; a second `proof` job would
+  # make the required context ambiguous (merge-group-coverage-guard fails closed).
+  canary-proof:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Reads VERDACCIO_REGISTRY_URL + VERDACCIO_PUBLISH_TOKEN / _NEXT from this
