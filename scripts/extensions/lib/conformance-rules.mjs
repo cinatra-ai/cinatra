@@ -130,6 +130,15 @@ export function loadLiveRules(sdkRepoRoot) {
     "ARTIFACT_UI_RESERVED_SLOTS",
   );
   const artifactUiAbiVersion = extractNumberConst(artifactContractSrc, "ARTIFACT_UI_ABI_VERSION");
+  // artifact-ui registryItems (cinatra#1623, S5): the closed shadcn item-TYPE
+  // enum, DERIVED from the live leaf source (never a re-listed copy). The
+  // `<component>`-name grammar is a one-line regex hand-mirrored in the gate
+  // (like `isUiEntryContained` mirrors `isContainedEntryPath`); only the enum is
+  // a data literal, so only it is derived here.
+  const artifactUiRegistryItemTypes = extractStringArrayConst(
+    artifactContractSrc,
+    "ARTIFACT_UI_REGISTRY_ITEM_TYPES",
+  );
   const sdkAbiVersion =
     typeof sdkExtensionsPkg?.cinatra?.sdkAbiVersion === "string"
       ? sdkExtensionsPkg.cinatra.sdkAbiVersion
@@ -153,6 +162,9 @@ export function loadLiveRules(sdkRepoRoot) {
   if (artifactUiAbiVersion === null) {
     return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_ABI_VERSION" };
   }
+  if (!artifactUiRegistryItemTypes || artifactUiRegistryItemTypes.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_REGISTRY_ITEM_TYPES" };
+  }
   // Mirror `generateArtifactUiSdkAbiRange` (leaf): caret over maj.min.patch of
   // the canonical SDK ABI. The generation RULE is one line — drift here can only
   // produce a false CI signal, never a security gap.
@@ -170,6 +182,7 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactUiSlots: new Set(artifactUiSlots),
     artifactUiReservedSlots: new Set(artifactUiReservedSlots),
     artifactUiAbiVersion,
+    artifactUiRegistryItemTypes: new Set(artifactUiRegistryItemTypes),
     artifactUiSdkAbiRange,
     sdkExtensionsExports: Object.keys(sdkExtensionsPkg.exports ?? {}),
     sdkUiExports: Object.keys(sdkUiPkg.exports ?? {}),
