@@ -15,7 +15,7 @@ documentation and lives under [`config/`](../../config/).
 |-----------|-----------------|
 | [`architecture/`](./architecture/) | System shape and subsystem boundaries (e.g. the skills lifecycle, the stateful-service inventory). |
 | [`decisions/`](./decisions/) | ADRs / decision records — point-in-time rulings with status and rationale. |
-| [`contracts/`](./contracts/) | Invariants the code enforces (extension server-entry contract, clone pinning, library closure, widget source of truth, LLM-provider dependency vocabulary, moderation credentials, default-off flags). |
+| [`contracts/`](./contracts/) | Invariants the code enforces (extension server-entry contract, clone pinning, library closure, widget source of truth, LLM-provider dependency vocabulary, moderation credentials, default-off flags, the artifact-renderer RSC contract). |
 | [`workflows/`](./workflows/) | Authoring / process guidance (webhook authoring and delivery, the upgrade track). |
 | [`governance/`](./governance/) | Living policy: ownership, decision process, gate policy. |
 | [`records/attribution/`](./records/attribution/) | Attribution / gate correction records (append-only; `Correction-for:` trailers reference commit SHAs, not paths). |
