@@ -73,8 +73,9 @@ describe("AccessCombobox checkbox multi-select — selectionMode=\"multiple\" (c
     expect(SOURCE).toMatch(/toggleAccessSelection\(v,\s*current\)/);
     // the multi onSelect branch does NOT close the popover
     expect(SOURCE).toMatch(/Popover stays OPEN on toggle/);
-    // single mode still closes on select
-    expect(SOURCE).toMatch(/onValueChange\(itemValue\);\s*\n\s*setOpen\(false\)/);
+    // single mode still closes on select — via the `commit` helper, which sets
+    // the value then closes the popover (post-#1607 refactor).
+    expect(SOURCE).toMatch(/onValueChange\(v\);\s*\n\s*setOpen\(false\);/);
   });
 
   it("derives row checked/disabled state from the pure accessRowState BY DEFAULT (grant mode)", () => {

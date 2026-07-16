@@ -37,6 +37,11 @@ export {
 // isolation, `bell-config-needs-row`). Standalone since the flyout retirement.
 export { ConfigurationNeedsRow } from "./configuration-needs-row";
 
+// The bell's loading presentation (spec §IV, cinatra#1549 E11-AC2) — the real,
+// exported skeleton the design-conformance harness mounts for the
+// `notifications-bell` loading state.
+export { NotificationsBellSkeleton } from "./bell-skeleton";
+
 // The shared client store the flyout consumes and the future /notifications
 // v2 page (E7) will mount against — the extracted poll/SSE/mark-read state
 // machine. Also importable component-free via

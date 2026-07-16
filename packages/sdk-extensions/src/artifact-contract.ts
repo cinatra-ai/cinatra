@@ -190,6 +190,67 @@ export type ArtifactUiRenderer = {
   representations?: string[];
 };
 
+// ---------------------------------------------------------------------------
+// cinatra.artifact.ui.registryItems — extension-contributed shadcn design
+// registry items (cinatra#1623, epic #1620 S5). PRESENTATIONAL-ONLY: an item is
+// consumer-executed source COPIED by `shadcn add` into the consuming tree (never
+// host-executed), so it may import ONLY public npm packages + other registry
+// items — no app/host imports, no auth context, no data fetching (#1607
+// doctrine). This is the extension author's DECLARATION surface; the marketplace
+// publish pipeline (owned by the publishing infrastructure) then validates the
+// dependency graph, runs a per-item clean-consumer install+typecheck, scans
+// content/provenance, and emits digest-pinned immutable blobs to the append-only
+// registry host. The vendor IDENTITY grammar (`@<registryNamespace>/<slug>-<
+// component>`), the tombstone contract, the serving-URL grammar, and the
+// publish-time DAG validation live in the sibling leaf `./registry-contract`.
+// ---------------------------------------------------------------------------
+
+/**
+ * The closed shadcn registry-item TYPE enum an extension may contribute:
+ * `registry:ui` (a presentational component) or `registry:lib` (a plain library
+ * module). Read AS A LITERAL by the conformance gate's rule derivation
+ * (`scripts/extensions/lib/conformance-rules.mjs`) — never a re-listed copy.
+ */
+export const ARTIFACT_UI_REGISTRY_ITEM_TYPES = ["registry:ui", "registry:lib"] as const;
+
+export type ArtifactUiRegistryItemType = (typeof ARTIFACT_UI_REGISTRY_ITEM_TYPES)[number];
+
+/**
+ * The shadcn item-name grammar for the `<component>` token: strict lowercase
+ * kebab (a leading alnum segment, hyphen-joined alnum segments). This is the
+ * SAME strict-lowercase slug grammar the registry-identity `registryNamespace`
+ * and `<slug>` tokens use (see `REGISTRY_NAMESPACE_RE` in `./registry-contract`),
+ * so a composed `@<ns>/<slug>-<component>` identifier is a single strict slug.
+ */
+export const REGISTRY_COMPONENT_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** True iff `name` is a valid `<component>` token (strict lowercase kebab). */
+export function isValidRegistryComponentName(name: unknown): boolean {
+  return typeof name === "string" && REGISTRY_COMPONENT_NAME_RE.test(name);
+}
+
+/**
+ * A single extension-declared registry item. The `name` is the `<component>`
+ * token; the full published identity `@<registryNamespace>/<slug>-<name>` is
+ * composed by the publish pipeline (the namespace is assigned at vendor
+ * onboarding, not declared in the manifest — see `./registry-contract`).
+ */
+export type ArtifactUiRegistryItem = {
+  /** The `<component>` token — the shadcn item name (strict lowercase kebab). */
+  name: string;
+  /**
+   * Package-relative, path-contained subpath to the item's source
+   * (`"./src/registry/stat-tile.tsx"`). Resolved against the package's
+   * `exports`/`files` at the publish/conformance gate; here we pin the SHAPE
+   * only (same containment guard as a renderer `entry`).
+   */
+  entry: string;
+  /** The shadcn registry item type. */
+  type: ArtifactUiRegistryItemType;
+  /** Human-readable, presentational description (non-empty). */
+  description: string;
+};
+
 export type ArtifactUiManifest = {
   abiVersion: typeof ARTIFACT_UI_ABI_VERSION;
   /**
@@ -198,8 +259,20 @@ export type ArtifactUiManifest = {
    * {@link generateArtifactUiSdkAbiRange}.
    */
   sdkAbiRange: string;
-  /** NON-EMPTY partial map over the closed v1 slot enum. */
-  renderers: Partial<Record<ArtifactUiSlot, ArtifactUiRenderer>>;
+  /**
+   * NON-EMPTY partial map over the closed v1 slot enum, when present. OPTIONAL
+   * since cinatra#1623 (S5): a `ui` block may instead (or additionally) declare
+   * only `registryItems` — the renderer/registry coupling is optional. At least
+   * one of `renderers`/`registryItems` MUST be non-empty (enforced by the
+   * schema refinement below).
+   */
+  renderers?: Partial<Record<ArtifactUiSlot, ArtifactUiRenderer>>;
+  /**
+   * NON-EMPTY list of extension-contributed shadcn registry items, when present
+   * (cinatra#1623, S5). Presentational-only (#1607 doctrine). Item `name`s are
+   * unique within the manifest.
+   */
+  registryItems?: ArtifactUiRegistryItem[];
 };
 
 /**
@@ -268,13 +341,69 @@ const artifactUiRenderersSchema = z
       "`renderers` must declare at least one slot (a non-empty partial map over the v1 slot enum: detail, preview)",
   });
 
+const artifactUiRegistryItemSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .refine(isValidRegistryComponentName, {
+        message:
+          "registry item `name` (the `<component>` token) must be strict lowercase kebab ([a-z0-9], hyphen-joined, e.g. `stat-tile`)",
+      }),
+    entry: z
+      .string()
+      .min(1)
+      .refine(isContainedEntryPath, {
+        message:
+          'registry item `entry` must be a package-relative, path-contained subpath ("./…", no "..", no absolute path or URL)',
+      }),
+    type: z.enum(ARTIFACT_UI_REGISTRY_ITEM_TYPES),
+    description: z.string().min(1),
+  })
+  // `.strict()` = presentational-only DECLARATION surface: name/entry/type/
+  // description only. npm + registry-item dependencies are extracted from the
+  // item's SOURCE by the publish pipeline (`shadcn build`), not declared here.
+  .strict();
+
+const artifactUiRegistryItemsSchema = z
+  .array(artifactUiRegistryItemSchema)
+  .min(1)
+  .superRefine((items, ctx) => {
+    // Item `name`s (the `<component>` tokens) are unique within a manifest —
+    // two items composing the same `@<ns>/<slug>-<component>` identity is a
+    // collision the publish pipeline could never disambiguate.
+    const seen = new Set<string>();
+    for (const [i, item] of items.entries()) {
+      if (seen.has(item.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [i, "name"],
+          message: `duplicate registry item name "${item.name}" within the manifest`,
+        });
+      }
+      seen.add(item.name);
+    }
+  });
+
 const artifactUiSchema = z
   .object({
     abiVersion: z.literal(ARTIFACT_UI_ABI_VERSION),
     sdkAbiRange: z.string().min(1),
-    renderers: artifactUiRenderersSchema,
+    // OPTIONAL since cinatra#1623: a `ui` block may declare renderers,
+    // registryItems, or both — but at least one non-empty (refinement below).
+    renderers: artifactUiRenderersSchema.optional(),
+    registryItems: artifactUiRegistryItemsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (ui) =>
+      (ui.renderers !== undefined && Object.keys(ui.renderers).length > 0) ||
+      (ui.registryItems !== undefined && ui.registryItems.length > 0),
+    {
+      message:
+        "cinatra.artifact.ui must declare at least one of `renderers` (a non-empty v1 slot map) or `registryItems` (a non-empty list)",
+    },
+  );
 
 export type ArtifactUiParseResult =
   | { ok: true; ui: ArtifactUiManifest }

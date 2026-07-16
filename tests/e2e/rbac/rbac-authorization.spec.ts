@@ -123,6 +123,34 @@ test.describe("RBAC — nav visibility + access clarity + role gate", () => {
     expect(res?.status() === 403 || res?.status() === 200).toBeTruthy();
     await expect(page.getByText("Single-organization mode")).toHaveCount(0);
   });
+
+  test("non-admin is denied the /configuration landing page (cinatra#1563 — server gate unchanged)", async ({ page }) => {
+    // Configuration moved from the sidebar to an admin-only top-bar cog
+    // (cinatra#1563). Hiding the cog is DISCOVERABILITY only — /configuration
+    // itself stays server-side admin-gated via requireAdminSession(), so a
+    // non-admin deep-linking straight to it is still rejected/redirected.
+    // Mirror the Access Control / Webhooks denials: assert status + absence of
+    // the admin-only landing content (no hydration wait on an error page).
+    const res = await page.goto("/configuration", { waitUntil: "domcontentloaded" });
+    expect(res?.status() === 403 || res?.status() === 200).toBeTruthy();
+    await expect(
+      page.getByText(
+        "Workspace controls for platform configuration, access, extensions, and operations.",
+      ),
+    ).toHaveCount(0);
+  });
+
+  test("non-admin sees no Configuration/Admin sidebar entry and no top-bar cog (cinatra#1563)", async ({ page }) => {
+    await page.goto("/desk", { waitUntil: "domcontentloaded" });
+    await waitForHydration(page);
+    const sidebar = page.getByRole("navigation");
+    // Configuration is no longer a sidebar entry for anyone; its former "Admin"
+    // group heading is gone (its sole item left the sidebar).
+    await expect(sidebar.getByText("Configuration", { exact: true })).toHaveCount(0);
+    await expect(sidebar.getByText("Admin", { exact: true })).toHaveCount(0);
+    // The top-bar cog is admin-only — a non-admin sees no Configuration affordance.
+    await expect(page.getByTestId("topbar-configuration-cog")).toHaveCount(0);
+  });
 });
 
 test.describe("single-org mode", () => {

@@ -7,6 +7,8 @@ import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarketplaceGridLoadingFallback } from "@cinatra-ai/extensions/screens/extensions-marketplace-client";
 
+import { resolveInstalledTab } from "@/components/extensions/installed-tab-model";
+
 import { CONFORMANCE_RUN_ID_RE } from "../seed-data";
 import { MarketplaceGridFixture, DelayedMarketplaceGridFixture } from "./marketplace-grid-fixture";
 import { InstalledExtensionsFixture } from "./installed-extensions-fixture";
@@ -50,8 +52,9 @@ export const dynamic = "force-dynamic";
  *     install action mutates the installed-state input (cinatra#985 pattern).
  *
  * Query params: ?run=<runId> selects the seeded namespace (defaults to
- * "local"); ?tab=archived drives the REAL installed-extensions status filter;
- * ?variant=loading mounts the delayed grid instance.
+ * "local"); ?tab=all|active|locked|archived drives the REAL installed-extensions
+ * status filter (cinatra#1571); ?variant=loading mounts the delayed grid
+ * instance.
  *
  * Kept OFF the pixel-diffed /design-fixtures index page; coverage here is
  * assertion-based (tests/e2e/design/conformance/functional-acceptance.spec.ts).
@@ -67,7 +70,9 @@ export default async function SeededConformanceHarnessPage({
 
   const runRaw = (first(params.run) ?? "local").toLowerCase();
   const runId = CONFORMANCE_RUN_ID_RE.test(runRaw) ? runRaw : "local";
-  const tab = first(params.tab) === "archived" ? ("archived" as const) : ("active" as const);
+  // The REAL `?tab=` contract (cinatra#1571): all|active|locked|archived, with
+  // an invalid/absent value falling back to the default "active" view.
+  const tab = resolveInstalledTab(params.tab);
   const variant = first(params.variant);
 
   return (

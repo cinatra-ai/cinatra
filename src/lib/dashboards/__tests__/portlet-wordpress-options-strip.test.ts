@@ -17,7 +17,6 @@ vi.mock("@/lib/artifacts/artifact-authoring", () => ({ authorArtifact: vi.fn() }
 vi.mock("@/lib/artifacts/artifact-service", () => ({ getArtifact: vi.fn() }));
 vi.mock("@/lib/blog/mcp/client/deterministic-client", () => ({ createDeterministicBlogContentClient: () => ({ post: { update: vi.fn() } }) }));
 vi.mock("@cinatra-ai/agents/mcp-client", () => ({ createDeterministicAgentsClient: () => ({ agent: { run: vi.fn() } }) }));
-vi.mock("@cinatra-ai/workflows/mcp-client", () => ({ createDeterministicWorkflowsClient: () => ({ template: { list: vi.fn(), get: vi.fn(), instantiate: vi.fn() } }) }));
 vi.mock("@/lib/workflow-host-deps", () => ({ buildWorkflowHandlerDeps: () => ({}) }));
 vi.mock("@/lib/connector-client-providers", () => ({
   resolveWordPressInstanceAdmin: () => ({

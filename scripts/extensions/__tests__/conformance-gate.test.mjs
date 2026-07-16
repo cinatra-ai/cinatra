@@ -554,3 +554,126 @@ describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", ()
     rmSync(pkgDir, { recursive: true, force: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra.artifact.ui.registryItems — extension-contributed shadcn registry
+// items (cinatra#1623, epic #1620 S5). FAIL-CLOSED at the publish gate.
+// ---------------------------------------------------------------------------
+
+const statTile = (over = {}) => ({
+  name: "stat-tile",
+  entry: "./src/registry/stat-tile.tsx",
+  type: "registry:ui",
+  description: "A presentational KPI stat tile.",
+  ...over,
+});
+
+// A fixture whose ui declares registryItems (+ optional renderers), with the
+// item entry files written so they resolve within `files`.
+function registryItemsFixture({ ui, extraFiles = {} } = {}) {
+  const files = artifactUiFixture({ ui, withEntryFile: Boolean(ui.renderers) });
+  files["src/registry/stat-tile.tsx"] = "export default function StatTile() { return null; }\n";
+  for (const [k, v] of Object.entries(extraFiles)) files[k] = v;
+  return files;
+}
+
+describe("conformance-gate — artifact-ui registryItems rule derivation (cinatra#1623)", () => {
+  it("derives the closed registry-item type enum from live leaf source", () => {
+    expect(UI_RULES.artifactUiRegistryItemTypes.has("registry:ui")).toBe(true);
+    expect(UI_RULES.artifactUiRegistryItemTypes.has("registry:lib")).toBe(true);
+  });
+});
+
+describe("conformance-gate — cinatra.artifact.ui.registryItems (fail-closed at publish)", () => {
+  it("conforms with renderers + registryItems (both ship)", () => {
+    const ui = { ...validUiBlock(), registryItems: [statTile()] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("conforms with registryItems ONLY (no renderers — the S5 optional-coupling relaxation)", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile()] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty ui block (NEITHER renderers nor registryItems)", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE };
+    const pkgDir = writeFixture(artifactUiFixture({ ui, withEntryFile: false }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-empty")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty registryItems array", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [] };
+    const pkgDir = writeFixture(artifactUiFixture({ ui, withEntryFile: false }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-items-shape")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a registry item declaring a disallowed field (npm/registry deps are extracted from SOURCE, never declared)", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile({ dependencies: ["radix-ui"] })] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-item-extraneous-key")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-strict-lowercase component name", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile({ name: "StatTile" })] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-item-name")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a registry item whose entry does not resolve in the package", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile({ entry: "./src/registry/missing.tsx" })] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-item-entry-unresolved")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown registry item type", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile({ type: "registry:page" })] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-item-type")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty description", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile({ description: "" })] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-item-description")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags duplicate registry item names within a manifest", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, registryItems: [statTile(), statTile()] };
+    const pkgDir = writeFixture(registryItemsFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-registry-item-duplicate-name")).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});

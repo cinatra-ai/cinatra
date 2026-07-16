@@ -171,3 +171,62 @@ export function filterAvailableScopesForParentPolicy(
     canGrantWorkspace: false,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Subsumption bridge (cinatra#1607 AC2 / spec §6.4): the agent_template's
+// three-field visibility intersection is the general `allowedScopes` case of
+// the access picker's first-class containment contract — NOT a single
+// `parentScope`. This adapter expresses this one-off pre-filter as a typed
+// `allowedScopes` PREDICATE the unified `AccessCombobox` consumes directly, so
+// the picker's `allowedScopes` prop subsumes what this module did per-site.
+//
+// The predicate is DERIVED from `filterAvailableScopesForParentPolicy` above, so
+// it admits EXACTLY the identities that survive the intersection filter (proven
+// by an equivalence test) — no re-implementation of the intersection algebra.
+//
+// The scope identity is re-declared locally (structurally identical to the
+// picker's `ScopeIdentity`) to keep the package→app boundary clean, mirroring
+// the `FilterableAvailableScopes` re-declaration above.
+// ---------------------------------------------------------------------------
+
+export type ScopeIdentityLike = {
+  kind: "personal" | "project" | "team" | "org" | "workspace" | "admin";
+  id?: string;
+};
+
+/**
+ * Build a typed `allowedScopes` predicate from an agent_template policy — the
+ * §6.4 mapping of the three-field intersection onto the picker's lower-level
+ * containment constraint. Personal is always admitted (§6.2 — never dropped by
+ * containment); `admin` is not an agent-run grant target and is excluded.
+ */
+export function allowedScopesFromPolicy(
+  scopes: FilterableAvailableScopes,
+  parentPolicy: AgentAuthPolicy,
+  resolvedTemplateOrgId: string | null,
+): (scope: ScopeIdentityLike) => boolean {
+  const filtered = filterAvailableScopesForParentPolicy(
+    scopes,
+    parentPolicy,
+    resolvedTemplateOrgId,
+  );
+  const orgIds = new Set(filtered.orgs.map((o) => o.id));
+  const teamIds = new Set(filtered.orgs.flatMap((o) => o.teams.map((t) => t.id)));
+  const projectIds = new Set(filtered.projects.map((p) => p.id));
+  return (scope) => {
+    switch (scope.kind) {
+      case "personal":
+        return true;
+      case "workspace":
+        return filtered.canGrantWorkspace;
+      case "admin":
+        return false;
+      case "org":
+        return scope.id != null && orgIds.has(scope.id);
+      case "team":
+        return scope.id != null && teamIds.has(scope.id);
+      case "project":
+        return scope.id != null && projectIds.has(scope.id);
+    }
+  };
+}
