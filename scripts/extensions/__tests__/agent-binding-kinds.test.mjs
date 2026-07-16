@@ -45,6 +45,29 @@ describe("validateFieldRendererDeclarations", () => {
     });
   });
 
+  it("accepts an optional migrated-component declaration and normalizes it (cinatra#1625 S8)", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [
+      { ...VALID, component: { entry: "./field-renderer", propsApiVersion: 2 } },
+    ]);
+    expect(errors).toEqual([]);
+    expect(entries[0]).toMatchObject({
+      component: { entry: "./field-renderer", propsApiVersion: 2 },
+    });
+  });
+
+  it("accepts a component with no propsApiVersion (defaulted downstream by the generator)", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [
+      { ...VALID, component: { entry: "src/renderers/thing" } },
+    ]);
+    expect(errors).toEqual([]);
+    expect(entries[0].component).toEqual({ entry: "src/renderers/thing" });
+  });
+
+  it("omits component from the normalized entry when not declared", () => {
+    const { entries } = validateFieldRendererDeclarations(PKG, [VALID]);
+    expect("component" in entries[0]).toBe(false);
+  });
+
   it("rejects non-array declarations", () => {
     const { entries, errors } = validateFieldRendererDeclarations(PKG, {});
     expect(entries).toEqual([]);
@@ -65,6 +88,12 @@ describe("validateFieldRendererDeclarations", () => {
     [{ ...VALID, params: [1, 2] }, /params must be a plain object/],
     [{ ...VALID, params: { big: "x".repeat(MAX_PARAMS_JSON_BYTES + 1) } }, /params must serialize/],
     [{ ...VALID, somethingElse: 1 }, /unknown key/],
+    [{ ...VALID, component: "./field-renderer" }, /component must be a plain object/],
+    [{ ...VALID, component: { entry: "/abs/path" } }, /component\.entry must be a package-relative subpath/],
+    [{ ...VALID, component: { entry: "../escape" } }, /component\.entry must be a package-relative subpath/],
+    [{ ...VALID, component: { entry: 42 } }, /component\.entry must be a package-relative subpath/],
+    [{ ...VALID, component: { entry: "./ok", propsApiVersion: 0 } }, /component\.propsApiVersion must be a positive integer/],
+    [{ ...VALID, component: { entry: "./ok", nope: 1 } }, /component has unknown key/],
     ["not-an-object", /entry must be an object/],
   ])("rejects invalid entry %#", (entry, message) => {
     const { entries, errors } = validateFieldRendererDeclarations(PKG, [entry]);
@@ -118,6 +147,19 @@ describe("mergeFieldRendererBindings (cross-declaration rules)", () => {
     const b = { ...VALID, params: { t: "y" }, declaredBy: "b" };
     const { errors } = mergeFieldRendererBindings([a, b]);
     expect(errors).toHaveLength(1);
+  });
+
+  it("component divergence is a conflict too (fail-closed, cinatra#1625 S8)", () => {
+    const a = { ...VALID, component: { entry: "./a" }, declaredBy: "a" };
+    const b = { ...VALID, component: { entry: "./b" }, declaredBy: "b" };
+    const { errors } = mergeFieldRendererBindings([a, b]);
+    expect(errors).toHaveLength(1);
+    // one declaring a component and the other not is ALSO a conflict
+    const { errors: e2 } = mergeFieldRendererBindings([
+      { ...VALID, component: { entry: "./a" }, declaredBy: "a" },
+      { ...VALID, declaredBy: "b" },
+    ]);
+    expect(e2).toHaveLength(1);
   });
 
   it("sorts the merged output by id (deterministic emission)", () => {

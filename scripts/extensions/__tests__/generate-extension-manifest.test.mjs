@@ -52,6 +52,11 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
+      // Field-renderer component dispatch spine (cinatra#1625, epic #1620 S8 —
+      // M3): the CLIENT-safe literal-import BUILD table of extension-shipped
+      // HITL field-renderer modules. Empty until a claimant declares
+      // cinatra.fieldRenderers[].component.
+      "src/lib/generated/field-renderer-components.ts",
       // Neutral stream primitives capability (cinatra#344): the host-owned
       // generated maps for the generic /api/streams/<slug> route (dispatch map +
       // slug-only public-path list). Inert until an extension declares
