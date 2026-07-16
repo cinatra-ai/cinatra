@@ -61,7 +61,7 @@ test.describe("/personal empty-state live-verify (cinatra#1119)", () => {
     await expect(page).toHaveURL(/\/personal$/);
     await waitForHydration(page);
     await expect(
-      page.getByText("Your private dashboard, built from the cards you add."),
+      page.getByText("Your private dashboards, built from the cards you add."),
     ).toBeVisible();
 
     // 2. The app empty state mounted.
