@@ -314,6 +314,11 @@ function checkManifest(pkgDir, pkg, rules) {
   }
   // kind === "workflow" | "skill": metadata-only, no rule (#979 addendum).
 
+  // cinatra.views chat renderable-view providers (cinatra#1626, S9): CROSS-KIND
+  // (the carrier kinds are extendable), so this runs regardless of kind —
+  // fail-closed on a malformed block, exactly as the host path degrades it.
+  findings.push(...checkChatViews(pkgDir, pkg, rules));
+
   return findings;
 }
 
@@ -332,6 +337,15 @@ const ARTIFACT_UI_REGISTRY_ITEM_ALLOWED_KEYS = new Set(["name", "entry", "type",
 // `isContainedEntryPath`). Drift here can only produce a false CI signal, never
 // a security gap; the leaf schema stays the runtime authority.
 const REGISTRY_COMPONENT_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// cinatra.views (cinatra#1626, S9): the closed v1 entry keys + the viewType
+// grammar, hand-mirrored from the leaf `chat-views-contract.ts` (its
+// `chatViewEntrySchema`/`CHAT_VIEW_TYPE_RE`) — the checker runs on bare `node`,
+// no TS toolchain. The `abiVersion` literal is DERIVED (loadLiveRules), never
+// re-listed. Drift here can only produce a false CI signal, never a security
+// gap; the leaf schema stays the runtime authority.
+const CHAT_VIEW_ENTRY_ALLOWED_KEYS = new Set(["viewType", "entry", "propsApiVersion"]);
+const CHAT_VIEW_TYPE_RE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 
 function isUiEntryContained(entry) {
   if (typeof entry !== "string" || entry.length === 0) return false;
@@ -634,6 +648,91 @@ function checkConnectorAccessConfig(pkgDir, rules) {
       file: "cinatra/config.json",
       detail: `access.scope must declare EXACTLY ONE of "default"/"only" (${hasDefault && hasOnly ? "both present" : "neither present"}).`,
     });
+  }
+  return findings;
+}
+
+// cinatra.views chat renderable-view declaration (cinatra#1626, epic #1620
+// S9/M4): the top-level provider field, FAIL-CLOSED at the publish/conformance
+// gate (the host path degrades an unsupported block to RenderableViewFallback on
+// the SAME shape). Cross-kind (the carrier kinds are extendable), so this runs
+// for every kind. Rules mirror the leaf `chat-views-contract.ts` schema; the
+// abiVersion literal is DERIVED (loadLiveRules), never re-listed — the #979
+// addendum principle, exactly as checkArtifactUi does.
+function checkChatViews(pkgDir, pkg, rules) {
+  const findings = [];
+  const file = "package.json";
+  const views = pkg?.cinatra?.views;
+  if (views === undefined) return findings; // views is optional
+  if (typeof views !== "object" || views === null || Array.isArray(views)) {
+    findings.push({
+      rule: "manifest.chat-views-shape",
+      file,
+      detail: "cinatra.views must be an object ({ abiVersion, entries: [...] }).",
+    });
+    return findings;
+  }
+  // Reject extra TOP-LEVEL keys, matching the leaf schema's `.strict()` (so the
+  // gate is never LOOSER than the host/publish verdict).
+  const extraKeys = Object.keys(views).filter((k) => k !== "abiVersion" && k !== "entries");
+  if (extraKeys.length > 0) {
+    findings.push({
+      rule: "manifest.chat-views-extraneous-key",
+      file,
+      detail: `cinatra.views may only declare { abiVersion, entries }; unexpected key(s): ${extraKeys.join(", ")}.`,
+    });
+  }
+  if (views.abiVersion !== rules.chatViewsAbiVersion) {
+    findings.push({
+      rule: "manifest.chat-views-abi-version",
+      file,
+      detail: `cinatra.views.abiVersion must be exactly ${rules.chatViewsAbiVersion} (got ${JSON.stringify(views.abiVersion)}).`,
+    });
+  }
+  if (!Array.isArray(views.entries) || views.entries.length === 0) {
+    findings.push({
+      rule: "manifest.chat-views-empty",
+      file,
+      detail: "cinatra.views.entries must be a NON-EMPTY array of { viewType, entry, propsApiVersion } entries.",
+    });
+    return findings;
+  }
+  const seen = new Set();
+  for (const [i, entry] of views.entries.entries()) {
+    const at = `cinatra.views.entries[${i}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      findings.push({ rule: "manifest.chat-views-entry-shape", file, detail: `${at} must be an object ({ viewType, entry, propsApiVersion }).` });
+      continue;
+    }
+    const extra = Object.keys(entry).filter((k) => !CHAT_VIEW_ENTRY_ALLOWED_KEYS.has(k));
+    if (extra.length > 0) {
+      findings.push({ rule: "manifest.chat-views-entry-extraneous-key", file, detail: `${at} may only declare { viewType, entry, propsApiVersion }; unexpected key(s): ${extra.join(", ")}.` });
+    }
+    if (typeof entry.viewType !== "string" || !CHAT_VIEW_TYPE_RE.test(entry.viewType)) {
+      findings.push({ rule: "manifest.chat-views-viewtype", file, detail: `${at}.viewType must be strict lowercase snake_case (e.g. "chart", "content_change_proposal").` });
+    } else if (seen.has(entry.viewType)) {
+      findings.push({ rule: "manifest.chat-views-duplicate-viewtype", file, detail: `${at}.viewType "${entry.viewType}" duplicates an earlier entry — one effective provider per viewType.` });
+    } else {
+      seen.add(entry.viewType);
+    }
+    if (typeof entry.entry !== "string" || !isUiEntryContained(entry.entry)) {
+      findings.push({ rule: "manifest.chat-views-entry-path", file, detail: `${at}.entry must be a package-relative, path-contained subpath ("./…", no "..", no absolute path or URL).` });
+    } else {
+      // Verify the renderer module actually SHIPS (resolves to a real file
+      // within the published `files` allowlist) — mirrors checkArtifactUiRenderers
+      // so the gate is as rigorous for a chat-view entry as for an artifact-ui
+      // renderer entry (the generated literal import would otherwise fail).
+      const rel = entry.entry.replace(/^\.\//, "");
+      const resolved = existsSync(join(pkgDir, rel)) ? rel : candidateFile(pkgDir, rel.replace(/\.[^./]+$/, ""));
+      if (!resolved) {
+        findings.push({ rule: "manifest.chat-views-entry-unresolved", file, detail: `${at}.entry "${entry.entry}" does not resolve to a file in the package (must resolve via the package's exports/files).` });
+      } else if (!isInScope(resolved, pkg.files)) {
+        findings.push({ rule: "manifest.chat-views-entry-out-of-scope", file, detail: `${at}.entry "${entry.entry}" resolves outside the published "files" allowlist — it would not ship in the package tarball.` });
+      }
+    }
+    if (!Number.isInteger(entry.propsApiVersion) || entry.propsApiVersion < 1) {
+      findings.push({ rule: "manifest.chat-views-props-api-version", file, detail: `${at}.propsApiVersion must be an integer >= 1.` });
+    }
   }
   return findings;
 }
