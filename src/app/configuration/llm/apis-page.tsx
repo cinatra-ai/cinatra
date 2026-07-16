@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense, type ComponentType } from "react";
 import { NangoManagedApiCard } from "@cinatra-ai/sdk-ui/nango";
+import { maskApiKey } from "./mask-api-key";
 import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango-system";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -109,6 +110,9 @@ async function OpenAIModalContent() {
   const isConnected = openai.isOpenAIConnectionReady(configuredConnection ?? connection ?? undefined);
   const connectionServiceReady = nangoStatus.status === "connected";
   const hasNangoConnection = Boolean(getPrimarySavedNangoConnection("openai"));
+  // Masked identification of the key actually in use (cinatra#1690) — masked
+  // SERVER-side; the raw key never reaches the client.
+  const maskedApiKey = maskApiKey(configuredConnection?.apiKey);
 
   let availableModels = connection?.availableModels ?? configuredConnection?.availableModels ?? [];
   if (configuredConnection?.apiKey) {
@@ -137,13 +141,19 @@ async function OpenAIModalContent() {
         badge={isConnected ? "Connected" : hasNangoConnection ? "API key provided" : "Setup required"}
         isConnected={hasNangoConnection || isConnected}
         usesConnectUI={true}
-        connectLabel="API key"
-        reconnectLabel="API key"
+        connectLabel="Add API key"
+        reconnectLabel="Update API key"
         reconnectConnectionId={getPrimarySavedNangoConnection("openai")?.connectionId}
         nangoFrontendConfig={nangoFrontendConfig}
         connectionServiceReady={connectionServiceReady}
         naked
       >
+        {maskedApiKey ? (
+          <p className="mt-4 text-sm" data-testid="openai-connected-key">
+            Connected key:{" "}
+            <span className="font-mono">{maskedApiKey}</span>
+          </p>
+        ) : null}
         <form action={saveOpenAIConnectionAction} className="mt-5 grid items-start gap-4 border-t border-line pt-5 sm:grid-cols-2">
           <Input type="hidden" name="redirectTo" value="/configuration/llm?modal=openai" />
           <Field>
