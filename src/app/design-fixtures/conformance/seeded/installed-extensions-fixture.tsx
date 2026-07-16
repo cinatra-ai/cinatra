@@ -27,12 +27,15 @@ import { listInstalledExtensions } from "@cinatra-ai/extensions/canonical-store"
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import {
   ActiveEmptyState,
+  AllEmptyState,
   ArchivedEmptyState,
+  LockedEmptyState,
 } from "@cinatra-ai/extensions/screens/installed-empty-states";
 
 import { Button } from "@/components/ui/button";
 import { Toolbar, ToolbarGroup } from "@/components/ui/toolbar";
 import { ExtensionsTabSelect } from "@/components/extensions/extensions-tab-select";
+import type { InstalledTabValue } from "@/components/extensions/installed-tab-model";
 import {
   InstalledExtensionCard,
   InstalledStatusIndicator,
@@ -114,7 +117,7 @@ export async function InstalledExtensionsFixture({
   tab,
 }: {
   runId: string;
-  tab: "active" | "archived";
+  tab: InstalledTabValue;
 }) {
   let allRows: InstalledExtension[];
   try {
@@ -137,9 +140,18 @@ export async function InstalledExtensionsFixture({
 
   const prefix = seededPackagePrefix(runId);
   const namespaceRows = allRows.filter((row) => row.packageName.startsWith(prefix));
+  // Clean status partition (cinatra#1571): All = any status; Locked/Archived =
+  // exactly that status; Active = truly-active only (locked rows now have their
+  // OWN view). Mirrors RegistryCatalogScreen's partition against the live rows.
   const rows = sortRows(
     namespaceRows.filter((row) =>
-      tab === "archived" ? row.status === "archived" : row.status !== "archived",
+      tab === "all"
+        ? true
+        : tab === "locked"
+          ? row.status === "locked"
+          : tab === "archived"
+            ? row.status === "archived"
+            : row.status === "active",
     ),
     runId,
   );
@@ -167,14 +179,20 @@ export async function InstalledExtensionsFixture({
 
       <div data-surface-id="installed-extensions-list" data-variant="populated" data-tab={tab}>
         {rows.length === 0 ? (
-          tab === "archived" ? (
+          tab === "all" ? (
+            <AllEmptyState />
+          ) : tab === "locked" ? (
+            <LockedEmptyState />
+          ) : tab === "archived" ? (
             <ArchivedEmptyState />
           ) : (
             <ActiveEmptyState />
           )
         ) : (
           <div className="grid gap-3">
-            {rows.map((row) => renderCard(runId, row, tab === "archived"))}
+            {/* isArchived is per-row (row.status) so the mixed All view greys
+                only its archived rows. */}
+            {rows.map((row) => renderCard(runId, row, row.status === "archived"))}
           </div>
         )}
       </div>
