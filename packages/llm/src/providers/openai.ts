@@ -198,6 +198,20 @@ function truncateResult(result: string): string {
 }
 
 /**
+ * gpt-5.5 splits its output into `message` items discriminated by a `phase`
+ * field: internal deliberation arrives as phase="commentary" and the real
+ * reply as phase="final_answer" — BOTH are type="message", so the item-type
+ * guard alone cannot tell them apart and raw chain-of-thought leaked into the
+ * user-visible reply (#1694). Only a final-answer message is user-visible;
+ * commentary is dropped exactly like `reasoning`/`reasoning_summary` item
+ * text. A message with NO phase at all stays visible — models and stream
+ * shapes that predate the field must keep their current behavior.
+ */
+function isUserVisibleMessagePhase(phase: unknown): boolean {
+  return phase == null || phase === "final_answer";
+}
+
+/**
  * Strip SDK-enriched fields (e.g. `parsed_arguments`, `parsed`) from a
  * response output item so it can safely be sent back as an input item.
  */
@@ -367,7 +381,10 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
         for (const item of outputItems) {
           const typedItem = item as { type?: string; text?: string; call_id?: string; name?: string; arguments?: string };
 
-          if (typedItem.type === "message") {
+          // Phase guard (#1694): gpt-5.5 commentary arrives as a `message`
+          // item too — without it, "last output_text wins" was only
+          // accidentally safe (final_answer happened to come last).
+          if (typedItem.type === "message" && isUserVisibleMessagePhase((item as { phase?: unknown }).phase)) {
             const content = (item as { content?: Array<{ type?: string; text?: string }> }).content;
             if (content) {
               for (const part of content) {
@@ -544,6 +561,13 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
           // `response.output_item.added` (legacy streams, older Responses API
           // shapes) still produce text on `output_text.delta` as before.
           let currentOutputItemType: string = "message";
+          // Track the parent item's `phase` as well: gpt-5.5 raw
+          // chain-of-thought ("commentary") arrives as type="message" —
+          // indistinguishable by item type from the real answer
+          // (phase="final_answer") — so the type guard alone leaked it
+          // verbatim into the reply (#1694). Default null (= no phase) keeps
+          // the same legacy-stream fail-open behavior as the type default.
+          let currentOutputItemPhase: unknown = null;
 
           let streamIterationError: Error | null = null;
           try {
@@ -552,9 +576,10 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
                 case "response.output_text.delta": {
                   // Only emit when the active output_item is a real
                   // user-visible message. Reasoning/reasoning_summary items
-                  // also fire `output_text.delta` for their inner text — dropping
-                  // those here is the leak fix.
-                  if (currentOutputItemType === "message") {
+                  // also fire `output_text.delta` for their inner text, and
+                  // gpt-5.5 commentary is a `message` item whose `phase`
+                  // is not "final_answer" — dropping both here is the leak fix.
+                  if (currentOutputItemType === "message" && isUserVisibleMessagePhase(currentOutputItemPhase)) {
                     stepTextEmitted = true;
                     input.onTextDelta((event as { delta?: string }).delta ?? "");
                   }
@@ -562,8 +587,9 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
                 }
 
                 case "response.output_item.added": {
-                  const addedItem = (event as { item?: { type?: string; call_id?: string; name?: string; action?: { commands?: string[]; timeout_ms?: number | null; max_output_length?: number | null } } }).item;
+                  const addedItem = (event as { item?: { type?: string; phase?: unknown; call_id?: string; name?: string; action?: { commands?: string[]; timeout_ms?: number | null; max_output_length?: number | null } } }).item;
                   currentOutputItemType = addedItem?.type ?? "message";
+                  currentOutputItemPhase = addedItem?.phase ?? null;
                   if (addedItem?.type === "function_call" && addedItem.call_id) {
                     currentFunctionCallIndex = pendingFunctionCalls.length;
                     pendingFunctionCalls.push({
@@ -589,6 +615,7 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
                   // legacy stream shapes that omit the added event for plain
                   // message items) is still treated as visible message text.
                   currentOutputItemType = "message";
+                  currentOutputItemPhase = null;
                   break;
                 }
 
@@ -689,15 +716,17 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
         // response.output_text.delta stream events may not fire even though text is present
         // in finalResponse().output. Extract and emit any un-streamed text now.
         //
-        // Item-type guard mirrors the streaming filter: ONLY `message` items
-        // contain user-visible content. `reasoning` / `reasoning_summary` /
-        // shell/function/mcp items are dropped here to prevent gpt-5.5
-        // reasoning summary text leaking into the chat reply.
+        // Item-type + phase guard mirrors the streaming filter: ONLY
+        // final-answer `message` items contain user-visible content.
+        // `reasoning` / `reasoning_summary` / shell/function/mcp items AND
+        // gpt-5.5 commentary messages (type="message", phase="commentary")
+        // are dropped here to prevent internal reasoning text leaking into
+        // the chat reply.
         if (!stepTextEmitted) {
           const outputItems = (finalResponse as { output?: unknown[] }).output ?? [];
           for (const item of outputItems) {
-            const typedItem = item as { type?: string; content?: Array<{ type?: string; text?: string }> };
-            if (typedItem.type === "message" && Array.isArray(typedItem.content)) {
+            const typedItem = item as { type?: string; phase?: unknown; content?: Array<{ type?: string; text?: string }> };
+            if (typedItem.type === "message" && isUserVisibleMessagePhase(typedItem.phase) && Array.isArray(typedItem.content)) {
               for (const part of typedItem.content) {
                 if (part.type === "output_text" && typeof part.text === "string" && part.text) {
                   input.onTextDelta(part.text);
@@ -883,11 +912,17 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
 
       await writeOpenAILogFile({ label: logLabel, kind: "response", body: response });
 
-      // Extract text from response
+      // Extract text from response. This site previously checked no item
+      // type at all — it read output_text from ANY item and relied on the
+      // final answer arriving last. Same message/phase guard as the other
+      // three extraction sites (#1694): only final-answer `message` items
+      // are user-visible.
       let text: string | null = null;
       const outputItems = (response as { output?: unknown[] }).output ?? [];
       for (const item of outputItems) {
-        const content = (item as { content?: Array<{ type?: string; text?: string }> }).content;
+        const typedItem = item as { type?: string; phase?: unknown; content?: Array<{ type?: string; text?: string }> };
+        if (typedItem.type !== "message" || !isUserVisibleMessagePhase(typedItem.phase)) continue;
+        const content = typedItem.content;
         if (content) {
           for (const part of content) {
             if (part.type === "output_text" && part.text) {
