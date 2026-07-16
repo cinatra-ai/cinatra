@@ -22,6 +22,84 @@ export { getPublicMcpServerUrl, getLlmMcpCredentials, hasLlmMcpAccess, getLlmMcp
 
 const AUTH_BASE_PATH = "/api/auth";
 
+// ---------------------------------------------------------------------------
+// Public MCP URL reachability probe (#1699)
+//
+// The public MCP base URL is a DB-stored row written once when a tunnel
+// existed; nothing ever re-validated it. When the ingress dies (a tailscale
+// funnel stops being served, a tunnel process exits), OpenAI does NOT error —
+// it silently omits the hosted MCP server from the model's view (200
+// completed, no mcp_list_tools item, no 424), so chat loses every Cinatra
+// tool with no signal anywhere and the model confabulates an explanation.
+// The loud 424 path (planMcpToolListErrorRecovery, #500) never fires.
+//
+// This probe lets attach sites detect the dead-ingress case BEFORE handing
+// the URL to a provider. ANY HTTP response — including 401/405 — proves the
+// ingress is live (the MCP endpoint auth-gates POSTs; liveness is all we
+// ask); only network-level failures (DNS, connection refused, TLS, timeout)
+// count as unreachable. Results are cached briefly so per-turn cost stays
+// negligible: a live answer is trusted for a minute, a dead one is re-probed
+// sooner so recovery is quick after the operator fixes the tunnel.
+// ---------------------------------------------------------------------------
+
+export type PublicMcpReachability =
+  | { status: "unconfigured" }
+  | { status: "reachable"; url: string }
+  | { status: "unreachable"; url: string; reason: string };
+
+const MCP_REACHABILITY_TTL_OK_MS = 60_000;
+const MCP_REACHABILITY_TTL_FAIL_MS = 15_000;
+const MCP_REACHABILITY_TIMEOUT_MS = 2_500;
+
+let mcpReachabilityCache: { validUntil: number; forUrl: string; result: PublicMcpReachability } | null = null;
+
+/** Test hook — the module-level cache would otherwise leak across tests. */
+export function _resetPublicMcpReachabilityCacheForTests(): void {
+  mcpReachabilityCache = null;
+}
+
+/**
+ * Probe the configured public MCP server URL for basic network reachability.
+ * Cached (60s live / 15s dead); ~2.5s timeout; never throws.
+ */
+export async function checkPublicMcpReachability(): Promise<PublicMcpReachability> {
+  const url = getPublicMcpServerUrl();
+  if (!url) return { status: "unconfigured" };
+
+  const now = Date.now();
+  if (mcpReachabilityCache && mcpReachabilityCache.forUrl === url && mcpReachabilityCache.validUntil > now) {
+    return mcpReachabilityCache.result;
+  }
+
+  let result: PublicMcpReachability;
+  try {
+    // HEAD keeps the probe body-free; a 405 from a POST-only route is still
+    // a live ingress. `redirect: "manual"` so a proxied 3xx also counts
+    // without following anywhere.
+    await fetch(url, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: AbortSignal.timeout(MCP_REACHABILITY_TIMEOUT_MS),
+    });
+    result = { status: "reachable", url };
+  } catch (err) {
+    const reason =
+      err instanceof Error && err.name === "TimeoutError"
+        ? `no response within ${MCP_REACHABILITY_TIMEOUT_MS}ms`
+        : err instanceof Error
+          ? ((err.cause as { message?: string } | undefined)?.message ?? err.message)
+          : String(err);
+    result = { status: "unreachable", url, reason };
+  }
+
+  mcpReachabilityCache = {
+    forUrl: url,
+    validUntil: now + (result.status === "reachable" ? MCP_REACHABILITY_TTL_OK_MS : MCP_REACHABILITY_TTL_FAIL_MS),
+    result,
+  };
+  return result;
+}
+
 // Chat → MCP delegated actor token plumbing. The token issuer lives in the
 // app layer (src/lib/chat-mcp-actor-token.ts) because it signs with
 // BETTER_AUTH_SECRET and resolves trusted MCP audiences; this shared
