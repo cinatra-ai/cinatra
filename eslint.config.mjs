@@ -134,6 +134,26 @@ const SONNER_BAN = [
   },
 ];
 
+// G4 — artifact-UI renderer-entry import boundary (epic #1620 / #1624 S6). An
+// artifact extension ships its type's view; those renderer ENTRY modules
+// (`@<scope>/<x>-artifact` + any subpath) execute in the host ONLY through the
+// generated literal-import map src/lib/generated/artifact-renderers.ts
+// (GENERATED_ARTIFACT_RENDERERS). NO shell/floor/dispatch-seam exception — the
+// slot + the generic floor load THROUGH the generated map, never by importing an
+// entry. The sole carve-out is the generated map file itself (declared after the
+// layers below). This is the static-import ESLint sibling of the authoritative
+// all-imports `core-extension-import-ban` .mjs gate (which also covers the
+// dynamic `import()` the generated map uses, with the same generated-file
+// exemption). Restated into every no-restricted-imports layer (flat-config
+// options replace, not merge — last match wins), exactly like SONNER_BAN.
+const ARTIFACT_RENDERER_ENTRY_BAN = [
+  {
+    group: ["@*/*-artifact", "@*/*-artifact/*"],
+    message:
+      "Do not import an artifact-extension renderer ENTRY (@<scope>/<x>-artifact) — core must treat the type's view as opaque. Extension renderer modules execute ONLY through the generated map src/lib/generated/artifact-renderers.ts (GENERATED_ARTIFACT_RENDERERS); the slot/floor load through it, never by importing an entry. See scripts/audit/artifact-ui-boundary-gate.md (authoring pack: docs.cinatra.ai/extensions/artifact-ui/boundary — S10 #1627).",
+  },
+];
+
 // Raw control JSX is flagged in favor of the shadcn wrappers. ERROR — the
 // tree is now clean of raw restricted elements (the last carve-outs went
 // through the wrappers / the NativeSelect seam), so this is ramped from warn
@@ -559,6 +579,7 @@ const eslintConfig = defineConfig([
             ...RADIX_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
           ],
         },
@@ -583,6 +604,7 @@ const eslintConfig = defineConfig([
             ...RADIX_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
             ...SDK_DASHBOARD_BAN,
           ],
@@ -604,6 +626,7 @@ const eslintConfig = defineConfig([
             ...RADIX_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
             ...SDK_DASHBOARD_BAN,
           ],
@@ -627,6 +650,7 @@ const eslintConfig = defineConfig([
             ...RADIX_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
           ],
         },
       ],
@@ -648,6 +672,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_NON_CLIENT_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
           ],
         },
       ],
@@ -670,6 +695,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
           ],
         },
@@ -695,6 +721,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
             ...SDK_DASHBOARD_BAN,
           ],
@@ -724,6 +751,7 @@ const eslintConfig = defineConfig([
             ...RADIX_BAN,
             ...UI_LIB_BAN,
             ...GRID_LAYOUT_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
           ],
         },
       ],
@@ -743,6 +771,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
             ...GRID_LAYOUT_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
           ],
         },
       ],
@@ -1025,6 +1054,7 @@ const eslintConfig = defineConfig([
             ...RADIX_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
             ...APP_ALIAS_BAN,
           ],
@@ -1052,6 +1082,7 @@ const eslintConfig = defineConfig([
             ...DRIZZLE_CUBE_BAN,
             ...UI_LIB_BAN,
             ...SONNER_BAN,
+            ...ARTIFACT_RENDERER_ENTRY_BAN,
             ...GRID_LAYOUT_BAN,
             ...APP_ALIAS_BAN,
           ],
@@ -1077,6 +1108,38 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/consistent-type-imports": [
         "error",
         { prefer: "type-imports", fixStyle: "separate-type-imports" },
+      ],
+    },
+  },
+
+  // ───── G4 carve-out: the generated artifact-renderer map (epic #1620 / #1624
+  // S6) ─────
+  // The SOLE sanctioned importer of artifact-extension renderer ENTRY modules.
+  // Declared AFTER every no-restricted-imports layer so it wins for its file
+  // (last match wins); it restates the Layer-1 (everywhere) set MINUS
+  // ARTIFACT_RENDERER_ENTRY_BAN — re-allowing artifact entries here ONLY, never
+  // disabling the rule. This is the "only generated maps import extension
+  // entries" boundary: no shell/floor/dispatch-seam file is carved out, only
+  // this generated file. (Its runtime loads are dynamic `import()`, which
+  // `no-restricted-imports` does not see; a future static re-export of an entry
+  // is what this carve-out keeps legal — the dynamic path + the all-imports
+  // authority live in the core-extension-import-ban .mjs gate.)
+  {
+    files: ["src/lib/generated/artifact-renderers.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...MCP_BAN,
+            ...CLIENT_BAN,
+            ...DRIZZLE_CUBE_BAN,
+            ...RADIX_BAN,
+            ...UI_LIB_BAN,
+            ...SONNER_BAN,
+            ...GRID_LAYOUT_BAN,
+          ],
+        },
       ],
     },
   },

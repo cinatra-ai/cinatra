@@ -799,6 +799,22 @@ jobs:
       - name: Core -> extension import-ban gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-import-ban.test.mjs
 
+      # G1 — artifact-UI type-identity boundary gate (epic #1620 / #1624 S6).
+      # AST/type-aware: core must treat an artifact/object type id, representation
+      # form, HITL binding id, or chat viewType as an OPAQUE input to generic
+      # dispatch. Every current keying arm is enumerated in the shrink-only
+      # baseline with a disposition (MIGRATE/DEFER/STAY); live findings must equal
+      # it exactly and the committed set may only shrink vs the base branch.
+      - name: Artifact-UI type-identity boundary gate (G1, shrink-only)
+        env:
+          # Shrink-only monotonic guard: the committed baseline must be a subset
+          # of the base-branch baseline. Same base ref the other ratchet gates use.
+          ARTIFACT_UI_BOUNDARY_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/artifact-ui-boundary-gate.mjs
+
+      - name: Artifact-UI type-identity boundary gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/artifact-ui-boundary-gate.test.mjs
+
       # No NEW bare fs.rename / renameSync on the extension install / materialize
       # / publish / store / boot surface (cinatra#874). A staged tmp tree promoted
       # to a persistent mount with a bare `rename` throws EXDEV cross-device and
