@@ -156,6 +156,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Tenant-scoped by-id reads of the legacy chat_threads JSON sync table (thread payload + team-org membership) that gate the authenticated chat read/write routes. Follows the same synchronous sync-table access pattern as the other chat_threads readers in database.ts; migrates to async typed reads when the legacy JSON sync tables are converted.",
   },
+  "src/lib/assistant-thread-mirror-backfill.ts": {
+    class: "migratable-request-path",
+    justification:
+      "One-shot boot backfill (cinatra#1218, #1216 S2): mirrors DORMANT legacy chat_threads rows into the structured assistant_threads/assistant_turns shadow via the P2b pure builders. Runs from a retryable boot phase (never request-time); uses the sync leaf primitives because it composes the same per-thread transactional mirror queries the legacy write path spreads into its transaction. Deleted with the legacy tables at the S2 delete stage.",
+  },
   "src/lib/assistant-thread-store.ts": {
     class: "migratable-request-path",
     justification:

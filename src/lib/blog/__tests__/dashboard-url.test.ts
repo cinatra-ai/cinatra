@@ -12,11 +12,22 @@ vi.mock("@cinatra-ai/dashboards/extension-dashboard-reads", () => ({
   listOrgDashboardRows: vi.fn(),
   excludeProjectTemplates: (rows: Array<{ isTemplate?: boolean; templateScope?: string }>) =>
     rows.filter((r) => !(r.isTemplate === true && r.templateScope === "project")),
+  // Faithful pure gate (cinatra#1628): operator rows always pass; an extension
+  // row is dropped when archived OR non-live.
+  filterRenderableDashboards: (
+    rows: Array<{ extensionId?: string | null; status?: string }>,
+    isLive: (id: string) => boolean,
+  ) => rows.filter((r) => r.extensionId == null || (r.status !== "archived" && isLive(r.extensionId))),
+}));
+// The reader-gate liveness oracle (cinatra#1628) — controllable per test.
+vi.mock("@/lib/dashboards/live-extension-oracle", () => ({
+  resolveLiveExtensionPredicate: vi.fn(),
 }));
 
 import { resolveBlogDashboardUrl } from "@/lib/blog/dashboard-url";
 import { resolveExtensionRole } from "@/lib/extension-roles";
 import { listOrgDashboardRows } from "@cinatra-ai/dashboards/extension-dashboard-reads";
+import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
 
 const actor = { organizationId: "org-1" } as ActorContext;
 const rows = [
@@ -29,6 +40,10 @@ beforeEach(() => {
   vi.mocked(resolveExtensionRole).mockReset();
   vi.mocked(listOrgDashboardRows).mockReset();
   vi.mocked(listOrgDashboardRows).mockResolvedValue(rows as never);
+  // Default: the resolved claimant is live (isolates the role-resolution tests
+  // from the liveness gate; the gate is exercised explicitly below).
+  vi.mocked(resolveLiveExtensionPredicate).mockReset();
+  vi.mocked(resolveLiveExtensionPredicate).mockResolvedValue(() => true);
 });
 
 describe("resolveBlogDashboardUrl — role-resolved owner", () => {
@@ -47,6 +62,15 @@ describe("resolveBlogDashboardUrl — role-resolved owner", () => {
 
   it("degrades to the dashboards index when the claimant has no materialized row", async () => {
     vi.mocked(resolveExtensionRole).mockReturnValue("@cinatra-ai/fixture-unmaterialized-workflow");
+    expect(await resolveBlogDashboardUrl(actor)).toBe("/dashboards");
+  });
+
+  it("degrades to the dashboards index when the claimant's rows are ORPHANED (reader gate, cinatra#1628)", async () => {
+    vi.mocked(resolveExtensionRole).mockReturnValue("@cinatra-ai/fixture-blog-workflow");
+    // Liveness oracle denies the (now-uninstalled) blog package → its rows are
+    // orphaned + filtered, so the deep-link never resolves to a would-404 detail.
+    vi.mocked(resolveLiveExtensionPredicate).mockResolvedValue(() => false);
+    expect(await resolveBlogDashboardUrl(actor, "proj-1")).toBe("/dashboards");
     expect(await resolveBlogDashboardUrl(actor)).toBe("/dashboards");
   });
 });
