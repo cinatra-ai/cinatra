@@ -1,6 +1,6 @@
 // Field-renderer component map emitter (cinatra#1625, epic #1620 S8 — M3).
 // Pins the empty seam byte-for-byte against the committed generated file (a
-// local proxy for the fail-closed `--check` drift gate) and the per-claimant
+// local proxy for the fail-closed `--check` staleness gate) and the per-claimant
 // emission mechanics (the literal-import loader shape) that stays inert until a
 // claimant declares cinatra.fieldRenderers[].component.
 
