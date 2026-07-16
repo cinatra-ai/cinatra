@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -551,6 +551,159 @@ describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", ()
     expect(result.blocking.some((f) => f.rule === "manifest.artifact-sdk-abi-range-present")).toBe(true);
     // The nested ui block itself is still conformant.
     expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra.views — chat renderable-view declaration surface (cinatra#1626, epic
+// #1620 S9/M4). FAIL-CLOSED at the publish gate; CROSS-KIND (validated for every
+// kind). Uses a connector fixture (no top-level key allowlist) so the chat-views
+// rules are isolated. The abiVersion literal is DERIVED from the live leaf.
+// ---------------------------------------------------------------------------
+
+// Inject a `cinatra.views` block into the clean connector fixture (merged into
+// the cinatra block, not replacing it) and (by default) SHIP the renderer entry
+// files so a well-formed block resolves within the published `files` scope.
+function connectorWithViews(views, { shipEntry = true } = {}) {
+  const files = cleanConnectorFiles({
+    pkg: { cinatra: { ...CLEAN_CONNECTOR_PKG.cinatra, views } },
+  });
+  if (shipEntry) {
+    files["src/views/chart.tsx"] = "export default function Chart() { return null; }\n";
+    files["src/views/chart2.tsx"] = "export default function Chart2() { return null; }\n";
+  }
+  return files;
+}
+const validViewEntry = { viewType: "chart", entry: "./src/views/chart.tsx", propsApiVersion: 1 };
+const chatViewsBlockingRules = (result) =>
+  result.blocking.filter((f) => f.rule.startsWith("manifest.chat-views")).map((f) => f.rule);
+
+describe("conformance-gate — cinatra.views derivation + leaf parity (cinatra#1626)", () => {
+  it("derives the views ABI version from live leaf source", () => {
+    expect(UI_RULES.ok).toBe(true);
+    expect(UI_RULES.chatViewsAbiVersion).toBe(1);
+  });
+
+  it("the gate-derived views ABI version equals the leaf's declared literal (mirror parity)", () => {
+    // Independent extraction of CHAT_VIEWS_ABI_VERSION straight from the leaf
+    // source — proves loadLiveRules DERIVES the same value the leaf declares
+    // (never a re-listed copy; the #979 addendum principle). This is the
+    // leaf↔gate parity guard for the top-level cinatra.views field (the analog
+    // of the S1 objects↔extensions byte-mirror, which does not apply to a
+    // generator+gate-consumed top-level field).
+    const leafSrc = readFileSync(
+      join(REPO_ROOT, "packages/sdk-extensions/src/chat-views-contract.ts"),
+      "utf8",
+    );
+    const m = /export const CHAT_VIEWS_ABI_VERSION\s*=\s*(\d+)/.exec(leafSrc);
+    expect(m).not.toBeNull();
+    expect(Number(m[1])).toBe(UI_RULES.chatViewsAbiVersion);
+  });
+});
+
+describe("conformance-gate — cinatra.views (fail-closed at publish)", () => {
+  it("conforms cleanly with a valid v1 views block", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [validViewEntry] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(chatViewsBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a duplicate viewType (one effective provider per viewType)", () => {
+    const views = { abiVersion: 1, entries: [validViewEntry, { ...validViewEntry, entry: "./src/views/chart2.tsx" }] };
+    const pkgDir = writeFixture(connectorWithViews(views));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-duplicate-viewtype");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-snake_case viewType", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [{ ...validViewEntry, viewType: "Chart" }] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-viewtype");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a wrong abiVersion (derived, fail-closed)", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 2, entries: [validViewEntry] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-abi-version");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an uncontained (traversing) entry", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [{ ...validViewEntry, entry: "../escape.tsx" }] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-path");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an extraneous entry key (closed v1 shape declares no host ports)", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [{ ...validViewEntry, ports: ["settings"] }] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-extraneous-key");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty entries array", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-empty");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an entry that does not ship in the package (unresolved) — as rigorous as artifact-ui renderers", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [validViewEntry] }, { shipEntry: false }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-unresolved");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an entry that resolves OUTSIDE the published files allowlist", () => {
+    const files = connectorWithViews(
+      { abiVersion: 1, entries: [{ viewType: "chart", entry: "./tools/chart.tsx", propsApiVersion: 1 }] },
+      { shipEntry: false },
+    );
+    files["tools/chart.tsx"] = "export default function Chart() { return null; }\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-out-of-scope");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("a connector with NO views block is unaffected (optional)", () => {
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(chatViewsBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("an ARTIFACT extension MAY declare a top-level cinatra.views (the initial carrier — cinatra#1626 allowlist widening)", () => {
+    // The artifact kind is the initial cinatra.views carrier: `views` is admitted
+    // to ARTIFACT_ALLOWED_CINATRA_KEYS, so a well-formed block does NOT trip the
+    // artifact-extraneous-keys gate, and the views content itself conforms.
+    const files = artifactUiFixture({ ui: validUiBlock() });
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.cinatra.views = { abiVersion: 1, entries: [validViewEntry] };
+    files["package.json"] = JSON.stringify(pkg, null, 2);
+    files["src/views/chart.tsx"] = "export default function Chart() { return null; }\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-extraneous-keys")).toBe(false);
+    expect(chatViewsBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
     rmSync(pkgDir, { recursive: true, force: true });
   });
 });

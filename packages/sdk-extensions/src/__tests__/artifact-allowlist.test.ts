@@ -13,6 +13,10 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
     expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("vendor")).toBe(true);
   });
 
+  it("admits the chat renderable-view carrier key (cinatra#1626 — the artifact kind is the initial cinatra.views carrier)", () => {
+    expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("views")).toBe(true);
+  });
+
   it("admits exactly the expected closed set (narrowly additive)", () => {
     expect([...ARTIFACT_ALLOWED_CINATRA_KEYS].sort()).toEqual(
       [
@@ -23,6 +27,7 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
         "kind",
         "roles",
         "vendor",
+        "views",
       ].sort(),
     );
   });
