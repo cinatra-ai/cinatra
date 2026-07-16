@@ -21,16 +21,17 @@ function runAssistantBootstrapOnce(): Promise<void> {
 
 let __getAuthSessionCalls = 0;
 
-export async function getAuthSession() {
-  // Auth-session performance instrumentation. The call# counter exposes how
-  // many getAuthSession() round-trips a single request makes; /notifications
-  // should make one route-local call.
+/**
+ * Resolve the caller's Better Auth session snapshot from a request's headers.
+ * The full computation — `auth.api.getSession()` → the one-shot enrichment
+ * (bootstrap / avatar / org default) → the post-enrichment re-get — runs once
+ * per request; `getAuthSession` memoizes the returned promise (see below).
+ */
+async function resolveAuthSessionSnapshot(
+  requestHeaders: Awaited<ReturnType<typeof headers>>,
+) {
   const __t0 = notifPerfNow();
-  notifPerfNote("getAuthSession.call#", ++__getAuthSessionCalls);
   void runAssistantBootstrapOnce();
-  const __tH = notifPerfNow();
-  const requestHeaders = await headers();
-  notifPerf("getAuthSession.headers", __tH);
   const __tS1 = notifPerfNow();
   const session = await auth.api.getSession({
     headers: requestHeaders,
@@ -75,6 +76,63 @@ export async function getAuthSession() {
   notifPerf("getAuthSession.getSession#2", __tS2);
   notifPerf("getAuthSession.TOTAL(reGet)", __t0);
   return reSession;
+}
+
+/**
+ * Per-request memo for the session snapshot, keyed on the request's headers
+ * object. `next/headers` `headers()` returns the SAME sealed headers instance
+ * for the whole request store (its own `CachedHeaders` WeakMap) — in Route
+ * Handlers, Server Components, AND Server Actions alike — so that object is a
+ * stable, request-unique identity. Entries are collected automatically when the
+ * request ends (WeakMap), and concurrent requests carry distinct headers
+ * objects, so there is no cross-request leakage.
+ *
+ * Why not React `cache()`: React's `cache()` only memoizes inside the RSC
+ * render tree, where Next installs the cache dispatcher (`ReactSharedInternals.A`).
+ * Route Handlers (`app/api/**` / `route.ts`) run OUTSIDE that dispatcher — the
+ * app-route runtime ships no `getCacheForType` — so `cache()` there degrades to
+ * a plain pass-through and would NOT dedupe the double-read. That is exactly the
+ * path this fix must cover: the MCP mount (`mcp-server.ts` `getSession:
+ * getAuthSession`) calls `getSession()` multiple times inside one `/api/mcp`
+ * Route Handler request. Keying on the request headers object closes the TOCTOU
+ * uniformly across every request scope, not just RSC render.
+ */
+const authSessionSnapshotByRequest = new WeakMap<
+  object,
+  ReturnType<typeof resolveAuthSessionSnapshot>
+>();
+
+export async function getAuthSession() {
+  // Auth-session performance instrumentation. The call# counter exposes how
+  // many getAuthSession() call SITES a single request hits; the underlying
+  // better-auth round-trip now runs at most once per request via the
+  // per-request memo below, so a high call# no longer implies redundant
+  // round-trips.
+  notifPerfNote("getAuthSession.call#", ++__getAuthSessionCalls);
+
+  // The awaited headers object is the per-request memo key. This also preserves
+  // getAuthSession()'s inherent request dependency: OUTSIDE a request scope
+  // (background jobs / workers) `headers()` throws — the pre-existing failure
+  // mode that non-request callers already tolerate (`email-system.ts` via
+  // `.catch(() => null)`, `notifications.ts:resolveSessionUserId` via try/catch).
+  // No new failure mode is introduced. The genuinely session-free path
+  // (`resolveUserContextForUserId`, MCP-OAuth / background) never calls
+  // getAuthSession() at all; it builds a synthetic session directly.
+  const __tH = notifPerfNow();
+  const requestHeaders = await headers();
+  notifPerf("getAuthSession.headers", __tH);
+
+  const cached = authSessionSnapshotByRequest.get(requestHeaders);
+  if (cached) return cached;
+
+  // Store the in-flight promise (not the resolved value) so concurrent call
+  // sites in the same request share ONE round-trip and observe the IDENTICAL
+  // snapshot — closing the double-read TOCTOU where authorization and delegation
+  // read the session independently and a concurrent org-switch / sign-out could
+  // otherwise land between the two reads.
+  const snapshot = resolveAuthSessionSnapshot(requestHeaders);
+  authSessionSnapshotByRequest.set(requestHeaders, snapshot);
+  return snapshot;
 }
 
 export async function requireAuthSession() {
