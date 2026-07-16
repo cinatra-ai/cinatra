@@ -315,6 +315,8 @@ export {
 export { agentPluginScreens } from "./screens";
 export { readAgentTemplateBySlug, slugifyAgentTemplateName } from "./store";
 export { readAgentTemplateByPackageName, setAgentTemplatePackageName, seedCodeBasedAgentIoSpec, deleteAgentTemplate } from "./store";
+// Built-in assistant-agent registration (#1037 P1.3).
+export { upsertBuiltInAssistantAgentTemplate, readAssistantConfigByPrincipalId, BUILT_IN_CINATRA_ASSISTANT_TEMPLATE_ID } from "./store";
 export { readHitlPromptsForRun, updateHitlPromptExcluded, readNonExcludedAgentIdsForRun } from "./store";
 export { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 export type { HitlPromptRecord } from "./store";

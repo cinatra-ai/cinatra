@@ -116,6 +116,17 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // wiring so `$inferSelect` / deserializeTemplate can surface the kind. `.default`
   // keeps it optional on insert (writers omit it → DB default 'executor').
   agentKind:      text("agent_kind").notNull().default("executor"), // assistant | executor
+  // Typed assistant sidecar (persona, skillBundle, allowedTools/Agents, modelPrefs, mcp policy) as
+  // JSON-as-text. NULL for executor rows; NOT NULL for assistant rows (DB CHECK
+  // agent_templates_agent_kind_config_check). Shape + write-time twin in src/lib/assistant-config.ts;
+  // physical column added transformationally by core__0019. READ wiring only (writers use raw SQL /
+  // normalizeAgentKindConfig; the ORM insert path never sets it). `.default(null)` keeps it optional on insert.
+  assistantConfig: text("assistant_config"),
+  // 1:1 template<->principal link (#1037 P1.3): the bare text id of the Better Auth
+  // public."user" assistant principal a conversational (agent_kind='assistant') template is
+  // registered AS. NULL for executor rows. No cross-schema FK (app owns integrity, like
+  // assistant_threads.assistant_user_id). Physical column + partial unique index added by core__0050.
+  assistantUserId: text("assistant_user_id"),
   taskSpec:       text("task_spec"), // nullable; free-form task specification for LangGraph agents
   packageName:       text("package_name").notNull(), // stable package identity; NOT NULL because vendor/slug routing requires every template to declare an identity.
   packageVersion:    text("package_version"),    // semantic version string
@@ -170,6 +181,14 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
 }, (t) => ({
   createdAtIdx:   index("agent_templates_created_at_idx").on(t.createdAt),
   packageNameIdx: uniqueIndex("agent_templates_package_name_idx").on(t.packageName),
+  // Partial UNIQUE index — mirrors the SQL DDL in src/lib/drizzle-store.ts +
+  // migration core__0050 (`agent_templates_assistant_user_id_uniq` WHERE
+  // assistant_user_id IS NOT NULL): the 1:1 template<->principal link (#1037 P1.3).
+  // Name + predicate MUST match the DDL so drizzle-kit introspection treats them as
+  // congruent and does not drop/recreate. Executor rows (NULL) are excluded.
+  assistantUserIdIdx: uniqueIndex("agent_templates_assistant_user_id_uniq")
+    .on(t.assistantUserId)
+    .where(sql`assistant_user_id IS NOT NULL`),
 }));
 
 // ---------------------------------------------------------------------------

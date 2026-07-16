@@ -15,9 +15,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     404-hide; owner / participant / admin pass);
 //   * the assistant-level mcp.enabled/restriction target policy gates
 //     addressability input-time;
-//   * runtime-config resolution is handle-generic and fails CLOSED as the
-//     sealed-room NOT_FOUND for a principal with no linked config (P1.3 not
-//     landed) — never a distinguishable code (no handle-existence oracle);
+//   * runtime-config resolution is handle-generic (P1.3): a principal with a
+//     valid LINKED assistant config resolves it; the built-in Cinatra handle
+//     falls back to the reference config when no link is resolvable yet; a
+//     principal with NO config (or a CORRUPT linked one) fails CLOSED as the
+//     sealed-room NOT_FOUND — never a distinguishable code (no handle oracle);
 //   * EVERY agent-run OBO caller (any oboCeiling on the frame, org floor
 //     included, platform-admin included) is refused (defense-in-depth twin of
 //     the boundary's cannot-express "assistant" class — this surface can honor
@@ -56,6 +58,7 @@ const mocks = vi.hoisted(() => {
     xaddRunEvent: vi.fn(),
     readRecentRunEventsReverse: vi.fn(),
     expireRunStream: vi.fn(),
+    readAssistantConfigByPrincipalId: vi.fn(),
     cinatraConfig,
   };
 });
@@ -88,6 +91,11 @@ vi.mock("@cinatra-ai/a2a", () => ({
   xaddRunEvent: mocks.xaddRunEvent,
   readRecentRunEventsReverse: mocks.readRecentRunEventsReverse,
   expireRunStream: mocks.expireRunStream,
+}));
+// P1.3: the template<->principal linked-config lookup behind the handle-generic
+// runtime binding (resolveTemplateLinkedAssistantConfig).
+vi.mock("@cinatra-ai/agents", () => ({
+  readAssistantConfigByPrincipalId: mocks.readAssistantConfigByPrincipalId,
 }));
 
 import { mcpRequestContextStorage, isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server";
@@ -209,6 +217,10 @@ beforeEach(() => {
   mocks.xaddRunEvent.mockResolvedValue("1-1");
   mocks.readRecentRunEventsReverse.mockResolvedValue([]);
   mocks.expireRunStream.mockResolvedValue(undefined);
+  // Default: no principal has a linked assistant template (the built-in Cinatra
+  // handle then falls back to the reference config; every other principal fails
+  // closed). Individual tests override for the linked-config / corrupt-config paths.
+  mocks.readAssistantConfigByPrincipalId.mockResolvedValue(null);
 });
 
 // ── registration + schema pin ────────────────────────────────────────────────
@@ -395,7 +407,7 @@ describe("assistant-level MCP target policy", () => {
   });
 });
 
-// ── handle-generic config resolution (P1.3 not landed) ───────────────────────
+// ── handle-generic config resolution (P1.3 LANDED — linked-config lookup) ─────
 
 describe("runtime-config resolution", () => {
   it("404-hides a resolvable handle with no linked config, BYTE-IDENTICAL with an unresolvable one (no handle-existence oracle)", async () => {
@@ -408,10 +420,41 @@ describe("runtime-config resolution", () => {
     expect(mocks.createAssistantThread).not.toHaveBeenCalled();
   });
 
-  it("resolves the built-in Cinatra principal through the reference config", async () => {
+  it("resolves the built-in Cinatra principal through the reference config when NO link is resolvable yet", async () => {
+    // readAssistantConfigByPrincipalId -> null (default) => kind:none => built-in fallback.
     const out = await call("assistant_send", { handle: "cinatra", message: "hi" }, memberFrame);
     expect(out.status).toBe("completed");
     expect(mocks.buildCinatraAssistantRuntimeConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("P1.3 forward path: a NON-built-in principal with a valid LINKED config resolves (handle-generic, no reference fallback)", async () => {
+    mocks.readAssistantConfigByPrincipalId.mockImplementation(async (id: string) =>
+      id === HELPER_ID
+        ? JSON.stringify({
+            persona: "You are the Helper assistant.",
+            skillBundle: ["helper-core"],
+            allowedTools: [],
+            allowedAgents: [],
+            modelPrefs: {},
+          })
+        : null,
+    );
+    const out = await call("assistant_send", { handle: "helper", message: "hi" }, memberFrame);
+    expect(out.status).toBe("completed");
+    // The linked config drove the turn — the Cinatra reference builder was NOT used.
+    expect(mocks.buildCinatraAssistantRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.runAssistantTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a linked-but-CORRUPT sidecar fails CLOSED (NOT_FOUND) — never a silent reference fallback", async () => {
+    mocks.readAssistantConfigByPrincipalId.mockImplementation(async (id: string) =>
+      id === HELPER_ID ? '{"persona":"x"}' /* missing required skillBundle => invalid */ : null,
+    );
+    const out = await call("assistant_send", { handle: "helper", message: "hi" }, memberFrame);
+    expect(out.status).toBe("rejected");
+    expect(out.code).toBe("NOT_FOUND");
+    expect(mocks.runAssistantTurn).not.toHaveBeenCalled();
+    expect(mocks.createAssistantThread).not.toHaveBeenCalled();
   });
 });
 
