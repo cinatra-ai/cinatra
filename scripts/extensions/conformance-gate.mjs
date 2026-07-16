@@ -323,8 +323,15 @@ function checkManifest(pkgDir, pkg, rules) {
 // ui ABI version, the generated sdkAbiRange — loaded in `loadLiveRules`), never
 // a re-listed literal. Mirrors the leaf's `parseArtifactUi`/`isContainedEntryPath`
 // as regex/JS (the checker runs on bare `node`, no TS toolchain).
-const ARTIFACT_UI_ALLOWED_KEYS = new Set(["abiVersion", "sdkAbiRange", "renderers"]);
+const ARTIFACT_UI_ALLOWED_KEYS = new Set(["abiVersion", "sdkAbiRange", "renderers", "registryItems"]);
 const ARTIFACT_UI_RENDERER_ALLOWED_KEYS = new Set(["entry", "propsApiVersion", "representations"]);
+// cinatra#1623 (S5): the presentational-only registryItems DECLARATION keys.
+const ARTIFACT_UI_REGISTRY_ITEM_ALLOWED_KEYS = new Set(["name", "entry", "type", "description"]);
+// Mirror of REGISTRY_COMPONENT_NAME_RE (leaf artifact-contract.ts) — a one-line
+// grammar hand-mirrored as JS (like `isUiEntryContained` mirrors the leaf's
+// `isContainedEntryPath`). Drift here can only produce a false CI signal, never
+// a security gap; the leaf schema stays the runtime authority.
+const REGISTRY_COMPONENT_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isUiEntryContained(entry) {
   if (typeof entry !== "string" || entry.length === 0) return false;
@@ -374,19 +381,44 @@ function checkArtifactUi(pkgDir, pkg, rules) {
     });
   }
   const renderers = ui.renderers;
-  if (
-    typeof renderers !== "object" ||
-    renderers === null ||
-    Array.isArray(renderers) ||
-    Object.keys(renderers).length === 0
-  ) {
+  const registryItems = ui.registryItems;
+  // cinatra#1623 (S5): `renderers` is now OPTIONAL — a ui block may declare
+  // renderers, registryItems, or both, but at least one non-empty (mirrors the
+  // leaf's at-least-one-of refinement).
+  if (renderers === undefined && registryItems === undefined) {
     findings.push({
-      rule: "manifest.artifact-ui-renderers-empty",
+      rule: "manifest.artifact-ui-empty",
       file,
-      detail: `cinatra.artifact.ui.renderers must be a NON-EMPTY partial map over the v1 slot enum {${[...rules.artifactUiSlots].join(", ")}}.`,
+      detail: `cinatra.artifact.ui must declare at least one of \`renderers\` (a non-empty v1 slot map over {${[...rules.artifactUiSlots].join(", ")}}) or \`registryItems\` (a non-empty list).`,
     });
     return findings;
   }
+  const renderersIsValidMap =
+    renderers !== undefined &&
+    typeof renderers === "object" &&
+    renderers !== null &&
+    !Array.isArray(renderers) &&
+    Object.keys(renderers).length > 0;
+  if (renderers !== undefined && !renderersIsValidMap) {
+    findings.push({
+      rule: "manifest.artifact-ui-renderers-empty",
+      file,
+      detail: `cinatra.artifact.ui.renderers, when present, must be a NON-EMPTY partial map over the v1 slot enum {${[...rules.artifactUiSlots].join(", ")}}.`,
+    });
+  }
+  if (renderersIsValidMap) {
+    findings.push(...checkArtifactUiRenderers(pkgDir, pkg, renderers, rules));
+  }
+  findings.push(...checkArtifactUiRegistryItems(pkgDir, pkg, registryItems, rules));
+  return findings;
+}
+
+// Per-slot renderer checks (cinatra#1621), extracted so the registryItems
+// addition (cinatra#1623) keeps `checkArtifactUi` linear. Only runs when
+// `renderers` is a valid non-empty slot map.
+function checkArtifactUiRenderers(pkgDir, pkg, renderers, rules) {
+  const findings = [];
+  const file = "package.json";
   for (const [slot, renderer] of Object.entries(renderers)) {
     const at = `cinatra.artifact.ui.renderers.${slot}`;
     if (!rules.artifactUiSlots.has(slot)) {
@@ -463,6 +495,102 @@ function checkArtifactUi(pkgDir, pkg, rules) {
           detail: `${at}.representations, when present, must be a non-empty array of MIME pattern strings.`,
         });
       }
+    }
+  }
+  return findings;
+}
+
+// cinatra#1623 (S5) — the presentational-only `registryItems` DECLARATION,
+// FAIL-CLOSED at the publish/conformance gate. Mirrors the leaf's
+// `artifactUiRegistryItemsSchema` (never LOOSER than the boot/handler verdict):
+// each item is { name, entry, type, description } — name a strict-lowercase
+// `<component>` token, entry a path-contained subpath that resolves within the
+// published `files` scope, type one of the DERIVED item-type enum, description a
+// non-empty string; item names are unique within the manifest.
+function checkArtifactUiRegistryItems(pkgDir, pkg, registryItems, rules) {
+  const findings = [];
+  const file = "package.json";
+  if (registryItems === undefined) return findings; // optional
+  if (!Array.isArray(registryItems) || registryItems.length === 0) {
+    findings.push({
+      rule: "manifest.artifact-ui-registry-items-shape",
+      file,
+      detail: "cinatra.artifact.ui.registryItems, when present, must be a NON-EMPTY array of { name, entry, type, description } items.",
+    });
+    return findings;
+  }
+  const seenNames = new Set();
+  for (const [i, item] of registryItems.entries()) {
+    const at = `cinatra.artifact.ui.registryItems[${i}]`;
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-shape",
+        file,
+        detail: `${at} must be an object ({ name, entry, type, description }).`,
+      });
+      continue;
+    }
+    const extra = Object.keys(item).filter((k) => !ARTIFACT_UI_REGISTRY_ITEM_ALLOWED_KEYS.has(k));
+    if (extra.length > 0) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-extraneous-key",
+        file,
+        detail: `${at} declares disallowed field(s) [${extra.join(", ")}] — a registry item is presentational-only and carries ONLY { name, entry, type, description } (npm + registry deps are extracted from the item SOURCE by the publish pipeline, never declared here).`,
+      });
+    }
+    if (typeof item.name !== "string" || !REGISTRY_COMPONENT_NAME_RE.test(item.name)) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-name",
+        file,
+        detail: `${at}.name (the \`<component>\` token) must be strict lowercase kebab ([a-z0-9], hyphen-joined); got ${JSON.stringify(item.name)}.`,
+      });
+    } else if (seenNames.has(item.name)) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-duplicate-name",
+        file,
+        detail: `${at}.name "${item.name}" duplicates an earlier registry item — item names must be unique within the manifest.`,
+      });
+    } else {
+      seenNames.add(item.name);
+    }
+    if (typeof item.entry !== "string" || !isUiEntryContained(item.entry)) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-entry-uncontained",
+        file,
+        detail: `${at}.entry must be a package-relative, path-contained subpath ("./…", no "..", no absolute path or URL); got ${JSON.stringify(item.entry)}.`,
+      });
+    } else {
+      const rel = item.entry.replace(/^\.\//, "");
+      const resolved = existsSync(join(pkgDir, rel))
+        ? rel
+        : candidateFile(pkgDir, rel.replace(/\.[^./]+$/, ""));
+      if (!resolved) {
+        findings.push({
+          rule: "manifest.artifact-ui-registry-item-entry-unresolved",
+          file,
+          detail: `${at}.entry "${item.entry}" does not resolve to a file in the package (must resolve via the package's exports/files).`,
+        });
+      } else if (!isInScope(resolved, pkg.files)) {
+        findings.push({
+          rule: "manifest.artifact-ui-registry-item-entry-out-of-scope",
+          file,
+          detail: `${at}.entry "${item.entry}" resolves outside the published "files" allowlist — it would not ship in the package tarball.`,
+        });
+      }
+    }
+    if (typeof item.type !== "string" || !rules.artifactUiRegistryItemTypes.has(item.type)) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-type",
+        file,
+        detail: `${at}.type must be one of {${[...rules.artifactUiRegistryItemTypes].join(", ")}}; got ${JSON.stringify(item.type)}.`,
+      });
+    }
+    if (typeof item.description !== "string" || item.description.length === 0) {
+      findings.push({
+        rule: "manifest.artifact-ui-registry-item-description",
+        file,
+        detail: `${at}.description must be a non-empty string.`,
+      });
     }
   }
   return findings;

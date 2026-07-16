@@ -90,7 +90,10 @@ export const semanticArtifactManifestSchema: z.ZodType<SemanticArtifactManifest>
     // `cinatra.artifact.ui` block is carried here as RAW `unknown` so a
     // malformed `ui` can NEVER fail this strict manifest parse and drop the
     // extension's type registration / `objectTypes` claims (cinatra#1621 — the
-    // whole-parse-rejection bug this slice fixes). The tolerant validation +
+    // whole-parse-rejection bug this slice fixes). The `ui` block's
+    // `registryItems` facet (cinatra#1623, S5 — extension-contributed shadcn
+    // registry items) rides this SAME raw-`unknown` carry + leaf validation, so
+    // no mirror-schema change is needed for it. The tolerant validation +
     // sanitized degradation live in the sdk-extensions LEAF (`parseArtifactUi`,
     // imported by both mirror sides): the boot path degrades-with-diagnostic and
     // KEEPS the claims; the publish/conformance gate rejects fail-closed on the

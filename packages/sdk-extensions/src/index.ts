@@ -434,7 +434,48 @@ export type {
   ArtifactTemplateVariant,
   ArtifactSkillBundle,
   SemanticArtifactRef,
+  ArtifactUiRegistryItem,
+  ArtifactUiRegistryItemType,
 } from "./artifact-contract";
+
+// The extensible-shadcn-registry author-facing CONTRACT (the `./registry-contract`
+// subpath, cinatra#1623 epic #1620 S5): vendor identity grammar, tombstone
+// contract, serving-URL grammar, and publish-time dependency-graph validation.
+// Schema-only leaf, consumed by the publish pipeline + registry host (owned by
+// the publishing infrastructure) — the extension's DECLARATION surface is
+// `cinatra.artifact.ui.registryItems` in `./artifact-contract`.
+export type {
+  RegistryItemIdentity,
+  BuiltRegistryItem,
+  RegistryDependencyGraphResult,
+  PinnedRegistryClosure,
+} from "./registry-contract";
+export {
+  REGISTRY_NAMESPACE_RE,
+  HOST_NAMESPACE,
+  RESERVED_NAMESPACES,
+  REGISTRY_HOST,
+  isValidRegistryNamespace,
+  isReservedNamespace,
+  isHostNamespace,
+  canonicalNamespaceToken,
+  canOnboardNamespace,
+  formatRegistryItemIdentity,
+  parseRegistryItemIdentity,
+  registryItemPath,
+  namespaceTombstoneKey,
+  identityTombstoneKey,
+  isNamespaceTombstoned,
+  isIdentityTombstoned,
+  flatHostRosterUrl,
+  immutableDigestUrl,
+  stableAliasUrl,
+  servingUrls,
+  isValidRegistryDigest,
+  formatRegistryDigest,
+  validateRegistryDependencyGraph,
+  freezeDependencyClosure,
+} from "./registry-contract";
 
 // The OBJECT contract (the `./objects-contract` subpath) — the React-free base
 // object-type / sync-adapter shapes — plus the host-injected OBJECTS provider DI
