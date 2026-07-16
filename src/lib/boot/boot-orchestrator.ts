@@ -25,6 +25,7 @@ import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-e
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
+import { assistantThreadMirrorBackfillPhases } from "@/lib/boot/phases/assistant-thread-mirror-backfill";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
@@ -151,6 +152,16 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // scanner merges the on-disk skill trees those phases produced. `degraded`: a
   // failure logs and boot continues (the legacy read path still self-heals).
   await run(skillsCatalogRebuildPhases());
+
+  // ── dormant assistant-thread mirror backfill (cinatra#1218, #1216 S2) ─────────
+  // Mirror the DORMANT legacy chat_threads (rows the P2b write-through never
+  // touched) into assistant_threads/assistant_turns via the P2b builders, so
+  // the structured store covers the whole legacy corpus before the S2 delete
+  // stage retires the legacy write path. AFTER core boot (DB + schema up).
+  // `retryable`: idempotent (the dormancy predicate converges), soft-failing
+  // per thread, retries next boot; kill switch in the phase body.
+  await run(assistantThreadMirrorBackfillPhases());
+
 
   // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────
   // Original interleave point: right after install-op cleanup, before the

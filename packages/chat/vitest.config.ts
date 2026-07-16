@@ -31,6 +31,23 @@ export default defineConfig({
         root,
         "packages/agent-ui-protocol/src/renderable-views/index.ts",
       ),
+      // S1 contract/handshake thin entries used by the S2 headless AG-UI chat
+      // client (mirrors tsconfig.json). Subpath keys MUST precede the bare
+      // package key below — vite's string `find` prefix-matches, so the bare
+      // entry would otherwise rewrite these to `…/index.ts/contract`.
+      "@cinatra-ai/agent-ui-protocol/contract": path.join(
+        root,
+        "packages/agent-ui-protocol/src/contract.ts",
+      ),
+      "@cinatra-ai/agent-ui-protocol/handshake": path.join(
+        root,
+        "packages/agent-ui-protocol/src/handshake.ts",
+      ),
+      // The bare protocol barrel (AG_UI_EVENT_TYPES etc.) — light leaves only.
+      "@cinatra-ai/agent-ui-protocol": path.join(
+        root,
+        "packages/agent-ui-protocol/src/index.ts",
+      ),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",
