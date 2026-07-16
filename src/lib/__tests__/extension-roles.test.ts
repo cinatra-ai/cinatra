@@ -11,10 +11,14 @@ describe("extension-roles — optional-surface role resolution", () => {
     expect(resolveExtensionRole("artifact-blog-post-body")).toBe("@cinatra-ai/blog-post-artifact");
     expect(resolveExtensionRole("artifact-blog-idea-summary")).toBe("@cinatra-ai/blog-idea-artifact");
     expect(resolveExtensionRole("artifact-blog-image")).toBe("@cinatra-ai/blog-image-artifact");
-    expect(resolveExtensionRole("blog-operator-dashboard")).toBe("@cinatra-ai/blog-content-workflow");
   });
 
   it("returns undefined for an unclaimed role (the NORMAL reduced-universe state)", () => {
+    // `blog-operator-dashboard` is host-neutral vocabulary whose optional
+    // claimant was retired with the archived workflow dev-extensions — a
+    // well-typed role with no present claimant, so it resolves like any
+    // reduced-universe absence.
+    expect(resolveExtensionRole("blog-operator-dashboard")).toBeUndefined();
     expect(
       resolveExtensionRole("artifact-fixture-unclaimed" as Parameters<typeof resolveExtensionRole>[0]),
     ).toBeUndefined();
