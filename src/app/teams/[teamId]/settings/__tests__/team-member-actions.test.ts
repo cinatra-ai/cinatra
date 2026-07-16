@@ -82,6 +82,10 @@ vi.mock("@/lib/better-auth-db", () => ({
       transaction(...(a as [Parameters<typeof transaction>[0]])),
   },
   teamMemberRoleColumnExists: () => teamMemberRoleColumnExists(),
+  // The strict variant shares the same underlying mock: tests that flip the
+  // probe to true/false exercise both call sites; the strict-failure case
+  // makes the shared mock reject explicitly.
+  teamMemberRoleColumnExistsStrict: () => teamMemberRoleColumnExists(),
 }));
 
 import {
@@ -400,6 +404,19 @@ describe("last-admin guard (#1686)", () => {
     expect(r).toEqual({ ok: true });
     const membershipRead = executed[2]!.sql;
     expect(sqlText(membershipRead)).not.toMatch(/\brole\b/i);
+  });
+
+  it("REMOVE: a FAILED role-column probe aborts the removal (fail closed — CodeRabbit 1689-r1), never skips the guard", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => {
+      throw new Error("probe: connection reset");
+    });
+    queuedRows = [[TEAM_ROW]];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "unknown_error" });
+    // No transaction, no DELETE — the mutation never starts unguarded.
+    expect(transaction).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("DEMOTE: refuses to demote the sole admin (last_admin), no UPDATE", async () => {

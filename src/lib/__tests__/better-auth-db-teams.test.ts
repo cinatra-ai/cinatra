@@ -30,6 +30,9 @@ describe("better-auth team helpers", () => {
   it("exports the teamMemberRoleColumnExists guard for the app-owned role column", async () => {
     const mod = await import("@/lib/better-auth-db");
     expect(typeof mod.teamMemberRoleColumnExists).toBe("function");
+    // Strict variant (cinatra#1686): rejects on probe failure so invariant
+    // guards fail closed instead of degrading to roleless.
+    expect(typeof mod.teamMemberRoleColumnExistsStrict).toBe("function");
   });
 
   it("exports readTeamsForUser as an async function with arity 2", async () => {

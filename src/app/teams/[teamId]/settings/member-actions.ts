@@ -39,7 +39,11 @@ import {
   requireAuthSession,
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
-import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
+import {
+  betterAuthDb,
+  teamMemberRoleColumnExists,
+  teamMemberRoleColumnExistsStrict,
+} from "@/lib/better-auth-db";
 import { AuthzError } from "@/lib/authz/errors";
 
 import { canManageTeamMembers } from "./team-member-authority";
@@ -277,9 +281,18 @@ export async function removeTeamMemberAction(
       await assertTeamMemberAuthority(teamId);
     const targetUserId = userId.trim();
     if (!targetUserId) return { ok: false, error: "invalid_user" };
-    // Memoized probe (the accent_color precedent) — selects the role column
-    // only where it exists, so the statement keeps working un-provisioned.
-    const rolesProvisioned = await teamMemberRoleColumnExists();
+    // STRICT probe (CodeRabbit 1689-r1): the fail-soft variant treats a
+    // transient probe failure as "roleless", which would silently skip the
+    // last-admin guard while the DELETE still succeeds. A guard must fail
+    // CLOSED — on probe failure the removal aborts (retryable) instead of
+    // proceeding unguarded. Genuine absence still degrades to the roleless
+    // statement, so un-provisioned deployments behave exactly as before.
+    let rolesProvisioned: boolean;
+    try {
+      rolesProvisioned = await teamMemberRoleColumnExistsStrict();
+    } catch {
+      return { ok: false, error: "unknown_error" };
+    }
 
     const result = await betterAuthDb.transaction(async (tx) => {
       // Serialize on the per-team advisory lock: the membership read below
