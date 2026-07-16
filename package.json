@@ -5,6 +5,11 @@
   "license": "Apache-2.0",
   "cinatra": {
     "apiVersion": "cinatra.ai/v1",
+    "installProfiles": [
+      "dev",
+      "prod",
+      "demo"
+    ],
     "devApps": {
       "@cinatra-ai/wordpress-plugin": {
         "url": "https://github.com/cinatra-ai/wordpress-plugin.git",
