@@ -89,9 +89,9 @@
     {
       "packageName": "@cinatra-ai/video-artifact",
       "repo": "cinatra-ai/video-artifact",
-      "resolvedSha": "8a8492b882e3c44d1364831b8a5556a85b0d2e80",
-      "packageVersion": "0.1.0",
-      "treeSha256": "9ca1a6bcd829ec4005c1ed71a7d75af07c0f701c3313e7cc58428cd2a73b2f6b"
+      "resolvedSha": "8a07f955932c3cdd9d874ef34728a76800cac8f3",
+      "packageVersion": "0.1.1",
+      "treeSha256": "8f8bad6344f32e2fb7efd0d188925b50c73c09fec27acb4fa870c7b48f739067"
     }
   ]
 }
