@@ -12,6 +12,10 @@ import "@/lib/extension-activate-hook-wiring";
 // lightweight module so the UI Server Action path + instrumentation boot can
 // wire it WITHOUT pulling this module's heavy handler-graph imports.
 import "@/lib/extension-data-teardown-wiring";
+// Side-effect import: installs the org-scoped dashboard-archival lifecycle hook
+// (cinatra#1628, S11a — archive/restore extension dashboards on the committed
+// (package, org) transition). Same lightweight-wiring rationale as above.
+import "@/lib/extension-dashboard-lifecycle-wiring";
 // The in-memory capability teardown closure (the four register-channel kinds)
 // lives in a shared lightweight module — single source of truth the host wires
 // here and the per-kind-teardown invariant test asserts directly.

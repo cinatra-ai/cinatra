@@ -118,6 +118,18 @@ export default defineConfig({
         __dirname,
         "../../src/lib/marketplace-credentials.ts",
       ),
+      // Light zod-only leaf of the auth-policy barrel (the server barrel drags
+      // @/lib/authz + enforceResourceAccess + DB init, out of this sandbox's
+      // reach). Every extensions consumer imports auth-policy TYPE-ONLY except
+      // permissions-actions.ts, which value-imports AgentAuthPolicySchema +
+      // isExactlyOwner — both live in auth-policy-types.ts — so this alias is a
+      // safe, suite-wide substitution (mirrors the package-contract leaf alias).
+      "@cinatra-ai/agents/auth-policy": path.join(__dirname, "../../packages/agents/src/auth-policy-types.ts"),
+      // permissions-actions.ts value-imports { betterAuthDb, betterAuthUsers };
+      // the containment request-level test mocks the module, so it only needs to
+      // RESOLVE (aliasing to real source keeps the specifier resolvable without
+      // pulling the pg pool — vi.mock replaces it before it executes).
+      "@/lib/better-auth-db": path.join(__dirname, "../../src/lib/better-auth-db.ts"),
       "@cinatra-ai/agents/store": path.join(__dirname, "../../packages/agents/src/store.ts"),
       "@cinatra-ai/agents/schema": path.join(__dirname, "../../packages/agents/src/schema.ts"),
       // Skill-kind hooks dynamically import @cinatra-ai/skills/store.

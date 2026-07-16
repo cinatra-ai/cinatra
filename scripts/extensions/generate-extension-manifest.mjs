@@ -643,6 +643,69 @@ export function validateStreamsDeclaration(pkgName, decl) {
   return errors;
 }
 
+// cinatra.views declaration (cinatra#1626, epic #1620 S9/M4): the top-level
+// chat renderable-view provider field. Structural .mjs restatement of the
+// canonical leaf schema `packages/sdk-extensions/src/chat-views-contract.ts`
+// (`chatViewsSchema`) — the generator runs on bare `node` with no TS toolchain,
+// the same reason validateStreamsDeclaration/validateWebhooksDeclaration restate
+// their leaf shapes. CHAT_VIEWS_ABI_VERSION here mirrors the leaf literal;
+// CHAT_VIEW_TYPE_RE mirrors the leaf grammar (a false-signal-only drift, never a
+// security gap — the leaf stays the runtime authority).
+const CHAT_VIEWS_ABI_VERSION = 1;
+const CHAT_VIEW_TYPE_RE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
+const CHAT_VIEW_ENTRY_SUBPATH_RE = /^\.\/[A-Za-z0-9._/-]+$/;
+
+export function validateChatViewsDeclaration(pkgName, decl) {
+  const errors = [];
+  const at = `${pkgName} cinatra.views`;
+  if (!isObj(decl)) return [`${at}: must be an object`];
+  // Closed v1 top-level shape (mirrors the leaf `.strict()` + the gate): only
+  // { abiVersion, entries }.
+  const extraTop = Object.keys(decl).filter((k) => k !== "abiVersion" && k !== "entries");
+  if (extraTop.length > 0) {
+    errors.push(`${at}: unexpected key(s): ${extraTop.join(", ")}`);
+  }
+  if (decl.abiVersion !== CHAT_VIEWS_ABI_VERSION) {
+    errors.push(`${at}.abiVersion: must be exactly ${CHAT_VIEWS_ABI_VERSION}`);
+  }
+  if (!Array.isArray(decl.entries) || decl.entries.length === 0) {
+    errors.push(`${at}.entries: must be a non-empty array`);
+    return errors;
+  }
+  const seen = new Set();
+  decl.entries.forEach((e, i) => {
+    const eat = `${at}.entries[${i}]`;
+    if (!isObj(e)) {
+      errors.push(`${eat}: must be an object`);
+      return;
+    }
+    // Closed v1 entry shape (mirrors the leaf `.strict()`): viewType, entry,
+    // propsApiVersion only.
+    const extra = Object.keys(e).filter(
+      (k) => k !== "viewType" && k !== "entry" && k !== "propsApiVersion",
+    );
+    if (extra.length > 0) {
+      errors.push(`${eat}: unexpected key(s): ${extra.join(", ")}`);
+    }
+    if (typeof e.viewType !== "string" || !CHAT_VIEW_TYPE_RE.test(e.viewType)) {
+      errors.push(`${eat}.viewType: must be strict lowercase snake_case`);
+    } else if (seen.has(e.viewType)) {
+      errors.push(
+        `${eat}.viewType: duplicate viewType "${e.viewType}" within ${pkgName} (one effective provider per viewType)`,
+      );
+    } else {
+      seen.add(e.viewType);
+    }
+    if (typeof e.entry !== "string" || !CHAT_VIEW_ENTRY_SUBPATH_RE.test(e.entry) || e.entry.includes("..")) {
+      errors.push(`${eat}.entry: must be a package-relative, path-contained subpath (e.g. "./src/views/chart")`);
+    }
+    if (!Number.isInteger(e.propsApiVersion) || e.propsApiVersion < 1) {
+      errors.push(`${eat}.propsApiVersion: must be an integer >= 1`);
+    }
+  });
+  return errors;
+}
+
 export function webhookHandlerExportsFactory(source, factory) {
   const cleaned = stripCommentsAndStrings(source);
   const name = factory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1817,6 +1880,79 @@ export async function buildManifest() {
     streamSlugOwners.set(s.streamSlug, s.packageName);
   }
 
+  // cinatra.views chat renderable-view providers (cinatra#1626, epic #1620
+  // S9/M4): an extension ships the chat renderable-view COMPONENT for a wire
+  // `viewType` via the top-level `cinatra.views` field (the S1 `cinatra.artifact.ui`
+  // sibling — its own versioned field + its own generated literal-import map,
+  // keyed by `viewType`). CROSS-KIND: the carrier kinds are initially the kinds
+  // owning the migrating views, extendable — so this collection scans every
+  // record, not one kind. STAGED + INERT: no bundled extension declares
+  // `cinatra.views` yet, so the emitted map is `{}` on day one (an intentionally
+  // empty seam like GENERATED_ARTIFACT_RENDERERS). FAIL-CLOSED like the streams
+  // collection: validate the declaration shape, then assert the entry resolves to
+  // a real, importable module (tsconfig alias OR package.json exports) so the
+  // generated literal import can never fail at runtime; a runtime-installed
+  // claimant absent from the build is the host's fallback degrade
+  // (RenderableViewFallback), not a generation error.
+  const chatViews = records
+    .flatMap((r) => {
+      const decl = readCinatraManifest(r.sourceDir).views;
+      if (decl === undefined) return [];
+      const errors = validateChatViewsDeclaration(r.packageName, decl);
+      if (errors.length > 0) {
+        throw new Error(
+          `[extension-manifest] invalid cinatra.views declaration:\n  - ${errors.join("\n  - ")}`,
+        );
+      }
+      const pkgJson = JSON.parse(
+        readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"),
+      );
+      return decl.entries.map((e) => {
+        const entryRel = e.entry.replace(/^\.\//, "");
+        const entryPath = join(r.sourceDir, entryRel);
+        const candidates = [entryPath, `${entryPath}.ts`, `${entryPath}.tsx`];
+        const resolved = candidates.find((p) => fileExists(p));
+        if (!resolved) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.views "${e.viewType}" entry "${e.entry}" ` +
+              `does not resolve to a file (looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+          );
+        }
+        const importSubpath = entryRel.replace(/\.(ts|tsx)$/, "");
+        const specifier = `${r.packageName}/${importSubpath}`;
+        const exportsKey = `./${importSubpath}`;
+        const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.views "${e.viewType}" subpath "${specifier}" is not ` +
+              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+              `the generated literal import would fail at runtime`,
+          );
+        }
+        return {
+          viewType: e.viewType,
+          packageName: r.packageName,
+          specifier,
+          propsApiVersion: e.propsApiVersion,
+          resolution: r.resolution,
+        };
+      });
+    })
+    .sort((a, b) => a.viewType.localeCompare(b.viewType));
+  // Cross-fleet duplicate gate (one effective provider per viewType): at most
+  // one owner per viewType across the whole bundled fleet — the build map is
+  // keyed by `viewType`, so a collision could never be disambiguated.
+  const chatViewOwners = new Map();
+  for (const v of chatViews) {
+    const owner = chatViewOwners.get(v.viewType);
+    if (owner) {
+      throw new Error(
+        `[extension-manifest] duplicate chat view viewType "${v.viewType}" (${owner} and ${v.packageName}) — one effective provider per viewType`,
+      );
+    }
+    chatViewOwners.set(v.viewType, v.packageName);
+  }
+
   // Chat-widget modules: an extension OPTS IN to the chat widget/wizard surface
   // by shipping src/widgets/index.ts (WidgetDefinition[] + components). It MUST
   // then also ship src/widgets/manifest.ts (the pure-data WidgetManifest, no
@@ -2078,6 +2214,7 @@ export async function buildManifest() {
     streamDeclarations,
     chatWidgetModules,
     artifactRenderers,
+    chatViews,
     agentFieldRendererBindings,
     fieldRendererComponents,
     agentRoleBindings,
@@ -2748,6 +2885,59 @@ export function emitFieldRendererComponents(fieldRendererComponents) {
   );
 }
 
+// cinatra.views chat renderable-view literal-import map (cinatra#1626, epic
+// #1620 S9/M4). Keyed by wire `viewType` (one effective provider per viewType —
+// the cross-fleet dedup above rejects a collision). Each entry is a guardedOptional
+// loader for a NON-system provider — a post-build-absent provider resolves the
+// standardized degraded result, on top of which the host renders its
+// RenderableViewFallback. Empty on day one (no bundled extension declares
+// `cinatra.views` yet) — an intentionally empty seam like GENERATED_ARTIFACT_RENDERERS.
+// The loaded modules are the "use client" renderable-view components consumed at
+// the chat mount (the same RSC-loads-client-components pattern as
+// GENERATED_CHAT_WIDGET_MODULES); host dispatch wiring rides the S9 host slice.
+function emitChatViews(chatViews) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = chatViews
+    .map((v) => {
+      const load =
+        v.resolution === "guardedOptional"
+          ? `guardedExtensionImport(${JSON.stringify(v.specifier)}, () => import(${JSON.stringify(v.specifier)}))`
+          : `() => import(${JSON.stringify(v.specifier)})`;
+      const meta = JSON.stringify({
+        packageName: v.packageName,
+        viewType: v.viewType,
+        propsApiVersion: v.propsApiVersion,
+      }).slice(1, -1); // splice resolution/load into the object literal
+      return `  ${JSON.stringify(v.viewType)}: { resolution: ${JSON.stringify(v.resolution)}, ${meta}, load: ${load} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(body) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// Literal dynamic-import map (Turbopack rejects computed import templates)\n` +
+    `// of extension-shipped chat renderable-view components, keyed by wire\n` +
+    `// \`viewType\`. At most ONE effective provider per viewType (dedup at\n` +
+    `// generation). The host renderable-view dispatch resolves a viewType to an\n` +
+    `// entry here; an absent viewType (never declared, or a runtime-installed\n` +
+    `// claimant absent from the build) falls back to RenderableViewFallback,\n` +
+    `// never a blank. The wire viewType PAYLOAD schemas + detectors stay\n` +
+    `// host-side (@cinatra-ai/agent-ui-protocol/renderable-views) and never\n` +
+    `// import an extension.\n` +
+    `export type GeneratedChatViewLoader = () => Promise<unknown>;\n\n` +
+    `export type GeneratedChatViewEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  packageName: string;\n` +
+    `  viewType: string;\n` +
+    `  propsApiVersion: number;\n` +
+    `  load: GeneratedChatViewLoader;\n` +
+    `};\n\n` +
+    `export const GENERATED_CHAT_VIEWS: Record<string, GeneratedChatViewEntry> = {\n` +
+    (body.length > 0 ? `${body}\n` : ``) +
+    `};\n`
+  );
+}
+
 // The GENERATED guarded-optional-loaders test (cinatra#7). Emitted
 // alongside the maps so the concrete entry list below can never drift from
 // the emitted set (`--check` pins this file byte-exact with the maps; the
@@ -2776,6 +2966,7 @@ function emitGuardedOptionalLoadersTest({
   connectorSettingsPages,
   connectorSkillsSettingsTabs,
   artifactRenderers,
+  chatViews,
 }) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const expected = [];
@@ -2800,6 +2991,7 @@ function emitGuardedOptionalLoadersTest({
   for (const p of connectorSettingsPages) expected.push(["GENERATED_CONNECTOR_SETTINGS_PAGES", p.slug, p.resolution]);
   for (const p of connectorSkillsSettingsTabs) expected.push(["GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS", p.slug, p.resolution]);
   for (const a of artifactRenderers) expected.push(["GENERATED_ARTIFACT_RENDERERS", `${a.packageName}::${a.slot}`, a.resolution]);
+  for (const v of chatViews) expected.push(["GENERATED_CHAT_VIEWS", v.viewType, v.resolution]);
   const expectedBody = expected
     .map(([map, key, resolution]) => `  { map: ${JSON.stringify(map)}, key: ${JSON.stringify(key)}, resolution: ${JSON.stringify(resolution)} },`)
     .join("\n");
@@ -2832,7 +3024,8 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
     `  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,\n` +
     `} from "../connector-setup-pages";\n` +
-    `import { GENERATED_ARTIFACT_RENDERERS } from "../artifact-renderers";\n\n` +
+    `import { GENERATED_ARTIFACT_RENDERERS } from "../artifact-renderers";\n` +
+    `import { GENERATED_CHAT_VIEWS } from "../chat-views";\n\n` +
     `const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>> = {\n` +
     `  GENERATED_EXTENSION_SERVER_ENTRIES,\n` +
     `  GENERATED_CONNECTOR_ENTRY_MODULES,\n` +
@@ -2849,6 +3042,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
     `  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,\n` +
     `  GENERATED_ARTIFACT_RENDERERS,\n` +
+    `  GENERATED_CHAT_VIEWS,\n` +
     `};\n\n` +
     `const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [\n` +
     `${expectedBody}\n];\n\n` +
@@ -3110,6 +3304,7 @@ const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 const OUT_ARTIFACT_RENDERERS = generatedOutPath("artifact-renderers.ts");
 const OUT_FIELD_RENDERER_COMPONENTS = generatedOutPath("field-renderer-components.ts");
+const OUT_CHAT_VIEWS = generatedOutPath("chat-views.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 const OUT_ARTIFACT_FLOOR = generatedOutPath("artifact-floor.ts");
 
@@ -3141,6 +3336,7 @@ async function main() {
     streamDeclarations,
     chatWidgetModules,
     artifactRenderers,
+    chatViews,
     agentFieldRendererBindings,
     fieldRendererComponents,
     agentRoleBindings,
@@ -3159,6 +3355,7 @@ async function main() {
     [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
     [OUT_ARTIFACT_RENDERERS, emitArtifactRenderers(artifactRenderers)],
     [OUT_FIELD_RENDERER_COMPONENTS, emitFieldRendererComponents(fieldRendererComponents)],
+    [OUT_CHAT_VIEWS, emitChatViews(chatViews)],
     [
       OUT_GUARDED_TEST,
       emitGuardedOptionalLoadersTest({
@@ -3176,6 +3373,7 @@ async function main() {
         connectorSettingsPages,
         connectorSkillsSettingsTabs,
         artifactRenderers,
+        chatViews,
       }),
     ],
   ];

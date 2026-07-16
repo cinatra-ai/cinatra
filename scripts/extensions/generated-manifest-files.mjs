@@ -71,6 +71,13 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // CLIENT-consumed, so it does NOT route through the server-only
   // guardedExtensionImport and is NOT in the guarded-optional-loaders test.
   "src/lib/generated/field-renderer-components.ts",
+  // Chat renderable-view dispatch map (cinatra#1626, epic #1620 S9/M4): the
+  // literal-import BUILD table of extension-shipped `cinatra.views` renderable-
+  // view components, keyed by wire `viewType` (one effective provider per
+  // viewType). The host renderable-view dispatch resolves a viewType to a key
+  // here; an absent viewType falls back to RenderableViewFallback. Empty until
+  // an extension declares `cinatra.views` (the chart migration, S9 host slice).
+  "src/lib/generated/chat-views.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing
   // it here adds no exemption surface — it puts the file under the same

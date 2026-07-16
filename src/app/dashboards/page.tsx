@@ -9,7 +9,12 @@ import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { filterReadableDashboards } from "@/lib/dashboards/authz";
-import { listOrgDashboardRows, excludeProjectTemplates } from "@cinatra-ai/dashboards/extension-dashboard-reads";
+import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
+import {
+  listOrgDashboardRows,
+  excludeProjectTemplates,
+  filterRenderableDashboards,
+} from "@cinatra-ai/dashboards/extension-dashboard-reads";
 
 export const metadata: Metadata = { title: "Dashboards" };
 
@@ -18,7 +23,16 @@ export const metadata: Metadata = { title: "Dashboards" };
 // owner + project-grant filtering via filterReadableDashboards.
 export default async function DashboardsPage() {
   const { actor, orgId } = await buildDashboardActorFromSession();
-  const rows = orgId ? filterReadableDashboards(excludeProjectTemplates(await listOrgDashboardRows(orgId)), actor) : [];
+  // ALL-READER liveness/status gate (cinatra#1628): drop orphaned/archived
+  // extension dashboards (their extension is no longer installed+active) BEFORE
+  // the owner/project readability filter, so a dead-package row never renders.
+  const isPackageLive = orgId ? await resolveLiveExtensionPredicate(orgId) : () => false;
+  const rows = orgId
+    ? filterReadableDashboards(
+        filterRenderableDashboards(excludeProjectTemplates(await listOrgDashboardRows(orgId)), isPackageLive),
+        actor,
+      )
+    : [];
 
   return (
     <Main className="min-h-screen">

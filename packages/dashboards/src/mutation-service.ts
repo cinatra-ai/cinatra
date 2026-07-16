@@ -19,7 +19,7 @@
  * serialize on the row lock and revision_number is computed atomically.
  */
 import "server-only";
-import { eq, max, sql, and, inArray } from "drizzle-orm";
+import { eq, max, sql, and, inArray, ne } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { CURRENT_CONFIG_VERSION } from "./store/dashboard-config";
@@ -348,6 +348,11 @@ export async function createDashboard(
     entityType: null,
     entityId: null,
     isDefault: false,
+    contributionId: null,
+    appliedContributionVersion: null,
+    appliedDefaultJson: null,
+    appliedDefaultHash: null,
+    archiveReason: null,
   };
   const access = resolveDashboardAccess(pseudo, actor);
   if (!access.canWrite) {
@@ -652,6 +657,11 @@ export async function upsertDashboardConfig(
         entityType: null,
         entityId: null,
         isDefault: false,
+        contributionId: null,
+        appliedContributionVersion: null,
+        appliedDefaultJson: null,
+        appliedDefaultHash: null,
+        archiveReason: null,
       };
       const access = resolveDashboardAccess(pseudo, actor);
       if (!access.canWrite) {
@@ -871,6 +881,11 @@ function buildAuthPseudoRow(args: {
     entityType: args.entityType,
     entityId: args.entityId,
     isDefault: args.isDefault,
+    contributionId: null,
+    appliedContributionVersion: null,
+    appliedDefaultJson: null,
+    appliedDefaultHash: null,
+    archiveReason: null,
   };
 }
 
@@ -1452,19 +1467,35 @@ export async function materializeExtensionInstanceForProject(
   });
 }
 
-/** Archive (or restore) the template + all per-project instances of an extension. */
+/** Archive (or restore) the template + all per-project instances of an extension.
+ *  `reason` (cinatra#1628) is stamped on `archive_reason` so the durable-uninstall
+ *  hook and the migration orphan sweep record WHY a row was archived (adopt-in-
+ *  place restore, S11b, reads it). Only NON-archived rows are touched, so a
+ *  re-fire is idempotent + never re-stamps an already-archived row's reason. */
 export async function archiveExtensionDashboards(
   tx: DashboardsDb | undefined,
-  input: { extensionId: string; organizationId: string; actor: DashboardActor },
+  input: { extensionId: string; organizationId: string; actor: DashboardActor; reason?: string },
 ): Promise<number> {
   return withDashboardsTx(tx, async (q) => {
     const rows = await q
       .update(dashboards)
-      .set({ status: "archived", archivedAt: new Date(), updatedBy: input.actor.userId, updatedAt: new Date() })
-      .where(and(eq(dashboards.extensionId, input.extensionId), eq(dashboards.organizationId, input.organizationId)))
+      .set({
+        status: "archived",
+        archivedAt: new Date(),
+        archiveReason: input.reason ?? null,
+        updatedBy: input.actor.userId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(dashboards.extensionId, input.extensionId),
+          eq(dashboards.organizationId, input.organizationId),
+          ne(dashboards.status, "archived"),
+        ),
+      )
       .returning();
     for (const row of rows) {
-      await writeAudit(q, { operation: "dashboards.extension_archive", actor: input.actor, row, metadata: { extensionId: input.extensionId } });
+      await writeAudit(q, { operation: "dashboards.extension_archive", actor: input.actor, row, metadata: { extensionId: input.extensionId, reason: input.reason ?? null } });
     }
     return rows.length;
   });
@@ -1477,8 +1508,14 @@ export async function restoreExtensionDashboards(
   return withDashboardsTx(tx, async (q) => {
     const rows = await q
       .update(dashboards)
-      .set({ status: "published", archivedAt: null, updatedBy: input.actor.userId, updatedAt: new Date() })
-      .where(and(eq(dashboards.extensionId, input.extensionId), eq(dashboards.organizationId, input.organizationId)))
+      .set({ status: "published", archivedAt: null, archiveReason: null, updatedBy: input.actor.userId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(dashboards.extensionId, input.extensionId),
+          eq(dashboards.organizationId, input.organizationId),
+          eq(dashboards.status, "archived"),
+        ),
+      )
       .returning();
     for (const row of rows) {
       await writeAudit(q, { operation: "dashboards.extension_restore", actor: input.actor, row, metadata: { extensionId: input.extensionId } });

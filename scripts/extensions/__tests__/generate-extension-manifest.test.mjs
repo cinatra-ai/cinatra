@@ -12,6 +12,7 @@ import {
   validateWidgetStreamDeclaration,
   validateWebhooksDeclaration,
   validateStreamsDeclaration,
+  validateChatViewsDeclaration,
   webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
@@ -43,6 +44,11 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       // literal-import BUILD table of extension-shipped cinatra.artifact.ui
       // renderer modules. Inert until an artifact declares `ui` (S3+/M1).
       "src/lib/generated/artifact-renderers.ts",
+      // Chat renderable-view dispatch map (cinatra#1626, epic #1620 S9/M4): the
+      // literal-import BUILD table of extension-shipped cinatra.views renderable-
+      // view components, keyed by wire viewType. Inert until an extension
+      // declares `cinatra.views` (the chart migration).
+      "src/lib/generated/chat-views.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
@@ -98,6 +104,7 @@ describe("generator-owned resolution classification + guarded emission (cinatra#
       m.externalMcpToolboxes,
       m.widgetStreamAgents,
       m.chatWidgetModules,
+      m.chatViews,
     ];
     for (const list of lists) {
       for (const entry of list) {
@@ -886,6 +893,57 @@ describe("stream declarations (cinatra.streams, cinatra#344)", () => {
   it("the real tree emits an EMPTY stream map (inert — no extension declares cinatra.streams)", async () => {
     const { streamDeclarations } = await buildManifest();
     expect(streamDeclarations).toEqual([]);
+  });
+});
+
+describe("chat renderable-view declarations (cinatra.views, cinatra#1626 S9/M4)", () => {
+  const validEntry = { viewType: "chart", entry: "./src/views/chart.tsx", propsApiVersion: 1 };
+  const validDecl = { abiVersion: 1, entries: [validEntry] };
+
+  it("validateChatViewsDeclaration: valid declaration → no errors", () => {
+    expect(validateChatViewsDeclaration("@x/p", validDecl)).toEqual([]);
+    expect(
+      validateChatViewsDeclaration("@x/p", {
+        abiVersion: 1,
+        entries: [validEntry, { viewType: "content_change_proposal", entry: "./src/views/proposal", propsApiVersion: 2 }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("FAILS CLOSED: non-object, wrong abiVersion, empty entries, bad viewType, uncontained entry, bad propsApiVersion, extraneous key", () => {
+    expect(validateChatViewsDeclaration("@x/p", "nope").length).toBeGreaterThan(0);
+    expect(validateChatViewsDeclaration("@x/p", { abiVersion: 2, entries: [validEntry] })).toEqual(
+      expect.arrayContaining([expect.stringContaining(".abiVersion")]),
+    );
+    expect(validateChatViewsDeclaration("@x/p", { abiVersion: 1, entries: [] })).toEqual(
+      expect.arrayContaining([expect.stringContaining("non-empty array")]),
+    );
+    expect(
+      validateChatViewsDeclaration("@x/p", { abiVersion: 1, entries: [{ ...validEntry, viewType: "Chart" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".viewType")]));
+    expect(
+      validateChatViewsDeclaration("@x/p", { abiVersion: 1, entries: [{ ...validEntry, entry: "./a/../b" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".entry")]));
+    expect(
+      validateChatViewsDeclaration("@x/p", { abiVersion: 1, entries: [{ ...validEntry, propsApiVersion: 0 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".propsApiVersion")]));
+    expect(
+      validateChatViewsDeclaration("@x/p", { abiVersion: 1, entries: [{ ...validEntry, ports: [] }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("unexpected key")]));
+  });
+
+  it("FAILS CLOSED: duplicate viewType within a package (one effective provider per viewType)", () => {
+    expect(
+      validateChatViewsDeclaration("@x/p", {
+        abiVersion: 1,
+        entries: [validEntry, { ...validEntry, entry: "./src/views/chart2.tsx" }],
+      }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("duplicate viewType")]));
+  });
+
+  it("the real tree emits an EMPTY chat-views map (inert — no extension declares cinatra.views)", async () => {
+    const { chatViews } = await buildManifest();
+    expect(chatViews).toEqual([]);
   });
 });
 

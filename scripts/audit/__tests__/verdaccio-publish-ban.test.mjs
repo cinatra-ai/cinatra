@@ -1,10 +1,17 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  applyCanaryProofException,
   scanWorkflowText,
   scanWorkflows,
 } from "../verdaccio-publish-ban.mjs";
@@ -118,6 +125,24 @@ describe("scanWorkflowText — executed publish is BANNED", () => {
     ].join("\n");
     const offenders = scanWorkflowText(wf);
     expect(offenders).toHaveLength(1);
+  });
+
+  it("flags a publish in a CRLF-terminated block scalar (no CRLF evasion)", () => {
+    const wf = [
+      "jobs:",
+      "  j:",
+      "    steps:",
+      "      - run: |",
+      '          npm publish --registry "$U"',
+    ].join("\r\n");
+    const offenders = scanWorkflowText(wf);
+    expect(offenders).toHaveLength(1);
+  });
+
+  it("flags a publish hidden after a lone CR inside a block scalar", () => {
+    const wf =
+      "jobs:\n  j:\n    steps:\n      - run: |\n          # note\r          npm publish --registry https://registry.cinatra.ai\n";
+    expect(scanWorkflowText(wf).length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -1455,6 +1480,172 @@ describe("scanWorkflowText — quoted escapes + flow comma + env -S glued", () =
       '  - { name: Build, run: "npm ci, please" }',
     ].join("\n");
     expect(scanWorkflowText(wf)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyCanaryProofException — the ONE ratified carve-out (ops#512 option A,
+// owner decision 2026-07-16), pinned to the EXACT canonical content of the real
+// .github/workflows/verdaccio-publish-proof.yml. The real file is exempted at
+// its exact path; ANY executable mutation of it re-arms the ban; comment /
+// blank-line edits stay exempt. `applyCanaryProofException` returns the hits
+// that REMAIN banned, so `[]` means suppressed and non-empty means still-flagged.
+// ---------------------------------------------------------------------------
+
+describe("applyCanaryProofException — the ratified canary carve-out (content-pinned)", () => {
+  const EXC_FILE = ".github/workflows/verdaccio-publish-proof.yml";
+  // The ACTUAL ratified workflow — the only content the gate exempts.
+  const REAL = readFileSync(
+    new URL(
+      "../../../.github/workflows/verdaccio-publish-proof.yml",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  // Load-bearing executable substrings used to build mutations. (Single-quoted
+  // JS strings — `${...}` is literal, not interpolated.)
+  const PUBLISH = '          npm publish --registry "${REGISTRY_URL}"';
+  const NAME_LINE =
+    'npm pkg set name="@cinatra-ai/registry-token-refresh-canary" version="${ver}"';
+  const SECRET_ENV = "REGISTRY_URL: ${{ secrets.VERDACCIO_REGISTRY_URL }}";
+
+  const remaining = (fileName, text) =>
+    applyCanaryProofException(fileName, text, scanWorkflowText(text));
+
+  it("the real workflow WOULD trip the ban (one real npm publish)", () => {
+    const hits = scanWorkflowText(REAL);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].registryHint).toBe(false);
+  });
+
+  it("exempts the real workflow ONLY at its exact path", () => {
+    expect(remaining(EXC_FILE, REAL)).toHaveLength(0);
+    // Same content anywhere else is not the sanctioned workflow.
+    expect(remaining("elsewhere.yml", REAL).length).toBeGreaterThanOrEqual(1);
+    expect(
+      remaining(".github/workflows/verdaccio-publish-proof-copy.yml", REAL)
+        .length,
+    ).toBeGreaterThanOrEqual(1);
+    // A basename-only match (as a temp-dir scan produces) is not the exact path.
+    expect(
+      remaining("verdaccio-publish-proof.yml", REAL).length,
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  // Every mutation is a change to the REAL file's EXECUTABLE content — each must
+  // re-arm the ban. This is also the drift guard: if the workflow's executable
+  // content is edited without updating CANARY_PROOF_CANONICAL (or vice-versa),
+  // the "exempts the real workflow" test above fails, forcing the paired edit.
+  it.each([
+    [
+      "same-line second publish",
+      REAL.replace(
+        PUBLISH,
+        PUBLISH + ' && npm publish --tag evil --registry "${REGISTRY_URL}"',
+      ),
+    ],
+    [
+      "separate second publish line",
+      REAL.replace(PUBLISH, PUBLISH + "\n          npm publish --tag evil"),
+    ],
+    [
+      "dynamically-built package name (npm pkg set var)",
+      REAL.replace(PUBLISH, '          npm pkg set "name=@evil/x"\n' + PUBLISH),
+    ],
+    [
+      "printf -v REGISTRY_URL registry override",
+      REAL.replace(
+        PUBLISH,
+        "          printf -v REGISTRY_URL %s https://registry.npmjs.org\n" +
+          PUBLISH,
+      ),
+    ],
+    [
+      "comment-shadowed env secret binding",
+      REAL.replace(
+        SECRET_ENV,
+        "REGISTRY_URL: https://registry.npmjs.org # " + SECRET_ENV,
+      ),
+    ],
+    ["duplicate top-level on:", REAL + "\non: push\n"],
+    [
+      "added pull_request trigger",
+      REAL.replace(
+        "  workflow_dispatch:",
+        "  pull_request:\n  workflow_dispatch:",
+      ),
+    ],
+    [
+      "mutated executable package name",
+      REAL.replace(
+        NAME_LINE,
+        'npm pkg set name="@cinatra-ai/evil-canary" version="${ver}"',
+      ),
+    ],
+    [
+      "added actions/checkout (foreign package.json)",
+      REAL.replace(
+        "      - name: Set up Node.js",
+        "      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0\n      - name: Set up Node.js",
+      ),
+    ],
+    [
+      "hardcoded cinatra registry on the publish line",
+      REAL.replace(
+        PUBLISH,
+        "          npm publish --registry https://registry.cinatra.ai",
+      ),
+    ],
+  ])("re-arms the ban on executable mutation: %s", (_label, text) => {
+    expect(text).not.toBe(REAL); // the mutation actually changed the file
+    expect(remaining(EXC_FILE, text).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("re-arms the ban when an executable line hides behind a lone CR", () => {
+    // A bare `\r` is a YAML line break; a `#`-comment prefix followed by `\r`
+    // and a command must NOT be normalized away as a single comment.
+    const text = REAL.replace(
+      "        run: |\n          set -euo pipefail",
+      '        run: |\n          # innocuous\r          npm pkg set "name=@evil/x"\n          set -euo pipefail',
+    );
+    expect(text).not.toBe(REAL);
+    expect(remaining(EXC_FILE, text).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("stays exempt when the whole file uses CRLF line endings", () => {
+    const crlf = REAL.replace(/\n/g, "\r\n");
+    expect(crlf).not.toBe(REAL);
+    expect(remaining(EXC_FILE, crlf)).toHaveLength(0);
+  });
+
+  // The pin is EXACT (byte-for-byte, LF-folded) — comments, blank lines, and
+  // trailing whitespace are all significant, because inside the `run:` block a
+  // comment/blank between `\` continuations or a trailing space after a `\`
+  // changes shell execution. So even a comment or whitespace edit re-arms.
+  it("re-arms the ban on a comment-only edit", () => {
+    const edited = REAL.replace(
+      "# THE PROOF: a real publish (not --dry-run) with the rotated token.",
+      "# proof: a real publish with the rotated token",
+    );
+    expect(edited).not.toBe(REAL);
+    expect(remaining(EXC_FILE, edited).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("re-arms the ban on a blank-line insertion", () => {
+    const blanks = REAL.replace("permissions:", "\n\npermissions:");
+    expect(blanks).not.toBe(REAL);
+    expect(remaining(EXC_FILE, blanks).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("re-arms the ban when a trailing space is added after a `\\` continuation", () => {
+    // A trailing space after the backslash breaks the shell line continuation at
+    // runtime; the exact-content pin (no trailing-ws stripping) catches it.
+    const marker =
+      '              npm unpublish "@cinatra-ai/registry-token-refresh-canary@${ver}" \\';
+    expect(REAL).toContain(marker);
+    const edited = REAL.replace(marker, marker + " ");
+    expect(edited).not.toBe(REAL);
+    expect(remaining(EXC_FILE, edited).length).toBeGreaterThanOrEqual(1);
   });
 });
 
