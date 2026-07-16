@@ -153,8 +153,21 @@ services:
     ports:
       - "3003:3003"
       - "3009:3009"
+    # NANGO_ENCRYPTION_KEY comes from a NARROW, generated file — NOT inlined as
+    # `environment: NANGO_ENCRYPTION_KEY: "${NANGO_ENCRYPTION_KEY}"`. That
+    # interpolation reads the *shell* env, so a bare `docker compose up` (no
+    # `source .env.local`) started Nango KEYLESS: a fresh DB initializes
+    # UNENCRYPTED, an existing encrypted DB crashes with the misleading
+    # "key has been removed" boot error (cinatra#1691). And an empty
+    # `environment:` value OVERRIDES an env_file value on the same key (the
+    # wayflow precedent above), so the key must NOT appear below.
+    # `scripts/gen-nango-env.mjs` (run by `npm run services`) writes
+    # docker/nango/.nango.env with ONLY this key; `required: false` keeps a
+    # fresh checkout bootable.
+    env_file:
+      - path: ./docker/nango/.nango.env
+        required: false
     environment:
-      NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY}
       SERVER_PORT: "3003"
       NANGO_SERVER_URL: http://localhost:3003
       NANGO_PUBLIC_SERVER_URL: http://localhost:3003
