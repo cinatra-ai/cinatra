@@ -72,6 +72,8 @@ import {
 } from "./agent-builder-ids";
 import { SkillRecommenderRenderer } from "./skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "./email-test-delivery-form-renderer";
+import { hasFieldRendererComponent } from "./field-renderer-components";
+import { makeExtensionFieldRenderer } from "./extension-field-renderer";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -194,6 +196,37 @@ export function registerFieldRendererBindings(
   bindings: ReadonlyArray<FieldRendererBindingInput>,
 ): void {
   for (const b of bindings) {
+    // S8 spine (cinatra#1625): a binding whose component has migrated into its
+    // claiming extension (declared cinatra.fieldRenderers[].component and is in
+    // THIS build) resolves to the extension-shipped component via the generated
+    // build map; a missing/degraded module falls back to SchemaFieldRenderer
+    // (the ExtensionFieldRenderer wrapper's floor — never blank/crash). The
+    // condition (xRenderer id + the kind's bare compat aliases) and the
+    // manifest-declared params contract are UNCHANGED — a map-hit is a 1:1 swap
+    // of the SAME binding's renderer, so the binding's own scoped id always
+    // resolves map-first and its legacy scoped aliases keep resolving. The map is
+    // EMPTY today, so every binding takes the host KIND path below
+    // (behavior-preserving).
+    //
+    // SHARED BARE-ALIAS CAVEAT (a per-claimant-migration concern, inert here):
+    // a kind's bare compat alias (e.g. "email-drafts-review") can be claimed by
+    // SEVERAL bindings of that kind; among equal priority the registry resolves
+    // the first-registered. Today that is invisible (all same-kind bindings share
+    // ONE host component). When a claimant slice migrates only SOME bindings of a
+    // shared kind, the unscoped bare alias becomes genuinely ambiguous (no
+    // arbitration rule can bind an unscoped string to one of several claimants) —
+    // that slice must migrate the shared-kind cohort together or scope the alias.
+    // The spine deliberately does not change arbitration priority to force this.
+    if (hasFieldRendererComponent(b.id)) {
+      fieldRendererRegistry.register({
+        id: b.id,
+        priority: b.priority,
+        condition: conditionFor(b.id, b.kind),
+        renderer: withBindingParams(makeExtensionFieldRenderer(b.id), b.params),
+        midRunHitl: b.midRunHitl === true,
+      });
+      continue;
+    }
     const kindEntry = RENDERER_KIND_TABLE[b.kind];
     if (!kindEntry) {
       console.warn(
