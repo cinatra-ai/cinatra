@@ -80,14 +80,14 @@ row), single Save button at the bottom. The Project access section calls
 
 ## Bindings surface
 
-`/projects/[projectId]/agents` manages
-`project_agent_template_bindings`. Each binding pins an ambient agent
-template (the template itself stays ambient — substrate exclusion list)
-with a visibility filter (visible / hidden / project-private), an optional
-pinned_version, and optional default_context_overrides (JSON object).
-Mutations route through `createProjectAgentTemplateBindingAction` /
-`updateProjectAgentTemplateBindingAction` /
-`deleteProjectAgentTemplateBindingAction`.
+`project_agent_template_bindings` pins an ambient agent template to a project
+(the template itself stays ambient — substrate exclusion list) with a
+visibility filter (visible / hidden / project-private), an optional
+pinned_version, and optional default_context_overrides (JSON object). These
+bindings are exposed only through the `project_agent_template_bindings_*` MCP
+primitives (create / update / delete / list) below — the dedicated
+`/projects/[projectId]/agents` route that used to manage them was removed in
+the #707 projects-detail cleanup, but the kernel primitives are unchanged.
 
 ## Co-owners (legacy compatibility)
 

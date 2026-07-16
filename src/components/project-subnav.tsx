@@ -9,17 +9,19 @@ type ProjectSubnavProps = {
   activeSection: ProjectSectionValue;
 };
 
-// Route-based section bar shown on EVERY `/projects/[projectId]` detail page
-// (cinatra#1504). Mirrors the established route-tab pattern
+// Route-based section bar for the `/projects/[projectId]` route-section
+// sub-pages (cinatra#1504). Since #706 the base detail page renders an
+// in-page tablist instead, and #707 removed the Customers + Agents routes, so
+// this shared subnav now carries the two remaining sibling sections (Overview
+// + Permissions). Mirrors the established route-tab pattern
 // (src/components/agents-tab-nav.tsx, src/components/metric-api-nav.tsx):
 // tabs render from the shared projectNav() config, each TabsTrigger wraps a
 // real <Link> (a full route navigation, not client-side tab state), and
 // TabsListRow's trailing rule replaces the section rule a bare <PageHeader>
 // would otherwise draw — pair with `<PageHeader divider={false}>` on every
-// project detail page (design-system.html §Dividers). One deviation from the
-// sibling navs: `overflow-x-auto` on the wrapper, because this row carries
-// four tabs (the siblings carry 2–3) and must stay usable on narrow
-// viewports — the non-wrapping triggers scroll instead of compressing.
+// project detail page (design-system.html §Dividers). `overflow-x-auto` on
+// the wrapper is retained defensively so long section labels stay usable on
+// narrow viewports — the non-wrapping triggers scroll instead of compressing.
 export function ProjectSubnav({ projectId, activeSection }: ProjectSubnavProps) {
   return (
     <div className="mx-auto mb-4 w-full max-w-7xl overflow-x-auto px-5 sm:px-8 lg:px-0">
