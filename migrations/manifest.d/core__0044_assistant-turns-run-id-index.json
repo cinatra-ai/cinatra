@@ -1,9 +1,0 @@
-{
-  "seq": "0044",
-  "file": "core/core__0044_assistant-turns-run-id-index.mjs",
-  "summary": "Partial index assistant_turns_run_id_idx on assistant_turns(run_id) WHERE run_id IS NOT NULL (cinatra#1216 S2, the /chat AG-UI cutover): the assistant run-stream route (GET /api/assistants/runs/[runId]/stream) authorizes a resume/tail subscription by resolving run_id -> turn -> thread before applying the thread's access policy. run_id is populated ONLY on runtime-minted turn rows (one per AG-UI run); the P2b legacy-mirror rows carry run_id NULL by design and dominate the table, so a PARTIAL index keeps mirror rows out of it. Additive: the bootstrap DDL (assistantThreadSchemaQueries, same PR) creates the index via CREATE INDEX IF NOT EXISTS so a fresh install is born at the target shape and ledger-fakes this chain; this module carries the same create onto the operator upgrade path (core__0026 convention for these tables). Idempotent both ways; unqualified names resolve to the runner's search_path schema. down() drops the index IF EXISTS (a pure performance revert, no data loss). SEQ PROVISIONAL: sequence is assigned at MERGE (the gate requires new seq > max SHIPPED, currently 0042); 0043 is provisionally held by the open PR #1520 (binding-reconcile-write-queue), so this fragment provisionally takes 0044 — renumber to the next free sequence if the merge order shifts (rename-only, zero SQL change; the runner tolerates gaps).",
-  "destructive": false,
-  "tables": [
-    "assistant_turns"
-  ]
-}

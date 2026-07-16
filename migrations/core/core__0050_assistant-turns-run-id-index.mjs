@@ -1,4 +1,4 @@
-// core__0044 — partial index on assistant_turns.run_id (cinatra#1216 S2, the
+// core__0050 — partial index on assistant_turns.run_id (cinatra#1216 S2, the
 // /chat AG-UI cutover). The new assistant run-stream route
 // (GET /api/assistants/runs/[runId]/stream) authorizes a resume/tail
 // subscription by resolving run_id → turn → thread before applying the
