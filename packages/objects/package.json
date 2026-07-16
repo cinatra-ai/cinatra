@@ -13,6 +13,7 @@
     "./claims": "./src/claims.ts",
     "./effective-identity": "./src/effective-identity.ts",
     "./artifact-renderer-registry": "./src/artifact-renderer-registry.ts",
+    "./artifact-ui-cutover-matrix": "./src/artifact-ui-cutover-matrix.ts",
     "./auto-registrar": "./src/auto-registrar.ts",
     "./registry": "./src/registry.ts",
     "./sync-adapters/registry": "./src/sync-adapters/registry.ts",
