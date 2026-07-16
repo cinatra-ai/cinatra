@@ -51,6 +51,17 @@ export function coreBootPhases(): BootPhase[] {
       },
     },
     {
+      name: "extension-dashboard-lifecycle-hook-wiring",
+      policy: "retryable",
+      run: async () => {
+        // Install the org-scoped dashboard-archival lifecycle hook at boot
+        // (cinatra#1628, S11a) so an archive/uninstall/restore via a UI Server
+        // Action archives/restores that (package, org)'s extension dashboards even
+        // in a worker that never imported @/lib/extensions.
+        await import("@/lib/extension-dashboard-lifecycle-wiring");
+      },
+    },
+    {
       name: "core-migrations",
       policy: "fatal",
       run: async () => {

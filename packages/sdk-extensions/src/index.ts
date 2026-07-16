@@ -438,6 +438,27 @@ export type {
   ArtifactUiRegistryItemType,
 } from "./artifact-contract";
 
+// The versioned DASHBOARD-CONTRIBUTION manifest contract (the
+// `./dashboard-contribution-contract` subpath, cinatra#1628 S11a) so a
+// `kind:"agent"` extension types its `cinatra.dashboardContribution` claim
+// against the SDK alone. Schema-only leaf; the host + the publish/conformance
+// gate share the field-tolerant `parseDashboardContribution` validator.
+export {
+  DASHBOARD_CONTRIBUTION_ABI_VERSION,
+  DASHBOARD_CONTRIBUTION_CARRIER_KINDS,
+  DASHBOARD_CONTRIBUTION_SDK_ABI_RANGE,
+  isDashboardContributionCarrierKind,
+  isValidContributionKey,
+  parseDashboardContribution,
+  validateDashboardContributionForPublish,
+} from "./dashboard-contribution-contract";
+export type {
+  DashboardContributionManifest,
+  DashboardContributionAdoption,
+  DashboardContributionCarrierKind,
+  DashboardContributionParseResult,
+} from "./dashboard-contribution-contract";
+
 // The extensible-shadcn-registry author-facing CONTRACT (the `./registry-contract`
 // subpath, cinatra#1623 epic #1620 S5): vendor identity grammar, tombstone
 // contract, serving-URL grammar, and publish-time dependency-graph validation.

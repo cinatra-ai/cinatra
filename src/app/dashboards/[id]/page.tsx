@@ -9,7 +9,12 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { requireDashboardAccess, DashboardAccessError } from "@/lib/dashboards/authz";
-import { readDashboardRowById, isProjectTemplate } from "@cinatra-ai/dashboards/extension-dashboard-reads";
+import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
+import {
+  readDashboardRowById,
+  isProjectTemplate,
+  isDashboardRowRenderable,
+} from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import { validateDashboardConfigV12 } from "@cinatra-ai/dashboards/extension-materialization";
 import { PortletHost, type PortletInstanceProp } from "@/components/dashboards/portlet-host";
 
@@ -23,6 +28,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     const { actor } = await buildDashboardActorFromSession();
     const row = await readDashboardRowById(id);
     if (!row || isProjectTemplate(row)) return { title: "Dashboard" };
+    // Same liveness/status gate as the page — never disclose an orphaned/archived
+    // extension dashboard's name via metadata (cinatra#1628).
+    const isPackageLive = await resolveLiveExtensionPredicate(row.organizationId);
+    if (!isDashboardRowRenderable(row, isPackageLive)) return { title: "Dashboard" };
     await requireDashboardAccess(actor, id, "read");
     return { title: row.name };
   } catch {
@@ -42,6 +51,12 @@ export default async function DashboardDetailPage({ params }: Props) {
   if (!row) notFound();
   // A project-scope template is a template only — 404 (dashboard_is_project_template).
   if (isProjectTemplate(row)) notFound();
+  // ALL-READER liveness/status gate (cinatra#1628): an ARCHIVED row, or an
+  // extension row whose extension is no longer installed+active (an orphan), 404s
+  // here too — the by-id route has no status filter of its own, so a
+  // bookmark/deep-link to a dead-package dashboard must be denied at read.
+  const isPackageLive = await resolveLiveExtensionPredicate(row.organizationId);
+  if (!isDashboardRowRenderable(row, isPackageLive)) notFound();
 
   try {
     await requireDashboardAccess(actor, id, "read");

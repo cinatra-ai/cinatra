@@ -54,6 +54,11 @@ vi.mock("@/lib/boot/phases/skills-catalog-rebuild", () => ({
     { name: "skills-catalog-rebuild", policy: "degraded", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/assistant-thread-mirror-backfill", () => ({
+  assistantThreadMirrorBackfillPhases: () => [
+    { name: "assistant-thread-mirror-backfill", policy: "retryable", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/system-services", () => ({
   systemServicesPhases: () => [
     { name: "assistant-bootstrap", policy: "retryable", run: async () => {} },
@@ -130,6 +135,7 @@ describe("runBoot orchestration", () => {
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
       "agent-runtime-dep-backfill", // cinatra#1056 — always-on, AWAITED, after marker backfill
       "skills-catalog-rebuild", // cinatra#1364 — explicit rebuild AFTER activation/materialization
+      "assistant-thread-mirror-backfill", // cinatra#1218 — dormant legacy-thread mirror, AWAITED
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
       "assistant-bootstrap",
       "otel-tracing",
@@ -165,6 +171,7 @@ describe("runBoot orchestration", () => {
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
       "agent-runtime-dep-backfill", // cinatra#1056 — runs in PROD too
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
+      "assistant-thread-mirror-backfill", // cinatra#1218 — runs in PROD too
       "assistant-bootstrap",
       "otel-tracing",
       // no a2a-dev-auto-connect in prod

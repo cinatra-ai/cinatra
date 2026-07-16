@@ -9,7 +9,7 @@ import {
   fetchThreadList,
   fetchThreadById,
   saveChatThreadViaFetch,
-} from "../chat-persistence";
+} from "../ag-ui-chat-client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
