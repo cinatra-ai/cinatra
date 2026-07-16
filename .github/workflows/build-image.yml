@@ -815,6 +815,19 @@ jobs:
       - name: Artifact-UI type-identity boundary gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/artifact-ui-boundary-gate.test.mjs
 
+      # G4 addendum — variable-URL dynamic-import ratchet (epic #1620 M1 Slice A,
+      # cinatra#1630). The main-realm dynamic renderer loader is the ONE
+      # sanctioned CLIENT variable-URL `import(runtimeURL)` seam (alongside the
+      # pre-existing server runtime-store loaders); this AST gate forbids a
+      # variable-URL import() anywhere else in src/**, keeping the generated-map
+      # static-import carve-out (G4) structurally intact. Zero-tolerance, no
+      # baseline — a new computed dynamic import anywhere else fails CI.
+      - name: Variable-URL dynamic-import ratchet (G4)
+        run: node scripts/audit/no-variable-url-dynamic-import.mjs
+
+      - name: Variable-URL dynamic-import ratchet tests
+        run: pnpm exec vitest run scripts/audit/__tests__/no-variable-url-dynamic-import.test.mjs
+
       # No NEW bare fs.rename / renameSync on the extension install / materialize
       # / publish / store / boot surface (cinatra#874). A staged tmp tree promoted
       # to a persistent mount with a bare `rename` throws EXDEV cross-device and
