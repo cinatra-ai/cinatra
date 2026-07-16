@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { format } from "date-fns";
 import { eq, sql } from "drizzle-orm";
 
-import { requireAuthSession } from "@/lib/auth-session";
+import * as authSession from "@/lib/auth-session";
+const { requireAuthSession } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { readProjectCoOwners } from "@/lib/project-co-owners-store";
@@ -12,19 +13,35 @@ import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
 import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 
+import { buildProjectOverviewConfig } from "@cinatra-ai/dashboards/overview-config";
+import {
+  ensureEntityOverviewAction,
+  listEntityDashboardsAction,
+  getEntityDashboardConfigAction,
+  createEntityDashboardAction,
+  renameEntityDashboardAction,
+  deleteEntityDashboardAction,
+  saveEntityDashboardConfigAction,
+} from "@cinatra-ai/dashboards/entity-dashboard-actions";
+import type { EntityDashboardsDataSource } from "@cinatra-ai/dashboards/entity-dashboards-contract";
+import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity";
+
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { ProjectSubnav } from "@/components/project-subnav";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
+import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
+
+import { ProjectDetailTabs } from "./project-detail-tabs";
+import type { ProjectDashboardsTabProps } from "./project-dashboards-tab";
+import type { ProjectPermissionsTabClientProps } from "./permissions/permissions-tab-client";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  readProjectOwnerViews,
+  listProjectAccessAction,
+  type ProjectAccessRow,
+} from "./permissions/actions";
+import { listGuestRows, type GuestRow } from "./permissions/guest-actions";
 
 export const metadata: Metadata = { title: "Project" };
 
@@ -33,19 +50,26 @@ type Props = {
 };
 
 // ---------------------------------------------------------------------------
-// `/projects/[projectId]` detail page.
+// `/projects/[projectId]` detail page (cinatra#706).
 //
 // Project is NEVER an ownership tier — there is no promotion path between
-// tiers. Access is N:M via `project_access`. The detail page shows:
+// tiers. Access is N:M via `project_access`. The detail page is a TABBED
+// Dashboards surface:
 //   1. PageHeader with ScopeBadge for owner level + an Archived badge when
 //      `projects.archived_at IS NOT NULL`.
-//   2. A "Project metadata" card with name / slug / description / owner /
-//      organization / visibility / created.
-//   3. A "Sealed-room counts" card — number of objects, agent runs, and
-//      chat threads scoped to this project. Counts read directly from the
-//      same physical columns sealed-room list handlers query
-//      (`*.project_id = $projectId`), so the numbers match what the sealed
-//      room exposes through its tooling.
+//   2. A "Dashboards" tab — the reusable entity Dashboards shell (#701) whose
+//      non-removable "Overview" default renders this project's CURRENT info as
+//      render-only portlets (#702): metadata (name / slug / id / owner /
+//      organization / visibility / created / description) + sealed-room counts
+//      (objects, agent runs, chat threads). Counts read directly from the same
+//      physical columns the sealed-room list handlers query
+//      (`*.project_id = $projectId`), so the numbers match what the sealed room
+//      exposes through its tooling.
+//   3. A "Permissions" tab — today's project permissions content (ownership,
+//      N:M project-access grants, and — for admins — external guest grants).
+//
+// Route deletions (/customers, /agents) and the customers fold are the SEPARATE
+// cleanup slice (#707); nothing is deleted here.
 // ---------------------------------------------------------------------------
 
 const VALID_OWNER_LEVELS: ReadonlySet<string> = new Set([
@@ -93,6 +117,8 @@ export default async function ProjectDetailPage({ params }: Props) {
   // `enforceResourceAccess` via the kernel's membership lookup; passing the
   // resource envelope is sufficient.
   const actor = actorFromSession(session);
+  const userId = actor.userId!;
+  const orgId = actor.organizationId ?? null;
   const coOwners = await readProjectCoOwners(project.id);
   try {
     await enforceResourceAccess(
@@ -139,8 +165,8 @@ export default async function ProjectDetailPage({ params }: Props) {
   const runsCount = Number(runsCountRes.rows[0]?.c ?? "0");
   const threadsCount = Number(threadsCountRes.rows[0]?.c ?? "0");
 
-  // Owner display name (best-effort — fall back to id on Better Auth
-  // outage so the page stays renderable).
+  // Owner + organization display names (best-effort — fall back to id on a
+  // Better Auth outage so the page stays renderable).
   let ownerDisplayName: string | null = null;
   let orgDisplayName: string | null = null;
   try {
@@ -172,6 +198,127 @@ export default async function ProjectDetailPage({ params }: Props) {
 
   const isArchived = archivedAt !== null;
 
+  // ── Dashboards tab wiring (#701 shell + #702 Overview) ───────────────────
+  // Per-user dashboards for THIS project instance. The ref is derived
+  // server-side and bound into each action (`.bind(null, ref)`), so it crosses
+  // to the client Next-encrypted and the client never authors the owner axis;
+  // `resolveDashboardAccess` re-derives read/write on every call regardless.
+  const ref: DashboardEntityRef = {
+    entityType: "project",
+    entityId: project.id,
+    ownerLevel: "user",
+    ownerId: userId,
+  };
+
+  const dataSource: EntityDashboardsDataSource = {
+    listDashboards: listEntityDashboardsAction.bind(null, ref),
+    loadConfig: getEntityDashboardConfigAction.bind(null, ref),
+    createDashboard: createEntityDashboardAction.bind(null, ref),
+    renameDashboard: renameEntityDashboardAction.bind(null, ref),
+    deleteDashboard: deleteEntityDashboardAction.bind(null, ref),
+    saveDashboard: saveEntityDashboardConfigAction.bind(null, ref),
+  };
+
+  // The FRESH Overview content: this project's live metadata + sealed-room
+  // counts, composed into render-only portlets. Rebuilt every request — never
+  // persisted (the mutation service rejects render-only kinds), so it can never
+  // serve a stale or authorization-obsolete summary.
+  const overviewConfig = buildProjectOverviewConfig({
+    name: project.name,
+    slug: project.slug,
+    id: project.id,
+    owner: ownerDisplayName ?? project.ownerId,
+    organizationName: orgDisplayName ?? project.organizationId ?? undefined,
+    visibility: project.visibility === "discoverable" ? "Discoverable" : "Private",
+    createdAt: format(project.createdAt, "MMM d, yyyy"),
+    description: project.description ?? undefined,
+    counts: [
+      { label: "Objects", value: objectsCount },
+      { label: "Agent runs", value: runsCount },
+      { label: "Chat threads", value: threadsCount },
+    ],
+  });
+  const overviewPortlets: PortletInstanceProp[] = overviewConfig.portlets.map((p) => ({
+    instanceId: p.instanceId,
+    kind: p.kind,
+    version: p.version,
+    slot: p.slot,
+    config: p.config as Record<string, unknown>,
+  }));
+
+  // Best-effort SSR seed so the default (Overview) paints without a client
+  // round-trip. Ensure the non-removable Overview row exists BEFORE listing (the
+  // shell never seeds it). On any failure (e.g. no active org) fall through with
+  // no seed — the shell then client-loads and surfaces its own loading/error
+  // state — while the Overview portlets above are always available regardless.
+  let dashboardsInitial: ProjectDashboardsTabProps["initialData"];
+  try {
+    await ensureEntityOverviewAction(ref);
+    const list = await listEntityDashboardsAction(ref);
+    const overview = list.dashboards.find((d) => d.isDefault) ?? list.dashboards[0];
+    if (overview) {
+      // The Overview's persisted config is an empty anchor — its rendered
+      // content comes from `overviewPortlets`, not this — but the shell wants a
+      // typed seed for the selected id, so read it through the confined action.
+      const config = await getEntityDashboardConfigAction(ref, overview.id);
+      dashboardsInitial = { list, selectedId: overview.id, config };
+    }
+  } catch {
+    dashboardsInitial = undefined;
+  }
+
+  // ── Permissions tab wiring (today's /permissions content) ────────────────
+  let owner: Awaited<ReturnType<typeof readProjectOwnerViews>>["owner"] = null;
+  let coOwnerViews: Awaited<ReturnType<typeof readProjectOwnerViews>>["coOwners"] = [];
+  try {
+    const views = await readProjectOwnerViews(
+      project.ownerId,
+      coOwners.map((c) => c.userId),
+    );
+    owner = views.owner;
+    coOwnerViews = views.coOwners;
+  } catch {
+    owner = null;
+    coOwnerViews = [];
+  }
+
+  // Platform-admin probe drives `canEdit`. Defensive — `isPlatformAdmin` may be
+  // unavailable in unit-test mocks of `@/lib/auth-session`; treat any throw /
+  // absence as "not admin". Owner short-circuit also grants edit.
+  let isAdmin = false;
+  try {
+    const fn = (authSession as unknown as { isPlatformAdmin?: (s: unknown) => boolean })
+      .isPlatformAdmin;
+    isAdmin = typeof fn === "function" ? fn(session) : false;
+  } catch {
+    isAdmin = false;
+  }
+  const canEdit = isAdmin || project.ownerId === userId;
+
+  // Current project_access grants; degrade to empty so the tab stays renderable.
+  let projectAccessRows: ProjectAccessRow[] = [];
+  const accessResult = await listProjectAccessAction(project.id);
+  if (accessResult.ok) projectAccessRows = accessResult.items;
+
+  // Guest rows are ADMIN-ONLY (guest emails are never shown to read-only
+  // members): loaded only under canEdit — listGuestRows re-asserts server-side.
+  let guestRows: GuestRow[] = [];
+  if (canEdit) {
+    guestRows = await listGuestRows(project.id).catch(() => []);
+  }
+
+  const permissions: ProjectPermissionsTabClientProps = {
+    activeOrgId: orgId,
+    projectId: project.id,
+    projectName: project.name,
+    canEdit,
+    resourceOwner: owner,
+    coOwners: coOwnerViews,
+    currentUserId: userId,
+    projectAccessRows,
+    guestRows,
+  };
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -185,7 +332,6 @@ export default async function ProjectDetailPage({ params }: Props) {
         }
         divider={false}
       />
-      <ProjectSubnav projectId={project.id} activeSection="overview" />
       <PageContent className="flex flex-col gap-6 pb-8">
         {isArchived && (
           <div className="soft-panel border-line bg-surface-muted px-4 py-3 text-xs text-muted-foreground">
@@ -197,102 +343,10 @@ export default async function ProjectDetailPage({ params }: Props) {
           </div>
         )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Project metadata</CardTitle>
-            <CardDescription>
-              Identifiers and ownership for this project.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="text-xs text-muted-foreground">Slug</dt>
-                <dd className="font-mono text-xs text-foreground">{project.slug}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Identifier</dt>
-                <dd className="font-mono text-xs text-foreground">{project.id}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Owner</dt>
-                <dd className="flex items-center gap-2 text-foreground">
-                  <ScopeBadge level={ownerLevel} />
-                  <span>{ownerDisplayName ?? project.ownerId}</span>
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Organization</dt>
-                <dd className="text-foreground">
-                  {orgDisplayName ?? project.organizationId ?? (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Visibility</dt>
-                <dd className="text-foreground">
-                  {project.visibility === "discoverable" ? "Discoverable" : "Private"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">Created</dt>
-                <dd className="text-foreground">
-                  {format(project.createdAt, "MMM d, yyyy")}
-                </dd>
-              </div>
-              {project.description && (
-                <div className="sm:col-span-2">
-                  <dt className="text-xs text-muted-foreground">Description</dt>
-                  <dd className="text-foreground whitespace-pre-wrap">
-                    {project.description}
-                  </dd>
-                </div>
-              )}
-            </dl>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Sealed room</CardTitle>
-            <CardDescription>
-              Resources scoped to this project. Counts match the sealed-room
-              filter used by the list primitives — no cross-project bleed.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="soft-panel flex flex-col gap-1 p-4">
-                <dt className="text-xs text-muted-foreground">Objects</dt>
-                <dd className="text-2xl font-semibold tabular-nums text-foreground">
-                  {objectsCount.toLocaleString()}
-                </dd>
-                <p className="text-xs text-muted-foreground">
-                  Includes artifacts (objects rows with an artifact type).
-                </p>
-              </div>
-              <div className="soft-panel flex flex-col gap-1 p-4">
-                <dt className="text-xs text-muted-foreground">Agent runs</dt>
-                <dd className="text-2xl font-semibold tabular-nums text-foreground">
-                  {runsCount.toLocaleString()}
-                </dd>
-                <p className="text-xs text-muted-foreground">
-                  Runs with <code>project_id = {project.id}</code>.
-                </p>
-              </div>
-              <div className="soft-panel flex flex-col gap-1 p-4">
-                <dt className="text-xs text-muted-foreground">Chat threads</dt>
-                <dd className="text-2xl font-semibold tabular-nums text-foreground">
-                  {threadsCount.toLocaleString()}
-                </dd>
-                <p className="text-xs text-muted-foreground">
-                  Threads with <code>project_id = {project.id}</code>.
-                </p>
-              </div>
-            </dl>
-          </CardContent>
-        </Card>
+        <ProjectDetailTabs
+          dashboards={{ dataSource, initialData: dashboardsInitial, overviewPortlets }}
+          permissions={permissions}
+        />
       </PageContent>
     </Main>
   );
