@@ -369,8 +369,10 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   }, [messages]);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
+  // Also release the auto-scroll lock — it leaked across thread switches (#1702).
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
+    userScrolledUpRef.current = false;
   }, [activeThreadId]);
 
   // Notify ChatThreadPanel of the active thread so it can highlight without router navigation.
@@ -528,9 +530,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // Re-enable auto-scroll when streaming completes so the next response scrolls normally.
   const prevHasActiveStreamRef = useRef(false);
   useEffect(() => {
-    if (prevHasActiveStreamRef.current && !hasActiveStream) {
-      userScrolledUpRef.current = false;
-    }
+    if (prevHasActiveStreamRef.current && !hasActiveStream) userScrolledUpRef.current = false;
     prevHasActiveStreamRef.current = hasActiveStream;
   }, [hasActiveStream]);
 
