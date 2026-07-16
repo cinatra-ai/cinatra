@@ -105,7 +105,7 @@ export function DynamicRendererLoader({
 
     void (async () => {
       try {
-        // 0. INIT-BEFORE-IMPORT (fail-closed, plan §2.3 / Codex R1): the host
+        // 0. INIT-BEFORE-IMPORT (fail-closed, plan §2.3): the host
         // module-registry shim MUST be initialized before importing a renderer,
         // or its externalized `import "react"` cannot resolve to the host
         // singleton. If the shim is not ready, floor (transient) — never import.

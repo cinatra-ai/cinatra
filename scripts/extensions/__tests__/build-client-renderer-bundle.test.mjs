@@ -118,7 +118,7 @@ describe("functional — real esbuild browser build", () => {
     expect(built.tuple.packageName).toBe("@fixture/demo-artifact");
     expect(built.tuple.slot).toBe("detail");
     // The tuple entry is the EMITTED bundle name (served + signed), not the
-    // source .tsx (Codex R1) — the digest-pinned URL targets the output.
+    // source .tsx — the digest-pinned URL targets the output.
     expect(built.tuple.entry).toBe(built.outBasename);
     expect(built.tuple.entry).not.toMatch(/\.tsx$/);
     expect(built.tuple.reactPeerRange).toBe("^19.0.0");

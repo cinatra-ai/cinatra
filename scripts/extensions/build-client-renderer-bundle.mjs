@@ -271,7 +271,7 @@ export async function buildClientRendererBundle({ packageDir, slot, esbuildDir =
   const integrity = integrityOf(bytes);
   // The tuple's `entry` is the EMITTED bundle name (what the digest-pinned URL
   // targets + what the host materializes into the store), NOT the source `.tsx`
-  // (Codex R1): `fields.entry` is the esbuild INPUT (a source path); signing +
+  // `fields.entry` is the esbuild INPUT (a source path); signing +
   // serving must reference the OUTPUT. Single-file bundle (no splitting) so the
   // whole chunk graph is one content-addressed file — no unpinned chunks.
   return {

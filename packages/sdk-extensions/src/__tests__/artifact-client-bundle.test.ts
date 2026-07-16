@@ -1,7 +1,7 @@
 /**
  * Shared client-bundle contract (epic #1620 M1 Slice A — cinatra#1630): the
  * externals allowlist gate, the exact-tuple identity + `reactPeerSet`
- * fingerprint (Codex R4 — both React ranges), and the canonical browser-bundle
+ * fingerprint (over both React ranges), and the canonical browser-bundle
  * signature payload. Pure; no crypto.
  */
 import { describe, expect, it } from "vitest";
@@ -99,7 +99,7 @@ describe("exact-tuple identity + reactPeerSet fingerprint", () => {
     expect(parseClientBundleTuple({ ...tuple(), extra: 1 }).ok).toBe(false);
   });
 
-  it("fingerprint folds BOTH React ranges injectively (Codex R4)", () => {
+  it("fingerprint folds BOTH React ranges injectively", () => {
     expect(reactPeerSetFingerprint("^19.0.0", "^19.0.0")).toBe(
       `^19.0.0${REACT_PEER_SET_SEPARATOR}^19.0.0`,
     );

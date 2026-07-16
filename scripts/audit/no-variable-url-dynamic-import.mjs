@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * G4 addendum — the VARIABLE-URL dynamic-import ratchet (epic #1620 M1 Slice A —
- * cinatra#1630, plan §2.4 / §5.3-G4, Codex R3/G4).
+ * cinatra#1630, plan §2.4 / §5.3-G4).
  *
  * The main-realm dynamic loader is the ONE sanctioned runtime seam that does a
  * variable-URL `import(runtimeURL)` (the whole point: a RUNTIME URL bypasses

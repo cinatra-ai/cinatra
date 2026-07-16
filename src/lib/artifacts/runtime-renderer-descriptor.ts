@@ -5,8 +5,8 @@
 //
 // A server-side process-global registry is NOT browser-visible, so the server
 // RESOLVES an admitted binding and SERIALIZES a descriptor
-// `{ digestPinnedUrl, tuple, reason? }` down to the client loader as props
-// (Codex R1 constraint 2). This module owns that descriptor shape, the immutable
+// `{ digestPinnedUrl, tuple, reason? }` down to the client loader as props.
+// This module owns that descriptor shape, the immutable
 // digest-pinned URL builder, the pre-import checks the host runs BEFORE
 // `import()`, and the reason a floor renders on every failure state.
 //
@@ -215,7 +215,7 @@ export type FreshnessPreflightVerdict =
  * installed/active, this exact digest still the active admitted one, and the
  * signature still verifies. Only a green verdict permits `import()`.
  *
- * HONEST TOCTOU LIMIT (Codex R4, plan §2.5): this REJECTS a stale or
+ * HONEST TOCTOU LIMIT (plan §2.5): this REJECTS a stale or
  * already-archived descriptor, but cannot fully close the final window — an
  * archive landing AFTER a green preflight and immediately before the cached
  * `import()` is an unavoidable residual. The guarantee is instead: a generation

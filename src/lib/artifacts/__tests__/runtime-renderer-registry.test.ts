@@ -101,7 +101,7 @@ describe("monotonic generation (ABA-safe)", () => {
   });
 });
 
-describe("concurrent-overwrite prevention (Codex R1 — re-check after async)", () => {
+describe("concurrent-overwrite prevention (re-check after async)", () => {
   it("a SLOW lower-generation admission cannot overwrite a committed higher generation", async () => {
     const key = runtimeAssetRegistry.keyFor("@cinatra-ai/json-artifact", "detail");
     let releaseSlow!: () => void;
@@ -167,7 +167,7 @@ describe("DB-authoritative reconstruct on cache miss (cross-process convergence)
     expect(resolved).toBeNull();
   });
 
-  it("reconstruct at the tombstoned floor generation cannot resurrect a retired epoch (Codex R1)", async () => {
+  it("reconstruct at the tombstoned floor generation cannot resurrect a retired epoch", async () => {
     const key = runtimeAssetRegistry.keyFor("@cinatra-ai/json-artifact", "detail");
     await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(), generation: 5, ...ok }); // floor 5
     runtimeAssetRegistry.retireByPackage("@cinatra-ai/json-artifact"); // byKey cleared, floor 5 tombstone

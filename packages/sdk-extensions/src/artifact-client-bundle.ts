@@ -32,7 +32,7 @@ import type { ArtifactUiSlot } from "./artifact-contract";
 import { ARTIFACT_UI_SLOTS } from "./artifact-contract";
 
 // ---------------------------------------------------------------------------
-// Externals allowlist — the SANCTIONED host peers (Codex R1/A1 "SHARE React").
+// Externals allowlist — the SANCTIONED host peers that SHARE the host's ONE React.
 // ---------------------------------------------------------------------------
 
 /**
@@ -139,7 +139,7 @@ export const STORE_DIGEST_RE = /^[0-9a-f]{128}$/;
  * The EXACT tuple that identifies an admitted dynamically-loaded renderer
  * bundle (plan §2.4 / G1). Identity is THIS tuple — never "package installed",
  * never "present in the generated map". Both React peer ranges are enumerated
- * (Codex R4: `reactDomPeerRange` must be in the durable tuple, not only signed
+ * (`reactDomPeerRange` must live in the durable tuple, not only be signed
  * elsewhere); {@link reactPeerSetFingerprint} folds them into the single
  * unambiguous `reactPeerSet` fingerprint the registry compares on.
  */
@@ -202,8 +202,8 @@ export function parseClientBundleTuple(input: unknown): ClientBundleTupleParseRe
 export const REACT_PEER_SET_SEPARATOR = "\u0000";
 
 /**
- * The single unambiguous `reactPeerSet` fingerprint over BOTH React peer ranges
- * (Codex R4). Enumerated in the durable/admitted tuple so registry identity
+ * The single unambiguous `reactPeerSet` fingerprint over BOTH React peer ranges,
+ * enumerated in the durable/admitted tuple so registry identity
  * compares one stable token instead of two independently-mutable ranges.
  */
 export function reactPeerSetFingerprint(reactPeerRange: string, reactDomPeerRange: string): string {

@@ -96,7 +96,7 @@ class RuntimeAssetRegistryImpl {
    * The active admitted tuple for a key, or null. On a cache MISS an injectable
    * `authority` reconstruct hook (the DB-authoritative active digest → tuple)
    * is consulted so every serving process converges to the SAME durable SoT
-   * without a warm cache (Codex R1 constraint 1). A reconstructed binding is
+   * without a warm cache. A reconstructed binding is
    * warmed into the cache under its own generation.
    */
   resolveActive(
@@ -110,7 +110,7 @@ class RuntimeAssetRegistryImpl {
     if (!reconstructed) return null;
     // Warm the cache only if the reconstructed generation is STRICTLY newer than
     // the key's monotonic floor and the digest is not quarantined — reconstruct
-    // must obey the SAME admission rule as `admitAndActivate` (Codex R1). After a
+    // must obey the SAME admission rule as `admitAndActivate`. After a
     // `retireByPackage` teardown keeps the floor as a tombstone at N, a stale
     // authority view at generation N (== floor) must NOT resurrect the retired
     // epoch, so equality is rejected (`<= floor`), not only `< floor`.
@@ -179,7 +179,7 @@ class RuntimeAssetRegistryImpl {
     }
 
     // RE-CHECK the gate AFTER the async materialize/verify, immediately before
-    // the synchronous commit (Codex R1): the floor could have advanced while we
+    // the synchronous commit: the floor could have advanced while we
     // awaited (a concurrent HIGHER-generation admission committed), and a digest
     // could have been quarantined. Committing unconditionally here would let a
     // SLOW lower-generation admission overwrite a newer one and LOWER the floor.

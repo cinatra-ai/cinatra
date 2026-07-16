@@ -1,5 +1,5 @@
 // The HOST MODULE-REGISTRY SHIM (epic #1620 M1 Slice A — cinatra#1630, plan
-// §2.2–§2.3, Codex R1/A1). The load-bearing mechanism for sharing ONE React /
+// §2.2–§2.3). The load-bearing mechanism for sharing ONE React /
 // ReactDOM / design-token instance with a main-realm dynamically-loaded renderer.
 //
 // WHY A SHIM (not an import map to a CDN / a second React): Next/Turbopack does
@@ -7,7 +7,7 @@
 // React would be a SECOND copy — "Invalid hook call", broken context/hooks. So
 // the host publishes THIS registry, populated from the host's OWN actual
 // React/ReactDOM/token imports, and initialized BEFORE any `import(runtimeURL)`
-// (Codex R3/G5 cold-load-race guard). The ESM façade the host serves for the
+// (a cold-load-race guard). The ESM façade the host serves for the
 // externalized bare specifiers (`react`, `react-dom`, …) re-exports EXACTLY
 // these registered singletons, so a renderer's `import "react"` resolves to the
 // host's instance — one React identity across host + renderer (AC-10).

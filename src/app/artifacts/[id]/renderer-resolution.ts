@@ -169,7 +169,7 @@ export function classifyLoadablePath(generatedKey: string): "build-map" | "runti
 
 /**
  * Resolve + SERIALIZE the admitted runtime descriptor for a dynamic-path
- * `generatedKey` (Codex R1 constraint 2: a server process-global is not
+ * `generatedKey` (a server process-global is not
  * browser-visible, so the client receives `{ digestPinnedUrl, tuple }` as
  * props, never by reading a server registry). Returns null when the key is not
  * a runtime binding (the caller uses the build-map path or floors). Any
