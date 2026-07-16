@@ -25,6 +25,7 @@
     "./blog-contract": "./src/blog-connector-contract.ts",
     "./mcp-contract": "./src/mcp-connector-contract.ts",
     "./artifact-contract": "./src/artifact-contract.ts",
+    "./artifact-client-bundle": "./src/artifact-client-bundle.ts",
     "./objects-contract": "./src/objects-contract.ts",
     "./objects-provider": "./src/objects-provider-contract.ts",
     "./project-template-contract": "./src/project-template-contract.ts",
