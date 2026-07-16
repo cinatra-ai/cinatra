@@ -114,9 +114,9 @@ export default async function TeamSettingsPage({
       <PageContent className="flex flex-col gap-6 pb-8">
         <Card>
           <CardHeader>
-            <CardTitle>Team slug</CardTitle>
+            <CardTitle>Team details</CardTitle>
             <CardDescription>
-              The team&apos;s URL-friendly identifier. Renaming the slug triggers an
+              Name, slug, and owning organization. Renaming the slug triggers an
               on-disk relocation of any team-scoped skills under
               <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">
                 data/skills/organization/{team.org_slug}/~teams/&lt;slug&gt;/
@@ -125,7 +125,13 @@ export default async function TeamSettingsPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <TeamSettingsForm teamId={team.id} currentSlug={team.slug ?? ""} />
+            <TeamSettingsForm
+              teamId={team.id}
+              currentSlug={team.slug ?? ""}
+              currentName={team.name}
+              orgName={team.org_name}
+              orgSlug={team.org_slug}
+            />
           </CardContent>
         </Card>
         <Card>
