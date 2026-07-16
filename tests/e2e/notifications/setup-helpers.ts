@@ -9,6 +9,7 @@
  * `organization/create` on fresh users (team.slug NOT NULL) — the same shim the
  * retired flyout setup used.
  */
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client } from "pg";
@@ -102,8 +103,8 @@ export async function ensureOrganizationByDirectInsert(email: string): Promise<s
       return existing.rows[0]!.organizationId;
     }
 
-    const orgId = `notif-uat-org-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const memberId = `notif-uat-member-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const orgId = `notif-uat-org-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+    const memberId = `notif-uat-member-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
     await client.query(
       `INSERT INTO public."organization" (id, name, slug, "createdAt")
         VALUES ($1, $2, $3, now())
