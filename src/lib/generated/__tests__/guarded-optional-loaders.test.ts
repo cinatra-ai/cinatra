@@ -163,6 +163,12 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-assistant-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "youtube-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/audio-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::preview", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::preview", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/video-artifact::detail", resolution: "required" },
 ];
 
 describe("generated guarded-optional loaders", () => {
