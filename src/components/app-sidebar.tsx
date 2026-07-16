@@ -9,7 +9,6 @@ import { requestChatPanel } from "@/lib/chat-shell-bus";
 import {
   ChevronRight,
   MessageSquare,
-  Settings,
 } from "lucide-react";
 import { domainIcons } from "@/components/domain-icons";
 import {
@@ -41,26 +40,19 @@ import { ANALYTICS_CATEGORIES, ANALYTICS_CATEGORY_PATHS } from "@/lib/section-na
 
 // ---------- sidebar data (mirrors shadcn-admin's sidebar-data.ts pattern) ----------
 
-type SidebarOpts = {
-  isAdmin: boolean;
-};
-
-// The Admin group, rendered ABOVE Intelligence (top of the rail). After the E8
-// cutover (cinatra#1558) the standalone "Approvals" nav item + its registry-
-// driven pill were removed per the notifications design spec §VII — approvals
-// now live only in `/notifications` (reached via the bell + repointed config
-// cards). The group is admin-only: its sole item is the cog → /configuration.
-// Exported for unit tests.
-export function buildAdminGroup(opts: SidebarOpts): { title: string; items: NavItem[] } | null {
-  const items: NavItem[] = [];
-  if (opts.isAdmin) {
-    items.push({ title: "Configuration", url: "/configuration", icon: Settings });
-  }
-  if (items.length === 0) return null;
-  return { title: "Admin", items };
-}
-
-function buildSidebarData() {
+// Configuration moved OUT of the sidebar to a top-bar cog (cinatra#1563):
+// `/configuration` is now reached from the admin-only cog in the app-shell
+// control row (ConfigurationTopbarCog), immediately left of the notifications
+// bell — not from a sidebar nav entry. That cog was the former Admin group's
+// SOLE remaining item (the "Approvals" item was already retired in the #1558
+// notifications cutover, §VII), so the group no longer exists and no "Admin"
+// heading renders for any viewer. `/configuration` stays server-side
+// admin-gated (requireAdminSession) independently of nav visibility — hiding
+// the cog is discoverability only, never the security boundary.
+//
+// Exported for the model-level regression test (cinatra#1563) that locks the
+// sidebar model to contain no "Admin" group and no "/configuration" entry.
+export function buildSidebarData() {
   const groups: { title: string; items: NavItem[] }[] = [];
 
   groups.push({
@@ -254,7 +246,6 @@ export function AppSidebar({
   userAccentColor = null,
   singleOrg = false,
   hiddenNavTitles,
-  isAdmin = false,
 }: {
   connectionReady: boolean;
   userAccentColor?: import("@/lib/extension-accent").ExtensionAccent | null;
@@ -265,23 +256,11 @@ export function AppSidebar({
   // server-side in layout.tsx via canSeeNavTarget(); the sidebar hides them
   // rather than relying on "click → 403".
   hiddenNavTitles?: string[];
-  /**
-   * Gates the Admin → Configuration entry (and, today, most admin surfaces).
-   * Plumbed from layout.tsx via isPlatformAdmin(session).
-   */
-  isAdmin?: boolean;
 }) {
   const hidden = new Set([
     ...(hiddenNavTitles ?? []),
     ...(singleOrg ? ["Organizations"] : []),
   ]);
-  const adminGroupRaw = buildAdminGroup({ isAdmin });
-  const adminGroup = adminGroupRaw
-    ? {
-        ...adminGroupRaw,
-        items: (adminGroupRaw.items as NavItem[]).filter((item) => !hidden.has(item.title)),
-      }
-    : null;
   const navGroups = buildSidebarData()
     .map((group) => ({
       ...group,
@@ -316,8 +295,9 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
-        {/* Admin group renders first (above Intelligence) for platform admins. */}
-        {adminGroup ? <NavGroup {...adminGroup} className="pt-0" /> : null}
+        {/* Configuration is no longer a sidebar entry — it lives in the top-bar
+            cog (cinatra#1563), so the sidebar opens at Intelligence for every
+            viewer and no "Admin" heading renders. */}
         {/* Chat renders separately — it has a dynamic thread sub-menu NavGroup can't express */}
         <SidebarGroup className="pb-0">
           <SidebarGroupLabel>Intelligence</SidebarGroupLabel>

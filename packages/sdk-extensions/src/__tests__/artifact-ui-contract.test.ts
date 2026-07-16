@@ -82,7 +82,7 @@ describe("parseArtifactUi — valid v1", () => {
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(Object.keys(r.ui.renderers).sort()).toEqual(["detail", "preview"]);
+      expect(Object.keys(r.ui.renderers ?? {}).sort()).toEqual(["detail", "preview"]);
       expect(r.ui.abiVersion).toBe(1);
     }
   });
@@ -153,6 +153,71 @@ describe("parseArtifactUi — rejections (fail-closed verdict; degrades at boot)
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.diagnostic).toMatch(/does not satisfy/);
+  });
+});
+
+describe("parseArtifactUi — registryItems (cinatra#1623, S5)", () => {
+  const item = (over: Record<string, unknown> = {}) => ({
+    name: "stat-tile",
+    entry: "./src/registry/stat-tile.tsx",
+    type: "registry:ui",
+    description: "A presentational KPI stat tile.",
+    ...over,
+  });
+  const uiWith = (extra: Record<string, unknown>) => ({
+    abiVersion: ARTIFACT_UI_ABI_VERSION,
+    sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+    ...extra,
+  });
+
+  it("accepts renderers + registryItems together", () => {
+    const r = parseArtifactUi(
+      uiWith({ renderers: { detail: validRenderer("./src/detail.tsx") }, registryItems: [item()] }),
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.ui.registryItems?.[0]?.name).toBe("stat-tile");
+      expect(r.ui.registryItems?.[0]?.type).toBe("registry:ui");
+    }
+  });
+
+  it("accepts registryItems ONLY — no renderers (the optional-coupling relaxation)", () => {
+    const r = parseArtifactUi(uiWith({ registryItems: [item(), item({ name: "meter", type: "registry:lib" })] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.ui.renderers).toBeUndefined();
+  });
+
+  it("REJECTS a ui block with NEITHER renderers nor registryItems", () => {
+    expect(parseArtifactUi(uiWith({})).ok).toBe(false);
+  });
+
+  it("rejects an empty registryItems array", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [] })).ok).toBe(false);
+  });
+
+  it("rejects a non-strict-lowercase component name", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [item({ name: "StatTile" })] })).ok).toBe(false);
+    expect(parseArtifactUi(uiWith({ registryItems: [item({ name: "-bad" })] })).ok).toBe(false);
+  });
+
+  it("rejects an unknown registry item type", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [item({ type: "registry:page" })] })).ok).toBe(false);
+  });
+
+  it("rejects an uncontained item entry", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [item({ entry: "../escape.tsx" })] })).ok).toBe(false);
+  });
+
+  it("rejects an empty description", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [item({ description: "" })] })).ok).toBe(false);
+  });
+
+  it("rejects an extraneous item field (presentational-only DECLARATION surface)", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [item({ dependencies: ["radix-ui"] })] })).ok).toBe(false);
+  });
+
+  it("rejects duplicate item names within a manifest", () => {
+    expect(parseArtifactUi(uiWith({ registryItems: [item(), item()] })).ok).toBe(false);
   });
 });
 

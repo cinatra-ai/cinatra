@@ -8,9 +8,13 @@
 //   - selectionMode="multiple" — the checkbox multi-select picker
 //     (cinatra#1072, multi-scope W3), and
 //   - selectionMode="single" (default) — the flat single-select combobox after
-//     its #1509 §4.0-c alignment (cinatra#1508): typed headings, distinct
-//     hover, selected checkmark, "Unknown team" synthesis for unhydrated
-//     selections, disabled rows with tooltips.
+//     its spec alignment (app-permissions.html §III): scope-PREFIXED rows, NO
+//     group headings, hairline separators between groups, distinct hover,
+//     selected checkmark, "Unknown team" synthesis, disabled rows with tooltips.
+//
+// Plus the §VI CONTAINMENT cases (cinatra#1607 AC2/AC8): a parentScope=org
+// render (org's teams/projects + Personal), a leaf/unknown parent (Personal
+// only), and a multi-mode parentScope render.
 // Kept OFF the pixel-diffed /design-fixtures index — driven directly by
 // verification runs / the owner.
 // ---------------------------------------------------------------------------
@@ -134,9 +138,10 @@ export function AccessPickerFixture() {
       </Case>
 
       {/* The interactive instance a verification run drives: open it to see
-          the typed heading hierarchy (Only me → Projects → Teams →
-          Organization → Workspace → Admin), the distinct hover tint, and the
-          checkmark on the selected team row. */}
+          the scope-PREFIXED rows in narrow → broad order (Personal → Project →
+          Team → Organization → Workspace), the hairline separators between
+          groups (no headings), the distinct hover tint, and the checkmark on
+          the selected team row. */}
       <Case id="flat-open-with-selection" label="Flat: interactive, team selected">
         <AccessCombobox
           value={flatLive}
@@ -174,6 +179,47 @@ export function AccessPickerFixture() {
             "team:team-eng": "Already granted — read",
             "project:proj-atlas": "Already granted — write",
           }}
+        />
+      </Case>
+
+      {/* Containment cases (cinatra#1607 §VI / AC8). ------------------------- */}
+      <h2 className="text-lg font-semibold text-foreground">
+        Access picker — containment (parentScope / allowedScopes, §VI)
+      </h2>
+
+      {/* parentScope = org:org-acme → strict descendants: only Acme's teams +
+          projects, plus Personal. The org row itself, Workspace and Admins are
+          excluded (§6.1). Open it to see teams/projects + Personal only. */}
+      <Case id="flat-parentscope-org" label="Flat: parentScope=org (descendants + Personal)">
+        <AccessCombobox
+          value="owner"
+          onValueChange={() => {}}
+          availableScopes={FLAT_SEED_SCOPES}
+          isAdmin
+          parentScope={{ kind: "org", id: "org-acme" }}
+        />
+      </Case>
+
+      {/* A leaf parent (team) → Personal only, fail closed (§6.1/§6.3). */}
+      <Case id="flat-parentscope-leaf" label="Flat: parentScope=team (Personal only)">
+        <AccessCombobox
+          value="owner"
+          onValueChange={() => {}}
+          availableScopes={FLAT_SEED_SCOPES}
+          isAdmin
+          parentScope={{ kind: "team", id: "team-rev" }}
+        />
+      </Case>
+
+      {/* Multi-mode parentScope = org:org-acme → Acme's teams + Personal
+          (Beta's team, the org row, and Workspace are excluded). */}
+      <Case id="multi-parentscope-org" label="Multi: parentScope=org (descendants + Personal)">
+        <AccessCombobox
+          selectionMode="multiple"
+          value={["owner"]}
+          onChange={() => {}}
+          scopes={SEED_SCOPES}
+          parentScope={{ kind: "org", id: "org-acme" }}
         />
       </Case>
     </div>

@@ -8,7 +8,9 @@ import { describe, it, expect } from "vitest";
 
 import {
   filterAvailableScopesForParentPolicy,
+  allowedScopesFromPolicy,
   type FilterableAvailableScopes,
+  type ScopeIdentityLike,
 } from "../scope-containment-filter";
 import type {
   AgentAuthPolicy,
@@ -138,5 +140,82 @@ describe("filterAvailableScopesForParentPolicy", () => {
     const result = filterAvailableScopesForParentPolicy(baseScopes, mixed, ORG_A);
     expect(result.orgs).toEqual([]);
     expect(result.projects).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Subsumption bridge (cinatra#1607 AC2 / spec §6.4): the agent_template's
+// three-field intersection is the general `allowedScopes` case of the picker's
+// containment contract. `allowedScopesFromPolicy` expresses this one-off filter
+// as a typed `allowedScopes` predicate — proven equivalent to the data filter.
+// ---------------------------------------------------------------------------
+describe("allowedScopesFromPolicy — precursor subsumed as an allowedScopes predicate", () => {
+  // Every scope identity present in baseScopes, plus the broad kinds.
+  const allIdentities: ScopeIdentityLike[] = [
+    { kind: "personal" },
+    { kind: "project", id: PROJECT_P_IN_A },
+    { kind: "team", id: TEAM_X_IN_A },
+    { kind: "team", id: TEAM_Y_IN_B },
+    { kind: "org", id: ORG_A },
+    { kind: "org", id: ORG_B },
+    { kind: "workspace" },
+    { kind: "admin" },
+  ];
+
+  // The identity survives the data filter iff it appears in the filtered scopes
+  // (personal is never in the org/project data but is always admitted; admin is
+  // never an agent-run grant target here).
+  function survivesFilter(filtered: FilterableAvailableScopes, s: ScopeIdentityLike): boolean {
+    switch (s.kind) {
+      case "personal":
+        return true;
+      case "workspace":
+        return filtered.canGrantWorkspace;
+      case "admin":
+        return false;
+      case "org":
+        return filtered.orgs.some((o) => o.id === s.id);
+      case "team":
+        return filtered.orgs.some((o) => o.teams.some((t) => t.id === s.id));
+      case "project":
+        return filtered.projects.some((p) => p.id === s.id);
+    }
+  }
+
+  const policies: Array<[string, AgentAuthPolicy]> = [
+    ["workspace", policy("workspace")],
+    ["owner", policy("owner")],
+    [`org:${ORG_A}`, policy(`org:${ORG_A}`)],
+    [`team:${TEAM_X_IN_A}`, policy(`team:${TEAM_X_IN_A}`)],
+    [`project:${PROJECT_P_IN_A}`, policy(`project:${PROJECT_P_IN_A}`)],
+    ["admin", policy("admin")],
+    [
+      "mixed(list=ws,data=orgA,exec=teamX)",
+      {
+        runListVisibility: ["workspace"],
+        runDataVisibility: [`org:${ORG_A}`],
+        runExecuteVisibility: [`team:${TEAM_X_IN_A}`],
+        allowRunSharing: false,
+      },
+    ],
+  ];
+
+  it.each(policies)("predicate admits exactly the filter's survivors — %s", (_label, pol) => {
+    const filtered = filterAvailableScopesForParentPolicy(baseScopes, pol, ORG_A);
+    const predicate = allowedScopesFromPolicy(baseScopes, pol, ORG_A);
+    for (const identity of allIdentities) {
+      expect(predicate(identity)).toBe(survivesFilter(filtered, identity));
+    }
+  });
+
+  it("org:A policy → predicate admits Personal + Org A + Team X only (not Org B / Team Y / Project P / workspace)", () => {
+    const predicate = allowedScopesFromPolicy(baseScopes, policy(`org:${ORG_A}`), ORG_A);
+    expect(predicate({ kind: "personal" })).toBe(true);
+    expect(predicate({ kind: "org", id: ORG_A })).toBe(true);
+    expect(predicate({ kind: "team", id: TEAM_X_IN_A })).toBe(true);
+    expect(predicate({ kind: "org", id: ORG_B })).toBe(false);
+    expect(predicate({ kind: "team", id: TEAM_Y_IN_B })).toBe(false);
+    expect(predicate({ kind: "project", id: PROJECT_P_IN_A })).toBe(false);
+    expect(predicate({ kind: "workspace" })).toBe(false);
   });
 });

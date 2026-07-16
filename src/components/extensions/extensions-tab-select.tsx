@@ -11,10 +11,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  INSTALLED_TABS,
+  resolveInstalledTab,
+  type InstalledTabValue,
+} from "./installed-tab-model";
 
-// URL-driven Active/Archived select for /configuration/extensions. Server
-// renders the body based on the URL param; this control just pushes the new URL
-// when the value changes.
+// URL-driven status-filter select for /configuration/extensions — the full
+// status set All / Active / Locked / Archived (cinatra#1571). Server renders the
+// body based on the URL param; this control just pushes the new URL when the
+// value changes. The options + their order and the `?tab=` value set are the
+// single source of truth in installed-tab-model.ts (INSTALLED_TABS), so the
+// control and the server-side partition can never disagree.
 //
 // `basePath` (default: the real /configuration/extensions route) lets the
 // design-conformance seeded harness (cinatra#986) mount this SAME control on
@@ -30,15 +38,16 @@ import {
 // navigation that reverted the URL back to the active tab (the "tab flap"). We
 // hold the selection optimistically inside the navigation transition, so the
 // controlled value is the just-selected tab for the whole push and can never
-// lag back — it converges to `value` the moment the server render lands. No
-// change to what renders or to the four-kind filtering; only the transient
-// controlled value during navigation.
+// lag back — it converges to `value` the moment the server render lands. The
+// optimistic hold is unchanged by cinatra#1571's option-set expansion; it holds
+// whichever of the four values was selected, affecting only the transient
+// controlled value during navigation, never what the server renders.
 
 export function ExtensionsTabSelect({
   value,
   basePath = "/configuration/extensions",
 }: {
-  value: "active" | "archived";
+  value: InstalledTabValue;
   basePath?: string;
 }) {
   const router = useRouter();
@@ -48,11 +57,16 @@ export function ExtensionsTabSelect({
     <Select
       value={optimisticValue}
       onValueChange={(next) => {
-        const tab = next === "archived" ? "archived" : "active";
+        // `next` is always one of the rendered INSTALLED_TABS values;
+        // resolveInstalledTab is the same canonicalizer the server applies, so a
+        // stray value can never desync the pushed URL from the rendered view.
+        const tab = resolveInstalledTab(next);
+        // The default "active" view carries NO query (clean default URL); every
+        // other view is addressed by ?tab=<value>.
         const target =
-          tab === "archived"
-            ? `${basePath}${basePath.includes("?") ? "&" : "?"}tab=archived`
-            : basePath;
+          tab === "active"
+            ? basePath
+            : `${basePath}${basePath.includes("?") ? "&" : "?"}tab=${tab}`;
         startTransition(() => {
           setOptimisticValue(tab);
           router.push(target);
@@ -68,8 +82,11 @@ export function ExtensionsTabSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
-          <SelectItem value="active">Active</SelectItem>
-          <SelectItem value="archived">Archived</SelectItem>
+          {INSTALLED_TABS.map((t) => (
+            <SelectItem key={t.value} value={t.value}>
+              {t.label}
+            </SelectItem>
+          ))}
         </SelectGroup>
       </SelectContent>
     </Select>
