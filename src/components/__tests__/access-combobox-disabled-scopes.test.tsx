@@ -87,9 +87,11 @@ describe("AccessCombobox disabledScopes", () => {
     // Type-level props.
     expect(SOURCE).toMatch(/installMode\?:\s*boolean/);
     expect(SOURCE).toMatch(/installWorkspaceScopes\?:\s*boolean/);
-    // The owner ("Only me") group stays hidden in installMode — owner is not an
-    // install target.
-    expect(SOURCE).toMatch(/\{!installMode\s*&&\s*\(/);
+    // The Personal ("Only me") group stays hidden in installMode — owner is not
+    // an install target (post-#1607 the group is assembled imperatively, so the
+    // guard reads `if (!installMode)` rather than a `{!installMode && (` JSX
+    // guard).
+    expect(SOURCE).toMatch(/if \(!installMode\)\s*\{/);
   });
 
   it("cinatra#1527: installMode renders the workspace + admin scopes as server-driven target rows", () => {
