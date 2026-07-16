@@ -198,12 +198,14 @@ export {
   buildLlmMcpServerTool,
   buildLlmMcpServerToolForChat,
   buildLlmMcpServerToolForAgentRun,
+  checkPublicMcpReachability,
 } from "./mcp-access";
 export type {
   ChatMcpActor,
   ChatMcpActorTokenIssuer,
   AgentRunMcpActor,
   AgentRunMcpActorTokenIssuer,
+  PublicMcpReachability,
 } from "./mcp-access";
 
 // Provider-neutral structured-JSON extraction (relocated from the openai

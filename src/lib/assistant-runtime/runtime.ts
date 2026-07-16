@@ -50,6 +50,7 @@ import {
   resolveDefaultAdapter,
   resolveChatExternalMcpTools,
   buildLlmMcpServerToolForChat,
+  checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
 import type { LlmTool } from "@cinatra-ai/llm";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
@@ -415,6 +416,26 @@ export async function runAssistantTurn(
   const skillTools = deliverShellSkillTools
     ? await buildSkillTools({ skillIds: runtimeConfig.skillIds })
     : [];
+  // Dead-ingress guard (#1699): a configured-but-unreachable public MCP URL
+  // is WORSE than a missing one — OpenAI silently omits the hosted MCP server
+  // (200 completed, no mcp_list_tools, no 424), chat loses every Cinatra tool
+  // with no signal, and the model confabulates that the tools don't exist.
+  // Probe (cached, short timeout) and fail LOUD like the unconfigured case
+  // below instead of running a turn that lies about the platform.
+  const mcpReachability = await checkPublicMcpReachability();
+  if (mcpReachability.status === "unreachable") {
+    console.error(
+      `[assistant-runtime] public MCP URL ${mcpReachability.url} is unreachable ` +
+        `(${mcpReachability.reason}) — refusing to run the turn without Cinatra tools (#1699)`,
+    );
+    send("error", {
+      message:
+        `Cinatra tools are unavailable: the public MCP URL ${mcpReachability.url} is not reachable ` +
+        `(${mcpReachability.reason}). The assistant can't use platform tools until the tunnel is ` +
+        "restored — check /configuration/development?tab=tunnel and run its connection test.",
+    });
+    return;
+  }
   const chatCinatraMcpTool = await buildLlmMcpServerToolForChat(
     adapter.provider,
     { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
