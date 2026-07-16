@@ -23,10 +23,27 @@
 // legacyContributionKey }]` list; {@link planContributionAdoptions} resolves each
 // edge to the candidate lineage ids above and matches THOSE against orphaned rows.
 
-import type {
-  DashboardContributionManifest,
-  DashboardContributionAdoption,
-} from "@cinatra-ai/sdk-extensions";
+// LOCAL structural types (NOT imported from @cinatra-ai/sdk-extensions): this is
+// pure host-persistence logic, so it takes no sdk-extensions dependency edge. The
+// sdk leaf's `DashboardContributionAdoption` / `DashboardContributionManifest`
+// STRUCTURALLY satisfy these — the reconciler passes a parsed
+// `DashboardContributionManifest` straight in as a `ContributionClaimForAdoption`.
+
+/** The adopts-edge shape the reconciler matches on (a successor names a legacy
+ *  contribution by its package + author-local key). Structurally satisfied by the
+ *  sdk `DashboardContributionAdoption`. */
+export type ContributionAdoptionEdge = {
+  readonly legacyPackage: string;
+  readonly legacyContributionKey: string;
+};
+
+/** The adoption-relevant subset of a parsed `dashboardContribution` claim.
+ *  Structurally satisfied by the sdk `DashboardContributionManifest`. */
+export type ContributionClaimForAdoption = {
+  readonly contributionKey: string;
+  readonly contributionVersion: number;
+  readonly adopts?: readonly ContributionAdoptionEdge[];
+};
 
 /** Prefix of the WORKFLOW-era backfill lineage id (migration core__0051). */
 export const LEGACY_LINEAGE_PREFIX = "legacy:";
@@ -61,7 +78,7 @@ export function deriveContributionLineageId(packageName: string, contributionKey
  * The reconciler matches orphaned rows against this whole set (a `contribution_id`
  * equal to ANY candidate).
  */
-export function adoptionMatchLineageIds(edge: DashboardContributionAdoption): string[] {
+export function adoptionMatchLineageIds(edge: ContributionAdoptionEdge): string[] {
   return [
     deriveContributionLineageId(edge.legacyPackage, edge.legacyContributionKey),
     legacyContributionLineageId(edge.legacyPackage),
@@ -73,7 +90,7 @@ export type LiveContributionClaim = {
   /** The declaring package (the successor CARRIER — always `kind:"agent"`). */
   readonly packageName: string;
   /** The parsed, validated `cinatra.dashboardContribution` claim. */
-  readonly contribution: DashboardContributionManifest;
+  readonly contribution: ContributionClaimForAdoption;
 };
 
 /**
@@ -90,7 +107,7 @@ export type ContributionAdoption = {
   /** The successor's declared DATA version — persisted as provenance. */
   readonly successorContributionVersion: number;
   /** Every explicit adopts edge this op honors (for audit provenance). */
-  readonly legacyRefs: DashboardContributionAdoption[];
+  readonly legacyRefs: ContributionAdoptionEdge[];
   /** The UNION of the edges' candidate legacy lineage ids to match orphans on. */
   readonly matchLineageIds: string[];
 };
@@ -98,7 +115,7 @@ export type ContributionAdoption = {
 /** Why a successor's adoption was NOT planned (fail-closed, for diagnostics). */
 export type SkippedAdoption = {
   readonly successorPackage: string;
-  readonly legacyRefs: DashboardContributionAdoption[];
+  readonly legacyRefs: ContributionAdoptionEdge[];
   readonly reason: "ambiguous_claimants";
   /** The other successor packages that also claim an overlapping legacy lineage. */
   readonly conflictingPackages: string[];
@@ -137,7 +154,7 @@ export function planContributionAdoptions(
     successorPackage: string;
     successorContributionId: string;
     successorContributionVersion: number;
-    legacyRefs: DashboardContributionAdoption[];
+    legacyRefs: ContributionAdoptionEdge[];
     matchLineageIds: string[];
   };
   const candidates: Candidate[] = [];
