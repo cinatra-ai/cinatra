@@ -95,18 +95,37 @@ export function buildEntityOverviewConfig(input: EntityOverviewInput): Dashboard
 export type ProjectOverviewSummary = {
   readonly name: string;
   readonly slug?: string;
+  /** Opaque project identifier (issue #706 enumerates it in the metadata block). */
+  readonly id?: string;
+  /** Owner display label (already resolved by the surface — name or id). */
+  readonly owner?: string;
   readonly organizationName?: string;
+  /** Human visibility label, e.g. "Discoverable" / "Private". */
+  readonly visibility?: string;
   readonly createdAt?: string;
+  readonly description?: string;
   /** Sealed-room (and any other project) counts the surface computed. */
   readonly counts?: readonly SummaryItem[];
 };
 
-/** Project Overview: identity/metadata + sealed-room counts. */
+/**
+ * Project Overview: identity/metadata + sealed-room counts.
+ *
+ * The metadata block renders the fields issue #706 enumerates —
+ * name / slug / id / owner / organization / visibility / created / description —
+ * in that canonical order. Every field beyond `name` is OPTIONAL and pushed only
+ * when the surface supplied it, so an absent field is skipped, never shown blank
+ * (the same "only present fields" rule the generic composer holds).
+ */
 export function buildProjectOverviewConfig(summary: ProjectOverviewSummary): DashboardConfigV12 {
   const items: SummaryItem[] = [{ label: "Name", value: summary.name }];
   if (summary.slug) items.push({ label: "Slug", value: summary.slug });
+  if (summary.id) items.push({ label: "Identifier", value: summary.id });
+  if (summary.owner) items.push({ label: "Owner", value: summary.owner });
   if (summary.organizationName) items.push({ label: "Organization", value: summary.organizationName });
+  if (summary.visibility) items.push({ label: "Visibility", value: summary.visibility });
   if (summary.createdAt) items.push({ label: "Created", value: summary.createdAt });
+  if (summary.description) items.push({ label: "Description", value: summary.description });
   return buildEntityOverviewConfig({
     scopeLevel: "project",
     metadata: { title: "Project", items },

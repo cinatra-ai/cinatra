@@ -84,6 +84,43 @@ describe("Overview portlet-model builders (cinatra#702)", () => {
     assertValidV12(minimal);
   });
 
+  it("project Overview: the full #706 metadata field set renders in canonical order", () => {
+    const cfg = buildProjectOverviewConfig({
+      name: "Apollo",
+      slug: "apollo",
+      id: "proj_123",
+      owner: "Jane Doe",
+      organizationName: "Acme",
+      visibility: "Private",
+      createdAt: "2026-07-15",
+      description: "Launch pad.",
+      counts: [
+        { label: "Objects", value: 4 },
+        { label: "Agent runs", value: 2 },
+        { label: "Chat threads", value: 1 },
+      ],
+    });
+    assertValidV12(cfg);
+    const meta = cfg.portlets.find((p) => p.kind === ENTITY_METADATA_PORTLET_KIND)!;
+    // name / slug / id / owner / organization / visibility / created / description.
+    expect(meta.config.items).toEqual([
+      { label: "Name", value: "Apollo" },
+      { label: "Slug", value: "apollo" },
+      { label: "Identifier", value: "proj_123" },
+      { label: "Owner", value: "Jane Doe" },
+      { label: "Organization", value: "Acme" },
+      { label: "Visibility", value: "Private" },
+      { label: "Created", value: "2026-07-15" },
+      { label: "Description", value: "Launch pad." },
+    ]);
+    const counts = cfg.portlets.find((p) => p.kind === ENTITY_COUNT_PORTLET_KIND)!;
+    expect(counts.config.items).toEqual([
+      { label: "Objects", value: 4 },
+      { label: "Agent runs", value: 2 },
+      { label: "Chat threads", value: 1 },
+    ]);
+  });
+
   it("team Overview: identity + member count", () => {
     const cfg = buildTeamOverviewConfig({ name: "Platform", organizationName: "Acme", memberCount: 12 });
     expect(cfg.scopeLevel).toBe("team");
