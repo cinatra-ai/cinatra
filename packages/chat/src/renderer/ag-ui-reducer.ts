@@ -24,10 +24,11 @@
 // existing tested pure helpers (`assistant-parts.ts` + the normalizers already
 // factored out of `chat-stream-events.ts`) rather than re-deriving them.
 //
-// UNCONSUMED. Nothing imports this module yet — `/chat` stays on the bespoke
-// wire (`chat-page.tsx` + `chat-stream-events.ts` are UNTOUCHED). Wiring `/chat`
-// onto this reducer is S2's job (#1218). Being unconsumed, the module never
-// enters the `/chat` route graph; the dev-perf ratchet is unchanged.
+// CONSUMED BY `/chat` since S2 (#1218): the headless AG-UI chat client
+// (../ag-ui-chat-client.ts) folds the live wire through this reducer and
+// projects the reduced state onto the legacy UiMessage list, so the existing
+// renderer draws the unified stream unchanged. The bespoke wire stays behind
+// the `streamWire` kill-switch until the parity-gated delete stage.
 //
 // ── The bespoke → AG-UI mapping gaps (the reducer contract) ─────────────────
 //  • TOOL_CALL_END carries ONLY `toolCallId` — no `resultLabel`, no `result`
@@ -71,7 +72,6 @@ import {
   hasVisibleStreamingText,
   type AssistantMessagePart,
 } from "../assistant-parts";
-import { renderableViewType } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
   extractErrorMessage,
   mergeCitations,
@@ -179,6 +179,25 @@ export type CitationsDataPart = {
   kind: "citations";
   citations: unknown;
 };
+
+/**
+ * LOCAL mirror of the S1 `renderableViewType` classification (a `DATA_PART`
+ * payload is a renderable view iff it carries a non-empty string `viewType` —
+ * the documented S1 rule this module's DATA_PART contract already states).
+ * Mirrored instead of imported because the tsconfig subpath for the S1
+ * classifier resolves the FULL S4 registry index (five schema modules), and
+ * this reducer rides the locked /chat route-graph budget. A drift pin in
+ * ag-ui-chat-client.test.ts asserts equality with the real
+ * `renderableViewType` across the classification matrix (registered /
+ * unregistered / absent / empty / hostile-getter payloads).
+ */
+export function renderableViewTypeOf(data: unknown): string | undefined {
+  if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+    const vt = (data as { viewType?: unknown }).viewType;
+    if (typeof vt === "string" && vt.length > 0) return vt;
+  }
+  return undefined;
+}
 
 function isAgentRunDataPart(d: Record<string, unknown>): d is AgentRunDataPart {
   return (
@@ -445,7 +464,7 @@ function reduceDataPart(
   // its safe fallback instead of the reducer crashing.
   let isRenderableView: boolean;
   try {
-    isRenderableView = renderableViewType(data) !== undefined;
+    isRenderableView = renderableViewTypeOf(data) !== undefined;
   } catch {
     isRenderableView = true;
   }
