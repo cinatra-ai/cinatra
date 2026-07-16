@@ -68,6 +68,7 @@ import {
   AccessCombobox,
   resolveAccessSummary,
   type AvailableScopes,
+  type AllowedScopes,
 } from "@/components/access-combobox";
 import type {
   AgentAuthPolicy,
@@ -155,6 +156,13 @@ export type PermissionsFormProps = {
   coOwners: OwnerView[];
   /** Available scopes for the access picker. */
   availableScopes: AvailableScopes;
+  /**
+   * Containment (cinatra#1607 §6.4): restrict the offered scopes to a parent's
+   * allowed set. Forwarded verbatim to the picker's first-class `allowedScopes`
+   * prop; the agent_run form derives it from the parent agent_template's policy.
+   * Absent → the picker offers every available scope (unchanged behaviour).
+   */
+  allowedScopes?: AllowedScopes;
   /** The logged-in user — used to detect self-removal. */
   currentUserId: string | null;
   /** When false, the add UI + remove buttons are hidden, lock icon shown. */
@@ -231,6 +239,7 @@ export function PermissionsForm({
   owner: initialOwner,
   coOwners: initialCoOwners,
   availableScopes,
+  allowedScopes,
   currentUserId,
   allowSharing,
   actions,
@@ -527,6 +536,7 @@ export function PermissionsForm({
                   value={f.value}
                   onChange={f.onChange}
                   scopes={availableScopes}
+                  allowedScopes={allowedScopes}
                   disabledScopes={accessDisabledScopes}
                   disabledReasons={accessDisabledReasons}
                 />
