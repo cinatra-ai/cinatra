@@ -93,7 +93,6 @@ vi.mock("@/lib/artifacts/artifact-authoring", () => ({ authorArtifact: vi.fn() }
 vi.mock("@/lib/blog/store", () => ({ readBlogPostsProjectById: h.readProjectSpy }));
 vi.mock("@/lib/background-jobs", () => ({ isBackgroundJobActive: h.jobActiveSpy }));
 vi.mock("@/lib/object-history/eligibility", () => ({ listEventsForObject: vi.fn(() => []) }));
-vi.mock("@cinatra-ai/workflows/store", () => ({ readWorkflow: vi.fn(), listWorkflows: vi.fn(() => []) }));
 vi.mock("@/lib/blog/mcp/client/deterministic-client", () => ({
   createDeterministicBlogContentClient: () => ({
     image: { startRegeneration: h.startSpy, cancelRegeneration: h.cancelSpy },
@@ -101,7 +100,6 @@ vi.mock("@/lib/blog/mcp/client/deterministic-client", () => ({
   }),
 }));
 vi.mock("@cinatra-ai/agents/mcp-client", () => ({ createDeterministicAgentsClient: () => ({}) }));
-vi.mock("@cinatra-ai/workflows/mcp-client", () => ({ createDeterministicWorkflowsClient: () => ({}) }));
 vi.mock("@/lib/workflow-host-deps", () => ({ buildWorkflowHandlerDeps: () => ({}) }));
 
 import {
