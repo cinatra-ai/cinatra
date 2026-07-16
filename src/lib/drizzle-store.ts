@@ -1193,6 +1193,32 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_template_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id) WHERE extension_id IS NOT NULL AND is_template = true` },
     // One INSTANCE per (extension, org, project).
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_ext_instance_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (extension_id, organization_id, project_id) WHERE extension_id IS NOT NULL AND project_id IS NOT NULL` },
+    // dashboardContribution lineage + baseline snapshot (cinatra#1628, S11a).
+    // Additive columns + partial indexes only (bootstrap owns additive evolution
+    // per migrations/README.md); the TRANSFORMATIONAL one-time legacy→lineage
+    // backfill + the durable-absence orphan sweep are versioned migration
+    // core__0051, which runs AFTER this bootstrap so these partial unique indexes
+    // already exist + enforce when it commits.
+    //   - contribution_id: carrier-independent immutable lineage id — survives the
+    //     workflow→agent package re-home. A template + its 0..N per-project
+    //     instances SHARE one contribution_id (NOT globally row-unique).
+    //   - applied_default_json / _hash / applied_contribution_version: the
+    //     extension-owned default SNAPSHOT (the baseline-backed 3-way merge base,
+    //     S11b) + a fast change-detector + the applied version provenance.
+    //   - archive_reason: why an extension row was archived (orphan sweep /
+    //     committed-uninstall hook), for auditability + restore decisions.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS contribution_id text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_contribution_version integer` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_default_json jsonb` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS applied_default_hash text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS archive_reason text` },
+    // Contribution-identity lookup (reader-gate liveness + reconcile).
+    { text: `CREATE INDEX IF NOT EXISTS dashboards_contribution_id_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (contribution_id) WHERE contribution_id IS NOT NULL` },
+    // Two-tier uniqueness on the LINEAGE id (re-keys the extension_id shape onto
+    // contribution_id). One TEMPLATE per (contribution, org).
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_contribution_template_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (contribution_id, organization_id) WHERE contribution_id IS NOT NULL AND is_template = true` },
+    // One INSTANCE per (contribution, org, project).
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_contribution_instance_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (contribution_id, organization_id, project_id) WHERE contribution_id IS NOT NULL AND project_id IS NOT NULL` },
     // Per-entity multi-dashboard model (cinatra#700): additive columns + partial indexes only (bootstrap owns additive evolution per migrations/README.md); the transformational one-time coexistence backfill is versioned migration core__0049, which runs AFTER this bootstrap so these partial unique indexes already exist + enforce when it commits.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS entity_type text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD COLUMN IF NOT EXISTS entity_id text` },

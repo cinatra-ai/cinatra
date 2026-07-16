@@ -77,6 +77,22 @@ export const dashboards = cinatraSchema.table(
      *  enforced by a partial UNIQUE index + the mutation service. Overview cannot
      *  be renamed/archived/deleted (service-enforced). */
     isDefault: boolean("is_default").notNull().default(false),
+    // dashboardContribution lineage + baseline snapshot (cinatra#1628, S11a).
+    // Additive; legacy/operator rows keep these NULL. Mirrors drizzle-store.ts DDL.
+    /** Carrier-independent immutable lineage id — survives the workflow→agent
+     *  re-home. A template + its 0..N per-project instances SHARE one value;
+     *  two-tier UNIQUE (template (contribution_id,org); instance
+     *  (contribution_id,org,project)). NULL for operator/unmapped rows. */
+    contributionId: text("contribution_id"),
+    /** Provenance: the DATA version of the applied extension default. */
+    appliedContributionVersion: integer("applied_contribution_version"),
+    /** The extension-owned default SNAPSHOT — the baseline-backed 3-way merge
+     *  base (S11b). NULL until a contribution materializes/upgrades the row. */
+    appliedDefaultJson: jsonb("applied_default_json"),
+    /** Fast change-detector over `applied_default_json`. */
+    appliedDefaultHash: text("applied_default_hash"),
+    /** Why an extension row was archived (orphan sweep / committed-uninstall). */
+    archiveReason: text("archive_reason"),
   },
   (t) => ({
     orgIdIdx: index("dashboards_org_id_idx").on(t.organizationId),
@@ -104,6 +120,18 @@ export const dashboards = cinatraSchema.table(
     entityNameUniq: uniqueIndex("dashboards_entity_name_uniq")
       .on(t.organizationId, t.entityType, t.entityId, t.ownerLevel, t.ownerId, t.name)
       .where(sql`entity_type IS NOT NULL`),
+    // Contribution-identity (cinatra#1628, S11a).
+    contributionIdIdx: index("dashboards_contribution_id_idx")
+      .on(t.contributionId)
+      .where(sql`contribution_id IS NOT NULL`),
+    // One TEMPLATE per (contribution, org).
+    contributionTemplateUniq: uniqueIndex("dashboards_contribution_template_uniq")
+      .on(t.contributionId, t.organizationId)
+      .where(sql`contribution_id IS NOT NULL AND is_template = true`),
+    // One INSTANCE per (contribution, org, project).
+    contributionInstanceUniq: uniqueIndex("dashboards_contribution_instance_uniq")
+      .on(t.contributionId, t.organizationId, t.projectId)
+      .where(sql`contribution_id IS NOT NULL AND project_id IS NOT NULL`),
   }),
 );
 
