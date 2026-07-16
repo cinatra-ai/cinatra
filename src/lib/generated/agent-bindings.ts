@@ -73,5 +73,4 @@ export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {
   "artifact-blog-image": "@cinatra-ai/blog-image-artifact",
   "artifact-blog-post-body": "@cinatra-ai/blog-post-artifact",
   "artifact-default-floor": "@cinatra-ai/default-artifact",
-  "blog-operator-dashboard": "@cinatra-ai/blog-content-workflow",
 };
