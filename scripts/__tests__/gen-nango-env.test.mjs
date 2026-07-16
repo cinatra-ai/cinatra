@@ -167,5 +167,12 @@ describe("docker-compose nango-server service — no env_file/environment overla
     expect(pkg.scripts.services.indexOf("gen-nango-env.mjs")).toBeLessThan(
       pkg.scripts.services.indexOf("docker compose"),
     );
+    // BEFORE `source .env.local` (CodeRabbit 1698-r1): sourcing shell-expands
+    // values (a key containing `$…` would be mangled), and the expanded
+    // process value would override the raw file value in overlayProcessEnv.
+    // The generator parses the file directly, expansion-free.
+    expect(pkg.scripts.services.indexOf("gen-nango-env.mjs")).toBeLessThan(
+      pkg.scripts.services.indexOf("source .env.local"),
+    );
   });
 });

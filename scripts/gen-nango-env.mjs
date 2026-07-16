@@ -44,7 +44,7 @@
 
 import path from "node:path";
 import process from "node:process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -168,10 +168,17 @@ function main() {
   }
 
   mkdirSync(outDir, { recursive: true });
-  // 0600 + unconditional chmod: the `mode` option only applies on CREATE; an
-  // existing file keeps its old mode after a rewrite otherwise.
-  writeFileSync(outPath, serializeDotenv(env), { mode: 0o600 });
-  chmodSync(outPath, 0o600);
+  // ATOMIC replace (CodeRabbit 1698-r1): writing outPath directly truncates
+  // the live file before the new content lands and keeps a pre-existing
+  // permissive mode until the chmod — a mid-write failure could leave an
+  // empty or exposed key file. Write a fresh 0600 temp file in the same
+  // directory, chmod defensively (`mode` only applies on CREATE), then
+  // rename over outPath — readers see the old or the new file, never a
+  // truncated one.
+  const tmpPath = `${outPath}.tmp-${process.pid}`;
+  writeFileSync(tmpPath, serializeDotenv(env), { mode: 0o600 });
+  chmodSync(tmpPath, 0o600);
+  renameSync(tmpPath, outPath);
   console.log(
     `[gen-nango-env] wrote ${path.relative(repoRoot, outPath)} ` +
       `(${Object.keys(env).length} keys${keyMissing ? ", encryption key MISSING" : ""}).`,
