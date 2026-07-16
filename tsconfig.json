@@ -200,6 +200,7 @@
       "@cinatra-ai/dashboards": ["./packages/dashboards/src/index.ts"],
       "@cinatra-ai/dashboards/module": ["./packages/dashboards/src/integration/module.ts"],
       "@cinatra-ai/dashboards/extension-materialization": ["./packages/dashboards/src/extension-materialization.ts"],
+      "@cinatra-ai/dashboards/contribution-lineage": ["./packages/dashboards/src/contribution-lineage.ts"],
       "@cinatra-ai/dashboards/overview-config": ["./packages/dashboards/src/components/seed-configs/overview-config.ts"],
       "@cinatra-ai/dashboards/entity-dashboard-actions": ["./packages/dashboards/src/actions.ts"],
       "@cinatra-ai/dashboards/entity-dashboards-contract": ["./packages/dashboards/src/entity-dashboards-contract.ts"],

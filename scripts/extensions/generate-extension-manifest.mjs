@@ -414,6 +414,19 @@ function isObj(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+// The RAW `cinatra.dashboardContribution` pass-through emitted onto a record
+// (cinatra#1628, S11b). CARRIER-KIND GATED: only `kind:"agent"` may author the
+// claim (the sole allowlisted carrier per the sdk leaf), so any other kind emits
+// null even if a stray `cinatra.dashboardContribution` is present. An agent that
+// declares a non-object (or nothing) emits null too. The value is carried
+// UNVALIDATED — the host parses it fail-closed + field-tolerantly via
+// `parseDashboardContribution` at consumption (the S11b adoption reconciler);
+// this seam is INERT until a successor agent ships the claim.
+export function resolveDashboardContributionClaim(kind, cin) {
+  if (kind !== "agent") return null;
+  return isObj(cin?.dashboardContribution) ? cin.dashboardContribution : null;
+}
+
 // ---------------------------------------------------------------------------
 // Widget-stream capability declaration (`cinatra.widgetStream`).
 //
@@ -1463,6 +1476,17 @@ export async function buildManifest() {
       // the host validates it fail-closed (namespaced-vs-legacy security guard,
       // keyed on `resolution` above) at ctx-build time.
       envOverrides: isObj(cin.envOverrides) ? cin.envOverrides : null,
+      // RAW `cinatra.dashboardContribution` pass-through (cinatra#1628, S11b):
+      // the versioned dashboard-contribution claim, emitted ONLY on kind:"agent"
+      // records (the sole carrier kind per the sdk leaf allowlist) — null on
+      // every other kind, and null when the agent declares none. Carried
+      // UNVALIDATED (same pattern as accessConfig/envOverrides); the host parses
+      // it fail-closed + field-tolerantly via `parseDashboardContribution` at
+      // consumption (the S11b adoption reconciler), degrade-with-diagnostic — so
+      // a malformed claim can never reject the surrounding agent manifest. INERT
+      // until a successor agent ships the claim (no bundled extension declares it
+      // yet), exactly like the artifact `ui` seam.
+      dashboardContribution: resolveDashboardContributionClaim(x.kind, cin),
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
@@ -2289,6 +2313,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             resolution: r.resolution,
             accessConfig: r.accessConfig,
             envOverrides: r.envOverrides,
+            dashboardContribution: r.dashboardContribution,
           },
         )},`,
     )

@@ -9,10 +9,29 @@ export {
   materializeExtensionInstanceForProject,
   archiveExtensionDashboards,
   restoreExtensionDashboards,
+  adoptExtensionDashboards,
   type MaterializeTemplateInput,
   type MaterializeInstanceInput,
   type ExtensionDashboardOwnerScope,
+  type AdoptExtensionDashboardsInput,
 } from "./mutation-service";
+
+// Contribution LINEAGE identity + the adopt-in-place PLANNER (cinatra#1628,
+// S11b). PURE (no writes) — the reconciler orchestrator resolves live successor
+// claims, plans adoptions (fail-closed on ambiguity), and drives
+// `adoptExtensionDashboards` per planned op.
+export {
+  LEGACY_LINEAGE_PREFIX,
+  CONTRIBUTION_LINEAGE_PREFIX,
+  legacyContributionLineageId,
+  deriveContributionLineageId,
+  adoptionMatchLineageIds,
+  planContributionAdoptions,
+  type LiveContributionClaim,
+  type ContributionAdoption,
+  type ContributionAdoptionPlan,
+  type SkippedAdoption,
+} from "./contribution-lineage";
 
 export {
   validateDashboardConfigV12,
