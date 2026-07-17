@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { Inter, Manrope, Geist, Archivo, JetBrains_Mono } from "next/font/google";
 import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 import { AppShell } from "@/components/app-shell";
+import { CrumbEpochProvider } from "@/components/crumb-epoch-context";
 import { buildCanDoOptsFromSession, getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { crumbEpoch as crumbEpochValue } from "@/lib/crumb-epoch";
 import { canDo } from "@/lib/authz";
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { isRegistrationClosed, isSingleOrgMode } from "@/lib/authz/instance-mode";
@@ -99,6 +101,8 @@ export default async function RootLayout({
   // pending approval that needs their decision — is never signal-less. Defaults
   // to 0 on any resolution error.
   let pendingApprovalsTotal = 0;
+  // Session/org fence for crumb contributions (cinatra#1737) — see AppShell.
+  let crumbEpoch = "anon";
   try {
     const [
       setupCompleteResult,
@@ -157,6 +161,7 @@ export default async function RootLayout({
     // no longer has its own sidebar nav title to hide. The page itself
     // (/configuration/webhooks) re-enforces with requireAdminSession().
     const orgId = session?.session?.activeOrganizationId ?? null;
+    crumbEpoch = crumbEpochValue(session?.user.id, orgId);
     if (session && orgId) {
       try {
         // IMPORT-LIGHT nav registry ONLY (cinatra#1283) — never the heavy
@@ -205,6 +210,7 @@ export default async function RootLayout({
     <html lang="en" className={`${inter.variable} ${manrope.variable} ${geist.variable} ${archivo.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <body>
         <Providers googleEnabled={googleEnabled} signUpEnabled={signUpEnabled}>
+          <CrumbEpochProvider value={crumbEpoch}>
           <AppShell
             connectionReady={connectionReady}
             canCreateProjects={canCreateProjects}
@@ -215,9 +221,11 @@ export default async function RootLayout({
             singleOrg={singleOrg}
             hiddenNavTitles={hiddenNavTitles}
             pendingApprovalsTotal={pendingApprovalsTotal}
+            crumbEpoch={crumbEpoch}
           >
             {children}
           </AppShell>
+          </CrumbEpochProvider>
         </Providers>
       </body>
     </html>

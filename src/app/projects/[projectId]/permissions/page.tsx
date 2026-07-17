@@ -10,6 +10,7 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // Re-exported from `@/lib/projects-store` so tests that mock the
 // surface keep working (see permissions-page.test.tsx).
 import { readProjectById, readProjectCoOwners } from "@/lib/projects-store";
+import { CrumbContributions } from "@/components/crumb-contributions";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -138,6 +139,13 @@ export default async function ProjectPermissionsPage({ params }: Props) {
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): a direct load of the
+          permissions page must still resolve the project-id crumb. */}
+      <CrumbContributions
+        entries={[
+          { prefix: `/projects/${encodeURIComponent(project.id)}`, label: project.name },
+        ]}
+      />
       <PageHeader
         title={project.name}
         description="Choose who can access this project and manage its owners."

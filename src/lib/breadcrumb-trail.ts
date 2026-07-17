@@ -4,6 +4,8 @@
 // for the connector cm-error classifier — keep render-affecting logic out of
 // the client component so it can be asserted without a full DOM render.)
 
+import type { CrumbContribution } from "./breadcrumb-contributions";
+
 export type BreadcrumbCrumb = {
   label: string;
   href: string;
@@ -17,6 +19,25 @@ export function humanizePathSegment(segment: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+// An id-like path segment (cinatra#1737): a UUID or a long bare-hex token.
+// These must NEVER pass through `humanizePathSegment` — stripping the hyphens
+// and Title-Casing the hex produces text that reads like a mangled name
+// ("9c0dfce6 B2cb 4dab …"). Without a resolved contribution they render as an
+// obvious short-id placeholder instead.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LONG_HEX_RE = /^[0-9a-f]{16,}$/i;
+
+export function isIdLikeSegment(segment: string): boolean {
+  const decoded = decodeURIComponent(segment);
+  return UUID_RE.test(decoded) || LONG_HEX_RE.test(decoded);
+}
+
+/** The obvious short-id placeholder for an unresolved id crumb — never
+ *  title-cased hex (cinatra#1737 floor rule). */
+export function idSegmentPlaceholder(segment: string): string {
+  return `${decodeURIComponent(segment).slice(0, 8)}…`;
 }
 
 // Configuration grouping segments that exist only as routing containers — no
@@ -109,28 +130,50 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
   return false;
 }
 
-// Build the breadcrumb trail for `pathname`. Pure: all live-title inputs are
-// passed in. The leaf crumb prefers the broadcast page title when it matches
-// the current path; chat threads and agent instances collapse to a readable
-// two/three-crumb trail; otherwise the full ancestor trail is emitted (capped
-// at 4 crumbs with a middle ellipsis).
+// Build the breadcrumb trail for `pathname`. Pure: all live inputs are passed
+// in. Crumb CONTRIBUTIONS (cinatra#1737 — server-authorized, route-published)
+// are consulted for EVERY crumb, leaf and intermediate; the leaf additionally
+// falls back to the broadcast page title; chat threads and agent instances
+// collapse to a readable two/three-crumb trail (documented shape rules);
+// otherwise the full ancestor trail is emitted (capped at 4 crumbs with a
+// middle ellipsis — contributions, including insertions, apply BEFORE the
+// truncation).
+//
+// Per-crumb label precedence (general branch):
+//   1. a contribution whose prefix equals the crumb's path (replaces
+//      label/href/nonNavigable in place — the route itself said so);
+//   2. leaf only: the broadcast page title (kept as an override for pages
+//      whose header genuinely differs from the entity name, e.g. "Upload
+//      Extension" — a leaf contribution beats it, being the newer deliberate
+//      contract);
+//   3. id-like segments: an obvious short-id placeholder — NEVER title-cased
+//      hex;
+//   4. `humanizePathSegment` for genuinely wordy segments.
 export function buildBreadcrumbTrail(
   pathname: string,
   opts: {
     pageTitle?: { title: string; pathname: string } | null;
     chatThreadTitle?: string | null;
-    agentInstanceName?: string | null;
+    contributions?: readonly CrumbContribution[];
   } = {},
 ): BreadcrumbCrumb[] {
-  const {
-    pageTitle = null,
-    chatThreadTitle = null,
-    agentInstanceName = null,
-  } = opts;
+  const { pageTitle = null, chatThreadTitle = null, contributions = [] } = opts;
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 0) return [{ label: "Personal", href: "/personal" }];
 
-  // Chat thread: collapse to "Chat > <thread title>".
+  const replacementFor = (crumbPath: string): CrumbContribution | undefined => {
+    // Last matching replacement wins (publish already dedupes; this guards
+    // callers passing raw arrays).
+    for (let j = contributions.length - 1; j >= 0; j--) {
+      const c = contributions[j];
+      if (!c.insertBefore && c.prefix === crumbPath) return c;
+    }
+    return undefined;
+  };
+
+  // Chat thread: collapse to "Chat > <thread title>" — a documented shape
+  // rule (ratified on cinatra#1737): the crumb shows the thread's PERSISTED
+  // title (whatever wrote it), supplied over the chat bus, never re-derived.
   if (
     segments[0] === "chat" &&
     segments.length >= 2 &&
@@ -143,13 +186,22 @@ export function buildBreadcrumbTrail(
   }
 
   // Agent instance: collapse the opaque vendor/package/instance path to
-  // "Agents > <instance name> [> <sub-route>]" so the trail stays readable.
+  // "Agents > <instance name> [> <sub-route>]" — a documented shape rule
+  // (ratified): the name is the page header's identity (run title →
+  // "<template name> (N) — <startedAt>" → placeholder), supplied via the ONE
+  // contribution channel by the gated instance page / rename flow.
   if (segments[0] === "agents" && segments.length >= 4) {
+    const instancePath = "/" + segments.slice(0, 4).join("/");
+    const contributed = replacementFor(instancePath);
     const crumbs: BreadcrumbCrumb[] = [
       { label: "Agents", href: "/agents" },
       {
-        label: agentInstanceName ?? humanizePathSegment(segments[3]),
-        href: "/" + segments.slice(0, 4).join("/"),
+        label:
+          contributed?.label ??
+          (isIdLikeSegment(segments[3])
+            ? idSegmentPlaceholder(segments[3])
+            : humanizePathSegment(segments[3])),
+        href: instancePath,
       },
     ];
     if (segments.length >= 5) {
@@ -158,15 +210,24 @@ export function buildBreadcrumbTrail(
     return crumbs;
   }
 
-  // General: full trail; the leaf crumb prefers the live page title (the exact
-  // <PageHeader> title, e.g. "Upload Extension") over the humanized path
-  // segment ("Upload").
+  // General: full trail with the per-crumb precedence documented above.
+  // `crumbPaths[i]` records crumb i's own path for insertion targeting —
+  // hrefs can be overridden (canonical connector link, contribution href), so
+  // they are not a stable match key.
+  const crumbPaths: string[] = segments.map(
+    (_seg, i) => "/" + segments.slice(0, i + 1).join("/"),
+  );
   const crumbs: BreadcrumbCrumb[] = segments.map((seg, i) => {
     const isLast = i === segments.length - 1;
+    const crumbPath = "/" + segments.slice(0, i + 1).join("/");
+    const contributed = replacementFor(crumbPath);
     const label =
-      isLast && pageTitle && pageTitle.pathname === pathname
+      contributed?.label ??
+      (isLast && pageTitle && pageTitle.pathname === pathname
         ? pageTitle.title
-        : humanizePathSegment(seg);
+        : isIdLikeSegment(seg)
+          ? idSegmentPlaceholder(seg)
+          : humanizePathSegment(seg));
     // The connector ([slug]) level has no index page, but it links to its
     // canonical subroute (already present in the path); see
     // connectorCanonicalCrumbHref (#422). Other pageless containers (e.g.
@@ -175,16 +236,34 @@ export function buildBreadcrumbTrail(
     const canonicalConnectorHref = connectorCanonicalCrumbHref(segments, i);
     return {
       label,
-      href: canonicalConnectorHref ?? defaultHref,
+      href: contributed?.href ?? canonicalConnectorHref ?? defaultHref,
       // Intermediate segments whose path is a pageless routing container would
       // 404 if linked — render as a label, UNLESS this is the connector crumb
-      // we just linked to its canonical subroute.
+      // we just linked to its canonical subroute. A contribution may also
+      // declare its crumb non-navigable explicitly.
       nonNavigable:
-        !isLast &&
-        isPagelessContainerCrumb(segments, i) &&
-        !canonicalConnectorHref,
+        contributed?.nonNavigable ??
+        (!isLast &&
+          isPagelessContainerCrumb(segments, i) &&
+          !canonicalConnectorHref),
     };
   });
+
+  // Ancestry insertions (cinatra#1738 consumes this): a contribution with
+  // `insertBefore` inserts a NEW crumb before the crumb whose path equals
+  // that prefix, in publisher declaration order; an absent target skips the
+  // insertion. Applied BEFORE truncation.
+  for (const c of contributions) {
+    if (!c.insertBefore) continue;
+    const at = crumbPaths.indexOf(c.insertBefore);
+    if (at === -1) continue;
+    crumbPaths.splice(at, 0, c.prefix);
+    crumbs.splice(at, 0, {
+      label: c.label,
+      href: c.href ?? c.prefix,
+      ...(c.nonNavigable !== undefined ? { nonNavigable: c.nonNavigable } : {}),
+    });
+  }
 
   // Breadcrumb: 3-4 crumbs max; truncate the middle with an ellipsis.
   if (crumbs.length <= 4) return crumbs;

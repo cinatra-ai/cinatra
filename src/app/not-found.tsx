@@ -3,12 +3,16 @@ import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
+import { CrumbContributionsClear } from "@/components/crumb-contributions";
 
 export const metadata: Metadata = { title: "Page not found" };
 
 export default function NotFoundPage() {
   return (
     <Main className="min-h-screen">
+      {/* Negative crumb clearing (cinatra#1737): a previously-authorized
+          entity label must never survive into an unauthorized/404 visit. */}
+      <CrumbContributionsClear />
       <PageHeader
         title="404 — Page not found"
         description="The page you're looking for doesn't exist or may have moved."

@@ -29,8 +29,13 @@ import {
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
+  isIdLikeSegment,
   type BreadcrumbCrumb,
 } from "@/lib/breadcrumb-trail";
+import {
+  selectCrumbContributions,
+  CRUMB_CONTRIBUTIONS_EVENT,
+} from "@/lib/breadcrumb-contributions";
 import { Building2, FolderKanban, MessageSquare, Play, Plus, TriangleAlert, UsersRound, Wrench } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 import {
@@ -148,6 +153,7 @@ export function AppShell({
   singleOrg = false,
   hiddenNavTitles,
   pendingApprovalsTotal = 0,
+  crumbEpoch = "anon",
 }: {
   children: React.ReactNode;
   connectionReady: boolean;
@@ -159,6 +165,13 @@ export function AppShell({
   // Server-resolved nav gating.
   singleOrg?: boolean;
   hiddenNavTitles?: string[];
+  /**
+   * Session/org fence for crumb contributions (cinatra#1737): resolved
+   * server-side in layout.tsx as `<userId>:<activeOrgId>`. A parked crumb
+   * snapshot from another session or org is never applied — the layout
+   * re-renders on org switch/login, handing this a new value.
+   */
+  crumbEpoch?: string;
   /**
    * The viewer's Inbox-actionable approval count across the ApprovalSource
    * registry (resolved server-side in layout.tsx). Feeds the notifications bell
@@ -204,9 +217,12 @@ export function AppShell({
   const [llmProviderPending, setLlmProviderPending] = useState(false);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [chatThreadTitle, setChatThreadTitle] = useState<string | null>(null);
-  const [agentInstanceName, setAgentInstanceName] = useState<string | null>(null);
   // Broadcast page title (from <PageHeader>) for the breadcrumb leaf crumb.
   const [pageTitle, setPageTitle] = useState<{ title: string; pathname: string } | null>(null);
+  // Crumb-contributions bus version (cinatra#1737): bumped by the changed
+  // event; the selection itself is computed in the memo below (the bus holds
+  // the parked snapshot, so a consumer mounting late still sees it).
+  const [crumbBusVersion, setCrumbBusVersion] = useState(0);
   const pageContentRef = useRef<HTMLDivElement | null>(null);
 
   const isSetupPath =
@@ -262,53 +278,32 @@ export function AppShell({
     return () => window.removeEventListener("cinatra:page:title", handlePageTitle);
   }, []);
 
+  // Crumb contributions (cinatra#1737): the ONE channel for entity-name
+  // resolution across every crumb — replaces the former agent instance-name
+  // fetch + `cinatra:agent:name-changed` event pair (two divergent writers).
+  // The gated route publishes; this consumer seeds from the parked snapshot
+  // and stays live via the changed event.
   useEffect(() => {
-    function handleAgentNameChanged(e: Event) {
-      const detail = (e as CustomEvent<{ name: string }>).detail;
-      setAgentInstanceName(detail.name || null);
-    }
-    window.addEventListener("cinatra:agent:name-changed", handleAgentNameChanged);
-    return () => window.removeEventListener("cinatra:agent:name-changed", handleAgentNameChanged);
+    const onCrumbsChanged = () => setCrumbBusVersion((v) => v + 1);
+    window.addEventListener(CRUMB_CONTRIBUTIONS_EVENT, onCrumbsChanged);
+    return () => window.removeEventListener(CRUMB_CONTRIBUTIONS_EVENT, onCrumbsChanged);
   }, []);
 
-  useEffect(() => {
-    const segments = pathname.split("/").filter(Boolean);
-    const isAgentInstancePage = segments.length >= 3 && segments[0] === "agents" && !!segments[2];
-    if (!isAgentInstancePage) {
-      setAgentInstanceName(null);
-      return;
-    }
-
-    const controller = new AbortController();
-    const agentId = segments[1];
-    const instanceId = segments[2];
-
-    fetch(`/api/agents/instance-name?agentId=${encodeURIComponent(agentId)}&instanceId=${encodeURIComponent(instanceId)}`, {
-      signal: controller.signal,
-    })
-      .then((res) => res.json())
-      .then((data: { name: string | null }) => {
-        if (!controller.signal.aborted) {
-          setAgentInstanceName(data.name ?? null);
-        }
-      })
-      .catch((err) => {
-        if (err instanceof Error && err.name !== "AbortError") {
-          console.warn("[app-shell] failed to resolve agent instance name", err);
-        }
-      });
-
-    return () => controller.abort();
-  }, [pathname]);
+  const crumbContributions = useMemo(
+    () => selectCrumbContributions(pathname, crumbEpoch),
+    // crumbBusVersion invalidates the memo when the bus content changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathname, crumbEpoch, crumbBusVersion],
+  );
 
   const breadcrumbSegments = useMemo<BreadcrumbCrumb[]>(
     () =>
       buildBreadcrumbTrail(pathname, {
         pageTitle,
         chatThreadTitle,
-        agentInstanceName,
+        contributions: crumbContributions,
       }),
-    [pathname, chatThreadTitle, agentInstanceName, pageTitle],
+    [pathname, chatThreadTitle, pageTitle, crumbContributions],
   );
 
   useEffect(() => {
@@ -319,17 +314,26 @@ export function AppShell({
 
   useEffect(() => {
     const isChatThread = /^\/chat\/[a-f0-9-]{36}$/.test(pathname);
-    const agentInstancePathSegments = pathname.split("/").filter(Boolean);
-    const isAgentInstance =
-      agentInstancePathSegments.length >= 3 && agentInstancePathSegments[0] === "agents";
+    const segments = pathname.split("/").filter(Boolean);
+    const isAgentInstance = segments.length >= 4 && segments[0] === "agents";
+    const agentLabel = isAgentInstance
+      ? crumbContributions.find(
+          (c) =>
+            !c.insertBefore && c.prefix === "/" + segments.slice(0, 4).join("/"),
+        )?.label
+      : undefined;
     if (isChatThread && chatThreadTitle) {
       document.title = `${chatThreadTitle} | Cinatra`;
-    } else if (isAgentInstance && agentInstanceName) {
-      document.title = `${agentInstanceName} | Cinatra`;
+    } else if (isAgentInstance && agentLabel) {
+      document.title = `${agentLabel} | Cinatra`;
+    } else if (segments.some((seg) => isIdLikeSegment(seg))) {
+      // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
+      // on the route owns the tab title — clobbering it here would replace a
+      // correct server title with humanized hex. Deliberately no write.
     } else {
       document.title = deriveDocumentTitle(pathname, activeHeader?.title);
     }
-  }, [activeHeader?.title, pathname, chatThreadTitle, agentInstanceName]);
+  }, [activeHeader?.title, pathname, chatThreadTitle, crumbContributions]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.
