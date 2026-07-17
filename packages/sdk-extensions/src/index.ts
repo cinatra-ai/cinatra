@@ -457,6 +457,41 @@ export {
   validateChatViewsForPublish,
 } from "./chat-views-contract";
 
+// The LLM-PROVIDER declaration contract (the `./llm-provider-contract` subpath,
+// cinatra#1712 epic #1711 S1): the versioned top-level `cinatra.llmProvider`
+// field by which an LLM connector (openai/anthropic/gemini) ships its OWN
+// capability matrix (function_tools/media_input/native_mcp {status,transports?,
+// approval?}) + model catalog. The PUBLIC, host-neutral MIRROR of the host
+// declaration model in `@cinatra-ai/agents`'s `llm-provider-policy.ts` (a
+// drift-guard coupling test in agents keeps the two byte-equivalent). Tolerant
+// parse (degrade at runtime / reject at publish); the conformance gate DERIVES
+// the ABI version + vocabularies from this leaf.
+export {
+  LLM_PROVIDER_ABI_VERSION,
+  LLM_PROVIDERS,
+  LLM_CAPABILITIES,
+  NATIVE_MCP_STATUSES,
+  MCP_APPROVAL_MODES,
+  LlmProviderNativeMcpSchema,
+  LlmProviderCapabilitiesSchema,
+  LlmProviderModelsSchema,
+  LlmProviderDeclarationSchema,
+  parseLlmProvider,
+  validateLlmProviderForPublish,
+  declarationSatisfiesCapability,
+} from "./llm-provider-contract";
+export type {
+  LlmProvider,
+  LlmCapability,
+  NativeMcpStatus,
+  McpApprovalMode,
+  LlmProviderNativeMcp,
+  LlmProviderCapabilities,
+  LlmProviderModels,
+  LlmProviderDeclaration,
+  LlmProviderParseResult,
+} from "./llm-provider-contract";
+
 // The versioned DASHBOARD-CONTRIBUTION manifest contract (the
 // `./dashboard-contribution-contract` subpath, cinatra#1628 S11a) so a
 // `kind:"agent"` extension types its `cinatra.dashboardContribution` claim
