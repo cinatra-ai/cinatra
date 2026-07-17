@@ -21,6 +21,7 @@ import {
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
+import { ensureBuiltInCinatraAssistantAgent } from "@/lib/assistant-agent-registration";
 import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
 import { buildInvitationAcceptUrl, buildInvitationEmail } from "@/lib/org-invitation-email";
 
@@ -805,11 +806,13 @@ export async function ensureAssistantBootstrap() {
   // Register "Cinatra" as the first assistant agent (cinatra#1037 P1.3): mints
   // the principal (the ONLY principal-minting path, I3), its handle, and the
   // 1:1-linked assistant agent_templates row. Replaces the deleted direct-SQL
-  // ensureBuiltInCinatraAssistant seed. Dynamic import keeps the registration
-  // module's store/agent-builder graph off auth.ts's static route graph.
-  const { ensureBuiltInCinatraAssistantAgent } = await import(
-    "@/lib/assistant-agent-registration"
-  );
+  // ensureBuiltInCinatraAssistant seed. The registration module is a STATIC
+  // import (entry-66): the earlier `await import(...)` here kept its graph off
+  // auth.ts's static route graph, but that server-side dynamic import sent the
+  // Turbopack native compile into an unbounded memory runaway on linux-x64 CI
+  // (>33GB; macOS unaffected) — see the entry-66 CI-memory investigation (2026-07-17). The
+  // route-graph ratchet still passes with the static form (verified: all 5
+  // tracked routes within ceilings).
   await ensureBuiltInCinatraAssistantAgent();
   // Register mention handles for any OTHER assistant principals lacking one — the
   // Cinatra handle is minted by the registration above; this backfill self-heals
