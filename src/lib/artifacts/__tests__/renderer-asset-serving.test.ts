@@ -53,7 +53,8 @@ describe("parseRendererAssetPath — round-trips the URL builder, fail-closed", 
   it("rejects too-few segments, a bad digest, and an unknown slot", () => {
     expect(parseRendererAssetPath([DIGEST, "detail", "@x/y"]).ok).toBe(false);
     expect(parseRendererAssetPath(["short", "detail", "@x/y", "a.js"]).ok).toBe(false);
-    expect(parseRendererAssetPath([DIGEST, "listRow", "@x/y", "a.js"]).ok).toBe(false);
+    // `listRow` is an ACTIVE slot since S7/M2 (cinatra#1631); `card` stays reserved/unknown.
+    expect(parseRendererAssetPath([DIGEST, "card", "@x/y", "a.js"]).ok).toBe(false);
   });
 
   it("REFUSES a path-traversal entry segment (no path-derived FS access)", () => {

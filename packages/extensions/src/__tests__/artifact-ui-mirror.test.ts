@@ -98,12 +98,23 @@ describe("handler.validate — cinatra.artifact.ui fail-closed at publish", () =
     expect((r.errors ?? []).join(" ")).toMatch(/cinatra\.artifact\.ui is rejected/);
   });
 
-  it("REJECTS a RESERVED slot (listRow) in v1", async () => {
+  it("ACCEPTS a listRow renderer (graduated from RESERVED by S7/M2, cinatra#1631)", async () => {
     const r = await validate(
       artifactManifest({
         abiVersion: 1,
         sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
         renderers: { listRow: { entry: "./src/row.tsx", propsApiVersion: 1 } },
+      }),
+    );
+    expect(r.valid).toBe(true);
+  });
+
+  it.each(["card", "inline"] as const)("REJECTS the still-RESERVED slot %s in v1", async (slot) => {
+    const r = await validate(
+      artifactManifest({
+        abiVersion: 1,
+        sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+        renderers: { [slot]: { entry: "./src/x.tsx", propsApiVersion: 1 } },
       }),
     );
     expect(r.valid).toBe(false);
