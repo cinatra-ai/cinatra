@@ -29,7 +29,6 @@ import {
 import { GmailSenderFieldRenderer } from "../gmail-sender-renderer";
 import { ListPickerRenderer } from "../list-picker-renderer";
 import { ContextSelectorRenderer } from "../context-selector-renderer";
-import { BlogLinkedinDraftReviewRenderer } from "../blog-linkedin-draft-review-renderer";
 import { BlogWordpressDraftConfirmRenderer } from "../blog-wordpress-draft-confirm-renderer";
 import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "../campaign-recipients-review-renderer";
@@ -79,12 +78,12 @@ const PARITY_TABLE: ReadonlyArray<
   ["list-picker", ListPickerRenderer as never, 90],
   ["@cinatra-ai/context-selection-agent:context-selector", ContextSelectorRenderer as never, 90],
   ["context-selector", ContextSelectorRenderer as never, 90],
-  // list-curator's scrape-schema-review + final-list-review COMPONENTS migrated
-  // into @cinatra-ai/list-curator-agent (cinatra#1625 S8/M3); their ids now
-  // resolve to the ExtensionFieldRenderer wrapper (still priority 90, same
-  // strict-id condition) — asserted in the dedicated migrated-binding block below,
-  // not in this frozen host-component table.
-  ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", BlogLinkedinDraftReviewRenderer as never, 90],
+  // MIGRATED field-renderer COMPONENTS (cinatra#1625 S8/M3): list-curator's
+  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent)
+  // and blog-linkedin's draft-review (→ @cinatra-ai/blog-linkedin-publish-agent).
+  // Their ids now resolve to the ExtensionFieldRenderer wrapper (still priority
+  // 90, same strict-id condition) — asserted in the dedicated migrated-binding
+  // block below, not in this frozen host-component table.
   ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", BlogWordpressDraftConfirmRenderer as never, 90],
   ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", FollowUpCadenceFieldRenderer as never, 90],
   ["@cinatra-ai/email-drafting-agent:follow-up-cadence", FollowUpCadenceFieldRenderer as never, 90],
@@ -154,8 +153,9 @@ describe("resolution parity with the retired hand map", () => {
   it.each([
     "@cinatra-ai/list-curator-agent:scrape-schema-review",
     "@cinatra-ai/list-curator-agent:final-list-review",
+    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
   ])(
-    "migrated list-curator binding %s resolves to the extension wrapper at the pre-cutover priority",
+    "migrated field-renderer binding %s resolves to the extension wrapper at the pre-cutover priority",
     (id) => {
       // The COMPONENT relocated into @cinatra-ai/list-curator-agent (cinatra#1625
       // S8/M3): the binding is present in the generated component map, so it

@@ -422,6 +422,7 @@
       "@cinatra-ai/video-artifact/src/renderers/detail": ["./extensions/cinatra-ai/video-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx"],
+      "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review": ["./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx"],
       "@cinatra-ai/projects": ["./packages/projects/src/index.ts"],
       "@cinatra-ai/projects/module": ["./packages/projects/src/integration/module.ts"],
       "@cinatra-ai/projects/mcp-handlers": ["./packages/projects/src/mcp/handlers.ts"],
