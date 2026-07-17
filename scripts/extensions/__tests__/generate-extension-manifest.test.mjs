@@ -941,9 +941,20 @@ describe("chat renderable-view declarations (cinatra.views, cinatra#1626 S9/M4)"
     ).toEqual(expect.arrayContaining([expect.stringContaining("duplicate viewType")]));
   });
 
-  it("the real tree emits an EMPTY chat-views map (inert — no extension declares cinatra.views)", async () => {
+  it("the real tree emits the `chart` chat-view from @cinatra-ai/chart-artifact (S9-b cutover, #1626)", async () => {
     const { chatViews } = await buildManifest();
-    expect(chatViews).toEqual([]);
+    // chart-artifact is the sole `cinatra.views` provider; one effective
+    // provider per viewType, so exactly one `chart` entry is emitted.
+    expect(chatViews).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          viewType: "chart",
+          packageName: "@cinatra-ai/chart-artifact",
+          propsApiVersion: 1,
+        }),
+      ]),
+    );
+    expect(chatViews.filter((v) => v.viewType === "chart")).toHaveLength(1);
   });
 });
 

@@ -50,6 +50,7 @@
       "@cinatra-ai/blog-skills": "https://github.com/cinatra-ai/blog-skills.git",
       "@cinatra-ai/blog-wordpress-publish-agent": "https://github.com/cinatra-ai/blog-wordpress-publish-agent.git",
       "@cinatra-ai/brand-voice-artifact": "https://github.com/cinatra-ai/brand-voice-artifact.git",
+      "@cinatra-ai/chart-artifact": "https://github.com/cinatra-ai/chart-artifact.git",
       "@cinatra-ai/code-reviewer-agent": "https://github.com/cinatra-ai/code-reviewer-agent.git",
       "@cinatra-ai/company-discovery-agent": "https://github.com/cinatra-ai/company-discovery-agent.git",
       "@cinatra-ai/competitive-analysis-artifact": "https://github.com/cinatra-ai/competitive-analysis-artifact.git",
@@ -125,7 +126,8 @@
       "@cinatra-ai/image-artifact",
       "@cinatra-ai/pdf-artifact",
       "@cinatra-ai/audio-artifact",
-      "@cinatra-ai/video-artifact"
+      "@cinatra-ai/video-artifact",
+      "@cinatra-ai/chart-artifact"
     ],
     "extensions": [
       "@cinatra-ai/nango-connector@^0.1.0",
@@ -140,7 +142,8 @@
       "@cinatra-ai/image-artifact@^0.1.0",
       "@cinatra-ai/pdf-artifact@^0.1.0",
       "@cinatra-ai/audio-artifact@^0.1.0",
-      "@cinatra-ai/video-artifact@^0.1.0"
+      "@cinatra-ai/video-artifact@^0.1.0",
+      "@cinatra-ai/chart-artifact@^0.1.0"
     ],
     "registryPolicy": {
       "temporary": false,

@@ -967,6 +967,10 @@ export type ExternalMcpServerRowShape = {
   orgId: string | null;
   userId: string | null;
   enabled: boolean;
+  /** MCP wire transport this server speaks (llm-providers S2, #1713). Mirrors
+   * the host record's `transport`; legacy rows classify as `"unknown"`. Never
+   * inferred from `serverUrl`. */
+  transport: "streamable-http" | "sse" | "unknown";
   /** Layer A — native MCP allowlist (`null` = no filter). */
   allowedTools: string[] | null;
   /** Layer B — catalog toolName allowlist enforced by the host proxy

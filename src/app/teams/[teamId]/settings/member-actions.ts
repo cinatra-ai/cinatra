@@ -246,6 +246,8 @@ export async function addTeamMemberAction(
     if (!result.ok) return result;
 
     revalidatePath(`/teams/${team.id}/settings`);
+    // The detail page's Overview counts members (#1688) — refresh it too.
+    revalidatePath(`/teams/${team.id}`);
     return { ok: true };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: "forbidden" };
@@ -345,6 +347,8 @@ export async function removeTeamMemberAction(
 
     if (result.ok) {
       revalidatePath(`/teams/${team.id}/settings`);
+      // The detail page's Overview counts members (#1688) — refresh it too.
+      revalidatePath(`/teams/${team.id}`);
     }
     return result;
   } catch (err) {

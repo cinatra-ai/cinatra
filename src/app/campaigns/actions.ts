@@ -395,6 +395,9 @@ const externalMcpSchema = z.object({
   label: z.string().min(1),
   serverUrl: z.string().min(1),
   scope: z.enum(["global", "user"]).optional(),
+  // llm-providers S2 (#1713): the operator write surface may declare the MCP
+  // transport; an omitted value persists "unknown" (never inferred from URL).
+  transport: z.enum(["streamable-http", "sse", "unknown"]).optional(),
 });
 
 export async function createExternalMcpServerAction(formData: FormData) {
@@ -403,6 +406,7 @@ export async function createExternalMcpServerAction(formData: FormData) {
     label: formData.get("label") ?? formData.get("name"),
     serverUrl: formData.get("serverUrl") ?? formData.get("url"),
     scope: (formData.get("scope") as string | null) ?? "global",
+    transport: (formData.get("transport") as string | null) ?? undefined,
   });
   const scope: ExternalMcpServerScope = parsed.scope === "user" ? "user" : "global";
 
@@ -472,6 +476,8 @@ export async function createExternalMcpServerAction(formData: FormData) {
     orgId: null,
     userId: scope === "user" ? preservedUserId ?? session.user.id : null,
     enabled: true,
+    // Persist the declared transport, or "unknown" when omitted (#1713).
+    transport: parsed.transport ?? "unknown",
   };
   try {
     if (guard) {

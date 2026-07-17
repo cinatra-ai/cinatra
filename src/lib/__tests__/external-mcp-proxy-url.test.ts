@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   resolveInjectedMcpServerUrl,
+  normalizeExternalMcpTransport,
   type ExternalMcpServerRecord,
 } from "@/lib/external-mcp-registry";
 
@@ -21,6 +22,7 @@ function makeRow(
     orgId: null,
     userId: null,
     enabled: true,
+    transport: "unknown",
     allowedTools: null,
     allowedCatalogTools: null,
     createdAt: "2026-05-25T00:00:00Z",
@@ -28,6 +30,26 @@ function makeRow(
     ...overrides,
   };
 }
+
+describe("normalizeExternalMcpTransport (llm-providers S2, #1713)", () => {
+  it("passes through the two known transports", () => {
+    expect(normalizeExternalMcpTransport("streamable-http")).toBe("streamable-http");
+    expect(normalizeExternalMcpTransport("sse")).toBe("sse");
+  });
+
+  it("classifies legacy rows (null / absent column) as unknown", () => {
+    expect(normalizeExternalMcpTransport(null)).toBe("unknown");
+    expect(normalizeExternalMcpTransport(undefined)).toBe("unknown");
+  });
+
+  it("classifies any unrecognized stored value as unknown (fail-closed; never inferred)", () => {
+    expect(normalizeExternalMcpTransport("http")).toBe("unknown");
+    expect(normalizeExternalMcpTransport("websocket")).toBe("unknown");
+    expect(normalizeExternalMcpTransport("STREAMABLE-HTTP")).toBe("unknown");
+    expect(normalizeExternalMcpTransport(42)).toBe("unknown");
+    expect(normalizeExternalMcpTransport("unknown")).toBe("unknown");
+  });
+});
 
 describe("resolveInjectedMcpServerUrl", () => {
   it("returns the raw upstream URL when no catalog allowlist is set (Layer A only)", () => {

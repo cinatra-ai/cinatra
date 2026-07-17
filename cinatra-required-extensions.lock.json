@@ -24,6 +24,13 @@
       "treeSha256": "72184d3cffdbf65ecc0a93e0ba7e5d285a27c0986d7b5a73704ff40e53a44e1f"
     },
     {
+      "packageName": "@cinatra-ai/chart-artifact",
+      "repo": "cinatra-ai/chart-artifact",
+      "resolvedSha": "bec51583cf9182e01a339f5eb30aaa480e37eefb",
+      "packageVersion": "0.1.0",
+      "treeSha256": "030801b211645d64fa4f0cf1b5e08a3520ab83f917f34981547d3753a7dcbcf8"
+    },
+    {
       "packageName": "@cinatra-ai/code-reviewer-agent",
       "repo": "cinatra-ai/code-reviewer-agent",
       "resolvedSha": "53effcf232591b039947ea9aa3bc9a9fd952f20b",
