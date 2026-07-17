@@ -52,6 +52,7 @@ import {
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
 import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
+import { CrumbContributions } from "@/components/crumb-contributions";
 import { canManageTeamMembers } from "@/app/teams/[teamId]/settings/team-member-authority";
 import type { TeamMemberView } from "@/app/teams/[teamId]/settings/team-members-section";
 
@@ -211,6 +212,11 @@ export async function TeamDetailDashboardPage({
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): both gates above passed,
+          so the team name may reach the breadcrumb. */}
+      <CrumbContributions
+        entries={[{ prefix: `/teams/${encodeURIComponent(team.id)}`, label: team.name }]}
+      />
       <PageHeader
         title={team.name}
         description={`Team in ${team.org_name}`}

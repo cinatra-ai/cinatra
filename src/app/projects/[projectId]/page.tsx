@@ -8,6 +8,7 @@ const { requireAuthSession } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { readProjectCoOwners } from "@/lib/project-co-owners-store";
+import { CrumbContributions } from "@/components/crumb-contributions";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { AuthzError } from "@/lib/authz/errors";
@@ -43,7 +44,44 @@ import {
 } from "./permissions/actions";
 import { listGuestRows, type GuestRow } from "./permissions/guest-actions";
 
-export const metadata: Metadata = { title: "Project" };
+// Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
+// title repeats the page's read gate before disclosing the project name; any
+// failure yields the generic title.
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  try {
+    // Non-throwing session read: requireAuthSession() redirects (throws
+    // NEXT_REDIRECT), which this try/catch would swallow. No session → the
+    // generic title; the page component itself still redirects.
+    const session = await authSession.getAuthSession();
+    if (!session) return { title: "Project" };
+    const { projectId } = await params;
+    const rows = await projectsDb
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    const project = rows[0];
+    if (!project) return { title: "Project" };
+    const actor = actorFromSession(session);
+    const coOwners = await readProjectCoOwners(project.id);
+    await enforceResourceAccess(
+      {
+        resourceType: "project",
+        resourceId: project.id,
+        organizationId: project.organizationId,
+        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
+        ownerId: project.ownerId,
+        visibility: null,
+        coOwnerUserIds: coOwners.map((c) => c.userId),
+      },
+      actor,
+      "project.read",
+    );
+    return { title: project.name };
+  } catch {
+    return { title: "Project" };
+  }
+}
 
 type Props = {
   params: Promise<{ projectId: string }>;
@@ -323,6 +361,12 @@ export default async function ProjectDetailPage({ params }: Props) {
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737). */}
+      <CrumbContributions
+        entries={[
+          { prefix: `/projects/${encodeURIComponent(project.id)}`, label: project.name },
+        ]}
+      />
       <PageHeader
         title={project.name}
         description="Bounded work context where agents run, project-specific capabilities are reused, data is created, approvals happen, and outputs accumulate."

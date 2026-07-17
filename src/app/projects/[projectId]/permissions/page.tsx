@@ -10,6 +10,7 @@ import { normalizeOwnerLevel } from "@/lib/authz/resource-ref";
 // Re-exported from `@/lib/projects-store` so tests that mock the
 // surface keep working (see permissions-page.test.tsx).
 import { readProjectById, readProjectCoOwners } from "@/lib/projects-store";
+import { CrumbContributions } from "@/components/crumb-contributions";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -25,7 +26,37 @@ import {
 } from "./actions";
 import { listGuestRows, type GuestRow } from "./guest-actions";
 
-export const metadata: Metadata = { title: "Project permissions" };
+// Gate-repeating metadata (cinatra#1737, the dashboards pattern): repeats the
+// page's own 404-hide read gate before disclosing the project name; any
+// failure yields the generic title.
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  try {
+    const [{ projectId }] = await Promise.all([params]);
+    // Non-throwing session read (see the detail page's generateMetadata).
+    const session = await authSession.getAuthSession();
+    if (!session) return { title: "Project permissions" };
+    const actor = actorFromSession(session);
+    const project = await readProjectById(projectId);
+    if (!project) return { title: "Project permissions" };
+    const coOwners = await readProjectCoOwners(project.id);
+    await enforceResourceAccess(
+      {
+        resourceType: "project",
+        resourceId: project.id,
+        organizationId: project.organizationId,
+        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
+        ownerId: project.ownerId,
+        visibility: null,
+        coOwnerUserIds: coOwners.map((c) => c.userId),
+      },
+      actor,
+      "project.read",
+    );
+    return { title: `${project.name} — Permissions` };
+  } catch {
+    return { title: "Project permissions" };
+  }
+}
 
 type Props = {
   params: Promise<{ projectId: string }>;
@@ -138,6 +169,13 @@ export default async function ProjectPermissionsPage({ params }: Props) {
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): a direct load of the
+          permissions page must still resolve the project-id crumb. */}
+      <CrumbContributions
+        entries={[
+          { prefix: `/projects/${encodeURIComponent(project.id)}`, label: project.name },
+        ]}
+      />
       <PageHeader
         title={project.name}
         description="Choose who can access this project and manage its owners."
