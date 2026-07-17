@@ -224,7 +224,11 @@ function fakeWorker(result?: Partial<SandboxCommandResult>) {
   return state as SandboxWorker & { specs: SandboxCommandSpec[] };
 }
 
-function makeBroker(worker: SandboxWorker, docker: DockerCli) {
+function makeBroker(
+  worker: SandboxWorker,
+  docker: DockerCli,
+  quotas?: ConstructorParameters<typeof ExecutionBroker>[0]["quotas"],
+) {
   const audits: ExecutionAuditRecord[] = [];
   const broker = new ExecutionBroker({
     worker,
@@ -234,6 +238,7 @@ function makeBroker(worker: SandboxWorker, docker: DockerCli) {
     livenessProbe: async () => "alive",
     egressPolicyResolver: () => ({ mode: "none" }),
     docker,
+    ...(quotas ? { quotas } : {}),
   });
   return { broker, audits };
 }
@@ -352,6 +357,55 @@ describe("createBrokerSandboxExecutor", () => {
       commands: ["sleep 999"],
     });
     expect(outputs[0].outcome).toEqual({ type: "timeout" });
+  });
+
+  it("eviction past the carrier cap forgets the MAPPING only — an in-flight job keeps working and a re-presented carrier re-opens (codex r2)", async () => {
+    const { docker } = recordingDocker();
+    const worker = fakeWorker();
+    // The broker's own per-org open-job ceiling (default 32) would refuse the
+    // flood long before the executor's 256-carrier tracking cap — raise it so
+    // this test exercises the EXECUTOR's eviction, not the broker quota.
+    const { broker } = makeBroker(worker, docker, { maxOpenJobsPerOrg: 1000 });
+    const executor = createBrokerSandboxExecutor(broker);
+    const first = carrierFor("run-evict-0");
+    await executor({ sessionCarrier: first, commands: ["echo first"] });
+    const firstJobId = worker.specs[0].jobId;
+    // Flood past the cap with distinct carriers so `first` is evicted.
+    for (let i = 1; i <= 257; i++) {
+      await executor({ sessionCarrier: carrierFor(`run-evict-${i}`), commands: ["echo n"] });
+    }
+    // The evicted carrier's JOB was never closed: presenting the carrier again
+    // opens a NEW job (fresh mapping) and both commands succeed structurally.
+    const again = await executor({ sessionCarrier: first, commands: ["echo again"] });
+    expect(again[0].outcome).toEqual({ type: "exit", exitCode: 0 });
+    const reopenedJobId = worker.specs[worker.specs.length - 1].jobId;
+    expect(reopenedJobId).not.toBe(firstJobId);
+    // And the ORIGINAL job is still alive at the broker (not terminated).
+    const direct = await broker.exec(firstJobId, "echo direct");
+    expect(direct.ok).toBe(true);
+  });
+
+  it("a non-Error throwable (throw null) from resolveFiles still becomes a structured refusal (codex r2)", async () => {
+    const { docker } = recordingDocker();
+    const { broker } = makeBroker(fakeWorker(), docker);
+    const executor = createBrokerSandboxExecutor(broker);
+    const outputs = await executor({
+      sessionCarrier: carrierFor("run-null-throw"),
+      commands: ["echo hi"],
+      stagedSkills: [
+        {
+          skillId: "skill-n",
+          slug: "my-skill",
+          description: "boom",
+          resolveFiles: async () => {
+            // eslint-disable-next-line no-throw-literal
+            throw null;
+          },
+        },
+      ],
+    });
+    expect(outputs[0].outcome).toEqual({ type: "exit", exitCode: 126 });
+    expect(outputs[0].stderr).toContain("staging_failed");
   });
 
   it("a THROWING resolveFiles becomes a structured refusal, never an escaping rejection (codex r1)", async () => {

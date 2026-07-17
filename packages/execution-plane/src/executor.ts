@@ -51,14 +51,28 @@ async function resolveStagedInputs(
 }
 
 /**
- * Bound on distinct carriers a single executor instance tracks. The wiring
- * layer builds one executor per broker (possibly long-lived), so the map must
- * not grow with traffic: past the cap the OLDEST tracked job is closed
- * (`closeJob` — eagerly frees its per-job skills volume; the run-keyed L2
- * workspace stays, retention GC owns it) and evicted. A carrier's TTL bounds
- * usefulness anyway (an expired carrier re-opens as a structured refusal).
+ * Bound on distinct carriers a single executor instance TRACKS. The wiring
+ * layer builds one executor per broker (possibly long-lived), so this map must
+ * not grow with traffic. Eviction forgets the carrier→job MAPPING ONLY — it
+ * never closes the job (codex round-2: closing on eviction could terminate a
+ * job another in-flight call is actively using). Job/volume lifecycle stays
+ * where it already lives: the broker's per-org open-job ceiling bounds open
+ * jobs, the carrier TTL bounds re-opens, teardown/closeJob free volumes
+ * eagerly, and the two-tier retention GC reaps the rest. An evicted-but-live
+ * carrier that is presented again simply opens a fresh job (run-keyed L2
+ * workspaces persist across that re-open).
  */
 const MAX_TRACKED_CARRIERS = 256;
+
+/** `throw null` / non-Error throwables must still become a structured string. */
+function describeThrown(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  try {
+    return String(err);
+  } catch {
+    return "unknown error";
+  }
+}
 
 export function createBrokerSandboxExecutor(
   broker: ExecutionBroker,
@@ -67,18 +81,17 @@ export function createBrokerSandboxExecutor(
   // batch cannot double-open. A FAILED open is not cached — a later command
   // retries (e.g. transient docker failure), while a carrier-level refusal
   // (expired/bad signature) simply fails again, still structured. The closure
-  // NEVER rejects (codex round-1): a throwing resolveFiles()/openJob() becomes
-  // a structured failure, so nothing escapes into the provider tool loop and
-  // no permanently-rejected promise can poison the cache.
+  // NEVER rejects (codex rounds 1-2): any throwable — including non-Error
+  // values — from resolveFiles()/openJob() becomes a structured failure, so
+  // nothing escapes into the provider tool loop and no permanently-rejected
+  // promise can poison the cache.
   const jobs = new Map<string, Promise<{ ok: true; jobId: string } | { ok: false; message: string }>>();
 
-  async function evictPastCap(): Promise<void> {
+  function evictPastCap(): void {
     while (jobs.size > MAX_TRACKED_CARRIERS) {
       const oldest = jobs.keys().next().value as string | undefined;
       if (oldest === undefined) return;
-      const settled = await jobs.get(oldest)!;
-      jobs.delete(oldest);
-      if (settled.ok) await broker.closeJob(settled.jobId);
+      jobs.delete(oldest); // mapping only — never closeJob (see above)
     }
   }
 
@@ -97,14 +110,18 @@ export function createBrokerSandboxExecutor(
         } catch (err) {
           return {
             ok: false,
-            message: `staging_failed: ${(err as Error).message}`,
+            message: `staging_failed: ${describeThrown(err)}`,
           } as const;
         }
       })();
       jobs.set(input.sessionCarrier, open);
       const settled = await open;
       if (!settled.ok) jobs.delete(input.sessionCarrier);
-      else await evictPastCap();
+      else evictPastCap();
+    } else {
+      // LRU touch: re-insert so hot carriers are never the eviction victim.
+      jobs.delete(input.sessionCarrier);
+      jobs.set(input.sessionCarrier, open);
     }
     const job = await open;
     if (!job.ok) {
