@@ -80,3 +80,25 @@ export async function resolveMentionsWithDefault(content: string): Promise<Menti
     },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// resolveBuiltInCinatraAssistantUserId — the host assistant's own principal
+//
+// cinatra#1037 P2.4 (attribution, I4): the host Cinatra reply must carry its
+// assistant PRINCIPAL so its persisted turn is attributed to @cinatra — closing
+// the legacy `authorUserId` gap where only @-mentioned external assistants
+// (@chatgpt/@gemini) set it. Resolved from the platform handle registry (the
+// principal P1.3 mints/links). Memoized: the built-in principal id is stable
+// (its username is delete-guarded, src/lib/assistant-users.ts) so a resolved id
+// never changes; a pre-seed miss (null) is NOT cached so it retries next call.
+// ---------------------------------------------------------------------------
+
+let builtInCinatraAssistantUserIdCache: string | null = null;
+
+export async function resolveBuiltInCinatraAssistantUserId(): Promise<string | null> {
+  if (builtInCinatraAssistantUserIdCache) return builtInCinatraAssistantUserIdCache;
+  const byHandle = await resolveAssistantHandles(["cinatra"]);
+  const id = byHandle.get("cinatra") ?? null;
+  if (id) builtInCinatraAssistantUserIdCache = id;
+  return id;
+}

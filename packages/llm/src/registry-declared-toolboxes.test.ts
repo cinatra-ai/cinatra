@@ -82,7 +82,7 @@ const tool = (serverLabel: string, serverUrl = `https://${serverLabel}.example.c
   serverUrl,
   serverDescription: serverLabel,
   allowedTools: null,
-  requireApproval: "never",
+  approval: "auto_execute",
 });
 
 beforeEach(() => {

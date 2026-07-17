@@ -35,6 +35,20 @@ import {
   resolvedAttachmentsPerMessage,
 } from "../attachments/provider-parts";
 import { planMcpToolListErrorRecovery } from "../openai-mcp-error";
+// Exec-plane S2 (cinatra#1707): per-model native-shell capability gate for the
+// sandbox_execution translation (native `type:"shell"` vs function-tool
+// fallback) — the same fact-set the chat runner / llm-bridge gates share.
+import { openAiModelSupportsShell } from "./openai-model-capabilities";
+// The contractual tool name ("sandbox_execute") — translation + dispatch key.
+import { SANDBOX_EXECUTE_TOOL_NAME } from "../execution-plane/tool";
+// The restricted named skill-read surface (singular-native-shell rule):
+// skills-without-execution and native-shell-rejecting models read skill files
+// through this function tool, never a privileged shell.
+import {
+  SKILL_FILE_READ_TOOL_NAME,
+  SKILL_FILE_READ_PARAMETERS,
+  skillFileReadDescription,
+} from "../tools/skill-read-tool";
 
 /**
  * Structural mirror of the openai-connector's `OpenAIConnectionConfig`
@@ -126,6 +140,53 @@ function isSandboxExecutionTool(
   return "type" in tool && tool.type === "sandbox_execution";
 }
 
+/** JSON schema for the sandbox_execute function-tool fallback form. */
+const SANDBOX_EXECUTE_FUNCTION_PARAMETERS = {
+  type: "object" as const,
+  properties: {
+    commands: {
+      type: "array",
+      items: { type: "string" },
+      description: "Shell commands to execute in the sandbox, in order.",
+    },
+    timeout_ms: {
+      type: "number",
+      description: "Optional per-batch timeout in milliseconds.",
+    },
+  },
+  required: ["commands"],
+  additionalProperties: false,
+};
+
+/**
+ * Model-facing skill listing for the single native shell declaration: the
+ * union of the sandbox tool's staged skills and every skill-delivery shell
+ * tool's skill entries, deduped by path (staged entries win — they are what
+ * the sandbox actually serves).
+ */
+function nativeShellSkillListing(
+  sandboxTool: import("../types").LlmSandboxExecutionTool,
+  shellTools: LlmShellTool[],
+): Array<{ name: string; description: string; path: string }> {
+  const listing: Array<{ name: string; description: string; path: string }> = [];
+  const seen = new Set<string>();
+  for (const s of sandboxTool.stagedSkills ?? []) {
+    const path = `/skills/${s.slug}`;
+    if (seen.has(path)) continue;
+    seen.add(path);
+    listing.push({ name: s.slug, description: s.description, path });
+  }
+  for (const shell of shellTools) {
+    for (const s of shell.skills) {
+      if (seen.has(s.path)) continue;
+      seen.add(s.path);
+      listing.push({ name: s.name, description: s.description, path: s.path });
+    }
+  }
+  return listing;
+}
+
+
 function isFunctionTool(tool: LlmTool): tool is LlmFunctionTool {
   return (
     !isShellTool(tool) &&
@@ -136,29 +197,81 @@ function isFunctionTool(tool: LlmTool): tool is LlmFunctionTool {
 }
 
 /**
- * Translate unified tools to OpenAI API format.
+ * Translate unified tools to OpenAI API format (exec-plane S2, cinatra#1707).
  * - LlmFunctionTool → { type: "function", name, description, parameters }
- * - LlmShellTool → { type: "shell", environment: { type: "local", skills: [...] } }
+ * - LlmSandboxExecutionTool → the SINGLE native `{ type: "shell" }` entry for
+ *   shell-capable models (skills listed from the staged snapshots + delivery
+ *   shell tools), or the `sandbox_execute` function tool for models that
+ *   reject the native shell.
+ * - LlmShellTool (skill delivery):
+ *     · merged into the single native shell when execution is authorized AND
+ *       the model is shell-capable (reads run in the sandbox via /skills
+ *       staging — the in-process reader no longer backs a shell surface);
+ *     · otherwise (skills-but-not-execution, or model-rejects-native) emitted
+ *       as the restricted `skill_file_read` NAMED function tool — never a
+ *       privileged shell.
+ *
+ * SINGULAR-NATIVE-SHELL INVARIANT (enforced defensively here, including
+ * against caller-supplied tools): OpenAI's native shell slot is singular and
+ * every `shell_call` dispatches to the first shell tool, so this function
+ * emits AT MOST ONE `type:"shell"` entry per request — and only for the
+ * execution-authorized case.
  */
-function translateTools(tools: LlmTool[]) {
+function translateTools(tools: LlmTool[], resolvedModel: string) {
   const defs: Record<string, unknown>[] = [];
+  const shellCapable = openAiModelSupportsShell(resolvedModel);
+  // Defensive singularity: only the FIRST sandbox_execution tool translates
+  // (injection is idempotent, so >1 means caller-supplied duplicates).
+  const sandboxTool = tools.find(isSandboxExecutionTool);
+  const shellTools = tools.filter(isShellTool);
+  const mergeSkillsIntoNativeShell = Boolean(sandboxTool) && shellCapable;
+  let emittedNativeShell = false;
+  let emittedSkillRead = false;
 
   for (const t of tools) {
     if (isWebSearchTool(t)) {
       // OpenAI Responses API built-in tool — no execute handler needed; processed server-side.
       defs.push({ type: "web_search" });
     } else if (isShellTool(t)) {
+      if (mergeSkillsIntoNativeShell) {
+        // Skills ride the single native shell emitted for the sandbox tool
+        // (staged read-only under /skills/<slug>); no second shell surface.
+        continue;
+      }
+      // Skills-but-not-execution or model-rejects-native: restricted NAMED
+      // function tool (never a privileged shell). One tool serves all skills.
+      if (emittedSkillRead || t.skills.length === 0) continue;
+      emittedSkillRead = true;
       defs.push({
-        type: "shell",
-        environment: {
-          type: "local",
-          skills: t.skills.map((s) => ({
-            name: s.name,
-            description: s.description,
-            path: s.path,
-          })),
-        },
+        type: "function",
+        name: SKILL_FILE_READ_TOOL_NAME,
+        description: skillFileReadDescription(shellTools.flatMap((s) => s.skills)),
+        parameters: SKILL_FILE_READ_PARAMETERS,
+        strict: false,
       });
+    } else if (isSandboxExecutionTool(t)) {
+      if (t !== sandboxTool) continue; // defensive: at most one translates
+      if (shellCapable) {
+        if (emittedNativeShell) continue;
+        emittedNativeShell = true;
+        defs.push({
+          type: "shell",
+          environment: {
+            type: "local",
+            skills: nativeShellSkillListing(t, shellTools),
+          },
+        });
+      } else {
+        // Function-tool fallback: the model rejects the hosted shell; both
+        // surfaces (execution + skill reads) are named function tools.
+        defs.push({
+          type: "function",
+          name: SANDBOX_EXECUTE_TOOL_NAME,
+          description: t.description,
+          parameters: SANDBOX_EXECUTE_FUNCTION_PARAMETERS,
+          strict: false,
+        });
+      }
     } else if (isMcpTool(t)) {
       defs.push({
         type: "mcp",
@@ -168,21 +281,23 @@ function translateTools(tools: LlmTool[]) {
         ...(t.authorization ? { authorization: t.authorization } : {}),
         ...(t.serverDescription ? { server_description: t.serverDescription } : {}),
         ...(t.allowedTools ? { allowed_tools: t.allowedTools } : {}),
-        ...(t.requireApproval ? { require_approval: t.requireApproval } : {}),
+        // Approval vocabulary translation (llm-providers S2, #1713 AC2).
+        // OpenAI's declared `approval` capability honours both values:
+        //   approval_required        → require_approval: "always"
+        //   auto_execute / undefined → require_approval: "never"
+        // ALWAYS emitted: an omitted `require_approval` would let OpenAI's
+        // server-side default ("always") decide, contradicting the ratified
+        // `undefined` ⇒ `auto_execute` rule. The capability-keyed enforcement
+        // for other providers (Anthropic's fail-closed refusal) lives in their
+        // adapters; the post-#1707 adapter half re-homes this translation onto
+        // the materializer-backed post-plane shapes.
+        require_approval: t.approval === "approval_required" ? "always" : "never",
       });
     } else if (isContainerSkillsTool(t)) {
       // container_skills is an Anthropic-only delivery vehicle. OpenAI
       // skill delivery is the native shell tool; OpenAI must never receive
       // container_skills. Defensive skip to avoid mis-emitting it as a
       // broken function tool.
-      continue;
-    } else if (isSandboxExecutionTool(t)) {
-      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
-      // an OpenAI-native shell / function tool by a dedicated path in S2. In S1
-      // there is no translation, and the orchestration layer strips this tool
-      // before any adapter call — this defensive skip guarantees the opaque
-      // session carrier can never be mis-emitted as a broken function tool even
-      // if one reaches here.
       continue;
     } else {
       defs.push({
@@ -204,6 +319,86 @@ function findFunctionToolByName(tools: LlmTool[], name: string): LlmFunctionTool
 
 function findShellTool(tools: LlmTool[]): LlmShellTool | undefined {
   return tools.find(isShellTool);
+}
+
+function findSandboxTool(
+  tools: LlmTool[],
+): import("../types").LlmSandboxExecutionTool | undefined {
+  return tools.find(isSandboxExecutionTool);
+}
+
+/** Shell-style outputs → the OpenAI shell_call_output wire shape. */
+function toShellCallOutputs(
+  outputs: Array<{
+    stdout: string;
+    stderr: string;
+    outcome: { type: "exit"; exitCode: number } | { type: "timeout" };
+  }>,
+): Array<Record<string, unknown>> {
+  return outputs.map((o) => ({
+    stdout: o.stdout,
+    stderr: o.stderr,
+    outcome:
+      o.outcome.type === "exit"
+        ? { type: "exit", exit_code: o.outcome.exitCode }
+        : { type: "timeout" },
+  }));
+}
+
+/**
+ * Dispatch the `sandbox_execute` FUNCTION-tool fallback form (exec-plane S2):
+ * parse the model's `{commands, timeout_ms}` arguments, run them on the plane,
+ * and JSON-encode shell-style outputs for the function_call_output.
+ */
+async function executeSandboxFunctionCall(
+  tools: LlmTool[],
+  args: Record<string, unknown>,
+): Promise<string> {
+  const sandboxTool = findSandboxTool(tools);
+  if (!sandboxTool) {
+    return JSON.stringify({ error: `Unknown tool: ${SANDBOX_EXECUTE_TOOL_NAME}` });
+  }
+  const commands = Array.isArray(args.commands)
+    ? args.commands.filter((c): c is string => typeof c === "string")
+    : [];
+  if (commands.length === 0) {
+    return JSON.stringify({ error: "sandbox_execute requires a non-empty `commands` array." });
+  }
+  const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : null;
+  const outputs = await sandboxTool.execute({ commands, timeoutMs });
+  return JSON.stringify(toShellCallOutputs(outputs));
+}
+
+/**
+ * Dispatch the restricted `skill_file_read` NAMED function tool (exec-plane
+ * S2, singular-native-shell rule): route the read-only command to the skill
+ * shell tool's executor — catalog-snapshot-restricted by construction, never
+ * the execution plane.
+ */
+async function executeSkillFileReadCall(
+  tools: LlmTool[],
+  args: Record<string, unknown>,
+): Promise<string> {
+  const shellTool = findShellTool(tools);
+  if (!shellTool) {
+    return JSON.stringify({ error: `Unknown tool: ${SKILL_FILE_READ_TOOL_NAME}` });
+  }
+  const command = typeof args.command === "string" ? args.command : "";
+  if (!command) {
+    return JSON.stringify({
+      error: "skill_file_read requires a `command` string (cat/head/tail on /skills/<slug>/...).",
+    });
+  }
+  const outputs = await shellTool.execute({
+    commands: [command],
+    timeoutMs: null,
+    maxOutputLength: null,
+  });
+  const output = outputs[0];
+  if (!output) return JSON.stringify({ error: "No output." });
+  return output.outcome.type === "exit" && output.outcome.exitCode === 0
+    ? output.stdout
+    : JSON.stringify({ error: output.stderr || "skill_file_read failed." });
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +511,7 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
         content: openaiUserContent(input.prompt, input.resolvedAttachments),
       });
 
-      const toolDefs = input.tools ? translateTools(input.tools) : undefined;
+      const toolDefs = input.tools ? translateTools(input.tools, resolvedModel) : undefined;
 
       let finalText: string | null = null;
       let response: Awaited<ReturnType<typeof client.responses.create>> | undefined;
@@ -416,7 +611,6 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
 
           if (typedItem.type === "function_call" && typedItem.name && typedItem.call_id) {
             hasToolCalls = true;
-            const tool = findFunctionToolByName(input.tools ?? [], typedItem.name);
             let args: Record<string, unknown> = {};
             try {
               args = JSON.parse(typedItem.arguments || "{}");
@@ -424,7 +618,18 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
               // Use empty args on parse failure
             }
 
-            const result = tool ? await executeFunctionTool(tool, args) : JSON.stringify({ error: `Unknown tool: ${typedItem.name}` });
+            // Exec-plane S2 (cinatra#1707): the two dedicated named surfaces
+            // dispatch first — they are NOT LlmFunctionTools, so the generic
+            // lookup below can never find them.
+            let result: string;
+            if (typedItem.name === SANDBOX_EXECUTE_TOOL_NAME) {
+              result = await executeSandboxFunctionCall(input.tools ?? [], args);
+            } else if (typedItem.name === SKILL_FILE_READ_TOOL_NAME) {
+              result = await executeSkillFileReadCall(input.tools ?? [], args);
+            } else {
+              const tool = findFunctionToolByName(input.tools ?? [], typedItem.name);
+              result = tool ? await executeFunctionTool(tool, args) : JSON.stringify({ error: `Unknown tool: ${typedItem.name}` });
+            }
             toolResultsToAdd.push({
               type: "function_call_output",
               call_id: typedItem.call_id,
@@ -432,14 +637,22 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
             });
           }
 
-          // Handle native shell tool calls
+          // Handle native shell tool calls. Exec-plane S2 (cinatra#1707,
+          // singular-native-shell rule): the single native shell is bound to
+          // the EXECUTION session when a sandbox tool is present — every
+          // shell_call dispatches to it (skill reads run in-sandbox via the
+          // /skills staging). The legacy skill-shell fallback only serves
+          // requests with no sandbox tool (e.g. an in-flight conversation
+          // replaying a shell_call from before the cutover).
           if (typedItem.type === "shell_call" && typedItem.call_id) {
             hasToolCalls = true;
+            const sandboxTool = findSandboxTool(input.tools ?? []);
             const shellTool = findShellTool(input.tools ?? []);
             const action = (item as { action?: { commands?: string[]; timeout_ms?: number | null; max_output_length?: number | null } }).action;
 
-            if (shellTool && action?.commands) {
-              const outputs = await shellTool.execute({
+            const executor = sandboxTool ?? shellTool;
+            if (executor && action?.commands) {
+              const outputs = await executor.execute({
                 commands: action.commands,
                 timeoutMs: action.timeout_ms,
                 maxOutputLength: action.max_output_length,
@@ -448,13 +661,7 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
               toolResultsToAdd.push({
                 type: "shell_call_output",
                 call_id: typedItem.call_id,
-                output: outputs.map((o) => ({
-                  stdout: o.stdout,
-                  stderr: o.stderr,
-                  outcome: o.outcome.type === "exit"
-                    ? { type: "exit", exit_code: o.outcome.exitCode }
-                    : { type: "timeout" },
-                })),
+                output: toShellCallOutputs(outputs),
               });
             }
           }
@@ -509,7 +716,7 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
             : m.content,
       }));
 
-      const toolDefs = input.tools ? translateTools(input.tools) : undefined;
+      const toolDefs = input.tools ? translateTools(input.tools, resolvedModel) : undefined;
 
       for (let step = 0; step < maxSteps; step++) {
         input.onStepStart(step + 1);
@@ -832,10 +1039,25 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
 
           input.onToolCall(toolCallEvent);
 
-          const tool = findFunctionToolByName(input.tools ?? [], tc.name);
-          const result = tool
-            ? await executeFunctionTool(tool, toolCallEvent.arguments)
-            : JSON.stringify({ error: `Unknown tool: ${originalName}` });
+          // Exec-plane S2 (cinatra#1707): dedicated named surfaces first
+          // (mirrors the generate loop — they are not LlmFunctionTools).
+          let result: string;
+          if (tc.name === SANDBOX_EXECUTE_TOOL_NAME) {
+            result = await executeSandboxFunctionCall(
+              input.tools ?? [],
+              toolCallEvent.arguments,
+            );
+          } else if (tc.name === SKILL_FILE_READ_TOOL_NAME) {
+            result = await executeSkillFileReadCall(
+              input.tools ?? [],
+              toolCallEvent.arguments,
+            );
+          } else {
+            const tool = findFunctionToolByName(input.tools ?? [], tc.name);
+            result = tool
+              ? await executeFunctionTool(tool, toolCallEvent.arguments)
+              : JSON.stringify({ error: `Unknown tool: ${originalName}` });
+          }
 
           const truncated = truncateResult(result);
 
@@ -852,9 +1074,13 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
           });
         }
 
-        // Execute shell tool calls
+        // Execute shell tool calls. Exec-plane S2 (cinatra#1707): the single
+        // native shell dispatches to the sandbox tool when present (see the
+        // generate loop's singular-native-shell note); legacy skill-shell
+        // fallback only when no sandbox tool exists.
         for (const sc of pendingShellCalls) {
-          const shellTool = findShellTool(input.tools ?? []);
+          const shellExecutor =
+            findSandboxTool(input.tools ?? []) ?? findShellTool(input.tools ?? []);
 
           input.onToolCall({
             id: sc.callId,
@@ -862,8 +1088,8 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
             arguments: { commands: sc.commands },
           });
 
-          if (shellTool) {
-            const outputs = await shellTool.execute({
+          if (shellExecutor) {
+            const outputs = await shellExecutor.execute({
               commands: sc.commands,
               timeoutMs: sc.timeoutMs,
               maxOutputLength: sc.maxOutputLength,

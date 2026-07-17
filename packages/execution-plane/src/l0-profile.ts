@@ -178,6 +178,11 @@ export function buildHardenedRunArgs(
     "/tmp:rw,size=128m",
     "--volume",
     `${spec.workspaceVolume}:${SANDBOX_WORKSPACE_DIR}`,
+    // Exec-plane S2 (cinatra#1707): staged skill snapshots mount READ-ONLY at
+    // /skills — immutable inputs; the sandbox cannot modify a snapshot.
+    ...(spec.skillsVolume
+      ? ["--volume", `${spec.skillsVolume}:/skills:ro`]
+      : []),
     "--workdir",
     SANDBOX_WORKSPACE_DIR,
     "--network",

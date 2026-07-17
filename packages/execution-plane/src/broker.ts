@@ -34,6 +34,9 @@ import {
 
 import { EgressRegistrationError, registerJobEgress, resolveEgress } from "./egress";
 import { ensureWorkspaceVolume, removeWorkspaceVolume } from "./workspace";
+// Exec-plane S2 (cinatra#1707): read-only skill staging under /skills/<slug>.
+import { stageSkillsVolume, removeSkillsVolume } from "./staging";
+import { resolveL0ImageRef } from "./l0-profile";
 import type { DockerCli } from "./docker-cli";
 import {
   DEFAULT_BROKER_QUOTAS,
@@ -53,6 +56,7 @@ import {
   type OpenJobResult,
   type RunLivenessProbe,
   type SandboxCommandResult,
+  type StagedSkillInput,
   type SandboxResourceLimits,
   type SandboxWorker,
 } from "./types";
@@ -85,6 +89,8 @@ type BrokerJob = {
   jobToken: string;
   session: ExecutionSession;
   workspaceVolume: string;
+  /** Per-job read-only staged-skills volume (exec-plane S2), when staged. */
+  skillsVolume?: string;
   seq: number;
   terminated: boolean;
   terminationReason?: string;
@@ -219,9 +225,14 @@ export class ExecutionBroker {
    * Open a job for a sealed session carrier. Verifies the carrier (fail-closed
    * per reason), revalidates liveness once up front, provisions the L2
    * workspace (keyed on runId when present — run-scoped persistence — else on
-   * the fresh jobId), and mints the per-job egress attribution token.
+   * the fresh jobId), stages any skill snapshots read-only under /skills
+   * (exec-plane S2 — digest-verified, fail-closed), and mints the per-job
+   * egress attribution token.
    */
-  async openJob(carrier: string): Promise<OpenJobResult> {
+  async openJob(
+    carrier: string,
+    openOpts?: { stagedSkills?: StagedSkillInput[] },
+  ): Promise<OpenJobResult> {
     const opened = openSealedSession(carrier, {
       nowMs: this.opts.nowMs?.(),
     });
@@ -266,11 +277,34 @@ export class ExecutionBroker {
         workspaceKey,
         this.opts.docker,
       );
+      // Exec-plane S2 (cinatra#1707): stage skill snapshots read-only. A
+      // staging refusal (digest mismatch / unsafe path / docker failure) fails
+      // the OPEN closed — a job must never run with a partial skill set the
+      // model was told it has. The workspace volume is left in place: it is
+      // run-keyed (possibly shared) and retention GC owns it.
+      let skillsVolume: string | undefined;
+      if (openOpts?.stagedSkills && openOpts.stagedSkills.length > 0) {
+        try {
+          skillsVolume = await stageSkillsVolume(
+            jobId,
+            openOpts.stagedSkills,
+            resolveL0ImageRef(),
+            this.opts.docker,
+          );
+        } catch (err) {
+          return {
+            ok: false,
+            reason: "staging_failed",
+            message: `Skill staging refused: ${(err as Error).message}`,
+          };
+        }
+      }
       const job: BrokerJob = {
         jobId,
         jobToken: `job-${jobId}`,
         session,
         workspaceVolume,
+        ...(skillsVolume ? { skillsVolume } : {}),
         seq: 0,
         terminated: false,
       };
@@ -403,6 +437,7 @@ export class ExecutionBroker {
           jobId: job.jobId,
           command,
           workspaceVolume: job.workspaceVolume,
+          ...(job.skillsVolume ? { skillsVolume: job.skillsVolume } : {}),
           egress,
           limits: this.limits,
         });
@@ -445,6 +480,10 @@ export class ExecutionBroker {
       if (opts?.removeWorkspace) {
         await removeWorkspaceVolume(job.workspaceVolume, this.opts.docker);
       }
+      // The skills volume is strictly per-job (never shared): remove eagerly.
+      if (job.skillsVolume) {
+        await removeSkillsVolume(job.skillsVolume, this.opts.docker);
+      }
       terminated += 1;
     }
     return terminated;
@@ -459,6 +498,10 @@ export class ExecutionBroker {
     this.terminate(job, "closed");
     if (opts?.removeWorkspace) {
       await removeWorkspaceVolume(job.workspaceVolume, this.opts.docker);
+    }
+    // The skills volume is strictly per-job (never shared): remove eagerly.
+    if (job.skillsVolume) {
+      await removeSkillsVolume(job.skillsVolume, this.opts.docker);
     }
     this.jobs.delete(jobId);
   }

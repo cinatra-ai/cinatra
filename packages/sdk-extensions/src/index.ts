@@ -438,6 +438,18 @@ export type {
   ArtifactUiRegistryItemType,
 } from "./artifact-contract";
 
+// The AUTHOR-FACING artifact-renderer props contract (the `./artifact-renderer-props`
+// subpath, cinatra#1629 epic #1620 S2/M1): the versioned, serializable snapshot a
+// `cinatra.artifact.ui` renderer's default-export component receives. The TYPE is
+// re-exported here (and at the subpath) so an extension's renderer types its props
+// against the SDK — never a host-internal import. Host-neutral MIRROR of the host
+// source of truth (`src/lib/artifacts/artifact-renderer-props.ts`); a host-side
+// mutual-assignability test keeps the two in lockstep. TYPE-ONLY on purpose: the
+// runtime `ARTIFACT_RENDERER_PROPS_API_VERSION` const lives at the subpath ONLY —
+// a runtime barrel re-export would add the module to every route graph that
+// reaches this barrel (route-graph-ratchet), while `export type` is erased.
+export type { ArtifactRendererProps } from "./artifact-renderer-props";
+
 // The CHAT RENDERABLE-VIEW declaration contract (the `./chat-views-contract`
 // subpath, cinatra#1626 epic #1620 S9/M4): the versioned top-level
 // `cinatra.views` field by which an extension ships the chat renderable-view

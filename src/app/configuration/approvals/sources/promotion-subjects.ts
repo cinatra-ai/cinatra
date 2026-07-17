@@ -30,6 +30,7 @@ import "server-only";
 // `artifact-visibility-approval` backend — NEVER a decision component.
 // ---------------------------------------------------------------------------
 
+import { artifactPromotionBackend } from "./artifact-promotion";
 import { PROMOTION_SOURCE_ID } from "./source-ids";
 import type {
   ApprovalNavSource,
@@ -189,13 +190,14 @@ export const memoryPromotionAdapter: PromotionSubjectAdapter = {
   backend: null,
 };
 
-/** Artifact row-scope promotion (#1437 — Blocked on #1560; this is the source it
- *  plugs into). Backend lands with that flow. */
+/** Artifact row-scope promotion (#1437). Widens an individual artifact row's
+ *  visibility (private → team | organization) through this shared source; the
+ *  backend owns authorization + CAS + never-narrow + fail-closed secret/PII scan
+ *  + atomic row-widen/re-projection/audit. */
 export const artifactPromotionAdapter: PromotionSubjectAdapter = {
   subjectType: "artifact",
   kindLabel: "Artifact",
-  // TODO(cinatra#1437): plug the artifact-promotion backend here.
-  backend: null,
+  backend: artifactPromotionBackend,
 };
 
 export const promotionSubjectAdapters: readonly PromotionSubjectAdapter[] = [

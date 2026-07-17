@@ -1,12 +1,11 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { LinkIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
   TableBody,
@@ -19,7 +18,6 @@ import { PaginatedTable } from "@/components/ui/paginated-table";
 import type { AssistantUser } from "@/lib/assistant-users";
 import { toast } from "@/lib/cinatra-toast";
 import {
-  createAssistantAction,
   deleteAssistantAction,
   rotateAssistantClientAction,
   setAssistantWebhookAction,
@@ -47,35 +45,12 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
   const [credentials, setCredentials] = useState<CredentialResult | null>(null);
   const [credentialLabel, setCredentialLabel] = useState("");
   const [isPending, startTransition] = useTransition();
-  const createFormRef = useRef<HTMLFormElement>(null);
 
-  // ---------------------------------------------------------------------------
-  // Create
-  // ---------------------------------------------------------------------------
-
-  function handleCreate(formData: FormData) {
-    startTransition(async () => {
-      try {
-        const result = await createAssistantAction(formData);
-        setCredentials({ clientId: result.clientId ?? "", clientSecret: result.clientSecret });
-        setCredentialLabel(`@${result.username}`);
-        // Optimistically add the new row (no reload needed)
-        setAssistants((prev) => [
-          ...prev,
-          {
-            id: result.id,
-            username: result.username,
-            email: result.email,
-            clientId: result.clientId,
-            userType: result.userType,
-          },
-        ]);
-        createFormRef.current?.reset();
-      } catch {
-        toast.error("Could not create the assistant.");
-      }
-    });
-  }
+  // Manual assistant CREATION was removed (cinatra#1037 P1.4) — assistant
+  // principal minting is now the exclusive job of assistant-agent registration
+  // (invariant I3). This table manages already-registered principals: rotate the
+  // OAuth client, set the webhook, or delete (the built-in Cinatra principal is
+  // delete-guarded server-side).
 
   // ---------------------------------------------------------------------------
   // Delete
@@ -138,22 +113,6 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Create form */}
-      <form ref={createFormRef} action={handleCreate} className="flex items-end gap-3">
-        <Field className="w-56">
-          <FieldLabel>Username</FieldLabel>
-          <Input
-            name="username"
-            placeholder="e.g. claude-code"
-            required
-            autoComplete="off"
-          />
-        </Field>
-        <Button type="submit" disabled={isPending}>
-          {isPending ? "Creating..." : "Create assistant"}
-        </Button>
-      </form>
-
       {/* Table */}
       {assistants.length === 0 ? (
         <p className="text-sm text-muted-foreground">No assistant users registered yet.</p>

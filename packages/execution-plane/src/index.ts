@@ -68,6 +68,18 @@ export {
   gcExpiredWorkspaces,
 } from "./workspace";
 
+// Exec-plane S2 (cinatra#1707): read-only /skills staging + the broker-backed
+// SandboxExecutor binding for the llm injection contract.
+export {
+  SKILLS_VOLUME_PREFIX,
+  SANDBOX_SKILLS_DIR,
+  SkillStagingError,
+  skillsVolumeName,
+  stageSkillsVolume,
+  removeSkillsVolume,
+} from "./staging";
+export { createBrokerSandboxExecutor } from "./executor";
+
 export {
   GATEWAY_CONTAINER_NAME,
   GATEWAY_PROXY_PORT,
@@ -88,6 +100,7 @@ export {
   type ResolvedEgress,
   type SandboxResourceLimits,
   type SandboxCommandSpec,
+  type StagedSkillInput,
   type SandboxCommandResult,
   type SandboxTermination,
   type SandboxEgressUse,

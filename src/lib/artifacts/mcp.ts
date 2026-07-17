@@ -37,6 +37,11 @@ import {
   getArtifactExtension,
 } from "./artifact-authoring";
 import { getAuthoringChain } from "./authoring-recursion-ledger";
+// Row-scope promotion request surface (cinatra#1437). STATIC import (entry-66:
+// a server-side dynamic import over a heavy subgraph detonates Turbopack's
+// linux-x64 native compile); shares the actor-gated service with the
+// `requestArtifactPromotionAction` server action.
+import { requestArtifactPromotion } from "./artifact-promotion-request";
 
 // Agent MCP CRUD. Every tool wraps the canonical artifact service; never
 // add a second write path. orgId is REQUIRED on all tools (fail-closed
@@ -81,6 +86,20 @@ const artifactExtensionSearchSchema = z.object({
 const artifactExtensionGetSchema = z.object({
   extension: z.string().min(1),
 });
+// Row-scope promotion request (cinatra#1437). The widen itself happens ONLY
+// through the approvals surface (`approvals_decide` / the inline UI action →
+// the admin-gated PromotionBackend decide) — this tool merely opens the
+// pending request.
+const promoteRequestSchema = z.object({
+  artifactId: z.string().min(1),
+  /** The widen target. Never-narrow is enforced server-side against the row's
+   *  CURRENT visibility (at request time AND re-checked at approve time). */
+  toVisibility: z.enum(["team", "organization"]),
+  /** Required when `toVisibility` is `team`: the team that will own the
+   *  widened row. Ignored for `organization`. */
+  targetTeamId: z.string().min(1).optional(),
+});
+
 const artifactAuthoringEmitSchema = z.object({
   extension: z.string().min(1),
   /** Composed content (chat-authored markdown text). Capped server-side
@@ -157,6 +176,11 @@ const TOOL_META = {
     description:
       "Inspect the authoring-recursion-ledger chain for one step (debug / replay surface). Returns ancestors from root to the named step. Read-only.",
     inputSchema: z.object({ authoringStepId: z.string().min(1) }),
+  },
+  artifact_promote_request: {
+    description:
+      "Request a row-scope visibility promotion (widen) for one artifact the caller can see: private → `team` (requires `targetTeamId`) or → `organization`. Opens a PENDING request in the approvals area (the unified /notifications inbox; also listable via `approvals_list`) — it does NOT widen the row; only an admin approve there does, re-checked against never-narrow + a fail-closed secret/PII scan and CAS-bound to the row version captured here (an edit after the request supersedes it). Structured refusals (`ok: false`) carry `code`: `not_found` (row absent OR not visible to the caller) | `narrowing` (target does not widen the current visibility) | `invalid_state` (team target without `targetTeamId`) | `conflict` (a pending request already exists for this row) | `not_authorized` (caller has no attributable user principal).",
+    inputSchema: promoteRequestSchema,
   },
 } as const;
 
@@ -494,6 +518,59 @@ export function registerArtifactPrimitives(server: McpRuntimeToolServer): void {
       const { orgId } = resolveScope();
       const chain = getAuthoringChain(orgId, parsed.authoringStepId);
       return envelope({ chain });
+    }) as never,
+  );
+
+  // -----------------------------------------------------------------
+  // Row-scope promotion request (cinatra#1437). Business refusals are
+  // VALUES in the envelope (`{ ok: false, code, message }`) mirroring the
+  // data layer — never throws — so an agent can branch on `code` (e.g.
+  // `conflict` = a request is already pending). The adapter-internal row
+  // is serialized to PUBLIC fields only.
+  // -----------------------------------------------------------------
+
+  server.registerTool(
+    "artifact_promote_request",
+    { title: "artifact_promote_request", ...TOOL_META.artifact_promote_request },
+    (async (input: unknown) => {
+      const parsed = promoteRequestSchema.parse(input);
+      const { orgId, userId, actor } = resolveScope();
+      // A promotion request must be attributable to a USER principal: it keys
+      // the requester's "Your requests" listing, and the reviewer inbox
+      // excludes the requester's own rows. A userless caller is refused.
+      if (!userId) {
+        return envelope({
+          ok: false,
+          code: "not_authorized",
+          message:
+            "artifact_promote_request requires an attributable user principal.",
+        });
+      }
+      const result = await requestArtifactPromotion({
+        orgId,
+        artifactId: parsed.artifactId,
+        requestedBy: userId,
+        toVisibility: parsed.toVisibility,
+        ...(parsed.targetTeamId ? { targetTeamId: parsed.targetTeamId } : {}),
+        actor,
+      });
+      if (!result.ok) {
+        return envelope({ ok: false, code: result.code, message: result.message });
+      }
+      const r = result.request;
+      return envelope({
+        ok: true,
+        request: {
+          id: r.id,
+          objectId: r.objectId,
+          title: r.objectTitle,
+          status: r.status,
+          fromVisibility: r.fromVisibility,
+          toVisibility: r.toVisibility,
+          rowVersion: r.rowVersion,
+          createdAt: r.createdAt,
+        },
+      });
     }) as never,
   );
 }
