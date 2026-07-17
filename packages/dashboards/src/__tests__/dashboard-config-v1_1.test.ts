@@ -65,11 +65,31 @@ describe("DashboardConfig schema", () => {
       }
     });
 
-    it("accepts legacy DC `query` (deprecated DC field) as a content spec", () => {
+    it("accepts legacy DC `query` (deprecated DC field) as a content spec — as a JSON string", () => {
+      const result = DashboardConfigV1_1Schema.safeParse({
+        portlets: [
+          {
+            id: "p1",
+            title: "x",
+            w: 4,
+            h: 4,
+            x: 0,
+            y: 0,
+            query: JSON.stringify({ measures: ["A.count"] }),
+          },
+        ],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a legacy `query` that is not valid JSON (cinatra#1736 — it can never render)", () => {
+      // Pre-#1736 the schema tolerated any string here; drizzle-cube then
+      // failed the JSON.parse at render and the portlet spun forever. The
+      // boundary now enforces DC's actual contract with an actionable message.
       const result = DashboardConfigV1_1Schema.safeParse({
         portlets: [{ id: "p1", title: "x", w: 4, h: 4, x: 0, y: 0, query: "raw-query-string" }],
       });
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
     });
   });
 

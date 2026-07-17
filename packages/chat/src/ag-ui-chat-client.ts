@@ -401,6 +401,11 @@ export type DriveAssistantChatTurnOptions = {
   authorUserId?: string;
   signal: AbortSignal;
   ui: AssistantChatTurnUiPort;
+  /** AG-UI producer endpoint. Defaults to the Cinatra endpoint
+   *  (`/api/assistants/chat`); the @chatgpt built-in targets
+   *  `/api/assistants/chatgpt` (cinatra#1218 predecessor 3). The durable-log
+   *  resume endpoint is producer-agnostic (runId-keyed), so it stays default. */
+  endpoint?: string;
 };
 
 /**
@@ -447,6 +452,10 @@ export async function driveAssistantChatTurn(
       streamAssistantTurn({
         threadId: options.threadId,
         messages: options.messages,
+        // Propagated on BOTH the initial attempt and the retry (this closure
+        // is re-invoked for the retry-once path) so the @chatgpt producer
+        // endpoint is never silently downgraded to the Cinatra endpoint.
+        ...(options.endpoint ? { endpoint: options.endpoint } : {}),
         signal,
         onState: (state) => {
           anyEventSeen = true;
@@ -540,17 +549,24 @@ export async function driveAssistantChatTurn(
 }
 
 // ---------------------------------------------------------------------------
-// LEGACY thread persistence fetch helpers — absorbed from chat-persistence.ts
+// Thread persistence fetch helpers — absorbed from chat-persistence.ts
 // ---------------------------------------------------------------------------
 // Moved here VERBATIM (cinatra#918 extracted them from chat-page; cinatra#1218
 // co-locates them with the stream client so the locked /chat route-graph
-// budget stays flat through the cutover transition — one module replaces
-// one). They target the LEGACY /api/chat persistence subroutes and are
-// deleted together with them at the S2 delete stage. Plain fetch instead of a
-// Next.js server action — avoids the RSC re-render that server actions
-// trigger, which caused a corrective navigation (visible "page reload") when
-// the URL had been changed via pushState while Next.js's internal router
-// state still pointed at the old route.
+// budget stays flat through the cutover transition — one module replaces one).
+//
+// As of cinatra#1218 (predecessor 1 of the bespoke-wire delete stage) these
+// target the FIRST-CLASS /api/assistants/threads persistence surface, NOT the
+// legacy /api/chat/{save,threads,thread/:id} subroutes — the assistants
+// handlers reproduce the legacy authz/session matrix exactly, so the client no
+// longer touches a delete target. The legacy subroutes stay in place (deleted
+// in the later stage); the client just stopped calling them.
+//
+// Plain fetch instead of a Next.js server action — avoids the RSC re-render
+// that server actions trigger, which caused a corrective navigation (visible
+// "page reload") when the URL had been changed via pushState while Next.js's
+// internal router state still pointed at the old route. Keeping this
+// fetch-based is a hard requirement (the reload regression must not return).
 
 export const MAX_STORED_THREADS = 50;
 
@@ -570,7 +586,7 @@ export function extractAgentName(text: string): string | null {
 }
 
 export async function saveChatThreadViaFetch(thread: Record<string, unknown> & { id: string }): Promise<void> {
-  await fetch("/api/chat/save", {
+  await fetch("/api/assistants/threads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(thread),
@@ -578,13 +594,13 @@ export async function saveChatThreadViaFetch(thread: Record<string, unknown> & {
 }
 
 export async function fetchThreadByIdViaFetch(threadId: string): Promise<Record<string, unknown> | null> {
-  const res = await fetch(`/api/chat/thread/${threadId}`);
+  const res = await fetch(`/api/assistants/threads/${threadId}`);
   if (!res.ok) return null;
   return res.json() as Promise<Record<string, unknown> | null>;
 }
 
 export async function fetchThreadListViaFetch(): Promise<UiThreadSummary[]> {
-  const res = await fetch("/api/chat/threads");
+  const res = await fetch("/api/assistants/threads");
   if (!res.ok) return [];
   return res.json() as Promise<UiThreadSummary[]>;
 }

@@ -230,3 +230,37 @@ export function allowedScopesFromPolicy(
     }
   };
 }
+
+/**
+ * The SERIALIZABLE array form of `allowedScopesFromPolicy` — the §6.4
+ * `allowedScopes` constraint as an explicit typed identity list rather than a
+ * predicate. A predicate cannot cross the React Server → Client boundary; a
+ * plain `{ kind, id }[]` can, so THIS is what the agent-run permissions Server
+ * Component (`instance-screens.tsx`) hands to the client `AccessCombobox` as its
+ * first-class `allowedScopes` prop — retiring the per-site data pre-filter.
+ *
+ * Enumerated from `filterAvailableScopesForParentPolicy`, so the list contains
+ * EXACTLY the identities the predicate admits among the offerable universe
+ * (personal + every org / team / project / workspace the filter keeps; admin is
+ * never an agent-run grant target). Proven by an equivalence test against both
+ * the data filter and the predicate.
+ */
+export function allowedScopeIdentitiesFromPolicy(
+  scopes: FilterableAvailableScopes,
+  parentPolicy: AgentAuthPolicy,
+  resolvedTemplateOrgId: string | null,
+): ScopeIdentityLike[] {
+  const filtered = filterAvailableScopesForParentPolicy(
+    scopes,
+    parentPolicy,
+    resolvedTemplateOrgId,
+  );
+  const identities: ScopeIdentityLike[] = [{ kind: "personal" }];
+  if (filtered.canGrantWorkspace) identities.push({ kind: "workspace" });
+  for (const org of filtered.orgs) identities.push({ kind: "org", id: org.id });
+  for (const org of filtered.orgs)
+    for (const team of org.teams) identities.push({ kind: "team", id: team.id });
+  for (const project of filtered.projects)
+    identities.push({ kind: "project", id: project.id });
+  return identities;
+}

@@ -21,7 +21,7 @@ import dynamic from "next/dynamic";
 import { authClient } from "@/lib/auth-client";
 import { useTheme } from "next-themes";
 import type { ThemeName } from "./syntax-highlight";
-import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetDefinition, type WidgetManifest, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
+import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
 // The widget set is NOT imported from extension packages here. It arrives as
 // props from the server chat mount, which resolves it from the generated
 // extension manifest + extension lifecycle (src/lib/chat-widget-catalog.server.ts);
@@ -49,6 +49,8 @@ import {
 // importing @/lib directly.
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
+import type { ChatViewComponents } from "./chat-messages-view";
+import type { ChatPageProps } from "./chat-page-props";
 import {
   saveChatThreadViaFetch,
   fetchThreadList,
@@ -79,6 +81,7 @@ import {
 } from "./chat-stream-events";
 import {
   EXTERNAL_TAKEOVER_MS,
+  AG_UI_ENDPOINT_FOR_LEGACY,
   countMentions,
   shouldEnterSlackModeOnSend,
   applyExternalMentionsToMessages,
@@ -109,6 +112,14 @@ import { DancingRobot } from "./dancing-robot";
 // async-module-cycle in unrelated SSR chunks and broke `next build`; the view
 // SSR'd an empty container anyway (messages are fetched client-side), so
 // client-only rendering of the list is visually equivalent.
+// Extension-provided chat renderable-view components (viewType → component),
+// resolved server-side from the generated `cinatra.views` map and passed in as
+// a prop (RSC client references). Empty default: the `chart` viewType then
+// renders the never-blank fallback, a legitimate state when no view-bearing
+// extension is live/built. Kept inline (a runtime value); the props TYPE lives
+// in ./chat-page-props.
+const EMPTY_CHAT_VIEWS: ChatViewComponents = {};
+
 const ChatMessagesView = dynamic(
   () => import("./chat-messages-view").then((m) => m.ChatMessagesView),
   { ssr: false, loading: () => null },
@@ -123,36 +134,13 @@ const ChatMessagesView = dynamic(
 // this tracked bottleneck file inside its file-size ceiling.
 
 // ---------------------------------------------------------------------------
-// Main chat page
+// Main chat page — its props contract (ChatPageProps/ChatPageMode) lives in the
+// type-only ./chat-page-props module (extracted to keep this bottleneck file
+// within its file-size ceiling); the EMPTY_CHAT_VIEWS runtime default is inline
+// above.
 // ---------------------------------------------------------------------------
 
-type ChatPageMode = "create-agent" | "create-workflow";
-
-type ChatPageProps = {
-  initialThreadId?: string;
-  userId?: string;
-  initialMention?: string;
-  initialMode?: ChatPageMode;
-  /** Pre-fills the prompt field on mount (e.g. a `?wf=&task=` workflow-task
-   *  handoff). Ignored if `initialMention` is set. */
-  initialPrompt?: string;
-  /** Live chat-widget catalog, resolved server-side by the chat mount from the
-   *  generated extension manifest + extension lifecycle
-   *  (src/lib/chat-widget-catalog.server.ts). Component values are RSC client
-   *  references. Defaults to empty — widget embeds then simply don't render
-   *  (a legitimate state when no widget-bearing extension is live). */
-  widgets?: WidgetDefinition[];
-  widgetManifests?: WidgetManifest[];
-  /** Which stream wire drives default Cinatra turns (cinatra#1218, #1216 S2).
-   *  `"ag-ui"` = the unified assistant stream (headless client + S3 reducer);
-   *  `"legacy"` = the bespoke chat-stream-events wire (the retained
-   *  kill-switch until the parity-gated deletes land). Defaults to legacy so
-   *  non-/chat mounts are unaffected; the /chat page mount resolves the env
-   *  flag server-side and passes it here. */
-  streamWire?: "ag-ui" | "legacy";
-};
-
-export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, streamWire = "legacy" }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS, streamWire = "legacy" }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -288,7 +276,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     void fetchThreadList().then(setThreads);
     setGreeting(getGreeting());
 
-    void fetch("/api/chat/autosave")
+    void fetch("/api/assistants/autosave")
       .then((r) => r.json())
       .then((config: { enabled?: boolean; userCanConfigure?: boolean; userCanSeeIndicator?: boolean }) => {
         setAutosaveEnabled(Boolean(config.enabled));
@@ -369,8 +357,10 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   }, [messages]);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
+  // Also release the auto-scroll lock — it leaked across thread switches (#1702).
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
+    userScrolledUpRef.current = false;
   }, [activeThreadId]);
 
   // Notify ChatThreadPanel of the active thread so it can highlight without router navigation.
@@ -528,9 +518,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // Re-enable auto-scroll when streaming completes so the next response scrolls normally.
   const prevHasActiveStreamRef = useRef(false);
   useEffect(() => {
-    if (prevHasActiveStreamRef.current && !hasActiveStream) {
-      userScrolledUpRef.current = false;
-    }
+    if (prevHasActiveStreamRef.current && !hasActiveStream) userScrolledUpRef.current = false;
     prevHasActiveStreamRef.current = hasActiveStream;
   }, [hasActiveStream]);
 
@@ -640,7 +628,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // AG-UI stream driver (cinatra#1218) — the unified-wire counterpart of the
   // bespoke streamResponse below, lifecycle-identical; the turn drive lives
   // headlessly in ./ag-ui-chat-client. This wrapper owns registry + guard.
-  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string) {
+  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string) {
     const assistantId = generateId();
     const abortController = new AbortController();
     // The ORIGIN thread is the one this turn was dispatched FOR (captured
@@ -654,6 +642,8 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         threadId,
         assistantId,
         authorUserId,
+        // @chatgpt targets its own producer endpoint; others default in-driver.
+        ...(endpoint ? { endpoint } : {}),
         slack: isSlackModeRef.current,
         signal: abortController.signal,
         messages: contextMessages.map((m) => ({
@@ -686,16 +676,13 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // thread-switch/abort guards live here; every per-event message transform is
   // a pure, unit-tested applier in ./chat-stream-events.
   async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/chat", authorUserId?: string) {
-    // Unified-wire delegation (cinatra#1218): default Cinatra turns ride the
-    // AG-UI stream when the cutover flag is on and the fail-closed handshake
-    // succeeds (a failure pins the page to the retained legacy wire).
-    // Mention/external/bridge dispatches stay on their legacy endpoints in
-    // this stage (S5/delete-stage scope). The thread always exists here.
-    if (endpoint === "/api/chat" && streamWireRef.current === "ag-ui") {
+    // Unified-wire delegation (cinatra#1218): Cinatra turns + @chatgpt (pred. 3) ride AG-UI when the flag is on & the handshake succeeds; a failure falls back to the same bespoke `endpoint` (retained safe-harbor). Externals are webhook-polled. See AG_UI_ENDPOINT_FOR_LEGACY in ./chat-routing. Thread exists here.
+    const agUiEndpoint = AG_UI_ENDPOINT_FOR_LEGACY[endpoint];
+    if (agUiEndpoint && streamWireRef.current === "ag-ui") {
       const agUiThreadId = activeThreadIdRef.current;
       if (agUiThreadId) {
         if (await ensureAssistantChatWireNegotiated()) {
-          return streamAgUiResponse(contextMessages, agUiThreadId, handle, authorUserId);
+          return streamAgUiResponse(contextMessages, agUiThreadId, handle, authorUserId, agUiEndpoint);
         }
         streamWireRef.current = "legacy";
       }
@@ -1389,7 +1376,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     canToggle: autosaveCanToggle,
     onToggle: (enabled: boolean) => {
       setAutosaveEnabled(enabled);
-      void fetch("/api/chat/autosave", {
+      void fetch("/api/assistants/autosave", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
@@ -1497,6 +1484,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
             onActiveGateChange={handleActiveGateChange}
             pendingExternalHandle={pendingExternalHandle}
             typingIndicators={typingIndicators}
+            chatViews={chatViews}
           />
         </div>
 

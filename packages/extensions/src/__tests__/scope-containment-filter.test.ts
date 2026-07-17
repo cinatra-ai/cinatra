@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   filterAvailableScopesForParentPolicy,
   allowedScopesFromPolicy,
+  allowedScopeIdentitiesFromPolicy,
   type FilterableAvailableScopes,
   type ScopeIdentityLike,
 } from "../scope-containment-filter";
@@ -217,5 +218,79 @@ describe("allowedScopesFromPolicy — precursor subsumed as an allowedScopes pre
     expect(predicate({ kind: "team", id: TEAM_Y_IN_B })).toBe(false);
     expect(predicate({ kind: "project", id: PROJECT_P_IN_A })).toBe(false);
     expect(predicate({ kind: "workspace" })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The SERIALIZABLE array form (cinatra#1607 §6.4): `allowedScopeIdentitiesFromPolicy`
+// is what the agent_run permissions Server Component hands to the client picker
+// (a predicate cannot cross the RSC boundary). It must enumerate EXACTLY the
+// identities the predicate admits — i.e. the data filter's survivors — so the
+// call-site cutover is behaviour-preserving.
+// ---------------------------------------------------------------------------
+describe("allowedScopeIdentitiesFromPolicy — the serializable array form crossing the RSC boundary", () => {
+  const universe: ScopeIdentityLike[] = [
+    { kind: "personal" },
+    { kind: "project", id: PROJECT_P_IN_A },
+    { kind: "team", id: TEAM_X_IN_A },
+    { kind: "team", id: TEAM_Y_IN_B },
+    { kind: "org", id: ORG_A },
+    { kind: "org", id: ORG_B },
+    { kind: "workspace" },
+    { kind: "admin" },
+  ];
+
+  function inList(list: ScopeIdentityLike[], s: ScopeIdentityLike): boolean {
+    return list.some((a) => a.kind === s.kind && (a.id ?? undefined) === (s.id ?? undefined));
+  }
+
+  const policies: Array<[string, AgentAuthPolicy]> = [
+    ["workspace", policy("workspace")],
+    ["owner", policy("owner")],
+    [`org:${ORG_A}`, policy(`org:${ORG_A}`)],
+    [`team:${TEAM_X_IN_A}`, policy(`team:${TEAM_X_IN_A}`)],
+    [`project:${PROJECT_P_IN_A}`, policy(`project:${PROJECT_P_IN_A}`)],
+    ["admin", policy("admin")],
+    [
+      "mixed(list=ws,data=orgA,exec=teamX)",
+      {
+        runListVisibility: ["workspace"],
+        runDataVisibility: [`org:${ORG_A}`],
+        runExecuteVisibility: [`team:${TEAM_X_IN_A}`],
+        allowRunSharing: false,
+      },
+    ],
+  ];
+
+  it.each(policies)(
+    "array membership == predicate admission for every identity — %s",
+    (_label, pol) => {
+      const list = allowedScopeIdentitiesFromPolicy(baseScopes, pol, ORG_A);
+      const predicate = allowedScopesFromPolicy(baseScopes, pol, ORG_A);
+      for (const identity of universe) {
+        // The array admits an identity iff the predicate does (admin, which the
+        // predicate rejects, is never enumerated into the array).
+        expect(inList(list, identity)).toBe(predicate(identity));
+      }
+    },
+  );
+
+  it("always enumerates Personal, and never admin (§6.2 / not a grant target)", () => {
+    const list = allowedScopeIdentitiesFromPolicy(baseScopes, policy("owner"), ORG_A);
+    expect(inList(list, { kind: "personal" })).toBe(true);
+    expect(inList(list, { kind: "admin" })).toBe(false);
+    // owner parent narrows everything else away.
+    expect(list).toEqual([{ kind: "personal" }]);
+  });
+
+  it("org:A policy → [Personal, Org A, Team X] (serializable, no functions)", () => {
+    const list = allowedScopeIdentitiesFromPolicy(baseScopes, policy(`org:${ORG_A}`), ORG_A);
+    expect(list).toEqual([
+      { kind: "personal" },
+      { kind: "org", id: ORG_A },
+      { kind: "team", id: TEAM_X_IN_A },
+    ]);
+    // Serializable across the RSC boundary: a JSON round-trip is identity.
+    expect(JSON.parse(JSON.stringify(list))).toEqual(list);
   });
 });

@@ -77,6 +77,10 @@ vi.mock("@/lib/auth-session", () => ({
 
 vi.mock("@/lib/external-mcp-registry", () => ({
   ExternalMcpServerWriteConflictError,
+  // llm-providers S2 (#1713): the write handler coerces a posted transport
+  // through this helper; mirror the real closed-vocabulary coercion.
+  normalizeExternalMcpTransport: (value: unknown) =>
+    value === "streamable-http" || value === "sse" ? value : "unknown",
   getExternalMcpServerByIdFresh: (id: string) =>
     authzOverride.has(id) ? authzOverride.get(id) : servers.get(id) ?? null,
   insertExternalMcpServerStrict: (input: Row) => {

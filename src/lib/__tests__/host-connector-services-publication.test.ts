@@ -44,6 +44,7 @@ const EXT_MCP_ROW = {
   orgId: null,
   userId: null,
   enabled: true,
+  transport: "unknown" as const,
   allowedTools: null,
   allowedCatalogTools: ["people_search"],
   createdAt: "2026-01-01T00:00:00Z",

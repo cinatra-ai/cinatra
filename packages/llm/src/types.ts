@@ -11,8 +11,30 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 // carry the app-injected resolver ports WITHOUT llm importing
 // @/lib (ports come from the caller).
 import type { AttachmentResolverPorts } from "./attachments/resolve-attachments";
+// Type-only (erased; the runtime module ./execution-plane imports value types
+// from THIS file, so a value import would cycle — a type import does not).
+import type { ExecutionSession, ExecutionAvailability } from "./execution-plane";
 
 export type LlmProvider = "openai" | "anthropic" | "gemini";
+
+/**
+ * The LLM capability an agent may pin via `metadata.cinatra.llm.capabilityRequired`.
+ *
+ * The authoritative vocabulary + the declared capability matrix live in
+ * `@cinatra-ai/agents/llm-provider-policy` (`LLM_CAPABILITIES`). This is a
+ * deliberate local mirror in the orchestration package: `@cinatra-ai/agents`
+ * depends on `@cinatra-ai/llm`, so the orchestration layer MUST NOT import
+ * from agents (that would invert the layering / create a cycle — the same
+ * reason `LlmProvider` is duplicated here). The host reads the capability from
+ * the OAS block and threads it DOWN into orchestration as data on
+ * `GenerateInput.capabilityRequired`; the values are identical to
+ * `LlmCapability`, so a host value is directly assignable.
+ *
+ * Consumed today by the Anthropic adapter's native_mcp fail-closed hardening
+ * (llm-providers S1, #1712): under `"native_mcp"` the adapter refuses to
+ * silently degrade its native MCP path to function-tool emulation.
+ */
+export type LlmCapabilityRequirement = "media_input" | "function_tools" | "native_mcp";
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -74,6 +96,17 @@ export type LlmMcpServerTool = {
   allowedTools?: string[] | null;
   /** Whether tools that mutate state require approval. */
   requireApproval?: "never" | "always" | "read-only";
+  /**
+   * MCP wire transport this server speaks (llm-providers S2, #1713):
+   *   - "streamable-http" — the modern MCP Streamable HTTP transport.
+   *   - "sse"             — the legacy HTTP+SSE transport.
+   *   - "unknown"         — not classified (legacy rows / omitted).
+   * Optional: an absent value is treated as `"unknown"` by the injection
+   * layer, which never infers transport from `serverUrl`. The adapter-facing
+   * refusal (transports a provider's declared capability does not accept) is
+   * wired in the post-#1707 adapter half.
+   */
+  transport?: "streamable-http" | "sse" | "unknown";
 };
 
 export type LlmWebSearchTool = {
@@ -104,12 +137,54 @@ export type LlmContainerSkillsTool = {
   }>;
 };
 
+/**
+ * Opaque, broker-verifiable sealed carrier for an execution session
+ * (`{orgId,userId,surface,runId?}`). Produced by the trusted surface-layer
+ * issuer (`sealExecutionSession`), embedded in the `sandbox_execution` tool the
+ * injection layer adds, and STRIPPED before any provider-adapter call — the
+ * adapters (S2) translate the tool contract to a provider-native shell / named
+ * function tool and never receive the carrier. Only the broker can open it.
+ * A plain string alias (not a branded type) so `types.ts` takes no runtime
+ * dependency on the execution-plane module.
+ */
+export type SealedExecutionSessionCarrier = string;
+
+/**
+ * The distinct execution-plane tool (epic #1705 / S1 #1706). Deliberately NOT
+ * the skill-delivery shell (`LlmShellTool`) — it is a separate union member so
+ * it (a) survives Anthropic MCP-mode tool stripping (the injectMcpTools
+ * function-tool strip only removes `type:"function"`), (b) is protected from
+ * MCP dedup (its `type` is not `"mcp"`), and (c) is translated per-provider by
+ * a dedicated path in S2 (OpenAI native `type:"shell"` with function-tool
+ * fallback; Anthropic/Gemini named function tool). In S1 the provider adapters
+ * do not yet translate it (they skip unrecognized tool types), so it only ever
+ * reaches an adapter behind the default-off rollout flag; the injection layer
+ * strips the carrier regardless.
+ */
+export type LlmSandboxExecutionTool = {
+  type: "sandbox_execution";
+  /**
+   * The stable, provider-agnostic tool name the model calls. Fixed to
+   * `"sandbox_execute"` by contract — the provider translation layer (S2) keys
+   * native-shell-vs-function-tool dispatch on this name.
+   */
+  toolName: "sandbox_execute";
+  /**
+   * Opaque, broker-verifiable sealed session carrier. Bound to
+   * `{orgId,userId,surface,runId?}`. Stripped before provider-adapter calls.
+   */
+  sessionCarrier: SealedExecutionSessionCarrier;
+  /** Model-facing description of the capability (schema half of the contract). */
+  description: string;
+};
+
 export type LlmTool =
   | LlmFunctionTool
   | LlmShellTool
   | LlmMcpServerTool
   | LlmWebSearchTool
-  | LlmContainerSkillsTool;
+  | LlmContainerSkillsTool
+  | LlmSandboxExecutionTool;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -339,6 +414,15 @@ export type GenerateInput = {
    * self-MCP; any other id is looked up in external_mcp_servers.
    */
   declaredToolboxIds?: string[];
+  /**
+   * llm-providers S1 (#1712): the capability the dispatching agent pinned via
+   * `metadata.cinatra.llm.capabilityRequired`, threaded down by the host so an
+   * adapter can honour it at runtime. Absent ⇒ no capability gate (existing
+   * behavior). Today only `"native_mcp"` is adapter-consumed — it disables the
+   * Anthropic adapter's silent function-tool fallback when its native MCP path
+   * fails (fail-closed; function-tool emulation is not native MCP).
+   */
+  capabilityRequired?: LlmCapabilityRequirement;
   /**
    * Optional artifact attachments for THIS generation. The orchestration layer
    * resolves each ref: ingestible → provider-native file part; non-ingestible
@@ -588,6 +672,15 @@ export type OrchestrateGenerateInput = Omit<GenerateInput, "resolvedAttachments"
    * byte-identical to text-only behavior.
    */
   attachmentResolverPorts?: AttachmentResolverPorts;
+  /**
+   * Execution plane (exec-plane S1, cinatra#1706). A pre-minted execution
+   * session bound to `{orgId,userId,surface,runId?}`, supplied by the assistant
+   * runtime (chat surface). Omitted ⇒ no attributable caller ⇒ the capability
+   * is withheld (fail-closed). Only consulted when the rollout flag is on.
+   */
+  executionSession?: ExecutionSession;
+  /** Execution plane: D4 per-org/per-agent availability posture (default `"enabled"`). */
+  executionAvailability?: ExecutionAvailability;
 };
 
 // Same INTERNAL invariant as OrchestrateGenerateInput, AND also Omit
@@ -606,6 +699,10 @@ export type OrchestrateStreamInput = Omit<
   actorContext?: ActorContext;
   /** See OrchestrateGenerateInput.attachmentResolverPorts. */
   attachmentResolverPorts?: AttachmentResolverPorts;
+  /** Execution plane (exec-plane S1): see OrchestrateGenerateInput.executionSession. */
+  executionSession?: ExecutionSession;
+  /** Execution plane: D4 per-org/per-agent availability posture (default `"enabled"`). */
+  executionAvailability?: ExecutionAvailability;
 };
 
 export type OrchestrateFileInputGenerateInput = FileInputGenerateInput & {

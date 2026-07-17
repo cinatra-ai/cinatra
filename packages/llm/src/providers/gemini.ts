@@ -144,6 +144,12 @@ function translateTools(tools: LlmTool[]): FunctionDeclaration[] {
           required: ["commands"],
         } as unknown as FunctionDeclaration["parameters"],
       });
+    } else if ("type" in t && t.type === "sandbox_execution") {
+      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
+      // a named function declaration by a dedicated path in S2. In S1 it is
+      // stripped before adapter calls — defensive skip so the opaque session
+      // carrier can never be mis-emitted.
+      continue;
     }
     // MCP tools: not supported by Gemini — register as function tools instead
   }

@@ -3,8 +3,11 @@
 // The content renderer is exposed as a reusable embed entry (`./renderer`) that
 // the Cinatra-served conversation-view (S5's iframe target) mounts. `/chat`
 // keeps importing the content-renderer modules directly by their deep paths
-// (`./markdown-render`, `./chart-embed`, `./mermaid-block`, `./syntax-highlight`,
-// `./chart-schema`) — routing `/chat` through the barrel would add a module to
+// (`./markdown-render`, `./mermaid-block`, `./syntax-highlight`, and the
+// host-owned chart payload contract at
+// `@cinatra-ai/agent-ui-protocol/renderable-views/chart` — the `chart` view
+// COMPONENT itself migrated to @cinatra-ai/chart-artifact, cinatra#1626) —
+// routing `/chat` through the barrel would add a module to
 // its locked route-graph budget for no runtime benefit. Because the extraction
 // is a PURE re-export boundary, the embed entry and `/chat` render identically
 // by construction, and this must hold for EVERY input:
@@ -23,8 +26,7 @@ import { describe, expect, it } from "vitest";
 
 import * as barrel from "../renderer";
 import { renderMarkdown as directRenderMarkdown, detectCharts as directDetectCharts, detectMermaidBlocks as directDetectMermaid } from "../markdown-render";
-import { ChartEmbed as directChartEmbed, ChartError as directChartError } from "../chart-embed";
-import { validateChart as directValidateChart } from "../chart-schema";
+import { validateChart as directValidateChart } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { MermaidBlock as directMermaidBlock } from "../mermaid-block";
 import { getHighlightedSync as directGetHighlightedSync, highlightCodeAsync as directHighlightCodeAsync } from "../syntax-highlight";
 
@@ -36,8 +38,6 @@ describe("renderer extraction parity (#1219 S3 — zero regression)", () => {
     expect(barrel.renderMarkdown).toBe(directRenderMarkdown);
     expect(barrel.detectCharts).toBe(directDetectCharts);
     expect(barrel.detectMermaidBlocks).toBe(directDetectMermaid);
-    expect(barrel.ChartEmbed).toBe(directChartEmbed);
-    expect(barrel.ChartError).toBe(directChartError);
     expect(barrel.validateChart).toBe(directValidateChart);
     expect(barrel.MermaidBlock).toBe(directMermaidBlock);
     expect(barrel.getHighlightedSync).toBe(directGetHighlightedSync);

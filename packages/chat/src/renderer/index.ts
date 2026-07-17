@@ -38,9 +38,10 @@ export {
   type MermaidSource,
 } from "../markdown-render";
 
-// --- Recharts chart embeds (validated ChartSpec) -----------------------------
-export { ChartEmbed, ChartError } from "../chart-embed";
-export { validateChart, type ChartSpec } from "../chart-schema";
+// --- Chart payload contract (host-owned; the `chart` renderable-view COMPONENT
+// migrated to @cinatra-ai/chart-artifact via the generated cinatra.views map,
+// cinatra#1626 — recharts + ChartEmbed no longer ship from this package) -------
+export { validateChart, type ChartSpec } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 
 // --- Mermaid diagram block (lazy-loads mermaid on first render) ---------------
 export { MermaidBlock } from "../mermaid-block";

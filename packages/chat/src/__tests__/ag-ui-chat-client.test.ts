@@ -452,6 +452,70 @@ describe("driveAssistantChatTurn", () => {
     expect(f.messages[0].content).toBe("");
   });
 
+  it("defaults to the Cinatra producer endpoint when none is given", async () => {
+    const fetchMock = vi.fn(async (_url: string) => new Response(sseBody(turnFrames()), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const f = fakePort();
+    await driveAssistantChatTurn({
+      threadId: "th1",
+      assistantId: "a1",
+      messages: [{ role: "user", content: "hi" }],
+      slack: false,
+      signal: new AbortController().signal,
+      ui: f.port,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/chat");
+  });
+
+  it("routes the @chatgpt built-in to its own AG-UI producer endpoint", async () => {
+    const fetchMock = vi.fn(async (_url: string) => new Response(sseBody(turnFrames()), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const f = fakePort();
+    await driveAssistantChatTurn({
+      threadId: "th1",
+      assistantId: "a1",
+      messages: [{ role: "user", content: "hi @chatgpt" }],
+      slack: false,
+      endpoint: "/api/assistants/chatgpt",
+      signal: new AbortController().signal,
+      ui: f.port,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/chatgpt");
+    expect(f.messages[0].content).toBe("Hello");
+  });
+
+  it("preserves the custom endpoint on the retry-once (pre-stream network failure) path", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        // First attempt: a pre-stream network failure (TypeError: Failed to fetch).
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+        // Retry: succeeds.
+        .mockResolvedValueOnce(new Response(sseBody(turnFrames()), { status: 200 }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const f = fakePort();
+      const pending = driveAssistantChatTurn({
+        threadId: "th1",
+        assistantId: "a1",
+        messages: [{ role: "user", content: "retry me" }],
+        slack: false,
+        endpoint: "/api/assistants/chatgpt",
+        signal: new AbortController().signal,
+        ui: f.port,
+      });
+      await vi.advanceTimersByTimeAsync(3000); // the retry-once backoff
+      await pending;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // BOTH the initial attempt and the retry target the @chatgpt endpoint —
+      // never a silent downgrade to the Cinatra endpoint.
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/assistants/chatgpt");
+      expect(fetchMock.mock.calls[1][0]).toBe("/api/assistants/chatgpt");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is silent on abort (no error patch, indicator cleaned up)", async () => {
     const controller = new AbortController();
     globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {

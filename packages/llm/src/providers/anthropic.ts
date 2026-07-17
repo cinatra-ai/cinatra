@@ -40,6 +40,7 @@ import { writeAnthropicLogFile } from "../telemetry";
 import {
   BatchNotSupportedError,
   AnthropicFunctionToolSkillError,
+  NativeMcpCapabilityRequiredError,
 } from "../errors";
 import {
   isContainerSkillsTool,
@@ -218,6 +219,12 @@ function translateTools(tools: LlmTool[]): ToolUnion[] {
       // `container` request param (built by buildContainerSkillsParam), NEVER
       // as function tools.
       defs.push({ ...CONTAINER_SKILLS_CODE_EXECUTION_ENTRY } as never);
+    } else if ("type" in t && t.type === "sandbox_execution") {
+      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
+      // a named function tool by a dedicated path in S2. In S1 it is stripped
+      // before adapter calls — defensive skip so the opaque session carrier can
+      // never be mis-emitted.
+      continue;
     }
     // MCP server tools: Anthropic may support MCP connectors in the future.
     // For now, MCP primitives must be registered as function tools for Claude.
@@ -357,6 +364,27 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
       const nonMcpTools = input.tools?.filter(t => !isMcpServerTool(t));
 
       let effectiveTools = nonMcpTools ?? [];
+
+      // llm-providers S1 (#1712) — native_mcp fail-closed hardening (AC3).
+      // MUST precede the function-tools MCP fetch below: when the request pins
+      // `capabilityRequired: "native_mcp"` and MCP server tools are present but
+      // the connector is CONFIGURED for function-tools mode, there is no native
+      // MCP path to take. Silently emulating MCP with function tools does NOT
+      // satisfy native_mcp (the MCP Injection Rule) — so refuse BEFORE issuing
+      // the credential-bearing `tools/list` request that would begin the
+      // prohibited degradation. Excludes the container-skills case so it keeps
+      // its existing precedence (the `AnthropicFunctionToolSkillError` guard
+      // below). No effect when native_mcp is not required (the default) or when
+      // no MCP tools are present — behavior-identical.
+      if (
+        input.capabilityRequired === "native_mcp" &&
+        mcpMode === "function-tools" &&
+        mcpServerTools.length > 0 &&
+        !hasContainerSkills
+      ) {
+        throw new NativeMcpCapabilityRequiredError("anthropic");
+      }
+
       if (mcpServerTool && mcpMode === "function-tools") {
         const mcpFunctionTools = await fetchMcpToolsAsLlmFunctionTools(mcpServerTool);
         effectiveTools = [...mcpFunctionTools, ...effectiveTools];
@@ -509,6 +537,15 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
             // skills. Fail closed instead.
             if (hasContainerSkills) {
               throw apiError;
+            }
+            // llm-providers S1 (#1712) — native_mcp fail-closed hardening (AC3).
+            // When the request pins `capabilityRequired: "native_mcp"`, the
+            // silent degrade to function-tools below would violate the declared
+            // capability contract (function-tool emulation is not native MCP).
+            // Fail closed instead. No effect when native_mcp is not required
+            // (the default) — the existing fallback path is preserved verbatim.
+            if (input.capabilityRequired === "native_mcp") {
+              throw new NativeMcpCapabilityRequiredError("anthropic", apiError);
             }
             // Native MCP failed (e.g. beta not enabled on the account). Fall back to
             // function-tools mode so the caller still gets a response and usage is emitted.

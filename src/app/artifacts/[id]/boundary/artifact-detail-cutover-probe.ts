@@ -31,6 +31,8 @@ import {
   type CutoverSystem,
 } from "@cinatra-ai/objects/artifact-ui-cutover-matrix";
 
+import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
+
 import { pickArtifactRenderer, type ArtifactRenderDispatch } from "../renderer-dispatch";
 import type { HandlerKind } from "../pick-handler";
 
@@ -72,12 +74,15 @@ export function representationViewerProbe(arm: {
 }): (caseId: CutoverCaseId) => CutoverObservation {
   const pkg = arm.packageName ?? EXT;
   const generatedKey = arm.generatedKey ?? `${pkg}::preview`;
+  // The slot the arm resolved at, derived from the key (`<pkg>::<slot>`) so a
+  // never-built degrade carries the ACTUAL slot (Slice B resolves at `detail`).
+  const slot: ArtifactUiSlot = generatedKey.endsWith("::detail") ? "detail" : "preview";
   const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "probe" };
   const extProvider = (built: boolean): ArtifactRenderDispatch =>
     pickArtifactRenderer({
       identity: floor,
       semantic: null,
-      representation: { tier: "extension", packageName: pkg, generatedKey, pattern: arm.mime, built },
+      representation: { tier: "extension", packageName: pkg, generatedKey, pattern: arm.mime, slot, built },
     });
   const firstPartyOnly = (): ArtifactRenderDispatch =>
     pickArtifactRenderer({

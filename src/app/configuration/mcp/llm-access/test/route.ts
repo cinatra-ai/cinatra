@@ -10,6 +10,7 @@ import { getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-
 // host-access cutover). An absent connector degrades to a
 // 400 ("connector not installed"), never a 500.
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+import { canProviderSatisfyCapability } from "@cinatra-ai/agents";
 import type { LlmProvider } from "@cinatra-ai/llm";
 
 const VALID_PROVIDERS: LlmProvider[] = ["openai", "gemini", "anthropic"];
@@ -61,6 +62,29 @@ export async function POST(request: Request) {
   const provider = body.provider as LlmProvider | undefined;
   if (!provider || !VALID_PROVIDERS.includes(provider)) {
     return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
+  }
+
+  // llm-providers S2 truth cleanup (cinatra#1713 AC4, epic #1711): MCP access
+  // is only testable for a provider whose DECLARED capability matrix satisfies
+  // `native_mcp`. Function-tool emulation does not qualify as MCP (the MCP
+  // Injection Rule), so the old fake `call_cinatra_mcp` function-declaration
+  // stand-in that presented a non-MCP Gemini request as an MCP test is removed
+  // rather than relabeled — Gemini is refused honestly here. (The Anthropic
+  // branch below picks its delivery path from the connector record's mcpMode,
+  // defaulting to native exactly like the adapter; its function-tools variant
+  // is labeled as function tools, never presented as MCP.) When the dormant
+  // Gemini arm activates and the declared catalog flips Gemini's
+  // `native_mcp.status` to "native", this gate opens for a real native branch.
+  if (!canProviderSatisfyCapability(provider, "native_mcp")) {
+    return NextResponse.json(
+      {
+        error:
+          `Provider "${provider}" does not support native MCP per its declared ` +
+          `capability matrix (function-tool emulation does not qualify as MCP), ` +
+          `so there is no MCP access to test.`,
+      },
+      { status: 400 },
+    );
   }
 
   const credentials = getLlmMcpCredentials(provider);
@@ -146,77 +170,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ request: requestBody, response: responseBody });
   }
 
-  if (provider === "gemini") {
-    const surface = getLlmProviderSurface("gemini");
-    if (!surface?.getConfiguredAPIKey) {
-      return NextResponse.json({ error: "The Gemini connector is not installed." }, { status: 400 });
-    }
-    const apiKey = await surface.getConfiguredAPIKey();
-    if (!apiKey) {
-      return NextResponse.json({ error: "Gemini API key not configured." }, { status: 400 });
-    }
-
-    // Gemini does not support native MCP tools. We expose the MCP server as a
-    // function declaration so the model can signal intent to call it.
-    const requestBody = {
-      systemInstruction: {
-        parts: [
-          {
-            text:
-              "You have access to the Cinatra MCP server as a function tool. " +
-              "When asked, call the 'call_cinatra_mcp' function and report what you receive.",
-          },
-        ],
-      },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: "Call the Cinatra MCP server and tell me which tools are available." }],
-        },
-      ],
-      tools: [
-        {
-          functionDeclarations: [
-            {
-              name: "call_cinatra_mcp",
-              description:
-                `Cinatra MCP server (server URL: ${serverUrl}). ` +
-                `Gemini does not yet support the MCP protocol natively — ` +
-                `this function declaration represents what would be a native MCP tool call.`,
-              parameters: {
-                type: "OBJECT",
-                properties: {
-                  tool_name: {
-                    type: "STRING",
-                    description: "Name of the MCP tool to call (e.g. contacts.list, entities.list)",
-                  },
-                  arguments: {
-                    type: "OBJECT",
-                    description: "Arguments for the MCP tool call",
-                  },
-                },
-                required: ["tool_name"],
-              },
-            },
-          ],
-        },
-      ],
-    };
-
-    const model = "gemini-2.5-flash";
-    const apiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-      },
-    );
-
-    const responseBody = await apiResponse.json() as unknown;
-    return NextResponse.json({ request: requestBody, response: responseBody });
-  }
-
   if (provider === "anthropic") {
     const surface = getLlmProviderSurface("anthropic");
     if (!surface?.getConfiguredConnection || !surface.getDefaultModel) {
@@ -231,7 +184,11 @@ export async function POST(request: Request) {
     }
 
     const model = surface.getDefaultModel();
-    const mcpMode = conn.mcpMode ?? "function-tools";
+    // Mirror the adapter's default (packages/llm/src/providers/anthropic.ts
+    // defaults an absent mcpMode to "native") so this diagnostic exercises the
+    // same path production requests take (#1713 AC4 truth cleanup — the old
+    // "function-tools" default here diverged from the adapter).
+    const mcpMode = conn.mcpMode ?? "native";
     const anthropicHeaders = {
       "Content-Type": "application/json",
       "x-api-key": conn.apiKey,

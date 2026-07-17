@@ -56,7 +56,7 @@ describe("fetch wrappers", () => {
     expect(await fetchThreadById("t1")).toBeNull();
   });
 
-  it("saveChatThreadViaFetch POSTs the thread JSON to /api/chat/save", async () => {
+  it("saveChatThreadViaFetch POSTs the thread JSON to /api/assistants/threads", async () => {
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
@@ -64,7 +64,7 @@ describe("fetch wrappers", () => {
     }));
     await saveChatThreadViaFetch({ id: "t1", title: "T" });
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("/api/chat/save");
+    expect(calls[0].url).toBe("/api/assistants/threads");
     expect(calls[0].init?.method).toBe("POST");
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ id: "t1", title: "T" });
   });

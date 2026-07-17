@@ -29,6 +29,12 @@
  *    (no (teamId,userId) unique constraint exists — codex 1567-r1);
  *  - remove: the LAST member is protected (`last_member`) inside a
  *    lock-then-count transaction; a non-member is `not_a_member`;
+ *  - last-admin guard (#1686), uniform across authority tiers: with the role
+ *    column provisioned, removing or demoting the team's ONLY admin is
+ *    refused (`last_admin`) inside the same locked transaction — a team never
+ *    silently drops to zero admins; `last_member` keeps precedence when the
+ *    sole member is also the sole admin; roleless deployments skip the guard
+ *    (and the membership read never names the role column there);
  *  - the candidate search is bounded by the team's organizationId, escapes
  *    ILIKE wildcards, and stays LIMIT 20.
  */
@@ -76,6 +82,10 @@ vi.mock("@/lib/better-auth-db", () => ({
       transaction(...(a as [Parameters<typeof transaction>[0]])),
   },
   teamMemberRoleColumnExists: () => teamMemberRoleColumnExists(),
+  // The strict variant shares the same underlying mock: tests that flip the
+  // probe to true/false exercise both call sites; the strict-failure case
+  // makes the shared mock reject explicitly.
+  teamMemberRoleColumnExistsStrict: () => teamMemberRoleColumnExists(),
 }));
 
 import {
@@ -246,6 +256,8 @@ describe("addTeamMemberAction", () => {
     expect(containsValue(insert, "team-1")).toBe(true);
     expect(containsValue(insert, "user-2")).toBe(true);
     expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1/settings");
+    // The detail page's Overview member count must refresh too (#1688).
+    expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1");
   });
 
   it("rejects a blank user id before touching the org boundary", async () => {
@@ -308,6 +320,161 @@ describe("removeTeamMemberAction", () => {
     expect(containsValue(del, "team-1")).toBe(true);
     expect(containsValue(del, "user-2")).toBe(true);
     expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1/settings");
+    // The detail page's Overview member count must refresh too (#1688).
+    expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Last-admin guard (#1686) — remove + demote may not orphan the team
+// ---------------------------------------------------------------------------
+describe("last-admin guard (#1686)", () => {
+  it("REMOVE: refuses to remove the sole admin while other members remain (last_admin), no DELETE", async () => {
+    primeManagerSession(); // org_admin — the guard is uniform across tiers
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // team lookup → lock → role-aware membership read
+    queuedRows = [
+      [TEAM_ROW],
+      [],
+      [
+        { userId: "user-2", role: "admin" },
+        { userId: "user-3", role: "member" },
+      ],
+    ];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "last_admin" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("DELETE"))).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("REMOVE (the #1686 scenario): a team-admin-only caller cannot remove THEMSELVES as sole admin", async () => {
+    primeManagerSession({ orgRole: "member" });
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // team lookup → lazy gate role read → lock → in-lock re-check →
+    // role-aware membership read
+    queuedRows = [
+      [TEAM_ROW],
+      [{ role: "admin" }],
+      [],
+      [{ role: "admin" }],
+      [
+        { userId: "caller-1", role: "admin" },
+        { userId: "user-3", role: "member" },
+      ],
+    ];
+    const r = await removeTeamMemberAction("team-1", "caller-1");
+    expect(r).toEqual({ ok: false, error: "last_admin" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("DELETE"))).toBe(false);
+  });
+
+  it("REMOVE: an admin leaves fine when ANOTHER admin remains", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    queuedRows = [
+      [TEAM_ROW],
+      [],
+      [
+        { userId: "user-2", role: "admin" },
+        { userId: "user-9", role: "admin" },
+      ],
+      [],
+    ];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: true });
+    expect(sqlText(executed[3]!.sql)).toContain('DELETE FROM public."teamMember"');
+    expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1/settings");
+  });
+
+  it("REMOVE: last_member keeps precedence when the sole member is also the sole admin", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    queuedRows = [[TEAM_ROW], [], [{ userId: "user-2", role: "admin" }]];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "last_member" });
+  });
+
+  it("REMOVE roleless: the membership read never names the role column, guard inert (pre-#1566 statement)", async () => {
+    primeManagerSession();
+    // default: teamMemberRoleColumnExists → false
+    queuedRows = [
+      [TEAM_ROW],
+      [],
+      [{ userId: "user-2" }, { userId: "user-3" }],
+      [],
+    ];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: true });
+    const membershipRead = executed[2]!.sql;
+    expect(sqlText(membershipRead)).not.toMatch(/\brole\b/i);
+  });
+
+  it("REMOVE: a FAILED role-column probe aborts the removal (fail closed — CodeRabbit 1689-r1), never skips the guard", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => {
+      throw new Error("probe: connection reset");
+    });
+    queuedRows = [[TEAM_ROW]];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "unknown_error" });
+    // No transaction, no DELETE — the mutation never starts unguarded.
+    expect(transaction).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("DEMOTE: refuses to demote the sole admin (last_admin), no UPDATE", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // team lookup → lock → admins read (exactly one: the target)
+    queuedRows = [[TEAM_ROW], [], [{ userId: "user-2" }]];
+    const r = await updateTeamMemberRoleAction("team-1", "user-2", "member");
+    expect(r).toEqual({ ok: false, error: "last_admin" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("UPDATE"))).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("DEMOTE: succeeds when another admin remains; the admins read runs on the locked snapshot", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    queuedRows = [
+      [TEAM_ROW],
+      [],
+      [{ userId: "user-2" }, { userId: "user-9" }],
+      [{ id: "tm-1" }],
+    ];
+    const r = await updateTeamMemberRoleAction("team-1", "user-2", "member");
+    expect(r).toEqual({ ok: true });
+    // lock first, THEN the admins count, THEN the update
+    expect(sqlText(executed[1]!.sql)).toContain("pg_advisory_xact_lock");
+    expect(sqlText(executed[2]!.sql)).toContain("role = 'admin'");
+    expect(sqlText(executed[3]!.sql)).toContain('UPDATE public."teamMember"');
+  });
+
+  it("DEMOTE: duplicate admin rows for the SAME user are not a second admin (no unique constraint — codex 1686-r1)", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    // Both admin rows belong to the target; the UPDATE would demote them all.
+    queuedRows = [
+      [TEAM_ROW],
+      [],
+      [{ userId: "user-2" }, { userId: "user-2" }],
+    ];
+    const r = await updateTeamMemberRoleAction("team-1", "user-2", "member");
+    expect(r).toEqual({ ok: false, error: "last_admin" });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.some((t) => t.includes("UPDATE"))).toBe(false);
+  });
+
+  it("PROMOTE: never issues the admins read (a promotion cannot reduce the admin count)", async () => {
+    primeManagerSession();
+    teamMemberRoleColumnExists.mockImplementation(async () => true);
+    queuedRows = [[TEAM_ROW], [], [{ id: "tm-1" }]];
+    const r = await updateTeamMemberRoleAction("team-1", "user-2", "admin");
+    expect(r).toEqual({ ok: true });
+    const texts = executed.map((c) => sqlText(c.sql));
+    expect(texts.filter((t) => t.includes("role = 'admin'"))).toHaveLength(0);
   });
 });
 

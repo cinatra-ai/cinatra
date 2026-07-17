@@ -55,6 +55,18 @@ export const BINDING_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 // Role names: kebab-case, host-neutral (a role is NOT a package name).
 export const ROLE_NAME_RE = /^[a-z][a-z0-9-]*$/;
 
+// A field-renderer COMPONENT entry (cinatra#1625, epic #1620 S8 — M3): the
+// optional `cinatra.fieldRenderers[].component` declaration by which a claiming
+// extension ships the migrated React renderer for its binding id (own keyspace,
+// separate from the neutral KIND table). `entry` is a package-RELATIVE subpath
+// (no leading slash, no `..` traversal, no bare package specifier) the generator
+// resolves to a real file + an importable subpath (package.json exports OR a
+// tsconfig path alias). This SHARED validator is fs-free (it also runs in the
+// runtime collector), so it shape-checks only; the file/exports resolution is a
+// generator-side check (generate-extension-manifest.mjs), mirroring the
+// cinatra.artifact.ui renderer-entry resolution.
+export const COMPONENT_ENTRY_RE = /^(\.\/)?[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
+
 // The semantic-floor artifact role (cinatra#151 Stage 6): the single role the
 // generator REQUIRES a claimant for (and requires that claimant to be a
 // cinatra.systemExtensions member) — the floor artifact type is structural,
@@ -90,7 +102,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       errors.push(`${where}: entry must be an object`);
       return;
     }
-    const { id, kind, priority, midRunHitl, a2uiTranslator, params, ...rest } = e;
+    const { id, kind, priority, midRunHitl, a2uiTranslator, params, component, ...rest } = e;
     const unknownKeys = Object.keys(rest);
     if (unknownKeys.length > 0) {
       errors.push(`${where}: unknown key(s) ${unknownKeys.join(", ")}`);
@@ -140,6 +152,46 @@ export function validateFieldRendererDeclarations(packageName, raw) {
         return;
       }
     }
+    // Optional migrated-component declaration (cinatra#1625, epic #1620 S8):
+    // { entry: <package-relative subpath>, propsApiVersion?: <int >= 1> }. The
+    // component the claiming extension ships for THIS binding id. Shape-only
+    // here (fs-free shared validator); the generator resolves the subpath.
+    let normalizedComponent;
+    if (component !== undefined) {
+      if (!isPlainObject(component)) {
+        errors.push(`${where}: component must be a plain object when present`);
+        return;
+      }
+      const { entry, propsApiVersion, ...componentRest } = component;
+      const componentUnknown = Object.keys(componentRest);
+      if (componentUnknown.length > 0) {
+        errors.push(`${where}: component has unknown key(s) ${componentUnknown.join(", ")}`);
+        return;
+      }
+      if (
+        typeof entry !== "string" ||
+        !COMPONENT_ENTRY_RE.test(entry) ||
+        entry.includes("..")
+      ) {
+        errors.push(
+          `${where}: component.entry must be a package-relative subpath (no leading slash, no "..") (got ${JSON.stringify(entry)})`,
+        );
+        return;
+      }
+      if (
+        propsApiVersion !== undefined &&
+        (!Number.isInteger(propsApiVersion) || propsApiVersion < 1)
+      ) {
+        errors.push(
+          `${where}: component.propsApiVersion must be a positive integer when present (got ${JSON.stringify(propsApiVersion)})`,
+        );
+        return;
+      }
+      normalizedComponent = {
+        entry,
+        ...(propsApiVersion !== undefined ? { propsApiVersion } : {}),
+      };
+    }
     entries.push({
       id,
       kind,
@@ -147,6 +199,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       ...(midRunHitl === true ? { midRunHitl: true } : {}),
       ...(a2uiTranslator !== undefined ? { a2uiTranslator } : {}),
       ...(params !== undefined ? { params: JSON.parse(JSON.stringify(params)) } : {}),
+      ...(normalizedComponent !== undefined ? { component: normalizedComponent } : {}),
       declaredBy: packageName,
     });
   });
@@ -155,9 +208,17 @@ export function validateFieldRendererDeclarations(packageName, raw) {
 
 /**
  * The canonical comparable form for duplicate-divergence checks (the
- * deep-equal contract: kind, priority, midRunHitl, a2uiTranslator, params).
- * ONE definition — the generator's merge and the runtime collector's
- * generated-vs-runtime divergence warning both consume it.
+ * deep-equal contract: kind, priority, midRunHitl, a2uiTranslator, params,
+ * component). ONE definition — the generator's merge and the runtime collector's
+ * generated-vs-runtime divergence warning both consume it. `component`
+ * (cinatra#1625 S8) is INCLUDED so a duplicate id that disagrees on the migrated
+ * component (a different entry/ABI, or one declaring it and the other not) is a
+ * fail-closed conflict at generation instead of a silent first-wins dedupe that
+ * could bake the wrong claimant (or none) into the component map. The generated
+ * bindings file never carries `component` (separate keyspace), so a runtime
+ * package re-declaring a bundled id without one is the only case that turns this
+ * into a (benign) divergence warning — and a runtime package cannot own a
+ * bundled package's namespaced id, so that case does not occur in practice.
  */
 export function comparableFieldRendererBinding(e) {
   return JSON.stringify({
@@ -166,6 +227,7 @@ export function comparableFieldRendererBinding(e) {
     midRunHitl: e.midRunHitl === true,
     a2uiTranslator: e.a2uiTranslator ?? null,
     params: e.params ?? null,
+    component: e.component ?? null,
   });
 }
 

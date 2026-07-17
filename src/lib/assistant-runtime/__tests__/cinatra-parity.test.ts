@@ -73,6 +73,12 @@ vi.mock("@/lib/artifacts/attachment-resolver-ports", () => ({
 }));
 vi.mock("@cinatra-ai/llm", () => ({
   hasConfiguredLlmRuntime: vi.fn(async () => true),
+  // Dead-ingress guard (#1699): the runtime probes before attaching the MCP
+  // tool; parity tests run with a live (reachable) URL.
+  checkPublicMcpReachability: vi.fn(async () => ({
+    status: "reachable",
+    url: "https://mcp.example.test/api/mcp",
+  })),
   resolveDefaultAdapter: vi.fn(async () => ({
     provider: "openai",
     defaultModel: "gpt-4o",

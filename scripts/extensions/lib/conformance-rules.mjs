@@ -82,12 +82,16 @@ function readIfExists(path) {
 export function loadLiveRules(sdkRepoRoot) {
   const hostContextPath = `${sdkRepoRoot}/packages/sdk-extensions/src/host-context.ts`;
   const artifactContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/artifact-contract.ts`;
+  const chatViewsContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/chat-views-contract.ts`;
+  const llmProviderContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/llm-provider-contract.ts`;
   const accessConfigPath = `${sdkRepoRoot}/packages/sdk-extensions/src/access-config.ts`;
   const sdkExtensionsPkgPath = `${sdkRepoRoot}/packages/sdk-extensions/package.json`;
   const sdkUiPkgPath = `${sdkRepoRoot}/packages/sdk-ui/package.json`;
 
   const hostContextSrc = readIfExists(hostContextPath);
   const artifactContractSrc = readIfExists(artifactContractPath);
+  const chatViewsContractSrc = readIfExists(chatViewsContractPath);
+  const llmProviderContractSrc = readIfExists(llmProviderContractPath);
   const accessConfigSrc = readIfExists(accessConfigPath);
   const sdkExtensionsPkgRaw = readIfExists(sdkExtensionsPkgPath);
   const sdkUiPkgRaw = readIfExists(sdkUiPkgPath);
@@ -95,6 +99,8 @@ export function loadLiveRules(sdkRepoRoot) {
   const missing = [];
   if (!hostContextSrc) missing.push(hostContextPath);
   if (!artifactContractSrc) missing.push(artifactContractPath);
+  if (!chatViewsContractSrc) missing.push(chatViewsContractPath);
+  if (!llmProviderContractSrc) missing.push(llmProviderContractPath);
   if (!accessConfigSrc) missing.push(accessConfigPath);
   if (!sdkExtensionsPkgRaw) missing.push(sdkExtensionsPkgPath);
   if (!sdkUiPkgRaw) missing.push(sdkUiPkgPath);
@@ -139,6 +145,31 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactContractSrc,
     "ARTIFACT_UI_REGISTRY_ITEM_TYPES",
   );
+  // cinatra.views (cinatra#1626, S9): the chat renderable-view declaration
+  // surface's OWN ABI version, DERIVED from the live leaf source
+  // (chat-views-contract.ts's CHAT_VIEWS_ABI_VERSION) — never a re-listed copy
+  // (#979 addendum principle). The viewType grammar + entry containment are a
+  // one-line regex hand-mirrored in the gate (like `isUiEntryContained`); only
+  // the version literal is derived here.
+  const chatViewsAbiVersion = extractNumberConst(chatViewsContractSrc, "CHAT_VIEWS_ABI_VERSION");
+  // cinatra.llmProvider (cinatra#1712, epic #1711 S1 AC1): the LLM-provider
+  // declaration surface's OWN ABI version + closed vocabularies, DERIVED from
+  // the live leaf source (llm-provider-contract.ts) — never a re-listed copy
+  // (#979 addendum principle). The leaf is the EXACT public mirror of the host
+  // `llm-provider-policy.ts` declaration model; the gate's `checkLlmProvider`
+  // hand-mirrors the object grammar / cross-field rules as JS (bare `node`, no
+  // TS toolchain), but every DATA literal (the abi version + the four
+  // vocabularies) is derived here so the gate can never drift LOOSER than the
+  // leaf schema. Drift here can only produce a false CI signal, never a
+  // security gap; the leaf schema stays the runtime authority.
+  const llmProviderAbiVersion = extractNumberConst(
+    llmProviderContractSrc,
+    "LLM_PROVIDER_ABI_VERSION",
+  );
+  const llmProviders = extractStringArrayConst(llmProviderContractSrc, "LLM_PROVIDERS");
+  const llmCapabilities = extractStringArrayConst(llmProviderContractSrc, "LLM_CAPABILITIES");
+  const nativeMcpStatuses = extractStringArrayConst(llmProviderContractSrc, "NATIVE_MCP_STATUSES");
+  const mcpApprovalModes = extractStringArrayConst(llmProviderContractSrc, "MCP_APPROVAL_MODES");
   const sdkAbiVersion =
     typeof sdkExtensionsPkg?.cinatra?.sdkAbiVersion === "string"
       ? sdkExtensionsPkg.cinatra.sdkAbiVersion
@@ -165,6 +196,24 @@ export function loadLiveRules(sdkRepoRoot) {
   if (!artifactUiRegistryItemTypes || artifactUiRegistryItemTypes.length === 0) {
     return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_REGISTRY_ITEM_TYPES" };
   }
+  if (chatViewsAbiVersion === null) {
+    return { ok: false, missing: [], derivationFailed: "CHAT_VIEWS_ABI_VERSION" };
+  }
+  if (llmProviderAbiVersion === null) {
+    return { ok: false, missing: [], derivationFailed: "LLM_PROVIDER_ABI_VERSION" };
+  }
+  if (!llmProviders || llmProviders.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "LLM_PROVIDERS" };
+  }
+  if (!llmCapabilities || llmCapabilities.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "LLM_CAPABILITIES" };
+  }
+  if (!nativeMcpStatuses || nativeMcpStatuses.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "NATIVE_MCP_STATUSES" };
+  }
+  if (!mcpApprovalModes || mcpApprovalModes.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "MCP_APPROVAL_MODES" };
+  }
   // Mirror `generateArtifactUiSdkAbiRange` (leaf): caret over maj.min.patch of
   // the canonical SDK ABI. The generation RULE is one line — drift here can only
   // produce a false CI signal, never a security gap.
@@ -184,6 +233,12 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactUiAbiVersion,
     artifactUiRegistryItemTypes: new Set(artifactUiRegistryItemTypes),
     artifactUiSdkAbiRange,
+    chatViewsAbiVersion,
+    llmProviderAbiVersion,
+    llmProviders: new Set(llmProviders),
+    llmCapabilities,
+    nativeMcpStatuses: new Set(nativeMcpStatuses),
+    mcpApprovalModes: new Set(mcpApprovalModes),
     sdkExtensionsExports: Object.keys(sdkExtensionsPkg.exports ?? {}),
     sdkUiExports: Object.keys(sdkUiPkg.exports ?? {}),
   };

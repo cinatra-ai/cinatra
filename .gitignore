@@ -30,6 +30,10 @@ yarn-error.log*
 # `.env*` glob above does NOT match this name, so it is listed explicitly.
 docker/wayflow/.wayflow.env
 
+# Same pattern for the Nango container (NANGO_ENCRYPTION_KEY only) — synced
+# from .env.local by scripts/gen-nango-env.mjs on every `npm run services`.
+docker/nango/.nango.env
+
 # --- OS / misc ---
 .DS_Store
 

@@ -27,7 +27,7 @@ import {
   type OwnerView,
   type PermissionsFormResult,
 } from "@/components/permissions-form";
-import type { AvailableScopes } from "@/components/access-combobox";
+import type { AvailableScopes, AllowedScopes } from "@/components/access-combobox";
 
 export type ExtensionPermissionsClientProps = {
   kind: ExtensionKind;
@@ -37,6 +37,14 @@ export type ExtensionPermissionsClientProps = {
   owner: OwnerView | null;
   coOwners: OwnerView[];
   availableScopes: AvailableScopes;
+  /**
+   * Containment (cinatra#1607 §6.4): narrow the offered scopes to a parent's
+   * allowed set via the picker's first-class `allowedScopes` prop. Serializable
+   * (a typed `{ kind, id }[]`) so it crosses the Server → Client boundary from
+   * the agent_run permissions Server Component. DISPLAY input only — the server
+   * independently rejects an out-of-scope selection (§6.8).
+   */
+  allowedScopes?: AllowedScopes;
   currentUserId: string | null;
   /**
    * Whether co-owner add / remove UI should be shown. Agent runs gate this
@@ -75,6 +83,7 @@ export function ExtensionPermissionsClient({
   owner,
   coOwners,
   availableScopes,
+  allowedScopes,
   currentUserId,
   allowSharing,
   removeOwner,
@@ -94,6 +103,7 @@ export function ExtensionPermissionsClient({
       owner={owner}
       coOwners={coOwners}
       availableScopes={availableScopes}
+      allowedScopes={allowedScopes}
       currentUserId={currentUserId}
       allowSharing={allowSharing}
       selfRemoveRedirect={selfRemoveRedirect}

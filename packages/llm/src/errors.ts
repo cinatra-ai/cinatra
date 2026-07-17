@@ -104,6 +104,40 @@ export class AnthropicFunctionToolSkillError extends AnthropicSkillDeliveryError
 }
 
 /**
+ * llm-providers S1 (#1712) — native_mcp fail-closed hardening.
+ *
+ * Thrown when a request carries `capabilityRequired: "native_mcp"` and the
+ * Anthropic adapter's native MCP path (`client.beta.messages.create` with
+ * `mcp_servers`) fails at runtime (e.g. the account has not enabled the MCP
+ * client beta). WITHOUT a native_mcp requirement the adapter silently degrades
+ * to the function-tools path; WITH it, that degradation would violate the
+ * declared capability contract (function-tool emulation does NOT satisfy
+ * native_mcp — the MCP Injection Rule), so the request fails closed instead.
+ * Callers convert adapter throws into SSE `error` events / HTTP 5xx.
+ */
+export class NativeMcpCapabilityRequiredError extends Error {
+  readonly code = "native_mcp_capability_required" as const;
+  readonly provider: LlmProvider;
+  /** The underlying native-path failure, when one triggered the fail-closed. */
+  readonly cause?: unknown;
+
+  constructor(provider: LlmProvider, cause?: unknown) {
+    super(
+      `The request requires the "native_mcp" LLM capability, but provider ` +
+        `"${provider}" could not complete its native MCP path` +
+        (cause instanceof Error ? `: ${cause.message}` : "") +
+        `. Falling back to function-tool emulation would not satisfy ` +
+        `native_mcp (function tools are not native MCP), so the request fails ` +
+        `closed. Enable the provider's native MCP support or remove the ` +
+        `native_mcp capability requirement.`,
+    );
+    this.name = "NativeMcpCapabilityRequiredError";
+    this.provider = provider;
+    this.cause = cause;
+  }
+}
+
+/**
  * A catalog skill exceeds Anthropic's 30MB Custom Skills upload limit, OR a
  * single request's resolved skill set exceeds the per-request
  * `container.skills` cap of 8. Surfaced as a CONFIGURATION error by the

@@ -42,6 +42,14 @@ import {
   OasCinatraLlmSchema,
   type LlmProvider,
 } from "@cinatra-ai/agents";
+// llm-providers S1 (#1712, AC4): the native-MCP OBO/durable-binding gate keys on
+// the DECLARED capability matrix (single source of truth) rather than a
+// hardcoded provider-id union — a provider carries native MCP iff its
+// declaration satisfies `native_mcp`. Behavior-identical under the build-known
+// catalog (openai|anthropic ⇔ native_mcp). The host app sits above both
+// `@cinatra-ai/agents` and `@cinatra-ai/llm`, so importing the agents policy
+// here does not invert the package layering.
+import { canProviderSatisfyCapability } from "@cinatra-ai/agents/llm-provider-policy";
 import {
   deriveOboCeilingChain,
   oboCeilingContains,
@@ -1370,8 +1378,11 @@ export async function POST(req: Request): Promise<Response> {
         runForPorts?.orgId &&
         runForPorts?.runBy &&
         runForPorts?.id &&
-        (mcpEffectiveProvider === "openai" ||
-          mcpEffectiveProvider === "anthropic")
+        // llm-providers S1 (#1712, AC4): native MCP OBO applies iff the
+        // effective provider's DECLARED capability matrix satisfies native_mcp
+        // (was: `=== "openai" || === "anthropic"`). Behavior-identical under the
+        // build-known catalog; a later catalog change flows through with no edit.
+        canProviderSatisfyCapability(mcpEffectiveProvider, "native_mcp")
           ? async () => {
               // #1195 durable run-context binding — the machine-token fallback,
               // minted HERE (byte-identical to the orchestration-layer fallback
@@ -1513,6 +1524,10 @@ export async function POST(req: Request): Promise<Response> {
         // creation path's fixed-allowlist hard cap). Drops surface via
         // `result.skillSelection` (returned in the JSON response below).
         skillSelectionMode: "general",
+        // llm-providers S1 (#1712): thread the agent's pinned capability down to
+        // the adapter so it can fail closed at runtime (Anthropic native_mcp —
+        // no silent function-tool degrade). Absent ⇒ no capability gate.
+        capabilityRequired: body.cinatra_llm?.capabilityRequired,
         customSkillContent: personalSkill?.content,
         // S10 efficacy loop (cinatra#1368): carry the personal delta's identity
         // alongside its content so exposure telemetry can attribute it (the

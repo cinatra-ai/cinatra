@@ -10,8 +10,6 @@ import {
   renderMarkdown,
   detectCharts,
   detectMermaidBlocks,
-  ChartEmbed,
-  ChartError,
   MermaidBlock,
   validateChart,
   getHighlightedSync,
@@ -29,9 +27,10 @@ describe("renderer module public surface (#1219 S3)", () => {
     expect(typeof validateChart).toBe("function");
     expect(typeof getHighlightedSync).toBe("function");
     expect(typeof highlightCodeAsync).toBe("function");
-    // React renderable components (function components).
-    expect(typeof ChartEmbed).toBe("function");
-    expect(typeof ChartError).toBe("function");
+    // React renderable components (function components). The `chart` view
+    // COMPONENT migrated to @cinatra-ai/chart-artifact (cinatra#1626) — it is no
+    // longer part of this host embed surface; only the host-owned chart payload
+    // helpers (detectCharts/validateChart) remain.
     expect(typeof MermaidBlock).toBe("function");
     // Guard against accidental extra runtime exports creeping into the embed API.
     // Includes the S4 (#1220) renderable-view surface: the dispatcher, the
@@ -39,8 +38,6 @@ describe("renderer module public surface (#1219 S3)", () => {
     const runtimeExports = Object.keys(renderer).sort();
     expect(runtimeExports).toEqual(
       [
-        "ChartEmbed",
-        "ChartError",
         "MermaidBlock",
         "detectCharts",
         "detectMermaidBlocks",

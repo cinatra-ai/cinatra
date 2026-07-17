@@ -113,6 +113,19 @@ export type SemanticArtifactRef = { extension: string };
  * `./manifest`); admitting it here is purely so the artifact bridge does not
  * reject the whole manifest as extraneous. Narrowly additive — unknown keys
  * stay rejected.
+ *
+ * `views` (cinatra#1626, epic #1620 S9/M4) is the TOP-LEVEL chat renderable-view
+ * declaration block (`{ abiVersion, entries: [{ viewType, entry, propsApiVersion }] }`
+ * — schema + tolerant parser in the sibling leaf `./chat-views-contract`). The
+ * artifact kind is the INITIAL carrier for the migrating chat views (the
+ * chart/dataviz embed) per the epic's "artifact extensions own their UI" thesis
+ * — so an artifact manifest may DECLARE it. Admitting it here is purely so the
+ * artifact bridge does not reject the whole manifest as extraneous; the block's
+ * CONTENT is validated fail-closed at the publish/conformance gate
+ * (`checkChatViews`) and read into the generated literal-import map at build —
+ * exactly the cross-kind top-level pattern `cinatra.streams`/`cinatra.webhooks`
+ * use (the host loader carries it through UNVALIDATED; host RENDERING dispatch
+ * rides the S9 host slice). Narrowly additive — unknown keys stay rejected.
  */
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
@@ -122,6 +135,7 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "roles",
   "displayName",
   "vendor",
+  "views",
 ]);
 
 // ===========================================================================
