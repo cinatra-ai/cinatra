@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Suspense, type ComponentType } from "react";
 import { NangoManagedApiCard } from "@cinatra-ai/sdk-ui/nango";
+import Link from "next/link";
+
 import { maskApiKey } from "./mask-api-key";
 import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango-system";
 import { PageHeader } from "@/components/page-header";
@@ -23,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
+import { FieldGroup, Field, FieldLabel, FieldDescription } from "@/components/ui/field";
 import { redirect } from "next/navigation";
 import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
@@ -156,13 +158,35 @@ async function OpenAIModalContent() {
         ) : null}
         <form action={saveOpenAIConnectionAction} className="mt-5 grid items-start gap-4 border-t border-line pt-5 sm:grid-cols-2">
           <Input type="hidden" name="redirectTo" value="/configuration/llm?modal=openai" />
+          {/* These are OPENAI's identifiers (proj_… / org-…), forwarded as
+              OpenAI request headers — NOT Cinatra's own project/organization
+              nouns. The qualified labels + helper copy exist to break that
+              collision (cinatra#1692; copy restored from the connector's
+              settings-page.tsx, which never renders here). */}
           <Field>
-            <FieldLabel>Project ID</FieldLabel>
-            <Input name="projectId" defaultValue={connection?.projectId ?? ""} />
+            <FieldLabel>OpenAI Project ID (optional)</FieldLabel>
+            <Input name="projectId" defaultValue={connection?.projectId ?? ""} placeholder="proj_…" />
+            <FieldDescription>
+              Scope API usage to a specific OpenAI project — not a Cinatra
+              project. Leave blank to use the key&apos;s default. Find it under{" "}
+              <Link
+                href="https://platform.openai.com/settings/organization/projects"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                OpenAI platform settings
+              </Link>
+              .
+            </FieldDescription>
           </Field>
           <Field>
-            <FieldLabel>Organization ID</FieldLabel>
-            <Input name="organizationId" defaultValue={connection?.organizationId ?? ""} />
+            <FieldLabel>OpenAI Organization ID (optional)</FieldLabel>
+            <Input name="organizationId" defaultValue={connection?.organizationId ?? ""} placeholder="org-…" />
+            <FieldDescription>
+              Scope to a specific OpenAI organization — not a Cinatra
+              organization. Leave blank to use the key&apos;s default.
+            </FieldDescription>
           </Field>
           <Field>
             <FieldLabel>Service tier</FieldLabel>
