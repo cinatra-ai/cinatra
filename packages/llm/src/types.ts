@@ -78,6 +78,16 @@ export type LlmShellTool = {
     stderr: string;
     outcome: { type: "exit"; exitCode: number } | { type: "timeout" };
   }>>;
+  /**
+   * Catalog-resolved skill snapshot descriptors (exec-plane S2, cinatra#1707).
+   * Set by the skill-delivery layer so the execution-plane injection can stage
+   * these skills read-only under `/skills/<slug>` inside the sandbox when the
+   * request is execution-authorized (the merged single-native-shell case).
+   * File CONTENT is resolved lazily (`resolveFiles`) at stage time — never
+   * inlined into the request. Absent on caller-constructed shell tools ⇒ no
+   * staging (the restricted skill-read function tool still serves reads).
+   */
+  stagedSkills?: SandboxStagedSkill[];
 };
 
 export type LlmMcpServerTool = {
@@ -154,42 +164,110 @@ export type LlmContainerSkillsTool = {
 /**
  * Opaque, broker-verifiable sealed carrier for an execution session
  * (`{orgId,userId,surface,runId?}`). Produced by the trusted surface-layer
- * issuer (`sealExecutionSession`), embedded in the `sandbox_execution` tool the
- * injection layer adds, and STRIPPED before any provider-adapter call — the
- * adapters (S2) translate the tool contract to a provider-native shell / named
- * function tool and never receive the carrier. Only the broker can open it.
- * A plain string alias (not a branded type) so `types.ts` takes no runtime
- * dependency on the execution-plane module.
+ * issuer (`sealExecutionSession`). Since S2 (#1707) it is captured in the
+ * `sandbox_execution` tool's `execute` CLOSURE at build time — it is not a
+ * field on the tool, so it cannot cross the provider boundary by construction.
+ * Only the broker can open it. A plain string alias (not a branded type) so
+ * `types.ts` takes no runtime dependency on the execution-plane module.
  */
 export type SealedExecutionSessionCarrier = string;
 
+/** One immutable file of a staged skill snapshot (relative to /skills/<slug>). */
+export type SandboxStagedSkillFile = {
+  /** Path relative to the skill's staging root, e.g. "SKILL.md". */
+  path: string;
+  /** Full file content (UTF-8). */
+  content: string;
+  /** Lowercase hex sha256 of `content` — the staging layer re-verifies it. */
+  digest: string;
+};
+
 /**
- * The distinct execution-plane tool (epic #1705 / S1 #1706). Deliberately NOT
- * the skill-delivery shell (`LlmShellTool`) — it is a separate union member so
- * it (a) survives Anthropic MCP-mode tool stripping (the injectMcpTools
- * function-tool strip only removes `type:"function"`), (b) is protected from
- * MCP dedup (its `type` is not `"mcp"`), and (c) is translated per-provider by
- * a dedicated path in S2 (OpenAI native `type:"shell"` with function-tool
- * fallback; Anthropic/Gemini named function tool). In S1 the provider adapters
- * do not yet translate it (they skip unrecognized tool types), so it only ever
- * reaches an adapter behind the default-off rollout flag; the injection layer
- * strips the carrier regardless.
+ * A catalog-resolved skill snapshot to stage as an immutable, read-only input
+ * under the virtual `/skills/<slug>` path inside the sandbox (exec-plane S2,
+ * cinatra#1707). Content digests, no host mounts: file content is resolved
+ * lazily app-side and handed to the staging layer as data.
+ */
+export type SandboxStagedSkill = {
+  /** Catalog skill id (attribution + exposure). */
+  skillId: string;
+  /** Slug — the staged directory name under /skills/. */
+  slug: string;
+  /** Model-facing description (rides the shell declaration / tool schema). */
+  description: string;
+  /** Resolve the snapshot files (content + sha256), lazily at stage time. */
+  resolveFiles: () => Promise<SandboxStagedSkillFile[]>;
+  /**
+   * S10 efficacy loop: fired (best-effort) with the catalog skill id when a
+   * sandbox command references this skill's staged path — the attributable
+   * invocation signal for sandbox-side reads.
+   */
+  onRead?: (skillId: string) => void;
+};
+
+/** Model-requested action shape for a sandbox execution call. */
+export type SandboxExecuteAction = {
+  commands: string[];
+  timeoutMs?: number | null;
+  maxOutputLength?: number | null;
+};
+
+/** Per-command result shape (mirrors the shell-tool output contract). */
+export type SandboxExecuteOutput = {
+  stdout: string;
+  stderr: string;
+  outcome: { type: "exit"; exitCode: number } | { type: "timeout" };
+};
+
+/**
+ * The executor binding the app wiring supplies to the injection layer
+ * (exec-plane S2, cinatra#1707): everything between a model tool call and the
+ * broker. It receives the sealed carrier (from the tool's closure — the only
+ * place it still exists), the commands, and the staged skill snapshots, and
+ * returns per-command outputs. `@cinatra-ai/execution-plane` provides the
+ * broker-backed implementation; tests bind fakes. packages/llm deliberately
+ * has NO import of the broker (layering: execution-plane depends on llm).
+ */
+export type SandboxExecutor = (input: {
+  sessionCarrier: SealedExecutionSessionCarrier;
+  commands: string[];
+  timeoutMs?: number | null;
+  maxOutputLength?: number | null;
+  stagedSkills?: SandboxStagedSkill[];
+}) => Promise<SandboxExecuteOutput[]>;
+
+/**
+ * The distinct execution-plane tool (epic #1705 / S1 #1706 / S2 #1707).
+ * Deliberately NOT the skill-delivery shell (`LlmShellTool`) — it is a
+ * separate union member so it (a) survives Anthropic MCP-mode tool stripping
+ * (the injectMcpTools function-tool strip only removes `type:"function"`),
+ * (b) is protected from MCP dedup (its `type` is not `"mcp"`), and (c) is
+ * translated per-provider by a dedicated path (S2): OpenAI renders it as the
+ * SINGLE native `type:"shell"` entry for shell-capable models (with skills
+ * staged read-only under /skills/<slug> when present) or as a named function
+ * tool for models that reject the native shell; Anthropic and Gemini render a
+ * named function tool. Model calls dispatch back to `execute`, whose closure
+ * holds the sealed session carrier — the carrier itself never crosses the
+ * provider boundary.
  */
 export type LlmSandboxExecutionTool = {
   type: "sandbox_execution";
   /**
    * The stable, provider-agnostic tool name the model calls. Fixed to
-   * `"sandbox_execute"` by contract — the provider translation layer (S2) keys
+   * `"sandbox_execute"` by contract — the provider translation layer keys
    * native-shell-vs-function-tool dispatch on this name.
    */
   toolName: "sandbox_execute";
-  /**
-   * Opaque, broker-verifiable sealed session carrier. Bound to
-   * `{orgId,userId,surface,runId?}`. Stripped before provider-adapter calls.
-   */
-  sessionCarrier: SealedExecutionSessionCarrier;
   /** Model-facing description of the capability (schema half of the contract). */
   description: string;
+  /**
+   * Staged skill snapshots bound into this execution session (the merged
+   * skills+execution case). Listed on the OpenAI native shell declaration;
+   * content resolved lazily by the executor at stage time.
+   */
+  stagedSkills?: SandboxStagedSkill[];
+  /** Run the model-requested commands on the execution plane (broker-bound). */
+  execute: (action: SandboxExecuteAction) => Promise<SandboxExecuteOutput[]>;
 };
 
 export type LlmTool =
@@ -695,6 +773,13 @@ export type OrchestrateGenerateInput = Omit<GenerateInput, "resolvedAttachments"
   executionSession?: ExecutionSession;
   /** Execution plane: D4 per-org/per-agent availability posture (default `"enabled"`). */
   executionAvailability?: ExecutionAvailability;
+  /**
+   * Execution plane (exec-plane S2, cinatra#1707): the broker-backed executor
+   * binding. Supplied by the app wiring layer; absent ⇒ the plane cannot run
+   * commands, so the capability is withheld (`capability_unavailable`,
+   * fail-closed) even when the rollout flag is on.
+   */
+  executionExecutor?: SandboxExecutor;
 };
 
 // Same INTERNAL invariant as OrchestrateGenerateInput, AND also Omit
@@ -717,6 +802,8 @@ export type OrchestrateStreamInput = Omit<
   executionSession?: ExecutionSession;
   /** Execution plane: D4 per-org/per-agent availability posture (default `"enabled"`). */
   executionAvailability?: ExecutionAvailability;
+  /** Execution plane (S2): see OrchestrateGenerateInput.executionExecutor. */
+  executionExecutor?: SandboxExecutor;
 };
 
 export type OrchestrateFileInputGenerateInput = FileInputGenerateInput & {

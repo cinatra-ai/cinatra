@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 150,
-    "/api/mcp": 1468,
-    "/chat": 1528,
-    "/api/a2a": 1473,
-    "/api/llm-bridge": 1479
+    "/sign-in": 1480,
+    "/api/mcp": 1476,
+    "/chat": 1536,
+    "/api/a2a": 1481,
+    "/api/llm-bridge": 1487
   },
   "absorbs": {
-    "/chat": {
-      "from": 1527,
-      "to": 1528,
-      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. /sign-in does not reach the toolbox boundaries and is correctly unchanged. MEASURED with the companion extensions cloned pinned (missingCount 0), matching CI's authoritative merge-ref run (Actions run 29594993568): /chat 1527 -> 1528 (NET +1). Retires the PR #1741 record by re-raising the ceiling.",
-      "pr": 1750
-    },
-    "/api/a2a": {
-      "from": 1472,
-      "to": 1473,
-      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. /sign-in does not reach the toolbox boundaries and is correctly unchanged. MEASURED with the companion extensions cloned pinned (missingCount 0), matching CI's authoritative merge-ref run (Actions run 29594993568): /api/a2a 1472 -> 1473 (NET +1). Retires the PR #1741 record by re-raising the ceiling.",
-      "pr": 1750
-    },
-    "/api/llm-bridge": {
-      "from": 1478,
-      "to": 1479,
-      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. /sign-in does not reach the toolbox boundaries and is correctly unchanged. MEASURED with the companion extensions cloned pinned (missingCount 0), matching CI's authoritative merge-ref run (Actions run 29594993568): /api/llm-bridge 1478 -> 1479 (NET +1). Retires the PR #1741 record by re-raising the ceiling.",
+    "/sign-in": {
+      "from": 1479,
+      "to": 1480,
+      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary — post-#1674 /sign-in reach. The net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts. Before #1674 /sign-in was a thin pre-auth page that did NOT reach those boundaries (this PR's original baseline correctly left /sign-in unchanged). #1674 made src/lib/auth.ts statically reach src/lib/assistant-agent-registration.ts -> the @cinatra-ai/agents store -> the host connector/agent registry (the 150->1479 /sign-in raise #1674 itself absorbed), and auth.ts is reachable from EVERY tracked route via @cinatra-ai/permissions/pages; that same graph now reaches the two toolbox boundaries, so /sign-in picks up the single net-new leaf exactly like the four companion routes. NOT a narrowable barrel import: the leaf is the single shared enforcement boundary (AC2). RE-MEASURED on the reconcile merge tree (origin/main f703e57b [#1674] merged into the lane) with the companion extension repos cloned pinned (missingCount 0, exactly as CI does via clone-extensions): /sign-in 1479 -> 1480 (NET +1). Re-raises the PR #1674 /sign-in record (150->1479) by +1 (a re-raise replaces the record it layers on).",
       "pr": 1750
     },
     "/api/mcp": {
-      "from": 1467,
-      "to": 1468,
-      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. /sign-in does not reach the toolbox boundaries and is correctly unchanged. MEASURED with the companion extensions cloned pinned (missingCount 0), matching CI's authoritative merge-ref run (Actions run 29594993568): /api/mcp 1467 -> 1468 (NET +1). Retires the PR #1741 record by re-raising the ceiling.",
+      "from": 1475,
+      "to": 1476,
+      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. RE-MEASURED on the reconcile merge tree (origin/main f703e57b [#1674] merged into the lane) with the companion extension repos cloned pinned (missingCount 0, exactly as CI does via clone-extensions): /api/mcp 1475 -> 1476 (NET +1). Re-raises the PR #1674 base ceiling for this route by +1 (a re-raise replaces the record it layers on). Post-#1674 /sign-in now reaches these same boundaries through the assistant-agent-registration graph #1674 wired into auth.ts — see the /sign-in record.",
       "pr": 1750
     },
-    "/sign-in": {
-      "from": 149,
-      "to": 150,
-      "reason": "cinatra#1565 (PR #1579) org member-invitation email: src/lib/auth.ts (reachable from every tracked route) gains the new leaf module src/lib/org-invitation-email.ts — the pure accept-link/subject/body builder wired into the organization.sendInvitationEmail callback (Better Auth ships NO default invitation sender, so inviteMember created an invitation row but sent nothing). MEASURED via an A/B differential using scripts/route-graph.mjs analyzeRoute: with the module present vs moved aside, EVERY tracked route drops by exactly 1, so the raise is a single net-new fully-resolvable leaf, invariant to the missing companion-extension modules. /sign-in measured 150 locally at missingCount 0; the four companion routes measured the identical -1 delta (their absolute count is CI-measured with the extensions cloned pinned, this base+1). Absorbed raise 149->150 (NET +1). RE-BASED 2026-07-15 after main-side baseline rewrite (objects/memory merges); from/to re-derived on the new base, same measured NET +1 — CI re-verifies on the merged tree.",
-      "pr": 1579
+    "/chat": {
+      "from": 1535,
+      "to": 1536,
+      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. RE-MEASURED on the reconcile merge tree (origin/main f703e57b [#1674] merged into the lane) with the companion extension repos cloned pinned (missingCount 0, exactly as CI does via clone-extensions): /chat 1535 -> 1536 (NET +1). Re-raises the PR #1674 base ceiling for this route by +1 (a re-raise replaces the record it layers on). Post-#1674 /sign-in now reaches these same boundaries through the assistant-agent-registration graph #1674 wired into auth.ts — see the /sign-in record.",
+      "pr": 1750
+    },
+    "/api/a2a": {
+      "from": 1480,
+      "to": 1481,
+      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. RE-MEASURED on the reconcile merge tree (origin/main f703e57b [#1674] merged into the lane) with the companion extension repos cloned pinned (missingCount 0, exactly as CI does via clone-extensions): /api/a2a 1480 -> 1481 (NET +1). Re-raises the PR #1674 base ceiling for this route by +1 (a re-raise replaces the record it layers on). Post-#1674 /sign-in now reaches these same boundaries through the assistant-agent-registration graph #1674 wired into auth.ts — see the /sign-in record.",
+      "pr": 1750
+    },
+    "/api/llm-bridge": {
+      "from": 1486,
+      "to": 1487,
+      "reason": "cinatra#1713 AC2 (PR #1750) ratified MCP approval vocabulary: the net-new leaf module src/lib/mcp-approval-vocabulary.ts (checkMcpApprovalVocabulary — the ONE shared fail-closed approval-vocabulary boundary check; PURE module, ZERO imports) is imported by the two extension-toolbox boundaries src/lib/external-mcp-toolbox-loader.server.ts and src/lib/llm-toolbox-providers.ts, both already first-party-reachable on this route, so the route grows by exactly +1 with no further subtree pulled. NOT a narrowable barrel import: AC2 deliberately extracts the check into ONE shared module so the two boundaries cannot drift — inlining it per-boundary to avoid the edge would defeat the single-enforcement design. RE-MEASURED on the reconcile merge tree (origin/main f703e57b [#1674] merged into the lane) with the companion extension repos cloned pinned (missingCount 0, exactly as CI does via clone-extensions): /api/llm-bridge 1486 -> 1487 (NET +1). Re-raises the PR #1674 base ceiling for this route by +1 (a re-raise replaces the record it layers on). Post-#1674 /sign-in now reaches these same boundaries through the assistant-agent-registration graph #1674 wired into auth.ts — see the /sign-in record.",
+      "pr": 1750
     }
   }
 }

@@ -49,6 +49,10 @@ import {
   buildContainerSkillsParam,
   CONTAINER_SKILLS_CODE_EXECUTION_ENTRY,
 } from "./anthropic-skill-tools";
+// Exec-plane S2 (cinatra#1707): the contractual sandbox tool name — the
+// Anthropic translation is a plain function tool with input_schema, classified
+// as its own union member so MCP-mode tool stripping never removes it.
+import { SANDBOX_EXECUTE_TOOL_NAME } from "../execution-plane/tool";
 
 export type AnthropicConnectionConfig = {
   apiKey: string;
@@ -103,6 +107,46 @@ function isShellTool(tool: LlmTool): tool is LlmShellTool {
 
 function findShellTool(tools: LlmTool[]): LlmShellTool | undefined {
   return tools.find(isShellTool);
+}
+
+function isSandboxExecutionTool(
+  tool: LlmTool,
+): tool is import("../types").LlmSandboxExecutionTool {
+  return "type" in tool && tool.type === "sandbox_execution";
+}
+
+/**
+ * Dispatch a `sandbox_execute` tool_use (exec-plane S2, cinatra#1707): parse
+ * the model's `{commands, timeout_ms}` input, run it on the execution plane
+ * via the sandbox tool's broker-bound executor, and JSON-encode the
+ * per-command outputs for the tool_result block.
+ */
+async function executeSandboxToolUse(
+  tools: LlmTool[],
+  args: Record<string, unknown>,
+): Promise<string> {
+  const sandboxTool = tools.find(isSandboxExecutionTool);
+  if (!sandboxTool) {
+    return JSON.stringify({ error: `Unknown tool: ${SANDBOX_EXECUTE_TOOL_NAME}` });
+  }
+  const commands = Array.isArray(args.commands)
+    ? args.commands.filter((c): c is string => typeof c === "string")
+    : [];
+  if (commands.length === 0) {
+    return JSON.stringify({ error: "sandbox_execute requires a non-empty `commands` array." });
+  }
+  const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : null;
+  const outputs = await sandboxTool.execute({ commands, timeoutMs });
+  return JSON.stringify(
+    outputs.map((o) => ({
+      stdout: o.stdout,
+      stderr: o.stderr,
+      outcome:
+        o.outcome.type === "exit"
+          ? { type: "exit", exit_code: o.outcome.exitCode }
+          : { type: "timeout" },
+    })),
+  );
 }
 
 function isMcpServerTool(tool: LlmTool): tool is LlmMcpServerTool {
@@ -240,12 +284,30 @@ function translateTools(tools: LlmTool[]): ToolUnion[] {
       // `container` request param (built by buildContainerSkillsParam), NEVER
       // as function tools.
       defs.push({ ...CONTAINER_SKILLS_CODE_EXECUTION_ENTRY } as never);
-    } else if ("type" in t && t.type === "sandbox_execution") {
-      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
-      // a named function tool by a dedicated path in S2. In S1 it is stripped
-      // before adapter calls — defensive skip so the opaque session carrier can
-      // never be mis-emitted.
-      continue;
+    } else if (isSandboxExecutionTool(t)) {
+      // Exec-plane S2 (cinatra#1707): plain function tool with input_schema.
+      // No carrier exists on the tool (it lives in the execute closure), so
+      // nothing session-bound can be mis-emitted. Skill DELIVERY stays
+      // container.skills (epic D7) — this tool is execution only.
+      defs.push({
+        name: SANDBOX_EXECUTE_TOOL_NAME,
+        description: t.description,
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            commands: {
+              type: "array",
+              items: { type: "string" },
+              description: "Shell commands to execute in the sandbox, in order.",
+            },
+            timeout_ms: {
+              type: "number",
+              description: "Optional per-batch timeout in milliseconds.",
+            },
+          },
+          required: ["commands"],
+        },
+      });
     }
     // MCP server tools: Anthropic may support MCP connectors in the future.
     // For now, MCP primitives must be registered as function tools for Claude.
@@ -621,7 +683,12 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
             const tool = effectiveTools.filter(isFunctionTool).find((t) => t.name === toolUse.name);
             const args = (toolUse.input as Record<string, unknown>) ?? {};
             let result: string;
-            if (!tool && toolUse.name === "bash") {
+            if (!tool && toolUse.name === SANDBOX_EXECUTE_TOOL_NAME) {
+              // Exec-plane S2 (cinatra#1707): dispatch to the sandbox tool's
+              // broker-bound executor (it is not an LlmFunctionTool, so the
+              // generic lookup above can never find it).
+              result = await executeSandboxToolUse(effectiveTools, args);
+            } else if (!tool && toolUse.name === "bash") {
               // Route bash calls to the local skill shell tool (translated as a function tool).
               const shellTool = findShellTool(effectiveTools);
               if (shellTool) {
@@ -788,7 +855,12 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
             const tool = effectiveTools.filter(isFunctionTool).find((t) => t.name === toolUse.name);
             const args = (toolUse.input as Record<string, unknown>) ?? {};
             let result: string;
-            if (!tool && toolUse.name === "bash") {
+            if (!tool && toolUse.name === SANDBOX_EXECUTE_TOOL_NAME) {
+              // Exec-plane S2 (cinatra#1707): dispatch to the sandbox tool's
+              // broker-bound executor (it is not an LlmFunctionTool, so the
+              // generic lookup above can never find it).
+              result = await executeSandboxToolUse(effectiveTools, args);
+            } else if (!tool && toolUse.name === "bash") {
               // Route bash calls to the local skill shell tool (translated as a function tool).
               const shellTool = findShellTool(effectiveTools);
               if (shellTool) {
@@ -1161,6 +1233,26 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
             arguments: args,
           };
           input.onToolCall(toolCallEvent);
+
+          // Exec-plane S2 (cinatra#1707): dispatch sandbox_execute to the
+          // sandbox tool's broker-bound executor (not an LlmFunctionTool, so
+          // the name-match lookup above never resolves it).
+          if (tu.name === SANDBOX_EXECUTE_TOOL_NAME && !tool) {
+            const sandboxResult = truncateResult(
+              await executeSandboxToolUse(streamEffectiveTools, args),
+            );
+            input.onToolResult({
+              id: tu.id,
+              name: SANDBOX_EXECUTE_TOOL_NAME,
+              result: sandboxResult,
+            });
+            toolResults.push({
+              type: "tool_result" as const,
+              tool_use_id: tu.id,
+              content: sandboxResult,
+            } as ContentBlockParam);
+            continue;
+          }
 
           // Handle native bash tool calls via the shell tool
           if (tu.name === "bash") {

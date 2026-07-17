@@ -3,21 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
-  createAssistantUser,
   deleteAssistantUser,
   rotateAssistantClient,
 } from "@/lib/assistant-users";
 import { upsertAssistantProfile, deleteAssistantProfile } from "@/lib/assistant-profiles";
 
-export async function createAssistantAction(formData: FormData) {
-  await requireAdminSession();
-  const username = String(formData.get("username") ?? "").trim();
-  if (!username) throw new Error("username required");
-  const result = await createAssistantUser({ username });
-  revalidatePath("/configuration/assistants");
-  // Returns { id, username, clientId, clientSecret } — UI shows secret once
-  return result;
-}
+// The manual "create assistant" action was DELETED (cinatra#1037 P1.4): assistant
+// PRINCIPAL minting is now the exclusive job of assistant-agent registration
+// (src/lib/assistant-agent-registration.ts, invariant I3), so there is no admin
+// path that mints a bare assistant user. The remaining actions manage an
+// already-registered principal's OAuth client + webhook + lifecycle.
 
 export async function deleteAssistantAction(formData: FormData) {
   await requireAdminSession();

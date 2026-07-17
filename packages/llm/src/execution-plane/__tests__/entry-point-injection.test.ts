@@ -1,15 +1,20 @@
 /**
  * Execution-plane INJECTION COVERAGE across all four orchestration entry points
- * (exec-plane S1, cinatra#1706 AC5).
+ * (exec-plane S1 #1706 AC5; S2 #1707 delivery).
  *
  * Proves the single injection site runs in `generate`, `stream`,
  * `runDeterministicLlmTask`, and `runSkillAwareDeterministicLlmTask`, and that
- * S1's provider-boundary posture holds in every one of them:
- *  - the sandbox tool + carrier + cue NEVER reach a provider adapter in S1
- *    (byte-identical provider payload — provider translation is S2);
+ * the S2 posture holds in every one of them:
+ *  - flag ON + session + EXECUTOR ⇒ the sandbox tool AND its centrally-composed
+ *    cue reach the adapter together (tool/cue cannot diverge), with a
+ *    tool-aware step budget on the non-streaming arms;
+ *  - flag ON + session but NO executor binding ⇒ `capability_unavailable`
+ *    warning, tools stripped, model stays usable (fail-closed);
  *  - a flag-ON call with NO attributable session fails closed with a structured
  *    `no_session` warning while the model stays usable (fail-closed per entry
  *    point);
+ *  - a caller-smuggled sandbox tool NEVER reaches an adapter on any
+ *    non-injected path;
  *  - default (flag OFF) is byte-identical with no warning.
  *
  * Mock shape mirrors entry-point-actor-context.test.ts so importing ./index
@@ -88,7 +93,7 @@ import {
   sealExecutionSession,
 } from "../../index";
 import type { ExecutionSession } from "../../index";
-import type { LlmTool } from "../../types";
+import type { LlmTool, SandboxExecutor } from "../../types";
 
 const ctx: ActorContext = {
   principalType: "HumanUser",
@@ -153,17 +158,123 @@ function noSessionWarned(entryPoint: string) {
   );
 }
 
-describe("flag ON + valid session — provider payload is byte-identical (S1)", () => {
-  it("generate: no sandbox tool, no cue reaches the adapter", async () => {
+/** Recording fake executor (S2) — the broker binding the app wiring supplies. */
+function makeExecutor(): SandboxExecutor {
+  return async (input) =>
+    input.commands.map(() => ({
+      stdout: "ok",
+      stderr: "",
+      outcome: { type: "exit" as const, exitCode: 0 },
+    }));
+}
+function unavailableWarned(entryPoint: string) {
+  return warnSpy.mock.calls.some(
+    (c) =>
+      String(c[0]).includes(`[execution-plane] ${entryPoint}`) &&
+      String(c[0]).includes("capability_unavailable"),
+  );
+}
+
+describe("flag ON + session + EXECUTOR — tool + cue delivered together (S2)", () => {
+  it("generate: sandbox tool AND cue reach the adapter; tool-aware budget", async () => {
+    enablePlane();
+    await generate({
+      provider: "openai",
+      system: "SYS",
+      prompt: "hi",
+      actorContext: ctx,
+      executionSession: session,
+      executionExecutor: makeExecutor(),
+    });
+    expect(_capturedGenerate).toBeDefined();
+    expect(hasSandboxTool(_capturedGenerate!.tools)).toBe(true);
+    expect(cueLeaked(_capturedGenerate!.system)).toBe(true);
+    // ≥1 post-tool step guaranteed on the non-streaming arm.
+    expect(_capturedGenerate!.maxSteps).toBeGreaterThanOrEqual(2);
+    expect(noWarn()).toBe(true);
+  });
+
+  it("stream: sandbox tool AND cue reach the adapter", async () => {
+    enablePlane();
+    await stream({
+      provider: "openai",
+      system: "SYS",
+      messages: [{ role: "user", content: "hi" }],
+      actorContext: ctx,
+      executionSession: session,
+      executionExecutor: makeExecutor(),
+      ...noopStreamCallbacks,
+    });
+    expect(_capturedStream).toBeDefined();
+    expect(hasSandboxTool(_capturedStream!.tools)).toBe(true);
+    expect(cueLeaked(_capturedStream!.system)).toBe(true);
+    expect(noWarn()).toBe(true);
+  });
+
+  it("runDeterministicLlmTask: sandbox tool AND cue reach the adapter; budget widened", async () => {
+    enablePlane();
+    await runDeterministicLlmTask({
+      provider: "openai",
+      system: "SYS",
+      user: "hi",
+      actorContext: ctx,
+      executionSession: { ...session, surface: "deterministic_task" },
+      executionExecutor: makeExecutor(),
+    });
+    expect(_capturedGenerate).toBeDefined();
+    expect(hasSandboxTool(_capturedGenerate!.tools)).toBe(true);
+    expect(cueLeaked(_capturedGenerate!.system)).toBe(true);
+    expect(_capturedGenerate!.maxSteps).toBeGreaterThanOrEqual(2);
+    expect(noWarn()).toBe(true);
+  });
+
+  it("runSkillAwareDeterministicLlmTask: sandbox tool AND cue reach the adapter", async () => {
+    enablePlane();
+    await runSkillAwareDeterministicLlmTask({
+      provider: "openai",
+      system: "SYS",
+      user: "hi",
+      actorContext: ctx,
+      executionSession: { ...session, surface: "skill_task" },
+      executionExecutor: makeExecutor(),
+    });
+    expect(_capturedGenerate).toBeDefined();
+    expect(hasSandboxTool(_capturedGenerate!.tools)).toBe(true);
+    expect(cueLeaked(_capturedGenerate!.system)).toBe(true);
+    expect(_capturedGenerate!.maxSteps).toBeGreaterThanOrEqual(2);
+    expect(noWarn()).toBe(true);
+  });
+
+  it("the sandbox tool that reaches the adapter carries NO sessionCarrier field", async () => {
+    enablePlane();
+    await generate({
+      provider: "openai",
+      system: "SYS",
+      prompt: "hi",
+      actorContext: ctx,
+      executionSession: session,
+      executionExecutor: makeExecutor(),
+    });
+    const sandbox = (_capturedGenerate!.tools ?? []).find(
+      (t) => "type" in t && (t as { type?: string }).type === "sandbox_execution",
+    );
+    expect(sandbox).toBeDefined();
+    expect(sandbox).not.toHaveProperty("sessionCarrier");
+    expect(JSON.stringify(sandbox)).not.toContain("org-1");
+  });
+});
+
+describe("flag ON + session, NO executor binding — fail-closed, model usable (S2)", () => {
+  it("generate warns capability_unavailable; no tool, no cue reaches the adapter", async () => {
     enablePlane();
     await generate({ provider: "openai", system: "SYS", prompt: "hi", actorContext: ctx, executionSession: session });
     expect(_capturedGenerate).toBeDefined();
     expect(hasSandboxTool(_capturedGenerate!.tools)).toBe(false);
     expect(cueLeaked(_capturedGenerate!.system)).toBe(false);
-    expect(noWarn()).toBe(true);
+    expect(unavailableWarned("generate")).toBe(true);
   });
 
-  it("stream: no sandbox tool, no cue reaches the adapter", async () => {
+  it("stream warns capability_unavailable; no tool, no cue reaches the adapter", async () => {
     enablePlane();
     await stream({
       provider: "openai",
@@ -176,10 +287,10 @@ describe("flag ON + valid session — provider payload is byte-identical (S1)", 
     expect(_capturedStream).toBeDefined();
     expect(hasSandboxTool(_capturedStream!.tools)).toBe(false);
     expect(cueLeaked(_capturedStream!.system)).toBe(false);
-    expect(noWarn()).toBe(true);
+    expect(unavailableWarned("stream")).toBe(true);
   });
 
-  it("runDeterministicLlmTask: no sandbox tool, no cue reaches the adapter", async () => {
+  it("runDeterministicLlmTask warns capability_unavailable; stays stripped", async () => {
     enablePlane();
     await runDeterministicLlmTask({
       provider: "openai",
@@ -191,10 +302,10 @@ describe("flag ON + valid session — provider payload is byte-identical (S1)", 
     expect(_capturedGenerate).toBeDefined();
     expect(hasSandboxTool(_capturedGenerate!.tools)).toBe(false);
     expect(cueLeaked(_capturedGenerate!.system)).toBe(false);
-    expect(noWarn()).toBe(true);
+    expect(unavailableWarned("runDeterministicLlmTask")).toBe(true);
   });
 
-  it("runSkillAwareDeterministicLlmTask: no sandbox tool, no cue reaches the adapter", async () => {
+  it("runSkillAwareDeterministicLlmTask warns capability_unavailable; stays stripped", async () => {
     enablePlane();
     await runSkillAwareDeterministicLlmTask({
       provider: "openai",
@@ -206,7 +317,7 @@ describe("flag ON + valid session — provider payload is byte-identical (S1)", 
     expect(_capturedGenerate).toBeDefined();
     expect(hasSandboxTool(_capturedGenerate!.tools)).toBe(false);
     expect(cueLeaked(_capturedGenerate!.system)).toBe(false);
-    expect(noWarn()).toBe(true);
+    expect(unavailableWarned("runSkillAwareDeterministicLlmTask")).toBe(true);
   });
 });
 
@@ -252,7 +363,10 @@ describe("provider-boundary strip — a caller-smuggled sandbox tool NEVER reach
       { orgId: "o", userId: "u", surface: "chat" },
       { secret: "strip-test-secret" },
     );
-    return [{ type: "web_search" }, buildSandboxExecutionTool(carrier)];
+    return [
+      { type: "web_search" },
+      buildSandboxExecutionTool({ sessionCarrier: carrier, executor: makeExecutor() }),
+    ];
   }
 
   it("generate strips a smuggled sandbox tool with the flag ON", async () => {

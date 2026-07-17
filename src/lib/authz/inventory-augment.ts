@@ -146,6 +146,14 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // the handler's platform_admin gate, so this kernel mapping is interim/least-
   // privilege within the existing pairs; promote to an artifact_extension::publish
   // boundary if/when non-admin release_manager publish is wanted. status enforced.
+  // Row-scope promotion REQUEST (cinatra#1437): opens a pending
+  // artifact_promotion_request row for an artifact the caller can READ (the
+  // handler's actor-gated `getArtifact` + attributable-user check are the true
+  // per-row authority). It never widens the row — the widen happens only via
+  // the approvals decide (`approvals_decide` / the inline UI action → the
+  // admin-gated PromotionBackend decide). Member-level write: artifact::update
+  // (effect write) — requesting is not applying.
+  artifact_promote_request:         { resourceType: "artifact", action: "update", status: "enforced" },
   artifact_source_compile:          { resourceType: "artifact", action: "update", status: "enforced" },
   artifact_source_publish:          { resourceType: "artifact", action: "create", status: "enforced" },
   artifact_source_validate:         { resourceType: "artifact", action: "read",   status: "enforced" },

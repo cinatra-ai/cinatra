@@ -30,6 +30,7 @@
     "./dashboard-contribution-contract": "./src/dashboard-contribution-contract.ts",
     "./registry-contract": "./src/registry-contract.ts",
     "./artifact-client-bundle": "./src/artifact-client-bundle.ts",
+    "./artifact-renderer-props": "./src/artifact-renderer-props.ts",
     "./objects-contract": "./src/objects-contract.ts",
     "./objects-provider": "./src/objects-provider-contract.ts",
     "./project-template-contract": "./src/project-template-contract.ts",
