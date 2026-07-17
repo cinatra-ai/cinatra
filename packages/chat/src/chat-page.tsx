@@ -49,6 +49,7 @@ import {
 // importing @/lib directly.
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
+import type { ChatViewComponents } from "./chat-messages-view";
 import {
   saveChatThreadViaFetch,
   fetchThreadList,
@@ -110,6 +111,13 @@ import { DancingRobot } from "./dancing-robot";
 // async-module-cycle in unrelated SSR chunks and broke `next build`; the view
 // SSR'd an empty container anyway (messages are fetched client-side), so
 // client-only rendering of the list is visually equivalent.
+// Extension-provided chat renderable-view components (viewType → component),
+// resolved server-side from the generated `cinatra.views` map and passed in as
+// a prop (RSC client references). Empty default: the `chart` viewType then
+// renders the never-blank fallback, a legitimate state when no view-bearing
+// extension is live/built.
+const EMPTY_CHAT_VIEWS: ChatViewComponents = {};
+
 const ChatMessagesView = dynamic(
   () => import("./chat-messages-view").then((m) => m.ChatMessagesView),
   { ssr: false, loading: () => null },
@@ -144,6 +152,12 @@ type ChatPageProps = {
    *  (a legitimate state when no widget-bearing extension is live). */
   widgets?: WidgetDefinition[];
   widgetManifests?: WidgetManifest[];
+  /** Live chat renderable-view catalog (viewType → extension component),
+   *  resolved server-side by the chat mount from the generated `cinatra.views`
+   *  map + extension lifecycle (src/lib/chat-views-catalog.server.ts). Component
+   *  values are RSC client references. Defaults to empty — the `chart` viewType
+   *  then renders the never-blank fallback. */
+  chatViews?: ChatViewComponents;
   /** Which stream wire drives default Cinatra turns (cinatra#1218, #1216 S2).
    *  `"ag-ui"` = the unified assistant stream (headless client + S3 reducer);
    *  `"legacy"` = the bespoke chat-stream-events wire (the retained
@@ -153,7 +167,7 @@ type ChatPageProps = {
   streamWire?: "ag-ui" | "legacy";
 };
 
-export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, streamWire = "legacy" }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS, streamWire = "legacy" }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -1497,6 +1511,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
             onActiveGateChange={handleActiveGateChange}
             pendingExternalHandle={pendingExternalHandle}
             typingIndicators={typingIndicators}
+            chatViews={chatViews}
           />
         </div>
 

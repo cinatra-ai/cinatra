@@ -28,4 +28,5 @@ export type GeneratedChatViewEntry = {
 };
 
 export const GENERATED_CHAT_VIEWS: Record<string, GeneratedChatViewEntry> = {
+  "chart": { resolution: "required", "packageName":"@cinatra-ai/chart-artifact","viewType":"chart","propsApiVersion":1, load: () => import("@cinatra-ai/chart-artifact/src/views/chart") },
 };
