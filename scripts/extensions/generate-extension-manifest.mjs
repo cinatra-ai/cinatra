@@ -46,6 +46,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { buildInventory } from "./inventory.mjs";
 import { GENERATED_MANIFEST_FILES } from "./generated-manifest-files.mjs";
 import { CONNECTOR_DESCRIPTORS } from "../../packages/connectors-catalog/src/descriptors.mjs";
@@ -1377,6 +1378,83 @@ export function classifyConnectorUiSurfaceErrors(rec, cin = {}) {
   return [];
 }
 
+/**
+ * Tolerant JSONC parse for tsconfig.json (line/block comments + trailing commas).
+ * Character-scanned so a `//` or `/* *​/` INSIDE a string literal (e.g. a path
+ * target) is never mistaken for a comment. Returns the parsed object, or null on
+ * malformed input (the caller fails CLOSED — an unparseable tsconfig cannot be
+ * treated as declaring any alias).
+ */
+let _tscModule; // lazily required (typescript is heavy; the JSONC path is rare)
+/**
+ * Parse tsconfig.json TEXT (JSONC — line/block comments + trailing commas) via
+ * TypeScript's OWN battle-tested config reader (`ts.parseConfigFileTextToJson`),
+ * rather than a hand-rolled scanner (the review rounds kept finding edge cases in a
+ * bespoke one: comment-in-string, target-vs-key, unterminated comment/string,
+ * `,,` collapse). It correctly strips comments, tolerates a legitimate trailing
+ * comma, and REJECTS malformed input (double commas, unterminated
+ * comment/string) as an error. FAIL CLOSED: any parse error → null.
+ */
+export function parseJsonc(text) {
+  if (!_tscModule) {
+    _tscModule = createRequire(import.meta.url)("typescript");
+  }
+  const { config, error } = _tscModule.parseConfigFileTextToJson("tsconfig.json", text);
+  if (error || !config || typeof config !== "object") return null;
+  return config;
+}
+
+/**
+ * HOST-RESOLVABILITY of an agent field-renderer component subpath (cinatra#1625,
+ * epic #1620 S8 — M3). Agent renderer packages are DELIBERATELY excluded from the
+ * pnpm workspace (`pnpm-workspace.yaml`: `-agent` repos are filesystem-loaded,
+ * never workspace-linked into node_modules), so the host bundler has no
+ * node_modules edge to them — a package.json `exports` entry alone cannot resolve
+ * the generated literal `import("@cinatra-ai/<agent>/…")` at host build. The ONLY
+ * thing that makes the bare specifier resolvable is an explicit tsconfig/
+ * build-config path alias into `extensions/…` (the same wiring the `-artifact`
+ * bases use).
+ *
+ * SOUND KEY MATCH: require the specifier to be an OWN KEY of
+ * `compilerOptions.paths` — NOT merely a substring of the file. A bare
+ * `includes()` would false-positive when the specifier text appears as another
+ * alias's TARGET or inside a comment, admitting a build-breaking component.
+ *
+ * TARGET MATCH: the alias must actually point AT the resolved
+ * component file. A key present with a bogus target (`["./missing.tsx"]`, `[42]`,
+ * `[null]`, `[""]`, or an alias for a DIFFERENT file) does not make THIS import
+ * resolvable — so when `expectedTargetPosix` is supplied (the generator always
+ * supplies the on-disk resolved path), at least one target string must equal it
+ * (modulo a leading `./`). Pure + fs-free (unit-testable).
+ *
+ * (An exact per-claimant alias is the chosen policy for deterministic,
+ * auditable wiring; a per-package single-wildcard alias — `"@cinatra-ai/<pkg>/*"`
+ * — could also resolve an agent's subpaths, but exact keys keep the emitted map's
+ * provenance one-to-one with the manifest declarations.)
+ *
+ * @param {string} tsconfigText the raw text of the host tsconfig.json
+ * @param {string} specifier    the bare import specifier, e.g.
+ *                              `@cinatra-ai/blog-wordpress-publish-agent/renderers/draft-confirm`
+ * @param {string|null} [expectedTargetPosix] the repo-relative POSIX path the
+ *                              alias MUST point at (e.g.
+ *                              `./extensions/cinatra-ai/<agent>/renderers/x.tsx`);
+ *                              when null, only key + non-empty string target is required
+ * @returns {boolean} true iff `compilerOptions.paths` aliases the exact specifier to the file
+ */
+export function agentRendererComponentHostResolvable(tsconfigText, specifier, expectedTargetPosix = null) {
+  const parsed = parseJsonc(tsconfigText);
+  const paths = parsed && parsed.compilerOptions && parsed.compilerOptions.paths;
+  if (!paths || typeof paths !== "object") return false;
+  if (!Object.prototype.hasOwnProperty.call(paths, specifier)) return false;
+  const targets = paths[specifier];
+  if (!Array.isArray(targets)) return false;
+  const stripDot = (t) => (typeof t === "string" ? t.replace(/^\.\//, "") : null);
+  const stringTargets = targets.map(stripDot).filter((t) => t && t.length > 0);
+  if (stringTargets.length === 0) return false; // rejects [], [null], [42], [""]
+  if (expectedTargetPosix == null) return true;
+  return stringTargets.includes(stripDot(expectedTargetPosix));
+}
+
 export async function buildManifest() {
   const inv = await buildInventory();
   // Generator-owned presence classification (cinatra#7): `"required"` =
@@ -2179,12 +2257,29 @@ export async function buildManifest() {
     const pkgJson = JSON.parse(
       readFileSync(join(REPO_ROOT, rec.sourceDir, "package.json"), "utf8"),
     );
+    // HOST-RESOLVABILITY (cinatra#1625, epic #1620 S8 — M3): agent renderer
+    // packages are DELIBERATELY excluded from the pnpm workspace
+    // (pnpm-workspace.yaml — `-agent` repos are filesystem-loaded, never
+    // workspace-linked into node_modules), so — unlike a workspace connector — a
+    // package.json `exports` entry alone does NOT make the bare specifier
+    // resolvable at host build: the host bundler has no node_modules edge to the
+    // agent package, so the literal `import("@cinatra-ai/<agent>/…")` can only
+    // resolve through an explicit tsconfig/build-config path alias into
+    // `extensions/…` (the same wiring the `-artifact` bases use). REQUIRE the
+    // alias; an `exports` entry MAY also be present (for standalone publishing of
+    // the extracted repo) but cannot substitute for it here.
+    // The alias must point AT this exact resolved file, not merely
+    // exist as a key — `resolved` is the repo-relative on-disk path.
+    const expectedTargetPosix = "./" + resolved.split(sep).join("/");
+    const hasTsconfigAlias = agentRendererComponentHostResolvable(tsconfigText, specifier, expectedTargetPosix);
     const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
-    if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+    if (!hasTsconfigAlias) {
       bindingErrors.push(
         `[extension-manifest] ${rec.packageName} cinatra.fieldRenderers component subpath "${specifier}" ` +
-          `(binding ${b.id}) is not resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
-          `the generated literal import would fail at runtime`,
+          `(binding ${b.id}) is not host-resolvable: agent renderer packages are workspace-excluded, so a ` +
+          `tsconfig.json path alias into extensions/… (config/build-config.manifest.json) is REQUIRED — a ` +
+          `package.json exports["${exportsKey}"] entry alone ${hasExportsEntry ? "is present but " : "is absent and "}` +
+          `cannot resolve the literal import at host build.`,
       );
       continue;
     }

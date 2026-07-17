@@ -27,13 +27,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // Which design-registry primitives each extension vendors. `uiItems` lists only
-// the primitives a connector imports DIRECTLY; the transitive closure (e.g.
+// the primitives an extension imports DIRECTLY; the transitive closure (e.g.
 // field -> label/separator, input-group -> button/input/textarea) is resolved
 // from registry.json's registryDependencies so the manifest can't drift from
 // the component graph. Sources are always the single source of truth:
 // src/components/ui/<item>.tsx + src/lib/utils.ts. (StatusPill is NOT here — it
 // is a Cinatra-ABI widget consumed from @cinatra-ai/sdk-ui/marketplace, not a
 // vendored registry primitive.)
+//
+// KIND-AGNOSTIC CHANNEL (cinatra#1625, epic #1620 S8 — M3): this manifest and
+// the whole vendoring/provenance mechanism are extension-KIND-neutral — an
+// `extensionDir` under `extensions/<scope>/` is vendored the same way whether it
+// is a connector OR an AGENT. A companion HITL-renderer slice that relocates a
+// field-renderer component into its claiming `-agent` extension adds an entry
+// here for that agent dir, exactly like a connector; the relative-import rewrite
+// keeps the vendored primitives clear of the `@/` import-ban (which is itself
+// kind-agnostic). Nothing below is connector-specific.
 const VENDOR_MANIFEST = [
   {
     extensionDir: "extensions/cinatra-ai/google-calendar-connector",

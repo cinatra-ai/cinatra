@@ -21,6 +21,19 @@ export {
 export type { AccentTone } from "./lib/extension-accent";
 export { cn } from "./lib/utils";
 
+// Public field-renderer props contract (cinatra#1625, epic #1620 S8 — M3). The
+// stable public mirror a claiming extension's migrated HITL renderer imports its
+// props from; `@cinatra-ai/agents` re-exports the same types for in-core code.
+// Prefer the zero-runtime `@cinatra-ai/sdk-ui/field-renderer-props` subpath from
+// an extension; these root re-exports are for convenience.
+export { FIELD_RENDERER_PROPS_API_VERSION } from "./field-renderer-props";
+export type {
+  FieldRendererProps,
+  FieldRendererContext,
+  RendererMode,
+  GmailSendAsAliasOption,
+} from "./field-renderer-props";
+
 // Connector/dialog UI primitives + notification context (consumed by extension
 // settings/setup pages so they need no `@/` host edge).
 export { AppDialog } from "./app-dialog";
