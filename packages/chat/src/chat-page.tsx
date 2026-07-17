@@ -288,7 +288,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     void fetchThreadList().then(setThreads);
     setGreeting(getGreeting());
 
-    void fetch("/api/chat/autosave")
+    void fetch("/api/assistants/autosave")
       .then((r) => r.json())
       .then((config: { enabled?: boolean; userCanConfigure?: boolean; userCanSeeIndicator?: boolean }) => {
         setAutosaveEnabled(Boolean(config.enabled));
@@ -1389,7 +1389,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     canToggle: autosaveCanToggle,
     onToggle: (enabled: boolean) => {
       setAutosaveEnabled(enabled);
-      void fetch("/api/chat/autosave", {
+      void fetch("/api/assistants/autosave", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
