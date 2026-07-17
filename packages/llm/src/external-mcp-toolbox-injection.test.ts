@@ -86,7 +86,7 @@ const registryTool: LlmMcpServerTool = {
   serverUrl: "https://fixture.example.com/mcp",
   serverDescription: "External MCP server: fixture",
   allowedTools: null,
-  requireApproval: "never",
+  approval: "auto_execute",
 };
 
 const builderTool: LlmMcpServerTool = {
@@ -95,7 +95,7 @@ const builderTool: LlmMcpServerTool = {
   serverUrl: "https://builder.example.com/mcp",
   serverDescription: "Fixture builder MCP",
   allowedTools: null,
-  requireApproval: "never",
+  approval: "auto_execute",
 };
 
 beforeEach(() => {

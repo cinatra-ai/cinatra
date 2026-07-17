@@ -4,7 +4,7 @@
 // Root cause: createExternalMcpServerAction mapped any non-"user" scope (incl.
 // the default) to "global" and only required a session for the user path — no
 // admin guard on the global write. Global external MCP rows are injected into
-// every LLM call's MCP toolbox with requireApproval:"never", so a non-admin who
+// every LLM call's MCP toolbox with approval:"auto_execute", so a non-admin who
 // invokes the server action directly could register or (via ON CONFLICT id
 // overwrite) hijack an attacker-controlled global MCP endpoint. The delete path
 // had no authz guard at all.

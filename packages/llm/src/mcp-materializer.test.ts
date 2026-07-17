@@ -123,7 +123,7 @@ describe("materializeExternalMcpServers", () => {
         authorization: "tok_1",
         serverDescription: "External MCP server: Twenty",
         allowedTools: ["find_people"],
-        requireApproval: "never",
+        approval: "auto_execute",
         transport: "streamable-http",
       }),
     ]);
@@ -135,7 +135,7 @@ describe("materializeExternalMcpServers", () => {
       authorization: "Bearer tok_1",
       serverDescription: "External MCP server: Twenty",
       allowedTools: ["find_people"],
-      requireApproval: "never",
+      approval: "auto_execute",
       transport: "streamable-http",
     });
     expect(res.attribution).toEqual({ twenty_crm: "Twenty CRM" });
@@ -150,6 +150,13 @@ describe("materializeExternalMcpServers", () => {
     if (!res.ok) return;
     expect(res.servers.map((s) => s.serverLabel)).toEqual(["first", "second"]);
     expect(res.servers[0]).toEqual({ serverLabel: "first", serverUrl: "https://first.example/mcp" });
+  });
+
+  it("carries approval_required through untouched — enforcement is the adapters' job (#1713 AC2)", () => {
+    const res = materializeExternalMcpServers([base({ approval: "approval_required" })]);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.servers[0].approval).toBe("approval_required");
   });
 
   it("fails closed on an invalid URL", () => {

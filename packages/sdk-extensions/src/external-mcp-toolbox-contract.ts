@@ -33,8 +33,23 @@ export type ExtensionExternalMcpTool = {
   serverDescription?: string;
   /** Optional list of allowed tool names, or null to allow all. */
   allowedTools?: string[] | null;
-  /** Whether tools that mutate state require approval. */
-  requireApproval?: "never" | "always" | "read-only";
+  /**
+   * Approval vocabulary (llm-providers S2, #1713 AC2) — whether the injected
+   * server's tool calls execute without a human approval step:
+   *   - "auto_execute"      — tool calls run without approval (the default;
+   *                           an OMITTED value means exactly this).
+   *   - "approval_required" — every tool call needs an approval step. A
+   *                           provider whose declared `approval` capability is
+   *                           "unsupported" (Anthropic today) REFUSES such a
+   *                           toolbox fail-closed — it is never silently
+   *                           downgraded to auto-execution.
+   * Replaces the retired three-value `requireApproval` ("never" | "always" |
+   * "read-only") that only OpenAI consumed. The host toolbox sanitizer DROPS a
+   * tool entry that still carries a legacy `requireApproval` approval intent
+   * ("always"/"read-only") rather than auto-executing it. Mirror of
+   * `@cinatra-ai/llm`'s `LlmMcpServerTool.approval`.
+   */
+  approval?: "auto_execute" | "approval_required";
   /**
    * MCP wire transport this server speaks (llm-providers S2, #1713). Optional:
    * an extension that omits it is treated as `"unknown"` by the host injection

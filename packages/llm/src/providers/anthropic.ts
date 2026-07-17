@@ -41,6 +41,7 @@ import {
   BatchNotSupportedError,
   AnthropicFunctionToolSkillError,
   NativeMcpCapabilityRequiredError,
+  McpApprovalUnsupportedError,
 } from "../errors";
 import {
   isContainerSkillsTool,
@@ -106,6 +107,26 @@ function findShellTool(tools: LlmTool[]): LlmShellTool | undefined {
 
 function isMcpServerTool(tool: LlmTool): tool is LlmMcpServerTool {
   return "type" in tool && tool.type === "mcp";
+}
+
+/**
+ * llm-providers S2 (#1713, AC2) — approval-vocabulary fail-closed refusal.
+ * Anthropic's declared `approval` capability is "unsupported": neither the
+ * native `mcp_servers` serialization nor the function-tools bridge carries any
+ * approval knob, so an `approval: "approval_required"` toolbox would silently
+ * auto-execute — the exact portable-fiction hazard AC2 retires. Refuse BEFORE
+ * any credential-bearing provider/MCP request is issued (same placement
+ * discipline as the S1b native_mcp refusal). `auto_execute` / absent (the
+ * ratified `undefined` ⇒ `auto_execute` default) pass through untouched.
+ */
+function assertNoApprovalRequiredMcp(mcpServerTools: LlmMcpServerTool[]): void {
+  const approvalRequired = mcpServerTools.filter((t) => t.approval === "approval_required");
+  if (approvalRequired.length > 0) {
+    throw new McpApprovalUnsupportedError(
+      "anthropic",
+      approvalRequired.map((t) => t.serverLabel),
+    );
+  }
 }
 
 // isContainerSkillsTool / assertNoFunctionToolSkillDelivery /
@@ -358,6 +379,9 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
 
       // Extract MCP server tools (if injected by registry) and build effective tool list
       const mcpServerTools = (input.tools?.filter(isMcpServerTool) ?? []) as LlmMcpServerTool[];
+      // S2 (#1713 AC2): Anthropic cannot honour approval_required — fail
+      // closed before any credential-bearing request.
+      assertNoApprovalRequiredMcp(mcpServerTools);
       // First entry = cinatra self-MCP (preserved for fallback path).
       // By convention, the registry always injects cinatra self-MCP first.
       const mcpServerTool = mcpServerTools[0];
@@ -851,6 +875,9 @@ export function createAnthropicProviderAdapter(config: AnthropicConnectionConfig
 
       // Extract MCP server tools (if injected by registry) and build effective tool list
       const streamMcpServerTools = (input.tools?.filter(isMcpServerTool) ?? []) as LlmMcpServerTool[];
+      // S2 (#1713 AC2): Anthropic cannot honour approval_required — fail
+      // closed before any credential-bearing request.
+      assertNoApprovalRequiredMcp(streamMcpServerTools);
       // First entry = cinatra self-MCP (preserved for fallback path and shell-tool strip check).
       const streamMcpServerTool = streamMcpServerTools[0];
       const streamNonMcpTools = input.tools?.filter(t => !isMcpServerTool(t));

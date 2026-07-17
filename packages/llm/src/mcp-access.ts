@@ -161,7 +161,7 @@ function buildCinatraMcpServerTool(
     // content-editor agent runs are pinned to the MCP-backed CMS primitives so
     // they cannot reach the not-yet-rerouted direct-REST CMS primitives).
     allowedTools,
-    requireApproval: "never",
+    approval: "auto_execute",
     // First-party transport classification (llm-providers S2, #1713): the
     // Cinatra self-MCP (/api/mcp) is served over the modern MCP Streamable HTTP
     // transport (verified stateless — no SSE session pinning). Declared

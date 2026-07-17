@@ -205,9 +205,10 @@ export const BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS: Readonly<
     capabilities: {
       function_tools: true,
       media_input: false,
-      // Anthropic honours native MCP but silently ignores requireApproval
-      // today → declares approval "unsupported" (S2 fails closed on
-      // approval_required for Anthropic).
+      // Anthropic honours native MCP but carries no approval knob on either
+      // its mcp_servers serialization or its function-tools bridge → declares
+      // approval "unsupported"; the adapter REFUSES an approval_required
+      // toolbox fail-closed (S2 #1713 AC2, McpApprovalUnsupportedError).
       native_mcp: { status: "native", approval: "unsupported" },
     },
     models: {
