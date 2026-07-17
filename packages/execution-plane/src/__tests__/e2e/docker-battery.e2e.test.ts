@@ -10,6 +10,7 @@
  * The gateway scenarios exercise real internet egress (pypi.org).
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,14 +18,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   mintExecutionSession,
   sealExecutionSession,
+  buildSandboxExecutionTool,
 } from "@cinatra-ai/llm/execution-plane";
 
 import { ExecutionBroker } from "../../broker";
+import { createBrokerSandboxExecutor } from "../../executor";
 import { LocalDevSandboxWorker } from "../../worker";
 import { startLocalGateway, type LocalGateway } from "../../local-gateway";
 import { DEFAULT_SANDBOX_NETWORK } from "../../egress";
 import { runDocker } from "../../docker-cli";
 import { workspaceVolumeName } from "../../workspace";
+import { skillsVolumeName } from "../../staging";
 import {
   type EgressGatewayEndpoint,
   type EgressPolicy,
@@ -42,6 +46,8 @@ const REPO_ROOT = path.resolve(
 const RUN_PREFIX = `e2e-${Date.now()}`;
 
 const createdRunKeys: string[] = [];
+/** Job ids whose per-job skills volumes need cleanup (S2 staging tests). */
+const createdJobIds: string[] = [];
 let gateway: LocalGateway | null = null;
 
 function carrierFor(runKey: string): string {
@@ -112,6 +118,21 @@ afterAll(async () => {
   if (gateway) await gateway.stop();
   for (const runKey of createdRunKeys) {
     await runDocker(["volume", "rm", "-f", workspaceVolumeName(runKey)]);
+  }
+  for (const jobId of createdJobIds) {
+    await runDocker(["volume", "rm", "-f", skillsVolumeName(jobId)]);
+  }
+  // Executor-opened jobs mint their own jobIds — sweep remaining S2 skills
+  // volumes by their retention label tier.
+  const strays = await runDocker([
+    "volume",
+    "ls",
+    "-q",
+    "--filter",
+    "label=ai.cinatra.execution-plane=skills",
+  ]);
+  for (const name of strays.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    await runDocker(["volume", "rm", "-f", name]);
   }
 });
 
@@ -384,6 +405,90 @@ describe("egress policy — network-LAYER enforcement (S1 AC3, epic D3)", () => 
     expect(bypass.ok).toBe(true);
     if (bypass.ok) expect(bypass.result.stdout.trim()).not.toBe("bypass-exit=0");
   }, 180_000);
+});
+
+describe("S2 (#1707) — staged skill snapshots: /skills reads, immutability, executor binding", () => {
+  const SKILL_BODY = "# Scrape data\nUse requests.get and parse the table.\n";
+  const sha256 = (content: string) =>
+    createHash("sha256").update(content, "utf8").digest("hex");
+  const stagedInput = () => ({
+    slug: "scrape-data",
+    files: [
+      { path: "SKILL.md", content: SKILL_BODY, digest: sha256(SKILL_BODY) },
+      { path: "scripts/fetch.py", content: "print('fetch')\n", digest: sha256("print('fetch')\n") },
+    ],
+  });
+
+  it("skill reads work via /skills/<slug> staging; the snapshot is READ-ONLY", async () => {
+    const { broker } = makeLiveBroker({ policy: { mode: "none" } });
+    const opened = await broker.openJob(carrierFor(`${RUN_PREFIX}-skills`), {
+      stagedSkills: [stagedInput()],
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    createdJobIds.push(opened.jobId);
+
+    // AC3: the skill shell step runs IN the core sandbox, reads via staging.
+    const read = await broker.exec(opened.jobId, "cat /skills/scrape-data/SKILL.md");
+    expect(read.ok).toBe(true);
+    if (read.ok) expect(read.result.stdout).toBe(SKILL_BODY);
+    const nested = await broker.exec(opened.jobId, "cat /skills/scrape-data/scripts/fetch.py");
+    expect(nested.ok).toBe(true);
+    if (nested.ok) expect(nested.result.stdout).toContain("print('fetch')");
+
+    // Immutable snapshot: writes into /skills are refused (ro mount).
+    const write = await broker.exec(
+      opened.jobId,
+      `echo tamper > /skills/scrape-data/SKILL.md 2>&1; echo write-exit=$?`,
+    );
+    expect(write.ok).toBe(true);
+    if (write.ok) expect(write.result.stdout.trim()).not.toBe("write-exit=0");
+    // And the content is intact.
+    const reread = await broker.exec(opened.jobId, "cat /skills/scrape-data/SKILL.md");
+    if (reread.ok) expect(reread.result.stdout).toBe(SKILL_BODY);
+  }, 120_000);
+
+  it("the llm sandbox tool bound via createBrokerSandboxExecutor runs reads + persistence on the plane", async () => {
+    const { broker } = makeLiveBroker({ policy: { mode: "none" } });
+    const executor = createBrokerSandboxExecutor(broker);
+    const reads: string[] = [];
+    const tool = buildSandboxExecutionTool({
+      sessionCarrier: carrierFor(`${RUN_PREFIX}-tool`),
+      executor,
+      stagedSkills: [
+        {
+          skillId: "skill-e2e",
+          slug: "scrape-data",
+          description: "scrape tables",
+          resolveFiles: async () => stagedInput().files,
+          onRead: (id) => reads.push(id),
+        },
+      ],
+    });
+
+    // Skill read through the FULL llm-tool → executor → broker → docker chain.
+    const readOut = await tool.execute({ commands: ["cat /skills/scrape-data/SKILL.md"] });
+    expect(readOut[0].outcome).toEqual({ type: "exit", exitCode: 0 });
+    expect(readOut[0].stdout).toBe(SKILL_BODY);
+    // Attributable sandbox-side read signal fired (S10 efficacy loop).
+    expect(reads).toEqual(["skill-e2e"]);
+
+    // L2 persistence across separate tool.execute batches (same carrier/job).
+    const write = await tool.execute({ commands: ["echo persisted > note.txt"] });
+    expect(write[0].outcome).toEqual({ type: "exit", exitCode: 0 });
+    const readBack = await tool.execute({ commands: ["cat note.txt"] });
+    expect(readBack[0].stdout.trim()).toBe("persisted");
+  }, 120_000);
+
+  it("openJob refuses a tampered snapshot against the real staging path (fail-closed)", async () => {
+    const { broker } = makeLiveBroker({ policy: { mode: "none" } });
+    const tampered = stagedInput();
+    tampered.files[0] = { ...tampered.files[0], digest: sha256("something else") };
+    const opened = await broker.openJob(carrierFor(`${RUN_PREFIX}-tamper`), {
+      stagedSkills: [tampered],
+    });
+    expect(opened).toMatchObject({ ok: false, reason: "staging_failed" });
+  }, 60_000);
 });
 
 describe("session liveness against real containers (S1 AC6)", () => {

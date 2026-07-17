@@ -8,10 +8,13 @@
  *  - the single `injectExecutionCapability` site + policy (rollout merge gate,
  *    D4 availability, task carve-outs, central cue composition, step budget).
  *
- * The broker service, sandbox worker + hardened container, egress gateway,
- * audit-kernel records, admin settings/health surfaces, DB migrations, disk
- * quota enforcement, session-liveness revalidation, and per-provider
- * translation (S2) are separate slices that consume this contract.
+ * S2 (cinatra#1707) adds the executor binding seam (`SandboxExecutor` in
+ * ../types), staged-skill snapshot merging, and delivery of tool + cue +
+ * step budget through the orchestration entry points; the per-provider
+ * translation lives in ../providers/*. The broker service, sandbox worker +
+ * hardened container, egress gateway, audit-kernel records, admin
+ * settings/health surfaces, and DB migrations are separate slices that
+ * consume this contract.
  */
 
 export {

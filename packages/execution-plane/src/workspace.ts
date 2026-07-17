@@ -102,15 +102,20 @@ export async function measureWorkspaceKb(
   return kb;
 }
 
-/** List execution-plane workspace volumes (name + createdAt label). */
+/**
+ * List execution-plane volumes of one retention tier (name + createdAt label).
+ * `"l2"` = per-run workspaces; `"skills"` = per-job staged skill snapshots
+ * (exec-plane S2, cinatra#1707).
+ */
 export async function listWorkspaceVolumes(
   docker: DockerCli = runDocker,
+  tier: "l2" | "skills" = "l2",
 ): Promise<Array<{ name: string; createdAtMs: number | null }>> {
   const outcome = await docker([
     "volume",
     "ls",
     "--filter",
-    `label=${WORKSPACE_LABEL}=l2`,
+    `label=${WORKSPACE_LABEL}=${tier}`,
     "--format",
     "{{.Name}}|{{.Labels}}",
   ]);
@@ -137,16 +142,23 @@ export async function listWorkspaceVolumes(
 }
 
 /**
- * Retention GC: remove labeled workspace volumes older than `retentionMs`.
- * Volumes still attached to a running container are skipped by docker itself
- * (`volume rm` fails while in use — we tolerate that failure silently).
+ * Retention GC: remove labeled execution-plane volumes older than
+ * `retentionMs` — BOTH tiers: L2 run workspaces and per-job staged-skills
+ * volumes (the broker removes skills volumes eagerly on job close/teardown;
+ * this sweep is the retry/backstop for strays, e.g. a removal that raced an
+ * attached container). Volumes still attached to a running container are
+ * skipped by docker itself (`volume rm` fails while in use — we tolerate that
+ * failure silently; the next sweep retries).
  */
 export async function gcExpiredWorkspaces(
   retentionMs: number,
   docker: DockerCli = runDocker,
   nowMs: number = Date.now(),
 ): Promise<string[]> {
-  const volumes = await listWorkspaceVolumes(docker);
+  const volumes = [
+    ...(await listWorkspaceVolumes(docker, "l2")),
+    ...(await listWorkspaceVolumes(docker, "skills")),
+  ];
   const removed: string[] = [];
   for (const volume of volumes) {
     if (volume.createdAtMs === null) continue;
