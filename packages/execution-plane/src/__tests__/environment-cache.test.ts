@@ -114,6 +114,23 @@ describe("EnvironmentLayerCache lookup", () => {
     expect(cache.lookupBySpecKey("absent-spec-key", { orgId: "org-a" }).hit).toBe(false);
   });
 
+  it("a poisoned spec-key index row can never redirect to a sibling entry of a DIFFERENT spec", () => {
+    // codex S3-r1 finding 1: seed a VALID entry, then a tampered sibling row
+    // that carries the victim's specKey in its unsigned index field but whose
+    // SIGNED recipe derives a different spec key. The fast path must not
+    // resolve the tampered nomination through the recipe-key lookup onto the
+    // valid sibling of the WRONG spec.
+    const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
+    const victimSpecKey = "victim-spec-key";
+    const other = makeEntry({ pipDigest: "other-recipe" }); // valid, different spec
+    cache.put(other);
+    const tampered = makeEntry({ pipDigest: "other-recipe", partition: "org:org-a" });
+    tampered.specKey = victimSpecKey; // unsigned index field poisoned
+    cache.put(tampered);
+    const result = cache.lookupBySpecKey(victimSpecKey, { orgId: "org-a" });
+    expect(result.hit).toBe(false);
+  });
+
   it("requiredPartition admits ONLY the exact partition (org-private requests)", () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const instance = makeEntry({});

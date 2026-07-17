@@ -450,6 +450,11 @@ export class TrustedEnvironmentBuilder {
     }
 
     // ---- content-addressed tag + host-side provenance + cache write -------
+    // Digest is resolved from the UNIQUE temp tag BEFORE the shared final
+    // alias exists (codex S3-r1 finding 2): a concurrent same-recipe build in
+    // another partition can retarget the mutable final alias between tagging
+    // and inspection, so the signed identity must never be read through it.
+    const imageDigest = await resolveImageDigest(tempTag, this.docker);
     // FULL recipe key in the tag (codex S3-r0 finding 6): 64 hex chars fits
     // docker's 128-char tag limit; no truncation-collision surface.
     const finalTag = `${L1_IMAGE_REPO}:${recipeKey}`;
@@ -458,7 +463,6 @@ export class TrustedEnvironmentBuilder {
       throw new Error(`Failed to tag environment layer: ${tag.stderr.trim()}`);
     }
     await this.docker(["rmi", tempTag]);
-    const imageDigest = await resolveImageDigest(finalTag, this.docker);
     const now = (this.opts.now ?? Date.now)();
     const provenance = signEnvironmentProvenance(
       {

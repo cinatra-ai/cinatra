@@ -252,6 +252,34 @@ describe("TrustedEnvironmentBuilder.ensureEnvironmentLayer", () => {
     expect(tempTag).toMatch(/^cinatra-sandbox-l1:build-[0-9a-f]{24}$/);
   });
 
+  it("resolves the signed digest from the UNIQUE temp tag, never the shared final alias", async () => {
+    // codex S3-r1 finding 2: a concurrent same-recipe build (other partition /
+    // other process) can retarget the mutable final alias between tagging and
+    // inspection — so the digest that gets SIGNED must be read through the
+    // unique temp tag, before the final alias exists.
+    const { builder, fake } = makeBuilder({ allowInsecure: true });
+    // Concurrent same-spec builds in DIFFERENT partitions (not single-flighted).
+    const [shared, priv] = await Promise.all([
+      builder.ensureEnvironmentLayer({ raw: { pip: ["pandas"] }, orgId: "org-a" }),
+      builder.ensureEnvironmentLayer({
+        raw: { pip: ["pandas"] },
+        orgId: "org-a",
+        visibility: "org-private",
+      }),
+    ]);
+    expect(shared.kind).toBe("ready");
+    expect(priv.kind).toBe("ready");
+    const digestInspects = fake.calls.filter(
+      (c) => c[0] === "image" && c[1] === "inspect" && c[c.length - 1].startsWith("cinatra-sandbox-l1:"),
+    );
+    expect(digestInspects.length).toBeGreaterThan(0);
+    for (const call of digestInspects) {
+      // EVERY digest resolution over an L1 ref targets a unique build-… temp
+      // tag — never the shared cinatra-sandbox-l1:<recipeKey> final alias.
+      expect(call[call.length - 1]).toMatch(/^cinatra-sandbox-l1:build-[0-9a-f]{24}$/);
+    }
+  });
+
   it("org-private visibility partitions the layer to the org", async () => {
     const { builder, cache } = makeBuilder({ allowInsecure: true });
     const result = await builder.ensureEnvironmentLayer({
