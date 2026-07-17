@@ -65,6 +65,14 @@ vi.mock("@/lib/generated/artifact-renderers", () => ({
         return { default: () => <span data-fixture-glyph="losing" /> };
       },
     },
+    "@fixture/null-render::listRow": {
+      resolution: "guardedOptional",
+      packageName: "@fixture/null-render",
+      slot: "listRow",
+      representations: [],
+      propsApiVersion: 1,
+      load: async () => ({ default: () => null }),
+    },
     "@fixture/bad-export::listRow": {
       resolution: "guardedOptional",
       packageName: "@fixture/bad-export",
@@ -290,6 +298,19 @@ describe("LibraryRowGlyph — extension glyph + host floors", () => {
     expect(html).toContain('data-glyph-source="generic"');
     expect(execCounts().row).toBe(0);
     expect(execCounts().losing).toBe(0);
+  });
+
+  it("a null-rendering extension glyph keeps the STRUCTURAL host floor underneath (never blank)", async () => {
+    // A valid component may legally render null. The cell must still carry the
+    // host fallback icon, shown by CSS exactly when the extension wrapper is
+    // empty (`peer` + `peer-empty:block`).
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/null-render", slot: "listRow" });
+    const html = await renderGlyph(summaryOf({ effectiveIdentity: winner("@fixture/null-render") }));
+    expect(html).toContain('data-glyph-source="extension"');
+    // The peer wrapper rendered no DOM…
+    expect(html).not.toContain("data-fixture-glyph");
+    // …and the structural fallback svg is present with the peer-empty reveal.
+    expect(html).toContain("peer-empty:block");
   });
 
   it("a claimant with ONLY a detail renderer floors the glyph (no listRow capability)", async () => {

@@ -104,13 +104,30 @@ export async function LibraryRowGlyph({
     }
   }
 
+  // Never-blank is STRUCTURAL (Codex finding, cinatra#1631): a valid extension
+  // component may legally render null/empty, which would otherwise leave an
+  // empty cell. The host fallback icon is always present underneath and is
+  // shown by CSS exactly when the extension wrapper rendered no DOM
+  // (`peer-empty`) — the floor cannot be un-rendered by extension output.
   return (
     <span
       className={`grid size-[34px] flex-none place-items-center overflow-hidden rounded-lg ${className}`}
       data-testid="artifacts-library-glyph"
       data-glyph-source={extensionGlyph ? "extension" : "generic"}
     >
-      {extensionGlyph ?? <Fallback aria-hidden className="size-[17px]" />}
+      {extensionGlyph ? (
+        <>
+          <span className="peer col-start-1 row-start-1 grid place-items-center">
+            {extensionGlyph}
+          </span>
+          <Fallback
+            aria-hidden
+            className="col-start-1 row-start-1 hidden size-[17px] peer-empty:block"
+          />
+        </>
+      ) : (
+        <Fallback aria-hidden className="size-[17px]" />
+      )}
     </span>
   );
 }
