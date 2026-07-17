@@ -125,6 +125,13 @@ const VENDOR_MANIFEST = [
     extensionDir: "extensions/cinatra-ai/list-curator-agent",
     uiItems: ["badge", "button", "card", "input", "input-group", "label", "textarea"],
   },
+  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-linkedin-publish-agent
+  // relocated its draft-review HITL field renderer into its own repo; it imports
+  // these design-registry primitives, vendored the same kind-agnostic way.
+  {
+    extensionDir: "extensions/cinatra-ai/blog-linkedin-publish-agent",
+    uiItems: ["button", "card", "label", "textarea"],
+  },
 ];
 
 // Resolve the transitive registry:ui closure of `directItems` from

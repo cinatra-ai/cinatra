@@ -15,10 +15,18 @@ import { emitFieldRendererComponents } from "../generate-extension-manifest.mjs"
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const COMMITTED = join(REPO_ROOT, "src/lib/generated/field-renderer-components.ts");
 
-// The migrated list-curator-agent claimant entries (cinatra#1625 S8/M3), in the
-// generator's bindingId-sorted order. This mirrors what generate-extension-manifest
-// derives from the extension's cinatra.fieldRenderers[].component declarations.
+// The migrated S8/M3 claimant entries (cinatra#1625) — blog-linkedin-publish-agent
+// + list-curator-agent — in the generator's bindingId-sorted order. This mirrors
+// what generate-extension-manifest derives from the extensions'
+// cinatra.fieldRenderers[].component declarations. Append the next claimant here.
 const MIGRATED_ENTRIES = [
+  {
+    bindingId: "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
+    packageName: "@cinatra-ai/blog-linkedin-publish-agent",
+    specifier: "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
   {
     bindingId: "@cinatra-ai/list-curator-agent:final-list-review",
     packageName: "@cinatra-ai/list-curator-agent",
