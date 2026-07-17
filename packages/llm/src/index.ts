@@ -223,6 +223,38 @@ export {
   getActorContextOrThrow,
 } from "./actor-context";
 
+// Execution plane (exec-plane S1, cinatra#1706): the sandbox_execute tool
+// contract, trusted session minting + sealing, and the single injection site.
+export {
+  EXECUTION_SURFACES,
+  mintExecutionSession,
+  sealExecutionSession,
+  openSealedSession,
+  UnidentifiableExecutionCallerError,
+  ExecutionBrokerSecretMissingError,
+  DEFAULT_CARRIER_TTL_MS,
+  isExecutionPlaneRolloutEnabled,
+  shouldSuppressExecutionForTask,
+  ensureToolAwareStepBudget,
+  composeExecutionCue,
+  SANDBOX_EXECUTE_TOOL_NAME,
+  isSandboxExecutionTool,
+  hasSandboxExecutionTool,
+  buildSandboxExecutionTool,
+  stripSandboxExecutionTools,
+  injectExecutionCapability,
+} from "./execution-plane";
+export type {
+  ExecutionSurface,
+  ExecutionSession,
+  MintExecutionSessionInput,
+  OpenSealedSessionResult,
+  ExecutionAvailability,
+  ExecutionCapabilityError,
+  ExecutionInjectionResult,
+  ExecutionInjectionParams,
+} from "./execution-plane";
+
 // ---------------------------------------------------------------------------
 // Backward-compatible wrapper functions
 // ---------------------------------------------------------------------------
@@ -245,6 +277,14 @@ import {
 } from "./registry";
 import { selectSkillDeliveryAdapter } from "./tools/skill-delivery";
 import type { SkillSelectionMode } from "./tools/skill-delivery";
+import {
+  injectExecutionCapability,
+  stripSandboxExecutionTools,
+} from "./execution-plane";
+import type {
+  ExecutionSession,
+  ExecutionAvailability,
+} from "./execution-plane";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { withActorContext, getActorContext } from "./actor-context";
@@ -390,6 +430,21 @@ export type DeterministicLlmExecutionInput = {
    * (if any) are NOT resolved (byte-identical text-only behavior).
    */
   attachmentResolverPorts?: AttachmentResolverPorts;
+  /**
+   * Execution plane (exec-plane S1, cinatra#1706). A pre-minted execution
+   * session bound to `{orgId,userId,surface,runId?}`, supplied by the trusted
+   * surface-layer issuer (agent execution / llm-bridge AFTER run-token
+   * verification). Omitted ⇒ no attributable caller ⇒ the capability is
+   * withheld (fail-closed). Only consulted when the rollout flag is on; live
+   * behavior is byte-identical while the flag is off (default).
+   */
+  executionSession?: ExecutionSession;
+  /**
+   * Execution plane: the D4 per-org / per-agent availability posture. Defaults
+   * to `"enabled"`; `"disabled"` (opt-out) yields a distinguishable
+   * `capability_unavailable` and the model stays usable.
+   */
+  executionAvailability?: ExecutionAvailability;
 };
 
 export type SkillAwareDeterministicLlmExecutionInput = DeterministicLlmExecutionInput & {
@@ -611,6 +666,81 @@ export async function injectMcpTools(params: {
   return [...mcpTools, ...baseTools];
 }
 
+/**
+ * @internal
+ * Run the single execution-capability injection site for an orchestration entry
+ * point — the sibling of `injectMcpTools`, run alongside it and independent of
+ * it (the sandbox tool is not `type:"function"`, so the MCP function-tool strip
+ * leaves it alone; it is not `type:"mcp"`, so it is never an MCP dedup hit).
+ *
+ * S1 SCOPE — NOTHING from the plane reaches a provider. There is NO
+ * per-provider translation yet (that is S2): an injected `sandbox_execution`
+ * tool cannot be delivered to any provider — the OpenAI adapter would coerce an
+ * unknown tool type into a malformed function tool, and the opaque session
+ * carrier must never cross the provider boundary. To honor the design's "tool
+ * and cue cannot diverge" invariant we withhold the cue and step-budget change
+ * too: in S1 injection is VALIDATED (session minted + sealed, fail-closed /
+ * unavailable paths exercised, structured warnings logged) but nothing reaches
+ * the model. S2 replaces this function's body with real per-provider
+ * translation and, at that point, delivers tool + cue + budget together — the
+ * injection PRIMITIVE (`injectExecutionCapability`) already composes them as one
+ * inseparable unit (unit-tested), so S2 cannot make them diverge.
+ *
+ * SECURITY — the returned `tools` are stripped of EVERY `sandbox_execution`
+ * member UNCONDITIONALLY, on every status (injected, passthrough incl. the
+ * flag-off default, and unavailable). This is the provider-boundary guarantee:
+ * an opaque carrier — even one a caller (or a prompt-injected upstream) smuggled
+ * into `input.tools` — can never reach a provider adapter. For every existing
+ * caller (none construct a `sandbox_execution` tool) the strip is a structural
+ * no-op, so the provider payload is unchanged.
+ *
+ * `unavailable` (`no_session` / `capability_unavailable`) is logged as a
+ * structured, non-fatal warning — the model stays usable.
+ */
+function applyExecutionInjection(params: {
+  entryPoint: string;
+  tools: LlmTool[] | undefined;
+  session: ExecutionSession | undefined;
+  availability: ExecutionAvailability | undefined;
+  streaming: boolean;
+  requestedMaxSteps: number | undefined;
+  outputSchema: unknown;
+}): {
+  tools: LlmTool[] | undefined;
+  systemCue: string;
+  maxSteps: number | undefined;
+} {
+  // Run injection for its VALIDATION + side effects (session mint/seal, the
+  // fail-closed / unavailable classification). In S1 the result is not
+  // delivered to the provider; only the warning below is observable.
+  const result = injectExecutionCapability({
+    tools: params.tools,
+    session: params.session,
+    availability: params.availability,
+    task: {
+      outputSchema: params.outputSchema,
+      maxSteps: params.requestedMaxSteps,
+    },
+  });
+  if (result.status === "unavailable") {
+    // Structured, non-fatal: distinguishable kind (`no_session` vs
+    // `capability_unavailable`) preserved in the log for operability. The model
+    // keeps its (stripped) tools and runs without the sandbox capability.
+    console.warn(
+      `[execution-plane] ${params.entryPoint}: capability ${result.error.kind} — ` +
+        "model continues without sandbox_execute",
+    );
+  }
+  // UNCONDITIONAL provider-boundary strip (see the SECURITY note above): no
+  // sandbox_execution tool or carrier ever crosses to a provider in S1,
+  // regardless of the rollout flag or injection status.
+  return {
+    tools: stripSandboxExecutionTools(params.tools),
+    systemCue: "",
+    maxSteps: params.requestedMaxSteps,
+  };
+}
+
 export async function runDeterministicLlmTask(input: DeterministicLlmExecutionInput) {
   return requireActorFrame("runDeterministicLlmTask", input.actorContext, () =>
     runDeterministicLlmTaskImpl(input),
@@ -628,6 +758,17 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     tools: undefined,
     declaredToolboxIds: input.declaredToolboxIds,
   });
+  // Execution-capability injection — exactly once, alongside (independent of)
+  // MCP injection. Passthrough + byte-identical while the rollout flag is off.
+  const exec = applyExecutionInjection({
+    entryPoint: "runDeterministicLlmTask",
+    tools,
+    session: input.executionSession,
+    availability: input.executionAvailability,
+    streaming: false,
+    requestedMaxSteps: input.maxSteps,
+    outputSchema: input.outputSchema,
+  });
   // Resolve attachments AFTER MCP injection, BEFORE the adapter call. No-op +
   // byte-identical when no attachments / no ports.
   const resolved = await resolveEntryAttachments({
@@ -637,12 +778,16 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     model: input.model ?? adapter.defaultModel,
     system: input.system,
   });
+  // Byte-identical when no cue (passthrough): preserve resolved.system exactly.
+  const system = exec.systemCue
+    ? [resolved.system, exec.systemCue].filter(Boolean).join("\n\n")
+    : resolved.system;
   const response = await adapter.generate({
-    system: resolved.system,
+    system,
     prompt: input.user,
     model: input.model,
-    tools,
-    maxSteps: input.maxSteps,
+    tools: exec.tools,
+    maxSteps: exec.maxSteps,
     maxTokens: input.maxOutputTokens,
     outputSchema: input.outputSchema,
     signal: input.signal,
@@ -769,14 +914,30 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     model: input.model ?? adapter.defaultModel,
     system: input.system,
   });
-  const system = [resolved.system, personalContext, skillContext].filter(Boolean).join("\n\n");
+  // Execution-capability injection — exactly once, alongside (independent of)
+  // MCP + skill injection. S1 is byte-identical at the provider boundary (the
+  // injection is validated + logged but delivers nothing until S2 translates
+  // the tool); `exec.tools` === `allTools`, `exec.systemCue` === "".
+  const exec = applyExecutionInjection({
+    entryPoint: "runSkillAwareDeterministicLlmTask",
+    tools: allTools,
+    session: input.executionSession,
+    availability: input.executionAvailability,
+    streaming: false,
+    requestedMaxSteps: input.maxSteps,
+    outputSchema: input.outputSchema,
+  });
+  const execTools = exec.tools ?? allTools;
+  const system = [resolved.system, personalContext, skillContext, exec.systemCue]
+    .filter(Boolean)
+    .join("\n\n");
 
   const idempotencyKey = randomUUID();
   const response = await adapter.generate({
     system,
     prompt: input.user,
     model: input.model,
-    tools: allTools.length > 0 ? allTools : undefined,
+    tools: execTools.length > 0 ? execTools : undefined,
     maxSteps: input.maxSteps ?? (allTools.length > 0 ? 6 : 1),
     maxTokens: input.maxOutputTokens,
     outputSchema: input.outputSchema,
@@ -899,6 +1060,11 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     attachments: _attachments,
     attachmentResolverPorts: _ports,
     resolvedAttachments: _smuggledResolvedAttachments,
+    // Execution-plane inputs are consumed by the injection layer here and MUST
+    // NOT spread into the adapter call (the adapter has no such fields and the
+    // opaque carrier never crosses the provider boundary).
+    executionSession: _executionSession,
+    executionAvailability: _executionAvailability,
     ...adapterInput
   } = input as OrchestrateGenerateInput & { resolvedAttachments?: unknown };
   // Explicit MCP injection.
@@ -906,6 +1072,16 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     provider: adapter.provider,
     tools: adapterInput.tools,
     declaredToolboxIds: adapterInput.declaredToolboxIds,
+  });
+  // Execution-capability injection — exactly once, independent of MCP.
+  const exec = applyExecutionInjection({
+    entryPoint: "generate",
+    tools,
+    session: input.executionSession,
+    availability: input.executionAvailability,
+    streaming: false,
+    requestedMaxSteps: adapterInput.maxSteps,
+    outputSchema: adapterInput.outputSchema,
   });
   // Resolve attachments AFTER MCP injection, BEFORE the adapter call. No-op +
   // byte-identical when no attachments / no ports.
@@ -918,8 +1094,13 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
   });
   const response = await adapter.generate({
     ...adapterInput,
-    system: resolvedAtt.system,
-    tools,
+    // Byte-identical when no cue (passthrough): keep the exact resolved system
+    // (which may be undefined) rather than coercing it to "".
+    system: exec.systemCue
+      ? [resolvedAtt.system, exec.systemCue].filter(Boolean).join("\n\n")
+      : resolvedAtt.system,
+    tools: exec.tools,
+    maxSteps: exec.maxSteps,
     ...(resolvedAtt.resolvedAttachments
       ? { resolvedAttachments: resolvedAtt.resolvedAttachments }
       : {}),
@@ -976,6 +1157,17 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     skipMcpInjection: input.skipMcpInjection,
     preserveFunctionTools: input.preserveFunctionTools,
   });
+  // Execution-capability injection — exactly once, independent of MCP. Stream is
+  // a multi-step tool loop already, so no step-budget widening (streaming:true).
+  const exec = applyExecutionInjection({
+    entryPoint: "stream",
+    tools,
+    session: input.executionSession,
+    availability: input.executionAvailability,
+    streaming: true,
+    requestedMaxSteps: undefined,
+    outputSchema: undefined,
+  });
   const emitter = createStreamUsageEmitter({
     provider: adapter.provider,
     model: input.model ?? adapter.defaultModel,
@@ -985,13 +1177,16 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
   // Strip the resolver inputs so they never reach the adapter; ALSO
   // runtime-strip `resolvedAttachments` (the public type already Omits it, but
   // a cast could smuggle one — the resolver-bypass invariant must hold at
-  // runtime).
+  // runtime). Execution-plane inputs are consumed by the injection layer above
+  // and must not spread into the adapter call.
   const {
     provider: _p,
     onUsageData,
     attachments: _attachments,
     attachmentResolverPorts: _ports,
     resolvedAttachments: _smuggledResolvedAttachments,
+    executionSession: _executionSession,
+    executionAvailability: _executionAvailability,
     ...rest
   } = input as OrchestrateStreamInput & { resolvedAttachments?: unknown };
   // Per-message resolution. Resolve EACH user message's attachments via the
@@ -1035,9 +1230,13 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
   };
   return adapter.stream({
     ...restNoMessages,
-    system: streamResolve.system,
+    // Byte-identical when no cue (passthrough): preserve the exact resolved
+    // system (which may be undefined) rather than coercing it to "".
+    system: exec.systemCue
+      ? [streamResolve.system, exec.systemCue].filter(Boolean).join("\n\n")
+      : streamResolve.system,
     messages: streamResolve.messages,
-    tools,
+    tools: exec.tools,
     onUsageData: (usage) => {
       emitter(usage);
       onUsageData?.(usage);
