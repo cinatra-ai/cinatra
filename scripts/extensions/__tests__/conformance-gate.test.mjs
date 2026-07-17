@@ -709,6 +709,175 @@ describe("conformance-gate — cinatra.views (fail-closed at publish)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cinatra.llmProvider — LLM-provider declaration surface (cinatra#1712, epic
+// #1711 S1 AC1). OPTIONAL (no connector declares it yet — AC6 later); FAIL-CLOSED
+// at the publish gate when PRESENT; ZERO findings when ABSENT. Uses the clean
+// connector fixture (an LLM connector is a `kind:"connector"`). The abiVersion +
+// vocabularies are DERIVED from the live leaf.
+// ---------------------------------------------------------------------------
+
+// A valid v1 declaration mirroring the anthropic build-known catalog entry.
+const validLlmProvider = {
+  abiVersion: 1,
+  provider: "anthropic",
+  capabilities: {
+    function_tools: true,
+    media_input: false,
+    native_mcp: { status: "native", approval: "unsupported" },
+  },
+  models: { default: "claude-sonnet-4-6", allowed: ["claude-sonnet-4-6", "claude-opus-4-7"] },
+};
+function connectorWithLlmProvider(llmProvider) {
+  return cleanConnectorFiles({ pkg: { cinatra: { ...CLEAN_CONNECTOR_PKG.cinatra, llmProvider } } });
+}
+const llmProviderBlockingRules = (result) =>
+  result.blocking.filter((f) => f.rule.startsWith("manifest.llm-provider")).map((f) => f.rule);
+
+describe("conformance-gate — cinatra.llmProvider derivation + leaf parity (cinatra#1712)", () => {
+  it("derives the llmProvider ABI version + vocabularies from live leaf source", () => {
+    expect(UI_RULES.ok).toBe(true);
+    expect(UI_RULES.llmProviderAbiVersion).toBe(1);
+    expect([...UI_RULES.llmProviders].sort()).toEqual(["anthropic", "gemini", "openai"]);
+    expect(UI_RULES.llmCapabilities).toEqual(["media_input", "function_tools", "native_mcp"]);
+    expect([...UI_RULES.nativeMcpStatuses].sort()).toEqual(["dormant", "native", "unsupported"]);
+    expect([...UI_RULES.mcpApprovalModes].sort()).toEqual(["approval_required", "auto_execute", "unsupported"]);
+  });
+
+  it("the gate-derived llmProvider ABI version equals the leaf's declared literal (mirror parity)", () => {
+    // Independent extraction of LLM_PROVIDER_ABI_VERSION straight from the leaf
+    // source — proves loadLiveRules DERIVES the same value the leaf declares
+    // (never a re-listed copy; the #979 addendum principle). The leaf↔gate parity
+    // guard for the top-level cinatra.llmProvider field.
+    const leafSrc = readFileSync(
+      join(REPO_ROOT, "packages/sdk-extensions/src/llm-provider-contract.ts"),
+      "utf8",
+    );
+    const m = /export const LLM_PROVIDER_ABI_VERSION\s*=\s*(\d+)/.exec(leafSrc);
+    expect(m).not.toBeNull();
+    expect(Number(m[1])).toBe(UI_RULES.llmProviderAbiVersion);
+  });
+});
+
+describe("conformance-gate — cinatra.llmProvider (optional; fail-closed at publish)", () => {
+  it("a connector with NO llmProvider block is unaffected (optional — the current fleet state)", () => {
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(llmProviderBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("conforms cleanly with a valid v1 llmProvider block", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider(validLlmProvider));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(llmProviderBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a wrong abiVersion (derived, fail-closed)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, abiVersion: 2 }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-abi-version");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown provider (derived vocabulary)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, provider: "mistral" }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-provider");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an extraneous top-level key (closed v1 shape)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, extra: true }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-extraneous-key");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a missing required capability key", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, native_mcp: { status: "native" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-capabilities-missing");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-boolean capability flag", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: "yes", media_input: false, native_mcp: { status: "native" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-capability-flag");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown native_mcp status (derived vocabulary)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, media_input: false, native_mcp: { status: "maybe" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-native-mcp-status");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown native_mcp approval mode (derived vocabulary)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, media_input: false, native_mcp: { status: "native", approval: "sometimes" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-native-mcp-approval");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty native_mcp transports array (nonempty when present)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, media_input: false, native_mcp: { status: "native", transports: [] } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-native-mcp-transports");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty models.allowed", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, models: { default: "x", allowed: [] } }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-models-allowed");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags models.default NOT in models.allowed (the cross-field rule)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, models: { default: "gpt-9", allowed: ["claude-sonnet-4-6"] } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-models-default-not-allowed");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-object llmProvider block", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider("nope"));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-shape");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // cinatra.artifact.ui.registryItems — extension-contributed shadcn registry
 // items (cinatra#1623, epic #1620 S5). FAIL-CLOSED at the publish gate.
 // ---------------------------------------------------------------------------
