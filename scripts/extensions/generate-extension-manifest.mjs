@@ -2101,7 +2101,7 @@ export async function buildManifest() {
   // generation error. ARTIFACT_UI_RENDER_SLOTS mirrors ARTIFACT_UI_SLOTS in
   // packages/sdk-extensions/src/artifact-contract.ts (the closed v1 slot enum);
   // the authoritative slot-enum validation is the S1 publish/conformance gate.
-  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview"];
+  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview", "listRow"];
   const artifactRenderers = records
     .filter((r) => r.kind === "artifact")
     .flatMap((r) => {
@@ -2940,7 +2940,7 @@ function emitArtifactRenderers(artifactRenderers) {
     `export type GeneratedArtifactRendererEntry = {\n` +
     `  resolution: ExtensionResolution;\n` +
     `  packageName: string;\n` +
-    `  slot: "detail" | "preview";\n` +
+    `  slot: "detail" | "preview" | "listRow";\n` +
     `  representations: readonly string[];\n` +
     `  propsApiVersion: number;\n` +
     `  load: GeneratedArtifactRendererLoader;\n` +

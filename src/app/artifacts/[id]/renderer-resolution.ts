@@ -106,6 +106,28 @@ export function resolveSemanticDispatch(
   };
 }
 
+/**
+ * Resolve the SEMANTIC `listRow` renderer for a row (S7/M2, cinatra#1631 —
+ * the artifacts-library glyph capability) via the per-org effective-identity
+ * winner + the generated build map. Same arbitration as the detail slot —
+ * the winner-bound semantic registry at slot `listRow` — so a losing
+ * claimant's row capability never leaks. Null when the winner ships no
+ * `listRow` renderer (the caller renders the host's generic claimed glyph).
+ */
+export function resolveSemanticListRowDispatch(
+  baseType: string,
+  identity: EffectiveIdentity,
+): SemanticRendererResolution | null {
+  const desc = semanticRendererRegistry.resolve(baseType, identity, "listRow");
+  if (!desc) return null;
+  return {
+    packageName: desc.packageName,
+    generatedKey: desc.generatedKey,
+    // `built` MEANING widened to `loadable` (§2.4): build map OR runtime registry.
+    built: isLoadableKey(desc.generatedKey),
+  };
+}
+
 /** Resolve the REPRESENTATION viewer for a row via the org-scoped
  * representation-provider registry (extension provider or the always-effective
  * first-party host default) + the generated build map, at the given `slot`

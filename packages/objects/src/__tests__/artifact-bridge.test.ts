@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // extensions package tests).
 vi.mock("server-only", () => ({}));
 
+import { ARTIFACT_UI_SDK_ABI_RANGE } from "@cinatra-ai/sdk-extensions/artifact-contract";
+import type { EffectiveIdentity } from "../effective-identity";
 import { objectTypeRegistry } from "../registry";
+import { semanticRendererRegistry } from "../artifact-renderer-registry";
 import { registerArtifactExtensions } from "../integration/register-artifact-extensions";
 
 // Proves the pluggability guarantee: a brand-new artifact type (a NOVEL
@@ -329,5 +332,139 @@ describe("registerArtifactExtensions — per-claim validators (cinatra#1429)", (
     const removed = objectTypeRegistry.removeByPackage("@cinatra-ai/invoice-artifact");
     expect(removed).toContain("@cinatra-ai/invoice-artifact:invoice");
     expect(objectTypeRegistry.resolve("@cinatra-ai/invoice-artifact:invoice")).toBeNull();
+  });
+});
+
+// S7/M2 (cinatra#1631): the bridge registers EVERY declared semantic slot —
+// `detail` AND the activated `listRow` — for the umbrella type and each claimed
+// type; `preview` never enters the semantic keyspace.
+describe("registerArtifactExtensions — semantic slot registration (S7 listRow)", () => {
+  let root: string;
+
+  const rowWinner: EffectiveIdentity = {
+    kind: "extension",
+    extension: "@cinatra-ai/rowful-artifact",
+    basis: "binding",
+    selectable: true,
+    assertionId: "sa_row",
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "artifact-bridge-s7-"));
+    objectTypeRegistry._clearForTests();
+    semanticRendererRegistry._clearForTests();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+    semanticRendererRegistry._clearForTests();
+  });
+
+  it("registers detail + listRow renderers per declared slot (preview stays representation-only)", () => {
+    writeExt(root, "rowful-artifact", {
+      name: "@cinatra-ai/rowful-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: {
+              detail: { entry: "./src/detail.tsx", propsApiVersion: 1 },
+              preview: { entry: "./src/preview.tsx", propsApiVersion: 1 },
+              listRow: { entry: "./src/row.tsx", propsApiVersion: 1 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+
+    const umbrella = "@cinatra-ai/rowful-artifact:artifact";
+    expect(semanticRendererRegistry.resolve(umbrella, rowWinner)).toMatchObject({
+      slot: "detail",
+      generatedKey: "@cinatra-ai/rowful-artifact::detail",
+    });
+    expect(semanticRendererRegistry.resolve(umbrella, rowWinner, "listRow")).toMatchObject({
+      slot: "listRow",
+      generatedKey: "@cinatra-ai/rowful-artifact::listRow",
+    });
+    // `preview` is representation-only — never a semantic descriptor.
+    const snapshot = semanticRendererRegistry._snapshot();
+    expect(snapshot.every((d) => d.slot === "detail" || d.slot === "listRow")).toBe(true);
+  });
+
+  it("a detail-only manifest registers no listRow descriptor (glyph floors)", () => {
+    writeExt(root, "detailonly-artifact", {
+      name: "@cinatra-ai/detailonly-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: { detail: { entry: "./src/detail.tsx", propsApiVersion: 1 } },
+          },
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+    const umbrella = "@cinatra-ai/detailonly-artifact:artifact";
+    const detailWinner: EffectiveIdentity = {
+      kind: "extension",
+      extension: "@cinatra-ai/detailonly-artifact",
+      basis: "binding",
+      selectable: true,
+      assertionId: "sa_d",
+    };
+    expect(semanticRendererRegistry.resolve(umbrella, detailWinner)).not.toBeNull();
+    expect(semanticRendererRegistry.resolve(umbrella, detailWinner, "listRow")).toBeNull();
+  });
+
+  it("a listRow-only manifest registers the row capability for umbrella + claimed types", () => {
+    writeExt(root, "rowonly-artifact", {
+      name: "@cinatra-ai/rowonly-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/rowonly-artifact:thing",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+          ui: {
+            abiVersion: 1,
+            sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+            renderers: { listRow: { entry: "./src/row.tsx", propsApiVersion: 1 } },
+          },
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+    const w: EffectiveIdentity = {
+      kind: "extension",
+      extension: "@cinatra-ai/rowonly-artifact",
+      basis: "binding",
+      selectable: true,
+      assertionId: "sa_r",
+    };
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w, "listRow"),
+    ).not.toBeNull();
+    expect(
+      semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:thing", w, "listRow"),
+    ).not.toBeNull();
+    expect(semanticRendererRegistry.resolve("@cinatra-ai/rowonly-artifact:artifact", w)).toBeNull();
   });
 });

@@ -16,15 +16,7 @@ import "server-only";
  */
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import {
-  AlertTriangle,
-  Boxes,
-  Braces,
-  FileText,
-  List as ListIcon,
-  Mail,
-  Search,
-} from "lucide-react";
+import { AlertTriangle, Braces, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +29,7 @@ import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 
 import { isSelectionPreparing } from "@/app/artifacts/[id]/renderer-dispatch";
 import { LibraryFacetControl } from "./library-facet-control";
+import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
 
 // ---------------------------------------------------------------------------
 // Presentation helpers (pure)
@@ -58,32 +51,11 @@ export function extensionDisplayName(extension: string): string {
     .join(" ");
 }
 
-function isFileMime(mime: string): boolean {
-  return Boolean(mime) && mime !== "application/octet-stream";
-}
-
-/** The renderer glyph reflects how the row opens (§III): a claimed typed row,
- * a file-form representation, or the generic fallback. */
-function libraryGlyph(summary: ArtifactSummary): {
-  Icon: typeof FileText;
-  className: string;
-} {
-  const id = summary.effectiveIdentity;
-  if (id.kind === "extension") {
-    // Coarse icon by claiming extension family, tinted indigo.
-    const ext = id.extension.toLowerCase();
-    const Icon = ext.includes("list")
-      ? ListIcon
-      : ext.includes("mail") || ext.includes("outreach") || ext.includes("email")
-        ? Mail
-        : Boxes;
-    return { Icon, className: "bg-primary/10 text-primary" };
-  }
-  if (isFileMime(summary.mime)) {
-    return { Icon: FileText, className: "bg-warning/10 text-warning" };
-  }
-  return { Icon: Braces, className: "bg-surface-muted text-muted-foreground" };
-}
+// The renderer glyph (§III) is resolved by `LibraryRowGlyph` through the
+// artifact-UI dispatch spine: a claimed row resolves its winner's registered
+// `listRow` capability (S7/M2, cinatra#1631); the file-vs-structured floor
+// split stays host-side in that seam. The former host-side per-extension-family
+// icon map is deleted.
 
 function ownerLabel(level: ArtifactSummary["ownerLevel"]): string {
   return level.charAt(0).toUpperCase() + level.slice(1);
@@ -189,7 +161,6 @@ function LibraryRow({
   summary: ArtifactSummary;
   isLast: boolean;
 }) {
-  const { Icon, className } = libraryGlyph(summary);
   const id = summary.effectiveIdentity;
   const name = summary.title ?? summary.artifactId;
   const preparing = isSelectionPreparing(id);
@@ -206,11 +177,7 @@ function LibraryRow({
         (isLast ? "" : " border-b border-line")
       }
     >
-      <span
-        className={`grid size-[34px] flex-none place-items-center rounded-lg ${className}`}
-      >
-        <Icon aria-hidden className="size-[17px]" />
-      </span>
+      <LibraryRowGlyph summary={summary} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-foreground">
