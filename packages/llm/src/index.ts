@@ -10,6 +10,7 @@ import "server-only";
 // Types
 export type {
   LlmProvider,
+  LlmCapabilityRequirement,
   LlmTool,
   LlmFunctionTool,
   LlmMcpServerTool,
@@ -230,7 +231,7 @@ export {
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import type { LlmProvider, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef } from "./types";
+import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef } from "./types";
 import type { OpenAIConnectionConfig } from "./providers/openai";
 // Shared orchestration-entry attachment step plus the app-injected
 // resolver-ports type used by the entry input types.
@@ -373,6 +374,13 @@ export type DeterministicLlmExecutionInput = {
    * runSkillAwareDeterministicLlmTask path honor per-agent toolbox filtering.
    */
   declaredToolboxIds?: string[];
+  /**
+   * llm-providers S1 (#1712): the capability the dispatching agent pinned via
+   * `metadata.cinatra.llm.capabilityRequired`. Threaded to the adapter's
+   * `GenerateInput.capabilityRequired`. Absent ⇒ no capability gate. Today only
+   * `"native_mcp"` is adapter-consumed (Anthropic native-fallback fail-closed).
+   */
+  capabilityRequired?: LlmCapabilityRequirement;
   /**
    * When provided AND no outer ALS frame is active, the entry point wraps its
    * body in withActorContext so downstream consumers (MCP handlers,
@@ -651,6 +659,9 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     logLabel: input.logLabel,
     reasoningEffort: input.reasoningEffort,
     declaredToolboxIds: input.declaredToolboxIds,
+    // llm-providers S1 (#1712): forward the pinned capability (Anthropic
+    // native_mcp fail-closed). Absent ⇒ existing behavior.
+    capabilityRequired: input.capabilityRequired,
     ...(resolved.resolvedAttachments
       ? { resolvedAttachments: resolved.resolvedAttachments }
       : {}),
@@ -786,6 +797,9 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     logLabel: input.logLabel,
     reasoningEffort: input.reasoningEffort,
     declaredToolboxIds: input.declaredToolboxIds,
+    // llm-providers S1 (#1712): forward the pinned capability so the adapter can
+    // fail closed at runtime (Anthropic native_mcp). Absent ⇒ existing behavior.
+    capabilityRequired: input.capabilityRequired,
     ...(resolved.resolvedAttachments
       ? { resolvedAttachments: resolved.resolvedAttachments }
       : {}),
