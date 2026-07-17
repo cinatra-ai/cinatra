@@ -48,7 +48,10 @@ import {
 } from "@cinatra-ai/objects/artifact-renderer-registry";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
-import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers";
+import {
+  GENERATED_ARTIFACT_RENDERERS,
+  type GeneratedArtifactRendererEntry,
+} from "@/lib/generated/artifact-renderers";
 import { PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS } from "@/lib/artifacts/artifact-read";
 
 /**
@@ -69,14 +72,34 @@ export interface SystemRepresentationProviderSpec {
 }
 
 /**
- * The set of package names the generated build map ships — the system artifact-
- * renderer packages. THESE are the "system extensions" the teardown path must
- * refuse to uninstall (they are part of the host release, not marketplace
- * installs). Derived from the map so it can never drift from what is built.
+ * The generated build-map entries that are SYSTEM bases. `resolution: "required"`
+ * is EXACTLY membership in `cinatra.systemExtensions`: the generator classifies
+ * every entry `resolutionOf(pkg) = systemExtensions.has(pkg) ? "required" :
+ * "guardedOptional"` (scripts/extensions/generate-extension-manifest.mjs). The map
+ * carries an entry for EVERY bundled `kind:"artifact"` extension that declares
+ * `cinatra.artifact.ui.renderers` — NOT only system ones — so a bundled NON-system
+ * (`guardedOptional`) artifact could otherwise leak into the "system" set. That
+ * would auto-bind it for every org AND exempt it from capability teardown — an
+ * isolation break (activate-without-install + survive-uninstall). Filtering to
+ * `required` here ENFORCES the "system = host-release-locked" boundary instead of
+ * assuming the map only ever carries system bases (Codex convergence, cinatra#1630).
+ */
+function requiredSystemRendererEntries(): GeneratedArtifactRendererEntry[] {
+  return Object.values(GENERATED_ARTIFACT_RENDERERS).filter(
+    (entry) => entry.resolution === "required",
+  );
+}
+
+/**
+ * The set of package names the generated build map ships AS SYSTEM BASES — the
+ * `resolution: "required"` (== `systemExtensions`) artifact-renderer packages.
+ * THESE are the "system extensions" the teardown path must refuse to uninstall
+ * (they are part of the host release, not marketplace installs). Derived from the
+ * map (filtered to `required`) so it can never drift from what is built.
  */
 export function systemArtifactRendererPackages(): ReadonlySet<string> {
   const names = new Set<string>();
-  for (const entry of Object.values(GENERATED_ARTIFACT_RENDERERS)) {
+  for (const entry of requiredSystemRendererEntries()) {
     names.add(entry.packageName);
   }
   return names;
@@ -102,12 +125,14 @@ export function isSystemArtifactRendererPackage(packageName: string): boolean {
  * allowlist granularity preserves the pre-cutover invariant exactly: the detail
  * page inline-renders precisely the MIMEs the preview route serves; everything
  * else falls to the generic floor. An entry with no `representations` contributes
- * none.
+ * none. Only `resolution: "required"` (== `systemExtensions`) entries are
+ * projected — a bundled `guardedOptional` artifact renderer is NEVER auto-bound as
+ * a system provider (Codex convergence, cinatra#1630).
  */
 export function systemRepresentationProviderSpecs(): SystemRepresentationProviderSpec[] {
   const specs: SystemRepresentationProviderSpec[] = [];
   const seen = new Set<string>();
-  for (const entry of Object.values(GENERATED_ARTIFACT_RENDERERS)) {
+  for (const entry of requiredSystemRendererEntries()) {
     for (const pattern of entry.representations ?? []) {
       for (const mime of PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS) {
         // Bind an EXACT allowlisted MIME whenever the declared representation

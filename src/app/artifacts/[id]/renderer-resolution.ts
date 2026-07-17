@@ -129,6 +129,9 @@ export function resolveRepresentationDispatch(
       packageName: res.packageName,
       generatedKey: res.generatedKey,
       pattern: res.pattern,
+      // The slot resolved at (Slice B: `detail` on the detail page) — carried so a
+      // never-built degrade diagnoses the actual slot, not a hardcoded `preview`.
+      slot,
       // `built` MEANING widened to `loadable` (§2.4): build map OR runtime registry.
       built: isLoadableKey(res.generatedKey),
     };
