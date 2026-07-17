@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { parse as yamlParse } from "yaml";
 
-import { parseSkillFrontmatterYaml, readMatchWhen, readMatchWhenRaw } from "./frontmatter";
+import { parseSkillFrontmatterYaml, readMatchWhen, readMatchWhenRaw, readRequiresExecution } from "./frontmatter";
 
 const fm = (...lines: string[]) => ["---", ...lines, "---", "body"].join("\n");
 
@@ -110,5 +110,31 @@ describe("readMatchWhenRaw - round-trips for the downstream parser", () => {
       fm("match_when:", "  - always", "metadata:", "  match_when:", '    - agent_id: "@x/y"'),
     );
     expect(yamlParse(raw as string)).toEqual([{ agent_id: "@x/y" }]);
+  });
+});
+
+describe("readRequiresExecution (exec-plane S2, cinatra#1707)", () => {
+  it("reads metadata.requires_execution: true (Anthropic-validator-safe location)", () => {
+    expect(readRequiresExecution(fm("metadata:", "  requires_execution: true"))).toBe(true);
+  });
+
+  it("falls back to the top-level requires_execution", () => {
+    expect(readRequiresExecution(fm("requires_execution: true"))).toBe(true);
+  });
+
+  it("metadata location WINS over the top level when both are present", () => {
+    expect(
+      readRequiresExecution(fm("requires_execution: true", "metadata:", "  requires_execution: false")),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["absent flag", fm("name: Foo")],
+    ["explicit false", fm("metadata:", "  requires_execution: false")],
+    ['string "true" (only the literal boolean counts)', fm("metadata:", '  requires_execution: "true"')],
+    ["no frontmatter at all", "plain body"],
+    ["malformed YAML", "---\n: : :\n---\nbody"],
+  ])("%s reads as false (fail-quiet)", (_label, content) => {
+    expect(readRequiresExecution(content)).toBe(false);
   });
 });
