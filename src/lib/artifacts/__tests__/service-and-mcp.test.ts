@@ -159,6 +159,9 @@ describe("artifacts MCP module semantic primitives", () => {
       "artifact_authoring_emit",
       "artifact_extension_get",
       "artifact_extension_search",
+      // Row-scope promotion request (cinatra#1437) — opens a pending request
+      // in the approvals area; the widen happens only via approvals_decide.
+      "artifact_promote_request",
     ].sort());
   });
 });
