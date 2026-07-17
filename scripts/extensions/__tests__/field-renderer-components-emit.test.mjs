@@ -1,8 +1,10 @@
 // Field-renderer component map emitter (cinatra#1625, epic #1620 S8 — M3).
-// Pins the empty seam byte-for-byte against the committed generated file (a
-// local proxy for the fail-closed `--check` staleness gate) and the per-claimant
-// emission mechanics (the literal-import loader shape) that stays inert until a
-// claimant declares cinatra.fieldRenderers[].component.
+// Pins the committed generated file byte-for-byte against the emitter output for
+// the CURRENT presence universe (a local proxy for the fail-closed `--check`
+// staleness gate) and the per-claimant emission mechanics (the literal-import
+// loader shape). The first claimant migration (list-curator-agent) populated the
+// map, so the byte-proxy now reflects those two entries; the empty-input unit
+// case below still holds independently.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -13,9 +15,29 @@ import { emitFieldRendererComponents } from "../generate-extension-manifest.mjs"
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const COMMITTED = join(REPO_ROOT, "src/lib/generated/field-renderer-components.ts");
 
+// The migrated list-curator-agent claimant entries (cinatra#1625 S8/M3), in the
+// generator's bindingId-sorted order. This mirrors what generate-extension-manifest
+// derives from the extension's cinatra.fieldRenderers[].component declarations.
+const MIGRATED_ENTRIES = [
+  {
+    bindingId: "@cinatra-ai/list-curator-agent:final-list-review",
+    packageName: "@cinatra-ai/list-curator-agent",
+    specifier: "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
+    bindingId: "@cinatra-ai/list-curator-agent:scrape-schema-review",
+    packageName: "@cinatra-ai/list-curator-agent",
+    specifier: "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+];
+
 describe("emitFieldRendererComponents", () => {
-  it("emits the EMPTY seam byte-identical to the committed generated file (--check proxy)", () => {
-    expect(emitFieldRendererComponents([])).toBe(readFileSync(COMMITTED, "utf8"));
+  it("emits the current presence universe byte-identical to the committed generated file (--check proxy)", () => {
+    expect(emitFieldRendererComponents(MIGRATED_ENTRIES)).toBe(readFileSync(COMMITTED, "utf8"));
   });
 
   it("emits an empty object literal (no entries) for the empty presence universe", () => {

@@ -168,6 +168,23 @@ export function scanHostImportedExtensions(
 const LOADER_BLOCK_RE = /export const ([A-Z0-9_]+)\s*:\s*Record<[^=]+=\s*\{([\s\S]*?)\n\};/g;
 const LOADER_ENTRY_RE =
   /"([^"]+)":\s*\{\s*resolution:\s*"([^"]+)"\s*,\s*load:\s*(?:guardedExtensionImport\(\s*"([^"]+)"|\(\)\s*=>\s*import\(\s*"([^"]+)")/g;
+
+// CLIENT-safe degradable loader maps (cinatra#1625, epic #1620 S8 — M3): the
+// field-renderer component map is consumed by the interactive CLIENT
+// field-renderer registry, so its loaders CANNOT route through the server-only
+// guardedExtensionImport / degraded-result guard (both `import "server-only"`).
+// Each loader is a plain `() => import()`; the graceful degrade to the
+// SchemaFieldRenderer floor is owned by the client resolution wiring +
+// ExtensionFieldRenderer wrapper (packages/agents/src/field-renderer-components.ts
+// + extension-field-renderer.tsx, proven by field-renderer-component-resolution +
+// field-renderer-component-cutover). So a `guardedOptional` entry here is
+// proven-degradable ACQUIRABLE without the server-guard brand; a `required` entry
+// stays bootable (a required claimant must never be absent). The per-entry shape
+// carries extra metadata (packageName / propsApiVersion) between `resolution` and
+// `load`, so it is parsed with a tolerant entry regex rather than LOADER_ENTRY_RE.
+const CLIENT_DEGRADABLE_LOADER_MAPS = new Set(["GENERATED_FIELD_RENDERER_COMPONENTS"]);
+const CLIENT_LOADER_ENTRY_RE =
+  /"([^"]+)":\s*\{\s*resolution:\s*"([^"]+)"[^}]*?load:\s*\(\)\s*=>\s*import\(\s*"([^"]+)"/g;
 const RECORD_LINE_RE = /^\s*"(@[^"]+)":\s*(\{"packageName":.*\}),?\s*$/;
 const EXPECTED_ENTRY_RE = /\{\s*map:\s*"([^"]+)",\s*key:\s*"([^"]+)",\s*resolution:\s*"([^"]+)"\s*\}/g;
 
@@ -252,6 +269,34 @@ export function classifyGeneratedReferences({ generatedSources, generatedTestSou
     while ((bm = LOADER_BLOCK_RE.exec(source)) !== null) {
       const mapName = bm[1];
       const body = bm[2];
+
+      // 2a) CLIENT-safe degradable maps (field-renderer components): plain
+      //     `() => import()` loaders whose degrade is owned client-side (the
+      //     SchemaFieldRenderer floor), NOT the server guard. guardedOptional ⇒
+      //     acquirable-on-demand (proven degradable by the client wrapper);
+      //     required ⇒ bootable; anything else ⇒ fail-closed.
+      if (CLIENT_DEGRADABLE_LOADER_MAPS.has(mapName)) {
+        let cm;
+        CLIENT_LOADER_ENTRY_RE.lastIndex = 0;
+        while ((cm = CLIENT_LOADER_ENTRY_RE.exec(body)) !== null) {
+          const [, key, resolution, spec] = cm;
+          const pkg = basePkg(spec);
+          if (!extensionNames.has(pkg)) continue;
+          classifiedSpecs.add(spec);
+          if (resolution === "guardedOptional") {
+            if (!bootable.has(pkg)) {
+              acquirable.add(pkg);
+              addReason(pkg, `${mapName}["${key}"] client-safe field-renderer loader (floors to SchemaFieldRenderer) + proven degradable`);
+            }
+          } else if (resolution === "required") {
+            forceBootable(pkg, `${mapName}["${key}"] resolution=required (client map)`);
+          } else {
+            forceBootable(pkg, `${mapName}["${key}"] resolution unknown: ${JSON.stringify(resolution)} (fail-closed)`);
+          }
+        }
+        continue;
+      }
+
       let em;
       LOADER_ENTRY_RE.lastIndex = 0;
       while ((em = LOADER_ENTRY_RE.exec(body)) !== null) {

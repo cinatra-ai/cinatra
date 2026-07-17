@@ -117,6 +117,14 @@ const VENDOR_MANIFEST = [
   // the connector no longer ships or imports any design-registry primitives.
   // Its VENDOR_MANIFEST entry (button/input/label/textarea) was removed to
   // match — the provenance gate would otherwise fail on the now-absent files.
+  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): list-curator-agent
+  // relocated its two HITL field-renderer components into its own repo; they
+  // import these design-registry primitives, vendored the same kind-agnostic
+  // way a connector does (relative imports, provenance-gated).
+  {
+    extensionDir: "extensions/cinatra-ai/list-curator-agent",
+    uiItems: ["badge", "button", "card", "input", "input-group", "label", "textarea"],
+  },
 ];
 
 // Resolve the transitive registry:ui closure of `directItems` from

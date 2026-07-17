@@ -29,8 +29,6 @@ import {
 import { GmailSenderFieldRenderer } from "../gmail-sender-renderer";
 import { ListPickerRenderer } from "../list-picker-renderer";
 import { ContextSelectorRenderer } from "../context-selector-renderer";
-import { ListCuratorScrapeSchemaRenderer } from "../list-curator-scrape-schema-renderer";
-import { ListCuratorFinalListRenderer } from "../list-curator-final-list-renderer";
 import { BlogLinkedinDraftReviewRenderer } from "../blog-linkedin-draft-review-renderer";
 import { BlogWordpressDraftConfirmRenderer } from "../blog-wordpress-draft-confirm-renderer";
 import { FollowUpCadenceFieldRenderer } from "../follow-up-cadence-renderer";
@@ -81,8 +79,11 @@ const PARITY_TABLE: ReadonlyArray<
   ["list-picker", ListPickerRenderer as never, 90],
   ["@cinatra-ai/context-selection-agent:context-selector", ContextSelectorRenderer as never, 90],
   ["context-selector", ContextSelectorRenderer as never, 90],
-  ["@cinatra-ai/list-curator-agent:scrape-schema-review", ListCuratorScrapeSchemaRenderer as never, 90],
-  ["@cinatra-ai/list-curator-agent:final-list-review", ListCuratorFinalListRenderer as never, 90],
+  // list-curator's scrape-schema-review + final-list-review COMPONENTS migrated
+  // into @cinatra-ai/list-curator-agent (cinatra#1625 S8/M3); their ids now
+  // resolve to the ExtensionFieldRenderer wrapper (still priority 90, same
+  // strict-id condition) — asserted in the dedicated migrated-binding block below,
+  // not in this frozen host-component table.
   ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", BlogLinkedinDraftReviewRenderer as never, 90],
   ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", BlogWordpressDraftConfirmRenderer as never, 90],
   ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", FollowUpCadenceFieldRenderer as never, 90],
@@ -149,6 +150,26 @@ describe("resolution parity with the retired hand map", () => {
     expect(resolved.displayName).toBe("WithBindingParams(SkillRecommenderRenderer)");
     void SkillRecommenderRenderer;
   });
+
+  it.each([
+    "@cinatra-ai/list-curator-agent:scrape-schema-review",
+    "@cinatra-ai/list-curator-agent:final-list-review",
+  ])(
+    "migrated list-curator binding %s resolves to the extension wrapper at the pre-cutover priority",
+    (id) => {
+      // The COMPONENT relocated into @cinatra-ai/list-curator-agent (cinatra#1625
+      // S8/M3): the binding is present in the generated component map, so it
+      // registers as the ExtensionFieldRenderer wrapper (which lazy-loads the
+      // extension module and floors on any degrade) — NOT a host KIND component.
+      // The id + priority (90) are unchanged, so stored/in-flight runs still
+      // resolve the SAME binding.
+      const entry = resolveWith(id);
+      expect(entry, id).toBeTruthy();
+      expect(entry!.priority, id).toBe(90);
+      const resolved = entry!.renderer as ComponentType & { displayName?: string };
+      expect(resolved.displayName).toBe(`ExtensionFieldRenderer(${id})`);
+    },
+  );
 
   it("gmail-sender keeps its CONTEXT GATING (no gmail connection => no match)", () => {
     expect(
