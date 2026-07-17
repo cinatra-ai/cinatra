@@ -38,6 +38,7 @@ vi.mock("./mcp-access", () => ({
 // connection degrades to null (cinatra#151 Stage 2; same semantics as the
 // pre-cutover connector mock).
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn((providerId: string) => {
     throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);

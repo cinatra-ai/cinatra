@@ -54,6 +54,7 @@ import type {
   BLOG_SYSTEM_CAPABILITY,
   SOCIAL_MEDIA_SYSTEM_CAPABILITY,
   LLM_PROVIDER_SURFACE_CAPABILITY,
+  LLM_PROVIDER_ADAPTER_CAPABILITY,
   EMAIL_SYSTEM_CAPABILITY,
 } from "./host-connector-services-contract";
 import type { NANGO_SYSTEM_CAPABILITY } from "./nango-system-contract";
@@ -72,6 +73,7 @@ import type {
   BlogSystemProvider,
   SocialMediaSystemProvider,
   LlmProviderSurface,
+  LlmProviderAdapterSurface,
   EmailSystemProvider,
 } from "./host-connector-services-contract";
 import type { EmailConnector } from "./email-connector-contract";
@@ -100,6 +102,7 @@ export type CapabilityContractMap = {
   [EMAIL_SENDER_IDENTITIES_CAPABILITY_ID]: EmailSenderIdentitiesProvider;
   [LLM_TOOLBOX_CAPABILITY]: LlmToolboxProvider;
   [LLM_PROVIDER_SURFACE_CAPABILITY]: LlmProviderSurface;
+  [LLM_PROVIDER_ADAPTER_CAPABILITY]: LlmProviderAdapterSurface;
   [BLOG_SYSTEM_CAPABILITY]: BlogSystemProvider;
   [SOCIAL_MEDIA_SYSTEM_CAPABILITY]: SocialMediaSystemProvider;
   [SOCIAL_POST_CAPABILITY]: SocialMediaConnector;
