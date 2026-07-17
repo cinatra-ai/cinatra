@@ -49,7 +49,16 @@ export function AddMatchSkillSelector({
         const fd = new FormData();
         fd.set("agentId", agentId);
         fd.set("skillId", skillId);
-        await addAgentSkillMatchAction(fd);
+        const result = await addAgentSkillMatchAction(fd);
+        // Exec-plane S2 (cinatra#1707): attach-time requiresExecution warning —
+        // the attach succeeded; the warning is advisory.
+        if (result?.warning) {
+          addNotification({
+            title: "Skill requires execution",
+            body: result.warning,
+            kind: "warning",
+          });
+        }
         addNotification({
           title: "Skill assignment saved",
           body: "The agent-skill match has been added.",
@@ -99,7 +108,15 @@ export function AddMatchForm({
 
   async function handleSubmit(formData: FormData) {
     try {
-      await addAgentSkillMatchAction(formData);
+      const result = await addAgentSkillMatchAction(formData);
+      // Exec-plane S2 (cinatra#1707): attach-time requiresExecution warning.
+      if (result?.warning) {
+        addNotification({
+          title: "Skill requires execution",
+          body: result.warning,
+          kind: "warning",
+        });
+      }
       addNotification({
         title: "Skill assignment saved",
         body: "The agent-skill match has been added.",

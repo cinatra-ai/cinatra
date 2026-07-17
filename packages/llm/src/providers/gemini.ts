@@ -23,6 +23,9 @@ import {
   resolvedAttachmentsPerMessage,
 } from "../attachments/provider-parts";
 import { BatchNotSupportedError } from "../errors";
+// Exec-plane S2 (cinatra#1707): the contractual sandbox tool name — Gemini
+// translation is a named function declaration; dispatch keys on this name.
+import { SANDBOX_EXECUTE_TOOL_NAME } from "../execution-plane/tool";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 
@@ -102,6 +105,45 @@ function isShellTool(tool: LlmTool): tool is import("../types").LlmShellTool {
   return "type" in tool && tool.type === "shell";
 }
 
+function isSandboxExecutionTool(
+  tool: LlmTool,
+): tool is import("../types").LlmSandboxExecutionTool {
+  return "type" in tool && tool.type === "sandbox_execution";
+}
+
+/**
+ * Dispatch a `sandbox_execute` functionCall (exec-plane S2, cinatra#1707):
+ * parse `{commands, timeout_ms}`, run on the execution plane via the sandbox
+ * tool's broker-bound executor, JSON-encode the per-command outputs.
+ */
+async function executeSandboxFunctionCall(
+  tools: LlmTool[] | undefined,
+  args: Record<string, unknown>,
+): Promise<string> {
+  const sandboxTool = tools?.find(isSandboxExecutionTool);
+  if (!sandboxTool) {
+    return JSON.stringify({ error: `Unknown tool: ${SANDBOX_EXECUTE_TOOL_NAME}` });
+  }
+  const commands = Array.isArray(args.commands)
+    ? args.commands.filter((c): c is string => typeof c === "string")
+    : [];
+  if (commands.length === 0) {
+    return JSON.stringify({ error: "sandbox_execute requires a non-empty `commands` array." });
+  }
+  const timeoutMs = typeof args.timeout_ms === "number" ? args.timeout_ms : null;
+  const outputs = await sandboxTool.execute({ commands, timeoutMs });
+  return JSON.stringify(
+    outputs.map((o) => ({
+      stdout: o.stdout,
+      stderr: o.stderr,
+      outcome:
+        o.outcome.type === "exit"
+          ? { type: "exit", exit_code: o.outcome.exitCode }
+          : { type: "timeout" },
+    })),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tool translation
 // ---------------------------------------------------------------------------
@@ -144,12 +186,29 @@ function translateTools(tools: LlmTool[]): FunctionDeclaration[] {
           required: ["commands"],
         } as unknown as FunctionDeclaration["parameters"],
       });
-    } else if ("type" in t && t.type === "sandbox_execution") {
-      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
-      // a named function declaration by a dedicated path in S2. In S1 it is
-      // stripped before adapter calls — defensive skip so the opaque session
-      // carrier can never be mis-emitted.
-      continue;
+    } else if (isSandboxExecutionTool(t)) {
+      // Exec-plane S2 (cinatra#1707): named function declaration. No carrier
+      // exists on the tool (it lives in the execute closure), so nothing
+      // session-bound can be mis-emitted.
+      defs.push({
+        name: SANDBOX_EXECUTE_TOOL_NAME,
+        description: t.description,
+        parameters: {
+          type: "object",
+          properties: {
+            commands: {
+              type: "array",
+              items: { type: "string" },
+              description: "Shell commands to execute in the sandbox, in order.",
+            },
+            timeout_ms: {
+              type: "number",
+              description: "Optional per-batch timeout in milliseconds.",
+            },
+          },
+          required: ["commands"],
+        } as unknown as FunctionDeclaration["parameters"],
+      });
     }
     // MCP tools: not supported by Gemini — register as function tools instead
   }
@@ -298,6 +357,32 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
         // Execute tools and add results
         const resultParts: Part[] = [];
         for (const fc of functionCalls) {
+          // Exec-plane S2 (cinatra#1707): sandbox_execute dispatches to the
+          // sandbox tool's broker-bound executor (not an LlmFunctionTool, so
+          // the generic name lookup below never resolves it).
+          if (fc.name === SANDBOX_EXECUTE_TOOL_NAME) {
+            const sandboxResult = truncateResult(
+              await executeSandboxFunctionCall(
+                input.tools,
+                (fc.args ?? {}) as Record<string, unknown>,
+              ),
+            );
+            // functionResponse.response must be an OBJECT — wrap the
+            // per-command output array (and any non-object parse) in one.
+            let parsedResult: Record<string, unknown>;
+            try {
+              const parsed: unknown = JSON.parse(sandboxResult);
+              parsedResult =
+                parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+                  ? (parsed as Record<string, unknown>)
+                  : { results: parsed };
+            } catch {
+              parsedResult = { result: sandboxResult };
+            }
+            resultParts.push({ functionResponse: { name: fc.name, response: parsedResult } });
+            continue;
+          }
+
           // Handle shell tool calls by finding the LlmShellTool
           if (fc.name === "shell") {
             const shellTool = input.tools?.find(isShellTool);
@@ -462,6 +547,34 @@ export function createGeminiProviderAdapter(apiKey: string): LlmProviderAdapter 
             arguments: fc.args,
           };
           input.onToolCall(toolCallEvent);
+
+          // Exec-plane S2 (cinatra#1707): sandbox_execute dispatches to the
+          // sandbox tool's broker-bound executor (mirrors the generate loop).
+          if (fc.name === SANDBOX_EXECUTE_TOOL_NAME) {
+            const sandboxResult = truncateResult(
+              await executeSandboxFunctionCall(
+                input.tools,
+                (fc.args ?? {}) as Record<string, unknown>,
+              ),
+            );
+            input.onToolResult({
+              id: toolCallEvent.id,
+              name: fc.name,
+              result: sandboxResult,
+            });
+            let parsedResult: Record<string, unknown>;
+            try {
+              const parsed: unknown = JSON.parse(sandboxResult);
+              parsedResult =
+                parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+                  ? (parsed as Record<string, unknown>)
+                  : { results: parsed };
+            } catch {
+              parsedResult = { result: sandboxResult };
+            }
+            resultParts.push({ functionResponse: { name: fc.name, response: parsedResult } });
+            continue;
+          }
 
           // Handle shell tool calls by finding the LlmShellTool
           if (fc.name === "shell") {

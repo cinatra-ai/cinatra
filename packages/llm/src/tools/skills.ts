@@ -11,17 +11,19 @@
  */
 
 import * as path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fsPromises } from "node:fs";
+import { createHash } from "node:crypto";
 import { readSkillFileContent, type SkillSource } from "@cinatra-ai/skills";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
-// LLM provider adapter cutover (cinatra#151 Stage 2): the openai shell tools
-// (settings reader + docker-confined executor) resolve through the openai
-// connector's GATED `shellTools` capability member at call time —
-// packages/llm carries NO connector value-imports, and the capability ABI
-// accepts no settings/administration override (the connector's STORED
-// settings are the single policy authority).
-import { requireLlmProviderSurface } from "@/lib/llm-provider-surfaces";
-import type { LlmTool, LlmShellTool, LlmFunctionTool, LlmMcpServerTool, LlmWebSearchTool } from "../types";
+import type {
+  LlmTool,
+  LlmShellTool,
+  LlmFunctionTool,
+  LlmMcpServerTool,
+  LlmWebSearchTool,
+  SandboxStagedSkill,
+  SandboxStagedSkillFile,
+} from "../types";
 
 type SkillSummary = {
   id: string;
@@ -153,6 +155,21 @@ export function createLocalSkillShellTool(options: {
       description: s.description,
       path: `/skills/${s.slug}`,
     })),
+    // Exec-plane S2 (cinatra#1707): catalog-resolved snapshot descriptors so
+    // an execution-authorized request stages these skills read-only under
+    // /skills/<slug> INSIDE the sandbox (content + sha256 resolved lazily at
+    // stage time; never inlined into the request). The in-process reader
+    // below still backs the restricted skill_file_read function tool for
+    // skills-without-execution requests.
+    stagedSkills: mountedSkills
+      .filter((s) => s.directoryPath)
+      .map((s): SandboxStagedSkill => ({
+        skillId: s.id,
+        slug: s.slug,
+        description: s.description,
+        resolveFiles: () => resolveStagedSkillFiles(s.directoryPath as string),
+        ...(onSkillRead ? { onRead: onSkillRead } : {}),
+      })),
     execute: async (action): Promise<Array<{ stdout: string; stderr: string; outcome: { type: "exit"; exitCode: number } | { type: "timeout" } }>> => {
       return Promise.all(
         action.commands.map(async (command) => {
@@ -487,95 +504,63 @@ async function executeLocalSkillCommand(
 }
 
 // ---------------------------------------------------------------------------
-// shell tool — executes commands in a sandboxed Docker container
+// staged skill snapshots — exec-plane S2 (cinatra#1707)
+//
+// The connector-owned Docker shell executor (`createShellTool` +
+// `requireOpenAIShellTools`) is RETIRED: skill EXECUTION runs on the core
+// execution plane (epic #1705 D7); the openai connector's `shellTools`
+// capability removal is S5. Skill reads for execution-authorized requests run
+// IN the sandbox against these staged snapshots; the in-process read-only
+// reader above serves only the restricted `skill_file_read` function tool.
 // ---------------------------------------------------------------------------
 
-type OpenAIShellToolsMember = NonNullable<
-  ReturnType<typeof requireLlmProviderSurface>["shellTools"]
->;
+/** Bounds for a staged skill snapshot (defense against runaway skill dirs). */
+const MAX_STAGED_FILES_PER_SKILL = 128;
+const MAX_STAGED_BYTES_PER_SKILL = 4 * 1024 * 1024;
 
 /**
- * The openai surface's GATED shell-tool members. Fail-loud when the connector
- * is absent or predates the Stage 2 surface — the docker shell-delivery path
- * cannot proceed without the openai connector (cinatra#151 established
- * degraded semantics for required members).
+ * Resolve a skill directory into staged snapshot files (content + sha256),
+ * lazily at stage time. Regular files only (symlinks are skipped — a staged
+ * snapshot must not follow links out of the catalog directory); bounded by
+ * file count and total bytes; deterministic order (sorted relative paths).
  */
-function requireOpenAIShellTools(): OpenAIShellToolsMember {
-  const surface = requireLlmProviderSurface("openai");
-  const shellTools = surface.shellTools;
-  if (
-    !shellTools ||
-    typeof shellTools.readSettings !== "function" ||
-    typeof shellTools.runCommandInDocker !== "function"
-  ) {
-    throw new Error(
-      'The "openai" LLM provider connector is active but does not expose the ' +
-        "gated shellTools members — the installed connector predates the " +
-        "Stage 2 surface (cinatra#151); update/re-acquire the openai connector.",
-    );
-  }
-  return shellTools;
-}
-
-/**
- * Default output limit derived from the connector-stored settings. The
- * capability ABI is loose (`readSettings(): unknown`), so the shape is
- * runtime-guarded (design review MEDIUM): a finite positive
- * `maxOutputKilobytes` is honored; anything else defers to the executor,
- * which resolves its limits from the SAME stored settings connector-side.
- */
-function defaultShellOutputLimit(settings: unknown): number | undefined {
-  const kilobytes = (settings as { maxOutputKilobytes?: unknown } | null | undefined)
-    ?.maxOutputKilobytes;
-  return typeof kilobytes === "number" && Number.isFinite(kilobytes) && kilobytes > 0
-    ? kilobytes * 1024
-    : undefined;
-}
-
-export function createShellTool(options: { mountedSkills: SkillSummary[] }): LlmShellTool {
-  // Resolve at construction: shell delivery without the openai connector is a
-  // defect of the request, not a degradable mode — fail loud here.
-  const shellTools = requireOpenAIShellTools();
-  const mountedSkills = options.mountedSkills;
-
-  return {
-    type: "shell",
-    skills: mountedSkills.map((s) => ({
-      name: s.slug,
-      description: s.description,
-      path: s.directoryPath ?? `/tmp/skills/${s.slug}`,
-    })),
-    execute: async (action) => {
-      const maxOutputLength =
-        action.maxOutputLength ?? defaultShellOutputLimit(shellTools.readSettings());
-      const timeoutMs = action.timeoutMs ?? undefined;
-
-      return Promise.all(
-        action.commands.map(async (command) => {
-          try {
-            const result = await shellTools.runCommandInDocker({
-              shellCommand: command,
-              timeoutMs: timeoutMs ?? undefined,
-              maxOutputLength,
-            });
-            return {
-              stdout: result.stdout,
-              stderr: result.stderr,
-              outcome: result.timedOut
-                ? { type: "timeout" as const }
-                : { type: "exit" as const, exitCode: result.exitCode ?? -1 },
-            };
-          } catch (error) {
-            return {
-              stdout: "",
-              stderr: error instanceof Error ? error.message : "Command execution failed",
-              outcome: { type: "exit" as const, exitCode: 1 },
-            };
-          }
-        }),
-      );
-    },
+export async function resolveStagedSkillFiles(
+  directoryPath: string,
+): Promise<SandboxStagedSkillFile[]> {
+  const collected: Array<{ rel: string; abs: string }> = [];
+  const walk = async (dir: string, relBase: string): Promise<void> => {
+    const entries = await fsPromises.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (collected.length >= MAX_STAGED_FILES_PER_SKILL) return;
+      const abs = path.join(dir, entry.name);
+      const rel = relBase ? `${relBase}/${entry.name}` : entry.name;
+      // Dirent#isSymbolicLink: symlinks are skipped as such (never followed),
+      // so a link cannot pull content from outside the skill directory.
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        await walk(abs, rel);
+      } else if (entry.isFile()) {
+        collected.push({ rel, abs });
+      }
+    }
   };
+  await walk(directoryPath, "");
+  collected.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+
+  const files: SandboxStagedSkillFile[] = [];
+  let totalBytes = 0;
+  for (const f of collected) {
+    const content = await readSkillFileContent(f.abs);
+    const bytes = Buffer.byteLength(content, "utf8");
+    if (totalBytes + bytes > MAX_STAGED_BYTES_PER_SKILL) continue;
+    totalBytes += bytes;
+    files.push({
+      path: f.rel,
+      content,
+      digest: createHash("sha256").update(content, "utf8").digest("hex"),
+    });
+  }
+  return files;
 }
 
 // ---------------------------------------------------------------------------
@@ -612,13 +597,6 @@ export function createShellTool(options: { mountedSkills: SkillSummary[] }): Llm
  */
 export async function buildSkillTools(input: {
   skillIds?: string[];
-  /**
-   * When true, use the Docker-based shell executor instead of the default
-   * local file reader. Only needed for write-capable shell tasks.
-   * @deprecated Pass nothing — the local shell tool is now always included
-   * when skills have disk paths.
-   */
-  includeShell?: boolean;
   /**
    * S10 efficacy loop (cinatra#1368): reports the catalog skill ids actually
    * MOUNTED as shell tools (requested ids without an on-disk sourcePath are
@@ -663,9 +641,11 @@ export async function buildSkillTools(input: {
           `dropped (catalog miss or no sourcePath): ${dropped.join(", ")}`,
       );
     }
-    if (input.includeShell) {
-      return [createShellTool({ mountedSkills: mountableSkills })];
-    }
+    // Exec-plane S2 (cinatra#1707): the connector-Docker `includeShell`
+    // branch is retired — every skill-delivery shell tool is the local
+    // catalog-restricted reader + staged snapshot descriptors; the adapter
+    // decides the wire surface (merged native shell when execution-authorized,
+    // restricted named function tool otherwise).
     return [
       createLocalSkillShellTool({
         mountedSkills: mountableSkills,

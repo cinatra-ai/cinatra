@@ -28,7 +28,13 @@ function fakeDockerLs(lines: string[]): { docker: DockerCli; calls: string[][] }
   const calls: string[][] = [];
   const docker: DockerCli = async (args) => {
     calls.push(args);
-    if (args[0] === "volume" && args[1] === "ls") return ok(lines.join("\n") + "\n");
+    if (args[0] === "volume" && args[1] === "ls") {
+      // Honor the tier filter like real docker: these fixtures are L2-tier
+      // volumes, so the S2 skills-tier sweep sees none of them.
+      const filter = args[args.indexOf("--filter") + 1] ?? "";
+      if (filter.endsWith("=skills")) return ok("");
+      return ok(lines.join("\n") + "\n");
+    }
     return ok("");
   };
   return { docker, calls };
