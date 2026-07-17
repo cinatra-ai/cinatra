@@ -1586,10 +1586,11 @@ jobs:
         # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
         # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
         # fails the build — it falls back to today's behavior.
-        # 20G (was 4G) — the entry-66 CI-memory investigation (2026-07-17): the modern
-        # ubuntu-latest runner is 4 vCPU / 15.8G RAM with a 145G root disk (~86G
-        # free), so a large swapfile is cheap (fallocate is instant, unused swap
-        # costs nothing). A heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE
+        # 20G target (was 4G) — the entry-66 CI-memory investigation (2026-07-17): the
+        # modern ubuntu-latest runner is 4 vCPU / 15.8G RAM, but the fleet's DISK
+        # is heterogeneous (entry-66 measured ~86G-free AND ~15G-free root disks
+        # the same day), so the script below sizes the swapfile to the disk it
+        # actually gets. A heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE
         # memory — the JS heap stays tiny, so NODE_OPTIONS cannot cap it) was
         # measured needing up to ~33G total (15.8G RAM + 17.4G swap on PR
         # #1673's fixed tree); the old 4G (+3G stock) swap starved that class
@@ -1601,16 +1602,31 @@ jobs:
         if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
-          SWAPFILE=/swapfile-ci-build
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
           # if/else makes it best-effort — any failure exits the step 0 with a warning.
-          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 6G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          target=/
+          free_kb=$(df -Pk / | awk 'NR==2{print $4}')
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          [ "$size_kb" -gt "$want_kb" ] && size_kb=$want_kb
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
+            swapon --show; free -h; df -h "$target"
           else
-            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE"
           fi
 
       - name: Build app (production)
@@ -1789,14 +1805,29 @@ jobs:
         if: ${{ vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
-          SWAPFILE=/swapfile-ci-build
-          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 6G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          target=/
+          free_kb=$(df -Pk / | awk 'NR==2{print $4}')
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          [ "$size_kb" -gt "$want_kb" ] && size_kb=$want_kb
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
+            swapon --show; free -h; df -h "$target"
           else
-            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE"
           fi
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -2360,14 +2391,29 @@ jobs:
         if: ${{ vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
-          SWAPFILE=/swapfile-ci-build
-          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 6G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          target=/
+          free_kb=$(df -Pk / | awk 'NR==2{print $4}')
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          [ "$size_kb" -gt "$want_kb" ] && size_kb=$want_kb
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h
+            swapon --show; free -h; df -h "$target"
           else
-            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE"
           fi
 
       # Same inert env placeholders as the Dockerfile build stage; CI=true is
