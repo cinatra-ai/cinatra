@@ -79,6 +79,7 @@ import {
 } from "./chat-stream-events";
 import {
   EXTERNAL_TAKEOVER_MS,
+  AG_UI_ENDPOINT_FOR_LEGACY,
   countMentions,
   shouldEnterSlackModeOnSend,
   applyExternalMentionsToMessages,
@@ -640,7 +641,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // AG-UI stream driver (cinatra#1218) — the unified-wire counterpart of the
   // bespoke streamResponse below, lifecycle-identical; the turn drive lives
   // headlessly in ./ag-ui-chat-client. This wrapper owns registry + guard.
-  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string) {
+  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string) {
     const assistantId = generateId();
     const abortController = new AbortController();
     // The ORIGIN thread is the one this turn was dispatched FOR (captured
@@ -654,6 +655,8 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
         threadId,
         assistantId,
         authorUserId,
+        // @chatgpt targets its own producer endpoint; others default in-driver.
+        ...(endpoint ? { endpoint } : {}),
         slack: isSlackModeRef.current,
         signal: abortController.signal,
         messages: contextMessages.map((m) => ({
@@ -686,16 +689,13 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   // thread-switch/abort guards live here; every per-event message transform is
   // a pure, unit-tested applier in ./chat-stream-events.
   async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/chat", authorUserId?: string) {
-    // Unified-wire delegation (cinatra#1218): default Cinatra turns ride the
-    // AG-UI stream when the cutover flag is on and the fail-closed handshake
-    // succeeds (a failure pins the page to the retained legacy wire).
-    // Mention/external/bridge dispatches stay on their legacy endpoints in
-    // this stage (S5/delete-stage scope). The thread always exists here.
-    if (endpoint === "/api/chat" && streamWireRef.current === "ag-ui") {
+    // Unified-wire delegation (cinatra#1218): Cinatra turns + @chatgpt (pred. 3) ride AG-UI when the flag is on & the handshake succeeds; a failure falls back to the same bespoke `endpoint` (retained safe-harbor). Externals are webhook-polled. See AG_UI_ENDPOINT_FOR_LEGACY in ./chat-routing. Thread exists here.
+    const agUiEndpoint = AG_UI_ENDPOINT_FOR_LEGACY[endpoint];
+    if (agUiEndpoint && streamWireRef.current === "ag-ui") {
       const agUiThreadId = activeThreadIdRef.current;
       if (agUiThreadId) {
         if (await ensureAssistantChatWireNegotiated()) {
-          return streamAgUiResponse(contextMessages, agUiThreadId, handle, authorUserId);
+          return streamAgUiResponse(contextMessages, agUiThreadId, handle, authorUserId, agUiEndpoint);
         }
         streamWireRef.current = "legacy";
       }
