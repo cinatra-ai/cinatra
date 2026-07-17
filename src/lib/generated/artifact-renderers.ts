@@ -20,7 +20,7 @@ export type GeneratedArtifactRendererLoader = () => Promise<unknown>;
 export type GeneratedArtifactRendererEntry = {
   resolution: ExtensionResolution;
   packageName: string;
-  slot: "detail" | "preview";
+  slot: "detail" | "preview" | "listRow";
   representations: readonly string[];
   propsApiVersion: number;
   load: GeneratedArtifactRendererLoader;

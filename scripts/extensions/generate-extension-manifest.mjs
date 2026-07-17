@@ -2087,9 +2087,10 @@ export async function buildManifest() {
     })
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
 
-  // cinatra.artifact.ui renderers (cinatra#1629, epic #1620 S2): a
-  // `kind:"artifact"` extension ships its type's view via
-  // `cinatra.artifact.ui.renderers.{detail,preview}` (the S1 schema). The host
+  // cinatra.artifact.ui renderers (cinatra#1629, epic #1620 S2; S7/M2 slot
+  // activation cinatra#1631): a `kind:"artifact"` extension ships its type's
+  // view via `cinatra.artifact.ui.renderers.{detail,preview,listRow}` (the S1
+  // schema). The host
   // dispatch spine resolves a row to a KEY in this generated build map (the
   // connector-setup-pages literal-import pattern), keyed `<pkg>::<slot>`. STAGED
   // + INERT: no bundled artifact declares `ui` yet (the companion-repo kind gate
@@ -2101,7 +2102,7 @@ export async function buildManifest() {
   // generation error. ARTIFACT_UI_RENDER_SLOTS mirrors ARTIFACT_UI_SLOTS in
   // packages/sdk-extensions/src/artifact-contract.ts (the closed v1 slot enum);
   // the authoritative slot-enum validation is the S1 publish/conformance gate.
-  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview"];
+  const ARTIFACT_UI_RENDER_SLOTS = ["detail", "preview", "listRow"];
   const artifactRenderers = records
     .filter((r) => r.kind === "artifact")
     .flatMap((r) => {
@@ -2940,7 +2941,7 @@ function emitArtifactRenderers(artifactRenderers) {
     `export type GeneratedArtifactRendererEntry = {\n` +
     `  resolution: ExtensionResolution;\n` +
     `  packageName: string;\n` +
-    `  slot: "detail" | "preview";\n` +
+    `  slot: "detail" | "preview" | "listRow";\n` +
     `  representations: readonly string[];\n` +
     `  propsApiVersion: number;\n` +
     `  load: GeneratedArtifactRendererLoader;\n` +

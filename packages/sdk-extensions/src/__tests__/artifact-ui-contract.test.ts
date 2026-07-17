@@ -24,11 +24,11 @@ const validUi = (renderers: Record<string, unknown>) => ({
 });
 
 describe("artifact-ui v1 — constants", () => {
-  it("the closed v1 slot enum is exactly {detail, preview}", () => {
-    expect([...ARTIFACT_UI_SLOTS].sort()).toEqual(["detail", "preview"]);
+  it("the closed v1 slot enum is exactly {detail, preview, listRow}", () => {
+    expect([...ARTIFACT_UI_SLOTS].sort()).toEqual(["detail", "listRow", "preview"]);
   });
-  it("reserves listRow/card/inline for later waves (not active in v1)", () => {
-    expect([...ARTIFACT_UI_RESERVED_SLOTS]).toEqual(["listRow", "card", "inline"]);
+  it("reserves card/inline for later waves (listRow activated by S7/M2)", () => {
+    expect([...ARTIFACT_UI_RESERVED_SLOTS]).toEqual(["card", "inline"]);
     for (const reserved of ARTIFACT_UI_RESERVED_SLOTS) {
       expect((ARTIFACT_UI_SLOTS as readonly string[]).includes(reserved)).toBe(false);
     }
@@ -113,8 +113,11 @@ describe("parseArtifactUi — rejections (fail-closed verdict; degrades at boot)
   it("rejects an empty renderers map", () => {
     expect(parseArtifactUi(validUi({})).ok).toBe(false);
   });
-  it("rejects a RESERVED slot (listRow) in v1", () => {
-    expect(parseArtifactUi(validUi({ listRow: validRenderer("./src/row.tsx") })).ok).toBe(false);
+  it("accepts the activated listRow slot (S7/M2)", () => {
+    expect(parseArtifactUi(validUi({ listRow: validRenderer("./src/row.tsx") })).ok).toBe(true);
+  });
+  it("rejects a RESERVED slot (card) in v1", () => {
+    expect(parseArtifactUi(validUi({ card: validRenderer("./src/card.tsx") })).ok).toBe(false);
   });
   it("rejects an unknown slot", () => {
     expect(parseArtifactUi(validUi({ sidebar: validRenderer("./src/x.tsx") })).ok).toBe(false);

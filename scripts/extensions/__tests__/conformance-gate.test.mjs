@@ -441,7 +441,10 @@ describe("conformance-gate — artifact-ui rule derivation (cinatra#1621)", () =
     expect(UI_RULES.ok).toBe(true);
     expect(UI_RULES.artifactUiSlots.has("detail")).toBe(true);
     expect(UI_RULES.artifactUiSlots.has("preview")).toBe(true);
-    expect(UI_RULES.artifactUiReservedSlots.has("listRow")).toBe(true);
+    // S7/M2 (cinatra#1631): listRow graduated from RESERVED to the active enum.
+    expect(UI_RULES.artifactUiSlots.has("listRow")).toBe(true);
+    expect(UI_RULES.artifactUiReservedSlots.has("listRow")).toBe(false);
+    expect(UI_RULES.artifactUiReservedSlots.has("card")).toBe(true);
     expect(UI_RULES.artifactUiAbiVersion).toBe(1);
     expect(GEN_UI_RANGE).toMatch(/^\^\d+\.\d+\.\d+$/);
   });
@@ -467,8 +470,16 @@ describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", ()
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
-  it("flags a RESERVED slot (listRow) in v1", () => {
+  it("accepts the activated listRow slot (S7/M2, cinatra#1631)", () => {
     const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { listRow: { entry: "./src/detail.tsx", propsApiVersion: 1 } } };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-unknown-slot")).toBe(false);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a RESERVED slot (card) in v1", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { card: { entry: "./src/detail.tsx", propsApiVersion: 1 } } };
     const pkgDir = writeFixture(artifactUiFixture({ ui }));
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
