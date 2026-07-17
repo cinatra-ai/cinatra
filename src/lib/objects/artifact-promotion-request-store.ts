@@ -56,6 +56,11 @@ export type ArtifactPromotionRequestRow = {
    *  organization; team lane for a team-owned row). */
   toOwnerLevel: string;
   toOwnerId: string;
+  /** DISPLAY-ONLY snapshot of the widen target's human label (the team name),
+   *  captured at request time so reviewers see the ACTUAL destination, not a
+   *  bare id (codex finding on cinatra#1437). Null for organization targets
+   *  (the org is unambiguous). Never used for authorization. */
+  toOwnerLabel: string | null;
   /** objects.version captured at request time (the CAS anchor). */
   rowVersion: number;
   status: ArtifactPromotionRequestStatus;
@@ -86,6 +91,7 @@ type Row = {
   to_visibility: ArtifactPromotionVisibility;
   to_owner_level: string;
   to_owner_id: string;
+  to_owner_label: string | null;
   row_version: number;
   status: ArtifactPromotionRequestStatus;
   decided_by: string | null;
@@ -111,6 +117,7 @@ function rowToRecord(row: Row): ArtifactPromotionRequestRow {
     toVisibility: row.to_visibility,
     toOwnerLevel: row.to_owner_level,
     toOwnerId: row.to_owner_id,
+    toOwnerLabel: row.to_owner_label ?? null,
     rowVersion: typeof row.row_version === "number" ? row.row_version : Number(row.row_version),
     status: row.status,
     decidedBy: row.decided_by,
@@ -130,6 +137,7 @@ export function createArtifactPromotionRequest(input: {
   toVisibility: ArtifactPromotionVisibility;
   toOwnerLevel: string;
   toOwnerId: string;
+  toOwnerLabel: string | null;
   rowVersion: number;
 }): ArtifactPromotionRequestRow {
   ensurePostgresSchema();
@@ -143,8 +151,8 @@ export function createArtifactPromotionRequest(input: {
         {
           text: `INSERT INTO "${schema}"."artifact_promotion_request" (
   id, org_id, object_id, object_title, requested_by,
-  from_visibility, to_visibility, to_owner_level, to_owner_id, row_version, status
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending')`,
+  from_visibility, to_visibility, to_owner_level, to_owner_id, to_owner_label, row_version, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')`,
           values: [
             id,
             input.orgId,
@@ -155,6 +163,7 @@ export function createArtifactPromotionRequest(input: {
             input.toVisibility,
             input.toOwnerLevel,
             input.toOwnerId,
+            input.toOwnerLabel,
             input.rowVersion,
           ],
         },
@@ -367,4 +376,44 @@ WHERE id = $1 AND org_id = $2 AND status = 'approved'`,
     ],
   });
   return (res?.rowCount ?? 0) === 1;
+}
+
+/**
+ * Resolve a widen-target TEAM within the caller's organization (Better Auth
+ * shape: `public."team" (id, name, organizationId)` + `public."teamMember"
+ * (teamId, userId)`; `teamMember` has no organizationId so the join goes
+ * through `team` — the same join `readChatThreadForClassifier` uses).
+ *
+ * Fail-closed tenant containment for artifact promotion (codex finding on
+ * cinatra#1437): a request may only target a team that EXISTS in the active
+ * org, and — when `memberUserId` is given (request time) — one the requester
+ * is a member of. Returns the display name for the reviewer-facing snapshot;
+ * null is the single indistinguishable refusal (no existence-vs-membership
+ * probe oracle).
+ */
+export function readTeamInOrgSync(input: {
+  teamId: string;
+  orgId: string;
+  memberUserId?: string;
+}): { id: string; name: string } | null {
+  const membershipJoin = input.memberUserId
+    ? `JOIN public."teamMember" tm ON tm."teamId" = t.id AND tm."userId" = $3`
+    : "";
+  const values: unknown[] = [input.teamId, input.orgId];
+  if (input.memberUserId) values.push(input.memberUserId);
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT t.id, t.name
+FROM public."team" t
+${membershipJoin}
+WHERE t.id = $1 AND t."organizationId" = $2
+LIMIT 1`,
+        values,
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as { id: string; name: string } | undefined;
+  return row ? { id: row.id, name: row.name } : null;
 }

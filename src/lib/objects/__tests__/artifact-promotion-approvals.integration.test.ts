@@ -159,6 +159,32 @@ beforeAll(async () => {
       if (!msg.includes("does not exist")) throw err;
     }
   }
+  // Better Auth team tables (public schema) for the team-target path — the
+  // production readTeamInOrgSync joins public."team" + public."teamMember".
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."team" (
+       id text PRIMARY KEY, name text NOT NULL, slug text NOT NULL,
+       "organizationId" text NOT NULL,
+       "createdAt" timestamptz, "updatedAt" timestamptz)`,
+  );
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS public."teamMember" (
+       id text PRIMARY KEY, "teamId" text NOT NULL, "userId" text NOT NULL,
+       "createdAt" timestamptz)`,
+  );
+  await client.query(`DELETE FROM public."teamMember"`);
+  await client.query(`DELETE FROM public."team"`);
+  await client.query(
+    `INSERT INTO public."team" (id, name, slug, "organizationId") VALUES
+       ('team-growth-1437', 'Growth', 'growth-1437', $1),
+       ('team-foreign-1437', 'Foreign', 'foreign-1437', 'org-OTHER')`,
+    [ORG],
+  );
+  await client.query(
+    `INSERT INTO public."teamMember" (id, "teamId", "userId") VALUES
+       ('tm-1437-1', 'team-growth-1437', $1)`,
+    [OWNER],
+  );
   await client.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
@@ -331,6 +357,63 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1437 artifact row-scope promotion via app
     // and the row was never widened.
     expect(readRequestRow(objectId)).toMatchObject({ status: "pending" });
     expect(readObjectRow(objectId)).toMatchObject({ visibility: "private", version: 1 });
+  });
+
+  it("team target: tenant-validated + member-gated at request time; approve widens to the team and reviewers see the destination", async () => {
+    const objectId = nextId("obj-team");
+    seedPrivateArtifact(objectId, { title: "Team doc", body: "for the growth team" });
+
+    // A foreign org's team id is refused with ONE indistinguishable message.
+    const foreign = await requestMod.requestArtifactPromotion({
+      orgId: ORG,
+      artifactId: objectId,
+      requestedBy: OWNER,
+      toVisibility: "team",
+      targetTeamId: "team-foreign-1437",
+      actor: ownerActor,
+    });
+    expect(foreign).toMatchObject({ ok: false, code: "invalid_state" });
+
+    // A nonexistent team id is refused identically.
+    const missing = await requestMod.requestArtifactPromotion({
+      orgId: ORG,
+      artifactId: objectId,
+      requestedBy: OWNER,
+      toVisibility: "team",
+      targetTeamId: "team-nope",
+      actor: ownerActor,
+    });
+    expect(missing).toMatchObject({ ok: false, code: "invalid_state" });
+
+    // The requester's own org team works; the display label is snapshotted.
+    const requested = await requestMod.requestArtifactPromotion({
+      orgId: ORG,
+      artifactId: objectId,
+      requestedBy: OWNER,
+      toVisibility: "team",
+      targetTeamId: "team-growth-1437",
+      actor: ownerActor,
+    });
+    expect(requested.ok).toBe(true);
+    if (!requested.ok) return;
+
+    // Reviewers see the ACTUAL destination team, not a bare "Team".
+    const inbox = await sourceMod.promotionRequestsSource.fetchInbox(adminViewer);
+    const row = inbox.rows.find((r) => r.id === `artifact:${requested.request.id}`);
+    expect(row).toBeDefined();
+    expect((row!.raw as { detail?: { toScope?: string } }).detail?.toScope).toBe("Team: Growth");
+
+    const decided = await sourceMod.promotionRequestsSource.actions.decide(
+      { rowId: row!.id, action: "approve", expectedVersion: row!.version },
+      adminViewer,
+    );
+    expect(decided).toEqual({ ok: true });
+    expect(readObjectRow(objectId)).toEqual({
+      visibility: "team",
+      owner_level: "team",
+      owner_id: "team-growth-1437",
+      version: 2,
+    });
   });
 
   it("AC-3: never-narrow is refused at REQUEST time against the live row", async () => {

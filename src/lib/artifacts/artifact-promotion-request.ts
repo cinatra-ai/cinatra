@@ -73,6 +73,16 @@ export async function requestArtifactPromotion(
       message: "A promotion request requires the caller's actor context.",
     };
   }
+  // Defense in depth (codex A): the surfaces derive `requestedBy` from the
+  // authenticated principal, but the service re-asserts it so no future
+  // caller can attribute a request to someone else.
+  if (input.actor.principalId !== input.requestedBy) {
+    return {
+      ok: false,
+      code: "not_authorized",
+      message: "A promotion request must be attributed to the acting principal.",
+    };
+  }
   const visible = getArtifact({
     artifactId: input.artifactId,
     orgId: input.orgId,

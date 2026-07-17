@@ -56,7 +56,13 @@ function toBackendRow(r: ArtifactPromotionReviewRow): PromotionBackendRow {
     version: r.version,
     detail: {
       fromScope: scopeLabel(r.fromScope),
-      toScope: scopeLabel(r.toScope),
+      // Reviewers must see the ACTUAL destination (codex finding): a team
+      // target carries the display-only team-name snapshot captured (and
+      // tenant-validated) at request time.
+      toScope:
+        r.toScope === "team" && r.toOwnerLabel
+          ? `${scopeLabel(r.toScope)}: ${r.toOwnerLabel}`
+          : scopeLabel(r.toScope),
       requestedBy: r.requestedBy,
     },
   };

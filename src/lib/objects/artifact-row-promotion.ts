@@ -63,6 +63,8 @@ export type ArtifactPromotionDecideOutcome =
  *  the backend adapter). The public CAS `version` is the objects.version the
  *  request captured; an edit-after-request moves the live row past it. */
 export interface ArtifactPromotionReviewRow {
+  /** Display-only widen-target label (team name snapshot); null for org. */
+  toOwnerLabel?: string | null;
   requestId: string;
   objectId: string;
   title: string;
@@ -170,8 +172,17 @@ export interface ArtifactPromotionDeps {
     toVisibility: ArtifactPromotionVisibility;
     toOwnerLevel: string;
     toOwnerId: string;
+    toOwnerLabel: string | null;
     rowVersion: number;
   }): ArtifactPromotionRequestRow;
+  /** Resolve a widen-target TEAM within the org (tenant containment — codex
+   *  finding): with `memberUserId`, additionally requires that user's team
+   *  membership. Null is the single indistinguishable refusal. */
+  readTeamInOrg(input: {
+    teamId: string;
+    orgId: string;
+    memberUserId?: string;
+  }): { id: string; name: string } | null;
   readObject(objectId: string, orgId: string): PromotableObject | null;
   /** Atomically widen the row's visibility/ownership, enqueue the durable
    *  re-projection (lane-move) and append the immutable history audit — all
@@ -204,6 +215,7 @@ async function productionDeps(): Promise<ArtifactPromotionDeps> {
       markSuperseded: (input) => store.markArtifactPromotionRequestSuperseded(input),
       compensateApproved: (input) => store.compensateApprovedArtifactPromotionRequest(input),
       createRequest: (input) => store.createArtifactPromotionRequest(input),
+      readTeamInOrg: (input) => store.readTeamInOrgSync(input),
       readObject: (objectId, orgId) => {
         const rec = objects.getObjectById(objectId, { orgId });
         if (!rec) return null;
@@ -285,6 +297,7 @@ function toReviewRow(r: ArtifactPromotionRequestRow): ArtifactPromotionReviewRow
     version: String(r.rowVersion),
     fromScope: r.fromVisibility,
     toScope: r.toVisibility,
+    toOwnerLabel: r.toOwnerLabel ?? null,
     requestedBy: r.requestedBy,
   };
 }
@@ -391,6 +404,30 @@ export async function createArtifactRowPromotionRequest(
   }
   const target = resolveWidenTarget(input.toVisibility, input.orgId, input.targetTeamId);
   if (!target.ok) return { ok: false, code: target.code, message: target.message };
+  // Tenant containment + requester eligibility for a TEAM target (codex
+  // finding): the team must exist in THIS org and the requester must be a
+  // member of it — otherwise a request could route the row to an arbitrary,
+  // foreign, or nonexistent team (an ownership transfer, not a widen). One
+  // indistinguishable refusal (no existence-vs-membership probe oracle). The
+  // resolved name is snapshotted DISPLAY-ONLY so reviewers see the actual
+  // destination.
+  let toOwnerLabel: string | null = null;
+  if (target.ownerLevel === "team") {
+    const team = deps.readTeamInOrg({
+      teamId: target.ownerId,
+      orgId: input.orgId,
+      memberUserId: input.requestedBy,
+    });
+    if (!team) {
+      return {
+        ok: false,
+        code: "invalid_state",
+        message:
+          "The target team was not found in this organization (or you are not a member of it).",
+      };
+    }
+    toOwnerLabel = team.name;
+  }
   try {
     const request = deps.createRequest({
       orgId: input.orgId,
@@ -401,6 +438,7 @@ export async function createArtifactRowPromotionRequest(
       toVisibility: input.toVisibility,
       toOwnerLevel: target.ownerLevel,
       toOwnerId: target.ownerId,
+      toOwnerLabel,
       rowVersion: object.version,
     });
     return { ok: true, request };
@@ -465,6 +503,8 @@ export interface DecideArtifactPromotionArgs {
  *           live row moved past it (edit-after-request) → SUPERSEDE the request,
  *           'stale_snapshot'
  *        d. toScope not strictly wider than the CURRENT visibility → 'narrowing'
+ *        d2. a TEAM destination no longer in this org → 'invalid_state'
+ *            (tenant containment re-check; no state change)
  *        e. content fails the fail-closed secret/PII scan → 'secret_scan'
  *        f. CAS claim pending→approved (lost → 'conflict')
  *        g. atomic version-guarded widen + durable re-projection + audit; a
@@ -547,6 +587,22 @@ export async function decideArtifactPromotion(
       code: "narrowing",
       message: `Promotion must WIDEN visibility: '${object.visibility}' → '${request.toVisibility}' is not a widen.`,
     };
+  }
+
+  // 5d2. TEAM-target revalidation (codex finding): the destination team must
+  // STILL exist in this org at approve time — a deleted/foreign team id must
+  // never become the row's owner. No state change: the admin rejects the dead
+  // request with a reason (the one-pending index otherwise blocks a re-request).
+  if (request.toOwnerLevel === "team") {
+    const team = deps.readTeamInOrg({ teamId: request.toOwnerId, orgId: viewer.orgId });
+    if (!team) {
+      return {
+        ok: false,
+        code: "invalid_state",
+        message:
+          "The target team no longer exists in this organization — reject this request.",
+      };
+    }
   }
 
   // 5e. fail-closed secret/PII scan of the CAS-bound content.

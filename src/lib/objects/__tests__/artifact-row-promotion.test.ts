@@ -32,6 +32,7 @@ function requestRow(over: Partial<ArtifactPromotionRequestRow> = {}): ArtifactPr
     toVisibility: "organization",
     toOwnerLevel: "organization",
     toOwnerId: "org-1",
+    toOwnerLabel: null,
     rowVersion: 3,
     status: "pending",
     decidedBy: null,
@@ -66,6 +67,8 @@ function harness(cfg: {
   scanThrows?: boolean;
   widen?: { ok: true } | { ok: false; reason: "version_conflict" | "not_found" | "transient" };
   widenThrows?: boolean;
+  /** readTeamInOrg returns null (unknown/foreign team or non-member). */
+  teamMissing?: boolean;
   casWins?: boolean;
   supersedeWins?: boolean;
   compensateWins?: boolean;
@@ -85,6 +88,9 @@ function harness(cfg: {
       requestRow({ id: "req-new", ...input }),
     ),
     readObject: vi.fn(() => (cfg.object === undefined ? promObject() : cfg.object)),
+    readTeamInOrg: vi.fn((input: { teamId: string }) =>
+      cfg.teamMissing ? null : { id: input.teamId, name: "Growth" },
+    ),
     widenAndReproject: vi.fn(() => {
       if (cfg.widenThrows) throw new Error("historyAwareUpsert boom");
       return cfg.widen ?? { ok: true };
@@ -286,6 +292,40 @@ describe("decideArtifactPromotion — approve gates (each short-circuits)", () =
   });
 });
 
+describe("decideArtifactPromotion — team-target revalidation (5d2)", () => {
+  const teamRequest = () =>
+    requestRow({ toVisibility: "team", toOwnerLevel: "team", toOwnerId: "team-9" });
+
+  it("approve refuses when the destination team no longer exists in the org (no state change)", async () => {
+    const { deps, spies } = harness({
+      request: teamRequest(),
+      object: promObject(),
+      teamMissing: true,
+    });
+    const res = await decideArtifactPromotion(
+      { requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin },
+      deps,
+    );
+    expect(res).toMatchObject({ ok: false, code: "invalid_state" });
+    expect(spies.readTeamInOrg).toHaveBeenCalledWith({ teamId: "team-9", orgId: "org-1" });
+    expect(spies.casDecideRequest).not.toHaveBeenCalled();
+    expect(spies.widenAndReproject).not.toHaveBeenCalled();
+    expect(spies.markSuperseded).not.toHaveBeenCalled();
+  });
+
+  it("approve proceeds when the destination team still exists", async () => {
+    const { deps, spies } = harness({ request: teamRequest(), object: promObject() });
+    const res = await decideArtifactPromotion(
+      { requestId: "req-1", action: "approve", expectedVersion: "3", viewer: admin },
+      deps,
+    );
+    expect(res).toEqual({ ok: true });
+    expect(spies.widenAndReproject).toHaveBeenCalledWith(
+      expect.objectContaining({ toOwnerLevel: "team", toOwnerId: "team-9" }),
+    );
+  });
+});
+
 describe("decideArtifactPromotion — atomic apply", () => {
   it("happy path: CLAIMS the request first (fail-closed), then widens/reprojects/audits", async () => {
     const { deps, spies } = harness();
@@ -428,6 +468,49 @@ describe("createArtifactRowPromotionRequest", () => {
       deps,
     );
     expect(res).toMatchObject({ ok: false, code: "invalid_state" });
+  });
+
+  it("team target: validates team-in-org + requester membership and snapshots the display label", async () => {
+    const { deps, spies } = harness();
+    const res = await createArtifactRowPromotionRequest(
+      {
+        orgId: "org-1",
+        objectId: "obj-1",
+        requestedBy: "u-member",
+        toVisibility: "team",
+        targetTeamId: "team-9",
+      },
+      deps,
+    );
+    expect(res.ok).toBe(true);
+    expect(spies.readTeamInOrg).toHaveBeenCalledWith({
+      teamId: "team-9",
+      orgId: "org-1",
+      memberUserId: "u-member",
+    });
+    expect(spies.createRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toOwnerLevel: "team",
+        toOwnerId: "team-9",
+        toOwnerLabel: "Growth",
+      }),
+    );
+  });
+
+  it("team target: an unknown/foreign team (or non-membership) refuses with ONE indistinguishable message and never creates", async () => {
+    const { deps, spies } = harness({ teamMissing: true });
+    const res = await createArtifactRowPromotionRequest(
+      {
+        orgId: "org-1",
+        objectId: "obj-1",
+        requestedBy: "u-member",
+        toVisibility: "team",
+        targetTeamId: "team-foreign",
+      },
+      deps,
+    );
+    expect(res).toMatchObject({ ok: false, code: "invalid_state" });
+    expect(spies.createRequest).not.toHaveBeenCalled();
   });
 
   it("maps a one-pending duplicate-key store error to conflict", async () => {

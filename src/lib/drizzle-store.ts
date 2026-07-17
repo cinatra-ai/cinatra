@@ -3696,6 +3696,7 @@ END $$` },
       to_visibility      text NOT NULL,
       to_owner_level     text NOT NULL,
       to_owner_id        text NOT NULL,
+      to_owner_label     text,
       row_version        integer NOT NULL,
       status             text NOT NULL DEFAULT 'pending',
       decided_by         text,
@@ -3706,6 +3707,9 @@ END $$` },
       CONSTRAINT apr_status_chk CHECK (status IN ('pending','approved','rejected','superseded')),
       CONSTRAINT apr_to_visibility_chk CHECK (to_visibility IN ('team','organization'))
     )` },
+    // Idempotent column add for dev DBs that bootstrapped the lane table before
+    // to_owner_label existed (display-only reviewer snapshot of the team name).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" ADD COLUMN IF NOT EXISTS to_owner_label text` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_org_status_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (org_id, status)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_requester_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (requested_by, status)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_promotion_request_object_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_promotion_request" (object_id)` },
