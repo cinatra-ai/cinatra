@@ -360,10 +360,14 @@ describe("analytics portlet cross-cube query validation (cinatra#1512)", () => {
     );
   });
 
-  it("tolerates an unparseable legacy query string (drizzle-cube owns invalid-JSON handling)", () => {
-    expect(
-      vc(ANALYTICS_PORTLET_KIND, embed({ query: "not json {", chartType: "bar" })),
-    ).toEqual([]);
+  it("rejects an unparseable legacy query string (cinatra#1736 — DC's JSON.parse would spin forever)", () => {
+    // Pre-#1736 this was tolerated ("drizzle-cube owns invalid-JSON handling")
+    // — but DC "handles" it with a console.warn and an indefinite spinner. The
+    // write boundary now rejects it with the contract message instead.
+    const errs = vc(ANALYTICS_PORTLET_KIND, embed({ query: "not json {", chartType: "bar" }));
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.code).toBe("port_analytics_invalid_dashboard");
+    expect(errs[0]!.message).toContain("must be a JSON string");
   });
 
   it("skips funnel/flow/retention analysis types (different query DSLs, not served in v1)", () => {

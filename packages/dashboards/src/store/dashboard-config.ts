@@ -27,6 +27,45 @@ import { DASHBOARD_CONFIG_V12_VERSION } from "../extension/dashboard-config-v12"
 // enforces finite layout, non-empty id/title, and at least one usable content
 // spec.
 // ─────────────────────────────────────────────────────────────────────────
+
+/** Actionable contract message for the deprecated legacy `query` field
+ *  (cinatra#1736). drizzle-cube's `LegacyPortlet.query` is a JSON STRING of a
+ *  CubeQuery/MultiQuery; an object-shaped value validates nowhere at write
+ *  time and then dies in the browser (`configMigration` `JSON.parse` →
+ *  permanent spinner). */
+export const LEGACY_QUERY_CONTRACT_MESSAGE =
+  "Portlet `query` (deprecated drizzle-cube field) must be a JSON string of a " +
+  "CubeQuery/MultiQuery — pass the query through JSON.stringify, or prefer the " +
+  "canonical `analysisConfig` shape.";
+
+/** Legacy `query` normalizer (cinatra#1736): objects are serialized to the
+ *  JSON string drizzle-cube expects (this also repairs pre-fix persisted rows
+ *  on the read path, which returns the PARSED output); strings must be valid
+ *  JSON; `null` is treated as absent (tolerated in old rows); anything else
+ *  fails with the contract message. */
+const LegacyDcQueryV1_1 = z.unknown().transform((v, ctx): string | undefined => {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === "string") {
+    try {
+      JSON.parse(v);
+      return v;
+    } catch {
+      ctx.addIssue({ code: "custom", message: LEGACY_QUERY_CONTRACT_MESSAGE });
+      return z.NEVER;
+    }
+  }
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      ctx.addIssue({ code: "custom", message: LEGACY_QUERY_CONTRACT_MESSAGE });
+      return z.NEVER;
+    }
+  }
+  ctx.addIssue({ code: "custom", message: LEGACY_QUERY_CONTRACT_MESSAGE });
+  return z.NEVER;
+});
+
 const PortletConfigV1_1 = z
   .object({
     id: z.string().min(1),
@@ -37,8 +76,9 @@ const PortletConfigV1_1 = z
     y: z.number().int().nonnegative().refine(Number.isFinite),
     // Canonical drizzle-cube portlet content — opaque to us; DC validates.
     analysisConfig: z.unknown().optional(),
-    // Legacy DC portlet fields (passthrough; we don't validate).
-    query: z.unknown().optional(),
+    // Legacy DC `query`: normalized/enforced to DC's JSON-string contract
+    // (cinatra#1736). Other legacy fields stay passthrough.
+    query: LegacyDcQueryV1_1.optional(),
     chartType: z.unknown().optional(),
     chartConfig: z.unknown().optional(),
     displayConfig: z.unknown().optional(),
@@ -55,6 +95,11 @@ const PortletConfigV1_1 = z
       });
     }
   });
+
+/** Single-portlet parse for render-time salvage (cinatra#1736): lets the
+ *  render path validate portlets INDIVIDUALLY so one broken portlet doesn't
+ *  take down its siblings. */
+export const PortletConfigV1_1Schema = PortletConfigV1_1;
 
 const DashboardGridSettingsV1_1 = z.object({
   cols: z.number().int().positive(),
