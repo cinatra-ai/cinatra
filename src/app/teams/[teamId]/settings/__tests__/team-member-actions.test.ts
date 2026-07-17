@@ -256,6 +256,8 @@ describe("addTeamMemberAction", () => {
     expect(containsValue(insert, "team-1")).toBe(true);
     expect(containsValue(insert, "user-2")).toBe(true);
     expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1/settings");
+    // The detail page's Overview member count must refresh too (#1688).
+    expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1");
   });
 
   it("rejects a blank user id before touching the org boundary", async () => {
@@ -318,6 +320,8 @@ describe("removeTeamMemberAction", () => {
     expect(containsValue(del, "team-1")).toBe(true);
     expect(containsValue(del, "user-2")).toBe(true);
     expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1/settings");
+    // The detail page's Overview member count must refresh too (#1688).
+    expect(revalidatePath).toHaveBeenCalledWith("/teams/team-1");
   });
 });
 
