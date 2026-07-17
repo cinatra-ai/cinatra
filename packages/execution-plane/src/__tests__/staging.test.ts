@@ -353,4 +353,60 @@ describe("createBrokerSandboxExecutor", () => {
     });
     expect(outputs[0].outcome).toEqual({ type: "timeout" });
   });
+
+  it("a THROWING resolveFiles becomes a structured refusal, never an escaping rejection (codex r1)", async () => {
+    const { docker } = recordingDocker();
+    const { broker } = makeBroker(fakeWorker(), docker);
+    const executor = createBrokerSandboxExecutor(broker);
+    const carrier = carrierFor("run-throw");
+    const throwing: SandboxStagedSkill = {
+      skillId: "skill-x",
+      slug: "my-skill",
+      description: "boom",
+      resolveFiles: async () => {
+        throw new Error("catalog read exploded");
+      },
+    };
+    const outputs = await executor({
+      sessionCarrier: carrier,
+      commands: ["echo hi"],
+      stagedSkills: [throwing],
+    });
+    expect(outputs[0].outcome).toEqual({ type: "exit", exitCode: 126 });
+    expect(outputs[0].stderr).toContain("catalog read exploded");
+    // The failed open is NOT cached: a later, healthy call opens fine.
+    const retry = await executor({ sessionCarrier: carrier, commands: ["echo hi"] });
+    expect(retry[0].outcome).toEqual({ type: "exit", exitCode: 0 });
+  });
+});
+
+describe("retention GC covers the skills tier (codex r1)", () => {
+  it("gcExpiredWorkspaces sweeps BOTH the l2 and skills label tiers", async () => {
+    const listed: string[] = [];
+    const removed: string[] = [];
+    const docker: DockerCli = async (args) => {
+      if (args[0] === "volume" && args[1] === "ls") {
+        const filter = args[args.indexOf("--filter") + 1];
+        listed.push(filter);
+        const tier = filter.endsWith("=skills") ? "skills" : "l2";
+        return {
+          exitCode: 0,
+          stdout: `cinatra-exec-${tier}-old|ai.cinatra.execution-plane=${tier},ai.cinatra.execution-plane.createdAt=1000\n`,
+          stderr: "",
+          stdioOverflow: false,
+          timedOut: false,
+        };
+      }
+      if (args[0] === "volume" && args[1] === "rm") removed.push(args[2]);
+      return { exitCode: 0, stdout: "", stderr: "", stdioOverflow: false, timedOut: false };
+    };
+    const { gcExpiredWorkspaces } = await import("../workspace");
+    const swept = await gcExpiredWorkspaces(60_000, docker, 1_000_000);
+    expect(listed).toEqual([
+      "label=ai.cinatra.execution-plane=l2",
+      "label=ai.cinatra.execution-plane=skills",
+    ]);
+    expect(swept.sort()).toEqual(["cinatra-exec-l2-old", "cinatra-exec-skills-old"]);
+    expect(removed.sort()).toEqual(["cinatra-exec-l2-old", "cinatra-exec-skills-old"]);
+  });
 });

@@ -50,30 +50,61 @@ async function resolveStagedInputs(
   );
 }
 
+/**
+ * Bound on distinct carriers a single executor instance tracks. The wiring
+ * layer builds one executor per broker (possibly long-lived), so the map must
+ * not grow with traffic: past the cap the OLDEST tracked job is closed
+ * (`closeJob` — eagerly frees its per-job skills volume; the run-keyed L2
+ * workspace stays, retention GC owns it) and evicted. A carrier's TTL bounds
+ * usefulness anyway (an expired carrier re-opens as a structured refusal).
+ */
+const MAX_TRACKED_CARRIERS = 256;
+
 export function createBrokerSandboxExecutor(
   broker: ExecutionBroker,
 ): SandboxExecutor {
   // One open job per carrier, memoized as a promise so a concurrent first
   // batch cannot double-open. A FAILED open is not cached — a later command
   // retries (e.g. transient docker failure), while a carrier-level refusal
-  // (expired/bad signature) simply fails again, still structured.
+  // (expired/bad signature) simply fails again, still structured. The closure
+  // NEVER rejects (codex round-1): a throwing resolveFiles()/openJob() becomes
+  // a structured failure, so nothing escapes into the provider tool loop and
+  // no permanently-rejected promise can poison the cache.
   const jobs = new Map<string, Promise<{ ok: true; jobId: string } | { ok: false; message: string }>>();
+
+  async function evictPastCap(): Promise<void> {
+    while (jobs.size > MAX_TRACKED_CARRIERS) {
+      const oldest = jobs.keys().next().value as string | undefined;
+      if (oldest === undefined) return;
+      const settled = await jobs.get(oldest)!;
+      jobs.delete(oldest);
+      if (settled.ok) await broker.closeJob(settled.jobId);
+    }
+  }
 
   return async (input) => {
     let open = jobs.get(input.sessionCarrier);
     if (!open) {
       open = (async () => {
-        const stagedSkills = await resolveStagedInputs(input.stagedSkills);
-        const result = await broker.openJob(input.sessionCarrier, {
-          stagedSkills,
-        });
-        return result.ok
-          ? ({ ok: true, jobId: result.jobId } as const)
-          : ({ ok: false, message: `${result.reason}: ${result.message}` } as const);
+        try {
+          const stagedSkills = await resolveStagedInputs(input.stagedSkills);
+          const result = await broker.openJob(input.sessionCarrier, {
+            stagedSkills,
+          });
+          return result.ok
+            ? ({ ok: true, jobId: result.jobId } as const)
+            : ({ ok: false, message: `${result.reason}: ${result.message}` } as const);
+        } catch (err) {
+          return {
+            ok: false,
+            message: `staging_failed: ${(err as Error).message}`,
+          } as const;
+        }
       })();
       jobs.set(input.sessionCarrier, open);
       const settled = await open;
       if (!settled.ok) jobs.delete(input.sessionCarrier);
+      else await evictPastCap();
     }
     const job = await open;
     if (!job.ok) {
