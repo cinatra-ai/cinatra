@@ -31,8 +31,15 @@ import {
  * `propsApiVersion` differs is degraded (abi-incompatible) — the extension was
  * built against a different FieldRendererProps shape, so the host renders the
  * floor rather than pass a mismatched props object.
+ *
+ * SINGLE AUTHORITY (cinatra#1625): the integer is owned by the public props leaf
+ * `@cinatra-ai/sdk-ui/field-renderer-props` (the same contract a claiming
+ * extension pins its `component.propsApiVersion` against); this module re-exports
+ * it so in-core call sites keep importing it from `@cinatra-ai/agents` unchanged.
+ * There must not be a second copy of the value.
  */
-export const FIELD_RENDERER_PROPS_API_VERSION = 1;
+import { FIELD_RENDERER_PROPS_API_VERSION } from "@cinatra-ai/sdk-ui/field-renderer-props";
+export { FIELD_RENDERER_PROPS_API_VERSION };
 
 /** Pre-render failure taxonomy (client analog of the S2 artifact-renderer
  * classes, minus the server-only "absent"/quarantine machinery). Every class

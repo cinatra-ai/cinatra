@@ -21,6 +21,26 @@ export {
 export type { AccentTone } from "./lib/extension-accent";
 export { cn } from "./lib/utils";
 
+// Public field-renderer props contract (cinatra#1625, epic #1620 S8 — M3). The
+// stable public mirror a claiming extension's migrated HITL renderer imports its
+// props TYPE from; `@cinatra-ai/agents` re-exports the same types for in-core
+// code. Only the structural TYPES are re-exported from this root barrel — they
+// are erased at build, so a route reaching this hot barrel does not pull the
+// props leaf into its first-party module graph. The runtime
+// `FIELD_RENDERER_PROPS_API_VERSION` constant is intentionally NOT re-exported
+// here: its sole host consumer (packages/agents/src/field-renderer-components.ts)
+// reads it from the zero-runtime `@cinatra-ai/sdk-ui/field-renderer-props`
+// subpath — which is also the canonical path an extension uses — so no consumer
+// needs the value from this barrel. Re-exporting the value here would accrete the
+// leaf into every route that touches sdk-ui (the route-graph ratchet caught
+// exactly that: /sign-in grew by one module). The subpath test locks this in.
+export type {
+  FieldRendererProps,
+  FieldRendererContext,
+  RendererMode,
+  GmailSendAsAliasOption,
+} from "./field-renderer-props";
+
 // Connector/dialog UI primitives + notification context (consumed by extension
 // settings/setup pages so they need no `@/` host edge).
 export { AppDialog } from "./app-dialog";
