@@ -48,7 +48,10 @@ import "server-only";
 
 import { registerExtensionUiAction } from "@/lib/extension-ui-registry";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
-import type { ExternalMcpServerScope } from "@/lib/external-mcp-registry";
+import {
+  normalizeExternalMcpTransport,
+  type ExternalMcpServerScope,
+} from "@/lib/external-mcp-registry";
 
 /** The write-action ids the host binds for the external-MCP registry surface. */
 const CREATE_ACTION_ID = "createServer";
@@ -130,6 +133,10 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   const serverUrl = asString(input, "serverUrl")?.trim();
   const requestedScope = asString(input, "scope") ?? "user";
   const requestedId = asString(input, "id")?.trim() || undefined;
+  // llm-providers S2 (#1713): the connector setup form may post a transport;
+  // coerce it to the closed vocabulary (omitted / unrecognized => "unknown").
+  // Never inferred from serverUrl.
+  const transport = normalizeExternalMcpTransport(asString(input, "transport"));
   // The optional API key the connector's `secret` field posts (cinatra#1407
   // defect 1). Blank/whitespace is treated as "no key" — the row's connection is
   // left null (apiKeyConfigured stays false) rather than storing an empty secret.
@@ -290,6 +297,8 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     // (never steal it), else bind to the creating actor. Global rows have no owner.
     userId: scope === "user" ? preservedUserId ?? session.user.id : null,
     enabled: true,
+    // Persist the declared transport, or "unknown" when omitted (#1713).
+    transport,
   };
   try {
     if (guard) {

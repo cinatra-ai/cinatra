@@ -5,10 +5,13 @@
 // ---------------------------------------------------------------------------
 // This module is the LAZY BOUNDARY for the chat route's heavy renderers:
 // ChatPage mounts it via next/dynamic, so marked + katex (./markdown-render →
-// ./math-render), recharts (./chart-embed), the mermaid wrapper
-// (./mermaid-block) and the shiki wrapper (./syntax-highlight) load in their
-// own client chunk only when a conversation actually renders — they no longer
-// ride the initial /chat bundle (the empty state + composer stay eager).
+// ./math-render), the mermaid wrapper (./mermaid-block) and the shiki wrapper
+// (./syntax-highlight) load in their own client chunk only when a conversation
+// actually renders — they no longer ride the initial /chat bundle (the empty
+// state + composer stay eager). The `chart` renderable-view COMPONENT (formerly
+// the in-tree recharts ChartEmbed) is now extension-provided
+// (@cinatra-ai/chart-artifact, resolved server-side into the `chatViews` map by
+// src/lib/chat-views-catalog.server.ts and dispatched here — cinatra#1626).
 // Everything here is moved UNCHANGED from chat-page.tsx: same components,
 // same markup, same class names. The only edits are mechanical — closure
 // state became props (isStreaming(id) reads the same abort-controller
@@ -16,7 +19,7 @@
 // the four identical embed/citation adjunct blocks are factored into local
 // components that emit byte-identical DOM.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { RotateCcw, PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,7 +35,8 @@ import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 import { highlightCodeAsync, type ThemeName } from "./syntax-highlight";
 import { renderMarkdown, detectCharts, detectMermaidBlocks } from "./markdown-render";
 import { MermaidBlock } from "./mermaid-block";
-import { ChartEmbed, ChartError } from "./chart-embed";
+import { RenderableViewFallback } from "./renderable-views";
+import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
@@ -696,14 +700,70 @@ function MessageMermaidEmbeds({ message }: { message: UiMessage }) {
   ));
 }
 
-function MessageChartEmbeds({ message }: { message: UiMessage }) {
+/**
+ * viewType → the resolved extension-provided renderable-view component
+ * (a React client reference), resolved server-side from the generated
+ * `cinatra.views` map by src/lib/chat-views-catalog.server.ts and threaded in
+ * as a prop. Empty when no view-bearing extension is live/built.
+ */
+export type ChatViewComponents = Record<
+  string,
+  ComponentType<{ view: { viewType: string } }>
+>;
+
+/**
+ * Error boundary around a mounted EXTENSION renderable-view component: a
+ * render/lifecycle throw from the extension degrades to the host's never-blank
+ * floor (`fallback`) instead of escaping and crashing the messages subtree /
+ * `/chat` (epic #1620 AC1; mirrors the artifact-side DynamicRendererLoader's
+ * RendererErrorBoundary). LOGICAL containment only — not a security boundary.
+ */
+class ChatViewErrorBoundary extends Component<
+  { fallback: ReactNode; children: ReactNode },
+  { crashed: boolean }
+> {
+  constructor(props: { fallback: ReactNode; children: ReactNode }) {
+    super(props);
+    this.state = { crashed: false };
+  }
+  static getDerivedStateFromError(): { crashed: boolean } {
+    return { crashed: true };
+  }
+  render(): ReactNode {
+    return this.state.crashed ? this.props.fallback : this.props.children;
+  }
+}
+
+function MessageChartEmbeds({
+  message,
+  chatViews,
+}: {
+  message: UiMessage;
+  chatViews: ChatViewComponents;
+}) {
+  // Host-side detection stays here permanently (epic #1620 AC2): the detector
+  // emits the stable `chart` viewType payload; the COMPONENT that renders it is
+  // extension-provided, dispatched through the generated `cinatra.views` map.
   const charts = detectCharts(message.content);
   if (charts.length === 0) return null;
-  return charts.map((c, i) =>
-    c.spec
-      ? <ChartEmbed key={`chart-${message.id}-${i}`} spec={c.spec} />
-      : <ChartError key={`chart-err-${message.id}-${i}`} reason="invalid schema" />,
-  );
+  const ChartView = chatViews.chart;
+  return charts.map((c, i) => {
+    const key = `chart-${message.id}-${i}`;
+    // Unclaimed / not built into this bundle → the never-blank floor (AC1),
+    // never a dead arm. The floor covers the whole `chart` viewType at once.
+    if (!ChartView) return <RenderableViewFallback key={key} rawViewType="chart" />;
+    // The stable payload the extension receives. A malformed embed (`spec ===
+    // null`) still dispatches the bare `{ viewType: "chart" }` payload — the
+    // extension re-validates and renders its own non-crashing error floor, so
+    // an invalid chart is never blank either. A render THROW from the extension
+    // is contained by the boundary → the same never-blank floor.
+    const view = c.spec ? buildChartView(c.spec) : { viewType: "chart" as const };
+    return (
+      <ChatViewErrorBoundary key={key} fallback={<RenderableViewFallback rawViewType="chart" />}>
+        <ChartView view={view} />
+      </ChatViewErrorBoundary>
+    );
+  });
 }
 
 function MessageCitations({ message }: { message: UiMessage }) {
@@ -770,6 +830,10 @@ export type ChatMessagesViewProps = {
   pendingExternalHandle: string | null;
   /** assistantId → display handle for per-assistant typing bubbles (Slack mode). */
   typingIndicators: Map<string, string>;
+  /** Extension-provided chat renderable-view components (viewType → component),
+   *  resolved server-side from the generated `cinatra.views` map. Defaults to
+   *  empty — the `chart` viewType then renders the never-blank fallback. */
+  chatViews: ChatViewComponents;
 };
 
 export function ChatMessagesView({
@@ -799,6 +863,7 @@ export function ChatMessagesView({
   onActiveGateChange,
   pendingExternalHandle,
   typingIndicators,
+  chatViews,
 }: ChatMessagesViewProps) {
   // Hydrate shiki placeholders after render — replace fallback <pre> blocks with
   // syntax-highlighted HTML loaded lazily from shiki. (Moved with the view: the
@@ -1049,7 +1114,7 @@ export function ChatMessagesView({
                           widgetRefreshKey={widgetRefreshKey}
                         />
                         <MessageMermaidEmbeds message={message} />
-                        <MessageChartEmbeds message={message} />
+                        <MessageChartEmbeds message={message} chatViews={chatViews} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1076,7 +1141,7 @@ export function ChatMessagesView({
                           widgetRefreshKey={widgetRefreshKey}
                         />
                         <MessageMermaidEmbeds message={message} />
-                        <MessageChartEmbeds message={message} />
+                        <MessageChartEmbeds message={message} chatViews={chatViews} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1178,7 +1243,7 @@ export function ChatMessagesView({
                       widgetRefreshKey={widgetRefreshKey}
                     />
                     <MessageMermaidEmbeds message={message} />
-                    <MessageChartEmbeds message={message} />
+                    <MessageChartEmbeds message={message} chatViews={chatViews} />
                     <MessageCitations message={message} />
                     {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                       <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1208,7 +1273,7 @@ export function ChatMessagesView({
                       widgetRefreshKey={widgetRefreshKey}
                     />
                     <MessageMermaidEmbeds message={message} />
-                    <MessageChartEmbeds message={message} />
+                    <MessageChartEmbeds message={message} chatViews={chatViews} />
                     {message.role === "assistant" && <MessageCitations message={message} />}
                     {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                       <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />

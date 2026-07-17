@@ -9,10 +9,29 @@ export {
   materializeExtensionInstanceForProject,
   archiveExtensionDashboards,
   restoreExtensionDashboards,
+  adoptExtensionDashboards,
   type MaterializeTemplateInput,
   type MaterializeInstanceInput,
   type ExtensionDashboardOwnerScope,
+  type AdoptExtensionDashboardsInput,
 } from "./mutation-service";
+
+// Contribution LINEAGE identity + the adopt-in-place PLANNER (cinatra#1628,
+// S11b). PURE (no writes) — the reconciler orchestrator resolves live successor
+// claims, plans adoptions (fail-closed on ambiguity), and drives
+// `adoptExtensionDashboards` per planned op.
+export {
+  LEGACY_LINEAGE_PREFIX,
+  CONTRIBUTION_LINEAGE_PREFIX,
+  legacyContributionLineageId,
+  deriveContributionLineageId,
+  adoptionMatchLineageIds,
+  planContributionAdoptions,
+  type LiveContributionClaim,
+  type ContributionAdoption,
+  type ContributionAdoptionPlan,
+  type SkippedAdoption,
+} from "./contribution-lineage";
 
 export {
   validateDashboardConfigV12,
@@ -32,8 +51,19 @@ export {
 // body an `analytics` portlet wraps. No writes — type/constant re-exports only.
 export {
   CURRENT_CONFIG_VERSION,
+  LEGACY_QUERY_CONTRACT_MESSAGE,
   type DashboardConfigV1_1,
 } from "./store/dashboard-config";
+
+// Render-side salvage for an analytics portlet's embedded dashboard
+// (cinatra#1736): normalizes legacy object-shaped `query` values and reports
+// portlets that cannot render, so `/dashboards/[id]` shows an error state
+// instead of drizzle-cube's indefinite spinner.
+export {
+  parseAnalyticsDashboardForRender,
+  type AnalyticsDashboardRenderParse,
+  type BrokenPortletReport,
+} from "./v12-envelope";
 
 // The runtime-installer cube guard. The saga's preflight calls it against the
 // materialized storeDir's dashboard config to reject an extension that references

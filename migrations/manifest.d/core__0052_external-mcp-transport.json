@@ -1,0 +1,9 @@
+{
+  "seq": "0052",
+  "file": "core/core__0052_external-mcp-transport.mjs",
+  "summary": "Add external_mcp_servers.transport (text NOT NULL DEFAULT 'unknown') on the operator upgrade path (llm-providers S2, cinatra#1713, epic #1711): the external-MCP contract carried no transport metadata anywhere, so S2 makes the MCP wire transport ('streamable-http' | 'sse' | 'unknown') first-class persisted DATA and the injection layer never infers transport from an HTTP URL. Legacy rows are backfilled to the 'unknown' default and classified 'unknown' end-to-end (the record mapper also coerces any unexpected stored value to 'unknown'). Classified DESTRUCTIVE by the schema-migration gate's not-null-column-on-existing-table rule (a NOT NULL column added to an existing table is user-land-affecting), hence this required artifact — but the change is data-preserving: the constant DEFAULT makes it a fast metadata-only add on Postgres 11+ (no table rewrite, no long lock) that backfills every existing row to 'unknown'. The bootstrap DDL (buildCreateStoreSchemaQueries in src/lib/drizzle-store.ts, same PR) carries the identical ADD COLUMN IF NOT EXISTS so a fresh install is born at the target shape and ledger-fakes this chain; this module carries it onto the operator upgrade path. Idempotent both ways; unqualified names resolve to the runner's search_path schema. down() drops the column IF EXISTS. SEQ PROVISIONAL: sequence is assigned at MERGE (the gate requires new seq > max SHIPPED, currently 0051); this fragment takes 0052 — the next free sequence past max shipped. NOTE: the open assistants slice #1674 (P1.3/P1.4/P2.4) also targets core__0052; whichever of the two merges second must renumber to the next free sequence (rename-only, zero SQL change; the runner tolerates gaps).",
+  "destructive": true,
+  "tables": [
+    "external_mcp_servers"
+  ]
+}

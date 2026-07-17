@@ -17,6 +17,7 @@ import {
 } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import { validateDashboardConfigV12 } from "@cinatra-ai/dashboards/extension-materialization";
 import { PortletHost, type PortletInstanceProp } from "@/components/dashboards/portlet-host";
+import { CrumbContributions } from "@/components/crumb-contributions";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -91,6 +92,11 @@ export default async function DashboardDetailPage({ params }: Props) {
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): every gate above has
+          passed, so the dashboard's name may reach the breadcrumb. */}
+      <CrumbContributions
+        entries={[{ prefix: `/dashboards/${encodeURIComponent(id)}`, label: row.name }]}
+      />
       <PageHeader
         title={row.name}
         description={row.description ?? undefined}

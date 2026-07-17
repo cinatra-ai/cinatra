@@ -68,6 +68,7 @@ import {
   semanticRendererRegistry,
   representationProviderRegistry,
 } from "@cinatra-ai/objects/artifact-renderer-registry";
+import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 // The EXACT production teardown closure the host wires into
 // `setExtensionCapabilityTeardownHook` (src/lib/extensions.ts ~:87). Imported from
 // the shared lightweight module — NOT a copy — so production wiring drift (a fifth
@@ -86,6 +87,7 @@ afterEach(() => {
   objectTypeRegistry._clearForTests();
   semanticRendererRegistry._clearForTests();
   representationProviderRegistry._clearForTests(true);
+  runtimeAssetRegistry._clearForTests();
 });
 
 describe("per-kind teardown (a) — ctx.jobs.registerWorker is not a supported port", () => {
@@ -137,7 +139,7 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
     expect(objectTypeRegistry.resolve(TYPE)).toBeNull();
   });
 
-  it("the host wires a teardown hook composed of EXACTLY these four primitives — and there is NO in-memory dereg primitive for the structurally-absent kinds (jobs/skills/agents/artifacts/credentials)", () => {
+  it("the host wires a teardown hook composed of EXACTLY these four primitives — and there is NO in-memory dereg primitive for the structurally-absent kinds (jobs/skills/agents/artifacts/credentials)", async () => {
     // Drive the REAL production closure `teardownExtensionCapabilities`
     // (the single source of truth the host wires at src/lib/extensions.ts ~:87 —
     // NOT a local copy): register one of each covered kind, fire the closure, and
@@ -162,6 +164,27 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
       slot: "preview",
       generation: 1,
     });
+    // Revocation-via-lifecycle (owner ruling 8): a main-realm dynamic runtime
+    // binding retires through this SAME chokepoint (no separate kill-switch).
+    await runtimeAssetRegistry.admitAndActivate({
+      tuple: {
+        packageName: PKG,
+        slot: "detail",
+        digest: "a".repeat(128),
+        entry: "client/detail.js",
+        propsApiVersion: 1,
+        sdkAbiRange: "^2.4.0",
+        reactPeerRange: "^19.0.0",
+        reactDomPeerRange: "^19.0.0",
+        tokenModuleAbi: "1.0.0",
+      },
+      generation: 1,
+      materialize: async () => {},
+      verify: async () => true,
+    });
+    expect(
+      runtimeAssetRegistry.inRuntimeAssetRegistry(runtimeAssetRegistry.keyFor(PKG, "detail")),
+    ).toBe(true);
 
     const result = teardownExtensionCapabilities(PKG);
 
@@ -169,6 +192,11 @@ describe("per-kind teardown (b) — the teardown hook covers EXACTLY the four re
     expect(result.removedTypes).toContain(TYPE);
     expect(result.removedRendererTypes).toContain(RTYPE);
     expect(result.removedRepresentationProviders).toBe(1);
+    expect(result.removedRuntimeBindings).toBe(1);
+    // The dynamic binding no longer resolves — a live mount degrades to the floor.
+    expect(
+      runtimeAssetRegistry.inRuntimeAssetRegistry(runtimeAssetRegistry.keyFor(PKG, "detail")),
+    ).toBe(false);
     expect(listExtensionMcpTools().some((x) => x.packageName === PKG)).toBe(false);
     expect(resolveCapabilityProviders("cap").some((p) => p.packageName === PKG)).toBe(false);
     expect(resolveExtensionUiAction(PKG, "a")).toBeNull();

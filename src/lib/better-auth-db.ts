@@ -286,7 +286,9 @@ export const betterAuthSessions = pgTable("session", {
 
 export const betterAuthOrganizations = pgTable("organization", {
   id: text("id").primaryKey(),
-  name: text("name"),
+  // NOT NULL since core__0053 (cinatra#1737 Stage C); fresh installs get the
+  // same shape from Better Auth's canonical model (name is required there).
+  name: text("name").notNull(),
   slug: text("slug"),
   createdAt: timestamp("createdAt", { withTimezone: true, mode: "date" }),
 });
@@ -361,17 +363,17 @@ export const betterAuthTeamMembers = pgTable("teamMember", {
  */
 let teamMemberRoleColumnPresent: Promise<boolean> | null = null;
 
-export function teamMemberRoleColumnExists(): Promise<boolean> {
-  if (teamMemberRoleColumnPresent) return teamMemberRoleColumnPresent;
-  const probe: Promise<boolean> = betterAuthPool
-    .query<{ exists: boolean }>(
-      `SELECT EXISTS (
+const TEAM_MEMBER_ROLE_COLUMN_PROBE = `SELECT EXISTS (
          SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'public'
            AND table_name = 'teamMember'
            AND column_name = 'role'
-       ) AS exists`,
-    )
+       ) AS exists`;
+
+export function teamMemberRoleColumnExists(): Promise<boolean> {
+  if (teamMemberRoleColumnPresent) return teamMemberRoleColumnPresent;
+  const probe: Promise<boolean> = betterAuthPool
+    .query<{ exists: boolean }>(TEAM_MEMBER_ROLE_COLUMN_PROBE)
     .then((result) => {
       const exists = Boolean(result.rows[0]?.exists);
       if (!exists && teamMemberRoleColumnPresent === probe) {
@@ -390,6 +392,30 @@ export function teamMemberRoleColumnExists(): Promise<boolean> {
     });
   teamMemberRoleColumnPresent = probe;
   return probe;
+}
+
+/**
+ * STRICT probe variant for INVARIANT GUARDS (cinatra#1686). The fail-soft
+ * `teamMemberRoleColumnExists` above treats a transient probe FAILURE as
+ * "roleless" — right for feature degrade (never over-grants), wrong for a
+ * guard: the last-admin check would be silently skipped while the mutation
+ * itself still succeeds. This variant REJECTS on probe failure so the caller
+ * aborts its mutation (fail closed) instead of proceeding unguarded. A
+ * memoised TRUE is reused (presence is monotonic); anything else re-probes.
+ */
+export async function teamMemberRoleColumnExistsStrict(): Promise<boolean> {
+  if (teamMemberRoleColumnPresent) {
+    // The memo only persists while TRUE (absence/failure self-clear) and its
+    // promise never rejects — a resolved true is authoritative, anything
+    // else falls through to a fresh, failure-propagating probe.
+    if (await teamMemberRoleColumnPresent) return true;
+  }
+  const result = await betterAuthPool.query<{ exists: boolean }>(
+    TEAM_MEMBER_ROLE_COLUMN_PROBE,
+  );
+  const exists = Boolean(result.rows[0]?.exists);
+  if (exists) teamMemberRoleColumnPresent = Promise.resolve(true);
+  return exists;
 }
 
 /** A team membership row as seen by `readTeamsForUser`. `role` is `undefined`

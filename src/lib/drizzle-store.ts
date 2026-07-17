@@ -1510,6 +1510,12 @@ END $$` },
     // rows created before this migration).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."external_mcp_servers" ADD COLUMN IF NOT EXISTS allowed_tools text[]` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."external_mcp_servers" ADD COLUMN IF NOT EXISTS allowed_catalog_tools text[]` },
+    // llm-providers S2 (#1713): persisted MCP wire transport. Legacy rows land
+    // on the 'unknown' default (transport is never inferred from server_url).
+    // Fresh installs are born with the column here; the operator upgrade path
+    // carries the identical ADD COLUMN in migration core__0052 (SEQ PROVISIONAL
+    // — assigned at merge, see the migration fragment).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."external_mcp_servers" ADD COLUMN IF NOT EXISTS transport text NOT NULL DEFAULT 'unknown'` },
     // agent_runs consolidation: title, created_at, source_type, source_id columns
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS title text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()` },
@@ -3536,7 +3542,21 @@ END $$` },
             old_prefix := "${schemaName.replaceAll('"', '""')}".compute_owner_path_prefix(OLD.owner_level, OLD.owner_id);
             new_prefix := "${schemaName.replaceAll('"', '""')}".compute_owner_path_prefix(NEW.owner_level, NEW.owner_id);
             IF old_prefix IS NULL OR new_prefix IS NULL THEN
-              RAISE EXCEPTION 'enqueue_agent_owner_move: cannot resolve owner paths for template %', NEW.id;
+              -- cinatra#1703: DEGRADE-WITH-DIAGNOSTIC, never abort boot. Either
+              -- the row's CURRENT owner or its move TARGET can't be resolved to
+              -- an on-disk "~agents" prefix — an orphaned/ephemeral template
+              -- whose principal no longer resolves (a run-token / deleted-user /
+              -- deleted-org owner). The boot-time owner backfill (owner_level
+              -- IS NULL -> 'organization'/COALESCE(org_id,'')) fires this trigger
+              -- on such rows; a hard RAISE aborted the WHOLE boot until the rows
+              -- were hand-deleted. With no resolvable prefix there is no
+              -- materialized path to relocate, so skip the relocation enqueue,
+              -- emit a sanitized diagnostic (template id ONLY, never the owner
+              -- value), and let the UPDATE proceed — boot continues to ready.
+              -- This mirrors the skip-with-diagnostic boot already applies to a
+              -- malformed extension manifest during registration.
+              RAISE WARNING 'enqueue_agent_owner_move: skipping relocation for template % — owner path unresolvable (orphaned owner); row owner updated, no relocation enqueued', NEW.id;
+              RETURN NEW;
             END IF;
             IF NEW.package_name IS NULL OR NEW.package_name = '' THEN
               RAISE EXCEPTION 'enqueue_agent_owner_move: template % has no package_name', NEW.id;

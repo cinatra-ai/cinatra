@@ -1,0 +1,9 @@
+{
+  "seq": "0053",
+  "file": "core/core__0053_organization-name-not-null.mjs",
+  "summary": "organization.name NOT NULL convergence (cinatra#1737 Stage C). Better Auth's canonical organization model declares name required, so fresh installs already create the column NOT NULL; legacy databases carry a nullable column with real null rows, which forced every org-labelled surface (breadcrumbs, tab titles) into placeholder fallbacks. up(): LOCK TABLE public.\"organization\" IN SHARE ROW EXCLUSIVE MODE (rolling-deploy writer guard), backfill each null-name row in createdAt ASC NULLS LAST, id ASC order with the owner-ratified sequential default \"Organization (N)\" where N is the SMALLEST free positive integer on the instance (strict matcher ^Organization \\(([1-9][0-9]*)\\)$ — \"Organization (01)\" does not reserve 1; gaps fill first, not max+1), then a guarded ALTER COLUMN name SET NOT NULL that skips when pg_attribute already reports attnotnull (fresh installs, re-runs) — idempotent and lineage-tolerant like core__0016/core__0017. down(): DROP NOT NULL only; backfilled names intentionally stay (indistinguishable from later user renames — the core__0049 no-op-down reasoning). Fresh schemas ledger-fake the chain, which is correct here since Better Auth's own DDL already produces the target shape. Creation path needs no change (Better Auth createOrganization requires name at the API level; no first-party raw INSERT into public.\"organization\" outside DB-gated fixtures).",
+  "destructive": true,
+  "tables": [
+    "public.\"organization\""
+  ]
+}

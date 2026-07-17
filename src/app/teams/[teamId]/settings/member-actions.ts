@@ -10,9 +10,12 @@
 //                                                   TEAM's org
 //   - removeTeamMemberAction(teamId, userId)   → canManageTeamMembers
 //                                                 + last-member guard
+//                                                 + last-admin guard (#1686)
 //   - updateTeamMemberRoleAction(teamId, userId, role)
 //                                              → canManageTeamMembers
 //                                                 + role column provisioned
+//                                                 + last-admin guard on
+//                                                   demotion (#1686)
 //   - searchTeamMemberCandidates(teamId, query)→ canManageTeamMembers
 //
 // Projected from the grant-form precedent
@@ -36,7 +39,11 @@ import {
   requireAuthSession,
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
-import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
+import {
+  betterAuthDb,
+  teamMemberRoleColumnExists,
+  teamMemberRoleColumnExistsStrict,
+} from "@/lib/better-auth-db";
 import { AuthzError } from "@/lib/authz/errors";
 
 import { canManageTeamMembers } from "./team-member-authority";
@@ -175,6 +182,7 @@ export type TeamMemberActionResult =
         | "already_member"
         | "not_a_member"
         | "last_member"
+        | "last_admin"
         | "role_unavailable"
         | "unknown_error";
     };
@@ -238,6 +246,8 @@ export async function addTeamMemberAction(
     if (!result.ok) return result;
 
     revalidatePath(`/teams/${team.id}/settings`);
+    // The detail page's Overview counts members (#1688) — refresh it too.
+    revalidatePath(`/teams/${team.id}`);
     return { ok: true };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: "forbidden" };
@@ -246,7 +256,7 @@ export async function addTeamMemberAction(
 }
 
 // ---------------------------------------------------------------------------
-// removeTeamMemberAction — roleless delete with a LAST-MEMBER guard.
+// removeTeamMemberAction — delete with LAST-MEMBER and LAST-ADMIN guards.
 //
 // Conservative semantics (surfaced in the #1567 PR): a team never goes empty
 // through this action. An empty team would stay visible only via the org
@@ -255,6 +265,14 @@ export async function addTeamMemberAction(
 // last-platform-admin guard (`countOtherPlatformAdmins`). The per-team
 // advisory lock makes two concurrent removals of the final two members (and
 // remove-vs-add interleavings) serialize instead of racing to an empty team.
+//
+// LAST-ADMIN guard (cinatra#1686): with the role model provisioned, removing
+// the only `admin` while other members remain is refused (`last_admin`) —
+// otherwise a team-admin-only actor orphans the team for everyone on it
+// (Better Auth's own org semantics likewise protect the last owner). Applies
+// to EVERY authority tier, like `last_member`: org/platform rescuers can
+// promote a replacement first, and the team never silently drops to zero
+// admins. On roleless deployments the guard is inert (no admin concept).
 // ---------------------------------------------------------------------------
 export async function removeTeamMemberAction(
   teamId: string,
@@ -265,6 +283,18 @@ export async function removeTeamMemberAction(
       await assertTeamMemberAuthority(teamId);
     const targetUserId = userId.trim();
     if (!targetUserId) return { ok: false, error: "invalid_user" };
+    // STRICT probe (CodeRabbit 1689-r1): the fail-soft variant treats a
+    // transient probe failure as "roleless", which would silently skip the
+    // last-admin guard while the DELETE still succeeds. A guard must fail
+    // CLOSED — on probe failure the removal aborts (retryable) instead of
+    // proceeding unguarded. Genuine absence still degrades to the roleless
+    // statement, so un-provisioned deployments behave exactly as before.
+    let rolesProvisioned: boolean;
+    try {
+      rolesProvisioned = await teamMemberRoleColumnExistsStrict();
+    } catch {
+      return { ok: false, error: "unknown_error" };
+    }
 
     const result = await betterAuthDb.transaction(async (tx) => {
       // Serialize on the per-team advisory lock: the membership read below
@@ -275,17 +305,38 @@ export async function removeTeamMemberAction(
       if (authorityTier === "team_admin") {
         await assertTeamAdminAuthorityOnTx(tx, team.id, callerUserId);
       }
-      const current = await tx.execute<{ userId: string }>(sql`
-        SELECT "userId" FROM public."teamMember"
-         WHERE "teamId" = ${team.id}
-      `);
-      const memberUserIds = (current.rows ?? []).map((r) => r.userId);
+      const current = await tx.execute<{ userId: string; role?: string | null }>(
+        rolesProvisioned
+          ? sql`
+              SELECT "userId", role FROM public."teamMember"
+               WHERE "teamId" = ${team.id}
+            `
+          : sql`
+              SELECT "userId" FROM public."teamMember"
+               WHERE "teamId" = ${team.id}
+            `,
+      );
+      const rows = current.rows ?? [];
+      const memberUserIds = rows.map((r) => r.userId);
       if (!memberUserIds.includes(targetUserId)) {
         return { ok: false as const, error: "not_a_member" as const };
       }
       const others = memberUserIds.filter((id) => id !== targetUserId);
       if (others.length === 0) {
         return { ok: false as const, error: "last_member" as const };
+      }
+      // Last-admin guard (#1686) — after last_member, which is the more
+      // fundamental refusal when the sole member is also the sole admin.
+      if (rolesProvisioned) {
+        const targetIsAdmin = rows.some(
+          (r) => r.userId === targetUserId && r.role === "admin",
+        );
+        const otherAdmins = rows.filter(
+          (r) => r.userId !== targetUserId && r.role === "admin",
+        );
+        if (targetIsAdmin && otherAdmins.length === 0) {
+          return { ok: false as const, error: "last_admin" as const };
+        }
       }
       await tx.execute(sql`
         DELETE FROM public."teamMember"
@@ -296,6 +347,8 @@ export async function removeTeamMemberAction(
 
     if (result.ok) {
       revalidatePath(`/teams/${team.id}/settings`);
+      // The detail page's Overview counts members (#1688) — refresh it too.
+      revalidatePath(`/teams/${team.id}`);
     }
     return result;
   } catch (err) {
@@ -309,10 +362,17 @@ export async function removeTeamMemberAction(
 //
 // Same authority gate as add/remove; the mutation serializes on the SAME
 // per-team advisory lock so a role change cannot interleave with a concurrent
-// add/remove of the same membership row. No last-admin guard on demotion —
-// deliberate: org owner/admin (and platform admin) always retain management
-// authority and can re-promote, and a zero-admin team degrades to exactly the
-// org-managed semantics that predate the role model.
+// add/remove of the same membership row.
+//
+// LAST-ADMIN guard on demotion (cinatra#1686, superseding the earlier
+// no-guard stance): demoting the only `admin` is refused (`last_admin`).
+// A team-admin-only actor who self-demotes would otherwise orphan the team
+// for everyone on it; requiring a replacement admin FIRST keeps the team
+// managed at every moment. Uniform across authority tiers, like the
+// last-member guard — org owner/admin and platform admin promote someone
+// else first (one extra click), and in exchange no team ever silently
+// drops to zero admins. Evaluated inside the advisory-locked transaction so
+// the admin count is authoritative under READ COMMITTED.
 // ---------------------------------------------------------------------------
 export async function updateTeamMemberRoleAction(
   teamId: string,
@@ -338,6 +398,25 @@ export async function updateTeamMemberRoleAction(
       // Stale-authority guard (see addTeamMemberAction).
       if (authorityTier === "team_admin") {
         await assertTeamAdminAuthorityOnTx(tx, team.id, callerUserId);
+      }
+      // Last-admin guard (#1686): a demotion may not remove the team's only
+      // admin. The read runs on the locked snapshot, so it cannot race a
+      // concurrent promote/demote/remove of the same team. Evaluated per
+      // DISTINCT user, not per row — `teamMember` has no (teamId, userId)
+      // unique constraint, so duplicate rows for the target must not count
+      // as a "second admin" (the UPDATE below would demote them all at once;
+      // codex 1686-r1).
+      if (role === "member") {
+        const admins = await tx.execute<{ userId: string }>(sql`
+          SELECT "userId" FROM public."teamMember"
+           WHERE "teamId" = ${team.id} AND role = 'admin'
+        `);
+        const adminRows = admins.rows ?? [];
+        const targetIsAdmin = adminRows.some((r) => r.userId === targetUserId);
+        const hasOtherAdmin = adminRows.some((r) => r.userId !== targetUserId);
+        if (targetIsAdmin && !hasOtherAdmin) {
+          return { ok: false as const, error: "last_admin" as const };
+        }
       }
       const updated = await tx.execute<{ id: string }>(sql`
         UPDATE public."teamMember"

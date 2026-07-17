@@ -969,6 +969,41 @@ export async function runHostExtensionInstallAndActivate(
         );
       }
 
+      // RUNTIME RENDERER ADMISSION (epic #1620 M1 Slice B, cinatra#1630): a
+      // metadata-only artifact package may ALSO ship a dynamically-loaded client
+      // renderer bundle. Drive each published client-bundle manifest through the
+      // full atomic admission chain (integrity + exact-tuple digest + Ed25519
+      // signature re-verification, fail-closed) so an installed runtime renderer
+      // becomes `loadable` WITHOUT a host rebuild. Runs only after the bridge
+      // registered THIS active package; best-effort — never un-finalizes the
+      // committed install.
+      if (bridgeRegistered && result.rolledBack !== true && typeof result.storeDir === "string") {
+        try {
+          const { admitRuntimeArtifactRenderersForStoreDir } = await import(
+            "@/lib/artifacts/admit-runtime-artifact-renderers"
+          );
+          const admitted = await admitRuntimeArtifactRenderersForStoreDir({
+            packageName,
+            storeDir: result.storeDir,
+          });
+          const ok = admitted.filter((a) => a.ok);
+          if (admitted.length) {
+            console.info(
+              `[extension-runtime-activate] runtime renderer admission for "${packageName}": ` +
+                `${ok.length}/${admitted.length} slot(s) admitted` +
+                (ok.length < admitted.length
+                  ? ` — refused: ${admitted.filter((a) => !a.ok).map((a) => `${a.slot}(${a.reason})`).join(", ")}`
+                  : ""),
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[extension-runtime-activate] runtime renderer admission threw for "${packageName}" (non-fatal):`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
       // INSTALL-ANCHOR CLAIM ACTIVATION (cinatra#1493, epic #1424): tie the
       // finalized artifact install's manifest `objectTypes` claims to the
       // durable claim registry. Runs ONLY after the rescan actually registered

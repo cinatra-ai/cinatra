@@ -3,12 +3,16 @@ import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
+import { CrumbContributionsClear } from "@/components/crumb-contributions";
 
 export const metadata: Metadata = { title: "Not Authorized" };
 
 export default function NotAuthorizedPage() {
   return (
     <Main className="min-h-screen">
+      {/* Negative crumb clearing (cinatra#1737): a previously-authorized
+          entity label must never survive into an unauthorized/404 visit. */}
+      <CrumbContributionsClear />
       <PageHeader
         title="Not authorized"
         description="This area is limited to platform admins. Sign in with the admin account or ask an admin to grant your user the admin role."

@@ -120,13 +120,18 @@ describe("updateExternalMcpServerGuarded", () => {
     const sql = lastQueries[0].text;
     expect(sql).toMatch(/^UPDATE /);
     expect(sql).toMatch(/WHERE id = \$1/);
-    expect(sql).toMatch(/AND scope = \$11/);
-    expect(sql).toMatch(/AND user_id IS NOT DISTINCT FROM \$12/);
+    // llm-providers S2 (#1713): transport is persisted in the SET clause at $11,
+    // pushing the witnessed guard parameters to $12 (scope) and $13 (owner).
+    expect(sql).toMatch(/transport = \$11/);
+    expect(sql).toMatch(/AND scope = \$12/);
+    expect(sql).toMatch(/AND user_id IS NOT DISTINCT FROM \$13/);
     expect(sql).toMatch(/RETURNING id/);
-    // The guard parameters are the WITNESSED scope+owner.
+    // The SET carries the row's transport ($11), then the guard parameters are
+    // the WITNESSED scope+owner ($12/$13).
     const values = lastQueries[0].values as unknown[];
-    expect(values[10]).toBe("user"); // $11
-    expect(values[11]).toBe("u1"); // $12
+    expect(values[10]).toBe("unknown"); // $11 — transport default (baseInput sets none)
+    expect(values[11]).toBe("user"); // $12
+    expect(values[12]).toBe("u1"); // $13
   });
 
   it("throws a write-conflict when the row no longer matches the witnessed guard (zero rows)", () => {
@@ -143,8 +148,9 @@ describe("updateExternalMcpServerGuarded", () => {
       { scope: "global", userId: null },
     );
     const values = lastQueries[0].values as unknown[];
-    expect(values[10]).toBe("global");
-    expect(values[11]).toBeNull();
+    expect(values[10]).toBe("unknown"); // $11 — transport default
+    expect(values[11]).toBe("global"); // $12 — witnessed scope
+    expect(values[12]).toBeNull(); // $13 — witnessed owner (NULL for global/shared)
   });
 });
 

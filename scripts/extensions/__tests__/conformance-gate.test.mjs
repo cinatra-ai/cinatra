@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -441,7 +441,10 @@ describe("conformance-gate — artifact-ui rule derivation (cinatra#1621)", () =
     expect(UI_RULES.ok).toBe(true);
     expect(UI_RULES.artifactUiSlots.has("detail")).toBe(true);
     expect(UI_RULES.artifactUiSlots.has("preview")).toBe(true);
-    expect(UI_RULES.artifactUiReservedSlots.has("listRow")).toBe(true);
+    // S7/M2 (cinatra#1631): listRow graduated from RESERVED to the active enum.
+    expect(UI_RULES.artifactUiSlots.has("listRow")).toBe(true);
+    expect(UI_RULES.artifactUiReservedSlots.has("listRow")).toBe(false);
+    expect(UI_RULES.artifactUiReservedSlots.has("card")).toBe(true);
     expect(UI_RULES.artifactUiAbiVersion).toBe(1);
     expect(GEN_UI_RANGE).toMatch(/^\^\d+\.\d+\.\d+$/);
   });
@@ -467,8 +470,16 @@ describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", ()
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
-  it("flags a RESERVED slot (listRow) in v1", () => {
+  it("accepts the activated listRow slot (S7/M2, cinatra#1631)", () => {
     const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { listRow: { entry: "./src/detail.tsx", propsApiVersion: 1 } } };
+    const pkgDir = writeFixture(artifactUiFixture({ ui }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-ui-unknown-slot")).toBe(false);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a RESERVED slot (card) in v1", () => {
+    const ui = { abiVersion: 1, sdkAbiRange: GEN_UI_RANGE, renderers: { card: { entry: "./src/detail.tsx", propsApiVersion: 1 } } };
     const pkgDir = writeFixture(artifactUiFixture({ ui }));
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
@@ -551,6 +562,328 @@ describe("conformance-gate — cinatra.artifact.ui (fail-closed at publish)", ()
     expect(result.blocking.some((f) => f.rule === "manifest.artifact-sdk-abi-range-present")).toBe(true);
     // The nested ui block itself is still conformant.
     expect(result.blocking.filter((f) => f.rule.startsWith("manifest.artifact-ui"))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra.views — chat renderable-view declaration surface (cinatra#1626, epic
+// #1620 S9/M4). FAIL-CLOSED at the publish gate; CROSS-KIND (validated for every
+// kind). Uses a connector fixture (no top-level key allowlist) so the chat-views
+// rules are isolated. The abiVersion literal is DERIVED from the live leaf.
+// ---------------------------------------------------------------------------
+
+// Inject a `cinatra.views` block into the clean connector fixture (merged into
+// the cinatra block, not replacing it) and (by default) SHIP the renderer entry
+// files so a well-formed block resolves within the published `files` scope.
+function connectorWithViews(views, { shipEntry = true } = {}) {
+  const files = cleanConnectorFiles({
+    pkg: { cinatra: { ...CLEAN_CONNECTOR_PKG.cinatra, views } },
+  });
+  if (shipEntry) {
+    files["src/views/chart.tsx"] = "export default function Chart() { return null; }\n";
+    files["src/views/chart2.tsx"] = "export default function Chart2() { return null; }\n";
+  }
+  return files;
+}
+const validViewEntry = { viewType: "chart", entry: "./src/views/chart.tsx", propsApiVersion: 1 };
+const chatViewsBlockingRules = (result) =>
+  result.blocking.filter((f) => f.rule.startsWith("manifest.chat-views")).map((f) => f.rule);
+
+describe("conformance-gate — cinatra.views derivation + leaf parity (cinatra#1626)", () => {
+  it("derives the views ABI version from live leaf source", () => {
+    expect(UI_RULES.ok).toBe(true);
+    expect(UI_RULES.chatViewsAbiVersion).toBe(1);
+  });
+
+  it("the gate-derived views ABI version equals the leaf's declared literal (mirror parity)", () => {
+    // Independent extraction of CHAT_VIEWS_ABI_VERSION straight from the leaf
+    // source — proves loadLiveRules DERIVES the same value the leaf declares
+    // (never a re-listed copy; the #979 addendum principle). This is the
+    // leaf↔gate parity guard for the top-level cinatra.views field (the analog
+    // of the S1 objects↔extensions byte-mirror, which does not apply to a
+    // generator+gate-consumed top-level field).
+    const leafSrc = readFileSync(
+      join(REPO_ROOT, "packages/sdk-extensions/src/chat-views-contract.ts"),
+      "utf8",
+    );
+    const m = /export const CHAT_VIEWS_ABI_VERSION\s*=\s*(\d+)/.exec(leafSrc);
+    expect(m).not.toBeNull();
+    expect(Number(m[1])).toBe(UI_RULES.chatViewsAbiVersion);
+  });
+});
+
+describe("conformance-gate — cinatra.views (fail-closed at publish)", () => {
+  it("conforms cleanly with a valid v1 views block", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [validViewEntry] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(chatViewsBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a duplicate viewType (one effective provider per viewType)", () => {
+    const views = { abiVersion: 1, entries: [validViewEntry, { ...validViewEntry, entry: "./src/views/chart2.tsx" }] };
+    const pkgDir = writeFixture(connectorWithViews(views));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-duplicate-viewtype");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-snake_case viewType", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [{ ...validViewEntry, viewType: "Chart" }] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-viewtype");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a wrong abiVersion (derived, fail-closed)", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 2, entries: [validViewEntry] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-abi-version");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an uncontained (traversing) entry", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [{ ...validViewEntry, entry: "../escape.tsx" }] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-path");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an extraneous entry key (closed v1 shape declares no host ports)", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [{ ...validViewEntry, ports: ["settings"] }] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-extraneous-key");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty entries array", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [] }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-empty");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an entry that does not ship in the package (unresolved) — as rigorous as artifact-ui renderers", () => {
+    const pkgDir = writeFixture(connectorWithViews({ abiVersion: 1, entries: [validViewEntry] }, { shipEntry: false }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-unresolved");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an entry that resolves OUTSIDE the published files allowlist", () => {
+    const files = connectorWithViews(
+      { abiVersion: 1, entries: [{ viewType: "chart", entry: "./tools/chart.tsx", propsApiVersion: 1 }] },
+      { shipEntry: false },
+    );
+    files["tools/chart.tsx"] = "export default function Chart() { return null; }\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(chatViewsBlockingRules(result)).toContain("manifest.chat-views-entry-out-of-scope");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("a connector with NO views block is unaffected (optional)", () => {
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(chatViewsBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("an ARTIFACT extension MAY declare a top-level cinatra.views (the initial carrier — cinatra#1626 allowlist widening)", () => {
+    // The artifact kind is the initial cinatra.views carrier: `views` is admitted
+    // to ARTIFACT_ALLOWED_CINATRA_KEYS, so a well-formed block does NOT trip the
+    // artifact-extraneous-keys gate, and the views content itself conforms.
+    const files = artifactUiFixture({ ui: validUiBlock() });
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.cinatra.views = { abiVersion: 1, entries: [validViewEntry] };
+    files["package.json"] = JSON.stringify(pkg, null, 2);
+    files["src/views/chart.tsx"] = "export default function Chart() { return null; }\n";
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.artifact-extraneous-keys")).toBe(false);
+    expect(chatViewsBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra.llmProvider — LLM-provider declaration surface (cinatra#1712, epic
+// #1711 S1 AC1). OPTIONAL (no connector declares it yet — AC6 later); FAIL-CLOSED
+// at the publish gate when PRESENT; ZERO findings when ABSENT. Uses the clean
+// connector fixture (an LLM connector is a `kind:"connector"`). The abiVersion +
+// vocabularies are DERIVED from the live leaf.
+// ---------------------------------------------------------------------------
+
+// A valid v1 declaration mirroring the anthropic build-known catalog entry.
+const validLlmProvider = {
+  abiVersion: 1,
+  provider: "anthropic",
+  capabilities: {
+    function_tools: true,
+    media_input: false,
+    native_mcp: { status: "native", approval: "unsupported" },
+  },
+  models: { default: "claude-sonnet-4-6", allowed: ["claude-sonnet-4-6", "claude-opus-4-7"] },
+};
+function connectorWithLlmProvider(llmProvider) {
+  return cleanConnectorFiles({ pkg: { cinatra: { ...CLEAN_CONNECTOR_PKG.cinatra, llmProvider } } });
+}
+const llmProviderBlockingRules = (result) =>
+  result.blocking.filter((f) => f.rule.startsWith("manifest.llm-provider")).map((f) => f.rule);
+
+describe("conformance-gate — cinatra.llmProvider derivation + leaf parity (cinatra#1712)", () => {
+  it("derives the llmProvider ABI version + vocabularies from live leaf source", () => {
+    expect(UI_RULES.ok).toBe(true);
+    expect(UI_RULES.llmProviderAbiVersion).toBe(1);
+    expect([...UI_RULES.llmProviders].sort()).toEqual(["anthropic", "gemini", "openai"]);
+    expect(UI_RULES.llmCapabilities).toEqual(["media_input", "function_tools", "native_mcp"]);
+    expect([...UI_RULES.nativeMcpStatuses].sort()).toEqual(["dormant", "native", "unsupported"]);
+    expect([...UI_RULES.mcpApprovalModes].sort()).toEqual(["approval_required", "auto_execute", "unsupported"]);
+  });
+
+  it("the gate-derived llmProvider ABI version equals the leaf's declared literal (mirror parity)", () => {
+    // Independent extraction of LLM_PROVIDER_ABI_VERSION straight from the leaf
+    // source — proves loadLiveRules DERIVES the same value the leaf declares
+    // (never a re-listed copy; the #979 addendum principle). The leaf↔gate parity
+    // guard for the top-level cinatra.llmProvider field.
+    const leafSrc = readFileSync(
+      join(REPO_ROOT, "packages/sdk-extensions/src/llm-provider-contract.ts"),
+      "utf8",
+    );
+    const m = /export const LLM_PROVIDER_ABI_VERSION\s*=\s*(\d+)/.exec(leafSrc);
+    expect(m).not.toBeNull();
+    expect(Number(m[1])).toBe(UI_RULES.llmProviderAbiVersion);
+  });
+});
+
+describe("conformance-gate — cinatra.llmProvider (optional; fail-closed at publish)", () => {
+  it("a connector with NO llmProvider block is unaffected (optional — the current fleet state)", () => {
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(llmProviderBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("conforms cleanly with a valid v1 llmProvider block", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider(validLlmProvider));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(llmProviderBlockingRules(result)).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a wrong abiVersion (derived, fail-closed)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, abiVersion: 2 }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-abi-version");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown provider (derived vocabulary)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, provider: "mistral" }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-provider");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an extraneous top-level key (closed v1 shape)", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, extra: true }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-extraneous-key");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a missing required capability key", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, native_mcp: { status: "native" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-capabilities-missing");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-boolean capability flag", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: "yes", media_input: false, native_mcp: { status: "native" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-capability-flag");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown native_mcp status (derived vocabulary)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, media_input: false, native_mcp: { status: "maybe" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-native-mcp-status");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an unknown native_mcp approval mode (derived vocabulary)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, media_input: false, native_mcp: { status: "native", approval: "sometimes" } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-native-mcp-approval");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty native_mcp transports array (nonempty when present)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, capabilities: { function_tools: true, media_input: false, native_mcp: { status: "native", transports: [] } } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-native-mcp-transports");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags an empty models.allowed", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider({ ...validLlmProvider, models: { default: "x", allowed: [] } }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-models-allowed");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags models.default NOT in models.allowed (the cross-field rule)", () => {
+    const pkgDir = writeFixture(
+      connectorWithLlmProvider({ ...validLlmProvider, models: { default: "gpt-9", allowed: ["claude-sonnet-4-6"] } }),
+    );
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-models-default-not-allowed");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a non-object llmProvider block", () => {
+    const pkgDir = writeFixture(connectorWithLlmProvider("nope"));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(llmProviderBlockingRules(result)).toContain("manifest.llm-provider-shape");
     rmSync(pkgDir, { recursive: true, force: true });
   });
 });

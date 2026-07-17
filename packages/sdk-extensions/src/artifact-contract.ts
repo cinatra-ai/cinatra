@@ -113,6 +113,19 @@ export type SemanticArtifactRef = { extension: string };
  * `./manifest`); admitting it here is purely so the artifact bridge does not
  * reject the whole manifest as extraneous. Narrowly additive — unknown keys
  * stay rejected.
+ *
+ * `views` (cinatra#1626, epic #1620 S9/M4) is the TOP-LEVEL chat renderable-view
+ * declaration block (`{ abiVersion, entries: [{ viewType, entry, propsApiVersion }] }`
+ * — schema + tolerant parser in the sibling leaf `./chat-views-contract`). The
+ * artifact kind is the INITIAL carrier for the migrating chat views (the
+ * chart/dataviz embed) per the epic's "artifact extensions own their UI" thesis
+ * — so an artifact manifest may DECLARE it. Admitting it here is purely so the
+ * artifact bridge does not reject the whole manifest as extraneous; the block's
+ * CONTENT is validated fail-closed at the publish/conformance gate
+ * (`checkChatViews`) and read into the generated literal-import map at build —
+ * exactly the cross-kind top-level pattern `cinatra.streams`/`cinatra.webhooks`
+ * use (the host loader carries it through UNVALIDATED; host RENDERING dispatch
+ * rides the S9 host slice). Narrowly additive — unknown keys stay rejected.
  */
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
@@ -122,6 +135,7 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "roles",
   "displayName",
   "vendor",
+  "views",
 ]);
 
 // ===========================================================================
@@ -153,19 +167,22 @@ export const ARTIFACT_UI_ABI_VERSION = 1;
 /**
  * The CLOSED v1 renderer-slot enum. `detail` is the artifact detail view;
  * `preview` is the neutral inline-preview capability consumed by in-core reuse
- * sites. An extension declares any NON-EMPTY subset (e.g. `detail` only) — the
- * map is a partial over this enum. Read as a literal by the conformance gate.
+ * sites; `listRow` (activated by S7/M2, cinatra#1631) is the compact row
+ * capability the artifacts-library glyph cell resolves for a claimed row. An
+ * extension declares any NON-EMPTY subset (e.g. `detail` only) — the map is a
+ * partial over this enum. Read as a literal by the conformance gate.
  */
-export const ARTIFACT_UI_SLOTS = ["detail", "preview"] as const;
+export const ARTIFACT_UI_SLOTS = ["detail", "preview", "listRow"] as const;
 
 /**
- * Slots RESERVED for later waves (e.g. S7 activates `listRow`) — REJECTED in
- * v1 by the closed-enum schema below. Listed (not merged into the active enum)
- * so the reservation is explicit and the gate can name it. The HITL
- * field-renderer system and the chat renderable-view system are SEPARATE
- * channels with their own declaration surfaces, NOT slots of this enum.
+ * Slots RESERVED for later waves — REJECTED in v1 by the closed-enum schema
+ * below. Listed (not merged into the active enum) so the reservation is
+ * explicit and the gate can name it. (`listRow` graduated to the active enum
+ * in S7/M2, cinatra#1631.) The HITL field-renderer system and the chat
+ * renderable-view system are SEPARATE channels with their own declaration
+ * surfaces, NOT slots of this enum.
  */
-export const ARTIFACT_UI_RESERVED_SLOTS = ["listRow", "card", "inline"] as const;
+export const ARTIFACT_UI_RESERVED_SLOTS = ["card", "inline"] as const;
 
 export type ArtifactUiSlot = (typeof ARTIFACT_UI_SLOTS)[number];
 
@@ -333,12 +350,12 @@ const artifactUiRenderersSchema = z
       ARTIFACT_UI_SLOTS.map((slot) => [slot, artifactUiRendererSchema.optional()]),
     ) as Record<ArtifactUiSlot, z.ZodOptional<typeof artifactUiRendererSchema>>,
   )
-  // `.strict()` = closed slot enum: a RESERVED slot (listRow/card/inline) or
-  // any unknown slot is rejected in v1.
+  // `.strict()` = closed slot enum: a RESERVED slot (card/inline) or any
+  // unknown slot is rejected in v1.
   .strict()
   .refine((r) => Object.keys(r).length > 0, {
     message:
-      "`renderers` must declare at least one slot (a non-empty partial map over the v1 slot enum: detail, preview)",
+      "`renderers` must declare at least one slot (a non-empty partial map over the v1 slot enum: detail, preview, listRow)",
   });
 
 const artifactUiRegistryItemSchema = z

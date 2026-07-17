@@ -4,11 +4,12 @@
 // TeamMembersSection — member list + add/remove + per-team roles
 // (cinatra#1567; roles from the #1566 role model).
 //
-// The interim members surface on /teams/[teamId]/settings. The eventual home
-// is the #704 team-detail Permissions tab (tablist epic #699); this section
-// moves there wholesale when that lands. Each member carries a per-team role
-// (Member / Admin) once the app-owned `teamMember.role` column is provisioned;
-// `rolesEnabled=false` (un-migrated deployment) renders the roleless surface.
+// Mounted ONLY on /teams/[teamId]/settings — THE single team-management
+// surface (cinatra#1688: the settings page absorbed the former #704 detail
+// Permissions tab, which mounted this same section a second time). Each member
+// carries a per-team role (Member / Admin) once the app-owned
+// `teamMember.role` column is provisioned; `rolesEnabled=false` (un-migrated
+// deployment) renders the roleless surface.
 //
 // Mount pattern projected from the grant form (permissions-tab-client.tsx):
 //   - user search via the shared EntitySearchCombobox fed by a dedicated
@@ -77,6 +78,8 @@ const REMOVE_ERROR_COPY: Record<
   already_member: "Already a member of this team.",
   not_a_member: "Not a member of this team.",
   last_member: "A team keeps at least one member — add someone else first.",
+  last_admin:
+    "A team keeps at least one admin — make someone else an admin first.",
   role_unavailable:
     "Team roles are not provisioned on this deployment yet.",
   unknown_error: "Something went wrong. Try again.",

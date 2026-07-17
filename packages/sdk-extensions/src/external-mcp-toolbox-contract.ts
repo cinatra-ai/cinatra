@@ -35,6 +35,13 @@ export type ExtensionExternalMcpTool = {
   allowedTools?: string[] | null;
   /** Whether tools that mutate state require approval. */
   requireApproval?: "never" | "always" | "read-only";
+  /**
+   * MCP wire transport this server speaks (llm-providers S2, #1713). Optional:
+   * an extension that omits it is treated as `"unknown"` by the host injection
+   * layer (transport is never inferred from `serverUrl`). Mirror of
+   * `@cinatra-ai/llm`'s `LlmMcpServerTool.transport`.
+   */
+  transport?: "streamable-http" | "sse" | "unknown";
 };
 
 /**

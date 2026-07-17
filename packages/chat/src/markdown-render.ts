@@ -10,7 +10,11 @@
 import { Marked, type Tokens } from "marked";
 import { getHighlightedSync, type ThemeName } from "./syntax-highlight";
 import { preprocessMath, restoreMath } from "./math-render";
-import { validateChart, type ChartSpec } from "./chart-schema";
+// The chart PAYLOAD schema + validator are host-owned and live in the shared
+// protocol contract (epic #1620 AC2); the `chart` renderable-view COMPONENT is
+// extension-provided (@cinatra-ai/chart-artifact via the generated cinatra.views
+// map). This detector stays host-side and never imports the extension.
+import { validateChart, type ChartSpec } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import type { DetectedWidget } from "./widget-runtime";
 
 const APP_ROUTES = "campaigns|content|sources|accounts|contacts|transcript-generators";

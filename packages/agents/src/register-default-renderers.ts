@@ -36,9 +36,6 @@ import {
 } from "./gmail-sender-renderer";
 import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
-import { ListCuratorScrapeSchemaRenderer } from "./list-curator-scrape-schema-renderer";
-import { ListCuratorFinalListRenderer } from "./list-curator-final-list-renderer";
-import { BlogLinkedinDraftReviewRenderer } from "./blog-linkedin-draft-review-renderer";
 import { BlogWordpressDraftConfirmRenderer } from "./blog-wordpress-draft-confirm-renderer";
 import { FollowUpCadenceFieldRenderer } from "./follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
@@ -72,6 +69,8 @@ import {
 } from "./agent-builder-ids";
 import { SkillRecommenderRenderer } from "./skill-recommender-agent-renderers";
 import { EmailTestDeliveryFormRenderer } from "./email-test-delivery-form-renderer";
+import { hasFieldRendererComponent } from "./field-renderer-components";
+import { makeExtensionFieldRenderer } from "./extension-field-renderer";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -124,7 +123,15 @@ const RENDERER_KIND_TABLE: Record<
     renderer: EmailDraftsReviewRenderer,
     bareAliases: ["email-drafts-review"],
   },
-  "final-list-review": { renderer: ListCuratorFinalListRenderer },
+  // scrape-schema-review + final-list-review: the COMPONENTS migrated into
+  // @cinatra-ai/list-curator-agent (cinatra#1625 S8/M3). The KIND stays in the
+  // table — the binding still declares it (kind-vocabulary set-equality) and
+  // conditionFor() reads its bare aliases — but the host no longer ships a
+  // component: a bundled binding resolves map-first to the extension wrapper
+  // (hasFieldRendererComponent → makeExtensionFieldRenderer), and a NOT-in-build
+  // binding of this kind (runtime-installed absent from the map) degrades to the
+  // SchemaFieldRenderer floor here (AC4 never-blank), which is exactly this entry.
+  "final-list-review": { renderer: SchemaFieldRenderer },
   "follow-up-cadence": {
     renderer: FollowUpCadenceFieldRenderer,
     bareAliases: ["follow-up-cadence"],
@@ -134,10 +141,19 @@ const RENDERER_KIND_TABLE: Record<
     bareAliases: ["gmail-sender"],
     makeCondition: makeGmailSenderCondition,
   },
-  "linkedin-draft-review": { renderer: BlogLinkedinDraftReviewRenderer },
+  // MIGRATED (cinatra#1625 S8/M3): the blog-linkedin draft-review component
+  // moved into @cinatra-ai/blog-linkedin-publish-agent. The KIND stays (the
+  // manifest still declares it — kind-vocabulary set-equality; conditionFor()
+  // reads its bare aliases), but the host ships no component: a bundled binding
+  // resolves map-first to the extension wrapper, and a not-in-build binding of
+  // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
+  // Same shape as final-list-review / scrape-schema-review above.
+  "linkedin-draft-review": { renderer: SchemaFieldRenderer },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   "reviewer-output": { renderer: ReviewerAgentOutputRenderer },
-  "scrape-schema-review": { renderer: ListCuratorScrapeSchemaRenderer },
+  // See the final-list-review note above — the component migrated; the kind + its
+  // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
+  "scrape-schema-review": { renderer: SchemaFieldRenderer },
   "send-confirmation": {
     renderer: SendConfirmationRenderer,
     bareAliases: ["send-confirmation"],
@@ -194,6 +210,37 @@ export function registerFieldRendererBindings(
   bindings: ReadonlyArray<FieldRendererBindingInput>,
 ): void {
   for (const b of bindings) {
+    // S8 spine (cinatra#1625): a binding whose component has migrated into its
+    // claiming extension (declared cinatra.fieldRenderers[].component and is in
+    // THIS build) resolves to the extension-shipped component via the generated
+    // build map; a missing/degraded module falls back to SchemaFieldRenderer
+    // (the ExtensionFieldRenderer wrapper's floor — never blank/crash). The
+    // condition (xRenderer id + the kind's bare compat aliases) and the
+    // manifest-declared params contract are UNCHANGED — a map-hit is a 1:1 swap
+    // of the SAME binding's renderer, so the binding's own scoped id always
+    // resolves map-first and its legacy scoped aliases keep resolving. The map is
+    // EMPTY today, so every binding takes the host KIND path below
+    // (behavior-preserving).
+    //
+    // SHARED BARE-ALIAS CAVEAT (a per-claimant-migration concern, inert here):
+    // a kind's bare compat alias (e.g. "email-drafts-review") can be claimed by
+    // SEVERAL bindings of that kind; among equal priority the registry resolves
+    // the first-registered. Today that is invisible (all same-kind bindings share
+    // ONE host component). When a claimant slice migrates only SOME bindings of a
+    // shared kind, the unscoped bare alias becomes genuinely ambiguous (no
+    // arbitration rule can bind an unscoped string to one of several claimants) —
+    // that slice must migrate the shared-kind cohort together or scope the alias.
+    // The spine deliberately does not change arbitration priority to force this.
+    if (hasFieldRendererComponent(b.id)) {
+      fieldRendererRegistry.register({
+        id: b.id,
+        priority: b.priority,
+        condition: conditionFor(b.id, b.kind),
+        renderer: withBindingParams(makeExtensionFieldRenderer(b.id), b.params),
+        midRunHitl: b.midRunHitl === true,
+      });
+      continue;
+    }
     const kindEntry = RENDERER_KIND_TABLE[b.kind];
     if (!kindEntry) {
       console.warn(

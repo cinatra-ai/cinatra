@@ -314,6 +314,18 @@ function checkManifest(pkgDir, pkg, rules) {
   }
   // kind === "workflow" | "skill": metadata-only, no rule (#979 addendum).
 
+  // cinatra.views chat renderable-view providers (cinatra#1626, S9): CROSS-KIND
+  // (the carrier kinds are extendable), so this runs regardless of kind —
+  // fail-closed on a malformed block, exactly as the host path degrades it.
+  findings.push(...checkChatViews(pkgDir, pkg, rules));
+
+  // cinatra.llmProvider LLM-provider declaration (cinatra#1712, S1 AC1):
+  // OPTIONAL (no connector declares it yet — AC6 is a later cross-repo wave),
+  // so an absent block yields zero findings; a present block validates
+  // fail-closed against the leaf. Cross-kind for the same reason checkChatViews
+  // is (the carrier is a connector, but running it regardless is strictly safe).
+  findings.push(...checkLlmProvider(pkg, rules));
+
   return findings;
 }
 
@@ -332,6 +344,26 @@ const ARTIFACT_UI_REGISTRY_ITEM_ALLOWED_KEYS = new Set(["name", "entry", "type",
 // `isContainedEntryPath`). Drift here can only produce a false CI signal, never
 // a security gap; the leaf schema stays the runtime authority.
 const REGISTRY_COMPONENT_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// cinatra.views (cinatra#1626, S9): the closed v1 entry keys + the viewType
+// grammar, hand-mirrored from the leaf `chat-views-contract.ts` (its
+// `chatViewEntrySchema`/`CHAT_VIEW_TYPE_RE`) — the checker runs on bare `node`,
+// no TS toolchain. The `abiVersion` literal is DERIVED (loadLiveRules), never
+// re-listed. Drift here can only produce a false CI signal, never a security
+// gap; the leaf schema stays the runtime authority.
+const CHAT_VIEW_ENTRY_ALLOWED_KEYS = new Set(["viewType", "entry", "propsApiVersion"]);
+const CHAT_VIEW_TYPE_RE = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
+
+// cinatra.llmProvider (cinatra#1712, epic #1711 S1 AC1): the closed object-key
+// sets at each strict level, hand-mirrored from the leaf `llm-provider-contract.ts`
+// (its `LlmProvider*Schema` `.strict()` shapes) — the checker runs on bare
+// `node`, no TS toolchain. The abiVersion literal + the provider / capability /
+// native_mcp-status / approval VOCABULARIES are DERIVED (loadLiveRules), never
+// re-listed. Drift in these structural key sets can only produce a false CI
+// signal, never a security gap; the leaf schema stays the runtime authority.
+const LLM_PROVIDER_ALLOWED_KEYS = new Set(["abiVersion", "provider", "capabilities", "models"]);
+const LLM_PROVIDER_NATIVE_MCP_ALLOWED_KEYS = new Set(["status", "transports", "approval"]);
+const LLM_PROVIDER_MODELS_ALLOWED_KEYS = new Set(["default", "allowed"]);
 
 function isUiEntryContained(entry) {
   if (typeof entry !== "string" || entry.length === 0) return false;
@@ -635,6 +667,281 @@ function checkConnectorAccessConfig(pkgDir, rules) {
       detail: `access.scope must declare EXACTLY ONE of "default"/"only" (${hasDefault && hasOnly ? "both present" : "neither present"}).`,
     });
   }
+  return findings;
+}
+
+// cinatra.views chat renderable-view declaration (cinatra#1626, epic #1620
+// S9/M4): the top-level provider field, FAIL-CLOSED at the publish/conformance
+// gate (the host path degrades an unsupported block to RenderableViewFallback on
+// the SAME shape). Cross-kind (the carrier kinds are extendable), so this runs
+// for every kind. Rules mirror the leaf `chat-views-contract.ts` schema; the
+// abiVersion literal is DERIVED (loadLiveRules), never re-listed — the #979
+// addendum principle, exactly as checkArtifactUi does.
+function checkChatViews(pkgDir, pkg, rules) {
+  const findings = [];
+  const file = "package.json";
+  const views = pkg?.cinatra?.views;
+  if (views === undefined) return findings; // views is optional
+  if (typeof views !== "object" || views === null || Array.isArray(views)) {
+    findings.push({
+      rule: "manifest.chat-views-shape",
+      file,
+      detail: "cinatra.views must be an object ({ abiVersion, entries: [...] }).",
+    });
+    return findings;
+  }
+  // Reject extra TOP-LEVEL keys, matching the leaf schema's `.strict()` (so the
+  // gate is never LOOSER than the host/publish verdict).
+  const extraKeys = Object.keys(views).filter((k) => k !== "abiVersion" && k !== "entries");
+  if (extraKeys.length > 0) {
+    findings.push({
+      rule: "manifest.chat-views-extraneous-key",
+      file,
+      detail: `cinatra.views may only declare { abiVersion, entries }; unexpected key(s): ${extraKeys.join(", ")}.`,
+    });
+  }
+  if (views.abiVersion !== rules.chatViewsAbiVersion) {
+    findings.push({
+      rule: "manifest.chat-views-abi-version",
+      file,
+      detail: `cinatra.views.abiVersion must be exactly ${rules.chatViewsAbiVersion} (got ${JSON.stringify(views.abiVersion)}).`,
+    });
+  }
+  if (!Array.isArray(views.entries) || views.entries.length === 0) {
+    findings.push({
+      rule: "manifest.chat-views-empty",
+      file,
+      detail: "cinatra.views.entries must be a NON-EMPTY array of { viewType, entry, propsApiVersion } entries.",
+    });
+    return findings;
+  }
+  const seen = new Set();
+  for (const [i, entry] of views.entries.entries()) {
+    const at = `cinatra.views.entries[${i}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      findings.push({ rule: "manifest.chat-views-entry-shape", file, detail: `${at} must be an object ({ viewType, entry, propsApiVersion }).` });
+      continue;
+    }
+    const extra = Object.keys(entry).filter((k) => !CHAT_VIEW_ENTRY_ALLOWED_KEYS.has(k));
+    if (extra.length > 0) {
+      findings.push({ rule: "manifest.chat-views-entry-extraneous-key", file, detail: `${at} may only declare { viewType, entry, propsApiVersion }; unexpected key(s): ${extra.join(", ")}.` });
+    }
+    if (typeof entry.viewType !== "string" || !CHAT_VIEW_TYPE_RE.test(entry.viewType)) {
+      findings.push({ rule: "manifest.chat-views-viewtype", file, detail: `${at}.viewType must be strict lowercase snake_case (e.g. "chart", "content_change_proposal").` });
+    } else if (seen.has(entry.viewType)) {
+      findings.push({ rule: "manifest.chat-views-duplicate-viewtype", file, detail: `${at}.viewType "${entry.viewType}" duplicates an earlier entry — one effective provider per viewType.` });
+    } else {
+      seen.add(entry.viewType);
+    }
+    if (typeof entry.entry !== "string" || !isUiEntryContained(entry.entry)) {
+      findings.push({ rule: "manifest.chat-views-entry-path", file, detail: `${at}.entry must be a package-relative, path-contained subpath ("./…", no "..", no absolute path or URL).` });
+    } else {
+      // Verify the renderer module actually SHIPS (resolves to a real file
+      // within the published `files` allowlist) — mirrors checkArtifactUiRenderers
+      // so the gate is as rigorous for a chat-view entry as for an artifact-ui
+      // renderer entry (the generated literal import would otherwise fail).
+      const rel = entry.entry.replace(/^\.\//, "");
+      const resolved = existsSync(join(pkgDir, rel)) ? rel : candidateFile(pkgDir, rel.replace(/\.[^./]+$/, ""));
+      if (!resolved) {
+        findings.push({ rule: "manifest.chat-views-entry-unresolved", file, detail: `${at}.entry "${entry.entry}" does not resolve to a file in the package (must resolve via the package's exports/files).` });
+      } else if (!isInScope(resolved, pkg.files)) {
+        findings.push({ rule: "manifest.chat-views-entry-out-of-scope", file, detail: `${at}.entry "${entry.entry}" resolves outside the published "files" allowlist — it would not ship in the package tarball.` });
+      }
+    }
+    if (!Number.isInteger(entry.propsApiVersion) || entry.propsApiVersion < 1) {
+      findings.push({ rule: "manifest.chat-views-props-api-version", file, detail: `${at}.propsApiVersion must be an integer >= 1.` });
+    }
+  }
+  return findings;
+}
+
+// cinatra.llmProvider LLM-provider declaration (cinatra#1712, epic #1711 S1
+// AC1): the top-level provider field an LLM connector (openai/anthropic/gemini)
+// ships to declare its OWN capability matrix + model catalog. FAIL-CLOSED at the
+// publish/conformance gate (the host path degrades an unsupported block to
+// core's build-known catalog on the SAME shape). OPTIONAL: no connector declares
+// it yet (the cross-repo connector-block wave is AC6, a later slice), so an
+// ABSENT block yields ZERO findings; a PRESENT block must validate against the
+// leaf. Rules mirror the leaf `llm-provider-contract.ts` schema (the EXACT
+// public mirror of the host `llm-provider-policy.ts` declaration model); every
+// DATA literal (abiVersion + the four vocabularies) is DERIVED (loadLiveRules),
+// never re-listed — the #979 addendum principle, exactly as checkArtifactUi /
+// checkChatViews do. Run cross-kind (returns [] when absent) so it is never
+// LOOSER than the leaf/host verdict.
+function checkLlmProvider(pkg, rules) {
+  const findings = [];
+  const file = "package.json";
+  const decl = pkg?.cinatra?.llmProvider;
+  if (decl === undefined) return findings; // llmProvider is optional
+  if (typeof decl !== "object" || decl === null || Array.isArray(decl)) {
+    findings.push({
+      rule: "manifest.llm-provider-shape",
+      file,
+      detail: "cinatra.llmProvider must be an object ({ abiVersion, provider, capabilities, models }).",
+    });
+    return findings;
+  }
+  // Reject extra TOP-LEVEL keys, matching the leaf schema's `.strict()` (so the
+  // gate is never LOOSER than the host/publish verdict).
+  const extraKeys = Object.keys(decl).filter((k) => !LLM_PROVIDER_ALLOWED_KEYS.has(k));
+  if (extraKeys.length > 0) {
+    findings.push({
+      rule: "manifest.llm-provider-extraneous-key",
+      file,
+      detail: `cinatra.llmProvider may only declare { abiVersion, provider, capabilities, models }; unexpected key(s): ${extraKeys.join(", ")}.`,
+    });
+  }
+  if (decl.abiVersion !== rules.llmProviderAbiVersion) {
+    findings.push({
+      rule: "manifest.llm-provider-abi-version",
+      file,
+      detail: `cinatra.llmProvider.abiVersion must be exactly ${rules.llmProviderAbiVersion} (got ${JSON.stringify(decl.abiVersion)}).`,
+    });
+  }
+  if (typeof decl.provider !== "string" || !rules.llmProviders.has(decl.provider)) {
+    findings.push({
+      rule: "manifest.llm-provider-provider",
+      file,
+      detail: `cinatra.llmProvider.provider must be one of ${[...rules.llmProviders].join(", ")} (got ${JSON.stringify(decl.provider)}).`,
+    });
+  }
+
+  // capabilities — the closed { function_tools, media_input, native_mcp } shape.
+  const caps = decl.capabilities;
+  if (typeof caps !== "object" || caps === null || Array.isArray(caps)) {
+    findings.push({
+      rule: "manifest.llm-provider-capabilities-shape",
+      file,
+      detail: `cinatra.llmProvider.capabilities must be an object declaring { ${rules.llmCapabilities.join(", ")} }.`,
+    });
+  } else {
+    const capKeys = new Set(Object.keys(caps));
+    // Required-and-only: exactly the derived capability vocabulary keys (missing
+    // OR extra both fail — the leaf's `.strict()` object with three required
+    // fields).
+    const missingCaps = rules.llmCapabilities.filter((k) => !capKeys.has(k));
+    const extraCaps = [...capKeys].filter((k) => !rules.llmCapabilities.includes(k));
+    if (missingCaps.length > 0) {
+      findings.push({
+        rule: "manifest.llm-provider-capabilities-missing",
+        file,
+        detail: `cinatra.llmProvider.capabilities is missing required key(s): ${missingCaps.join(", ")}.`,
+      });
+    }
+    if (extraCaps.length > 0) {
+      findings.push({
+        rule: "manifest.llm-provider-capabilities-extraneous-key",
+        file,
+        detail: `cinatra.llmProvider.capabilities may only declare { ${rules.llmCapabilities.join(", ")} }; unexpected key(s): ${extraCaps.join(", ")}.`,
+      });
+    }
+    // Every capability EXCEPT the structured `native_mcp` is a plain boolean
+    // flag. The boolean-flag key set is DERIVED (llmCapabilities minus the one
+    // structured capability), never re-listed — so a future vocabulary addition
+    // automatically gets boolean type-validation (the #979 addendum principle;
+    // the native_mcp special-case is a SHAPE distinction inherent to the leaf's
+    // `LlmProviderCapabilitiesSchema`, not a re-listed data literal).
+    const booleanCapKeys = rules.llmCapabilities.filter((k) => k !== "native_mcp");
+    for (const flag of booleanCapKeys) {
+      if (flag in caps && typeof caps[flag] !== "boolean") {
+        findings.push({
+          rule: "manifest.llm-provider-capability-flag",
+          file,
+          detail: `cinatra.llmProvider.capabilities.${flag} must be a boolean (got ${JSON.stringify(caps[flag])}).`,
+        });
+      }
+    }
+    // native_mcp — { status (required), transports? (nonempty string[]),
+    // approval? } with derived status/approval vocabularies.
+    const nm = caps.native_mcp;
+    if ("native_mcp" in caps) {
+      if (typeof nm !== "object" || nm === null || Array.isArray(nm)) {
+        findings.push({
+          rule: "manifest.llm-provider-native-mcp-shape",
+          file,
+          detail: "cinatra.llmProvider.capabilities.native_mcp must be an object ({ status, transports?, approval? }).",
+        });
+      } else {
+        const nmExtra = Object.keys(nm).filter((k) => !LLM_PROVIDER_NATIVE_MCP_ALLOWED_KEYS.has(k));
+        if (nmExtra.length > 0) {
+          findings.push({
+            rule: "manifest.llm-provider-native-mcp-extraneous-key",
+            file,
+            detail: `cinatra.llmProvider.capabilities.native_mcp may only declare { status, transports, approval }; unexpected key(s): ${nmExtra.join(", ")}.`,
+          });
+        }
+        if (typeof nm.status !== "string" || !rules.nativeMcpStatuses.has(nm.status)) {
+          findings.push({
+            rule: "manifest.llm-provider-native-mcp-status",
+            file,
+            detail: `cinatra.llmProvider.capabilities.native_mcp.status must be one of ${[...rules.nativeMcpStatuses].join(", ")} (got ${JSON.stringify(nm.status)}).`,
+          });
+        }
+        if ("transports" in nm) {
+          const ts = nm.transports;
+          if (!Array.isArray(ts) || ts.length === 0 || !ts.every((t) => typeof t === "string" && t.length > 0)) {
+            findings.push({
+              rule: "manifest.llm-provider-native-mcp-transports",
+              file,
+              detail: "cinatra.llmProvider.capabilities.native_mcp.transports, when present, must be a NON-EMPTY array of non-empty strings.",
+            });
+          }
+        }
+        if ("approval" in nm && (typeof nm.approval !== "string" || !rules.mcpApprovalModes.has(nm.approval))) {
+          findings.push({
+            rule: "manifest.llm-provider-native-mcp-approval",
+            file,
+            detail: `cinatra.llmProvider.capabilities.native_mcp.approval, when present, must be one of ${[...rules.mcpApprovalModes].join(", ")} (got ${JSON.stringify(nm.approval)}).`,
+          });
+        }
+      }
+    }
+  }
+
+  // models — the closed { default, allowed[] } catalog with the
+  // default ∈ allowed cross-field rule.
+  const models = decl.models;
+  if (typeof models !== "object" || models === null || Array.isArray(models)) {
+    findings.push({
+      rule: "manifest.llm-provider-models-shape",
+      file,
+      detail: "cinatra.llmProvider.models must be an object ({ default, allowed: [...] }).",
+    });
+  } else {
+    const modelExtra = Object.keys(models).filter((k) => !LLM_PROVIDER_MODELS_ALLOWED_KEYS.has(k));
+    if (modelExtra.length > 0) {
+      findings.push({
+        rule: "manifest.llm-provider-models-extraneous-key",
+        file,
+        detail: `cinatra.llmProvider.models may only declare { default, allowed }; unexpected key(s): ${modelExtra.join(", ")}.`,
+      });
+    }
+    const allowed = models.allowed;
+    const allowedOk = Array.isArray(allowed) && allowed.length > 0 && allowed.every((m) => typeof m === "string" && m.length > 0);
+    if (!allowedOk) {
+      findings.push({
+        rule: "manifest.llm-provider-models-allowed",
+        file,
+        detail: "cinatra.llmProvider.models.allowed must be a NON-EMPTY array of non-empty model-id strings.",
+      });
+    }
+    if (typeof models.default !== "string" || models.default.length === 0) {
+      findings.push({
+        rule: "manifest.llm-provider-models-default",
+        file,
+        detail: "cinatra.llmProvider.models.default must be a non-empty model-id string.",
+      });
+    } else if (allowedOk && !allowed.includes(models.default)) {
+      // The leaf's `.refine()` cross-field rule — a default the connector does
+      // not declare as routable would fall back to a model it never listed.
+      findings.push({
+        rule: "manifest.llm-provider-models-default-not-allowed",
+        file,
+        detail: `cinatra.llmProvider.models.default must be a member of models.allowed (default ${JSON.stringify(models.default)} is not in the allowlist).`,
+      });
+    }
+  }
+
   return findings;
 }
 

@@ -13,11 +13,21 @@ ABI (`cinatra.artifact.ui`), the serializable props snapshot, the failure-isolat
 dispatch spine (#1629, epic #1620) and gated by the S6 boundary gates (#1664,
 `72aab923`).
 
-**Planned surface (marked `PLANNED` inline, NOT yet landed):** the **main-realm
-dynamic** client loader that runs a marketplace-installed renderer with zero host
-rebuild. Its plan of record is the ratified final comment on **#1630**
-(2026-07-16); Slice A is on PR #1672 (unmerged). Every `PLANNED` note below is
-the plan of record, not landed code.
+**Slice A surface (landed as a DORMANT SEAM — `47780a05`, #1672):** the
+**main-realm dynamic** client loader that runs a marketplace-installed renderer
+with zero host rebuild. The machinery is in `main` — the client loader component,
+the digest-pinned serving route, the runtime asset registry, the host
+module-registry shim, the fail-closed freshness preflight, the client-bundle
+builder, and the `no-variable-url-dynamic-import` ratchet. The seam is **dormant**:
+nothing registers into the runtime asset registry yet, so no renderer flows
+through it. The **live** end-to-end dynamic render — a real marketplace-installed
+renderer executing in the main realm — awaits **Slice B**, specifically the
+`@cinatra-ai/json-artifact` dynamic fixture (owner-gated); the four Slice B system
+bases stay **build-bundled** through the SSR fast path and do not exercise this
+dynamic seam. Plan of record: the final comment on **#1630**, 2026-07-16. Each
+inline `PLANNED` note below now marks that **live render**, not the machinery: the
+machinery it describes has landed in Slice A; only its end-to-end exercise awaits
+Slice B.
 
 ## 1. Entry ABI — `cinatra.artifact.ui`
 
@@ -34,11 +44,13 @@ depends only on `@cinatra-ai/sdk-extensions`).
   host-compatible SDK must still render); the **exact generated pin** is enforced
   one layer up at the extension-repo publish conformance gate.
 - **`renderers`** — a **non-empty partial map** over the closed v1 slot enum
-  `ARTIFACT_UI_SLOTS = ["detail","preview"]` (`detail` = the artifact detail view;
-  `preview` = the neutral inline-preview capability core reuse sites consume). The
-  reserved slots `listRow` / `card` / `inline` are **rejected** in v1. The HITL
-  field-renderer system and the chat renderable-view system are **separate
-  channels with their own declaration surfaces**, not slots of this enum.
+  `ARTIFACT_UI_SLOTS = ["detail","preview","listRow"]` (`detail` = the artifact
+  detail view; `preview` = the neutral inline-preview capability core reuse sites
+  consume; `listRow` = the compact row capability the artifacts-library glyph
+  cell resolves — graduated from RESERVED by S7/M2, cinatra#1631). The reserved
+  slots `card` / `inline` are **rejected** in v1. The HITL field-renderer system
+  and the chat renderable-view system are **separate channels with their own
+  declaration surfaces**, not slots of this enum.
 - **Per-slot renderer** (`ArtifactUiRenderer`, `.strict()`):
   - **`entry`** — a package-relative, path-contained subpath (`"./…"`, no `".."`,
     no absolute path, no protocol/URL, no backslash; `isContainedEntryPath` pins
@@ -90,7 +102,8 @@ invariant.
   (`buildArtifactRendererProps`, called in `src/app/artifacts/[id]/page.tsx`) and
   mounts server-side, so it does **not** yet run the assertion as a runtime
   pre-crossing guard — wiring the assert in as a pre-mount check belongs to the
-  `PLANNED` client mount (§5). A non-serializable field is a contract violation,
+  Slice A client mount seam (§5), which stays dormant until a Slice B renderer
+  exercises it. A non-serializable field is a contract violation,
   not a render-time surprise. `buildArtifactRendererProps` is pure data assembly
   (imports nothing server-only, closes over nothing).
 - **`propsApiVersion` compat.** A renderer declares the `propsApiVersion` it
@@ -161,7 +174,7 @@ page, and the detailed error stays telemetry-only.
 - **Best-effort robustness, NOT a security or revocation control.** Quarantine is
   **process-local and best-effort by design**: a stale worker that never saw the
   failures simply renders the renderer (or its own floor) — the **floor is the
-  safety net, not this counter**. Under the `PLANNED` dynamic path, revocation is
+  safety net, not this counter**. Under the Slice A dynamic path, revocation is
   a *separate* concern handled by the existing extension archive/delete lifecycle
   (plan of record #1630, owner ruling 8); this quarantine stays a
   persistently-broken-module recovery mechanism only.
@@ -173,14 +186,17 @@ page, and the detailed error stays telemetry-only.
 SSR/RSC tree. `renderer-resolution.ts` sets `built = generatedKey in
 GENERATED_ARTIFACT_RENDERERS`; a runtime-installed claimant whose key is absent
 from this build degrades to `requires-rebuild` (generic + diagnostic, never
-blank). This is the only path that exists at the SHA this contract documents.
+blank). This is the path every artifact row renders through today — the dynamic
+path below is landed but dormant (no renderer flows through it until Slice B).
 
-**`PLANNED` — the main-realm dynamic client path** (plan of record #1630; Slice A
-on PR #1672, unmerged). A marketplace-installed renderer is compiled to a
-React-externalized client bundle, served from the content-addressed store at a
-**digest-pinned immutable URL**, and mounted **client-only** in the **main realm**
-via a native `import(runtimeURL)`, sharing the host's single React instance
-through a host module-registry shim. Its contract deltas (all `PLANNED`):
+**The main-realm dynamic client path** (Slice A landed as a dormant seam,
+`47780a05`, #1672; the LIVE render awaits Slice B — plan of record #1630). A
+marketplace-installed renderer is compiled to a React-externalized client bundle,
+served from the content-addressed store at a **digest-pinned immutable URL**, and
+mounted **client-only** in the **main realm** via a native `import(runtimeURL)`,
+sharing the host's single React instance through a host module-registry shim. Its
+contract deltas — the machinery **landed** in Slice A; only the live end-to-end
+render (`PLANNED`) awaits a Slice B renderer:
 
 - The predicate widens to `loadable = inBuildMap OR inRuntimeAssetRegistry`; the
   runtime asset registry binds the **exact admitted tuple** `<packageName, slot,
@@ -205,5 +221,9 @@ through a host module-registry shim. Its contract deltas (all `PLANNED`):
   seam (a `no-variable-url-dynamic-import` ratchet confines it), and the generated
   map remains the sole static-import carve-out.
 
-When Slice A lands, the `PLANNED` deltas above become normative and this section
-moves them out of `PLANNED`.
+Slice A has **landed** (`47780a05`): the deltas above are the landed machinery and
+the widened predicate is live in `renderer-resolution.ts`. They become the
+**live** render path — no longer merely a dormant seam — when Slice B ships
+`@cinatra-ai/json-artifact` (the dynamic fixture), which registers into the runtime
+asset registry and flows through the client loader. (The four Slice B system bases
+stay build-bundled through the SSR fast path and never touch this seam.)

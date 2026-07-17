@@ -52,6 +52,7 @@ describe("semantic-type renderer registry — per-claimant winner binding", () =
     ).toEqual({
       objectTypeId: "@cinatra-ai/contract-artifact:artifact",
       packageName: "@cinatra-ai/contract-artifact",
+      slot: "detail",
       generatedKey: "@cinatra-ai/contract-artifact::detail",
     });
   });
@@ -94,6 +95,46 @@ describe("semantic-type renderer registry — per-claimant winner binding", () =
     expect(semanticRendererRegistry.resolve("@cinatra-ai/x:artifact", winner("@cinatra-ai/x"))).toBeNull();
     // A different package's renderer for the same type survives.
     expect(semanticRendererRegistry.resolve("@cinatra-ai/x:memo", winner("@cinatra-ai/y"))).not.toBeNull();
+  });
+
+  // S7/M2 (cinatra#1631): the activated `listRow` slot in the semantic keyspace.
+  it("keys listRow separately from detail — same (type, package), independent slots", () => {
+    const TYPE = "@cinatra-ai/shared:contract";
+    const PKG = "@cinatra-ai/ext-a";
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: PKG });
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: PKG, slot: "listRow" });
+    expect(semanticRendererRegistry.resolve(TYPE, winner(PKG))).toMatchObject({
+      slot: "detail",
+      generatedKey: "@cinatra-ai/ext-a::detail",
+    });
+    expect(semanticRendererRegistry.resolve(TYPE, winner(PKG), "listRow")).toMatchObject({
+      slot: "listRow",
+      generatedKey: "@cinatra-ai/ext-a::listRow",
+    });
+  });
+
+  it("a claimant with only a detail renderer resolves null at listRow (glyph floor)", () => {
+    const TYPE = "@cinatra-ai/shared:contract";
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@cinatra-ai/ext-a" });
+    expect(semanticRendererRegistry.resolve(TYPE, winner("@cinatra-ai/ext-a"), "listRow")).toBeNull();
+  });
+
+  it("listRow resolution is winner-bound — a losing claimant's row capability never leaks", () => {
+    const TYPE = "@cinatra-ai/shared:contract";
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@cinatra-ai/ext-a", slot: "listRow" });
+    expect(
+      semanticRendererRegistry.resolve(TYPE, winner("@cinatra-ai/ext-b"), "listRow"),
+    ).toBeNull();
+  });
+
+  it("removeByPackage retires BOTH slots and reports each type once", () => {
+    const TYPE = "@cinatra-ai/x:artifact";
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@cinatra-ai/x" });
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@cinatra-ai/x", slot: "listRow" });
+    const removed = semanticRendererRegistry.removeByPackage("@cinatra-ai/x");
+    expect(removed).toEqual([TYPE]);
+    expect(semanticRendererRegistry.resolve(TYPE, winner("@cinatra-ai/x"))).toBeNull();
+    expect(semanticRendererRegistry.resolve(TYPE, winner("@cinatra-ai/x"), "listRow")).toBeNull();
   });
 });
 

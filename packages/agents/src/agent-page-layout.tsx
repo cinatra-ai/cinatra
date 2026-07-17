@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Info } from "lucide-react";
@@ -10,6 +11,8 @@ import { toast } from "@/lib/cinatra-toast";
 import { AgentInstanceNav } from "@/components/agent-instance-nav";
 import type { AgentInstanceNavProps } from "@/components/agent-instance-nav";
 import { InlinePageTitle, type InlinePageTitleHandle } from "@cinatra-ai/sdk-ui";
+import { publishCrumbContributions } from "@/lib/breadcrumb-contributions";
+import { useCrumbEpoch } from "@/components/crumb-epoch-context";
 import { saveRunName } from "./run-name-actions";
 
 type AgentPageLayoutProps = {
@@ -85,6 +88,34 @@ export function AgentPageLayout({
 }: AgentPageLayoutProps) {
   const [runName, setRunName] = useState(initialRunName);
   const titleRef = useRef<InlinePageTitleHandle>(null);
+  const pathname = usePathname();
+  const crumbEpoch = useCrumbEpoch();
+
+  // The ONE crumb channel (cinatra#1737): this layout owns the page header's
+  // identity (the editable run title → template name → short-id placeholder,
+  // ensureRunTitle populating the title on every SSR path), so it publishes
+  // that same identity for the collapsed "Agents > <name>" crumb — replacing
+  // the former divergent pair (the name-changed event + the AppShell
+  // instance-name fetch). Rename + name-set flows update `runName`, which
+  // re-publishes.
+  const crumbLabel = runName || templateName || `${instanceId.slice(0, 8)}…`;
+  // Epoch-capture guard (mirrors CrumbContributions): the identity this
+  // layout publishes was authorized by the server render that mounted it. A
+  // later epoch-context change with the SAME instance still mounted (router
+  // cache re-use across a session/org change) must not republish it into the
+  // new scope. A new agent/instance re-arms; renames under the armed epoch
+  // keep publishing.
+  const armedRef = useRef<{ identity: string; epoch: string } | null>(null);
+  useEffect(() => {
+    const identity = `${agentId}:${instanceId}`;
+    if (armedRef.current?.identity !== identity) {
+      armedRef.current = { identity, epoch: crumbEpoch };
+    }
+    if (armedRef.current.epoch !== crumbEpoch) return;
+    publishCrumbContributions(pathname, crumbEpoch, [
+      { prefix: `/agents/${agentId}/${instanceId}`, label: crumbLabel },
+    ]);
+  }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel]);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
   const contentMaxWidth = TAB_CONTENT_MAX_WIDTH[activeTab];
 
@@ -106,8 +137,10 @@ export function AgentPageLayout({
   }, []);
 
   function handleCommit(newName: string) {
+    // `setRunName` re-publishes the crumb contribution via the effect above
+    // (the former cinatra:agent:name-changed event had exactly one listener —
+    // the AppShell breadcrumb — replaced by the contribution channel, #1737).
     setRunName(newName);
-    window.dispatchEvent(new CustomEvent("cinatra:agent:name-changed", { detail: { name: newName } }));
     if (runId) {
       saveRunName(runId, newName).then((result) => {
         if (!result.ok) {

@@ -42,6 +42,11 @@ import {
 // dev-perf route-graph budgets reach; see scripts/audit/route-graph-ratchet).
 export * from "../renderable-views";
 export * from "./safe-url";
+// The `chart` renderable-view is dispatched to an EXTENSION component (via the
+// generated `cinatra.views` map), so its host-owned payload schema lives here
+// (epic AC2) but is deliberately absent from `RENDERABLE_VIEW_SCHEMAS` below
+// (the host-CARD registry). See ./chart.
+export * from "./chart";
 export * from "./content-change-proposal";
 export * from "./artifact-preview";
 export * from "./citation-group";

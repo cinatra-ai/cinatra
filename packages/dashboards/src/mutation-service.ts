@@ -56,6 +56,8 @@ import { registerCorePortletKinds } from "./portlets/kinds";
 import { getPortletKindDescriptor, isRenderOnlyPortletKind, validatePortletConfig } from "./portlets/registry";
 import {
   isV12Envelope,
+  normalizeDcBodyForWrite,
+  normalizeV12AnalyticsForWrite,
   ownerLevelToScopeLevel,
   reEnvelopeDcSave,
 } from "./v12-envelope";
@@ -152,7 +154,8 @@ type AuditOp =
   | "dashboards.materialize_template"
   | "dashboards.materialize_instance"
   | "dashboards.extension_archive"
-  | "dashboards.extension_restore";
+  | "dashboards.extension_restore"
+  | "dashboards.extension_adopt";
 
 async function writeAudit(
   tx: DashboardsDb,
@@ -272,13 +275,25 @@ async function normalizeConfigForWrite(opts: {
     // Rule 3: version-only change. Normalize the existing body to apiVersion 1.2.
     resolved = isV12Envelope(opts.existingConfig)
       ? opts.existingConfig
-      : reEnvelopeDcSave(opts.existingConfig, opts.existingConfig, fallbackScope);
+      : reEnvelopeDcSave(
+          opts.existingConfig,
+          normalizeDcBodyForWrite(opts.existingConfig),
+          fallbackScope,
+        );
   } else if (isV12Envelope(opts.config)) {
-    // Already an envelope — pass through.
-    resolved = opts.config;
+    // Already an envelope — passes through, EXCEPT the analytics portlets'
+    // embedded DC bodies, which get the legacy-`query` normalization
+    // (cinatra#1736: an object-shaped query must never reach a row).
+    resolved = normalizeV12AnalyticsForWrite(opts.config);
   } else {
-    // Rule 2: bare DC config → wrap, preserving the existing envelope's siblings/scope.
-    resolved = reEnvelopeDcSave(opts.existingConfig, opts.config, fallbackScope);
+    // Rule 2: bare DC config → normalize (cinatra#1736: legacy `query`
+    // object → JSON string), then wrap, preserving the existing envelope's
+    // siblings/scope.
+    resolved = reEnvelopeDcSave(
+      opts.existingConfig,
+      normalizeDcBodyForWrite(opts.config),
+      fallbackScope,
+    );
   }
   await validateConfig(resolved, DASHBOARD_CONFIG_V12_VERSION);
   return { config: resolved, configVersion: DASHBOARD_CONFIG_V12_VERSION };
@@ -1519,6 +1534,140 @@ export async function restoreExtensionDashboards(
       .returning();
     for (const row of rows) {
       await writeAudit(q, { operation: "dashboards.extension_restore", actor: input.actor, row, metadata: { extensionId: input.extensionId } });
+    }
+    return rows.length;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Adopt-in-place re-key (cinatra#1628, S11b — the AC2 "re-key not duplicate"
+// recovery).
+//
+// When a LIVE successor `kind:"agent"` extension declares a
+// `cinatra.dashboardContribution` whose `adopts` edge names an ORPHANED/legacy
+// row's lineage, the reconciler adopts those rows IN PLACE: it re-keys
+// `extension_id` (→ the successor package) + `contribution_id` (→ the successor's
+// AGENT-era canonical lineage), un-archives them, and stamps the applied-version
+// provenance — preserving the user's `config_json` overlay, the row id, and
+// render continuity (NEVER a duplicate). Adoption is the transactional restore of
+// a row the orphan sweep / lifecycle hook archived (recoverably).
+//
+// SAFETY INVARIANTS:
+//   - ARCHIVED-ONLY: adoption re-keys ONLY `status = 'archived'` rows — it is the
+//     RESTORE of an orphan the migration sweep or the uninstall/archive lifecycle
+//     hook already archived (recoverably). This is the load-bearing guard against
+//     clobbering a LIVE extension's still-published rows: a published (live)
+//     extension row can NEVER be re-homed out from under its owner. If a legacy
+//     package is still installed, the operator uninstalls it first (the hook
+//     archives its rows), and only THEN can a successor adopt them.
+//   - NEVER clobbers an OPERATOR row: `extension_id IS NOT NULL` scopes the write
+//     to extension-owned rows only (an operator dashboard has extension_id NULL
+//     and a NULL contribution_id, so it can match neither guard). An operator's
+//     OWN archived dashboard is also excluded — it has extension_id NULL.
+//   - EXACT lineage identity: matches on `(contribution_id ∈ matchLineageIds,
+//     organizationId)`; a template and its per-project instances share the
+//     lineage, so all re-key together onto the successor.
+//   - IDEMPOTENT: after adoption the rows are `published` (restored), so a re-fire
+//     is excluded by the archived-only gate; a row already keyed to the successor
+//     identity is additionally excluded (belt-and-suspenders).
+//   - ATOMIC + FAIL-CLOSED on collision: ONE UPDATE per successor across the UNION
+//     of its adopts-edge candidate lineages, in ONE transaction. If re-keying the
+//     matched rows would violate the successor's two-tier contribution uniqueness
+//     (e.g. two distinct orphan templates collapsing onto one successor lineage,
+//     or a successor that already materialized a template), the UNIQUE index
+//     raises 23505 and the transaction ROLLS BACK — nothing is partially adopted;
+//     the caller contains the throw per successor.
+//   - The reconciler's PLANNER fails closed on cross-extension ambiguity BEFORE
+//     this primitive is called (two successors contesting one lineage never reach
+//     here), so this primitive assumes a single, resolved successor.
+//
+// BASELINE: the applied-default SNAPSHOT (`applied_default_json`/`_hash`) is the
+// merge base for the deferred 3-way UPGRADE path — it is set here only when the
+// caller resolves the successor's validated default; otherwise it is left
+// untouched (adoption never fabricates a baseline from the user's current config,
+// which would mis-attribute the user's customizations as the extension default
+// and corrupt a later upgrade merge). Provenance (`applied_contribution_version`)
+// is always stamped.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type AdoptExtensionDashboardsInput = {
+  readonly organizationId: string;
+  /** The successor CARRIER package the rows are re-keyed onto. */
+  readonly successorPackage: string;
+  /** The AGENT-era canonical lineage id the rows are re-keyed TO. */
+  readonly successorContributionId: string;
+  /** The candidate legacy lineage ids to match orphaned rows on (from the
+   *  planner's `adoptionMatchLineageIds`). */
+  readonly matchLineageIds: readonly string[];
+  /** The successor's declared DATA version — persisted as provenance. */
+  readonly appliedContributionVersion: number;
+  readonly actor: DashboardActor;
+  /** Optional validated default SNAPSHOT + hash (the upgrade-merge base). Omit to
+   *  leave the baseline untouched (set on the deferred materialize/upgrade path). */
+  readonly appliedDefaultJson?: unknown;
+  readonly appliedDefaultHash?: string;
+};
+
+/**
+ * Transactionally adopt-in-place the orphaned rows matching `matchLineageIds` in
+ * the org onto the successor identity. Returns the number of rows re-keyed (0
+ * when no orphan matched — a safe no-op, e.g. already adopted or never stranded).
+ */
+export async function adoptExtensionDashboards(
+  tx: DashboardsDb | undefined,
+  input: AdoptExtensionDashboardsInput,
+): Promise<number> {
+  if (input.matchLineageIds.length === 0) return 0;
+  const lineageIds = [...input.matchLineageIds];
+  return withDashboardsTx(tx, async (q) => {
+    const setPatch: Record<string, unknown> = {
+      extensionId: input.successorPackage,
+      contributionId: input.successorContributionId,
+      appliedContributionVersion: input.appliedContributionVersion,
+      // Adoption restores an orphan-swept / lifecycle-archived row to live.
+      status: "published" as const,
+      archivedAt: null,
+      archiveReason: null,
+      updatedBy: input.actor.userId,
+      updatedAt: new Date(),
+    };
+    if (input.appliedDefaultJson !== undefined) {
+      setPatch.appliedDefaultJson = input.appliedDefaultJson as never;
+      setPatch.appliedDefaultHash = input.appliedDefaultHash ?? null;
+    }
+
+    const rows = await q
+      .update(dashboards)
+      .set(setPatch)
+      .where(
+        and(
+          eq(dashboards.organizationId, input.organizationId),
+          // RESTORE-of-archived ONLY: never re-home a LIVE (published) extension
+          // row out from under its owner (the load-bearing anti-clobber guard).
+          eq(dashboards.status, "archived"),
+          // NEVER an operator row — extension-owned only.
+          sql`${dashboards.extensionId} IS NOT NULL`,
+          inArray(dashboards.contributionId, lineageIds),
+          // Idempotency belt-and-suspenders: skip rows already keyed to the
+          // successor identity (the archived gate already makes a re-fire a no-op).
+          sql`NOT (${dashboards.extensionId} = ${input.successorPackage} AND ${dashboards.contributionId} = ${input.successorContributionId})`,
+        ),
+      )
+      .returning();
+
+    for (const row of rows) {
+      await writeAudit(q, {
+        operation: "dashboards.extension_adopt",
+        actor: input.actor,
+        row,
+        metadata: {
+          successorPackage: input.successorPackage,
+          successorContributionId: input.successorContributionId,
+          appliedContributionVersion: input.appliedContributionVersion,
+          isTemplate: row.isTemplate,
+          projectId: row.projectId,
+        },
+      });
     }
     return rows.length;
   });

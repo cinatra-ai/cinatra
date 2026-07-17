@@ -14,3 +14,7 @@ export async function listAccessibleOrgIdsForUser(_userId: string): Promise<stri
 export async function teamMemberRoleColumnExists(): Promise<boolean> {
   return false;
 }
+
+export async function teamMemberRoleColumnExistsStrict(): Promise<boolean> {
+  return false;
+}

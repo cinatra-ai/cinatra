@@ -17,3 +17,7 @@ export async function readTeamsForUser(
 export async function teamMemberRoleColumnExists(): Promise<boolean> {
   return false;
 }
+
+export async function teamMemberRoleColumnExistsStrict(): Promise<boolean> {
+  return false;
+}

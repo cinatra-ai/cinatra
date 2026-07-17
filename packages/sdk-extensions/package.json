@@ -25,6 +25,8 @@
     "./blog-contract": "./src/blog-connector-contract.ts",
     "./mcp-contract": "./src/mcp-connector-contract.ts",
     "./artifact-contract": "./src/artifact-contract.ts",
+    "./chat-views-contract": "./src/chat-views-contract.ts",
+    "./llm-provider-contract": "./src/llm-provider-contract.ts",
     "./dashboard-contribution-contract": "./src/dashboard-contribution-contract.ts",
     "./registry-contract": "./src/registry-contract.ts",
     "./artifact-client-bundle": "./src/artifact-client-bundle.ts",
