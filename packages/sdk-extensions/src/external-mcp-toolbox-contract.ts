@@ -51,6 +51,22 @@ export type ExtensionExternalMcpTool = {
    */
   approval?: "auto_execute" | "approval_required";
   /**
+   * @deprecated Retired three-value approval vocabulary (pre-#1713 AC2) —
+   * declare `approval` instead. Kept ONLY as a type-level compatibility member
+   * so companion extension sources built against the previous SDK still
+   * typecheck while their migrations land; the host boundary sanitizer
+   * (`checkMcpApprovalVocabulary`) strips a `"never"` (identical semantics to
+   * the `auto_execute` default) and DROPS a tool entry carrying `"always"` /
+   * `"read-only"` approval intent fail-closed — a legacy value never reaches a
+   * provider adapter. DELIBERATELY absent from the host's `LlmMcpServerTool`
+   * mirror (the mirror lock quarantines exactly this key): host-constructed
+   * tools never pass the extension-boundary sanitizer, so the host type
+   * carrying the retired key would let approval intent silently serialize as
+   * auto-execution. Remove once every pinned companion extension declares the
+   * new vocabulary.
+   */
+  requireApproval?: "never" | "always" | "read-only";
+  /**
    * MCP wire transport this server speaks (llm-providers S2, #1713). Optional:
    * an extension that omits it is treated as `"unknown"` by the host injection
    * layer (transport is never inferred from `serverUrl`). Mirror of

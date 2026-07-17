@@ -33,22 +33,49 @@ import { sanitizeExternalMcpToolboxTools } from "@/lib/external-mcp-toolbox-load
 // SDK's structural mirror of the host's `LlmMcpServerTool` — a vocabulary
 // drift in EITHER direction (e.g. one side renaming/retyping `approval`) must
 // fail `pnpm typecheck`, not surface at runtime.
+//
+// ONE quarantined exception: the SDK side additionally carries the retired
+// `requireApproval` as a @deprecated type-level compatibility member, so
+// companion extension sources built against the previous SDK still typecheck
+// while their migrations land (this boundary's sanitizer strips/drops the
+// legacy key fail-closed at runtime). The host type must NEVER gain it — a
+// host-constructed tool bypasses this sanitizer, so a type-legal
+// `requireApproval: "always"` on the host side would silently serialize as
+// auto-execution (the exact downgrade AC2 retires). The canonical mirror is
+// therefore compared with the compat key Omit-ed, and the compat key itself is
+// locked to exactly the retired vocabulary, SDK-only.
 // ---------------------------------------------------------------------------
-// (a) SDK → host: every extension-built tool is usable where the host expects
-// its own tool shape.
-const _sdkAssignableToHost: LlmMcpServerTool = {} as ExtensionExternalMcpTool;
+type CanonicalSdkTool = Omit<ExtensionExternalMcpTool, "requireApproval">;
+// (a) SDK → host: every extension-built tool's canonical shape is usable where
+// the host expects its own tool shape.
+const _sdkAssignableToHost: LlmMcpServerTool = {} as CanonicalSdkTool;
 // (b) host → SDK: the host shape satisfies the SDK mirror (no host-only key
 // an extension could not produce).
 const _hostAssignableToSdk: ExtensionExternalMcpTool = {} as LlmMcpServerTool;
-// (c) key-set parity: neither side invents a key the other lacks.
-type _SdkExtraKeys = Exclude<keyof ExtensionExternalMcpTool, keyof LlmMcpServerTool>;
+// (c) key-set parity: neither side invents a key the other lacks, beyond the
+// quarantined compat key.
+type _SdkExtraKeys = Exclude<keyof CanonicalSdkTool, keyof LlmMcpServerTool>;
 type _HostExtraKeys = Exclude<keyof LlmMcpServerTool, keyof ExtensionExternalMcpTool>;
 const _noSdkExtraKeys: _SdkExtraKeys extends never ? true : false = true;
 const _noHostExtraKeys: _HostExtraKeys extends never ? true : false = true;
+// (d) the deprecated compat key: present on the SDK side with EXACTLY the
+// retired three-value vocabulary (optional), and ABSENT from the host type.
+const _compatKeyExactlyRetiredVocab: ExtensionExternalMcpTool["requireApproval"] extends
+  | "never"
+  | "always"
+  | "read-only"
+  | undefined
+  ? "never" | "always" | "read-only" extends NonNullable<ExtensionExternalMcpTool["requireApproval"]>
+    ? true
+    : false
+  : false = true;
+const _hostLacksCompatKey: "requireApproval" extends keyof LlmMcpServerTool ? false : true = true;
 void _sdkAssignableToHost;
 void _hostAssignableToSdk;
 void _noSdkExtraKeys;
 void _noHostExtraKeys;
+void _compatKeyExactlyRetiredVocab;
+void _hostLacksCompatKey;
 
 const base = {
   type: "mcp" as const,
