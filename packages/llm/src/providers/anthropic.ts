@@ -219,6 +219,12 @@ function translateTools(tools: LlmTool[]): ToolUnion[] {
       // `container` request param (built by buildContainerSkillsParam), NEVER
       // as function tools.
       defs.push({ ...CONTAINER_SKILLS_CODE_EXECUTION_ENTRY } as never);
+    } else if ("type" in t && t.type === "sandbox_execution") {
+      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
+      // a named function tool by a dedicated path in S2. In S1 it is stripped
+      // before adapter calls — defensive skip so the opaque session carrier can
+      // never be mis-emitted.
+      continue;
     }
     // MCP server tools: Anthropic may support MCP connectors in the future.
     // For now, MCP primitives must be registered as function tools for Claude.

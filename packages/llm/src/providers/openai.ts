@@ -120,8 +120,19 @@ function isContainerSkillsTool(
   return "type" in tool && tool.type === "container_skills";
 }
 
+function isSandboxExecutionTool(
+  tool: LlmTool,
+): tool is import("../types").LlmSandboxExecutionTool {
+  return "type" in tool && tool.type === "sandbox_execution";
+}
+
 function isFunctionTool(tool: LlmTool): tool is LlmFunctionTool {
-  return !isShellTool(tool) && !isMcpTool(tool) && !isContainerSkillsTool(tool);
+  return (
+    !isShellTool(tool) &&
+    !isMcpTool(tool) &&
+    !isContainerSkillsTool(tool) &&
+    !isSandboxExecutionTool(tool)
+  );
 }
 
 /**
@@ -164,6 +175,14 @@ function translateTools(tools: LlmTool[]) {
       // skill delivery is the native shell tool; OpenAI must never receive
       // container_skills. Defensive skip to avoid mis-emitting it as a
       // broken function tool.
+      continue;
+    } else if (isSandboxExecutionTool(t)) {
+      // The execution-plane tool (exec-plane S1, cinatra#1706) is translated to
+      // an OpenAI-native shell / function tool by a dedicated path in S2. In S1
+      // there is no translation, and the orchestration layer strips this tool
+      // before any adapter call — this defensive skip guarantees the opaque
+      // session carrier can never be mis-emitted as a broken function tool even
+      // if one reaches here.
       continue;
     } else {
       defs.push({

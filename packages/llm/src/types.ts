@@ -11,6 +11,9 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 // carry the app-injected resolver ports WITHOUT llm importing
 // @/lib (ports come from the caller).
 import type { AttachmentResolverPorts } from "./attachments/resolve-attachments";
+// Type-only (erased; the runtime module ./execution-plane imports value types
+// from THIS file, so a value import would cycle — a type import does not).
+import type { ExecutionSession, ExecutionAvailability } from "./execution-plane";
 
 export type LlmProvider = "openai" | "anthropic" | "gemini";
 
@@ -123,12 +126,54 @@ export type LlmContainerSkillsTool = {
   }>;
 };
 
+/**
+ * Opaque, broker-verifiable sealed carrier for an execution session
+ * (`{orgId,userId,surface,runId?}`). Produced by the trusted surface-layer
+ * issuer (`sealExecutionSession`), embedded in the `sandbox_execution` tool the
+ * injection layer adds, and STRIPPED before any provider-adapter call — the
+ * adapters (S2) translate the tool contract to a provider-native shell / named
+ * function tool and never receive the carrier. Only the broker can open it.
+ * A plain string alias (not a branded type) so `types.ts` takes no runtime
+ * dependency on the execution-plane module.
+ */
+export type SealedExecutionSessionCarrier = string;
+
+/**
+ * The distinct execution-plane tool (epic #1705 / S1 #1706). Deliberately NOT
+ * the skill-delivery shell (`LlmShellTool`) — it is a separate union member so
+ * it (a) survives Anthropic MCP-mode tool stripping (the injectMcpTools
+ * function-tool strip only removes `type:"function"`), (b) is protected from
+ * MCP dedup (its `type` is not `"mcp"`), and (c) is translated per-provider by
+ * a dedicated path in S2 (OpenAI native `type:"shell"` with function-tool
+ * fallback; Anthropic/Gemini named function tool). In S1 the provider adapters
+ * do not yet translate it (they skip unrecognized tool types), so it only ever
+ * reaches an adapter behind the default-off rollout flag; the injection layer
+ * strips the carrier regardless.
+ */
+export type LlmSandboxExecutionTool = {
+  type: "sandbox_execution";
+  /**
+   * The stable, provider-agnostic tool name the model calls. Fixed to
+   * `"sandbox_execute"` by contract — the provider translation layer (S2) keys
+   * native-shell-vs-function-tool dispatch on this name.
+   */
+  toolName: "sandbox_execute";
+  /**
+   * Opaque, broker-verifiable sealed session carrier. Bound to
+   * `{orgId,userId,surface,runId?}`. Stripped before provider-adapter calls.
+   */
+  sessionCarrier: SealedExecutionSessionCarrier;
+  /** Model-facing description of the capability (schema half of the contract). */
+  description: string;
+};
+
 export type LlmTool =
   | LlmFunctionTool
   | LlmShellTool
   | LlmMcpServerTool
   | LlmWebSearchTool
-  | LlmContainerSkillsTool;
+  | LlmContainerSkillsTool
+  | LlmSandboxExecutionTool;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -616,6 +661,15 @@ export type OrchestrateGenerateInput = Omit<GenerateInput, "resolvedAttachments"
    * byte-identical to text-only behavior.
    */
   attachmentResolverPorts?: AttachmentResolverPorts;
+  /**
+   * Execution plane (exec-plane S1, cinatra#1706). A pre-minted execution
+   * session bound to `{orgId,userId,surface,runId?}`, supplied by the assistant
+   * runtime (chat surface). Omitted ⇒ no attributable caller ⇒ the capability
+   * is withheld (fail-closed). Only consulted when the rollout flag is on.
+   */
+  executionSession?: ExecutionSession;
+  /** Execution plane: D4 per-org/per-agent availability posture (default `"enabled"`). */
+  executionAvailability?: ExecutionAvailability;
 };
 
 // Same INTERNAL invariant as OrchestrateGenerateInput, AND also Omit
@@ -634,6 +688,10 @@ export type OrchestrateStreamInput = Omit<
   actorContext?: ActorContext;
   /** See OrchestrateGenerateInput.attachmentResolverPorts. */
   attachmentResolverPorts?: AttachmentResolverPorts;
+  /** Execution plane (exec-plane S1): see OrchestrateGenerateInput.executionSession. */
+  executionSession?: ExecutionSession;
+  /** Execution plane: D4 per-org/per-agent availability posture (default `"enabled"`). */
+  executionAvailability?: ExecutionAvailability;
 };
 
 export type OrchestrateFileInputGenerateInput = FileInputGenerateInput & {
