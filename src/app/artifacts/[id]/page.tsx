@@ -6,22 +6,18 @@
  * latest representation, and renders inside the canonical Main +
  * PageHeader (artifact name) + PageContent shell.
  *
- * MIME → handler mapping:
- *   - `text/markdown` / `.md` / `.markdown` → MarkdownHandler (rendered
- *     + raw side-by-side; reuses `marked` from the chat-page renderer).
- *   - `text/plain` → PlainTextHandler (`<pre class="whitespace-pre-wrap">`).
- *   - `application/pdf` → PdfHandler (`<embed>`, browser viewer; iOS
- *     WebKit gets a dynamically-imported react-pdf inline fallback —
- *     the request UA seeds its initial render, see #70).
- *   - `image/*` → ImageHandler (`<img>`, even for SVG — never inline
- *     `<svg>` from artifact content).
- *   - allowlisted `video/*` → VideoHandler (`<video controls>`, range-
- *     streamed by the preview route).
- *   - allowlisted `audio/*` → AudioHandler (`<audio controls>`).
- *   - everything else → FallbackHandler (metadata card).
+ * Renderer dispatch (spine — cinatra#1629 / #1630):
+ *   - `application/pdf`, `image/*`, allowlisted `video/*` + `audio/*` →
+ *     the system `-artifact` base's build-bundled renderer, resolved as a
+ *     `representation` through the representation-provider registry (the boot
+ *     registrar binds the four bases for every org; the preview route still
+ *     streams the bytes the extension renderer points `urls.preview` at).
+ *   - `text/markdown` / `text/plain` → the core-owned never-blank FLOOR
+ *     (MarkdownHandler / PlainTextHandler), a first-party `mime` dispatch.
+ *   - everything else → FallbackHandler (generic metadata card).
  *
- * Selection itself lives in `./pick-handler.ts` (unit-tested for parity
- * with the preview route's allowlist).
+ * First-party FLOOR selection lives in `./pick-handler.ts`; the precedence leaf
+ * in `./renderer-dispatch.ts`; the resolution seam in `./renderer-resolution.ts`.
  *
  * `PageHeader.actions` carries the artifact-level actions:
  *   - Download — always (when a representation exists); hits the existing
@@ -32,7 +28,6 @@
  */
 import "server-only";
 import Link from "next/link";
-import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { Download, ExternalLink } from "lucide-react";
 
@@ -60,11 +55,6 @@ import { ExtensionRendererMount } from "./extension-renderer-mount";
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
 import { MarkdownHandler } from "./handlers/markdown-handler";
 import { PlainTextHandler } from "./handlers/plain-text-handler";
-import { PdfHandler } from "./handlers/pdf-handler";
-import { isIosUserAgent } from "./handlers/pdf-inline-support";
-import { ImageHandler } from "./handlers/image-handler";
-import { VideoHandler } from "./handlers/video-handler";
-import { AudioHandler } from "./handlers/audio-handler";
 import { FallbackHandler } from "./handlers/fallback-handler";
 
 export const dynamic = "force-dynamic";
@@ -138,15 +128,6 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // settled binding; a catalog browse-only identity shows "Preparing" until it
   // lands. Open still renders the row read-only.
   const selectionPreparing = isSelectionPreparing(artifact.effectiveIdentity);
-
-  // UA hint for the PDF handler: known-iOS clients skip the broken
-  // `<embed>` from the very first render (the client corrects the hint
-  // post-hydration — iPadOS-as-Mac is indistinguishable server-side).
-  // The page is already `force-dynamic`, so reading headers adds nothing.
-  const pdfInitialFallback =
-    dispatch.kind === "mime" && dispatch.handler === "pdf"
-      ? isIosUserAgent((await headers()).get("user-agent") ?? "")
-      : false;
 
   const title = artifact.title ?? artifact.artifactId;
 
@@ -247,7 +228,10 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
                   {genericFloor}
                 </>
               );
-            // First-party host MIME handler (the always-effective default).
+            // First-party host MIME handler — the core-owned never-blank FLOOR
+            // that survives the G2 cutover: markdown (DEFER) + escaped plain-text
+            // (STAY). pdf / image / audio / video MIGRATED to the system
+            // `-artifact` bases and resolve as `representation` above, never here.
             case "mime": {
               if (!previewHref) return genericFloor;
               switch (dispatch.handler) {
@@ -267,20 +251,9 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
                       orgId={orgId}
                     />
                   );
-                case "pdf":
-                  return (
-                    <PdfHandler
-                      previewHref={previewHref}
-                      downloadHref={downloadHref as string}
-                      initialFallback={pdfInitialFallback}
-                    />
-                  );
-                case "image":
-                  return <ImageHandler previewHref={previewHref} alt={title} />;
-                case "video":
-                  return <VideoHandler previewHref={previewHref} />;
-                case "audio":
-                  return <AudioHandler previewHref={previewHref} />;
+                // Any other handler kind is unreachable post-cutover (pickHandler
+                // only yields markdown/text); the generic floor keeps it
+                // never-blank if a stale build ever produced one.
                 default:
                   return genericFloor;
               }

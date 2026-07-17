@@ -119,11 +119,13 @@ describe("golden dispatch — a fixture extension renders through the registries
     });
   });
 
-  it("without any provider, a PDF row falls through to the always-effective first-party host handler", () => {
+  it("without any provider (mocked map has no pdf base), a PDF row falls to the generic never-blank floor", () => {
+    // Post-G2-cutover: pickHandler no longer selects a host pdf handler, and this
+    // fixture map carries no pdf-artifact base, so the row deterministically
+    // reaches the generic floor — never blank.
     const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
-      kind: "mime",
-      handler: "pdf",
+      kind: "fallback",
     });
   });
 });

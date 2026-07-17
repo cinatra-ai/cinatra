@@ -84,11 +84,12 @@ describe("G3 — real arbitration through the registries + generated map", () =>
     });
   });
 
-  it("with NO provider installed, the same PDF row falls to the always-effective first-party host floor", () => {
+  it("with NO provider installed (mocked map has no pdf base), the same PDF row falls to the generic never-blank floor", () => {
+    // Post-G2-cutover: no host pdf handler + no pdf base in this fixture map → the
+    // row reaches the generic floor deterministically (never blank).
     const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
     expect(dispatchViaRealRegistries({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
-      kind: "mime",
-      handler: "pdf",
+      kind: "fallback",
     });
   });
 
