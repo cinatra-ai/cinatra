@@ -205,24 +205,28 @@ jobs:
         # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
         # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
         # fails the build — it falls back to today's behavior.
-        # 20G target (was 4G) — the entry-66 CI-memory investigation (2026-07-17): the
-        # modern ubuntu-latest runner is 4 vCPU / 15.8G RAM, but the fleet's DISK
-        # is heterogeneous (entry-66 measured ~86G-free AND ~15G-free root disks
-        # the same day), so the script below sizes the swapfile to the disk it
-        # actually gets. A heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE
-        # memory — the JS heap stays tiny, so NODE_OPTIONS cannot cap it) was
-        # measured needing up to ~33G total (15.8G RAM + 17.4G swap on PR
-        # #1673's fixed tree); the old 4G (+3G stock) swap starved that class
-        # into runner RECLAIM mid-build. 20G + 3G stock ≈ 23G swap fits it with
-        # margin. Swap only helps BOUNDED builds: an UNBOUNDED Turbopack runaway
-        # (the server-side dynamic-import detonation entry-66 root-caused —
-        # >33G and still climbing) fills any swap and still reclaims the
-        # runner; that class needs the content fix, not more swap.
+        # 12G target (was 4G; PR #1746 briefly overshot to 20G, which ate the
+        # docker build's root disk and ENOSPC-failed PR #1756 -- so the image
+        # build now FREES disk instead of swapping, and these memory-bound build
+        # jobs cap swap at 12G behind a 12G disk margin). The entry-66 CI-memory
+        # investigation (2026-07-17): the modern ubuntu-latest runner is
+        # 4 vCPU / 15.8G RAM, but the fleet's DISK is heterogeneous (entry-66
+        # measured ~86G-free AND ~15G-free root disks the same day), so the
+        # script below sizes the swapfile to the disk it actually gets. A
+        # heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE memory -- the JS heap
+        # stays tiny, so NODE_OPTIONS cannot cap it) peaked at ~33G total on the
+        # PRE-fix tree; the #1747/#1748 static-import fixes have since bounded it
+        # well under RAM + stock + a modest swap, so 12G (+3G stock) is ample and
+        # leaves the disk headroom the 20G cap did not. Swap only helps BOUNDED
+        # builds: an UNBOUNDED Turbopack runaway (the server-side dynamic-import
+        # detonation entry-66 root-caused -- >33G and still climbing) fills any
+        # swap and still reclaims the runner; that class needs the content fix,
+        # not more swap.
         if: ${{ vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
-          # size to what fits behind a 6G disk margin, and ALWAYS remove a
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
           # partial file on failure — a swapfile that fills the disk kills the
           # build on ENOSPC, strictly worse than no swap.
           # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
@@ -237,10 +241,10 @@ jobs:
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
-          size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 12*1024*1024 ))
           if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
-            echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
           elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
@@ -425,12 +429,12 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Same 20G step + rationale as the render-smoke job above (entry-66).
+        # Same 12G step + rationale as the render-smoke job above (entry-66).
         if: ${{ vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
           # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
-          # size to what fits behind a 6G disk margin, and ALWAYS remove a
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
           # partial file on failure — a swapfile that fills the disk kills the
           # build on ENOSPC, strictly worse than no swap.
           # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
@@ -445,10 +449,10 @@ jobs:
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
-          size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 12*1024*1024 ))
           if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
-            echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
           elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
