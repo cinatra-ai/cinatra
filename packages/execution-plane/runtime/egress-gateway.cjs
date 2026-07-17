@@ -431,7 +431,7 @@ function createGateway(config) {
   }
 
   const adminServer = http.createServer((req, res) => {
-    const url = new URL(req.url, "http://admin.invalid");
+    const url = new URL(req.url, "http://control.invalid");
     if (url.pathname === "/__health") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));

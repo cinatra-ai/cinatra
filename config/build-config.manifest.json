@@ -312,6 +312,8 @@
     { "alias": "@cinatra-ai/llm/actor-context", "target": "./packages/llm/src/actor-context.ts" },
     { "alias": "@cinatra-ai/llm/openai-model-capabilities", "target": "./packages/llm/src/providers/openai-model-capabilities.ts" },
     { "alias": "@cinatra-ai/llm/scripted-test-provider", "target": "./packages/llm/src/scripted-test-provider.ts" },
+    { "alias": "@cinatra-ai/llm/execution-plane", "target": "./packages/llm/src/execution-plane/index.ts" },
+    { "alias": "@cinatra-ai/execution-plane", "target": "./packages/execution-plane/src/index.ts" },
     { "alias": "@cinatra-ai/notifications/host-adapters", "target": "./packages/notifications/src/host-adapters.ts" },
     { "alias": "@cinatra-ai/notifications/types", "target": "./packages/notifications/src/types.ts" },
     { "alias": "@cinatra-ai/notifications/client", "target": "./packages/notifications/src/client.ts" },

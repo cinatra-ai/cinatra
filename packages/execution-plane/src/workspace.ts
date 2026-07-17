@@ -121,10 +121,18 @@ export async function listWorkspaceVolumes(
     .filter((line) => line.length > 0)
     .map((line) => {
       const [name, labels = ""] = line.split("|");
-      const match = new RegExp(
-        `${WORKSPACE_LABEL.replace(/\./g, "\\.")}\\.createdAt=(\\d+)`,
-      ).exec(labels);
-      return { name, createdAtMs: match ? Number(match[1]) : null };
+      // Docker `{{.Labels}}` renders `key=value,key2=value2` — parse by
+      // prefix match instead of a regex built from the label constant
+      // (string-built regexes need exhaustive metacharacter escaping;
+      // CodeQL js/incomplete-sanitization).
+      const createdAtPrefix = `${WORKSPACE_LABEL}.createdAt=`;
+      const createdAtEntry = labels
+        .split(",")
+        .map((entry) => entry.trim())
+        .find((entry) => entry.startsWith(createdAtPrefix));
+      const raw = createdAtEntry?.slice(createdAtPrefix.length) ?? "";
+      const createdAtMs = /^\d+$/.test(raw) ? Number(raw) : null;
+      return { name, createdAtMs };
     });
 }
 
