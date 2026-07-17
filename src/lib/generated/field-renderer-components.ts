@@ -28,4 +28,6 @@ export type GeneratedFieldRendererComponentEntry = {
 };
 
 export const GENERATED_FIELD_RENDERER_COMPONENTS: Record<string, GeneratedFieldRendererComponentEntry> = {
+  "@cinatra-ai/list-curator-agent:final-list-review": { resolution: "guardedOptional", packageName: "@cinatra-ai/list-curator-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer") },
+  "@cinatra-ai/list-curator-agent:scrape-schema-review": { resolution: "guardedOptional", packageName: "@cinatra-ai/list-curator-agent", propsApiVersion: 1, load: () => import("@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer") },
 };

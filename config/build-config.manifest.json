@@ -408,6 +408,8 @@
     { "alias": "@cinatra-ai/pdf-artifact/src/renderers/pdf-preview", "target": "./extensions/cinatra-ai/pdf-artifact/src/renderers/pdf-preview.tsx" },
     { "alias": "@cinatra-ai/audio-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/audio-artifact/src/renderers/detail.tsx" },
     { "alias": "@cinatra-ai/video-artifact/src/renderers/detail", "target": "./extensions/cinatra-ai/video-artifact/src/renderers/detail.tsx" },
+    { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx" },
+    { "alias": "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer", "target": "./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx" },
     { "alias": "@cinatra-ai/projects", "target": "./packages/projects/src/index.ts" },
     { "alias": "@cinatra-ai/projects/module", "target": "./packages/projects/src/integration/module.ts" },
     { "alias": "@cinatra-ai/projects/mcp-handlers", "target": "./packages/projects/src/mcp/handlers.ts" },
