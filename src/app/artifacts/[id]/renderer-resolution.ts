@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
+import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import {
   semanticRendererRegistry,
   representationProviderRegistry,
@@ -9,6 +10,7 @@ import {
 import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers";
 import { PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS } from "@/lib/artifacts/artifact-read";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
+import { reconcileSystemRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
 import {
   buildDigestPinnedUrl,
   type SerializedRuntimeRendererDescriptor,
@@ -51,10 +53,15 @@ function isLoadableKey(generatedKey: string): boolean {
 // route consumes. Server-only (reads the generated build map); the pure
 // precedence composition lives in `./renderer-dispatch`.
 //
-// REPRESENTATION-viewer slot convention: the detail page renders the row's
-// representation through the neutral `preview` capability (AC-6) — the same slot
-// core reuse sites use — so a representation viewer resolves at slot `preview`.
-// The SEMANTIC detail view resolves at slot `detail`.
+// REPRESENTATION-viewer slot (Slice B, cinatra#1630 §5.1): the DETAIL PAGE
+// resolves a row's representation at slot `detail` — the four system bases
+// (image/pdf/audio/video-artifact) each ship a `detail` renderer that is the
+// faithful migration of the host handler, and audio/video ship ONLY a `detail`
+// renderer (no `preview` build entry), so `detail` is the single slot that
+// resolves every base to a built module. The neutral `preview` capability
+// (`resolveArtifactPreviewDispatch`, AC-6) stays at slot `preview` for in-core
+// reuse sites (image/pdf ship a `preview` renderer too). The SEMANTIC detail
+// view resolves at slot `detail`.
 // ---------------------------------------------------------------------------
 
 // First-party defaults are the always-effective host handlers a provider must
@@ -65,14 +72,20 @@ function isLoadableKey(generatedKey: string): boolean {
 let firstPartyDefaultsSeeded = false;
 function ensureFirstPartyRepresentationDefaults(): void {
   if (firstPartyDefaultsSeeded) return;
+  // Seed at BOTH slots the host resolves at: `detail` (the detail page — Slice B)
+  // and `preview` (the neutral in-core reuse capability). The host handler a
+  // provider must beat is the same at either slot, so the always-effective
+  // first-party floor is registered at both.
   for (const mime of PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS) {
     const handler = pickHandler(mime);
     if (handler === "fallback") continue;
-    representationProviderRegistry.registerFirstPartyDefault({
-      pattern: mime,
-      slot: "preview",
-      ref: handler,
-    });
+    for (const slot of ["detail", "preview"] as const) {
+      representationProviderRegistry.registerFirstPartyDefault({
+        pattern: mime,
+        slot,
+        ref: handler,
+      });
+    }
   }
   firstPartyDefaultsSeeded = true;
 }
@@ -95,13 +108,21 @@ export function resolveSemanticDispatch(
 
 /** Resolve the REPRESENTATION viewer for a row via the org-scoped
  * representation-provider registry (extension provider or the always-effective
- * first-party host default) + the generated build map. */
+ * first-party host default) + the generated build map, at the given `slot`
+ * (the detail page resolves at `detail`; the neutral reuse seam at `preview`).
+ *
+ * Before resolving, the system bases are reconciled into the org (Slice B boot
+ * registrar, generation-safe + self-healing) so the four MIME families resolve
+ * to their build-bundled renderer for EVERY org — the legacy first-party host
+ * handler is beaten by the now-bound system extension provider. */
 export function resolveRepresentationDispatch(
   orgId: string,
   mime: string,
+  slot: ArtifactUiSlot = "detail",
 ): RepresentationRendererResolution | null {
   ensureFirstPartyRepresentationDefaults();
-  const res = representationProviderRegistry.resolve(orgId, mime, "preview");
+  reconcileSystemRepresentationProviders(orgId);
+  const res = representationProviderRegistry.resolve(orgId, mime, slot);
   if (res?.tier === "extension") {
     return {
       tier: "extension",
@@ -135,7 +156,10 @@ export function resolveArtifactDispatchInputs(args: {
   return {
     identity: args.identity,
     semantic: resolveSemanticDispatch(args.baseType, args.identity),
-    representation: resolveRepresentationDispatch(args.orgId, args.mime),
+    // The detail page resolves the representation at slot `detail` (Slice B) so
+    // every system base — including the detail-only audio/video bases — resolves
+    // to its built renderer.
+    representation: resolveRepresentationDispatch(args.orgId, args.mime, "detail"),
   };
 }
 
@@ -150,7 +174,7 @@ export function resolveArtifactPreviewDispatch(args: {
   orgId: string;
   mime: string;
 }): RepresentationRendererResolution | null {
-  return resolveRepresentationDispatch(args.orgId, args.mime);
+  return resolveRepresentationDispatch(args.orgId, args.mime, "preview");
 }
 
 /**

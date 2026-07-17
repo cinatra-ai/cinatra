@@ -16,6 +16,7 @@ import {
   representationProviderRegistry,
 } from "@cinatra-ai/objects/artifact-renderer-registry";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
+import { isSystemArtifactRendererPackage } from "@/lib/artifacts/system-artifact-renderer-registrar";
 
 /**
  * Deregister every artifact-renderer registration a package made — its semantic
@@ -39,6 +40,21 @@ export function invalidateArtifactRenderersForPackage(packageName: string): {
   removedRepresentationProviders: number;
   removedRuntimeBindings: number;
 } {
+  // SYSTEM EXTENSIONS REJECT UNINSTALL (Slice B, plan §5.3.4): the four build-
+  // bundled system bases (image/pdf/audio/video-artifact) are part of the host
+  // release, not marketplace installs — archive/uninstall must never retire their
+  // renderer bindings (nor tombstone their generation floor), so a stray teardown
+  // (e.g. the defensive pre-reactivate pass) can never dormant them. The boot
+  // registrar keeps them bound; retiring here would strand the four MIME families
+  // on the removed legacy floor. A no-op removal for a system package.
+  if (isSystemArtifactRendererPackage(packageName)) {
+    return {
+      removedSemanticTypes: [],
+      removedRepresentationProviders: 0,
+      removedRuntimeBindings: 0,
+    };
+  }
+
   const removedSemanticTypes = semanticRendererRegistry.removeByPackage(packageName);
   const removedRepresentationProviders =
     representationProviderRegistry.retireProvidersByPackage(packageName);

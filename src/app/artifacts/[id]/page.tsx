@@ -225,7 +225,11 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
                 <ExtensionRendererMount
                   generatedKey={dispatch.generatedKey}
                   packageName={dispatch.packageName}
-                  slot={dispatch.kind === "semantic" ? "detail" : "preview"}
+                  // Both the semantic detail view and the detail-page
+                  // representation viewer mount at slot `detail` (Slice B — the
+                  // representation viewer resolves at `detail`, the neutral
+                  // `preview` capability serves in-core reuse sites only).
+                  slot="detail"
                   props={rendererProps}
                   fallback={genericFloor}
                 />

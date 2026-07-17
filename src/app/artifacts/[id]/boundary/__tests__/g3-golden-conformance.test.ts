@@ -17,7 +17,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 
 const DETAIL_KEY = "@fixture/detail-ext::detail";
-const PREVIEW_KEY = "@fixture/rep-ext::preview";
+// The detail page resolves the representation at slot `detail` (Slice B); the
+// fixture representation provider ships a `detail` build entry with EMPTY
+// `representations` so the system-base boot registrar does not auto-bind it (the
+// test drives resolution through an explicit `registerProvider`).
+const REP_KEY = "@fixture/rep-ext::detail";
 
 vi.mock("@/lib/generated/artifact-renderers", () => ({
   GENERATED_ARTIFACT_RENDERERS: {
@@ -29,11 +33,11 @@ vi.mock("@/lib/generated/artifact-renderers", () => ({
       propsApiVersion: 1,
       load: async () => ({ default: () => null }),
     },
-    "@fixture/rep-ext::preview": {
+    "@fixture/rep-ext::detail": {
       resolution: "guardedOptional",
       packageName: "@fixture/rep-ext",
-      slot: "preview",
-      representations: ["application/pdf"],
+      slot: "detail",
+      representations: [],
       propsApiVersion: 1,
       load: async () => ({ default: () => null }),
     },
@@ -68,14 +72,14 @@ describe("G3 — real arbitration through the registries + generated map", () =>
     representationProviderRegistry.registerProvider(ORG, {
       packageName: "@fixture/rep-ext",
       pattern: "application/pdf",
-      slot: "preview",
+      slot: "detail",
       generation: 1,
     });
     const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
     expect(dispatchViaRealRegistries({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
       kind: "representation",
       packageName: "@fixture/rep-ext",
-      generatedKey: PREVIEW_KEY,
+      generatedKey: REP_KEY,
       pattern: "application/pdf",
     });
   });
