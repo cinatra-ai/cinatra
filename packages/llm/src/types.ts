@@ -96,6 +96,17 @@ export type LlmMcpServerTool = {
   allowedTools?: string[] | null;
   /** Whether tools that mutate state require approval. */
   requireApproval?: "never" | "always" | "read-only";
+  /**
+   * MCP wire transport this server speaks (llm-providers S2, #1713):
+   *   - "streamable-http" — the modern MCP Streamable HTTP transport.
+   *   - "sse"             — the legacy HTTP+SSE transport.
+   *   - "unknown"         — not classified (legacy rows / omitted).
+   * Optional: an absent value is treated as `"unknown"` by the injection
+   * layer, which never infers transport from `serverUrl`. The adapter-facing
+   * refusal (transports a provider's declared capability does not accept) is
+   * wired in the post-#1707 adapter half.
+   */
+  transport?: "streamable-http" | "sse" | "unknown";
 };
 
 export type LlmWebSearchTool = {
