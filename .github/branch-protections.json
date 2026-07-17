@@ -44,7 +44,8 @@
       "skills-drift-gate / skills-drift-gate",
       "secrets-required-gate / secrets-required-gate",
       "truthful-attribution-gate / truthful-attribution-gate",
-      "proof"
+      "proof",
+      "toast-banner-gate / toast-banner-gate"
     ]
   },
   "enforce_admins": false,
