@@ -1,4 +1,4 @@
-// core__0052 — the 1:1 agent_templates <-> assistant-user PRINCIPAL link
+// core__0054 — the 1:1 agent_templates <-> assistant-user PRINCIPAL link
 // (cinatra-ai/cinatra#1037 P1.3). Adds `assistant_user_id` to agent_templates:
 // the bare text id of the Better Auth public."user" assistant principal a
 // conversational (`agent_kind='assistant'`) template is registered AS. This is

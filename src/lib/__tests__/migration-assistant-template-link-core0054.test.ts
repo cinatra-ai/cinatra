@@ -1,5 +1,5 @@
 // Contract test for the template<->principal link migration
-// (migrations/core/core__0052_assistant-template-principal-link.mjs, cinatra#1037 P1.3).
+// (migrations/core/core__0054_assistant-template-principal-link.mjs, cinatra#1037 P1.3).
 //
 // The migration module is imported by RELATIVE PATH so the real SQL is
 // exercised. Pure unit test (no DB): it pins up()/down() — the additive column,
@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { up, down } from "../../../migrations/core/core__0052_assistant-template-principal-link.mjs";
+import { up, down } from "../../../migrations/core/core__0054_assistant-template-principal-link.mjs";
 
 function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
   const out: string[] = [];
@@ -18,7 +18,7 @@ function collectSql(fn: (b: { sql: (s: string) => void }) => void): string[] {
   return out;
 }
 
-describe("core__0052 up()", () => {
+describe("core__0054 up()", () => {
   const stmts = collectSql(up as (b: { sql: (s: string) => void }) => void);
   const joined = stmts.join("\n").toLowerCase();
 
@@ -39,7 +39,7 @@ describe("core__0052 up()", () => {
   });
 });
 
-describe("core__0052 down()", () => {
+describe("core__0054 down()", () => {
   const stmts = collectSql(down as (b: { sql: (s: string) => void }) => void);
   const joined = stmts.join("\n").toLowerCase();
 
