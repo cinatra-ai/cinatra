@@ -13,6 +13,7 @@ import "server-only";
 import type { LlmToolboxProvider } from "@cinatra-ai/sdk-extensions";
 import { LLM_TOOLBOX_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
+import { checkMcpApprovalVocabulary } from "@/lib/mcp-approval-vocabulary";
 import type { LlmMcpServerTool, LlmProvider } from "@cinatra-ai/llm";
 
 // Structural guard: a capability impl is `unknown` by contract.
@@ -57,7 +58,14 @@ export async function buildToolboxProviderTools(
   if (!match) return null;
   try {
     const built = await match.build(provider);
-    return (Array.isArray(built) ? built : []).filter(isLlmMcpServerToolLike);
+    // Same approval-vocabulary boundary as the manifest-driven toolbox loader
+    // (llm-providers S2, #1713 AC2): a registration-driven provider is
+    // extension code too — legacy/garbage approval intent must never slip
+    // through THIS boundary into an auto-executing injection.
+    return (Array.isArray(built) ? built : [])
+      .filter(isLlmMcpServerToolLike)
+      .map((tool) => checkMcpApprovalVocabulary(`llm-toolbox provider "${declaredId}"`, tool))
+      .filter((tool): tool is LlmMcpServerTool => tool !== null);
   } catch (err) {
     console.warn(
       `[llm-toolbox] provider for "${declaredId}" failed to build tools: ${err instanceof Error ? err.message : String(err)}`,

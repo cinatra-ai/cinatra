@@ -138,6 +138,40 @@ export class NativeMcpCapabilityRequiredError extends Error {
 }
 
 /**
+ * llm-providers S2 (#1713, AC2) — an MCP server toolbox declares
+ * `approval: "approval_required"`, but the target provider cannot honour an
+ * approval step (its declared `approval` capability is "unsupported" —
+ * Anthropic today: neither its native `mcp_servers` serialization nor its
+ * function-tools emulation carries any approval knob). Silently executing an
+ * approval-intending toolbox would auto-run tool calls the operator required
+ * approval for, so the request fails closed BEFORE any provider/credential
+ * request is issued. Callers convert adapter throws into SSE `error` events /
+ * HTTP 5xx.
+ */
+export class McpApprovalUnsupportedError extends Error {
+  readonly code = "mcp_approval_unsupported" as const;
+  readonly provider: LlmProvider;
+  /** The server labels that declared `approval_required`. */
+  readonly serverLabels: string[];
+
+  constructor(provider: LlmProvider, serverLabels: string[]) {
+    super(
+      `MCP server${serverLabels.length === 1 ? "" : "s"} ` +
+        `${serverLabels.map((l) => `"${l}"`).join(", ")} require` +
+        `${serverLabels.length === 1 ? "s" : ""} tool-call approval ` +
+        `(approval: "approval_required"), but provider "${provider}" cannot ` +
+        `honour an approval step (declared approval capability: unsupported). ` +
+        `Auto-executing an approval-intending toolbox would drop the approval ` +
+        `silently, so the request fails closed. Route the toolbox to a ` +
+        `provider that supports approvals, or set approval to "auto_execute".`,
+    );
+    this.name = "McpApprovalUnsupportedError";
+    this.provider = provider;
+    this.serverLabels = serverLabels;
+  }
+}
+
+/**
  * A catalog skill exceeds Anthropic's 30MB Custom Skills upload limit, OR a
  * single request's resolved skill set exceeds the per-request
  * `container.skills` cap of 8. Surfaced as a CONFIGURATION error by the

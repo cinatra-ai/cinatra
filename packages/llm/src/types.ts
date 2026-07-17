@@ -104,8 +104,22 @@ export type LlmMcpServerTool = {
   serverDescription?: string;
   /** Optional list of allowed tool names, or null to allow all. */
   allowedTools?: string[] | null;
-  /** Whether tools that mutate state require approval. */
-  requireApproval?: "never" | "always" | "read-only";
+  /**
+   * Approval vocabulary (llm-providers S2, #1713 AC2):
+   *   - "auto_execute"      — tool calls run without a human approval step.
+   *                           An ABSENT value means exactly this (the ratified
+   *                           `undefined` ⇒ `auto_execute` default).
+   *   - "approval_required" — every tool call needs an approval step,
+   *                           translated per the provider's declared `approval`
+   *                           capability: OpenAI serializes it natively
+   *                           (`require_approval: "always"`); a provider whose
+   *                           declared capability is "unsupported" (Anthropic
+   *                           today) REFUSES the toolbox fail-closed — approval
+   *                           intent is never silently dropped.
+   * Replaces the retired three-value `requireApproval` ("never" | "always" |
+   * "read-only") that only OpenAI consumed and Anthropic silently ignored.
+   */
+  approval?: "auto_execute" | "approval_required";
   /**
    * MCP wire transport this server speaks (llm-providers S2, #1713):
    *   - "streamable-http" — the modern MCP Streamable HTTP transport.

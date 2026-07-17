@@ -40,9 +40,17 @@ export type McpMaterializerInput = {
   authorization?: string;
   serverDescription?: string;
   allowedTools?: string[] | null;
-  requireApproval?: "never" | "always" | "read-only";
+  approval?: McpToolboxApproval;
   transport?: McpTransport;
 };
+
+/**
+ * Approval vocabulary (S2 AC2): `undefined` ⇒ `"auto_execute"`. The
+ * capability-keyed translation (OpenAI serializes both; a provider declaring
+ * `approval: "unsupported"` refuses `approval_required` fail-closed) lives
+ * with the adapters — this pure module only carries the value through.
+ */
+export type McpToolboxApproval = "auto_execute" | "approval_required";
 
 /** The validated, single-auth-source serialization shape a provider adapter
  *  serializes. `serverLabel` is the NORMALIZED name; `serverUrl` is canonical. */
@@ -53,7 +61,7 @@ export type MaterializedMcpServer = {
   authorization?: string;
   serverDescription?: string;
   allowedTools?: string[] | null;
-  requireApproval?: "never" | "always" | "read-only";
+  approval?: McpToolboxApproval;
   transport?: McpTransport;
 };
 
@@ -263,7 +271,7 @@ export function materializeExternalMcpServers(
     if (auth.authorization !== undefined) server.authorization = auth.authorization;
     if (input.serverDescription !== undefined) server.serverDescription = input.serverDescription;
     if (input.allowedTools !== undefined) server.allowedTools = input.allowedTools;
-    if (input.requireApproval !== undefined) server.requireApproval = input.requireApproval;
+    if (input.approval !== undefined) server.approval = input.approval;
     if (input.transport !== undefined) server.transport = input.transport;
     servers.push(server);
     attribution[normalized] = input.serverLabel;

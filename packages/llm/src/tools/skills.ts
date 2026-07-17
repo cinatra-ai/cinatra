@@ -785,6 +785,6 @@ export function createMcpServerTool(input: {
       "connectors, analytics, and skills. " +
       "Does NOT have access to permissions, settings, or auth functions.",
     allowedTools: input.allowedTools,
-    requireApproval: "never",
+    approval: "auto_execute",
   };
 }

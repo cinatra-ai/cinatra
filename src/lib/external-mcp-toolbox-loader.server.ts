@@ -26,6 +26,7 @@ import {
   type GeneratedConnectorFactoryEntry,
 } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
+import { checkMcpApprovalVocabulary } from "@/lib/mcp-approval-vocabulary";
 
 /**
  * Validate one toolbox-produced tool entry. Toolbox modules are extension
@@ -41,6 +42,11 @@ function isValidExternalMcpTool(tool: unknown): tool is ExtensionExternalMcpTool
     typeof candidate.serverUrl === "string"
   );
 }
+
+// Approval-vocabulary boundary check (llm-providers S2, #1713 AC2): shared
+// with the registration-driven `llm-toolbox` capability boundary
+// (`llm-toolbox-providers.ts`) via the ONE pure enforcement module — see
+// `mcp-approval-vocabulary.ts` for the drop/strip rules.
 
 /**
  * Sanitize a toolbox `buildTools` result: THROWS on a non-array (contract
@@ -61,7 +67,8 @@ export function sanitizeExternalMcpToolboxTools(
   const valid: ExtensionExternalMcpTool[] = [];
   for (const tool of built) {
     if (isValidExternalMcpTool(tool)) {
-      valid.push(tool);
+      const checked = checkMcpApprovalVocabulary(`toolbox "${slug}"`, tool);
+      if (checked) valid.push(checked);
     } else {
       console.warn(
         `[external-mcp-toolbox-loader] toolbox "${slug}" produced an invalid tool entry — dropped`,
