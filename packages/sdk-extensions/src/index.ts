@@ -714,3 +714,22 @@ export type {
   KnownCapabilityId,
   ResolvedCapabilityProvider,
 } from "./capability-contract-map";
+
+// L1 declared-environment leaf (exec-plane S3, cinatra#1708; epic #1705): the
+// CANONICAL internal env-spec type + the fail-closed parser + canonicalization
+// shared by BOTH declaration sources (packaged-agent manifests and project-
+// agent config) and consumed by the trusted environment builder
+// (@cinatra-ai/execution-plane). Pure data/validation — nothing here executes.
+export {
+  EXECUTION_ENVIRONMENT_MANAGERS,
+  EXECUTION_ENVIRONMENT_MAX_ENTRIES_PER_MANAGER,
+  EXECUTION_ENVIRONMENT_MAX_ENTRY_LENGTH,
+  EXECUTION_ENVIRONMENT_CARRIER_KIND,
+  parseExecutionEnvironment,
+  isEmptyExecutionEnvironment,
+  canonicalExecutionEnvironmentJson,
+  resolveExecutionEnvironmentClaim,
+  type ExecutionEnvironmentSpec,
+  type ExecutionEnvironmentManager,
+  type ParseExecutionEnvironmentResult,
+} from "./execution-environment";

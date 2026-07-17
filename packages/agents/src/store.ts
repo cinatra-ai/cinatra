@@ -144,6 +144,17 @@ export type AgentTemplateRecord = {
   // Grandfather clause: null origin rows are treated as "public" visibility.
   // Optional in the type so legacy fixture objects in tests remain valid.
   origin?: ExtensionOrigin | null;
+  // L1 declared execution environment (exec-plane S3, cinatra#1708): the RAW
+  // declared env for a PROJECT agent, normalized to the shared internal type
+  // via `parseExecutionEnvironment` (@cinatra-ai/sdk-extensions) at
+  // consumption — the same parser packaged-agent manifests go through, so
+  // both sources resolve to one internal type. OPTIONAL + additive: the
+  // agent-config storage column rides the per-agent configuration surface
+  // slice; until it lands, deserializeTemplate never sets this and env-less
+  // behavior is unchanged. Captured into the immutable version snapshot at
+  // save time (see buildSnapshotFromTemplate) so REQUIRED-pin runs resolve
+  // their environment from the pinned snapshot, never the live row.
+  executionEnvironment?: unknown;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -3322,6 +3333,18 @@ export type AgentTemplateVersionSnapshot = {
   packageVersion: string | null;
   lgGraphCode: string | null;                         // null for non-LangGraph templates
   lgGraphId: string | null;                           // null for non-LangGraph templates
+  /**
+   * L1 declared execution environment captured at save time (exec-plane S3,
+   * cinatra#1708): the resolved env spec is PART of the immutable version
+   * snapshot — a REQUIRED-pin run resolves its environment from THIS
+   * snapshot's recipe, never the live template row (an update must not swap
+   * the environment under a pinned run; see resolveRunExecutionEnvironment in
+   * ./execution-environment). OPTIONAL + shape-preserving: legacy snapshots
+   * (and env-less templates) omit the key entirely, so existing content
+   * hashes are untouched. New version = new recipe = new cache key falls out
+   * of the snapshot content hash covering this field when present.
+   */
+  executionEnvironment?: unknown;
 };
 
 export type AgentTemplateVersionRecord = {
@@ -3400,6 +3423,12 @@ export function buildSnapshotFromTemplate(
     packageVersion: template.packageVersion ?? null,
     lgGraphCode: template.lgGraphCode ?? null,         //
     lgGraphId: template.lgGraphId ?? null,             //
+    // Shape-preserving capture (cinatra#1708): the key exists ONLY when the
+    // template declares an environment, so env-less templates keep their
+    // legacy snapshot shape (and content hash) byte-for-byte.
+    ...(template.executionEnvironment != null
+      ? { executionEnvironment: template.executionEnvironment }
+      : {}),
   };
 }
 

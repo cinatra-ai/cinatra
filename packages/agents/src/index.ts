@@ -347,6 +347,14 @@ export type {
   AgentTemplateVersionListPage,
   ReadAgentTemplateVersionsOptions,
 } from "./store";
+// Project-agent L1 declared-environment surface (exec-plane S3,
+// cinatra#1708): normalization to the SAME internal type packaged agents
+// resolve to, plus the pinned-snapshot-first per-run resolution rule.
+export {
+  normalizeProjectAgentEnvironment,
+  resolveRunExecutionEnvironment,
+  type ResolvedRunEnvironment,
+} from "./execution-environment";
 export {
   createAgentRunPendingInput,
   updateAgentRunInputParams,

@@ -104,3 +104,69 @@ export {
   type ExecResult,
   type ExecFailureReason,
 } from "./types";
+
+// ---------------------------------------------------------------------------
+// L1 declared environments (exec-plane S3, cinatra#1708): the trusted
+// content-addressed builder, the layer cache + org-scoped recipe references +
+// retention GC + teardown participant, signed per-layer provenance, and the
+// promotion data seam. Worker/broker wiring of built layers (mounting the L1
+// image for a job) rides the app-layer service slice.
+// ---------------------------------------------------------------------------
+
+export {
+  ENVIRONMENT_BUILDER_VERSION,
+  computeEnvironmentSpecKey,
+  computeEnvironmentRecipeKey,
+  canonicalSpecKeyJson,
+  canonicalRecipeJson,
+  resolvedArtifactDigest,
+  type EnvironmentBuildPolicy,
+  type EnvironmentPlatform,
+  type EnvironmentSpecKeyInputs,
+  type EnvironmentBuildRecipe,
+} from "./environment/recipe";
+
+export {
+  signEnvironmentProvenance,
+  verifyEnvironmentProvenance,
+  type EnvironmentLayerProvenance,
+  type SignedEnvironmentLayerProvenance,
+} from "./environment/provenance";
+
+export {
+  EnvironmentLayerCache,
+  createInMemoryEnvironmentLayerStore,
+  makeEnvironmentTeardownParticipant,
+  DEFAULT_ENVIRONMENT_LAYER_RETENTION_MS,
+  type EnvironmentLayerCacheEntry,
+  type EnvironmentLayerCacheOptions,
+  type EnvironmentLayerPartition,
+  type EnvironmentLayerStore,
+  type EnvironmentRecipeReference,
+  type LayerLookupResult,
+  type ReferenceMatch,
+} from "./environment/cache";
+
+export {
+  TrustedEnvironmentBuilder,
+  EnvironmentBuildRefusedError,
+  renderEnvironmentDockerfile,
+  buildEnvironmentImageArgs,
+  assertNoCredentialBuildArgs,
+  resolveImageDigest,
+  L1_IMAGE_REPO,
+  ENV_LOCK_DIR,
+  DEFAULT_BUILD_REGISTRY_ALLOWLIST,
+  type TrustedEnvironmentBuilderOptions,
+  type EnsureEnvironmentLayerResult,
+} from "./environment/builder";
+
+export {
+  computePromotionCandidates,
+  applyPromotion,
+  DEFAULT_PROMOTION_WINDOW_RUNS,
+  DEFAULT_PROMOTION_THRESHOLD,
+  type ObservedAdhocInstall,
+  type PromotionCandidate,
+  type PromotionProposal,
+} from "./environment/promotion";

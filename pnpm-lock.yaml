@@ -1803,6 +1803,9 @@ importers:
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:../llm
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../sdk-extensions
     devDependencies:
       vitest:
         specifier: ^4.1.10

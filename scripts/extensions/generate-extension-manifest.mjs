@@ -428,6 +428,21 @@ export function resolveDashboardContributionClaim(kind, cin) {
   return isObj(cin?.dashboardContribution) ? cin.dashboardContribution : null;
 }
 
+// The RAW `cinatra.execution.environment` pass-through emitted onto a record
+// (exec-plane S3, cinatra#1708). CARRIER-KIND GATED: only `kind:"agent"` may
+// declare an L1 execution environment, so any other kind emits null even if a
+// stray declaration is present. Mirrors `resolveExecutionEnvironmentClaim` in
+// packages/sdk-extensions/src/execution-environment.ts (the sdk leaf owns the
+// semantic; a parity test pins the two). The value is carried UNVALIDATED —
+// the execution plane parses it FAIL-CLOSED via `parseExecutionEnvironment`
+// before any build (unknown keys / malformed entries reject the declaration
+// outright; a build recipe must never silently drop a declared package).
+export function resolveExecutionEnvironmentClaim(kind, cin) {
+  if (kind !== "agent") return null;
+  if (!isObj(cin?.execution)) return null;
+  return isObj(cin.execution.environment) ? cin.execution.environment : null;
+}
+
 // ---------------------------------------------------------------------------
 // Widget-stream capability declaration (`cinatra.widgetStream`).
 //
@@ -1565,6 +1580,15 @@ export async function buildManifest() {
       // until a successor agent ships the claim (no bundled extension declares it
       // yet), exactly like the artifact `ui` seam.
       dashboardContribution: resolveDashboardContributionClaim(x.kind, cin),
+      // RAW `cinatra.execution.environment` pass-through (exec-plane S3,
+      // cinatra#1708): the L1 declared-environment claim, emitted ONLY on
+      // kind:"agent" records (the sole carrier kind per the sdk leaf) — null
+      // on every other kind, and null when the agent declares none. Carried
+      // UNVALIDATED (same pattern as accessConfig/envOverrides/
+      // dashboardContribution); the execution plane validates it FAIL-CLOSED
+      // via `parseExecutionEnvironment` before any environment build. INERT
+      // until a bundled agent ships a declaration.
+      executionEnvironment: resolveExecutionEnvironmentClaim(x.kind, cin),
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
@@ -2410,6 +2434,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             accessConfig: r.accessConfig,
             envOverrides: r.envOverrides,
             dashboardContribution: r.dashboardContribution,
+            executionEnvironment: r.executionEnvironment,
           },
         )},`,
     )
