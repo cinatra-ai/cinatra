@@ -401,6 +401,11 @@ export type DriveAssistantChatTurnOptions = {
   authorUserId?: string;
   signal: AbortSignal;
   ui: AssistantChatTurnUiPort;
+  /** AG-UI producer endpoint. Defaults to the Cinatra endpoint
+   *  (`/api/assistants/chat`); the @chatgpt built-in targets
+   *  `/api/assistants/chatgpt` (cinatra#1218 predecessor 3). The durable-log
+   *  resume endpoint is producer-agnostic (runId-keyed), so it stays default. */
+  endpoint?: string;
 };
 
 /**
@@ -447,6 +452,10 @@ export async function driveAssistantChatTurn(
       streamAssistantTurn({
         threadId: options.threadId,
         messages: options.messages,
+        // Propagated on BOTH the initial attempt and the retry (this closure
+        // is re-invoked for the retry-once path) so the @chatgpt producer
+        // endpoint is never silently downgraded to the Cinatra endpoint.
+        ...(options.endpoint ? { endpoint: options.endpoint } : {}),
         signal,
         onState: (state) => {
           anyEventSeen = true;
