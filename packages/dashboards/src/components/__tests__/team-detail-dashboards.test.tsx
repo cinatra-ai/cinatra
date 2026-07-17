@@ -1,33 +1,33 @@
 // @vitest-environment jsdom
 //
-// Covers the `/teams/[teamId]` tabbed surface glue (cinatra#704): the tablist,
-// the Overview-aware renderer, and the Permissions slot. The renderer branch is
-// the per-surface seam OVER the landed shell (#701) + Overview portlets (#702) —
-// so this test drives the REAL `<EntityDashboardsShell>` + real toolbar controls
-// with a mocked data source, and asserts:
-//   - both tabs render; Dashboards is the default;
+// Covers the `/teams/[teamId]` dashboards-surface glue (cinatra#704, reshaped
+// by cinatra#1688): the Overview-aware renderer over the landed shell (#701) +
+// Overview portlets (#702). This test drives the REAL `<EntityDashboardsShell>`
+// + real toolbar controls with a mocked data source, and asserts:
 //   - the non-removable Overview renders the team summary AS render-only
 //     portlets (entity-metadata identity + entity-count members) — NOT the DC
 //     grid — with the dashboard-select + "+ New dashboard" primary controls;
-//   - the Permissions tab shows the team access slot, with NO customer-invite
-//     affordance (customers are project-only).
+//   - there is NO tablist and NO Permissions surface here (cinatra#1688: the
+//     former Permissions tab duplicated the members UI that
+//     `/teams/[teamId]/settings` hosts — the settings page is THE single
+//     team-management surface).
 //
 // The heavy leaves are mocked: the embedded DC grid (never rendered on the
 // Overview path; its real mount is proven by embedded-drizzle-cube-dashboard-grid
 // .test) and `<PortletHost>` (its real render of these exact entity-summary
 // portlets is proven by portlet-host.test + overview-config.test). This isolates
-// the #704 wiring.
+// the surface wiring.
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
-//     src/components/__tests__/team-detail-tabs.test.tsx
+//     src/components/__tests__/team-detail-dashboards.test.tsx
 
 import "./jsdom-shims";
 import React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 
 // The DC grid is only reached for a NON-default (custom) dashboard; the Overview
-// path never mounts it. Mock it so importing the tab shell pulls no
+// path never mounts it. Mock it so importing the surface pulls no
 // drizzle-cube/client into this test.
 vi.mock("../embedded-drizzle-cube-dashboard-grid", () => ({
   EmbeddedDrizzleCubeDashboardGrid: (props: { editable?: boolean }) => (
@@ -60,7 +60,7 @@ vi.mock("@/components/dashboards/portlet-host", () => ({
   ),
 }));
 
-import { TeamDetailTabs } from "../team-detail-tabs";
+import { TeamDetailDashboards } from "../team-detail-dashboards";
 import { buildTeamOverviewConfig } from "../seed-configs/overview-config";
 import type { DashboardConfigV1_1 } from "../../store/dashboard-config";
 import type {
@@ -111,41 +111,24 @@ const OVERVIEW_PORTLETS = buildTeamOverviewConfig({
   memberCount: 3,
 }).portlets;
 
-function renderTabs(opts: {
+function renderSurface(opts: {
   dataSource?: EntityDashboardsDataSource;
   list?: EntityDashboardsList;
-  permissionsSlot?: React.ReactNode;
 } = {}) {
   const list = opts.list ?? { dashboards: [OVERVIEW], canCreate: true };
   const dataSource = opts.dataSource ?? makeDataSource({}, list);
   return render(
-    <TeamDetailTabs
+    <TeamDetailDashboards
       dataSource={dataSource}
       overviewPortlets={OVERVIEW_PORTLETS}
       initialData={{ list, selectedId: OVERVIEW.id, config: EMPTY_CONFIG }}
-      permissionsSlot={
-        opts.permissionsSlot ?? (
-          <div data-testid="perms-slot">Team access configuration</div>
-        )
-      }
     />,
   );
 }
 
-describe("TeamDetailTabs — tablist", () => {
-  test("renders a Dashboards tab and a Permissions tab, Dashboards active first", () => {
-    renderTabs();
-    expect(screen.getByRole("tab", { name: "Dashboards" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Permissions" })).toBeTruthy();
-    expect(
-      screen.getByRole("tab", { name: "Dashboards" }).getAttribute("data-state"),
-    ).toBe("active");
-  });
-});
-
-describe("TeamDetailTabs — Dashboards tab (Overview = team info)", () => {
+describe("TeamDetailDashboards — Overview (team info)", () => {
   test("the Overview renders the team summary as render-only portlets (no DC grid)", () => {
-    renderTabs();
+    renderSurface();
     // Overview default selected → the render-only summary, not the grid.
     expect(screen.getByTestId("portlet-host")).toBeTruthy();
     expect(screen.queryByTestId("grid-mock")).toBeNull();
@@ -157,7 +140,7 @@ describe("TeamDetailTabs — Dashboards tab (Overview = team info)", () => {
   });
 
   test("the Overview carries the dashboard-select + New dashboard primary controls", () => {
-    renderTabs();
+    renderSurface();
     const toolbar = document.querySelector<HTMLElement>(
       "[data-cinatra-dashboard-toolbar]",
     );
@@ -172,29 +155,23 @@ describe("TeamDetailTabs — Dashboards tab (Overview = team info)", () => {
   });
 
   test("the non-removable Overview shows no rename/delete (manage) affordance", () => {
-    renderTabs();
+    renderSurface();
     expect(screen.queryByRole("button", { name: /^Manage / })).toBeNull();
   });
 
   test("no New dashboard control when the actor cannot create", () => {
-    renderTabs({
+    renderSurface({
       list: { dashboards: [{ ...OVERVIEW, canWrite: false }], canCreate: false },
     });
     expect(screen.queryByRole("button", { name: /New dashboard/ })).toBeNull();
   });
 });
 
-describe("TeamDetailTabs — Permissions tab", () => {
-  test("selecting Permissions shows the team access slot; no customer-invite affordance", () => {
-    renderTabs();
-    // Radix unmounts inactive content, so the slot is absent until selected.
-    expect(screen.queryByTestId("perms-slot")).toBeNull();
-
-    // Radix TabsTrigger activates on onMouseDown (or focus), not a bare click.
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "Permissions" }));
-
-    expect(screen.getByTestId("perms-slot")).toBeTruthy();
-    // Customers are a project-only concept — the team surface never offers one.
-    expect(screen.queryByText(/customer/i)).toBeNull();
+describe("TeamDetailDashboards — no Permissions surface (cinatra#1688)", () => {
+  test("renders no tablist and no Permissions tab — management lives on /settings", () => {
+    renderSurface();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByText("Permissions")).toBeNull();
   });
 });
