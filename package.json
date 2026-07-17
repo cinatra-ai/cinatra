@@ -350,7 +350,7 @@
     "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "7.0.0-dev.20260516.1",
     "esbuild": "0.25.12",
-    "eslint": "10.4.0",
+    "eslint": "10.7.0",
     "eslint-config-next": "16.2.10",
     "jsdom": "^29.1.1",
     "knip": "6.17.1",
