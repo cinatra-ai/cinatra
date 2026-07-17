@@ -1608,26 +1608,32 @@ jobs:
           # size to what fits behind a 6G disk margin, and ALWAYS remove a
           # partial file on failure — a swapfile that fills the disk kills the
           # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
           target=/
-          free_kb=$(df -Pk / | awk 'NR==2{print $4}')
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
           if [ -d /mnt ]; then
-            mnt_kb=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
           size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
-          [ "$size_kb" -gt "$want_kb" ] && size_kb=$want_kb
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
             echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
           elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h; df -h "$target"
+            swapon --show || true; free -h || true; df -h "$target" || true
           else
             echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
-            sudo rm -f "$SWAPFILE"
+            sudo rm -f "$SWAPFILE" || true
           fi
+          exit 0
 
       - name: Build app (production)
         if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -1809,26 +1815,32 @@ jobs:
           # size to what fits behind a 6G disk margin, and ALWAYS remove a
           # partial file on failure — a swapfile that fills the disk kills the
           # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
           target=/
-          free_kb=$(df -Pk / | awk 'NR==2{print $4}')
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
           if [ -d /mnt ]; then
-            mnt_kb=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
           size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
-          [ "$size_kb" -gt "$want_kb" ] && size_kb=$want_kb
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
             echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
           elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h; df -h "$target"
+            swapon --show || true; free -h || true; df -h "$target" || true
           else
             echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
-            sudo rm -f "$SWAPFILE"
+            sudo rm -f "$SWAPFILE" || true
           fi
+          exit 0
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -2395,26 +2407,32 @@ jobs:
           # size to what fits behind a 6G disk margin, and ALWAYS remove a
           # partial file on failure — a swapfile that fills the disk kills the
           # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
           target=/
-          free_kb=$(df -Pk / | awk 'NR==2{print $4}')
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
           if [ -d /mnt ]; then
-            mnt_kb=$(df -Pk /mnt | awk 'NR==2{print $4}')
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
           size_kb=$(( free_kb - 6*1024*1024 )); want_kb=$(( 20*1024*1024 ))
-          [ "$size_kb" -gt "$want_kb" ] && size_kb=$want_kb
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
             echo "::warning::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
           elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
-            swapon --show; free -h; df -h "$target"
+            swapon --show || true; free -h || true; df -h "$target" || true
           else
             echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
-            sudo rm -f "$SWAPFILE"
+            sudo rm -f "$SWAPFILE" || true
           fi
+          exit 0
 
       # Same inert env placeholders as the Dockerfile build stage; CI=true is
       # implicit on Actions runners, so next.config skips the in-build tsc
