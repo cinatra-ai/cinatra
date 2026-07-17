@@ -16,19 +16,20 @@
 // assistant turn in a thread, so the reduced view model is a single assistant
 // message that accretes as events fold.
 //
-// It MIRRORS the behavior of the bespoke `chat-stream-events` appliers, mapped
-// from the bespoke SSE vocabulary (`text` / `thinking_*` / `tool_call` /
-// `tool_result` / `citations` / `error`) onto the AG-UI vocabulary
-// (`TEXT_MESSAGE_*` / `TOOL_CALL_*` / `INTERRUPT`/`RESUME` / `DATA_PART` /
-// `RUN_*`). To guarantee identical trace/label/status behavior it REUSES the
-// existing tested pure helpers (`assistant-parts.ts` + the normalizers already
-// factored out of `chat-stream-events.ts`) rather than re-deriving them.
+// It MIRRORS the behavior of the former bespoke `chat-stream-events` appliers
+// (deleted by the cinatra#1218 delete stage), mapped from that SSE vocabulary
+// (`text` / `thinking_*` / `tool_call` / `tool_result` / `citations` /
+// `error`) onto the AG-UI vocabulary (`TEXT_MESSAGE_*` / `TOOL_CALL_*` /
+// `INTERRUPT`/`RESUME` / `DATA_PART` / `RUN_*`). To guarantee identical
+// trace/label/status behavior it REUSES the existing tested pure helpers
+// (`assistant-parts.ts` + the wire-agnostic normalizers relocated to
+// `./stream-normalizers`) rather than re-deriving them.
 //
 // CONSUMED BY `/chat` since S2 (#1218): the headless AG-UI chat client
 // (../ag-ui-chat-client.ts) folds the live wire through this reducer and
 // projects the reduced state onto the legacy UiMessage list, so the existing
-// renderer draws the unified stream unchanged. The bespoke wire stays behind
-// the `streamWire` kill-switch until the parity-gated delete stage.
+// renderer draws the unified stream unchanged. Since the delete stage this is
+// the ONLY `/chat` wire — the bespoke path and its kill-switch are gone.
 //
 // ── The bespoke → AG-UI mapping gaps (the reducer contract) ─────────────────
 //  • TOOL_CALL_END carries ONLY `toolCallId` — no `resultLabel`, no `result`
@@ -76,7 +77,7 @@ import {
   extractErrorMessage,
   mergeCitations,
   normalizeCitations,
-} from "../chat-stream-events";
+} from "./stream-normalizers";
 import type { UiCitation, UiThoughtGroup } from "../types";
 import type {
   AgUiEvent,

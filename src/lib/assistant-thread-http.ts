@@ -39,7 +39,8 @@ type ThreadSummary = {
  *
  * Ownership axes are derived from the EXISTING persisted row (never from the
  * request body) so a caller can never spoof `ownerUserId`/`teamId` to overwrite
- * or hijack another user's thread. Mirrors POST /api/chat/save exactly. */
+ * or hijack another user's thread. Mirrors the deleted legacy POST
+ * /api/chat/save exactly. */
 export async function handleSaveAssistantThread(request: Request): Promise<Response> {
   const session = await getAuthSession();
   if (!session) {
@@ -114,8 +115,8 @@ export async function handleSaveAssistantThread(request: Request): Promise<Respo
 }
 
 /** GET /api/assistants/threads — the caller's own + legacy-unowned thread list.
- * Mirrors GET /api/chat/threads. Team threads belong in the team panel, not
- * this list. */
+ * Mirrors the deleted legacy GET /api/chat/threads. Team threads belong in the
+ * team panel, not this list. */
 export async function handleListAssistantThreads(): Promise<Response> {
   const session = await getAuthSession();
   if (!session) {

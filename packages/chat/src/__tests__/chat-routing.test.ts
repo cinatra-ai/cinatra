@@ -86,15 +86,15 @@ describe("resolveDispatchPlan", () => {
   it("LLM turn → stream with endpoint default and built-in author id", () => {
     expect(resolveDispatchPlan({ shouldCallLlm: true }, undefined)).toEqual({
       kind: "stream",
-      endpoint: "/api/chat",
+      endpoint: "/api/assistants/chat",
       authorUserId: undefined,
     });
     expect(
       resolveDispatchPlan(
-        { shouldCallLlm: true, isBroadcast: true, chatEndpoint: "/api/chat/chatgpt", builtInMention: mention({ assistantUserId: "b-1" }) },
+        { shouldCallLlm: true, isBroadcast: true, chatEndpoint: "/api/assistants/chatgpt", builtInMention: mention({ assistantUserId: "b-1" }) },
         "chatgpt",
       ),
-    ).toEqual({ kind: "stream", endpoint: "/api/chat/chatgpt", authorUserId: "b-1" });
+    ).toEqual({ kind: "stream", endpoint: "/api/assistants/chatgpt", authorUserId: "b-1" });
   });
 
   it("keeps the 20s takeover window", () => {

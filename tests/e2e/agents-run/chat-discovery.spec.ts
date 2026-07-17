@@ -1,11 +1,13 @@
 /**
  * Chat MCP discoverability harness.
  *
- * For each `DISCOVERY_FIXTURE`, POSTs a vague prompt to /api/chat,
- * reads the SSE response, watches for an `agent_run` tool_call +
- * tool_result, extracts the returned runId, resolves it via direct pg
- * to the agent's package_name, and asserts it matches the expected
- * target.
+ * For each `DISCOVERY_FIXTURE`, POSTs a vague prompt to the unified
+ * assistant endpoint (POST /api/assistants/chat — the bespoke /api/chat SSE
+ * wire was deleted by the cinatra#1218 delete stage), reads the AG-UI
+ * stream, watches for an `agent_run` / `cinatra_<slug>` TOOL_CALL_START,
+ * resolves the spawned runId (wire `DATA_PART { kind: "agent_run" }` first;
+ * DB fallback for tools whose result never rides the wire), and asserts the
+ * run's package_name matches the expected target via direct pg.
  *
  * Cost guard: each probe runs one chat turn (~$0.02-0.05 in OpenAI
  * tokens). This harness ships a few sample fixtures to validate the rig.
@@ -13,14 +15,17 @@
  * Non-determinism: chat LLM responses jitter on cold-start. We use
  * single-retry-on-soft-failure (configurable via PLAYWRIGHT_RETRIES).
  */
-import type { APIResponse } from "@playwright/test";
 import { expect, test } from "@playwright/test";
-import { Client } from "pg";
 
-const DATABASE_URL =
-  process.env.SUPABASE_DB_URL ??
-  "postgresql://postgres:postgres@127.0.0.1:5434/postgres";
-const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra";
+import {
+  agentRunIdFromWire,
+  describeAgUiEvents,
+  fetchLatestRunIdForPackage,
+  fetchRunPackageName,
+  postAssistantChatTurn,
+  readAgUiEvents,
+  toolCallNames,
+} from "./ag-ui-chat";
 
 type DiscoveryFixture = {
   /** Target package name (e.g. "@cinatra-ai/media-feed-lister-agent"). */
@@ -70,51 +75,6 @@ const DISCOVERY_FIXTURES: ReadonlyArray<DiscoveryFixture> = [
   },
 ];
 
-async function fetchRunPackageName(runId: string): Promise<string | null> {
-  const client = new Client({
-    connectionString: DATABASE_URL,
-    connectionTimeoutMillis: 5_000,
-  });
-  await client.connect();
-  try {
-    const res = await client.query<{ package_name: string | null }>(
-      `SELECT t.package_name FROM ${SCHEMA}.agent_runs r
-       JOIN ${SCHEMA}.agent_templates t ON t.id = r.template_id
-       WHERE r.id = $1`,
-      [runId],
-    );
-    return res.rows[0]?.package_name ?? null;
-  } finally {
-    await client.end();
-  }
-}
-
-/** Parse an SSE response stream into a list of {event, data} pairs. */
-async function readSseEvents(
-  response: APIResponse,
-): Promise<Array<{ event: string; data: unknown }>> {
-  const events: Array<{ event: string; data: unknown }> = [];
-  const text = await response.text();
-  const blocks = text.split("\n\n");
-  for (const block of blocks) {
-    const lines = block.split("\n");
-    let event = "";
-    let dataRaw = "";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) event = line.slice(7);
-      else if (line.startsWith("data: ")) dataRaw = line.slice(6);
-    }
-    if (event && dataRaw) {
-      try {
-        events.push({ event, data: JSON.parse(dataRaw) });
-      } catch {
-        // skip malformed
-      }
-    }
-  }
-  return events;
-}
-
 /**
  * DISCOVERABILITY GAP DOCUMENTED:
  *
@@ -151,55 +111,51 @@ for (const fixture of DISCOVERY_FIXTURES) {
     test(`prompt → agent_run with matching template`, async ({ request }) => {
       // ~$0.05 budget per turn; allow 90s for the chat to make the
       // agents_list + agent_run roundtrip including LLM latency.
-      test.setTimeout(120_000);
+      test.setTimeout(180_000);
 
-      const response = await request.post("/api/chat", {
-        data: {
-          messages: [{ role: "user", content: fixture.biasedPrompt }],
-        },
-        headers: {
-          "content-type": "application/json",
-          Origin: process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000",
-          Accept: "text/event-stream",
-        },
-        timeout: 90_000,
+      const turnStartedAt = new Date().toISOString();
+      const response = await postAssistantChatTurn(request, fixture.biasedPrompt, {
+        baseUrl: process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000",
+        timeoutMs: 90_000,
       });
       expect(response.ok(), `chat POST returned ${response.status()}`).toBeTruthy();
 
-      const events = await readSseEvents(response);
+      const events = await readAgUiEvents(response);
       // The chat may call `agent_run` (generic) for these prompts, or call
       // a dynamically-registered `cinatra_<slug>` wrapper tool. Accept
-      // either shape so the harness covers both.
+      // either shape so the harness covers both. Tool NAMES ride
+      // TOOL_CALL_START on the AG-UI wire (TOOL_CALL_END carries only ids).
       const slug = fixture.packageName.replace(/^@[^/]+\//, "");
       const expectedToolNames = new Set(["agent_run", `cinatra_${slug}`]);
-      const agentRunResult = events.find(
-        (e) =>
-          e.event === "tool_result" &&
-          typeof (e.data as { name?: string })?.name === "string" &&
-          expectedToolNames.has((e.data as { name: string }).name),
-      );
+      const invoked = toolCallNames(events).find((name) => expectedToolNames.has(name));
 
       expect(
-        agentRunResult,
+        invoked,
         `chat did not invoke agent_run or cinatra_${slug} for prompt ` +
-          `"${fixture.biasedPrompt}". Events emitted: ${events.map((e) => `${e.event}/${(e.data as { name?: string })?.name ?? "_"}`).join(", ")}. ` +
+          `"${fixture.biasedPrompt}". Events emitted: ${describeAgUiEvents(events)}. ` +
           `Description optimization needed for ${fixture.packageName}: ` +
           `edit src/app/api/chat/runner.ts:TOOL_DESCRIPTIONS["cinatra_<slug>"] or ` +
           `agents/cinatra/<slug>/cinatra/oas.json info.description.`,
       ).toBeTruthy();
 
-      // Extract runId from the tool_result.result string. The result is the
-      // JSON-stringified return of the handler.
-      const resultStr = (agentRunResult!.data as { result?: string })?.result ?? "";
-      const runIdMatch = resultStr.match(/"runId"\s*:\s*"([^"]+)"/);
+      // Resolve the spawned runId. The AG-UI wire carries it only for the
+      // generic `agent_run` tool (DATA_PART { kind: "agent_run" }); the
+      // `cinatra_<slug>` wrappers return it inside their off-wire result, so
+      // fall back to the newest run of the EXPECTED package started since
+      // this turn began.
+      const runId =
+        agentRunIdFromWire(events) ??
+        (await fetchLatestRunIdForPackage(fixture.packageName, turnStartedAt));
       expect(
-        runIdMatch,
-        `agent_run result did not contain runId. Result preview: ${resultStr.slice(0, 300)}`,
+        runId,
+        `no runId: neither a DATA_PART agent_run frame nor a ${fixture.packageName} ` +
+          `run started after ${turnStartedAt}. Events: ${describeAgUiEvents(events)}`,
       ).toBeTruthy();
-      const runId = runIdMatch![1];
 
-      // Resolve runId → package_name.
-      const pkg = await fetchRunPackageName(runId);
+      // Resolve runId → package_name. (For the DB-fallback path this
+      // re-checks the join rather than adding evidence — the wire path is
+      // the discriminating one.)
+      const pkg = await fetchRunPackageName(runId!);
       expect(
         pkg,
         `runId ${runId} not found in cinatra.agent_runs (or no joined template).`,

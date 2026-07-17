@@ -15,19 +15,6 @@ import type { UiMessage } from "./types";
 export const EXTERNAL_TAKEOVER_MS = 20_000;
 
 /**
- * Legacy bespoke chat endpoint → its unified AG-UI producer (cinatra#1218
- * predecessor 3). A dispatch whose endpoint is a key here delegates to the
- * AG-UI wire when the cutover flag is on and the handshake succeeds; on a
- * fail-closed handshake it falls through to the SAME-keyed bespoke endpoint
- * (the retained safe-harbor until the mechanical delete stage). Endpoints not
- * listed here never delegate.
- */
-export const AG_UI_ENDPOINT_FOR_LEGACY: Record<string, string> = {
-  "/api/chat": "/api/assistants/chat",
-  "/api/chat/chatgpt": "/api/assistants/chatgpt",
-};
-
-/**
  * Cheap synchronous mention count. resolveMessageRouting is async; this regex
  * check is sufficient to switch to Slack mode NOW — in the same synchronous
  * batch as setMessages — so the message is never rendered in normal
@@ -125,7 +112,7 @@ export function resolveDispatchPlan(
   if (routing.shouldCallLlm) {
     return {
       kind: "stream",
-      endpoint: routing.chatEndpoint ?? "/api/chat",
+      endpoint: routing.chatEndpoint ?? "/api/assistants/chat",
       authorUserId: routing.builtInMention?.assistantUserId,
     };
   }
