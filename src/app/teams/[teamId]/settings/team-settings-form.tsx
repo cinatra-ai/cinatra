@@ -23,12 +23,21 @@ export function TeamSettingsForm({
   currentName,
   orgName,
   orgSlug,
+  canRenameName,
+  canRenameSlug,
 }: {
   teamId: string;
   currentSlug: string;
   currentName: string;
   orgName: string;
   orgSlug: string;
+  /** Viewer may rename the NAME (team admin / org owner-admin / platform
+   *  admin — the canManageTeamMembers tiers). UI honesty only; the server
+   *  action re-checks. */
+  canRenameName: boolean;
+  /** Viewer may rename the SLUG (team member AND org owner/admin — stricter,
+   *  no platform-admin bypass). UI honesty only; the server action re-checks. */
+  canRenameSlug: boolean;
 }) {
   const [slug, setSlug] = useState(currentSlug);
   const [name, setName] = useState(currentName);
@@ -43,7 +52,7 @@ export function TeamSettingsForm({
 
   const handleSlugSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canSubmitSlug) return;
+    if (!canRenameSlug || !canSubmitSlug) return;
     startTransition(async () => {
       const formData = new FormData();
       formData.set("teamId", teamId);
@@ -75,7 +84,7 @@ export function TeamSettingsForm({
 
   const handleNameSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canSubmitName) return;
+    if (!canRenameName || !canSubmitName) return;
     startTransition(async () => {
       const formData = new FormData();
       formData.set("teamId", teamId);
@@ -111,16 +120,19 @@ export function TeamSettingsForm({
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="e.g. Growth Team"
-            disabled={pending}
+            disabled={pending || !canRenameName}
             autoComplete="off"
           />
-          <Button type="submit" disabled={!canSubmitName}>
-            {pending ? "Saving…" : "Save"}
-          </Button>
+          {canRenameName ? (
+            <Button type="submit" disabled={!canSubmitName}>
+              {pending ? "Saving…" : "Save"}
+            </Button>
+          ) : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          The human-readable label shown across the app. Renaming it has no
-          side effects.
+          {canRenameName
+            ? "The human-readable label shown across the app. Renaming it has no side effects."
+            : "The human-readable label shown across the app. Only a team admin, org owner/admin, or platform admin can rename the team."}
         </p>
       </form>
       <form onSubmit={handleSlugSubmit} className="flex flex-col gap-3">
@@ -131,18 +143,20 @@ export function TeamSettingsForm({
             value={slug}
             onChange={(event) => setSlug(event.target.value)}
             placeholder="e.g. growth-team"
-            disabled={pending}
+            disabled={pending || !canRenameSlug}
             autoComplete="off"
             spellCheck={false}
           />
-          <Button type="submit" disabled={!canSubmitSlug}>
-            {pending ? "Saving…" : "Save"}
-          </Button>
+          {canRenameSlug ? (
+            <Button type="submit" disabled={!canSubmitSlug}>
+              {pending ? "Saving…" : "Save"}
+            </Button>
+          ) : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          Lowercase letters, digits, hyphens. Must start and end with alphanumeric. Max 63 chars.
-          Renaming triggers an on-disk move of skill content; the relocation worker handles it
-          asynchronously.
+          {canRenameSlug
+            ? "Lowercase letters, digits, hyphens. Must start and end with alphanumeric. Max 63 chars. Renaming triggers an on-disk move of skill content; the relocation worker handles it asynchronously."
+            : "The team's URL-friendly identifier. Only an organization owner/admin who is on this team can rename it."}
         </p>
       </form>
       <div className="flex flex-col gap-1" data-testid="team-org-readonly">

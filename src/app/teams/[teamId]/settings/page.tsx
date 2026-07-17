@@ -105,6 +105,16 @@ export default async function TeamSettingsPage({
   });
   if (!team.is_member && !canManage) redirect("/not-authorized");
 
+  // UI capabilities for the details form, mirroring each action's OWN server
+  // gate (they differ deliberately — see actions.ts):
+  //   name  — the canManage tiers (renameTeamNameAction uses the same predicate);
+  //   slug  — team member AND org owner/admin, no platform-admin bypass
+  //           (renameTeamSlugAction's two-stage gate).
+  // The server re-checks on submit either way; these only keep the form honest.
+  const canRenameName = canManage;
+  const canRenameSlug =
+    team.is_member && (orgRole === "org_admin" || orgRole === "org_owner");
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -131,6 +141,8 @@ export default async function TeamSettingsPage({
               currentName={team.name}
               orgName={team.org_name}
               orgSlug={team.org_slug}
+              canRenameName={canRenameName}
+              canRenameSlug={canRenameSlug}
             />
           </CardContent>
         </Card>
