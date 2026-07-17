@@ -1,0 +1,250 @@
+name: gemini-mcp-watch
+
+# Event-driven activation watch for Gemini remote-MCP on the GENERAL endpoints
+# (llm-providers epic, sub-issue S5 — cinatra#1716). It is the trigger that
+# fires the dormant S6 (cinatra#1717): S6 must NOT start until Google ships
+# server-side remote MCP for the general Gemini 3 endpoints with a published
+# request/response schema, and that arrival must be NOTICED on purpose — never
+# rediscovered by accident.
+#
+# Grounded 2026-07-16 (citations in cinatra#1716/#1717): server-side remote MCP
+# exists today ONLY for Managed/Antigravity agents (preview). The general
+# endpoints explicitly say "coming soon" — the authoritative doc carries the
+# literal sentence "Gemini 3 does not support remote MCP, this is coming soon."
+# and the js-genai SDK exposes only the CLIENT-side mcpToTool bridge (no
+# server-side mcp_server config token).
+#
+# Same class as the Renovate dependency-staleness alarm
+# (renovate-freshness-gate.yml): a scheduled check that OWNS its green path
+# (unchanged state ⇒ silent pass, auto-resolving any prior alert) and FAILS
+# VISIBLY when it cannot evaluate its sources — a dead watch must never
+# masquerade as "no news". On detecting a change it surfaces a labeled tracking
+# issue referencing S6 with the evidence (URL + UTC date) and NEVER auto-starts
+# any work: a human confirms the published schema and unblocks cinatra#1717.
+#
+# Retirement (S5 AC4): the watch self-retires once S6 (cinatra#1717) is closed —
+# it green-skips early — so a completed activation stops the noise without a
+# manual teardown (the file may also simply be deleted after S6 lands).
+
+on:
+  schedule:
+    - cron: "41 7 * * *" # daily 07:41 UTC (offset from the other daily gates)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: gemini-mcp-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    if: github.repository == 'cinatra-ai/cinatra'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # The dormant consumer this watch fires. Referenced (never auto-mutated).
+      S6_ISSUE: "1717"
+      # Idempotency keys: at most one open issue per class, edited in place.
+      TRIGGER_LABEL: "gemini-mcp-watch"
+      HEALTH_LABEL: "gemini-mcp-watch-health"
+      # Watched authoritative signals (S5 AC1). URLs are env so a review sees the
+      # exact surface; a move/restructure is caught by the health path below.
+      DOC_URL: "https://ai.google.dev/gemini-api/docs/interactions-overview"
+      FC_URL: "https://ai.google.dev/gemini-api/docs/generate-content/function-calling"
+      REL_URL: "https://api.github.com/repos/googleapis/js-genai/releases?per_page=10"
+    steps:
+      - name: Watch Gemini remote-MCP availability on the general endpoints
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          NOW_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          # --- S5 AC4: self-retire once S6 has completed. --------------------
+          # Fail CLOSED on a lookup error: an inability to establish S6's state
+          # must never silently proceed (a closed S6 could still get alerted) nor
+          # masquerade as "no news" — it is a visible failure.
+          if s6_state="$(gh issue view "$S6_ISSUE" --repo "$REPO" --json state --jq '.state' 2>/dev/null)"; then
+            if [ "$s6_state" = "CLOSED" ]; then
+              echo "::notice::S6 (#${S6_ISSUE}) is closed — Gemini remote-MCP watch retired. No action."
+              exit 0
+            fi
+            echo "S6 (#${S6_ISSUE}) is ${s6_state} — watch active."
+          else
+            echo "::error::Could not determine S6 (#${S6_ISSUE}) state (gh lookup failed). Failing visibly rather than running blind or masking a completed S6."
+            exit 1
+          fi
+
+          # --- Fetch a source; echo the HTTP status, save the body. ----------
+          # Returns 0 on a 2xx (body in $2), non-zero otherwise. Retries absorb
+          # transient blips so a real non-2xx means the surface is unreachable.
+          fetch() {
+            url="$1"; out="$2"; shift 2
+            code="$(curl -sS -L --max-time 45 --retry 3 --retry-delay 5 \
+              -A 'cinatra-gemini-mcp-watch (+https://github.com/cinatra-ai/cinatra)' \
+              "$@" -o "$out" -w '%{http_code}' "$url" || echo 000)"
+            echo "$code"
+            case "$code" in 2??) return 0 ;; *) return 1 ;; esac
+          }
+
+          tmp="${RUNNER_TEMP:-/tmp}"
+          doc_code="$(fetch "$DOC_URL"  "$tmp/doc.html" || true)"
+          fc_code="$(fetch  "$FC_URL"   "$tmp/fc.html"  || true)"
+          rel_code="$(fetch "$REL_URL"  "$tmp/rel.json" -H "Authorization: Bearer ${GH_TOKEN}" -H 'X-GitHub-Api-Version: 2022-11-28' || true)"
+          is2xx() { case "$1" in 2??) return 0 ;; *) return 1 ;; esac; }
+
+          # Every content probe greps the file DIRECTLY (case-insensitive) — never
+          # `printf "$big" | grep -q`, whose early-match SIGPIPE trips `pipefail`
+          # and intermittently drops the `&&` result (false alerts).
+          #
+          # The server-side sentinel is the config token `mcp_server`/`mcpServer`
+          # (regex `mcp[_-]?server`): it denotes server-side INJECTION config, is
+          # ABSENT from all three sources today, and the client-side `mcpToTool`
+          # bridge normalizes to `mcptotool` and never matches it. A bare "remote
+          # MCP" phrase is deliberately NOT used as a token — it also describes the
+          # client bridge and would false-positive.
+          SERVER_TOKEN='mcp[_-]?server'
+
+          # interactions-overview (authoritative general-endpoint status):
+          #   topic_present    — still discusses "remote MCP" at all (absent ⇒ the
+          #                      page moved/restructured ⇒ health, NOT a trigger).
+          #   negative_present — the literal "does not support remote MCP" state;
+          #                      while present, general endpoints still lack it.
+          #   doc_positive     — reachable + still on-topic + the "does not support"
+          #                      state DROPPED ⇒ the general-endpoint status flipped.
+          topic_present=0; negative_present=0; doc_positive=0
+          if is2xx "$doc_code"; then
+            grep -qiF "remote mcp" "$tmp/doc.html" && topic_present=1 || true
+            grep -qiF "does not support remote mcp" "$tmp/doc.html" && negative_present=1 || true
+            [ "$topic_present" = "1" ] && [ "$negative_present" = "0" ] && doc_positive=1 || true
+          fi
+
+          # function-calling doc + js-genai SDK: a server-side token appearing on
+          # EITHER surface is an independent shipment signal (S5 AC1/AC2 — the doc
+          # or an SDK release "exposing it").
+          fc_positive=0
+          if is2xx "$fc_code"; then
+            grep -qiE "$SERVER_TOKEN" "$tmp/fc.html" && fc_positive=1 || true
+          fi
+          sdk_positive=0
+          if is2xx "$rel_code"; then
+            grep -qiE "$SERVER_TOKEN" "$tmp/rel.json" && sdk_positive=1 || true
+          fi
+
+          # shipped: ANY reachable source shows a positive signal.
+          # health : any source unreachable, OR the doc moved (topic gone).
+          shipped=0
+          { [ "$doc_positive" = "1" ] || [ "$fc_positive" = "1" ] || [ "$sdk_positive" = "1" ]; } && shipped=1 || true
+          health=0
+          if ! is2xx "$doc_code" || ! is2xx "$fc_code" || ! is2xx "$rel_code" || { is2xx "$doc_code" && [ "$topic_present" = "0" ]; }; then
+            health=1
+          fi
+
+          echo "doc=${doc_code}(topic=${topic_present},neg=${negative_present},pos=${doc_positive}) fc=${fc_code}(pos=${fc_positive}) rel=${rel_code}(pos=${sdk_positive}) shipped=${shipped} health=${health}"
+
+          # --- Decide (order matters). ---------------------------------------
+          # A real shipment signal WINS over a partial outage: a positive signal
+          # only ever comes from a REACHABLE source, so it is never fabricated by
+          # an outage — and it must not be buried under a health alert (S5 AC2).
+          # Otherwise an unevaluable source fails visibly (S5 AC3). Green requires
+          # ALL sources reachable, the doc still unsupported, and no server token.
+          mode="green"; reason=""
+          if [ "$shipped" = "1" ]; then
+            mode="trigger"
+            parts=""
+            [ "$doc_positive" = "1" ] && parts="${parts}the interactions doc dropped its \"Gemini 3 does not support remote MCP, this is coming soon.\" state while still documenting remote MCP; "
+            [ "$fc_positive" = "1" ]  && parts="${parts}the function-calling doc now carries a server-side remote-MCP config token (\`mcp_server\`); "
+            [ "$sdk_positive" = "1" ] && parts="${parts}a js-genai SDK release now exposes a server-side remote-MCP config token (\`mcp_server\`); "
+            reason="A possible Gemini remote-MCP change on the GENERAL endpoints: ${parts%%; }. This may only be the Managed/Antigravity preview surfacing — a human must confirm GENERAL-endpoint support with a published schema."
+            [ "$health" = "1" ] && reason="${reason} NOTE: one or more OTHER sources were unreachable this run (interactions-overview=${doc_code}, function-calling=${fc_code}, js-genai releases=${rel_code}); the signal above still stands."
+          elif [ "$health" = "1" ]; then
+            mode="health"
+            reason="The watch could not evaluate its sources. HTTP: interactions-overview=${doc_code}, function-calling=${fc_code}, js-genai releases=${rel_code}; doc mentions remote MCP=${topic_present}. A source is unreachable or the documented surface moved/restructured — the watched sentinel can no longer be evaluated, so this run cannot assert \"no news\"."
+          fi
+
+          # --- Green: silent pass, auto-resolve any prior alert. -------------
+          resolve_open() {
+            label="$1"; note="$2"
+            n="$(gh issue list --repo "$REPO" --label "$label" --state open --json number --jq '(first.number // "")')"
+            if [ -n "$n" ]; then
+              gh issue comment "$n" --repo "$REPO" --body "$note"
+              gh issue close "$n" --repo "$REPO" --reason completed
+              echo "Auto-resolved #$n ($label)."
+            fi
+          }
+          if [ "$mode" = "green" ]; then
+            echo "State unchanged: general Gemini 3 endpoints still lack remote MCP (doc sentinel present, SDK clean). Silent pass."
+            resolve_open "$TRIGGER_LABEL" "Auto-resolved by \`gemini-mcp-watch\`: the general Gemini 3 endpoints again read as lacking remote MCP (doc sentinel present, SDK clean) as of ${NOW_UTC}. Closing."
+            resolve_open "$HEALTH_LABEL"  "Auto-resolved by \`gemini-mcp-watch\`: all watched sources are reachable and the sentinel is evaluable again as of ${NOW_UTC}. Closing."
+            exit 0
+          fi
+
+          # --- Non-green: surface the labeled tracking issue, then fail. -----
+          if [ "$mode" = "trigger" ]; then
+            label="$TRIGGER_LABEL"; color="0e8a16"
+            title="Gemini remote-MCP watch FIRED — evaluate S6 activation (#${S6_ISSUE})"
+          else
+            label="$HEALTH_LABEL"; color="b60205"
+            title="Gemini remote-MCP watch unhealthy — sources unreachable/moved"
+          fi
+          gh label create "$label" --repo "$REPO" --color "$color" \
+            --description "Gemini remote-MCP activation watch (S5 / cinatra#1716)" 2>/dev/null || true
+
+          body_file="${tmp}/gemini-mcp-watch-body.md"
+          {
+            if [ "$mode" = "trigger" ]; then
+              printf '## Gemini remote-MCP availability may have changed on the GENERAL endpoints\n\n'
+              printf '%s\n\n' "$reason"
+              printf 'This is the **S5 → S6 trigger** for the dormant Gemini native-MCP activation, **#%s** (S6). ' "$S6_ISSUE"
+              printf 'It does **NOT** auto-start any work.\n\n'
+              printf '### Detected evidence\n'
+              printf '| Signal | URL | HTTP | Observation |\n'
+              printf '| --- | --- | --- | --- |\n'
+              printf '| interactions-overview | %s | %s | covers remote MCP=%s · "does not support" state present=%s · **status-flip signal=%s** |\n' "$DOC_URL" "$doc_code" "$topic_present" "$negative_present" "$doc_positive"
+              printf '| function-calling | %s | %s | **server-side token (`mcp_server`) present=%s** (vs the existing client-side mcpToTool bridge) |\n' "$FC_URL" "$fc_code" "$fc_positive"
+              printf '| js-genai releases | %s | %s | **server-side token (`mcp_server`) present=%s** |\n' "$REL_URL" "$rel_code" "$sdk_positive"
+              printf '\n**Detected (UTC):** %s\n' "$NOW_UTC"
+              printf '**Detected by:** `.github/workflows/gemini-mcp-watch.yml` (run: %s)\n\n' "$RUN_URL"
+              printf '### Human action required (do NOT auto-start S6)\n'
+              printf '1. Open the watched doc(s) above and confirm Google shipped **server-side remote MCP for the GENERAL Gemini 3 endpoints** (not only the Managed/Antigravity preview) **with a published request/response schema**.\n'
+              printf '2. If confirmed: unblock **#%s** (S6) and proceed with its safely-ordered connector-release plan (translator behind a disabled gate → declaration flip → gate enabled last after E2E conformance). Record the confirming URL + date on #%s.\n' "$S6_ISSUE" "$S6_ISSUE"
+              printf '3. If this was a doc reword with no actual availability change: note it here; the watch auto-closes this issue on the next run once the "does not support" state is observed again.\n'
+            else
+              printf '## Gemini remote-MCP watch could not evaluate its sources\n\n'
+              printf '%s\n\n' "$reason"
+              printf 'A dead watch must not read as "no news" (S5 AC3), so this run **fails visibly** instead of passing silently.\n\n'
+              printf '### Source status\n'
+              printf '| Signal | URL | HTTP | Note |\n'
+              printf '| --- | --- | --- | --- |\n'
+              printf '| interactions-overview | %s | %s | mentions remote MCP=%s |\n' "$DOC_URL" "$doc_code" "$topic_present"
+              printf '| function-calling | %s | %s |  |\n' "$FC_URL" "$fc_code"
+              printf '| js-genai releases | %s | %s |  |\n' "$REL_URL" "$rel_code"
+              printf '\n**Observed (UTC):** %s\n' "$NOW_UTC"
+              printf '**Detected by:** `.github/workflows/gemini-mcp-watch.yml` (run: %s)\n\n' "$RUN_URL"
+              printf '### Owner action required (re-ground the watch)\n'
+              printf '1. Open the failing source URL(s) above; Google may have moved/renamed the doc or changed the sentinel wording, or the js-genai releases API was unreachable.\n'
+              printf '2. Update `DOC_URL`/`FC_URL`/`REL_URL` and the sentinel strings in `.github/workflows/gemini-mcp-watch.yml` to the new authoritative surface (this is a HIGH-RISK `.github/**` change → owner-reviewed PR).\n'
+              printf '3. This issue auto-closes on the next healthy run.\n'
+            fi
+            printf '\n---\nGrounded per cinatra#%s (S5) · consumer cinatra#%s (S6) · part of the LLM-providers epic.\n' "1716" "$S6_ISSUE"
+          } > "$body_file"
+
+          existing="$(gh issue list --repo "$REPO" --label "$label" --state open --json number --jq '(first.number // "")')"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "$REPO" --body-file "$body_file"
+            gh issue comment "$existing" --repo "$REPO" --body "Re-observed on this run (${NOW_UTC}): ${reason}"
+            echo "Updated existing #${existing} (${label})."
+          else
+            new="$(gh issue create --repo "$REPO" --title "$title" --label "$label" --body-file "$body_file")"
+            echo "Opened ${new}"
+          fi
+
+          if [ "$mode" = "trigger" ]; then
+            echo "::error::Gemini remote-MCP watch FIRED — evaluate S6 (#${S6_ISSUE}) activation. See the surfaced issue."
+          else
+            echo "::error::Gemini remote-MCP watch is unhealthy (a watched source is unreachable/moved). See the surfaced issue."
+          fi
+          exit 1
