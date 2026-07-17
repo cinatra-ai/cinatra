@@ -58,6 +58,39 @@ describe("enqueue_agent_owner_move scope-stripping SQL shape (cinatra#550)", () 
   });
 });
 
+describe("enqueue_agent_owner_move degrade-with-diagnostic on an unresolvable owner (cinatra#1703)", () => {
+  const fn = triggerSql();
+
+  it("skips the relocation with a sanitized WARNING (never a boot-aborting EXCEPTION) when a prefix is NULL", () => {
+    // cinatra#1703: an orphaned/ephemeral row (a run-token / deleted-user /
+    // deleted-org owner) resolves to a NULL on-disk prefix. The boot-time owner
+    // backfill UPDATEs such rows and fires this trigger; it USED to
+    // `RAISE EXCEPTION 'cannot resolve owner paths'`, aborting the WHOLE boot.
+    // It must now DEGRADE-WITH-DIAGNOSTIC — WARNING + RETURN NEW (skip) —
+    // whether the CURRENT owner OR the move target is the unresolvable side.
+    expect(fn).not.toMatch(/cannot resolve owner paths/);
+    expect(fn).toMatch(
+      /IF old_prefix IS NULL OR new_prefix IS NULL THEN[\s\S]*?RAISE WARNING 'enqueue_agent_owner_move: skipping relocation for template %[\s\S]*?RETURN NEW;\s*END IF;/,
+    );
+  });
+
+  it("emits only the template id in the diagnostic, never the owner value (sanitized)", () => {
+    // The WARNING interpolates `NEW.id` and describes the owner as unresolvable
+    // WITHOUT echoing owner_level/owner_id (no principal value leaks to logs).
+    expect(fn).toMatch(
+      /RAISE WARNING 'enqueue_agent_owner_move: skipping relocation for template %[^']*', NEW\.id;/,
+    );
+    expect(fn).not.toMatch(/RAISE WARNING[^;]*NEW\.owner_id/);
+    expect(fn).not.toMatch(/RAISE WARNING[^;]*OLD\.owner_id/);
+  });
+
+  it("keeps the fail-closed guard for a missing package_name (unchanged, out of #1703 scope)", () => {
+    expect(fn).toMatch(
+      /RAISE EXCEPTION 'enqueue_agent_owner_move: template % has no package_name'/,
+    );
+  });
+});
+
 describe("scope-strip regex semantics (mirror of agentPackageNameToPath)", () => {
   // Same pattern Postgres POSIX regexp_replace applies inside the trigger.
   const RE = /^@([^/]+)\/(.+)$/;
