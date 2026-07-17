@@ -102,6 +102,8 @@ function bearerRow(scope: string): ExternalMcpServerRecord {
     orgId: null,
     userId: scope === "user" ? "owner1" : null,
     enabled: true,
+    // "unknown" despite the /sse URL — transport is never inferred from the URL (#1713).
+    transport: "unknown",
     allowedTools: null,
     allowedCatalogTools: null,
     createdAt: "",

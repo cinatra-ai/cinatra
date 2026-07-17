@@ -33,6 +33,34 @@ export const EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY = "cinatra-external-mcp";
 // rows now, and actor-aware paths can honor them where supported.
 export type ExternalMcpServerScope = "global" | "org" | "team" | "user" | "workspace";
 
+// ---------------------------------------------------------------------------
+// Transport vocabulary (llm-providers S2, #1713). The MCP wire transport a
+// server speaks, persisted as first-class data so the injection layer never
+// INFERS transport from an HTTP URL (Gemini's documented MCP is
+// Streamable-HTTP-only, but the rule stands on its own for every provider).
+//   - "streamable-http" → the modern MCP Streamable HTTP transport.
+//   - "sse"             → the legacy HTTP+SSE transport.
+//   - "unknown"         → transport not classified. LEGACY rows (written before
+//                         this column existed) and any unrecognized stored value
+//                         land here; the adapter-facing injection refusal (wired
+//                         in the post-#1707 adapter half) fails closed against
+//                         "unknown" for providers whose declared capability does
+//                         not accept it.
+// ---------------------------------------------------------------------------
+export const EXTERNAL_MCP_TRANSPORTS = ["streamable-http", "sse", "unknown"] as const;
+export type ExternalMcpServerTransport = (typeof EXTERNAL_MCP_TRANSPORTS)[number];
+
+/**
+ * Coerce a raw stored / caller-supplied transport value to the closed
+ * vocabulary. Any value that is not exactly `"streamable-http"` or `"sse"`
+ * classifies as `"unknown"` — this is the single place legacy rows (a NULL /
+ * absent column before the S2 migration) and unrecognized values become
+ * `"unknown"`, fail-closed. Never infers from the URL.
+ */
+export function normalizeExternalMcpTransport(value: unknown): ExternalMcpServerTransport {
+  return value === "streamable-http" || value === "sse" ? value : "unknown";
+}
+
 export type ExternalMcpServerRecord = {
   id: string;
   label: string;
@@ -42,6 +70,14 @@ export type ExternalMcpServerRecord = {
   orgId: string | null;
   userId: string | null;
   enabled: boolean;
+  /**
+   * MCP wire transport this server speaks (llm-providers S2, #1713). Legacy
+   * rows classify as `"unknown"` (the migration backfills the column default);
+   * `toRecord` coerces any unexpected stored value through
+   * `normalizeExternalMcpTransport`. Persisted end-to-end so the injection
+   * layer never infers transport from the URL.
+   */
+  transport: ExternalMcpServerTransport;
   /**
    * Layer A — native MCP allowlist.
    * Filters which native MCP tools (e.g. `execute_tool`, `get_tool_catalog`)
@@ -63,12 +99,18 @@ export type ExternalMcpServerRecord = {
 
 export type ExternalMcpServerUpsertInput = Omit<
   ExternalMcpServerRecord,
-  "createdAt" | "updatedAt" | "allowedTools" | "allowedCatalogTools"
+  "createdAt" | "updatedAt" | "allowedTools" | "allowedCatalogTools" | "transport"
 > & {
   /** Optional on upsert; defaults to null (legacy "no filter"). */
   allowedTools?: string[] | null;
   /** Optional on upsert; defaults to null (legacy "no filter"). */
   allowedCatalogTools?: string[] | null;
+  /**
+   * Optional on upsert; defaults to `"unknown"` (llm-providers S2, #1713). An
+   * operator write surface may set it explicitly; an omitted value persists
+   * `"unknown"` — the transport is never inferred from `serverUrl`.
+   */
+  transport?: ExternalMcpServerTransport;
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +145,7 @@ type RawRow = {
   enabled: boolean;
   allowed_tools: string[] | null;
   allowed_catalog_tools: string[] | null;
+  transport: string | null;
   created_at: string | Date;
   updated_at: string | Date;
 };
@@ -128,6 +171,7 @@ function toRecord(row: RawRow): ExternalMcpServerRecord {
     allowedCatalogTools: Array.isArray(row.allowed_catalog_tools)
       ? row.allowed_catalog_tools
       : null,
+    transport: normalizeExternalMcpTransport(row.transport),
     createdAt: typeof row.created_at === "string" ? row.created_at : row.created_at.toISOString(),
     updatedAt: typeof row.updated_at === "string" ? row.updated_at : row.updated_at.toISOString(),
   };
@@ -151,7 +195,7 @@ export function listExternalMcpServers(): ExternalMcpServerRecord[] {
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" ORDER BY created_at ASC`,
+        text: `SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" ORDER BY created_at ASC`,
       },
     ],
   });
@@ -191,7 +235,7 @@ export function getExternalMcpServerByIdFresh(id: string): ExternalMcpServerReco
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" WHERE id = $1 LIMIT 1`,
+        text: `SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" WHERE id = $1 LIMIT 1`,
         values: [id],
       },
     ],
@@ -454,8 +498,8 @@ export function upsertExternalMcpServer(input: ExternalMcpServerUpsertInput): vo
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
+        text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
                ON CONFLICT (id) DO UPDATE SET
                  label = EXCLUDED.label,
                  server_url = EXCLUDED.server_url,
@@ -466,6 +510,7 @@ export function upsertExternalMcpServer(input: ExternalMcpServerUpsertInput): vo
                  enabled = EXCLUDED.enabled,
                  allowed_tools = EXCLUDED.allowed_tools,
                  allowed_catalog_tools = EXCLUDED.allowed_catalog_tools,
+                 transport = EXCLUDED.transport,
                  updated_at = now()`,
         values: [
           input.id,
@@ -478,6 +523,7 @@ export function upsertExternalMcpServer(input: ExternalMcpServerUpsertInput): vo
           input.enabled,
           input.allowedTools ?? null,
           input.allowedCatalogTools ?? null,
+          input.transport ?? "unknown",
         ],
       },
     ],
@@ -562,8 +608,8 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
+        text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
                ON CONFLICT (id) DO NOTHING
                RETURNING id`,
         values: [
@@ -577,6 +623,7 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
           input.enabled,
           input.allowedTools ?? null,
           input.allowedCatalogTools ?? null,
+          input.transport ?? "unknown",
         ],
       },
     ],
@@ -621,6 +668,7 @@ export function updateExternalMcpServerGuarded(
     input.enabled,
     input.allowedTools ?? null,
     input.allowedCatalogTools ?? null,
+    input.transport ?? "unknown",
     expected.scope,
     expected.userId,
   ];
@@ -639,11 +687,12 @@ export function updateExternalMcpServerGuarded(
                  enabled = $8,
                  allowed_tools = $9,
                  allowed_catalog_tools = $10,
+                 transport = $11,
                  updated_at = now()
                WHERE id = $1
-                 AND scope = $11
-                 AND user_id IS NOT DISTINCT FROM $12${
-                   witnessNango ? "\n                 AND nango_connection_id IS NOT DISTINCT FROM $13" : ""
+                 AND scope = $12
+                 AND user_id IS NOT DISTINCT FROM $13${
+                   witnessNango ? "\n                 AND nango_connection_id IS NOT DISTINCT FROM $14" : ""
                  }
                RETURNING id`,
         values,
@@ -756,6 +805,9 @@ export async function buildRegisteredExternalMcpServerTools(): Promise<LlmMcpSer
         serverDescription: `External MCP server: ${row.label}`,
         allowedTools: row.allowedTools,
         requireApproval: "never",
+        // Transport persisted on the row (llm-providers S2, #1713); legacy rows
+        // classify as "unknown". Never inferred from serverUrl.
+        transport: row.transport,
       });
     }
     return tools;
@@ -847,6 +899,9 @@ export async function buildSingleExternalMcpTool(
       serverDescription: `External MCP server: ${row.label}`,
       allowedTools: row.allowedTools,
       requireApproval: "never",
+      // Transport persisted on the row (llm-providers S2, #1713); legacy rows
+      // classify as "unknown". Never inferred from serverUrl.
+      transport: row.transport,
     };
   } catch (err) {
     console.warn(

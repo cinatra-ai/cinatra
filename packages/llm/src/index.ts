@@ -71,6 +71,23 @@ export type {
   AttachmentResolverPorts,
 } from "./attachments/resolve-attachments";
 
+// External-MCP provider materializer (pure; llm-providers S2, #1713). Not
+// wired into any adapter yet — the adapter-facing serialization lands in the
+// post-#1707 adapter half. Exported here for the adapters + their tests.
+export {
+  materializeExternalMcpServers,
+  normalizeMcpServerName,
+  validateMcpServerUrl,
+  resolveSingleAuthorization,
+} from "./mcp-materializer";
+export type {
+  McpTransport,
+  McpMaterializerInput,
+  MaterializedMcpServer,
+  McpMaterializerError,
+  McpMaterializerResult,
+} from "./mcp-materializer";
+
 // Batch errors
 export { BatchNotSupportedError } from "./errors";
 
