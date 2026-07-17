@@ -49,7 +49,11 @@ import { listGuestRows, type GuestRow } from "./permissions/guest-actions";
 // failure yields the generic title.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   try {
-    const session = await requireAuthSession();
+    // Non-throwing session read: requireAuthSession() redirects (throws
+    // NEXT_REDIRECT), which this try/catch would swallow. No session → the
+    // generic title; the page component itself still redirects.
+    const session = await authSession.getAuthSession();
+    if (!session) return { title: "Project" };
     const { projectId } = await params;
     const rows = await projectsDb
       .select()

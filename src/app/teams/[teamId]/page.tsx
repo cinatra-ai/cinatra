@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { sql } from "drizzle-orm";
 
 import {
+  getAuthSession,
   isPlatformAdmin,
-  requireAuthSession,
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
 import { betterAuthDb } from "@/lib/better-auth-db";
@@ -19,7 +19,10 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   try {
     const { teamId } = await params;
-    const session = await requireAuthSession();
+    // Non-throwing session read: requireAuthSession() redirects (throws
+    // NEXT_REDIRECT), which this try/catch would swallow.
+    const session = await getAuthSession();
+    if (!session) return { title: "Team" };
     const rows = await betterAuthDb.execute<{
       name: string;
       organizationId: string;

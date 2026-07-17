@@ -286,6 +286,10 @@ export function AppShell({
   useEffect(() => {
     const onCrumbsChanged = () => setCrumbBusVersion((v) => v + 1);
     window.addEventListener(CRUMB_CONTRIBUTIONS_EVENT, onCrumbsChanged);
+    // Effects run bottom-up: descendant publisher islands fire before this
+    // ancestor subscribes, so seed once to pick up the already-parked
+    // snapshot instead of waiting for the next publication.
+    onCrumbsChanged();
     return () => window.removeEventListener(CRUMB_CONTRIBUTIONS_EVENT, onCrumbsChanged);
   }, []);
 

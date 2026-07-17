@@ -19,7 +19,7 @@
 // happens on the next route's publish, fencing via (pathname, epoch) scoping
 // in the bus.
 
-import { useEffect, useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 
 import {
@@ -43,7 +43,21 @@ export function CrumbContributions({
   // component a fresh array identity each pass; serializing keeps the publish
   // idempotent instead of re-firing per render.
   const serialized = JSON.stringify(entries);
+  // Epoch-capture guard: these entries were authorized by the server render
+  // that delivered them, under the epoch current at that time. If the epoch
+  // context later changes while THIS island instance survives with the SAME
+  // entries (the router cache re-using a page rendered under the previous
+  // session/org while the root layout re-renders), republishing would stamp
+  // previously-authorized names into the new scope and defeat the bus fence.
+  // Fresh entries (serialized changed = a new server pass delivered them)
+  // re-arm the guard to the then-current epoch; an epoch change alone blocks
+  // the publish — the crumb degrades to its placeholder, never to a leak.
+  const armedRef = useRef<{ serialized: string; epoch: string } | null>(null);
   useEffect(() => {
+    if (armedRef.current?.serialized !== serialized) {
+      armedRef.current = { serialized, epoch };
+    }
+    if (armedRef.current.epoch !== epoch) return;
     publishCrumbContributions(
       pathname,
       epoch,

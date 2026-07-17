@@ -32,7 +32,9 @@ import { listGuestRows, type GuestRow } from "./guest-actions";
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   try {
     const [{ projectId }] = await Promise.all([params]);
-    const session = await requireAuthSession();
+    // Non-throwing session read (see the detail page's generateMetadata).
+    const session = await authSession.getAuthSession();
+    if (!session) return { title: "Project permissions" };
     const actor = actorFromSession(session);
     const project = await readProjectById(projectId);
     if (!project) return { title: "Project permissions" };

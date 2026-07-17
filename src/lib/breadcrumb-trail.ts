@@ -29,15 +29,27 @@ export function humanizePathSegment(segment: string): string {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONG_HEX_RE = /^[0-9a-f]{16,}$/i;
 
+// Malformed percent-encoding ("%", truncated UTF-8 escapes) makes
+// decodeURIComponent THROW — and these helpers run while rendering the shell,
+// so a crafted URL would crash AppShell instead of reaching the page/404.
+// Fall back to the raw segment.
+function safelyDecodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function isIdLikeSegment(segment: string): boolean {
-  const decoded = decodeURIComponent(segment);
+  const decoded = safelyDecodePathSegment(segment);
   return UUID_RE.test(decoded) || LONG_HEX_RE.test(decoded);
 }
 
 /** The obvious short-id placeholder for an unresolved id crumb — never
  *  title-cased hex (cinatra#1737 floor rule). */
 export function idSegmentPlaceholder(segment: string): string {
-  return `${decodeURIComponent(segment).slice(0, 8)}…`;
+  return `${safelyDecodePathSegment(segment).slice(0, 8)}…`;
 }
 
 // Configuration grouping segments that exist only as routing containers — no

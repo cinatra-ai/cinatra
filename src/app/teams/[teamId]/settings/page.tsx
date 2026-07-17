@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 
 import {
+  getAuthSession,
   isPlatformAdmin,
   requireAuthSession,
   resolveOrgRoleForUser,
@@ -30,7 +31,10 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   try {
     const { teamId } = await params;
-    const session = await requireAuthSession();
+    // Non-throwing session read: requireAuthSession() redirects (throws
+    // NEXT_REDIRECT), which this try/catch would swallow.
+    const session = await getAuthSession();
+    if (!session) return { title: "Team settings" };
     const rows = await betterAuthDb.execute<{
       name: string;
       organizationId: string;

@@ -99,7 +99,19 @@ export function AgentPageLayout({
   // instance-name fetch). Rename + name-set flows update `runName`, which
   // re-publishes.
   const crumbLabel = runName || templateName || `${instanceId.slice(0, 8)}…`;
+  // Epoch-capture guard (mirrors CrumbContributions): the identity this
+  // layout publishes was authorized by the server render that mounted it. A
+  // later epoch-context change with the SAME instance still mounted (router
+  // cache re-use across a session/org change) must not republish it into the
+  // new scope. A new agent/instance re-arms; renames under the armed epoch
+  // keep publishing.
+  const armedRef = useRef<{ identity: string; epoch: string } | null>(null);
   useEffect(() => {
+    const identity = `${agentId}:${instanceId}`;
+    if (armedRef.current?.identity !== identity) {
+      armedRef.current = { identity, epoch: crumbEpoch };
+    }
+    if (armedRef.current.epoch !== crumbEpoch) return;
     publishCrumbContributions(pathname, crumbEpoch, [
       { prefix: `/agents/${agentId}/${instanceId}`, label: crumbLabel },
     ]);
