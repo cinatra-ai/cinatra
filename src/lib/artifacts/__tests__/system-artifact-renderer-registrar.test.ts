@@ -67,37 +67,43 @@ describe("system base set + specs are projected from the generated build map", (
     expect(isSystemArtifactRendererPackage("@vendor/marketplace-artifact")).toBe(false);
   });
 
-  it("projects one representation provider spec per (representation, slot) of every build entry", () => {
+  it("projects EXACT allowlisted-MIME specs (wildcards expanded, gated by the preview allowlist)", () => {
     const specs = systemRepresentationProviderSpecs();
-    // image/pdf ship detail+preview; audio/video ship detail only.
+    // image/pdf ship detail+preview; audio/video ship detail only — bound at the
+    // EXACT allowlisted MIME, never the raw wildcard.
     expect(specs).toEqual(
       expect.arrayContaining([
-        { packageName: IMAGE, pattern: "image/*", slot: "detail" },
-        { packageName: IMAGE, pattern: "image/*", slot: "preview" },
+        { packageName: IMAGE, pattern: "image/png", slot: "detail" },
+        { packageName: IMAGE, pattern: "image/png", slot: "preview" },
         { packageName: PDF, pattern: "application/pdf", slot: "detail" },
         { packageName: PDF, pattern: "application/pdf", slot: "preview" },
-        { packageName: AUDIO, pattern: "audio/*", slot: "detail" },
-        { packageName: VIDEO, pattern: "video/*", slot: "detail" },
+        { packageName: AUDIO, pattern: "audio/mpeg", slot: "detail" },
+        { packageName: VIDEO, pattern: "video/mp4", slot: "detail" },
       ]),
     );
+    // NEVER the raw wildcard — a wildcard would claim MIMEs the preview route 415s.
+    expect(specs).not.toContainEqual({ packageName: IMAGE, pattern: "image/*", slot: "detail" });
+    // NEVER a non-allowlisted MIME (image/bmp / audio/midi / video/quicktime).
+    expect(specs.some((s) => s.pattern === "image/bmp")).toBe(false);
+    expect(specs.some((s) => s.pattern === "audio/midi")).toBe(false);
+    expect(specs.some((s) => s.pattern === "video/quicktime")).toBe(false);
     // audio/video are detail-ONLY — never a preview provider.
-    expect(specs).not.toContainEqual({ packageName: AUDIO, pattern: "audio/*", slot: "preview" });
-    expect(specs).not.toContainEqual({ packageName: VIDEO, pattern: "video/*", slot: "preview" });
+    expect(specs.some((s) => s.packageName === AUDIO && s.slot === "preview")).toBe(false);
+    expect(specs.some((s) => s.packageName === VIDEO && s.slot === "preview")).toBe(false);
   });
 });
 
 describe("the four MIME families dispatch to the build-map fast path after reconcile", () => {
-  // The exact pdf base beats the exact first-party pdf handler on the TIER
-  // tie-break (both specificity-3), so it dispatches to the extension even while
-  // the legacy first-party default is still seeded (pre-G2-cutover). The wildcard
-  // image/audio/video bases are exercised on a NON-allowlisted MIME (no exact
-  // first-party to shadow the wildcard) — the cutover of the allowlisted MIMEs
-  // (removing the first-party shadow) is proven in the G2 cutover suite.
+  // Post-G2-cutover: each base is bound at the EXACT allowlisted MIME and there is
+  // no host handler left to shadow it (pickHandler no longer selects these media
+  // families), so an allowlisted row dispatches to the base. A NON-allowlisted
+  // MIME (image/bmp etc.) is deliberately NOT bound → generic floor (asserted
+  // in the never-blank case below + the G2 cutover suite).
   it.each([
     { mime: "application/pdf", pkg: PDF },
-    { mime: "image/bmp", pkg: IMAGE },
-    { mime: "audio/midi", pkg: AUDIO },
-    { mime: "video/quicktime", pkg: VIDEO },
+    { mime: "image/png", pkg: IMAGE },
+    { mime: "audio/mpeg", pkg: AUDIO },
+    { mime: "video/mp4", pkg: VIDEO },
   ])("$mime → representation extension via $pkg::detail (build-map)", ({ mime, pkg }) => {
     // resolveArtifactDispatchInputs reconciles the system bases for the org, so no
     // explicit registration is needed — this is the production path.
@@ -112,6 +118,13 @@ describe("the four MIME families dispatch to the build-map fast path after recon
     // dynamic runtime path.
     expect(classifyLoadablePath(`${pkg}::detail`)).toBe("build-map");
   });
+
+  it.each(["image/bmp", "audio/midi", "video/quicktime"])(
+    "a NON-allowlisted media MIME (%s) is NOT claimed by a base → generic floor (preview route would 415)",
+    (mime) => {
+      expect(dispatchFor(mime)).toEqual({ kind: "fallback" });
+    },
+  );
 
   it("reconcile is self-healing — re-binds after a registry clear (reconcile missing bindings)", () => {
     expect(dispatchFor("application/pdf").kind).toBe("representation");

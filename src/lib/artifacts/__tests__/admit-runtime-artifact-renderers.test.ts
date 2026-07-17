@@ -177,6 +177,46 @@ describe("admitRuntimeArtifactRenderersForStoreDir — the full admission chain"
     expect(outcomes).toEqual([]);
   });
 
+  it("POISONING GUARD: bytes that do not hash to tuple.digest never overwrite an already-active digest's CAS entry", async () => {
+    // 1. Admit a LEGITIMATE bundle at its real digest.
+    const legit = tuple();
+    const integrity = sha512Sri(BUNDLE_BYTES);
+    writeManifest({ tuple: legit, integrity, signature: signBundle(legit, integrity) });
+    expect((await admitRuntimeArtifactRenderersForStoreDir({ packageName: PKG, storeDir }))[0]?.ok).toBe(true);
+    const servedLegit = path.join(dataRoot, "artifact", "cinatra-ai", "json-artifact", legit.digest, "bundle.js");
+    expect(readFileSync(servedLegit)).toEqual(BUNDLE_BYTES);
+
+    // 2. An attacker manifest targets the ALREADY-ACTIVE legit digest with
+    //    malicious bytes whose SRI it also controls (so the integrity check would
+    //    pass) — the digest content-address check must reject BEFORE any write.
+    const malicious = Buffer.from("export default function Evil(){window.pwn=1;return null}\n", "utf8");
+    const attacker = tuple({ digest: legit.digest }); // points at the live digest
+    const attackerIntegrity = sha512Sri(malicious); // attacker controls integrity
+    writeManifest({ tuple: attacker, integrity: attackerIntegrity, signature: signBundle(attacker, attackerIntegrity), bytes: malicious });
+
+    const outcomes = await admitRuntimeArtifactRenderersForStoreDir({ packageName: PKG, storeDir });
+    expect(outcomes[0]?.ok).toBe(false);
+    expect(outcomes[0]?.reason).toBe("materialize-failed");
+    // The live bundle at the legit digest is UNTOUCHED (not poisoned).
+    expect(readFileSync(servedLegit)).toEqual(BUNDLE_BYTES);
+  });
+
+  it("TRAVERSAL GUARD: a `..` entry is refused as invalid-manifest before any filesystem access", async () => {
+    const t = tuple({ entry: "../../../../etc/evil.js" });
+    const integrity = sha512Sri(BUNDLE_BYTES);
+    // Write ONLY the manifest (never the bundle at the traversal path) — the guard
+    // must refuse from the manifest alone, before any read/write.
+    writeFileSync(
+      path.join(storeDir, "client-bundle.manifest.json"),
+      JSON.stringify({ tuple: t, integrity, signature: signBundle(t, integrity), scheme: "cinatra-artifact-client-bundle/v1" }),
+    );
+
+    const outcomes = await admitRuntimeArtifactRenderersForStoreDir({ packageName: PKG, storeDir });
+    expect(outcomes[0]?.ok).toBe(false);
+    expect(outcomes[0]?.reason).toBe("invalid-manifest");
+    expect(runtimeAssetRegistry.isActiveTuple(t)).toBe(false);
+  });
+
   it("a manifest whose package does not match the store dir's package is REFUSED (invalid-manifest)", async () => {
     const t = tuple({ packageName: "@evil/imposter", digest: sha512Hex(BUNDLE_BYTES) });
     const integrity = sha512Sri(BUNDLE_BYTES);

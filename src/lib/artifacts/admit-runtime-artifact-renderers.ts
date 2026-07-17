@@ -111,6 +111,32 @@ function servingDigestDir(dataRoot: string, packageName: string, digest: string)
   return path.join(dataRoot, ARTIFACT_KIND, ...slugParts, digest);
 }
 
+/**
+ * A bundle `entry` must be a PATH-CONTAINED relative filename — never absolute,
+ * never a `..` traversal (Codex). The tuple schema only pins a non-empty string,
+ * so the admission caller must contain it BEFORE it touches the filesystem: an
+ * un-contained entry could otherwise read outside the package dir or write
+ * outside the content-addressed store, even though admission ultimately fails.
+ */
+function isSafeRelativeEntry(entry: string): boolean {
+  if (typeof entry !== "string" || entry.length === 0) return false;
+  if (path.isAbsolute(entry)) return false;
+  const normalized = path.normalize(entry);
+  if (path.isAbsolute(normalized)) return false;
+  return normalized !== ".." && !normalized.startsWith(`..${path.sep}`) && !normalized.split(path.sep).includes("..");
+}
+
+/** Join `entry` under `baseDir` with a fail-closed containment check (belt to the
+ * `isSafeRelativeEntry` guard): the resolved path MUST stay inside `baseDir`. */
+function containedJoin(baseDir: string, entry: string): string {
+  const resolvedBase = path.resolve(baseDir);
+  const resolved = path.resolve(resolvedBase, entry);
+  if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep)) {
+    throw new Error(`client-bundle entry "${entry}" escapes its directory`);
+  }
+  return resolved;
+}
+
 async function isDir(p: string): Promise<boolean> {
   try {
     return (await stat(p)).isDirectory();
@@ -161,7 +187,10 @@ async function admitOneBundle(args: {
 }): Promise<AdmitAndActivateResult> {
   const { manifestDir, tuple, integrity, signature } = args;
   const fields: ClientBundleSignatureFields = { ...tuple, integrity };
-  const bundlePath = path.join(manifestDir, tuple.entry);
+  // Containment (Codex): the entry is contained BEFORE any filesystem access, so
+  // a traversal entry never reads outside the package dir nor writes outside the
+  // store — even though admission would ultimately fail.
+  const bundlePath = containedJoin(manifestDir, tuple.entry);
   const dataRoot = resolveExtensionDataRoot();
 
   // Read the built bytes ONCE; both materialize and verify close over them.
@@ -178,16 +207,30 @@ async function admitOneBundle(args: {
     if (sha512Sri(b) !== integrity) {
       throw new Error("client-bundle integrity mismatch (materialize root of trust)");
     }
+    // POISONING GUARD (Codex): the bytes MUST hash to the exact-tuple digest
+    // BEFORE they are written. The serving path is keyed by `tuple.digest`; a
+    // manifest could set `tuple.digest` to an ALREADY-ACTIVE legitimate digest
+    // with malicious bytes whose SRI it also controls — writing before the digest
+    // check would overwrite the live bundle at that address (the route serves it
+    // without rehashing) even though this admission later fails. Checking the
+    // content address first makes the write always content-correct: malicious
+    // bytes (hash != digest) throw here and nothing is written.
+    if (sha512Hex(b) !== tuple.digest) {
+      throw new Error("client-bundle digest mismatch (content address)");
+    }
     const dir = servingDigestDir(dataRoot, tuple.packageName, tuple.digest);
-    await mkdir(dir, { recursive: true });
-    // Idempotent: content-addressed, so re-writing the same digest is a no-op in
-    // effect (identical bytes).
-    await writeFile(path.join(dir, tuple.entry), b);
+    // The serving route reads `<digest>/<entry>` (the exact entry the digest-
+    // pinned URL carries), so materialize writes at the SAME contained relative
+    // entry. Idempotent: content-addressed + digest-verified above, so re-writing
+    // the same digest is writing the identical verified bytes.
+    const outFile = containedJoin(dir, tuple.entry);
+    await mkdir(path.dirname(outFile), { recursive: true });
+    await writeFile(outFile, b);
   };
 
   const verify = async (): Promise<boolean> => {
     const b = await readBytes();
-    // Exact-tuple store digest must match the bytes.
+    // Exact-tuple store digest must match the bytes (re-confirmed post-materialize).
     if (sha512Hex(b) !== tuple.digest) return false;
     // Re-verify the Ed25519 signature over (tuple + integrity) against the host
     // trust root — fail-closed for an in-page renderer (unsigned/unverifiable =>
@@ -236,6 +279,12 @@ export async function admitRuntimeArtifactRenderersForStoreDir(args: {
     // Defence-in-depth: the manifest's package must be the one being admitted —
     // a store dir can only admit ITS OWN package's bundles.
     if (tuple.packageName !== args.packageName) {
+      outcomes.push({ packageName: args.packageName, slot: tuple.slot, digest: tuple.digest, ok: false, reason: "invalid-manifest" });
+      continue;
+    }
+    // Refuse a traversal entry BEFORE any filesystem access (Codex): an absolute
+    // or `..` entry is a malformed manifest, never admitted.
+    if (!isSafeRelativeEntry(tuple.entry)) {
       outcomes.push({ packageName: args.packageName, slot: tuple.slot, digest: tuple.digest, ok: false, reason: "invalid-manifest" });
       continue;
     }
