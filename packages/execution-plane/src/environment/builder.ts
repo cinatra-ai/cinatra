@@ -169,16 +169,34 @@ export function renderEnvironmentDockerfile(
  * Build the `docker build` argv (without the leading binary). Pure. The
  * credential invariant is asserted on the RESULT, every time.
  */
+/** Best-effort daemon-side build resource ceilings (hygiene, not the boundary). */
+export type EnvironmentBuildResources = {
+  memoryMb: number;
+  cpuShares: number;
+};
+
+export const DEFAULT_BUILD_RESOURCES: EnvironmentBuildResources = {
+  memoryMb: 2048,
+  cpuShares: 512,
+};
+
 export function buildEnvironmentImageArgs(opts: {
   contextDir: string;
   tag: string;
   network?: string;
   proxyUrl?: string;
   platform?: EnvironmentPlatform;
+  resources?: EnvironmentBuildResources;
 }): string[] {
   const args = ["build", "--tag", opts.tag, "--file", join(opts.contextDir, "Dockerfile")];
   if (opts.platform) args.push("--platform", `${opts.platform.os}/${opts.platform.arch}`);
   if (opts.network) args.push("--network", opts.network);
+  // Resource ceilings on the BUILD (codex S3-r0 finding 5): lifecycle scripts
+  // run as root inside the build, so cap what the build can take from the
+  // daemon host. Classic-builder flags; best-effort under BuildKit — the
+  // hard capacity boundary remains the deployment layer's builder placement.
+  const res = opts.resources ?? DEFAULT_BUILD_RESOURCES;
+  args.push("--memory", `${res.memoryMb}m`, "--cpu-shares", String(res.cpuShares));
   if (opts.proxyUrl) {
     for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
       args.push("--build-arg", `${key}=${opts.proxyUrl}`);
@@ -254,13 +272,20 @@ export class TrustedEnvironmentBuilder {
     this.docker = opts.docker ?? runDocker;
   }
 
+  /**
+   * The EFFECTIVE build policy — truthful to the actual network posture
+   * (codex S3-r0 finding 4): with a gateway this is the registry-allowlist
+   * posture; under the explicit local-dev escape hatch it is
+   * `insecure-open-network`, a DISTINCT cache identity that can never alias
+   * a gateway-built layer.
+   */
   buildPolicy(): EnvironmentBuildPolicy {
-    return (
-      this.opts.buildPolicy ?? {
-        networkPolicy: "registry-allowlist",
-        registryAllowlist: DEFAULT_BUILD_REGISTRY_ALLOWLIST,
-      }
-    );
+    const allowlist =
+      this.opts.buildPolicy?.registryAllowlist ?? DEFAULT_BUILD_REGISTRY_ALLOWLIST;
+    if (!this.opts.gateway && this.opts.allowInsecureLocalDevNetwork) {
+      return { networkPolicy: "insecure-open-network", registryAllowlist: allowlist };
+    }
+    return { networkPolicy: "registry-allowlist", registryAllowlist: allowlist };
   }
 
   /**
@@ -320,7 +345,14 @@ export class TrustedEnvironmentBuilder {
     orgId: string;
     partition: EnvironmentLayerPartition;
   }): Promise<EnsureEnvironmentLayerResult> {
-    const cached = this.opts.cache.lookupBySpecKey(input.specKey, { orgId: input.orgId });
+    // An org-private request enforces its EXACT partition (codex S3-r0
+    // finding 8): it never resolves to a differently-placed layer.
+    const requiredPartition =
+      input.partition === "instance" ? undefined : input.partition;
+    const cached = this.opts.cache.lookupBySpecKey(input.specKey, {
+      orgId: input.orgId,
+      ...(requiredPartition ? { requiredPartition } : {}),
+    });
     if (cached.hit) return { kind: "ready", entry: cached.entry, cacheHit: true };
 
     // ---- egress posture (fail-closed) -------------------------------------
@@ -335,6 +367,9 @@ export class TrustedEnvironmentBuilder {
         allowlist: policy.registryAllowlist,
       });
       network = this.opts.buildNetwork ?? "cinatra-exec-internal";
+      // The gateway posture is only real if the build network is actually a
+      // no-NAT internal network (codex S3-r0 finding 4) — verify, fail-closed.
+      await this.assertInternalNetwork(network);
       proxyUrl = `http://${buildToken}:x@${this.opts.gateway.host}:${this.opts.gateway.port}`;
     } else if (!this.opts.allowInsecureLocalDevNetwork) {
       throw new EnvironmentBuildRefusedError(
@@ -346,7 +381,10 @@ export class TrustedEnvironmentBuilder {
 
     // ---- build once -------------------------------------------------------
     const contextDir = await mkdtemp(join(tmpdir(), "cinatra-env-build-"));
-    const tempTag = `${L1_IMAGE_REPO}:spec-${input.specKey.slice(0, 12)}`;
+    // UNIQUE per build (codex S3-r0 finding 6): concurrent builds of the same
+    // spec (other partitions / other processes) must never share or remove
+    // each other's temp tag.
+    const tempTag = `${L1_IMAGE_REPO}:build-${randomBytes(12).toString("hex")}`;
     try {
       const dockerfile = renderEnvironmentDockerfile(input.spec, {
         baseImageRef: this.opts.l0ImageRef,
@@ -402,14 +440,19 @@ export class TrustedEnvironmentBuilder {
     const recipeKey = computeEnvironmentRecipeKey(recipe);
 
     // Another resolution may have produced this exact recipe already.
-    const raced = this.opts.cache.lookup(recipeKey, { orgId: input.orgId });
+    const raced = this.opts.cache.lookup(recipeKey, {
+      orgId: input.orgId,
+      ...(requiredPartition ? { requiredPartition } : {}),
+    });
     if (raced.hit) {
       await this.docker(["rmi", tempTag]);
       return { kind: "ready", entry: raced.entry, cacheHit: true };
     }
 
     // ---- content-addressed tag + host-side provenance + cache write -------
-    const finalTag = `${L1_IMAGE_REPO}:${recipeKey.slice(0, 16)}`;
+    // FULL recipe key in the tag (codex S3-r0 finding 6): 64 hex chars fits
+    // docker's 128-char tag limit; no truncation-collision surface.
+    const finalTag = `${L1_IMAGE_REPO}:${recipeKey}`;
     const tag = await this.docker(["tag", tempTag, finalTag]);
     if (tag.exitCode !== 0) {
       throw new Error(`Failed to tag environment layer: ${tag.stderr.trim()}`);
@@ -422,6 +465,7 @@ export class TrustedEnvironmentBuilder {
         recipeKey,
         recipe,
         imageDigest,
+        partition: input.partition,
         builderIdentity: ENVIRONMENT_BUILDER_VERSION,
         builtAtMs: now,
       },
@@ -439,5 +483,27 @@ export class TrustedEnvironmentBuilder {
     };
     this.opts.cache.put(entry);
     return { kind: "ready", entry, cacheHit: false };
+  }
+
+  /**
+   * Verify the build network is a docker `--internal` (no-NAT) network —
+   * the gateway posture is only enforceable on a network with no direct
+   * route out. Fail-closed on inspect failure or `Internal != true`.
+   */
+  private async assertInternalNetwork(network: string): Promise<void> {
+    const outcome = await this.docker([
+      "network",
+      "inspect",
+      "--format",
+      "{{.Internal}}",
+      network,
+    ]);
+    if (outcome.exitCode !== 0 || outcome.stdout.trim() !== "true") {
+      throw new EnvironmentBuildRefusedError(
+        `Build network "${network}" is not a verified internal (no-NAT) docker network ` +
+          `(inspect ${outcome.exitCode !== 0 ? "failed" : `reported Internal=${outcome.stdout.trim()}`}); ` +
+          `refusing the build — the registry-allowlist posture would be fictional on a routed network.`,
+      );
+    }
   }
 }

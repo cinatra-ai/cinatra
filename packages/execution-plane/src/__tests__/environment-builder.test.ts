@@ -33,6 +33,7 @@ function fakeDocker(state?: { baseDigest?: string; pipLock?: string }) {
       const ref = args[args.length - 1];
       return ok(ref.startsWith("cinatra-sandbox-l1:") ? "sha256:l1img" : baseDigest);
     }
+    if (args[0] === "network" && args[1] === "inspect") return ok("true"); // internal
     if (args[0] === "build") return ok();
     if (args[0] === "run") return ok(pipLock); // lock extraction
     if (args[0] === "tag" || args[0] === "rmi") return ok();
@@ -206,6 +207,49 @@ describe("TrustedEnvironmentBuilder.ensureEnvironmentLayer", () => {
     expect(build!.join(" ")).toContain(`http://${registered[0].token}:x@cinatra-exec-gateway:3128`);
     expect(build!).toContain("--network");
     expect(() => assertNoCredentialBuildArgs(build!)).not.toThrow();
+    // The build network's internal (no-NAT) property was VERIFIED.
+    expect(fake.calls.some((c) => c[0] === "network" && c[1] === "inspect")).toBe(true);
+  });
+
+  it("refuses a gateway build on a NON-internal network (fail-closed)", async () => {
+    const fake = fakeDocker();
+    const routed: DockerCli = async (args) => {
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { exitCode: 0, stdout: "false\n", stderr: "", stdioOverflow: false, timedOut: false };
+      }
+      return fake.cli(args);
+    };
+    const { builder } = makeBuilder({ gateway: true, docker: routed });
+    await expect(
+      builder.ensureEnvironmentLayer({ raw: { pip: ["pandas"] }, orgId: "org-a" }),
+    ).rejects.toThrow(/not a verified internal/);
+  });
+
+  it("records the TRUTHFUL insecure-open-network policy under the local-dev escape hatch", async () => {
+    const { builder } = makeBuilder({ allowInsecure: true });
+    expect(builder.buildPolicy().networkPolicy).toBe("insecure-open-network");
+    const result = await builder.ensureEnvironmentLayer({
+      raw: { pip: ["pandas"] },
+      orgId: "org-a",
+    });
+    if (result.kind !== "ready") throw new Error("expected ready");
+    expect(result.entry.provenance.recipe.buildPolicy.networkPolicy).toBe(
+      "insecure-open-network",
+    );
+    // A gateway builder's identity is the allowlist posture — the two can
+    // never alias under one recipe key.
+    const { builder: gw } = makeBuilder({ gateway: true });
+    expect(gw.buildPolicy().networkPolicy).toBe("registry-allowlist");
+  });
+
+  it("applies build resource ceilings and a UNIQUE temp tag per build", async () => {
+    const { builder, fake } = makeBuilder({ allowInsecure: true });
+    await builder.ensureEnvironmentLayer({ raw: { pip: ["pandas"] }, orgId: "org-a" });
+    const build = fake.calls.find((c) => c[0] === "build")!;
+    expect(build).toContain("--memory");
+    expect(build).toContain("--cpu-shares");
+    const tempTag = build[build.indexOf("--tag") + 1];
+    expect(tempTag).toMatch(/^cinatra-sandbox-l1:build-[0-9a-f]{24}$/);
   });
 
   it("org-private visibility partitions the layer to the org", async () => {

@@ -157,6 +157,8 @@ export {
   L1_IMAGE_REPO,
   ENV_LOCK_DIR,
   DEFAULT_BUILD_REGISTRY_ALLOWLIST,
+  DEFAULT_BUILD_RESOURCES,
+  type EnvironmentBuildResources,
   type TrustedEnvironmentBuilderOptions,
   type EnsureEnvironmentLayerResult,
 } from "./environment/builder";

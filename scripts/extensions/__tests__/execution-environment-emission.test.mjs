@@ -18,16 +18,21 @@ describe("resolveExecutionEnvironmentClaim — generator emission", () => {
     ).toBe(ENV);
   });
 
-  it("emits null when the agent declares none / a malformed shape", () => {
+  it("emits null ONLY when the agent genuinely declares nothing", () => {
     expect(resolveExecutionEnvironmentClaim("agent", {})).toBeNull();
-    expect(resolveExecutionEnvironmentClaim("agent", { execution: null })).toBeNull();
-    expect(resolveExecutionEnvironmentClaim("agent", { execution: [] })).toBeNull();
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: {} })).toBeNull();
+  });
+
+  it("emits the poison marker for PRESENT-but-malformed declarations (fail-closed at consumption)", () => {
+    const POISON = { __invalidExecutionEnvironmentDeclaration: true };
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: null })).toEqual(POISON);
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: [] })).toEqual(POISON);
     expect(
       resolveExecutionEnvironmentClaim("agent", { execution: { environment: [ENV] } }),
-    ).toBeNull();
+    ).toEqual(POISON);
     expect(
       resolveExecutionEnvironmentClaim("agent", { execution: { environment: "pip" } }),
-    ).toBeNull();
+    ).toEqual(POISON);
   });
 
   it("CARRIER-KIND GATED: null on every non-agent kind even when a claim is present", () => {
@@ -43,7 +48,11 @@ describe("resolveExecutionEnvironmentClaim — generator emission", () => {
       ["agent", { execution: { environment: ENV } }],
       ["agent", { execution: { environment: { bogus: true } } }],
       ["agent", { execution: { environment: [] } }],
+      ["agent", { execution: { environment: "pip" } }],
+      ["agent", { execution: { environment: null } }],
+      ["agent", { execution: {} }],
       ["agent", { execution: null }],
+      ["agent", { execution: [] }],
       ["agent", {}],
       ["agent", null],
       ["connector", { execution: { environment: ENV } }],

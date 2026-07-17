@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalExecutionEnvironmentJson,
+  EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY,
   EXECUTION_ENVIRONMENT_MAX_ENTRIES_PER_MANAGER,
   EXECUTION_ENVIRONMENT_MAX_ENTRY_LENGTH,
   isEmptyExecutionEnvironment,
@@ -112,13 +113,37 @@ describe("resolveExecutionEnvironmentClaim (carrier-kind gate)", () => {
     }
   });
 
-  it("resolves null for absent/malformed shapes without validating content", () => {
+  it("resolves null ONLY for genuinely absent declarations", () => {
     expect(resolveExecutionEnvironmentClaim("agent", {})).toBeNull();
-    expect(resolveExecutionEnvironmentClaim("agent", { execution: null })).toBeNull();
-    expect(resolveExecutionEnvironmentClaim("agent", { execution: [] })).toBeNull();
-    expect(resolveExecutionEnvironmentClaim("agent", { execution: { environment: [] } })).toBeNull();
-    // Content is NOT validated here — a malformed-but-object claim is carried
-    // (the fail-closed parser rejects it at consumption).
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: undefined })).toBeNull();
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: {} })).toBeNull();
+    expect(
+      resolveExecutionEnvironmentClaim("agent", { execution: { environment: undefined } }),
+    ).toBeNull();
+  });
+
+  it("carries the POISON marker for PRESENT-but-malformed declarations (never silent none)", () => {
+    const poison = { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: null })).toEqual(poison);
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: [] })).toEqual(poison);
+    expect(resolveExecutionEnvironmentClaim("agent", { execution: "pip" })).toEqual(poison);
+    expect(
+      resolveExecutionEnvironmentClaim("agent", { execution: { environment: [] } }),
+    ).toEqual(poison);
+    expect(
+      resolveExecutionEnvironmentClaim("agent", { execution: { environment: "pip" } }),
+    ).toEqual(poison);
+    expect(
+      resolveExecutionEnvironmentClaim("agent", { execution: { environment: null } }),
+    ).toEqual(poison);
+    // The parser rejects the marker with a precise error — the declaration
+    // attempt fails LOUDLY at consumption.
+    const parsed = parseExecutionEnvironment(poison);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.errors[0]).toContain("DECLARED but is not a plain object");
+  });
+
+  it("content is NOT validated at the claim resolver — a malformed-but-object claim is carried", () => {
     expect(
       resolveExecutionEnvironmentClaim("agent", { execution: { environment: { bogus: true } } }),
     ).toEqual({ bogus: true });

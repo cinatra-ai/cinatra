@@ -56,10 +56,40 @@ const baseTemplate = (): AgentTemplateRecord =>
   }) as unknown as AgentTemplateRecord;
 
 describe("buildSnapshotFromTemplate executionEnvironment capture", () => {
-  it("captures the declared environment into the snapshot", () => {
+  it("captures the declared environment into the snapshot in CANONICAL form", () => {
     const template = { ...baseTemplate(), executionEnvironment: { pip: ["pandas==2.2.1"] } };
     const snapshot = buildSnapshotFromTemplate(template);
     expect(snapshot.executionEnvironment).toEqual({ pip: ["pandas==2.2.1"] });
+  });
+
+  it("equivalent reordered/duplicated declarations snapshot — and hash — identically", () => {
+    const a = buildSnapshotFromTemplate({
+      ...baseTemplate(),
+      executionEnvironment: { pip: ["b", "a", "b"] },
+    });
+    const b = buildSnapshotFromTemplate({
+      ...baseTemplate(),
+      executionEnvironment: { pip: ["a", "b"] },
+    });
+    expect(a.executionEnvironment).toEqual({ pip: ["a", "b"] });
+    expect(computeSnapshotContentHash(a)).toBe(computeSnapshotContentHash(b));
+  });
+
+  it("REJECTS an invalid declaration at version-save (fail-closed; never versioned)", () => {
+    expect(() =>
+      buildSnapshotFromTemplate({
+        ...baseTemplate(),
+        executionEnvironment: { bogus: ["x"] },
+      }),
+    ).toThrow(/invalid\s+execution environment/);
+  });
+
+  it("an EMPTY declaration is captured as no environment (legacy shape)", () => {
+    const snapshot = buildSnapshotFromTemplate({
+      ...baseTemplate(),
+      executionEnvironment: { pip: [] },
+    });
+    expect("executionEnvironment" in snapshot).toBe(false);
   });
 
   it("is SHAPE-PRESERVING: env-less templates emit NO executionEnvironment key", () => {

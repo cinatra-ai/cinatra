@@ -38,12 +38,19 @@ export const ENVIRONMENT_BUILDER_VERSION = "cinatra-env-builder/1";
 
 export type EnvironmentBuildPolicy = {
   /**
-   * The ONLY supported builder network policy (epic D3 trust distinction:
-   * run sandboxes may default to open internet, the TRUSTED BUILDER never
-   * does — its egress is registry-allowlisted, always via the attributing
-   * gateway).
+   * The EFFECTIVE builder network posture — part of cache identity, so a
+   * layer built one way can never alias a layer built another way (codex
+   * S3-r0 finding 4):
+   *  - `"registry-allowlist"` — the ONLY production posture (epic D3 trust
+   *    distinction: run sandboxes may default to open internet, the TRUSTED
+   *    BUILDER never does — its egress is registry-allowlisted, always via
+   *    the attributing gateway on a verified-internal network);
+   *  - `"insecure-open-network"` — the explicit local-dev-only escape hatch
+   *    (`allowInsecureLocalDevNetwork`). Recorded truthfully in the recipe +
+   *    signed provenance; a production lookup keyed on the allowlist posture
+   *    can never hit a layer built open.
    */
-  networkPolicy: "registry-allowlist";
+  networkPolicy: "registry-allowlist" | "insecure-open-network";
   /** The registry hosts the build may reach (exact or dot-suffix match). */
   registryAllowlist: string[];
 };
@@ -69,6 +76,16 @@ export type EnvironmentSpecKeyInputs = {
  * The FULL effective build recipe (the RECIPE KEY inputs): spec-key inputs
  * plus the digests of every RESOLVED artifact the build actually froze
  * (pip lock, npm lock, os package manifest — keyed by manager).
+ *
+ * SEMANTIC, on record (codex S3-r0 finding 7): these are digests of the
+ * RESOLVED LOCK MANIFESTS (pinned name==version sets from pip freeze /
+ * npm ls / dpkg-query), i.e. VERSION-RESOLUTION identity — they do NOT hash
+ * the downloaded wheel/tarball/deb bytes. Byte-level identity of what a run
+ * actually mounts IS bound, by the signed `imageDigest` in the layer's
+ * provenance; what the recipe key does NOT claim is that two separate builds
+ * with equal lock digests are byte-identical images. Capturing package-
+ * manager integrity hashes (pip --require-hashes / npm lockfile integrity /
+ * apt SHA256s) is the follow-up hardening for cross-build byte identity.
  */
 export type EnvironmentBuildRecipe = EnvironmentSpecKeyInputs & {
   /** manager → sha256 hex of the resolved lock/manifest content. */

@@ -91,6 +91,18 @@ const ENTRY_RES: Record<ExecutionEnvironmentManager, RegExp> = {
   npm: NPM_ENTRY_RE,
 };
 
+/**
+ * Poison marker for a PRESENT-but-malformed declaration root (codex S3-r0
+ * finding 3; same doctrine as `invalidMigrationsDirDeclared`): a manifest
+ * that declared `cinatra.execution` / `…execution.environment` as a
+ * NON-OBJECT has ATTEMPTED a declaration — it must never silently collapse
+ * to "no environment". The claim resolver carries this sentinel instead, and
+ * the fail-closed parser rejects it with a precise error, so the attempt
+ * fails loudly at consumption on BOTH loader paths.
+ */
+export const EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY =
+  "__invalidExecutionEnvironmentDeclaration";
+
 export type ParseExecutionEnvironmentResult =
   | { ok: true; spec: ExecutionEnvironmentSpec }
   | { ok: false; errors: string[] };
@@ -117,6 +129,16 @@ export function parseExecutionEnvironment(
     };
   }
   const raw = value as Record<string, unknown>;
+  if (EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY in raw) {
+    return {
+      ok: false,
+      errors: [
+        "execution.environment was DECLARED but is not a plain object (the claim " +
+          "resolver carried the malformed-declaration marker); fix the manifest — " +
+          "a present-but-malformed declaration never activates as \"no environment\"",
+      ],
+    };
+  }
   const errors: string[] = [];
   const known = new Set<string>(EXECUTION_ENVIRONMENT_MANAGERS);
   for (const key of Object.keys(raw)) {
@@ -221,21 +243,29 @@ export function resolveExecutionEnvironmentClaim(
   cinatra: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> | null {
   if (kind !== EXECUTION_ENVIRONMENT_CARRIER_KIND) return null;
-  const execution = cinatra?.execution;
+  if (!cinatra || !("execution" in cinatra)) return null;
+  const execution = cinatra.execution;
+  if (execution === undefined) return null;
+  const poison = { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
   if (
     execution === null ||
     typeof execution !== "object" ||
     Array.isArray(execution)
   ) {
-    return null;
+    // `cinatra.execution` DECLARED but malformed — carry the poison marker so
+    // the parser rejects it fail-closed (never "no environment").
+    return poison;
   }
-  const environment = (execution as Record<string, unknown>).environment;
+  const block = execution as Record<string, unknown>;
+  if (!("environment" in block) || block.environment === undefined) return null;
+  const environment = block.environment;
   if (
     environment === null ||
     typeof environment !== "object" ||
     Array.isArray(environment)
   ) {
-    return null;
+    // environment DECLARED but malformed — same fail-closed carry.
+    return poison;
   }
   return environment as Record<string, unknown>;
 }

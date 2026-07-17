@@ -29,6 +29,13 @@ export type EnvironmentLayerProvenance = {
   recipe: EnvironmentBuildRecipe;
   /** Immutable image identity of the built layer (image ID / digest). */
   imageDigest: string;
+  /**
+   * The cache partition the layer was built FOR (`"instance"` /
+   * `"org:<id>"`). SIGNED (codex S3-r0 finding 1): a store row cannot be
+   * re-partitioned — e.g. a private org layer flipped to instance-shared —
+   * without breaking the signature.
+   */
+  partition: string;
   /** Builder identity string (ENVIRONMENT_BUILDER_VERSION at build time). */
   builderIdentity: string;
   /** Build wall-clock (ms epoch). Informational; NOT part of the recipe key. */
@@ -48,6 +55,7 @@ function provenancePayload(prov: EnvironmentLayerProvenance): string {
     builderIdentity: prov.builderIdentity,
     builtAtMs: prov.builtAtMs,
     imageDigest: prov.imageDigest,
+    partition: prov.partition,
     recipe: JSON.parse(canonicalRecipeJson(prov.recipe)) as unknown,
     recipeKey: prov.recipeKey,
   });
@@ -72,16 +80,22 @@ export function verifyEnvironmentProvenance(
   signed: SignedEnvironmentLayerProvenance,
   signingKey: string,
 ): boolean {
-  const { signature, ...prov } = signed;
-  if (typeof signature !== "string" || signature.length === 0) return false;
-  // Internal consistency BEFORE the MAC: the claimed content address must be
-  // the recipe's actual content address.
-  if (computeEnvironmentRecipeKey(prov.recipe) !== prov.recipeKey) return false;
-  const expected = createHmac("sha256", signingKey)
-    .update(provenancePayload(prov))
-    .digest("hex");
-  const a = Buffer.from(signature, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  // EXCEPTION-SAFE fail-closed (codex S3-r0 finding 10): a malformed /
+  // corrupted store row must verify FALSE, never throw into the request path.
+  try {
+    const { signature, ...prov } = signed;
+    if (typeof signature !== "string" || signature.length === 0) return false;
+    // Internal consistency BEFORE the MAC: the claimed content address must be
+    // the recipe's actual content address.
+    if (computeEnvironmentRecipeKey(prov.recipe) !== prov.recipeKey) return false;
+    const expected = createHmac("sha256", signingKey)
+      .update(provenancePayload(prov))
+      .digest("hex");
+    const a = Buffer.from(signature, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }

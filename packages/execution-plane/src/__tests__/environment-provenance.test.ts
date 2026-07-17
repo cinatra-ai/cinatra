@@ -23,6 +23,7 @@ const prov = () => ({
   recipeKey: computeEnvironmentRecipeKey(recipe),
   recipe,
   imageDigest: "sha256:l1img",
+  partition: "instance",
   builderIdentity: ENVIRONMENT_BUILDER_VERSION,
   builtAtMs: 1_000,
 });
@@ -48,5 +49,21 @@ describe("environment layer provenance", () => {
     // self-inconsistent record never verifies.
     const signed = signEnvironmentProvenance({ ...prov(), recipeKey: "not-the-key" }, "key");
     expect(verifyEnvironmentProvenance(signed, "key")).toBe(false);
+  });
+
+  it("binds the partition: a re-partitioned record fails verification", () => {
+    const signed = signEnvironmentProvenance(prov(), "key");
+    expect(
+      verifyEnvironmentProvenance({ ...signed, partition: "org:attacker" }, "key"),
+    ).toBe(false);
+  });
+
+  it("is exception-safe: a structurally-corrupt record verifies FALSE, never throws", () => {
+    const signed = signEnvironmentProvenance(prov(), "key");
+    const corrupt = {
+      ...signed,
+      recipe: null,
+    } as unknown as ReturnType<typeof signEnvironmentProvenance>;
+    expect(verifyEnvironmentProvenance(corrupt, "key")).toBe(false);
   });
 });

@@ -4,6 +4,10 @@ import { expireRunStream } from "@cinatra-ai/a2a";
 import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID, createHash } from "node:crypto";
 import { diffLines } from "diff";
+import {
+  parseExecutionEnvironment,
+  isEmptyExecutionEnvironment,
+} from "@cinatra-ai/sdk-extensions";
 import semver from "semver";
 import { buildListPage } from "@/lib/mcp-pagination";
 import type { ListPage } from "@/lib/mcp-pagination";
@@ -3424,12 +3428,30 @@ export function buildSnapshotFromTemplate(
     lgGraphCode: template.lgGraphCode ?? null,         //
     lgGraphId: template.lgGraphId ?? null,             //
     // Shape-preserving capture (cinatra#1708): the key exists ONLY when the
-    // template declares an environment, so env-less templates keep their
-    // legacy snapshot shape (and content hash) byte-for-byte.
-    ...(template.executionEnvironment != null
-      ? { executionEnvironment: template.executionEnvironment }
-      : {}),
+    // template declares a non-empty environment, so env-less templates keep
+    // their legacy snapshot shape (and content hash) byte-for-byte. The
+    // captured value is the CANONICAL parsed spec (codex S3-r0 finding 9):
+    // equivalent reordered/duplicated declarations snapshot — and hash —
+    // identically, and an INVALID declaration is rejected here fail-closed
+    // (version-save is the last gate before a recipe becomes immutable; a
+    // snapshot must never version a declaration the builder would refuse).
+    ...captureSnapshotExecutionEnvironment(template),
   };
+}
+
+function captureSnapshotExecutionEnvironment(
+  template: AgentTemplateRecord,
+): { executionEnvironment: unknown } | Record<string, never> {
+  if (template.executionEnvironment == null) return {};
+  const parsed = parseExecutionEnvironment(template.executionEnvironment);
+  if (!parsed.ok) {
+    throw new Error(
+      `[buildSnapshotFromTemplate] template ${template.id} declares an invalid ` +
+        `execution environment (refusing to version it):\n- ${parsed.errors.join("\n- ")}`,
+    );
+  }
+  if (isEmptyExecutionEnvironment(parsed.spec)) return {};
+  return { executionEnvironment: parsed.spec };
 }
 
 // ---------------------------------------------------------------------------

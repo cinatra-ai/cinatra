@@ -437,10 +437,21 @@ export function resolveDashboardContributionClaim(kind, cin) {
 // the execution plane parses it FAIL-CLOSED via `parseExecutionEnvironment`
 // before any build (unknown keys / malformed entries reject the declaration
 // outright; a build recipe must never silently drop a declared package).
+// PRESENT-but-malformed declarations (a non-object `execution` /
+// `execution.environment`) are carried as the sdk leaf's poison marker so the
+// fail-closed parser rejects them at consumption — a declaration attempt must
+// never silently collapse to "no environment" (codex S3-r0 finding 3; the
+// invalidMigrationsDirDeclared doctrine).
+const EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY =
+  "__invalidExecutionEnvironmentDeclaration";
+
 export function resolveExecutionEnvironmentClaim(kind, cin) {
   if (kind !== "agent") return null;
-  if (!isObj(cin?.execution)) return null;
-  return isObj(cin.execution.environment) ? cin.execution.environment : null;
+  if (!cin || !("execution" in cin) || cin.execution === undefined) return null;
+  const poison = { [EXECUTION_ENVIRONMENT_INVALID_DECLARATION_KEY]: true };
+  if (!isObj(cin.execution)) return poison;
+  if (!("environment" in cin.execution) || cin.execution.environment === undefined) return null;
+  return isObj(cin.execution.environment) ? cin.execution.environment : poison;
 }
 
 // ---------------------------------------------------------------------------

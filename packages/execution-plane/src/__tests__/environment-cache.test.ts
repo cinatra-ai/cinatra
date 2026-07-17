@@ -8,6 +8,7 @@ import {
 } from "../environment/cache";
 import {
   computeEnvironmentRecipeKey,
+  computeEnvironmentSpecKey,
   ENVIRONMENT_BUILDER_VERSION,
   type EnvironmentBuildRecipe,
 } from "../environment/recipe";
@@ -34,18 +35,20 @@ function makeEntry(opts: {
 }): EnvironmentLayerCacheEntry {
   const recipe = makeRecipe(opts.pipDigest ?? "abc");
   const recipeKey = computeEnvironmentRecipeKey(recipe);
+  const partition = opts.partition ?? "instance";
   const now = opts.now ?? 1_000;
   return {
     recipeKey,
-    specKey: "spec-1",
-    imageRef: `cinatra-sandbox-l1:${recipeKey.slice(0, 16)}`,
+    specKey: computeEnvironmentSpecKey(recipe),
+    imageRef: `cinatra-sandbox-l1:${recipeKey}`,
     imageDigest: "sha256:l1img",
-    partition: opts.partition ?? "instance",
+    partition,
     provenance: signEnvironmentProvenance(
       {
         recipeKey,
         recipe,
         imageDigest: "sha256:l1img",
+        partition,
         builderIdentity: ENVIRONMENT_BUILDER_VERSION,
         builtAtMs: now,
       },
@@ -106,9 +109,53 @@ describe("EnvironmentLayerCache lookup", () => {
     const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
     const entry = makeEntry({});
     cache.put(entry);
-    const result = cache.lookupBySpecKey("spec-1", { orgId: "org-a" });
+    const result = cache.lookupBySpecKey(entry.specKey, { orgId: "org-a" });
     expect(result.hit && result.entry.recipeKey).toBe(entry.recipeKey);
-    expect(cache.lookupBySpecKey("spec-2", { orgId: "org-a" }).hit).toBe(false);
+    expect(cache.lookupBySpecKey("absent-spec-key", { orgId: "org-a" }).hit).toBe(false);
+  });
+
+  it("requiredPartition admits ONLY the exact partition (org-private requests)", () => {
+    const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
+    const instance = makeEntry({});
+    cache.put(instance);
+    // An org-private request must NOT resolve to the instance-shared layer.
+    expect(
+      cache.lookup(instance.recipeKey, { orgId: "org-a", requiredPartition: "org:org-a" }),
+    ).toEqual({ hit: false, reason: "partition_denied" });
+    const priv = makeEntry({ partition: "org:org-a" });
+    cache.put(priv);
+    const hit = cache.lookup(priv.recipeKey, { orgId: "org-a", requiredPartition: "org:org-a" });
+    expect(hit.hit && hit.entry.partition).toBe("org:org-a");
+  });
+
+  it("unsigned entry fields must MATCH the signed provenance (binding checks)", () => {
+    const cache = new EnvironmentLayerCache({ provenanceKey: KEY });
+    // imageDigest drifted from the signed record: refused.
+    const drifted = makeEntry({});
+    drifted.imageDigest = "sha256:swapped";
+    cache.put(drifted);
+    expect(cache.lookup(drifted.recipeKey, { orgId: "org-a" })).toEqual({
+      hit: false,
+      reason: "provenance_invalid",
+    });
+    // partition re-labeled (private -> instance) without re-signing: refused.
+    const relabeled = makeEntry({ partition: "org:org-a" });
+    relabeled.partition = "instance";
+    const cache2 = new EnvironmentLayerCache({ provenanceKey: KEY });
+    cache2.put(relabeled);
+    expect(cache2.lookup(relabeled.recipeKey, { orgId: "org-b" })).toEqual({
+      hit: false,
+      reason: "provenance_invalid",
+    });
+    // specKey drifted (would satisfy the wrong spec lookup): refused.
+    const wrongSpec = makeEntry({});
+    wrongSpec.specKey = "some-other-spec-key";
+    const cache3 = new EnvironmentLayerCache({ provenanceKey: KEY });
+    cache3.put(wrongSpec);
+    expect(cache3.lookup(wrongSpec.recipeKey, { orgId: "org-a" })).toEqual({
+      hit: false,
+      reason: "provenance_invalid",
+    });
   });
 });
 
