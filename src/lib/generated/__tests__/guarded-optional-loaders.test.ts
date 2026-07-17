@@ -169,6 +169,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/pdf-artifact::preview", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/video-artifact::detail", resolution: "required" },
+  { map: "GENERATED_CHAT_VIEWS", key: "chart", resolution: "required" },
 ];
 
 describe("generated guarded-optional loaders", () => {

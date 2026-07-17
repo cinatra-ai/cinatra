@@ -15,8 +15,6 @@ import {
   renderMarkdown,
   detectCharts,
   detectMermaidBlocks,
-  ChartEmbed,
-  ChartError,
   MermaidBlock,
   validateChart,
   highlightCodeAsync,
@@ -28,6 +26,15 @@ import {
   type DetectedWidget,
 } from "@cinatra-ai/chat/renderer";
 ```
+
+> **Chart component migrated (cinatra#1626).** The `chart` renderable-view
+> COMPONENT (formerly the in-tree recharts `ChartEmbed`/`ChartError`) is now
+> extension-provided by `@cinatra-ai/chart-artifact` via the generated
+> `cinatra.views` map. The host keeps the **payload contract** — the detector
+> (`detectCharts`) and the schema/validator (`validateChart` / `ChartSpec`, now
+> re-exported from `@cinatra-ai/agent-ui-protocol/renderable-views/chart`) — and
+> dispatches the detected `chart` payload to the extension component, falling
+> back to `RenderableViewFallback` when no chart extension is live/built.
 
 The barrel is a **pure re-export** boundary — every symbol is the same module
 instance the renderer has always used (locked by `renderer-parity.test.ts`:
@@ -49,8 +56,11 @@ The content layer of a conversation message body:
 - **Syntax highlighting** — `shiki`, theme-aware, sync-cache + async hydrate.
 - **Math** — `katex` (`$…$` inline, `$$…$$` display).
 - **Diagrams** — `mermaid` (`MermaidBlock`).
-- **Charts** — `recharts` (`ChartEmbed`) from a validated `[chart:{…}]` /
-  ` ```chart ` payload (`detectCharts` + `validateChart`).
+- **Charts** — the host **detects + validates** a `[chart:{…}]` / ` ```chart `
+  payload (`detectCharts` + `validateChart`) and dispatches the stable `chart`
+  viewType to the **extension-provided** renderer (`@cinatra-ai/chart-artifact`
+  via the generated `cinatra.views` map, cinatra#1626); the recharts component
+  no longer ships from this package.
 - **Inline widget embeds** — detected via a host-supplied widget detector.
 
 All of it is **XSS-hardened** inside `markdown-render`: the custom `marked`
@@ -68,16 +78,14 @@ the public entry and moves with the renderer.
 | `renderMarkdown(text, theme, detectWidgets)` | fn → HTML string | Render a message body to sanitized HTML for `dangerouslySetInnerHTML`. `theme: ThemeName`; `detectWidgets` is **required** (host supplies its widget catalog's detector). |
 | `detectCharts(text)` | fn → `DetectedChart[]` | Balanced-bracket scan for `[chart:{…}]` / fenced `chart` embeds; each result carries a validated `spec` (or `null`). |
 | `detectMermaidBlocks(text)` | fn → `MermaidSource[]` | Extract ` ```mermaid ` fenced sources. |
-| `validateChart(raw)` | fn → `ChartSpec \| null` | Zod validation/normalization of an untrusted chart payload. |
-| `ChartEmbed({ spec })` | React FC | Render a validated `ChartSpec` via `recharts`. |
-| `ChartError({ reason })` | React FC | Fallback card for a malformed chart. |
+| `validateChart(raw)` | fn → `ChartSpec \| null` | Host-owned Zod validation/normalization of an untrusted chart payload (re-exported from `@cinatra-ai/agent-ui-protocol/renderable-views/chart`). |
 | `MermaidBlock({ source, id })` | React FC | Render a mermaid source as SVG; lazy-loads `mermaid`. |
 | `highlightCodeAsync(code, lang, theme)` | async fn | Load `shiki` if needed, highlight, cache. |
 | `getHighlightedSync(code, lang, theme)` | fn | Synchronous cache lookup (used on the render fast-path). |
 
 `renderMarkdown` strips mermaid and chart embeds from the HTML it returns — the
-host renders `MermaidBlock` / `ChartEmbed` **beside** the HTML using
-`detectMermaidBlocks` / `detectCharts`.
+host renders `MermaidBlock` / the extension `chart` view **beside** the HTML
+using `detectMermaidBlocks` / `detectCharts`.
 
 ## Theming / token strategy
 
@@ -91,9 +99,9 @@ the host's active palette (light/dark) with no per-surface CSS.
   `ThemeName`.
 - **Diagram theme** — `MermaidBlock` reads `next-themes` (`useTheme`) and
   re-renders on theme change; the host must provide a `next-themes` provider.
-- **Chart theme** — `ChartEmbed` reads CSS custom properties (`--chart-1…5`,
-  `--border`, `--muted-foreground`, `--surface`) with sensible hardcoded
-  fallbacks, so charts theme from the same token layer.
+- **Chart theme** — the extension `chart` view reads CSS custom properties
+  (`--chart-1…5`, `--border`, `--muted-foreground`, `--surface`) with sensible
+  hardcoded fallbacks, so charts theme from the same token layer.
 
 **Host CSS isolation.** For the embedded surface, isolation is structural: the
 conversation-view is a **Cinatra-served iframe** (#1221) carrying `/chat`'s own
@@ -109,10 +117,10 @@ The heavy renderer dependencies stay **off the initial `/chat` shell** and out
 of any host admin page:
 
 - **Message-view boundary (primary).** `ChatMessagesView` is mounted via
-  `next/dynamic` (`ssr: false`). `marked`, `katex`, `recharts`, the `mermaid`
-  wrapper and the `shiki` wrapper all sit behind it and load in their own client
-  chunk only when a conversation actually renders — the empty state + composer
-  stay eager.
+  `next/dynamic` (`ssr: false`). `marked`, `katex`, the `mermaid` wrapper, the
+  `shiki` wrapper, and the extension `chart` view all sit behind it and load in
+  their own client chunk only when a conversation actually renders — the empty
+  state + composer stay eager.
 - **Dependency-level lazy.** `shiki` and `mermaid` are additionally
   `import()`-lazy **inside** their wrappers, so they don't even ride the
   message-view chunk until first highlight / first diagram.
@@ -120,15 +128,14 @@ of any host admin page:
   (#1221), the renderer bundle never loads inside the WordPress/Drupal admin
   page at all — only inside the Cinatra-served iframe.
 
-**Deferred (deliberate).** `katex` and `recharts` are still statically imported
-by their modules. Making them dependency-level lazy is deferred because:
-`katex.renderToString` runs **synchronously** inside `renderMarkdown` (a lazy
-`katex` would force `renderMarkdown` async and cascade into the synchronous
-`dangerouslySetInnerHTML` path); and a lazy `recharts` adds a Suspense fallback
-flash on first chart. Both would risk the **zero-visual-regression / pixel-parity**
-acceptance of this extraction, and both deps already stay off the initial shell
-via the message-view boundary above. If pursued later, the only low-risk path is
-preloading before first render and proving no fallback / pixel change.
+**Deferred (deliberate).** `katex` is still statically imported by its module.
+Making it dependency-level lazy is deferred because `katex.renderToString` runs
+**synchronously** inside `renderMarkdown` (a lazy `katex` would force
+`renderMarkdown` async and cascade into the synchronous
+`dangerouslySetInnerHTML` path); it would risk the **zero-visual-regression /
+pixel-parity** acceptance of this extraction, and it already stays off the
+initial shell via the message-view boundary above. (`recharts` is no longer a
+host dependency at all — the `chart` view is extension-provided, cinatra#1626.)
 
 ## Scope & the S1 follow-up
 
