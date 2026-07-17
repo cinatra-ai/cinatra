@@ -14,6 +14,25 @@ import type { AttachmentResolverPorts } from "./attachments/resolve-attachments"
 
 export type LlmProvider = "openai" | "anthropic" | "gemini";
 
+/**
+ * The LLM capability an agent may pin via `metadata.cinatra.llm.capabilityRequired`.
+ *
+ * The authoritative vocabulary + the declared capability matrix live in
+ * `@cinatra-ai/agents/llm-provider-policy` (`LLM_CAPABILITIES`). This is a
+ * deliberate local mirror in the orchestration package: `@cinatra-ai/agents`
+ * depends on `@cinatra-ai/llm`, so the orchestration layer MUST NOT import
+ * from agents (that would invert the layering / create a cycle — the same
+ * reason `LlmProvider` is duplicated here). The host reads the capability from
+ * the OAS block and threads it DOWN into orchestration as data on
+ * `GenerateInput.capabilityRequired`; the values are identical to
+ * `LlmCapability`, so a host value is directly assignable.
+ *
+ * Consumed today by the Anthropic adapter's native_mcp fail-closed hardening
+ * (llm-providers S1, #1712): under `"native_mcp"` the adapter refuses to
+ * silently degrade its native MCP path to function-tool emulation.
+ */
+export type LlmCapabilityRequirement = "media_input" | "function_tools" | "native_mcp";
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -339,6 +358,15 @@ export type GenerateInput = {
    * self-MCP; any other id is looked up in external_mcp_servers.
    */
   declaredToolboxIds?: string[];
+  /**
+   * llm-providers S1 (#1712): the capability the dispatching agent pinned via
+   * `metadata.cinatra.llm.capabilityRequired`, threaded down by the host so an
+   * adapter can honour it at runtime. Absent ⇒ no capability gate (existing
+   * behavior). Today only `"native_mcp"` is adapter-consumed — it disables the
+   * Anthropic adapter's silent function-tool fallback when its native MCP path
+   * fails (fail-closed; function-tool emulation is not native MCP).
+   */
+  capabilityRequired?: LlmCapabilityRequirement;
   /**
    * Optional artifact attachments for THIS generation. The orchestration layer
    * resolves each ref: ingestible → provider-native file part; non-ingestible
