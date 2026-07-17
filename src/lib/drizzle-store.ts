@@ -2203,6 +2203,12 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS agent_kind text NOT NULL DEFAULT 'executor', ADD COLUMN IF NOT EXISTS assistant_config text` },
     { text: `DO $$ BEGIN ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_check", `CHECK (agent_kind IN ('assistant', 'executor'))`)} ${addConstraintIfAbsentSql(schemaName, "agent_templates", "agent_templates_agent_kind_config_check", `CHECK ((agent_kind = 'assistant' AND assistant_config IS NOT NULL) OR (agent_kind = 'executor' AND assistant_config IS NULL))`)} END $$;` },
     { text: `CREATE INDEX IF NOT EXISTS agent_templates_agent_kind_idx ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (agent_kind)` },
+    // 1:1 template<->principal link (#1037 P1.3): assistant_user_id is the bare text id of the
+    // Better Auth public."user" assistant principal an agent_kind='assistant' template is registered AS
+    // (no cross-schema FK, like assistant_threads.assistant_user_id). Partial UNIQUE over non-null values
+    // enforces the 1:1; executor rows stay NULL and are excluded by the predicate. Transformational half in migration core__0054.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS assistant_user_id text` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_templates_assistant_user_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (assistant_user_id) WHERE assistant_user_id IS NOT NULL` },
     // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
     // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
@@ -2823,7 +2829,12 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
       'visibility', 'public',
       'registryUrl', 'https://registry.cinatra.ai'
     )
-    WHERE package_name IS NOT NULL AND origin IS NULL;
+    -- #1037 P1.3: never grandfather a conversational (assistant) row to a PUBLIC
+    -- Cinatra registry origin — the built-in Cinatra assistant is a seeded
+    -- principal-linked instance, not a marketplace extension. It carries NULL
+    -- package_name (excluded by the first predicate already); this arm hardens
+    -- against any future assistant row that does declare a package identity.
+    WHERE package_name IS NOT NULL AND origin IS NULL AND agent_kind IS DISTINCT FROM 'assistant';
   END IF;
 END $$` },
     // Step 5: Grandfather backfill — existing skill_packages rows are public.
