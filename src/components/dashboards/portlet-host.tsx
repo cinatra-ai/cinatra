@@ -9,6 +9,8 @@
 import { useState, type ComponentType } from "react";
 import dynamic from "next/dynamic";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+// Client-safe subpath (the extension-materialization barrel is server-only).
+import { parseAnalyticsDashboardForRender } from "@cinatra-ai/dashboards/v12-envelope";
 import type { PortletComponentProps } from "./portlets/types";
 import { ObjectListPortlet } from "./portlets/object-list-portlet";
 import { ObjectDetailPortlet } from "./portlets/object-detail-portlet";
@@ -43,6 +45,40 @@ const EmbeddedDrizzleCubeDashboardGrid = dynamic(() =>
 // Type-only — erased at build, so it never pulls drizzle-cube/client into the
 // app-dir bundle (the runtime component is the dynamic import above).
 type AnalyticsDashboardConfig = import("@/components/dashboards/embedded-drizzle-cube-dashboard-grid").EmbeddedDrizzleCubeDashboardGridProps["dashboard"];
+
+// Error state for portlets whose embedded config cannot render (cinatra#1736)
+// — shown INSTEAD of the indefinite drizzle-cube spinner those portlets would
+// otherwise produce.
+function BrokenPortletsCard({
+  broken,
+  allBroken,
+}: {
+  broken: readonly { id: string; title: string; reason: string }[];
+  allBroken: boolean;
+}) {
+  return (
+    <Card className="border-destructive/50 bg-surface backdrop-blur-none">
+      <CardHeader>
+        <CardTitle className="text-base">
+          {allBroken
+            ? "This dashboard can't be rendered"
+            : `${broken.length} portlet${broken.length === 1 ? "" : "s"} can't be rendered`}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
+          {broken.map((b) => (
+            <li key={b.id}>
+              <span className="font-medium text-foreground">{b.title}</span>
+              {" — "}
+              {b.reason}
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
 
 // Per-kind chrome policy. Most kinds render as a titled `<Card>` in the vertical
 // stack; the `analytics` kind renders BARE (no surrounding card chrome,
@@ -102,17 +138,46 @@ export function PortletHost({
         // dashboard BARE (no card chrome), full-width. The view owns its own
         // CubeProvider/QueryClient shell, so the host never touches
         // drizzle-cube/client (Layer-4 boundary stays clean).
+        //
+        // The embedded config goes through the render salvage parse first
+        // (cinatra#1736): it normalizes legacy object-shaped portlet `query`
+        // values to the JSON string drizzle-cube expects (repairing pre-fix
+        // persisted rows), and portlets that STILL cannot render are excluded
+        // and reported in an error card — never handed to the grid, where
+        // they would spin forever.
         if ((KIND_CHROME[p.kind] ?? "card") === "bare") {
           const dashboard = (p.config as { dashboard?: unknown }).dashboard;
-          return (
-            <div key={p.instanceId} className="w-full">
-              {dashboard && typeof dashboard === "object" ? (
-                <EmbeddedDrizzleCubeDashboardGrid dashboard={dashboard as AnalyticsDashboardConfig} />
-              ) : (
+          if (!dashboard || typeof dashboard !== "object") {
+            return (
+              <div key={p.instanceId} className="w-full">
                 <p className="text-sm text-muted-foreground">
                   Analytics portlet <span className="font-mono">{p.instanceId}</span> is missing its
                   embedded dashboard config.
                 </p>
+              </div>
+            );
+          }
+          const parsed = parseAnalyticsDashboardForRender(dashboard);
+          if (!parsed.ok) {
+            return (
+              <div key={p.instanceId} className="w-full">
+                <BrokenPortletsCard
+                  broken={[{ id: p.instanceId, title: "Dashboard", reason: parsed.reason }]}
+                  allBroken
+                />
+              </div>
+            );
+          }
+          const hasRenderable = parsed.config.portlets.length > 0;
+          return (
+            <div key={p.instanceId} className="flex w-full flex-col gap-4">
+              {parsed.broken.length > 0 && (
+                <BrokenPortletsCard broken={parsed.broken} allBroken={!hasRenderable} />
+              )}
+              {hasRenderable && (
+                <EmbeddedDrizzleCubeDashboardGrid
+                  dashboard={parsed.config as AnalyticsDashboardConfig}
+                />
               )}
             </div>
           );

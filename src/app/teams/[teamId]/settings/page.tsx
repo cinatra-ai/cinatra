@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
 
 import {
+  getAuthSession,
   isPlatformAdmin,
   requireAuthSession,
   resolveOrgRoleForUser,
@@ -13,11 +14,58 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+import { CrumbContributions } from "@/components/crumb-contributions";
+
 import { TeamSettingsForm } from "./team-settings-form";
 import { TeamMembersSection, type TeamMemberView } from "./team-members-section";
 import { canManageTeamMembers } from "./team-member-authority";
 
-export const metadata: Metadata = { title: "Team settings" };
+// Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
+// title repeats the page's own authorization before disclosing the team name;
+// any failure yields the generic title. Without this the client-side title
+// derivation would show humanized hex for the id-bearing route.
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ teamId: string }>;
+}): Promise<Metadata> {
+  try {
+    const { teamId } = await params;
+    // Non-throwing session read: requireAuthSession() redirects (throws
+    // NEXT_REDIRECT), which this try/catch would swallow.
+    const session = await getAuthSession();
+    if (!session) return { title: "Team settings" };
+    const rows = await betterAuthDb.execute<{
+      name: string;
+      organizationId: string;
+      is_member: boolean;
+    }>(sql`
+      SELECT
+        t.name,
+        t."organizationId",
+        EXISTS (
+          SELECT 1 FROM public."teamMember" tm
+           WHERE tm."teamId" = t.id AND tm."userId" = ${session.user.id}
+        ) AS is_member
+      FROM public."team" t
+      WHERE t.id = ${teamId}
+      LIMIT 1
+    `);
+    const team = rows.rows?.[0];
+    if (!team) return { title: "Team settings" };
+    // Same predicate family as the page gate. A non-member's team role cannot
+    // exist, so the light (no member-list) form is authorization-equivalent.
+    const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
+    const canManage = canManageTeamMembers({
+      platformAdmin: isPlatformAdmin(session),
+      orgRole,
+    });
+    if (!team.is_member && !canManage) return { title: "Team settings" };
+    return { title: `Team settings — ${team.name}` };
+  } catch {
+    return { title: "Team settings" };
+  }
+}
 
 type TeamRow = {
   id: string;
@@ -117,6 +165,15 @@ export default async function TeamSettingsPage({
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): resolves the intermediate
+          team-id crumb AND pins the leaf to "Settings" (the deliberate crumb
+          contract beats the longer header title broadcast). */}
+      <CrumbContributions
+        entries={[
+          { prefix: `/teams/${encodeURIComponent(teamId)}`, label: team.name },
+          { prefix: `/teams/${encodeURIComponent(teamId)}/settings`, label: "Settings" },
+        ]}
+      />
       <PageHeader
         title={`Team settings — ${team.name}`}
         description={`Organization: ${team.org_name} (${team.org_slug})`}

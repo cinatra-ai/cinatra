@@ -127,3 +127,85 @@ configuration surfacing tracked in #1057.
   run-start preflight for connectors OR LLM providers today; making the chokepoint
   self-derive the identity from `runId -> template` would close both gaps at once
   and is a shared follow-up on the #1056 machinery, not specific to this wave.
+
+## Native-MCP addendum (llm-providers epic #1711, S2 #1713 AC5)
+
+This section extends the ratified vocabulary above with the native-MCP
+qualification rule, the declaration model it keys on, and
+the reviewer duty that keeps declared claims truthful. It changes no existing
+semantics; it codifies rules that previously lived only as code comments.
+
+### The native-MCP qualification rule (the "MCP Injection Rule")
+
+A provider satisfies the `native_mcp` capability ONLY when MCP tool calls
+execute **server-side on the provider's own standard endpoint** — the provider's
+API accepts the MCP server description (URL + authorization) and the provider
+executes `tools/list` / `tools/call` itself. Concretely today: the OpenAI
+Responses API `type: "mcp"` tool, and the Anthropic `mcp_servers` beta
+(`client.beta.messages.create`).
+
+**Shims never qualify**, regardless of behavioral equivalence:
+
+- function-tool emulation (host fetches the MCP tool list and re-exposes it as
+  function tools — the Anthropic `"function-tools"` mcpMode);
+- a function declaration that merely *represents* an MCP server (the removed
+  Gemini `call_cinatra_mcp` diagnostic stand-in);
+- any host-side proxy that executes MCP calls in-process and relays results.
+
+The rule is fail-closed in both directions: a request that pins
+`capabilityRequired: "native_mcp"` must refuse rather than silently degrade to
+emulation (`NativeMcpCapabilityRequiredError` in `packages/llm/src/errors.ts`),
+and a capability resolver must answer `false` for any provider whose declared
+`native_mcp.status` is not `"native"` (`declarationSatisfiesCapability`).
+
+### The declaration model (llm-providers S1, #1712)
+
+Provider capabilities are **declaration-driven**. The epic's target state is
+extension-contributed: each LLM connector ships a top-level
+`cinatra.llmProvider` manifest block (abiVersion 1) declaring its own
+capability matrix and model catalog. Today (post-S1) the declarations live in
+core as the hardcoded build-known catalog
+(`BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS` in
+`packages/agents/src/llm-provider-policy.ts`) conforming to the same schema —
+no connector ships the block yet; a later slice of the epic swaps the catalog
+for declarations generated from the connector manifest blocks with no change
+to the resolvers. The model:
+
+- Leaf schema (the single shared authority for connectors + the publish gate):
+  `packages/sdk-extensions/src/llm-provider-contract.ts`. Host-side byte-mirror
+  (build-known catalog + resolvers + enforcement):
+  `packages/agents/src/llm-provider-policy.ts`.
+- `capabilities.native_mcp.status` ∈ `"native" | "unsupported" | "dormant"`.
+  Only `"native"` satisfies `native_mcp`; `"dormant"` means the translator code
+  ships ahead of the declaration flip (the dormant-Gemini ordering) and is
+  provably false until a later connector release sets `"native"`.
+- `capabilities.native_mcp.approval` ∈
+  `"auto_execute" | "approval_required" | "unsupported"` — what the provider's
+  native-MCP surface can honour. A provider declaring `"unsupported"`
+  (Anthropic today) must REFUSE an `approval_required` toolbox fail-closed.
+  The translation/refusal enforcement is owned by S2's adapter half, which is
+  sequenced after the #1707 provider-translation rewrite and has NOT landed
+  yet.
+- `capabilities.native_mcp.transports` — optional array declaring the MCP
+  transports the provider's native surface supports. The persisted per-server
+  `transport` column (`"streamable-http" | "sse" | "unknown"`, landed with
+  S2's persistence half) will be matched against it at injection time by the
+  same post-#1707 adapter half; transport is never inferred from a URL.
+- The **effective** (live) capability is fail-closed:
+  declaration ∩ activated `llm-provider-surface` ∩ adapter readiness
+  (`resolveEffectiveProviderCapability`); any absent factor forces `false`.
+
+### Reviewer qualification duty at the publish gate
+
+The extension publish/conformance gate
+(`scripts/extensions/conformance-gate.mjs`, its `checkLlmProvider` branch)
+validates the `cinatra.llmProvider` block mechanically (shape, vocabulary,
+abiVersion) — but whether a claimed `native_mcp.status: "native"` is GENUINELY
+native is a semantic claim the gate cannot decide. The human reviewer approving
+a connector release that declares `"native"` (or flips `"dormant"` →
+`"native"`) owns verifying the qualification rule above against the provider's
+documented API: server-side execution on the provider's standard endpoint, not
+a shim. A declaration that cannot be verified that way must stay `"dormant"`
+or `"unsupported"`. Until connectors ship the block, the build-known catalog
+is the declaration surface — a core PR that edits a provider's
+`native_mcp.status` carries the same reviewer duty.

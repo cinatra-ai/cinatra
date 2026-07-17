@@ -25,6 +25,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { getAuthSession } from "@/lib/auth-session";
+import { CrumbContributions } from "@/components/crumb-contributions";
 import {
   betterAuthDb,
   betterAuthMembers,
@@ -128,6 +129,17 @@ export async function OrganizationDetailDashboardPage({
 
   return (
     <Main className="min-h-screen">
+      {/* Post-gate crumb publisher (cinatra#1737): the membership gate above
+          passed. Pre-Stage-C an org may still have a NULL name — fall back to
+          the short-id placeholder explicitly (never title-cased hex). */}
+      <CrumbContributions
+        entries={[
+          {
+            prefix: `/organizations/${encodeURIComponent(id)}`,
+            label: orgName || `${id.slice(0, 8)}…`,
+          },
+        ]}
+      />
       <PageHeader
         title={orgName || "Organization"}
         description="Dashboards and access for this organization."

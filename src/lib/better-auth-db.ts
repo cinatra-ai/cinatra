@@ -286,7 +286,9 @@ export const betterAuthSessions = pgTable("session", {
 
 export const betterAuthOrganizations = pgTable("organization", {
   id: text("id").primaryKey(),
-  name: text("name"),
+  // NOT NULL since core__0053 (cinatra#1737 Stage C); fresh installs get the
+  // same shape from Better Auth's canonical model (name is required there).
+  name: text("name").notNull(),
   slug: text("slug"),
   createdAt: timestamp("createdAt", { withTimezone: true, mode: "date" }),
 });

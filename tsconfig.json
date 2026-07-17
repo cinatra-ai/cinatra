@@ -214,6 +214,7 @@
       "@cinatra-ai/dashboards/require-dashboard-access": ["./packages/dashboards/src/auth/require-dashboard-access.ts"],
       "@cinatra-ai/dashboards/extension-dashboard-reads": ["./packages/dashboards/src/store/extension-dashboard-reads.ts"],
       "@cinatra-ai/dashboards/embedded-drizzle-cube-dashboard-grid": ["./packages/dashboards/src/components/embedded-drizzle-cube-dashboard-grid.tsx"],
+      "@cinatra-ai/dashboards/v12-envelope": ["./packages/dashboards/src/v12-envelope.ts"],
       "@cinatra-ai/dashboards/audit": ["./packages/dashboards/src/audit/index.ts"],
       "@cinatra-ai/dashboards/providers": ["./packages/dashboards/src/providers/index.tsx"],
       "@cinatra-ai/dashboards/cubes-mcp-module": ["./packages/dashboards/src/mcp-cubes/index.ts"],

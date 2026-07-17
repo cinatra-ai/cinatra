@@ -14,6 +14,7 @@ Unified LLM orchestration layer. All LLM API calls in the application go through
 | `src/providers/anthropic.ts` | Anthropic adapter — function tools, MCP server tool (native or function-tools mode with auto-fallback) |
 | `src/providers/gemini.ts` | Gemini adapter — function tools (no native MCP) |
 | `src/mcp-access.ts` | `buildLlmMcpServerTool` — exchanges client_credentials for JWT, builds `LlmMcpServerTool` |
+| `src/mcp-materializer.ts` | Pure provider materializer for external MCP server tools (llm-providers S2, #1713): URL validation, single authorization source, deterministic name normalization with collision detection. Not yet wired into any adapter — the adapter wiring lands after the #1707 provider-translation rewrite |
 | `src/tools/skills.ts` | Skill tool helpers — internal: `buildSkillTools`, `readSkillContent`; public: `buildMcpTools`, `createShellTool`, `createWebSearchTool` |
 
 ## MCP server tool — automatic injection at the orchestration layer
@@ -40,7 +41,7 @@ When the MCP server is not reachable (no tunnel, no credentials), the helper is 
 |---|---|---|---|
 | `LlmFunctionTool` | (inline) | All | Has `execute` callback; orchestration layer calls it when model issues a function call |
 | `LlmShellTool` | `createShellTool`, `createLocalSkillShellTool` | All (OpenAI native; others simulate) | Exposes skill directories as virtual paths `/skills/<slug>` |
-| `LlmMcpServerTool` | `createMcpServerTool`, `buildMcpTools` | OpenAI (native); Anthropic (native or function-tools, see below); Gemini (function tool shim) | Auto-injected for OpenAI/Anthropic via `injectMcpTools` in `index.ts` |
+| `LlmMcpServerTool` | `createMcpServerTool`, `buildMcpTools` | OpenAI (native); Anthropic (native or function-tools, see below); Gemini: NONE — `injectMcpTools` short-circuits Gemini and the adapter drops MCP tools (function-tool emulation does not qualify as MCP — the MCP Injection Rule) | Auto-injected for OpenAI/Anthropic via `injectMcpTools` in `index.ts` |
 | `LlmWebSearchTool` | `createWebSearchTool` | OpenAI only (`web_search_preview`) | No execute handler — processed server-side by OpenAI |
 
 ### `LlmWebSearchTool`
@@ -76,9 +77,17 @@ await runResolvedSkillAwareDeterministicLlmTask({
 
 `buildSkillTools` and `readSkillContent` in `src/tools/skills.ts` are **internal helpers** — they are not exported from the package public API. Consumers must not import or call them directly. Pass `skillIds` to the orchestration wrapper functions instead.
 
-The orchestration wrapper auto-selects the delivery method per provider:
-- **OpenAI / Anthropic**: skills delivered as tools (`read_skill` / `shell`) via `buildSkillTools`
-- **Gemini**: skill content inlined into the system prompt via `readSkillContent` (avoids the extra function-call round-trip)
+The orchestration wrapper auto-selects the delivery method per provider through
+the `SkillDeliveryAdapter` seam (`selectSkillDeliveryAdapter`):
+- **OpenAI**: native shell delivery (`OpenAiShellSkillDelivery`) — skills exposed
+  via the shell tool's virtual `/skills/<slug>` paths. (The #1707
+  provider-translation rewrite moves this onto the execution plane.)
+- **Anthropic**: `container.skills` ONLY (`AnthropicContainerSkillDelivery`).
+  Skill delivery via function tools / `shell` / `read_skill` is a forbidden
+  standing invariant — the adapter fails closed
+  (`assertNoFunctionToolSkillDelivery` → `AnthropicFunctionToolSkillError`).
+- **Gemini**: skill content inlined into the system prompt
+  (`GeminiInlineSkillDelivery`; avoids the extra function-call round-trip)
 
 ## Anthropic MCP mode
 
