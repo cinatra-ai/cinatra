@@ -1,17 +1,17 @@
 /**
- * `/teams/[teamId]` screen — the team detail TABBED surface (cinatra#704, epic
- * #699).
+ * `/teams/[teamId]` screen — the team detail dashboards surface (cinatra#704,
+ * epic #699; Permissions tab dropped by cinatra#1688).
  *
- * Replaces the prior read-only single-portlet DC dashboard with a two-tab shell:
- *   - "Dashboards": the reusable entity Dashboards surface (#701) bound to this
- *     team's PER-USER dashboard set. The non-removable "Overview" default (#700)
- *     holds the team's general info — identity + member count — rendered as the
- *     render-only summary portlets (#702) built fresh here via
- *     `buildTeamOverviewConfig`; the user may also create/select their own
- *     custom dashboards for the team.
- *   - "Permissions": the team access configuration — membership + per-team roles
- *     (the existing `TeamMembersSection`, authority-gated). NO "customer invite":
- *     customers are a project-only external-grant concept.
+ * The reusable entity Dashboards surface (#701) bound to this team's PER-USER
+ * dashboard set. The non-removable "Overview" default (#700) holds the team's
+ * general info — identity + member count — rendered as the render-only summary
+ * portlets (#702) built fresh here via `buildTeamOverviewConfig`; the user may
+ * also create/select their own custom dashboards for the team.
+ *
+ * Team MANAGEMENT (membership + per-team roles + rename) lives ONLY at
+ * `/teams/[teamId]/settings`, reached via the header button (cinatra#1688: the
+ * former "Permissions" tab mounted the same `TeamMembersSection` a second time
+ * — the settings page absorbed it as THE single management surface).
  *
  * Ownership axis (converged decision): team detail dashboards are USER-owned
  * (`ownerLevel:"user"`, `ownerId:userId`) — "the user's dashboards for this
@@ -47,26 +47,16 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   isPlatformAdmin,
   requireAuthSession,
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
 import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
 import { canManageTeamMembers } from "@/app/teams/[teamId]/settings/team-member-authority";
-import {
-  TeamMembersSection,
-  type TeamMemberView,
-} from "@/app/teams/[teamId]/settings/team-members-section";
+import type { TeamMemberView } from "@/app/teams/[teamId]/settings/team-members-section";
 
 import { buildTeamOverviewConfig } from "../components/seed-configs/overview-config";
-import { TeamDetailTabs } from "../components/team-detail-tabs";
+import { TeamDetailDashboards } from "../components/team-detail-dashboards";
 import type { DashboardEntityRef } from "../store/entity-identity";
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
 import { ensureEntityOverviewAction, listEntityDashboardsAction } from "../actions";
@@ -133,8 +123,9 @@ export async function TeamDetailDashboardPage({
   if (activeOrgId !== team.organizationId) redirect("/not-authorized");
 
   // Members list (+ per-team roles when the app-owned `teamMember.role` column
-  // is provisioned) — the same fetch the settings surface uses; it doubles as
-  // the Overview member count and the Permissions-tab data.
+  // is provisioned) — the same fetch the settings surface uses. Needed here for
+  // the Overview member count and the viewer's per-team role (authority gate);
+  // the members UI itself renders only on `/teams/[teamId]/settings` (#1688).
   const rolesEnabled = await teamMemberRoleColumnExists();
   const memberRows = await betterAuthDb.execute<{
     userId: string;
@@ -218,29 +209,6 @@ export async function TeamDetailDashboardPage({
     saveDashboard: teamSaveDashboardConfigAction.bind(null, team.id),
   };
 
-  const permissionsSlot = (
-    <Card>
-      <CardHeader>
-        <CardTitle>Members</CardTitle>
-        <CardDescription>
-          {canManage
-            ? rolesEnabled
-              ? "People on this team. Add members from this organization, remove them, or assign the Admin role — a team keeps at least one member."
-              : "People on this team. Add members from this organization or remove them — a team keeps at least one member."
-            : "People on this team. Ask a team admin or an organization owner/admin to add or remove members."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <TeamMembersSection
-          teamId={team.id}
-          members={members}
-          canManage={canManage}
-          rolesEnabled={rolesEnabled}
-        />
-      </CardContent>
-    </Card>
-  );
-
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -257,11 +225,10 @@ export async function TeamDetailDashboardPage({
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <TeamDetailTabs
+        <TeamDetailDashboards
           dataSource={dataSource}
           overviewPortlets={overviewConfig.portlets}
           initialData={initialData}
-          permissionsSlot={permissionsSlot}
         />
       </PageContent>
     </Main>

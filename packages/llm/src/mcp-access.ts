@@ -162,6 +162,11 @@ function buildCinatraMcpServerTool(
     // they cannot reach the not-yet-rerouted direct-REST CMS primitives).
     allowedTools,
     requireApproval: "never",
+    // First-party transport classification (llm-providers S2, #1713): the
+    // Cinatra self-MCP (/api/mcp) is served over the modern MCP Streamable HTTP
+    // transport (verified stateless — no SSE session pinning). Declared
+    // explicitly so it is never left as "unknown" and never inferred from URL.
+    transport: "streamable-http",
   };
 }
 

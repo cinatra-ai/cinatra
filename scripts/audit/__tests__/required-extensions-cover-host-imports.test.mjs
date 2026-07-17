@@ -236,6 +236,37 @@ describe("classifyGeneratedReferences (generator-owned resolution metadata)", ()
     expect([...bootable]).toEqual(["@scope/opt-connector"]);
   });
 
+  it("CLIENT-safe field-renderer map: guardedOptional plain-import ⇒ acquirable (no server-guard brand required)", () => {
+    // The field-renderer component map is client-consumed, so its loaders are
+    // plain `() => import()` (guardedExtensionImport is server-only) and degrade
+    // via the SchemaFieldRenderer floor — NOT part of the server-guard proof.
+    const source =
+      "export const GENERATED_FIELD_RENDERER_COMPONENTS: Record<string, X> = {\n" +
+      '  "@scope/opt-connector:some-review": { resolution: "guardedOptional", packageName: "@scope/opt-connector", propsApiVersion: 1, load: () => import("@scope/opt-connector/src/some-renderer") },\n' +
+      "};\n";
+    const { bootable, acquirable } = classifyGeneratedReferences({
+      generatedSources: [{ rel: "g.ts", source }],
+      generatedTestSource: "const EXPECTED = [];", // intentionally NOT in the server-guard proof
+      extensionNames,
+    });
+    expect([...acquirable]).toEqual(["@scope/opt-connector"]);
+    expect(bootable.size).toBe(0);
+  });
+
+  it("CLIENT-safe field-renderer map: required entry ⇒ bootable (a required claimant must never be absent)", () => {
+    const source =
+      "export const GENERATED_FIELD_RENDERER_COMPONENTS: Record<string, X> = {\n" +
+      '  "@scope/req-connector:some-review": { resolution: "required", packageName: "@scope/req-connector", propsApiVersion: 1, load: () => import("@scope/req-connector/src/some-renderer") },\n' +
+      "};\n";
+    const { bootable, acquirable } = classifyGeneratedReferences({
+      generatedSources: [{ rel: "g.ts", source }],
+      generatedTestSource: "const EXPECTED = [];",
+      extensionNames,
+    });
+    expect([...bootable]).toEqual(["@scope/req-connector"]);
+    expect(acquirable.size).toBe(0);
+  });
+
   it('STATIC_EXTENSION_MANIFEST records: resolution "required" ⇒ bootable; guardedOptional records are passive', () => {
     const source = [
       "export const STATIC_EXTENSION_MANIFEST: Record<string, NormalizedExtensionRecord> = {",

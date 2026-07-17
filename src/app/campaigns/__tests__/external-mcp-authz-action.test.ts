@@ -235,6 +235,8 @@ describe("external MCP server actions — authorization boundary", () => {
     form.set("label", "ops-global");
     form.set("serverUrl", "https://ops.example/mcp");
     form.set("scope", "global");
+    // llm-providers S2 (#1713): a submitted transport must round-trip onto the row.
+    form.set("transport", "streamable-http");
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(redirect).toHaveBeenCalledWith(`${MCP_SERVER_SETUP_HREF}?saved=1`);
@@ -245,6 +247,24 @@ describe("external MCP server actions — authorization boundary", () => {
     const arg = insertExternalMcpServerStrict.mock.calls[0][0] as Record<string, unknown>;
     expect(arg.scope).toBe("global");
     expect(arg.userId).toBeNull();
+    // The FormData transport field is read and persisted (regression: it was
+    // previously dropped, silently defaulting every write to "unknown").
+    expect(arg.transport).toBe("streamable-http");
+  });
+
+  it("defaults a create with no transport field to \"unknown\"", async () => {
+    requireAdminSession.mockResolvedValue({ user: { id: "u_admin", role: "admin" } });
+
+    const { createExternalMcpServerAction } = await import("@/app/campaigns/actions");
+
+    const form = new FormData();
+    form.set("label", "ops-global-2");
+    form.set("serverUrl", "https://ops2.example/mcp");
+    form.set("scope", "global");
+
+    await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
+    const arg = insertExternalMcpServerStrict.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(arg.transport).toBe("unknown");
   });
 
   it("allows an authenticated user to create their own user-scoped row bound to their userId", async () => {
