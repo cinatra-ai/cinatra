@@ -64,10 +64,16 @@ async function resolveStagedInputs(
  */
 const MAX_TRACKED_CARRIERS = 256;
 
-/** `throw null` / non-Error throwables must still become a structured string. */
+/**
+ * `throw null` / non-Error throwables must still become a structured string.
+ * The ENTIRE inspection sits inside the try (codex round-3): a hostile
+ * throwable can make `instanceof` itself throw (Proxy with a throwing
+ * getPrototypeOf trap) or carry a throwing `message` getter — even then this
+ * returns a string and the caller's never-rejects contract holds.
+ */
 function describeThrown(err: unknown): string {
-  if (err instanceof Error) return err.message;
   try {
+    if (err instanceof Error) return err.message;
     return String(err);
   } catch {
     return "unknown error";

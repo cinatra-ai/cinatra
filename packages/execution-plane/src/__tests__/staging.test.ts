@@ -408,6 +408,39 @@ describe("createBrokerSandboxExecutor", () => {
     expect(outputs[0].stderr).toContain("staging_failed");
   });
 
+  it("a HOSTILE throwable (throwing instanceof/message traps) still yields a structured refusal (codex r3)", async () => {
+    const { docker } = recordingDocker();
+    const { broker } = makeBroker(fakeWorker(), docker);
+    const executor = createBrokerSandboxExecutor(broker);
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("trap");
+        },
+        get() {
+          throw new Error("trap");
+        },
+      },
+    );
+    const outputs = await executor({
+      sessionCarrier: carrierFor("run-hostile-throw"),
+      commands: ["echo hi"],
+      stagedSkills: [
+        {
+          skillId: "skill-h",
+          slug: "my-skill",
+          description: "boom",
+          resolveFiles: async () => {
+            throw hostile;
+          },
+        },
+      ],
+    });
+    expect(outputs[0].outcome).toEqual({ type: "exit", exitCode: 126 });
+    expect(outputs[0].stderr).toContain("staging_failed: unknown error");
+  });
+
   it("a THROWING resolveFiles becomes a structured refusal, never an escaping rejection (codex r1)", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
