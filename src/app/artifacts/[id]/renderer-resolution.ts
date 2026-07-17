@@ -106,6 +106,46 @@ export function resolveSemanticDispatch(
   };
 }
 
+/**
+ * Resolve the SEMANTIC `listRow` renderer for a row (S7/M2, cinatra#1631 —
+ * the artifacts-library glyph capability) via the per-org effective-identity
+ * winner + the generated build map. Same arbitration as the detail slot —
+ * the winner-bound semantic registry at slot `listRow` — so a losing
+ * claimant's row capability never leaks. Null when the winner ships no
+ * `listRow` renderer (the caller renders the host's generic claimed glyph).
+ *
+ * Keying: type-precise first (a claimant may ship a type-specific `listRow`
+ * for a TYPED row it claims), then the WINNER'S OWN umbrella type
+ * (`<pkg>:artifact`). The umbrella fallback is what makes the glyph a
+ * like-for-like replacement of the deleted host-side family map: every
+ * /artifacts library row is the GENERIC `@cinatra-ai/artifact:object` type
+ * (artifact-service filters on the constant), so without it a claimed generic
+ * row could never reach its winner's registered row capability — the old map
+ * keyed on the WINNER alone for exactly these rows. Winner-binding holds in
+ * both steps: only keys derived from the row's effective-identity winner are
+ * consulted (a losing claimant's registration lives under a different
+ * (type, package, slot) key and stays unreachable), and the registry derives
+ * `generatedKey` from `(packageName, slot)` — an extension ships at most one
+ * `listRow` module, so the fallback can never select a foreign module.
+ */
+export function resolveSemanticListRowDispatch(
+  baseType: string,
+  identity: EffectiveIdentity,
+): SemanticRendererResolution | null {
+  const desc =
+    semanticRendererRegistry.resolve(baseType, identity, "listRow") ??
+    (identity.kind === "extension"
+      ? semanticRendererRegistry.resolve(`${identity.extension}:artifact`, identity, "listRow")
+      : null);
+  if (!desc) return null;
+  return {
+    packageName: desc.packageName,
+    generatedKey: desc.generatedKey,
+    // `built` MEANING widened to `loadable` (§2.4): build map OR runtime registry.
+    built: isLoadableKey(desc.generatedKey),
+  };
+}
+
 /** Resolve the REPRESENTATION viewer for a row via the org-scoped
  * representation-provider registry (extension provider or the always-effective
  * first-party host default) + the generated build map, at the given `slot`

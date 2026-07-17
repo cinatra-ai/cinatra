@@ -17,6 +17,22 @@ const validUi = {
 };
 
 describe("parseSemanticArtifactManifest — cinatra.artifact.ui tolerance", () => {
+  it("accepts the activated listRow slot through the mirror parse (S7/M2, cinatra#1631)", () => {
+    const r = parseSemanticArtifactManifest({
+      accepts: { file: { mimeTypes: ["text/markdown"] } },
+      ui: {
+        abiVersion: 1,
+        sdkAbiRange: ARTIFACT_UI_SDK_ABI_RANGE,
+        renderers: { listRow: { entry: "./src/row.tsx", propsApiVersion: 1 } },
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.manifest.ui?.renderers?.listRow?.entry).toBe("./src/row.tsx");
+      expect(r.diagnostics).toBeUndefined();
+    }
+  });
+
   it("attaches a valid ui block (typed) with no diagnostics", () => {
     const r = parseSemanticArtifactManifest({
       accepts: { file: { mimeTypes: ["text/markdown"] } },

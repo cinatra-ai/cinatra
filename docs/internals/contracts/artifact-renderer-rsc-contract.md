@@ -44,11 +44,13 @@ depends only on `@cinatra-ai/sdk-extensions`).
   host-compatible SDK must still render); the **exact generated pin** is enforced
   one layer up at the extension-repo publish conformance gate.
 - **`renderers`** — a **non-empty partial map** over the closed v1 slot enum
-  `ARTIFACT_UI_SLOTS = ["detail","preview"]` (`detail` = the artifact detail view;
-  `preview` = the neutral inline-preview capability core reuse sites consume). The
-  reserved slots `listRow` / `card` / `inline` are **rejected** in v1. The HITL
-  field-renderer system and the chat renderable-view system are **separate
-  channels with their own declaration surfaces**, not slots of this enum.
+  `ARTIFACT_UI_SLOTS = ["detail","preview","listRow"]` (`detail` = the artifact
+  detail view; `preview` = the neutral inline-preview capability core reuse sites
+  consume; `listRow` = the compact row capability the artifacts-library glyph
+  cell resolves — graduated from RESERVED by S7/M2, cinatra#1631). The reserved
+  slots `card` / `inline` are **rejected** in v1. The HITL field-renderer system
+  and the chat renderable-view system are **separate channels with their own
+  declaration surfaces**, not slots of this enum.
 - **Per-slot renderer** (`ArtifactUiRenderer`, `.strict()`):
   - **`entry`** — a package-relative, path-contained subpath (`"./…"`, no `".."`,
     no absolute path, no protocol/URL, no backslash; `isContainedEntryPath` pins
