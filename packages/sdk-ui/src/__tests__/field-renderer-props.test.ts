@@ -16,9 +16,6 @@ import type {
   RendererMode as ModeFromLeaf,
   GmailSendAsAliasOption as AliasFromLeaf,
 } from "../field-renderer-props";
-import {
-  FIELD_RENDERER_PROPS_API_VERSION as VERSION_FROM_ROOT,
-} from "../index";
 import type {
   FieldRendererProps as PropsFromRoot,
   FieldRendererContext as ContextFromRoot,
@@ -31,9 +28,15 @@ describe("@cinatra-ai/sdk-ui field-renderer props contract", () => {
     expect(VERSION_FROM_LEAF).toBe(1);
   });
 
-  it("re-exposes the SAME version from the sdk-ui root barrel", () => {
-    expect(VERSION_FROM_ROOT).toBe(VERSION_FROM_LEAF);
-    expect(VERSION_FROM_ROOT).toBe(1);
+  it("does NOT re-export the runtime version VALUE from the sdk-ui root barrel (the value lives only on the ./field-renderer-props subpath, keeping the hot barrel zero-runtime w.r.t. the props leaf)", async () => {
+    // The root barrel re-exports the field-renderer props TYPES (erased at
+    // build) but NOT the runtime constant — re-exporting the value would pull
+    // the props leaf into every route whose first-party graph reaches sdk-ui.
+    // The sole host consumer imports the constant from the subpath instead.
+    const rootBarrel = await import("../index");
+    expect("FIELD_RENDERER_PROPS_API_VERSION" in rootBarrel).toBe(false);
+    // The single integer authority still resolves to 1 via the leaf subpath.
+    expect(VERSION_FROM_LEAF).toBe(1);
   });
 
   it("exports the props type as a usable structural shape (edit-mode renderer props)", () => {
