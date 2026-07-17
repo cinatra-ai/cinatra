@@ -317,7 +317,7 @@
     "drizzle-orm": "^0.45.2",
     "input-otp": "^1.4.2",
     "ioredis": "^5.11.1",
-    "katex": "^0.16.47",
+    "katex": "^0.18.0",
     "lucide-react": "^1.20.0",
     "moddle-xml": "12.0.0",
     "next": "16.2.10",
