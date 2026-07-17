@@ -1826,6 +1826,65 @@ jobs:
           echo "disk after prune:"; df -h /
           exit 0
 
+      - name: Add CI build swap (default-runner only, after the disk prune)
+        # Cold-cache OOM fix (issue #1758 follow-up, folded into #1759). The
+        # docker-buildx build below runs `pnpm build` (Turbopack) INSIDE buildkit;
+        # a COLD `next build` peaks ~33G, above the default runner's 15.8G RAM +
+        # ~3G stock swap, so buildkit is reclaimed mid-compile. The failing head-
+        # of-lane run logged `Creating an optimized production build ...` ->
+        # `[ELIFECYCLE] Command failed.` (118.9s) -> `ResourceExhausted: ... pnpm
+        # build did not complete successfully: cannot allocate memory` (run
+        # 29612773246, `build` job). #1757 DROPPED this job's swapfile (see the
+        # prune step above) because PR #1746's 20G swapfile shared the root disk
+        # buildkit writes its layers + mode=max gha cache to and ENOSPC-killed
+        # #1756 (~6G left after a 9.4G swapfile, with NO prune). Both conditions
+        # behind that ENOSPC are gone now: (1) the prune above runs FIRST and
+        # reclaims ~23G (this run: / 19G->42G avail), and (2) this step sizes the
+        # swapfile at min(20G, free-12G) on the ROOMIER of / and the /mnt temp
+        # disk, so it ALWAYS leaves >=12G free on the chosen disk. On a roomy
+        # runner (~96G avail post-prune) a 20G swapfile leaves ~76G, above the
+        # ~73G baseline docker builds were historically green under, so #1757's
+        # ENOSPC structurally cannot recur — while 15.8G RAM + 20G swap (~35.8G)
+        # clears the ~33G cold peak. Byte-identical best-effort/fail-open script
+        # to the four memory-bound jobs' swap step (subshell-guarded, partial-
+        # file cleanup on failure, swapon --show/df -h diagnostics); skipped when
+        # CI_BUILD_RUNNER moves this job to a larger runner.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
+          # if/else makes it best-effort — any failure exits the step 0 with a warning.
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
+          target=/
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show || true; free -h || true; df -h "$target" || true
+          else
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE" || true
+          fi
+          exit 0
+
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       # Build → boot-gate (issue #81). The image is FIRST built and loaded into
