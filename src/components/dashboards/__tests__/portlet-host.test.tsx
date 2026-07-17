@@ -211,3 +211,70 @@ describe("PortletHost — entity-summary plain chrome (cinatra#702)", () => {
     expect(c.textContent).toContain("3");
   });
 });
+
+describe("PortletHost — analytics render salvage (cinatra#1736)", () => {
+  it("normalizes a legacy object-shaped query and still mounts the grid (the #1736 repro)", async () => {
+    const c = await mount([
+      {
+        instanceId: "analytics",
+        kind: "analytics",
+        version: "1.0.0",
+        slot: "fixed",
+        config: {
+          dashboard: {
+            portlets: [
+              { id: "p1", title: "P1", w: 6, h: 4, x: 0, y: 0, query: { measures: ["agent_runs.count"] } },
+            ],
+          },
+        },
+      },
+    ]);
+    expect(c.querySelector('[data-testid="analytics-view"]')).not.toBeNull();
+    const dash = analyticsProbeProps[0]?.dashboard as { portlets: { query?: unknown }[] };
+    expect(typeof dash.portlets[0]?.query).toBe("string");
+  });
+
+  it("excludes an un-renderable portlet into an error card; siblings still mount", async () => {
+    const c = await mount([
+      {
+        instanceId: "analytics",
+        kind: "analytics",
+        version: "1.0.0",
+        slot: "fixed",
+        config: {
+          dashboard: {
+            portlets: [
+              { id: "good", title: "Good", w: 6, h: 4, x: 0, y: 0, query: { measures: ["a.count"] } },
+              { id: "bad", title: "Broken portlet", w: 6, h: 4, x: 6, y: 0, query: "not json {" },
+            ],
+          },
+        },
+      },
+    ]);
+    // the grid mounts with ONLY the good portlet…
+    const dash = analyticsProbeProps[0]?.dashboard as { portlets: { id: string }[] };
+    expect(dash.portlets.map((pp) => pp.id)).toEqual(["good"]);
+    // …and the broken one is called out, not spinning.
+    expect(c.textContent).toContain("1 portlet can't be rendered");
+    expect(c.textContent).toContain("Broken portlet");
+  });
+
+  it("all portlets broken → error card only, NO grid mount (never a spinner)", async () => {
+    const c = await mount([
+      {
+        instanceId: "analytics",
+        kind: "analytics",
+        version: "1.0.0",
+        slot: "fixed",
+        config: {
+          dashboard: {
+            portlets: [{ id: "bad", title: "Dead", w: 6, h: 4, x: 0, y: 0, query: 42 }],
+          },
+        },
+      },
+    ]);
+    expect(c.querySelector('[data-testid="analytics-view"]')).toBeNull();
+    expect(c.textContent).toContain("This dashboard can't be rendered");
+    expect(c.textContent).toContain("Dead");
+  });
+});

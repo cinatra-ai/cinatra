@@ -56,6 +56,8 @@ import { registerCorePortletKinds } from "./portlets/kinds";
 import { getPortletKindDescriptor, isRenderOnlyPortletKind, validatePortletConfig } from "./portlets/registry";
 import {
   isV12Envelope,
+  normalizeDcBodyForWrite,
+  normalizeV12AnalyticsForWrite,
   ownerLevelToScopeLevel,
   reEnvelopeDcSave,
 } from "./v12-envelope";
@@ -273,13 +275,25 @@ async function normalizeConfigForWrite(opts: {
     // Rule 3: version-only change. Normalize the existing body to apiVersion 1.2.
     resolved = isV12Envelope(opts.existingConfig)
       ? opts.existingConfig
-      : reEnvelopeDcSave(opts.existingConfig, opts.existingConfig, fallbackScope);
+      : reEnvelopeDcSave(
+          opts.existingConfig,
+          normalizeDcBodyForWrite(opts.existingConfig),
+          fallbackScope,
+        );
   } else if (isV12Envelope(opts.config)) {
-    // Already an envelope — pass through.
-    resolved = opts.config;
+    // Already an envelope — passes through, EXCEPT the analytics portlets'
+    // embedded DC bodies, which get the legacy-`query` normalization
+    // (cinatra#1736: an object-shaped query must never reach a row).
+    resolved = normalizeV12AnalyticsForWrite(opts.config);
   } else {
-    // Rule 2: bare DC config → wrap, preserving the existing envelope's siblings/scope.
-    resolved = reEnvelopeDcSave(opts.existingConfig, opts.config, fallbackScope);
+    // Rule 2: bare DC config → normalize (cinatra#1736: legacy `query`
+    // object → JSON string), then wrap, preserving the existing envelope's
+    // siblings/scope.
+    resolved = reEnvelopeDcSave(
+      opts.existingConfig,
+      normalizeDcBodyForWrite(opts.config),
+      fallbackScope,
+    );
   }
   await validateConfig(resolved, DASHBOARD_CONFIG_V12_VERSION);
   return { config: resolved, configVersion: DASHBOARD_CONFIG_V12_VERSION };
