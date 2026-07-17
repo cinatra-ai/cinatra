@@ -1,5 +1,16 @@
 import "server-only";
 
+// entry-66: these four production deps are STATIC imports. They were
+// `await import(...)` lazy-loads (import-light nav purity), but a server-side
+// dynamic import whose target subgraph is this heavy detonates Turbopack's
+// native compile on linux-x64 CI (unbounded >33GB memory runaway; macOS is
+// unaffected) — see the entry-66 CI-memory investigation (2026-07-17). The DI seam below is
+// unchanged: tests still inject in-memory deps over the same code path.
+import * as store from "@/lib/objects/artifact-promotion-request-store";
+import * as objects from "@/lib/objects-store";
+import * as writer from "@/lib/object-history/canonical-writer";
+import * as errors from "@/lib/object-history/errors";
+
 // ---------------------------------------------------------------------------
 // Artifact row-scope promotion — the SUBJECT-SPECIFIC data layer behind the
 // shared promotion approvals seam (cinatra#1437, epic #1424; plugs into the
@@ -185,10 +196,6 @@ let cachedProdDeps: Promise<ArtifactPromotionDeps> | null = null;
 async function productionDeps(): Promise<ArtifactPromotionDeps> {
   if (cachedProdDeps) return cachedProdDeps;
   cachedProdDeps = (async () => {
-    const store = await import("@/lib/objects/artifact-promotion-request-store");
-    const objects = await import("@/lib/objects-store");
-    const writer = await import("@/lib/object-history/canonical-writer");
-    const errors = await import("@/lib/object-history/errors");
     return {
       readRequestById: (id, orgId) => store.readArtifactPromotionRequestById(id, orgId),
       listRequests: (input) => store.listArtifactPromotionRequests(input),
