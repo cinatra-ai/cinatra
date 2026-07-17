@@ -21,7 +21,7 @@ import dynamic from "next/dynamic";
 import { authClient } from "@/lib/auth-client";
 import { useTheme } from "next-themes";
 import type { ThemeName } from "./syntax-highlight";
-import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetDefinition, type WidgetManifest, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
+import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
 // The widget set is NOT imported from extension packages here. It arrives as
 // props from the server chat mount, which resolves it from the generated
 // extension manifest + extension lifecycle (src/lib/chat-widget-catalog.server.ts);
@@ -50,6 +50,7 @@ import {
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
 import type { ChatViewComponents } from "./chat-messages-view";
+import type { ChatPageProps } from "./chat-page-props";
 import {
   saveChatThreadViaFetch,
   fetchThreadList,
@@ -115,7 +116,8 @@ import { DancingRobot } from "./dancing-robot";
 // resolved server-side from the generated `cinatra.views` map and passed in as
 // a prop (RSC client references). Empty default: the `chart` viewType then
 // renders the never-blank fallback, a legitimate state when no view-bearing
-// extension is live/built.
+// extension is live/built. Kept inline (a runtime value); the props TYPE lives
+// in ./chat-page-props.
 const EMPTY_CHAT_VIEWS: ChatViewComponents = {};
 
 const ChatMessagesView = dynamic(
@@ -132,40 +134,11 @@ const ChatMessagesView = dynamic(
 // this tracked bottleneck file inside its file-size ceiling.
 
 // ---------------------------------------------------------------------------
-// Main chat page
+// Main chat page — its props contract (ChatPageProps/ChatPageMode) lives in the
+// type-only ./chat-page-props module (extracted to keep this bottleneck file
+// within its file-size ceiling); the EMPTY_CHAT_VIEWS runtime default is inline
+// above.
 // ---------------------------------------------------------------------------
-
-type ChatPageMode = "create-agent" | "create-workflow";
-
-type ChatPageProps = {
-  initialThreadId?: string;
-  userId?: string;
-  initialMention?: string;
-  initialMode?: ChatPageMode;
-  /** Pre-fills the prompt field on mount (e.g. a `?wf=&task=` workflow-task
-   *  handoff). Ignored if `initialMention` is set. */
-  initialPrompt?: string;
-  /** Live chat-widget catalog, resolved server-side by the chat mount from the
-   *  generated extension manifest + extension lifecycle
-   *  (src/lib/chat-widget-catalog.server.ts). Component values are RSC client
-   *  references. Defaults to empty — widget embeds then simply don't render
-   *  (a legitimate state when no widget-bearing extension is live). */
-  widgets?: WidgetDefinition[];
-  widgetManifests?: WidgetManifest[];
-  /** Live chat renderable-view catalog (viewType → extension component),
-   *  resolved server-side by the chat mount from the generated `cinatra.views`
-   *  map + extension lifecycle (src/lib/chat-views-catalog.server.ts). Component
-   *  values are RSC client references. Defaults to empty — the `chart` viewType
-   *  then renders the never-blank fallback. */
-  chatViews?: ChatViewComponents;
-  /** Which stream wire drives default Cinatra turns (cinatra#1218, #1216 S2).
-   *  `"ag-ui"` = the unified assistant stream (headless client + S3 reducer);
-   *  `"legacy"` = the bespoke chat-stream-events wire (the retained
-   *  kill-switch until the parity-gated deletes land). Defaults to legacy so
-   *  non-/chat mounts are unaffected; the /chat page mount resolves the env
-   *  flag server-side and passes it here. */
-  streamWire?: "ag-ui" | "legacy";
-};
 
 export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS, streamWire = "legacy" }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
