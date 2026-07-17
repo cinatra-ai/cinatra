@@ -401,7 +401,9 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#1437 artifact row-scope promotion via app
     const inbox = await sourceMod.promotionRequestsSource.fetchInbox(adminViewer);
     const row = inbox.rows.find((r) => r.id === `artifact:${requested.request.id}`);
     expect(row).toBeDefined();
-    expect((row!.raw as { detail?: { toScope?: string } }).detail?.toScope).toBe("Team: Growth");
+    expect((row!.raw as { detail?: { toScope?: string } }).detail?.toScope).toBe(
+      "Team: Growth [team-growth-1437]",
+    );
 
     const decided = await sourceMod.promotionRequestsSource.actions.decide(
       { rowId: row!.id, action: "approve", expectedVersion: row!.version },

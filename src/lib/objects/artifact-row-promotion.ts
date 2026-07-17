@@ -65,6 +65,10 @@ export type ArtifactPromotionDecideOutcome =
 export interface ArtifactPromotionReviewRow {
   /** Display-only widen-target label (team name snapshot); null for org. */
   toOwnerLabel?: string | null;
+  /** The IMMUTABLE widen-target owner id (team id / org id) — what an approve
+   *  actually writes; surfaced so reviewers can verify the true destination
+   *  (names are mutable + non-unique). */
+  toOwnerId: string;
   requestId: string;
   objectId: string;
   title: string;
@@ -298,6 +302,7 @@ function toReviewRow(r: ArtifactPromotionRequestRow): ArtifactPromotionReviewRow
     fromScope: r.fromVisibility,
     toScope: r.toVisibility,
     toOwnerLabel: r.toOwnerLabel ?? null,
+    toOwnerId: r.toOwnerId,
     requestedBy: r.requestedBy,
   };
 }
@@ -593,6 +598,16 @@ export async function decideArtifactPromotion(
   // STILL exist in this org at approve time — a deleted/foreign team id must
   // never become the row's owner. No state change: the admin rejects the dead
   // request with a reason (the one-pending index otherwise blocks a re-request).
+  //
+  // RESIDUAL (documented for the maintainer, mirrors the ratified claim/apply
+  // residual): this check and the widen below are separate transactions, so a
+  // team deleted/reassigned in the window ends up as the row's owner id. The
+  // blast radius is confidentiality-FAIL-CLOSED: object reads are org_id-scoped
+  // FIRST, so a team id now foreign to this org matches no reader here (no
+  // cross-tenant leak), and a deleted team id matches nobody — the row becomes
+  // LESS visible, never more. True atomicity needs the containment predicate
+  // inside canonical-writer's transactional CTE (same out-of-scope class as
+  // co-committing the decision with the widen).
   if (request.toOwnerLevel === "team") {
     const team = deps.readTeamInOrg({ teamId: request.toOwnerId, orgId: viewer.orgId });
     if (!team) {

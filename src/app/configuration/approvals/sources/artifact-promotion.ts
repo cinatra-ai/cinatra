@@ -56,12 +56,15 @@ function toBackendRow(r: ArtifactPromotionReviewRow): PromotionBackendRow {
     version: r.version,
     detail: {
       fromScope: scopeLabel(r.fromScope),
-      // Reviewers must see the ACTUAL destination (codex finding): a team
-      // target carries the display-only team-name snapshot captured (and
-      // tenant-validated) at request time.
+      // Reviewers must see the ACTUAL destination (codex findings, rounds
+      // 1-2): a team target shows the display-only name snapshot AND the
+      // IMMUTABLE team id — names are mutable and non-unique, so a rename
+      // race could make a snapshot (or a live) name lie; the id is exactly
+      // what an approve writes as the row's owner, so a reviewer can always
+      // verify the true destination.
       toScope:
-        r.toScope === "team" && r.toOwnerLabel
-          ? `${scopeLabel(r.toScope)}: ${r.toOwnerLabel}`
+        r.toScope === "team"
+          ? `${scopeLabel(r.toScope)}: ${r.toOwnerLabel ?? "(unnamed)"} [${r.toOwnerId}]`
           : scopeLabel(r.toScope),
       requestedBy: r.requestedBy,
     },
