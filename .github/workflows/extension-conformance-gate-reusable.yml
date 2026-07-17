@@ -84,6 +84,7 @@ jobs:
             scripts/audit/lib/strip-comments.mjs
             packages/sdk-extensions/src/host-context.ts
             packages/sdk-extensions/src/artifact-contract.ts
+            packages/sdk-extensions/src/chat-views-contract.ts
             packages/sdk-extensions/src/access-config.ts
             packages/sdk-extensions/package.json
             packages/sdk-ui/package.json
