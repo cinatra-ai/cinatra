@@ -359,7 +359,7 @@ describe("createBrokerSandboxExecutor", () => {
     expect(outputs[0].outcome).toEqual({ type: "timeout" });
   });
 
-  it("eviction past the carrier cap forgets the MAPPING only — an in-flight job keeps working and a re-presented carrier re-opens (codex r2)", async () => {
+  it("eviction past the carrier cap forgets the MAPPING only — an in-flight job keeps working and a re-presented carrier re-opens", async () => {
     const { docker } = recordingDocker();
     const worker = fakeWorker();
     // The broker's own per-org open-job ceiling (default 32) would refuse the
@@ -385,7 +385,7 @@ describe("createBrokerSandboxExecutor", () => {
     expect(direct.ok).toBe(true);
   });
 
-  it("a non-Error throwable (throw null) from resolveFiles still becomes a structured refusal (codex r2)", async () => {
+  it("a non-Error throwable (throw null) from resolveFiles still becomes a structured refusal", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
     const executor = createBrokerSandboxExecutor(broker);
@@ -408,7 +408,7 @@ describe("createBrokerSandboxExecutor", () => {
     expect(outputs[0].stderr).toContain("staging_failed");
   });
 
-  it("a HOSTILE throwable (throwing instanceof/message traps) still yields a structured refusal (codex r3)", async () => {
+  it("a HOSTILE throwable (throwing instanceof/message traps) still yields a structured refusal", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
     const executor = createBrokerSandboxExecutor(broker);
@@ -441,7 +441,7 @@ describe("createBrokerSandboxExecutor", () => {
     expect(outputs[0].stderr).toContain("staging_failed: unknown error");
   });
 
-  it("a THROWING resolveFiles becomes a structured refusal, never an escaping rejection (codex r1)", async () => {
+  it("a THROWING resolveFiles becomes a structured refusal, never an escaping rejection", async () => {
     const { docker } = recordingDocker();
     const { broker } = makeBroker(fakeWorker(), docker);
     const executor = createBrokerSandboxExecutor(broker);
@@ -467,7 +467,7 @@ describe("createBrokerSandboxExecutor", () => {
   });
 });
 
-describe("retention GC covers the skills tier (codex r1)", () => {
+describe("retention GC covers the skills tier", () => {
   it("gcExpiredWorkspaces sweeps BOTH the l2 and skills label tiers", async () => {
     const listed: string[] = [];
     const removed: string[] = [];

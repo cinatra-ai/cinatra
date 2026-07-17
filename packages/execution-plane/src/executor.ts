@@ -54,7 +54,7 @@ async function resolveStagedInputs(
  * Bound on distinct carriers a single executor instance TRACKS. The wiring
  * layer builds one executor per broker (possibly long-lived), so this map must
  * not grow with traffic. Eviction forgets the carrier→job MAPPING ONLY — it
- * never closes the job (codex round-2: closing on eviction could terminate a
+ * never closes the job (closing on eviction could terminate a
  * job another in-flight call is actively using). Job/volume lifecycle stays
  * where it already lives: the broker's per-org open-job ceiling bounds open
  * jobs, the carrier TTL bounds re-opens, teardown/closeJob free volumes
@@ -66,7 +66,7 @@ const MAX_TRACKED_CARRIERS = 256;
 
 /**
  * `throw null` / non-Error throwables must still become a structured string.
- * The ENTIRE inspection sits inside the try (codex round-3): a hostile
+ * The ENTIRE inspection sits inside the try: a hostile
  * throwable can make `instanceof` itself throw (Proxy with a throwing
  * getPrototypeOf trap) or carry a throwing `message` getter — even then this
  * returns a string and the caller's never-rejects contract holds.
@@ -87,7 +87,7 @@ export function createBrokerSandboxExecutor(
   // batch cannot double-open. A FAILED open is not cached — a later command
   // retries (e.g. transient docker failure), while a carrier-level refusal
   // (expired/bad signature) simply fails again, still structured. The closure
-  // NEVER rejects (codex rounds 1-2): any throwable — including non-Error
+  // NEVER rejects — by contract: any throwable — including non-Error
   // values — from resolveFiles()/openJob() becomes a structured failure, so
   // nothing escapes into the provider tool loop and no permanently-rejected
   // promise can poison the cache.
