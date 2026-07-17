@@ -206,6 +206,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Artifact-claim registry DB primitives (cinatra#1425): reserve/activate/retire claim transitions (advisory-locked, CTE-atomic with their claim events + reconcile-queue rows) plus the org scope-chain reads the effective-type-catalog resolver consumes. Built as a sync leaf mirroring skill-lifecycle-store.ts's pattern so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
   },
+  "src/lib/objects/artifact-promotion-request-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Artifact row-scope promotion-request store (cinatra#1437, epic #1424): the pending requests to WIDEN one artifact row's visibility through the shared approvals surface — create (partial-unique one-pending guard), the Inbox list/count reads, and the CAS-guarded decide/supersede/compensate transitions (business decisions returned as VALUES via rowCount, never a throw). Request-time store mirroring the agent_creation_request store idiom and artifact-claim-store.ts's synchronous sync-table access pattern (runPostgresQueriesSync via the postgres-sync leaf) so it composes into the synchronous store graph; migrates to async typed writes with the objects subsystem.",
+  },
   "src/lib/objects/artifact-uninstall-operations.ts": {
     class: "migratable-background-setup",
     justification:

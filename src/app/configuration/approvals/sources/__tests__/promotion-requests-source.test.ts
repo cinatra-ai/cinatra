@@ -152,15 +152,27 @@ describe("contract conformance & registry parity", () => {
 });
 
 describe("eligibility — dormant vs configured", () => {
-  it("is DORMANT while every registered subject backend is unplugged", async () => {
-    // The shipped registry ships memory + artifact with backend: null.
-    expect(promotionRequestsSource.availability(admin)).toBe("not_configured");
-    expect(promotionRequestsSource.appliesTo(admin, "inbox")).toBe(false);
-    expect(promotionRequestsSource.appliesTo(admin, "mine")).toBe(false);
-    expect(await promotionRequestsSource.counts(admin)).toEqual({ inbox: 0, mine: 0 });
+  it("is DORMANT (not_configured) while every subject backend is unplugged (fixture registry)", async () => {
+    // The dormancy SEMANTICS — exercised via the DI seam over an all-null
+    // registry (the shipped registry now plugs the artifact backend, #1437).
+    const src = sourceWith([adapter("memory", "Memory", null), adapter("artifact", "Artifact", null)]);
+    expect(src.availability(admin)).toBe("not_configured");
+    expect(src.appliesTo(admin, "inbox")).toBe(false);
+    expect(src.appliesTo(admin, "mine")).toBe(false);
+    expect(await src.counts(admin)).toEqual({ inbox: 0, mine: 0 });
     // A dormant source produces no rows even if fetched directly.
-    expect((await promotionRequestsSource.fetchInbox(admin)).rows).toEqual([]);
-    expect((await promotionRequestsSource.fetchMine(admin)).rows).toEqual([]);
+    expect((await src.fetchInbox(admin)).rows).toEqual([]);
+    expect((await src.fetchMine(admin)).rows).toEqual([]);
+  });
+
+  it("the SHIPPED source is READY now that the artifact backend is plugged in (#1437)", () => {
+    // Cheap gates only — no counts()/fetch() here (those hit the real store).
+    expect(promotionRequestsSource.availability(admin)).toBe("ready");
+    // Review gate is admin-only; request gate is any member.
+    expect(promotionRequestsSource.appliesTo(admin, "inbox")).toBe(true);
+    expect(promotionRequestsSource.appliesTo(member, "inbox")).toBe(false);
+    expect(promotionRequestsSource.appliesTo(member, "mine")).toBe(true);
+    expect(promotionRequestsSource.appliesTo(admin, "mine")).toBe(true);
   });
 
   it("becomes READY once a subject backend is plugged in", () => {

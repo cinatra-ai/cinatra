@@ -24,7 +24,11 @@
  * The tool and its cue are produced together here so they can never diverge.
  */
 
-import type { LlmTool } from "../types";
+import type {
+  LlmTool,
+  SandboxExecutor,
+  SandboxStagedSkill,
+} from "../types";
 import {
   ExecutionBrokerSecretMissingError,
   mintExecutionSession,
@@ -88,7 +92,39 @@ export type ExecutionInjectionParams = {
   rolloutOverride?: string;
   /** Test override for the broker signing secret. */
   brokerSecret?: string;
+  /**
+   * The broker-backed executor binding (exec-plane S2, cinatra#1707). Supplied
+   * by the app wiring layer / tests. ABSENT ⇒ the plane cannot run commands ⇒
+   * `capability_unavailable` (fail-closed) — a tool without an executor would
+   * be a schema the model can call into a void.
+   */
+  executor?: SandboxExecutor;
 };
+
+/**
+ * Collect the staged-skill snapshot descriptors the skill-delivery layer
+ * attached to shell tools in the request (exec-plane S2 skill-execution
+ * unification): when the request is execution-authorized, these skills are
+ * staged read-only under `/skills/<slug>` in the sandbox and listed on the
+ * single native shell surface. Dedup by slug (first wins — a slug staged twice
+ * would collide on the staging path).
+ */
+function collectStagedSkills(
+  tools: LlmTool[] | undefined,
+): SandboxStagedSkill[] {
+  if (!tools) return [];
+  const staged: SandboxStagedSkill[] = [];
+  const seen = new Set<string>();
+  for (const t of tools) {
+    if (!("type" in t) || t.type !== "shell") continue;
+    for (const s of t.stagedSkills ?? []) {
+      if (seen.has(s.slug)) continue;
+      seen.add(s.slug);
+      staged.push(s);
+    }
+  }
+  return staged;
+}
 
 /**
  * Inject the execution capability exactly once. Pure with respect to its inputs
@@ -153,7 +189,22 @@ export function injectExecutionCapability(
     };
   }
 
-  // 6. Seal + build the tool and its cue together (they cannot diverge). A
+  // 6. Executor binding (S2): a capability without a broker-backed executor is
+  //    unavailable — never inject a schema the model can call into a void.
+  if (!params.executor) {
+    return {
+      status: "unavailable",
+      tools: params.tools,
+      error: {
+        kind: "capability_unavailable",
+        message:
+          "The execution plane has no executor binding (broker wiring absent); " +
+          "the capability is unavailable. The model may continue without it.",
+      },
+    };
+  }
+
+  // 7. Seal + build the tool and its cue together (they cannot diverge). A
   //    missing broker secret is a plane-unavailable condition, distinct from a
   //    caller-identity failure.
   let carrier: string;
@@ -176,8 +227,17 @@ export function injectExecutionCapability(
     throw err;
   }
 
-  const tool = buildSandboxExecutionTool(carrier);
-  const systemCue = composeExecutionCue(session);
+  // 8. Merge staged skill snapshots from the delivery layer (S2 unification):
+  //    execution-authorized ⇒ the skills bind into THIS session's sandbox
+  //    (read-only /skills/<slug> staging), listed on the single native shell.
+  const stagedSkills = collectStagedSkills(params.tools);
+
+  const tool = buildSandboxExecutionTool({
+    sessionCarrier: carrier,
+    executor: params.executor,
+    stagedSkills,
+  });
+  const systemCue = composeExecutionCue(session, { stagedSkills });
   return {
     status: "injected",
     tools: [...(params.tools ?? []), tool],
