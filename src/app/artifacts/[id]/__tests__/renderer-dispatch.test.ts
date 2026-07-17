@@ -69,6 +69,7 @@ const builtRepProvider: RepresentationRendererResolution = {
   packageName: "@cinatra-ai/pdf-viewer",
   generatedKey: "@cinatra-ai/pdf-viewer::preview",
   pattern: "application/pdf",
+  slot: "preview",
   built: true,
 };
 const unbuiltRepProvider: RepresentationRendererResolution = {
@@ -76,6 +77,7 @@ const unbuiltRepProvider: RepresentationRendererResolution = {
   packageName: "@cinatra-ai/pdf-viewer",
   generatedKey: "@cinatra-ai/pdf-viewer::preview",
   pattern: "application/pdf",
+  slot: "preview",
   built: false,
 };
 
@@ -142,10 +144,24 @@ describe("pickArtifactRenderer — representation tier (case 2)", () => {
     });
   });
 
-  it("a never-built representation provider degrades to requires-rebuild (slot preview)", () => {
+  it("a never-built representation provider degrades to requires-rebuild carrying the RESOLVED slot (preview)", () => {
     expect(
       pickArtifactRenderer({ identity: floorIdentity, semantic: null, representation: unbuiltRepProvider }),
     ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/pdf-viewer", slot: "preview" });
+  });
+
+  it("a never-built representation resolved at slot DETAIL degrades reporting slot detail (not a hardcoded preview)", () => {
+    const unbuiltDetailRepProvider: RepresentationRendererResolution = {
+      tier: "extension",
+      packageName: "@cinatra-ai/pdf-viewer",
+      generatedKey: "@cinatra-ai/pdf-viewer::detail",
+      pattern: "application/pdf",
+      slot: "detail",
+      built: false,
+    };
+    expect(
+      pickArtifactRenderer({ identity: floorIdentity, semantic: null, representation: unbuiltDetailRepProvider }),
+    ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/pdf-viewer", slot: "detail" });
   });
 
   it("a first-party default resolves to the host MIME handler", () => {

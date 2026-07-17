@@ -10,6 +10,13 @@
       "treeSha256": "2753645dce740a675cb44c13b75279ea72daa3b9753d2db87baaec5abc91f59e"
     },
     {
+      "packageName": "@cinatra-ai/audio-artifact",
+      "repo": "cinatra-ai/audio-artifact",
+      "resolvedSha": "111437d4cd8a35cc01f58b2141db607f09eb5670",
+      "packageVersion": "0.1.0",
+      "treeSha256": "483f3e6c75ed3453e1ecb8c236d837a586f74a4ed4763e20b5f029acdc1cec2b"
+    },
+    {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
       "resolvedSha": "73dd34b3e8030422e8436a33554b227edd2ddd47",
@@ -29,6 +36,13 @@
       "resolvedSha": "1668d29011dcfc60710bcf703964babab9ceb9d7",
       "packageVersion": "0.1.0",
       "treeSha256": "a51fb665eb325bbc8252a6fe1b79c9b71bb77cd9ed616f6994af17e7e93661df"
+    },
+    {
+      "packageName": "@cinatra-ai/image-artifact",
+      "repo": "cinatra-ai/image-artifact",
+      "resolvedSha": "44f8395e7bd26c9b547fc361b7a8e6516e913fe8",
+      "packageVersion": "0.1.0",
+      "treeSha256": "c99e9cd37fd49ccb7de424cfc877552055ccc0eff34f79aaeafd2e6303150d77"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -52,6 +66,13 @@
       "treeSha256": "9581c9c9c44cfcac26d624df624355dbe61a55b701378a765074320d7436f517"
     },
     {
+      "packageName": "@cinatra-ai/pdf-artifact",
+      "repo": "cinatra-ai/pdf-artifact",
+      "resolvedSha": "4c604fda2d9568417edd54db890830a7d19069a0",
+      "packageVersion": "0.1.0",
+      "treeSha256": "a111f5e4d0cf6b3e9da8aff8e6afb85eafcbc69e5ba0c52af0f3e6a58b3eeb30"
+    },
+    {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
       "resolvedSha": "fb98b08ac03117c6fb6285dc47adfb45f9a1c45b",
@@ -64,6 +85,13 @@
       "resolvedSha": "4eaee35a7eeac71e1625e0eba89046196bcfac29",
       "packageVersion": "0.1.0",
       "treeSha256": "c1174b488fbfc260dec80bbe8a1a33774920f042e03e830abc7b496815f16ada"
+    },
+    {
+      "packageName": "@cinatra-ai/video-artifact",
+      "repo": "cinatra-ai/video-artifact",
+      "resolvedSha": "8a07f955932c3cdd9d874ef34728a76800cac8f3",
+      "packageVersion": "0.1.1",
+      "treeSha256": "8f8bad6344f32e2fb7efd0d188925b50c73c09fec27acb4fa870c7b48f739067"
     }
   ]
 }

@@ -62,6 +62,20 @@ export function coreBootPhases(): BootPhase[] {
       },
     },
     {
+      name: "system-artifact-renderer-registrar-wiring",
+      policy: "retryable",
+      run: async () => {
+        // Ready the SYSTEM artifact-renderer registrar at boot (epic #1620 M1
+        // Slice B, cinatra#1630): confirm the generated build map carries the four
+        // build-bundled bases the per-org representation-provider reconcile binds,
+        // so a misgenerated/empty map surfaces here rather than silently leaving
+        // the four MIME families on the generic floor. The bind itself is org-
+        // scoped + lazy (at resolve time) and generation-safe — see the wiring
+        // module. Retryable: readiness logging must never abort boot.
+        await import("@/lib/system-artifact-renderer-wiring");
+      },
+    },
+    {
       name: "core-migrations",
       policy: "fatal",
       run: async () => {

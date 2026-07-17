@@ -14,7 +14,13 @@ import type { EffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 // locals, so the fixture keys are inlined here and mirrored in the constants
 // below (asserted equal in a guard test).
 const DETAIL_KEY = "@fixture/detail-ext::detail";
-const PREVIEW_KEY = "@fixture/rep-ext::preview";
+// The detail page resolves the representation at slot `detail` (Slice B); the
+// fixture representation provider therefore ships a `detail` build entry. Its
+// `representations` are DELIBERATELY empty so the system-base boot registrar
+// (which projects providers from every build-map entry that DECLARES
+// representations) does NOT auto-bind this fixture — the test drives resolution
+// through EXPLICIT `registerProvider` calls, exactly as before.
+const REP_KEY = "@fixture/rep-ext::detail";
 
 vi.mock("@/lib/generated/artifact-renderers", () => ({
   GENERATED_ARTIFACT_RENDERERS: {
@@ -26,11 +32,11 @@ vi.mock("@/lib/generated/artifact-renderers", () => ({
       propsApiVersion: 1,
       load: async () => ({ default: () => null }),
     },
-    "@fixture/rep-ext::preview": {
+    "@fixture/rep-ext::detail": {
       resolution: "guardedOptional",
       packageName: "@fixture/rep-ext",
-      slot: "preview",
-      representations: ["application/pdf"],
+      slot: "detail",
+      representations: [],
       propsApiVersion: 1,
       load: async () => ({ default: () => null }),
     },
@@ -101,23 +107,25 @@ describe("golden dispatch — a fixture extension renders through the registries
     representationProviderRegistry.registerProvider(ORG, {
       packageName: "@fixture/rep-ext",
       pattern: "application/pdf",
-      slot: "preview",
+      slot: "detail",
       generation: 1,
     });
     const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
       kind: "representation",
       packageName: "@fixture/rep-ext",
-      generatedKey: PREVIEW_KEY,
+      generatedKey: REP_KEY,
       pattern: "application/pdf",
     });
   });
 
-  it("without any provider, a PDF row falls through to the always-effective first-party host handler", () => {
+  it("without any provider (mocked map has no pdf base), a PDF row falls to the generic never-blank floor", () => {
+    // Post-G2-cutover: pickHandler no longer selects a host pdf handler, and this
+    // fixture map carries no pdf-artifact base, so the row deterministically
+    // reaches the generic floor — never blank.
     const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/pdf" })).toEqual({
-      kind: "mime",
-      handler: "pdf",
+      kind: "fallback",
     });
   });
 });

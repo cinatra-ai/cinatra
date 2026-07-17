@@ -123,18 +123,20 @@ describe("AC-1 — a runtime-registered semantic renderer loads with ZERO host r
 
 describe("AC-1 — a runtime-registered representation provider loads with zero rebuild", () => {
   it("routes a matching representation to the dynamic runtime path", async () => {
+    // The detail page resolves the representation at slot `detail` (Slice B), so a
+    // dynamic representation provider binds + activates at `detail`.
     representationProviderRegistry.registerProvider(ORG, {
       packageName: PKG,
       pattern: "application/json",
-      slot: "preview",
+      slot: "detail",
       generation: 1,
     });
     await runtimeAssetRegistry.admitAndActivate({
-      tuple: tuple({ slot: "preview", entry: "client/preview.js" }),
+      tuple: tuple({ slot: "detail", entry: "client/detail.js" }),
       generation: 1,
       ...okActivate,
     });
-    const key = runtimeAssetRegistry.keyFor(PKG, "preview");
+    const key = runtimeAssetRegistry.keyFor(PKG, "detail");
     const floor: EffectiveIdentity = { kind: "default-artifact", selectable: true, assertionId: "f" };
 
     expect(dispatchFor({ baseType: "@cinatra-ai/artifact:object", identity: floor, mime: "application/json" })).toEqual({

@@ -169,6 +169,34 @@ export function extensionActivationPhases(
               registered.map((p) => p.replace("@cinatra-ai/", "")).join(", "),
           );
         }
+
+        // RUNTIME RENDERER ADMISSION (epic #1620 M1 Slice B, cinatra#1630): drive
+        // every registered artifact package's published client-bundle manifests
+        // through the full atomic admission chain (integrity + exact-tuple digest
+        // + Ed25519 signature re-verification, fail-closed) so an installed runtime
+        // renderer becomes `loadable` on THIS boot without a host rebuild — the
+        // multi-process convergence path parallel to the hot-activate admission.
+        // Best-effort: an admission failure must never abort boot.
+        try {
+          const { admitRuntimeArtifactRenderersForRecords } = await import(
+            "@/lib/artifacts/admit-runtime-artifact-renderers"
+          );
+          const admitted = await admitRuntimeArtifactRenderersForRecords(registeredRecords);
+          const ok = admitted.filter((a) => a.ok);
+          if (admitted.length) {
+            console.info(
+              `[boot] runtime renderer admission: ${ok.length}/${admitted.length} client-bundle slot(s) admitted` +
+                (ok.length < admitted.length
+                  ? ` — refused: ${admitted.filter((a) => !a.ok).map((a) => `${a.packageName.replace("@cinatra-ai/", "")}:${a.slot}(${a.reason})`).join(", ")}`
+                  : ""),
+            );
+          }
+        } catch (err) {
+          console.warn(
+            "[boot] runtime renderer admission threw (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
+        }
         // CLAIM-ACTIVATION BACKSTOP (cinatra#1493): the install-anchor hook is
         // NON-THROWING — a claim activation that failed/raced at install time
         // ended as a console.warn with nothing re-driving it. Re-fire the

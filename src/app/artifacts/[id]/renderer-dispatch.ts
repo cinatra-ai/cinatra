@@ -48,6 +48,10 @@ export type RepresentationRendererResolution =
       packageName: string;
       generatedKey: string;
       pattern: string;
+      /** The slot this representation was resolved at (the detail page resolves at
+       * `detail`, the neutral reuse seam at `preview`). Carried so a never-built
+       * degrade diagnoses the ACTUAL slot, not a hardcoded one. */
+      slot: ArtifactUiSlot;
       built: boolean;
     }
   | { tier: "first-party"; handler: Exclude<HandlerKind, "fallback"> };
@@ -120,10 +124,13 @@ export function pickArtifactRenderer(
           pattern: input.representation.pattern,
         };
       }
+      // Degrade at the slot the representation was ACTUALLY resolved at (the
+      // detail page resolves at `detail`) — a hardcoded slot would mislabel the
+      // user-facing "requires rebuild" notice (Codex convergence, cinatra#1630).
       return {
         kind: "requires-rebuild",
         packageName: input.representation.packageName,
-        slot: "preview",
+        slot: input.representation.slot,
       };
     }
     return { kind: "mime", handler: input.representation.handler };

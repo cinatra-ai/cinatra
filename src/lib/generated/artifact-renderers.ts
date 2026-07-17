@@ -27,4 +27,10 @@ export type GeneratedArtifactRendererEntry = {
 };
 
 export const GENERATED_ARTIFACT_RENDERERS: Record<string, GeneratedArtifactRendererEntry> = {
+  "@cinatra-ai/audio-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/audio-artifact","slot":"detail","representations":["audio/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/audio-artifact/src/renderers/detail") },
+  "@cinatra-ai/image-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/image-artifact","slot":"detail","representations":["image/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/image-artifact/src/renderers/detail") },
+  "@cinatra-ai/image-artifact::preview": { resolution: "required", "packageName":"@cinatra-ai/image-artifact","slot":"preview","representations":["image/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/image-artifact/src/renderers/preview") },
+  "@cinatra-ai/pdf-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/pdf-artifact","slot":"detail","representations":["application/pdf"],"propsApiVersion":1, load: () => import("@cinatra-ai/pdf-artifact/src/renderers/pdf-detail") },
+  "@cinatra-ai/pdf-artifact::preview": { resolution: "required", "packageName":"@cinatra-ai/pdf-artifact","slot":"preview","representations":["application/pdf"],"propsApiVersion":1, load: () => import("@cinatra-ai/pdf-artifact/src/renderers/pdf-preview") },
+  "@cinatra-ai/video-artifact::detail": { resolution: "required", "packageName":"@cinatra-ai/video-artifact","slot":"detail","representations":["video/*"],"propsApiVersion":1, load: () => import("@cinatra-ai/video-artifact/src/renderers/detail") },
 };

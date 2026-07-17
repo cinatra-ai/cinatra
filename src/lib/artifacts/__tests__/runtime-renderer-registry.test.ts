@@ -46,6 +46,32 @@ describe("two-path membership + resolveActive", () => {
     expect(runtimeAssetRegistry.resolveActive(key)).toEqual(t);
     expect(runtimeAssetRegistry.isActiveTuple(t)).toBe(true);
   });
+
+  // G1 tuple-identity regression (plan §5.3 G1): identity is the EXACT tuple —
+  // never "package installed", never "same (package, slot) key". A tuple sharing
+  // the key but differing in ANY signed field is NOT the active binding, so a
+  // superseded/tampered descriptor can never masquerade as admitted.
+  it("isActiveTuple is false for a tuple that shares the key but differs in any field", async () => {
+    const active = tuple();
+    await runtimeAssetRegistry.admitAndActivate({ tuple: active, generation: 1, ...ok });
+    expect(runtimeAssetRegistry.isActiveTuple(active)).toBe(true);
+    // Same (package, slot) key, but a different value in each signed field.
+    for (const drift of [
+      { digest: DIGEST_B },
+      { entry: "client/other.js" },
+      { propsApiVersion: 2 },
+      { sdkAbiRange: "^2.5.0" },
+      { reactPeerRange: "^18.0.0" },
+      { reactDomPeerRange: "^18.0.0" },
+      { tokenModuleAbi: "2.0.0" },
+    ] satisfies Partial<AdmittedClientBundleTuple>[]) {
+      const mutated = tuple(drift);
+      expect(runtimeAssetRegistry.keyFor(mutated.packageName, mutated.slot)).toBe(
+        runtimeAssetRegistry.keyFor(active.packageName, active.slot),
+      );
+      expect(runtimeAssetRegistry.isActiveTuple(mutated)).toBe(false);
+    }
+  });
 });
 
 describe("atomic materialize → verify → activate", () => {
