@@ -202,14 +202,26 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
-        # Best-effort 4G swap on the default ubuntu-latest path only (see the RBAC
-        # e2e job in build-image.yml for the full rationale). Skipped on a larger
-        # CI_BUILD_RUNNER; a swap-setup failure never fails the build.
+        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
+        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # fails the build — it falls back to today's behavior.
+        # 20G (was 4G) — the entry-66 CI-memory investigation (2026-07-17): the modern
+        # ubuntu-latest runner is 4 vCPU / 15.8G RAM with a 145G root disk (~86G
+        # free), so a large swapfile is cheap (fallocate is instant, unused swap
+        # costs nothing). A heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE
+        # memory — the JS heap stays tiny, so NODE_OPTIONS cannot cap it) was
+        # measured needing up to ~33G total (15.8G RAM + 17.4G swap on PR
+        # #1673's fixed tree); the old 4G (+3G stock) swap starved that class
+        # into runner RECLAIM mid-build. 20G + 3G stock ≈ 23G swap fits it with
+        # margin. Swap only helps BOUNDED builds: an UNBOUNDED Turbopack runaway
+        # (the server-side dynamic-import detonation entry-66 root-caused —
+        # >33G and still climbing) fills any swap and still reclaims the
+        # runner; that class needs the content fix, not more swap.
         if: ${{ vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build
-          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
@@ -391,11 +403,12 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Add CI build swap (default-runner only)
+        # Same 20G step + rationale as the render-smoke job above (entry-66).
         if: ${{ vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build
-          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then

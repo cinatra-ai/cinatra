@@ -1584,19 +1584,27 @@ jobs:
 
       - name: Add CI build swap (default-runner only)
         # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
-        # job to a larger runner). A 4G swapfile absorbs `pnpm build` memory SPIKES
-        # so the 2-vCPU/7GB runner is not RECLAIMED for unresponsiveness (Mode B).
-        # Subshell-guarded so a swap-setup failure NEVER fails the build — it falls
-        # back to today's behavior. 4G (not 8G+): the runner SSD is small + huge
-        # swap turns an OOM into a long I/O stall; the 20-min build cap still bounds
-        # a true thrash.
+        # job to a larger runner). Subshell-guarded so a swap-setup failure NEVER
+        # fails the build — it falls back to today's behavior.
+        # 20G (was 4G) — the entry-66 CI-memory investigation (2026-07-17): the modern
+        # ubuntu-latest runner is 4 vCPU / 15.8G RAM with a 145G root disk (~86G
+        # free), so a large swapfile is cheap (fallocate is instant, unused swap
+        # costs nothing). A heavy-but-BOUNDED `pnpm build` (Turbopack NATIVE
+        # memory — the JS heap stays tiny, so NODE_OPTIONS cannot cap it) was
+        # measured needing up to ~33G total (15.8G RAM + 17.4G swap on PR
+        # #1673's fixed tree); the old 4G (+3G stock) swap starved that class
+        # into runner RECLAIM mid-build. 20G + 3G stock ≈ 23G swap fits it with
+        # margin. Swap only helps BOUNDED builds: an UNBOUNDED Turbopack runaway
+        # (the server-side dynamic-import detonation entry-66 root-caused —
+        # >33G and still climbing) fills any swap and still reclaims the
+        # runner; that class needs the content fix, not more swap.
         if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
         run: |
           set -uxo pipefail
           SWAPFILE=/swapfile-ci-build
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
           # if/else makes it best-effort — any failure exits the step 0 with a warning.
-          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
             && sudo chmod 600 "$SWAPFILE" \
             && sudo mkswap "$SWAPFILE" \
             && sudo swapon "$SWAPFILE"; then
@@ -1770,6 +1778,26 @@ jobs:
       # tracking tree). The prod-boot e2e step below then BOOTS that image and
       # asserts it serves — proving the no-private-extensions path end to end
       # (issue #81), not just at build/typecheck level.
+
+      - name: Add CI build swap (default-runner only)
+        # the entry-66 CI-memory investigation (2026-07-17): the in-container `pnpm build`
+        # (Dockerfile RUN) died here with buildkit ResourceExhausted ("cannot
+        # allocate memory") on the held PRs — buildkit RUN steps carry no
+        # memory cgroup limit, so HOST swap directly backs the containerized
+        # compile. Same 20G step + rationale as the RBAC-e2e job's swap step;
+        # a build that fits RAM never touches it.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -2323,6 +2351,24 @@ jobs:
           src/lib/__tests__/extension-degraded-consumers.test.ts
           src/lib/generated/__tests__/guarded-optional-loaders.test.ts
           src/lib/__tests__/connectors-readiness-fail-soft.test.ts
+
+      - name: Add CI build swap (default-runner only)
+        # Same 20G step + rationale as the RBAC-e2e job's swap step above
+        # (entry-66 CI-memory investigation, 2026-07-17): this job runs the same
+        # memory-heavy `pnpm build` directly on the runner and was reclaimed
+        # mid-build on the held PRs with no swap at all.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          if { sudo fallocate -l 20G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=20480; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
 
       # Same inert env placeholders as the Dockerfile build stage; CI=true is
       # implicit on Actions runners, so next.config skips the in-build tsc
