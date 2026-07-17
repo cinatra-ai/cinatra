@@ -110,8 +110,31 @@ export type SandboxCommandSpec = {
   command: string;
   /** Name of the per-run L2 docker volume mounted at /workspace. */
   workspaceVolume: string;
+  /**
+   * Name of the per-job READ-ONLY skills volume mounted at /skills (exec-plane
+   * S2, cinatra#1707) — staged catalog skill snapshots. Absent ⇒ no /skills
+   * mount (byte-identical S1 argv).
+   */
+  skillsVolume?: string;
   egress: ResolvedEgress;
   limits: SandboxResourceLimits;
+};
+
+/**
+ * One catalog-resolved skill snapshot to stage read-only under
+ * `/skills/<slug>` (exec-plane S2, cinatra#1707). Pure data — file content +
+ * sha256 digests the staging layer re-verifies; no host paths.
+ */
+export type StagedSkillInput = {
+  slug: string;
+  files: Array<{
+    /** Path relative to /skills/<slug> (strictly relative, no traversal). */
+    path: string;
+    /** Full file content (UTF-8). */
+    content: string;
+    /** Lowercase hex sha256 of `content`. */
+    digest: string;
+  }>;
 };
 
 export type SandboxTermination =
@@ -275,7 +298,9 @@ export type OpenJobFailureReason =
   | "carrier_expired"
   | "carrier_no_secret"
   | "run_removed"
-  | "open_jobs_exhausted";
+  | "open_jobs_exhausted"
+  /** Skill staging refused (digest mismatch / unsafe path / docker failure) — exec-plane S2. */
+  | "staging_failed";
 
 export type ExecFailureReason =
   | "unknown_job"

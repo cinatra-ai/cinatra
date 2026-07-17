@@ -29,7 +29,7 @@ import {
   SANDBOX_EXECUTE_TOOL_NAME,
 } from "../index";
 import type { ExecutionSession } from "../index";
-import type { LlmTool } from "../../types";
+import type { LlmTool, SandboxExecutor } from "../../types";
 
 const SECRET = "test-broker-secret";
 const ON = "on";
@@ -39,8 +39,32 @@ const session: ExecutionSession = {
   surface: "chat",
 };
 
+/** Recording fake executor (S2): captures what crosses the executor seam. */
+function makeExecutor(): {
+  executor: SandboxExecutor;
+  calls: Array<Parameters<SandboxExecutor>[0]>;
+} {
+  const calls: Array<Parameters<SandboxExecutor>[0]> = [];
+  const executor: SandboxExecutor = async (input) => {
+    calls.push(input);
+    return input.commands.map(() => ({
+      stdout: "ok",
+      stderr: "",
+      outcome: { type: "exit" as const, exitCode: 0 },
+    }));
+  };
+  return { executor, calls };
+}
+
+const defaultExecutor = makeExecutor().executor;
+
 const inj = (over: Parameters<typeof injectExecutionCapability>[0]) =>
-  injectExecutionCapability({ rolloutOverride: ON, brokerSecret: SECRET, ...over });
+  injectExecutionCapability({
+    rolloutOverride: ON,
+    brokerSecret: SECRET,
+    executor: defaultExecutor,
+    ...over,
+  });
 
 describe("rollout merge gate — default OFF", () => {
   it.each(["", "off", "true", "1", "ON", "On", undefined as unknown as string])(
@@ -103,9 +127,25 @@ describe("capability_unavailable is DISTINGUISHABLE from no_session", () => {
       session,
       rolloutOverride: ON,
       brokerSecret: "", // resolves as absent → seal fails → unavailable
+      executor: defaultExecutor,
     });
     expect(r.status).toBe("unavailable");
     if (r.status === "unavailable") expect(r.error.kind).toBe("capability_unavailable");
+  });
+
+  it("NO executor binding ⇒ capability_unavailable (S2: never a schema into a void)", () => {
+    const r = injectExecutionCapability({
+      tools: undefined,
+      session,
+      rolloutOverride: ON,
+      brokerSecret: SECRET,
+      // executor deliberately absent
+    });
+    expect(r.status).toBe("unavailable");
+    if (r.status === "unavailable") {
+      expect(r.error.kind).toBe("capability_unavailable");
+      expect(r.error.message).toContain("executor");
+    }
   });
 });
 
@@ -130,7 +170,10 @@ describe("technical carve-outs (D4) suppress silently — not an error", () => {
 describe("idempotency — tool dedup + exactly-once cue", () => {
   it("a tools array already carrying the sandbox tool ⇒ already_injected, no second cue", () => {
     const carrier = sealExecutionSession(session, { secret: SECRET });
-    const existing = buildSandboxExecutionTool(carrier);
+    const existing = buildSandboxExecutionTool({
+      sessionCarrier: carrier,
+      executor: defaultExecutor,
+    });
     const tools: LlmTool[] = [{ type: "web_search" }, existing];
     const r = inj({ tools, session });
     expect(r.status).toBe("passthrough");
@@ -165,7 +208,7 @@ describe("pre-minted session hardening — no trust by type (codex round)", () =
     if (r.status === "unavailable") expect(r.error.kind).toBe("no_session");
   });
 
-  it("a pre-minted session with SMUGGLED extra fields never seals them into the carrier", () => {
+  it("a pre-minted session with SMUGGLED extra fields never seals them into the carrier", async () => {
     const smuggled = {
       orgId: "org-1",
       userId: "user-1",
@@ -174,11 +217,16 @@ describe("pre-minted session hardening — no trust by type (codex round)", () =
       apiKey: "sk-SECRET",
       hostPath: "/etc/shadow",
     } as unknown as ExecutionSession;
-    const r = inj({ tools: undefined, session: smuggled });
+    const rec = makeExecutor();
+    const r = inj({ tools: undefined, session: smuggled, executor: rec.executor });
     expect(r.status).toBe("injected");
     if (r.status === "injected") {
       const t = r.tools.find(isSandboxExecutionTool)!;
-      const body = t.sessionCarrier.split(".")[1];
+      // S2: the carrier lives ONLY in the execute closure — observe it at the
+      // executor seam (the sole place it may legitimately reappear).
+      await t.execute({ commands: ["true"] });
+      const carrier = rec.calls[0].sessionCarrier;
+      const body = carrier.split(".")[1];
       const decoded = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
       expect(Object.keys(decoded).sort()).toEqual(
         ["exp", "iat", "orgId", "surface", "userId"].sort(),
@@ -189,20 +237,65 @@ describe("pre-minted session hardening — no trust by type (codex round)", () =
   });
 });
 
-describe("injected tool contract", () => {
-  it("carries the fixed tool name and a broker-verifiable carrier, no raw identity", () => {
-    const r = inj({ tools: undefined, session });
+describe("injected tool contract (S2: carrier-in-closure)", () => {
+  it("carries the fixed tool name; NO carrier field and no raw identity on the object", async () => {
+    const rec = makeExecutor();
+    const r = inj({ tools: undefined, session, executor: rec.executor });
     expect(r.status).toBe("injected");
     if (r.status === "injected") {
       const t = r.tools.find(isSandboxExecutionTool)!;
       expect(t.toolName).toBe(SANDBOX_EXECUTE_TOOL_NAME);
       expect(t.toolName).toBe("sandbox_execute");
-      // The carrier is opaque (sealed) — the raw orgId/userId are NOT present
-      // as plaintext object fields on the tool.
+      // S2 provider-boundary guarantee BY CONSTRUCTION: the tool object that
+      // crosses into the adapters has no carrier field and no raw identity —
+      // JSON-serializing it leaks nothing session-bound.
+      expect(t).not.toHaveProperty("sessionCarrier");
       expect(t).not.toHaveProperty("orgId");
       expect(t).not.toHaveProperty("userId");
-      expect(typeof t.sessionCarrier).toBe("string");
-      expect(t.sessionCarrier.startsWith("v1.")).toBe(true);
+      expect(JSON.stringify(t)).not.toContain("org-1");
+      expect(JSON.stringify(t)).not.toContain("user-1");
+      // The executor receives the sealed carrier on dispatch.
+      await t.execute({ commands: ["echo hi"] });
+      expect(rec.calls).toHaveLength(1);
+      expect(rec.calls[0].sessionCarrier.startsWith("v1.")).toBe(true);
+      expect(rec.calls[0].commands).toEqual(["echo hi"]);
+    }
+  });
+
+  it("merges staged skill snapshots from delivery shell tools into the session (S2 unification)", async () => {
+    const rec = makeExecutor();
+    const reads: string[] = [];
+    const shellTool: LlmTool = {
+      type: "shell",
+      skills: [{ name: "my-skill", description: "does things", path: "/skills/my-skill" }],
+      execute: async () => [],
+      stagedSkills: [
+        {
+          skillId: "skill-1",
+          slug: "my-skill",
+          description: "does things",
+          resolveFiles: async () => [
+            { path: "SKILL.md", content: "# body", digest: "d".repeat(64) },
+          ],
+          onRead: (id) => reads.push(id),
+        },
+      ],
+    };
+    const r = inj({ tools: [shellTool], session, executor: rec.executor });
+    expect(r.status).toBe("injected");
+    if (r.status === "injected") {
+      const t = r.tools.find(isSandboxExecutionTool)!;
+      expect(t.stagedSkills?.map((s) => s.slug)).toEqual(["my-skill"]);
+      // The cue names the staged path (tool and cue composed together).
+      expect(r.systemCue).toContain("/skills/my-skill");
+      // Dispatch forwards the staged skills to the executor and fires the
+      // attributable read signal when a command references the staged path.
+      await t.execute({ commands: ["cat /skills/my-skill/SKILL.md"] });
+      expect(rec.calls[0].stagedSkills?.map((s) => s.slug)).toEqual(["my-skill"]);
+      expect(reads).toEqual(["skill-1"]);
+      // A command NOT referencing the path does not fire the signal.
+      await t.execute({ commands: ["echo unrelated"] });
+      expect(reads).toEqual(["skill-1"]);
     }
   });
 });
@@ -212,7 +305,7 @@ describe("tool helpers", () => {
     const carrier = sealExecutionSession(session, { secret: SECRET });
     const tools: LlmTool[] = [
       { type: "web_search" },
-      buildSandboxExecutionTool(carrier),
+      buildSandboxExecutionTool({ sessionCarrier: carrier, executor: defaultExecutor }),
     ];
     const stripped = stripSandboxExecutionTools(tools)!;
     expect(hasSandboxExecutionTool(stripped)).toBe(false);

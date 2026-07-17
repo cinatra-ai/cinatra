@@ -9,9 +9,10 @@
  *  - gemini buildRequestHeaders MISSING on an active surface ⇒ descriptive
  *    fail-loud (design round MEDIUM: the headers carry the host self-client
  *    identity — never silently default);
- *  - openai shellTools MISSING/ABSENT ⇒ createShellTool fails loud with a
- *    descriptive error; the executor input carries NO administration
- *    override and the readSettings shape is runtime-guarded.
+ *
+ * The openai shellTools cases were RETIRED with `createShellTool` (exec-plane
+ * S2, cinatra#1707): skill execution runs on the core execution plane; the
+ * connector's `shellTools` capability removal is S5.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -51,7 +52,7 @@ vi.mock("../mcp-access", () => ({
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
 }));
-// Keep the heavy skills-client graph out; createShellTool itself is REAL.
+// Keep the heavy skills-client graph out.
 vi.mock("@cinatra-ai/skills", () => ({
   readSkillFileContent: vi.fn(async () => ""),
 }));
@@ -61,7 +62,6 @@ vi.mock("@cinatra-ai/skills/mcp-client", () => ({
 
 import { resolveProviderAdapter } from "../registry";
 import { writeLlmLogFile } from "../telemetry";
-import { createShellTool } from "../tools/skills";
 import { getConfiguredOpenAIConnection } from "../providers/openai";
 
 beforeEach(() => {
@@ -130,63 +130,5 @@ describe("gemini adapter — connection vs headers member (design MEDIUM)", () =
     await expect(resolveProviderAdapter("gemini")).rejects.toThrow(
       /does not expose\s+buildRequestHeaders/,
     );
-  });
-});
-
-describe("openai shellTools — gated member resolution (design HIGH)", () => {
-  it("createShellTool fails loud with NO openai surface", () => {
-    expect(() => createShellTool({ mountedSkills: [] })).toThrow(/not installed\/active/);
-  });
-
-  it("createShellTool fails loud when the surface lacks shellTools (pre-Stage-2 skew)", () => {
-    surfaces.set("openai", { providerId: "openai" });
-    expect(() => createShellTool({ mountedSkills: [] })).toThrow(
-      /does not expose the\s+gated shellTools/,
-    );
-  });
-
-  it("execute forwards NO administration override and guards the settings shape", async () => {
-    const runCommandInDocker = vi.fn(async (_input: unknown) => ({
-      exitCode: 0,
-      stdout: "ok",
-      stderr: "",
-      timedOut: false,
-    }));
-    // Malformed settings shape: maxOutputKilobytes is a string — the runtime
-    // guard must NOT do junk math; the limit defers to the executor's stored
-    // settings (undefined).
-    const readSettings = vi.fn(() => ({ maxOutputKilobytes: "64" }));
-    surfaces.set("openai", {
-      providerId: "openai",
-      shellTools: { readSettings, runCommandInDocker },
-    });
-
-    const tool = createShellTool({ mountedSkills: [] });
-    const results = await tool.execute({ commands: ["echo hi"] });
-    expect(results).toEqual([
-      { stdout: "ok", stderr: "", outcome: { type: "exit", exitCode: 0 } },
-    ]);
-    expect(runCommandInDocker).toHaveBeenCalledTimes(1);
-    const forwarded = runCommandInDocker.mock.calls[0][0] as Record<string, unknown>;
-    expect("administration" in forwarded).toBe(false);
-    expect(forwarded.maxOutputLength).toBeUndefined();
-  });
-
-  it("a well-formed maxOutputKilobytes becomes the default output limit", async () => {
-    const runCommandInDocker = vi.fn(async (_input: unknown) => ({
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-    }));
-    surfaces.set("openai", {
-      providerId: "openai",
-      shellTools: { readSettings: () => ({ maxOutputKilobytes: 64 }), runCommandInDocker },
-    });
-
-    const tool = createShellTool({ mountedSkills: [] });
-    await tool.execute({ commands: ["echo hi"] });
-    const forwarded = runCommandInDocker.mock.calls[0][0] as Record<string, unknown>;
-    expect(forwarded.maxOutputLength).toBe(64 * 1024);
   });
 });

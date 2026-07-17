@@ -27,7 +27,12 @@ import {
   // re-introduces hash drift for rule-bearing skills.
   adaptAgentForMatching,
   adaptSkillForMatching,
+  // Exec-plane S2 (cinatra#1707): the optional `requires_execution`
+  // skill-metadata flag — attach-time warning when the target agent's
+  // execution capability is disabled.
+  readRequiresExecution,
 } from "@cinatra-ai/skills";
+import { isExecutionPlaneRolloutEnabled } from "@cinatra-ai/llm";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
   createInProcessPrimitiveTransport,
@@ -163,7 +168,17 @@ export async function evaluatePairAction(formData: FormData) {
   return callSkillsHandler("skills_match_evaluate_pair", { agentId, skillId });
 }
 
-export async function addAgentSkillMatchAction(formData: FormData) {
+/**
+ * Manual agent-skill attach. Returns an optional attach-time WARNING
+ * (exec-plane S2, cinatra#1707): a skill that declares `requires_execution`
+ * attached while the execution capability is effectively disabled still
+ * attaches (a warning, not a gate) but the admin is told the skill's shell
+ * steps cannot run. Availability today = the plane rollout flag; the per-org /
+ * per-agent D4 posture wires in with the admin settings slice (S1 remainder).
+ */
+export async function addAgentSkillMatchAction(
+  formData: FormData,
+): Promise<{ warning?: string }> {
   const session = await requireAdminSession();
   const agentId = String(formData.get("agentId") ?? "").trim();
   const skillId = String(formData.get("skillId") ?? "").trim();
@@ -223,6 +238,20 @@ export async function addAgentSkillMatchAction(formData: FormData) {
       skillInputHash,
     });
   }
+
+  // Exec-plane S2 (cinatra#1707): attach-time requiresExecution warning. The
+  // attach SUCCEEDED — this is advisory, never a gate.
+  if (readRequiresExecution(skill.content ?? "") && !isExecutionPlaneRolloutEnabled()) {
+    const warning =
+      `"${skill.name}" declares requires_execution, but the execution ` +
+      `capability is disabled for this instance — the skill's shell/script ` +
+      `steps will not run until execution is enabled.`;
+    console.warn(
+      `[execution-plane] attach-time requiresExecution warning — agent=${agentId} skill=${skillId}: ${warning}`,
+    );
+    return { warning };
+  }
+  return {};
 }
 
 export async function removeAgentSkillMatchAction(formData: FormData) {
