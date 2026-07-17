@@ -262,6 +262,36 @@ describe("LibraryRowGlyph — extension glyph + host floors", () => {
     expect(execCounts().row).toBe(1);
   });
 
+  it("a GENERIC-typed library row reaches its winner's umbrella-registered listRow capability (the like-for-like replacement of the deleted family map)", async () => {
+    // The bridge registers under the claimant's umbrella type; every live
+    // library row is the generic artifact object type. The winner-umbrella
+    // fallback connects the two — winner-bound (only `${winner}:artifact`).
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext", slot: "listRow" });
+    const html = await renderGlyph(
+      summaryOf({ objectType: "@cinatra-ai/artifact:object" }),
+    );
+    expect(html).toContain('data-glyph-source="extension"');
+    expect(execCounts().row).toBe(1);
+  });
+
+  it("the umbrella fallback never reaches a LOSING claimant's registration (winner-binding)", async () => {
+    // Only the losing claimant registered a listRow renderer; the row's winner
+    // did not. Neither the type-keyed nor the umbrella-keyed lookup may reach
+    // the loser's module — the glyph floors.
+    semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/losing-ext", slot: "listRow" });
+    semanticRendererRegistry.register({
+      objectTypeId: "@fixture/losing-ext:artifact",
+      packageName: "@fixture/losing-ext",
+      slot: "listRow",
+    });
+    const html = await renderGlyph(
+      summaryOf({ objectType: "@cinatra-ai/artifact:object" }),
+    );
+    expect(html).toContain('data-glyph-source="generic"');
+    expect(execCounts().row).toBe(0);
+    expect(execCounts().losing).toBe(0);
+  });
+
   it("a claimant with ONLY a detail renderer floors the glyph (no listRow capability)", async () => {
     semanticRendererRegistry.register({ objectTypeId: TYPE, packageName: "@fixture/row-ext" });
     const html = await renderGlyph(summaryOf());
