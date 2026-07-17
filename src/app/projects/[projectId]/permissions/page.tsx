@@ -26,7 +26,35 @@ import {
 } from "./actions";
 import { listGuestRows, type GuestRow } from "./guest-actions";
 
-export const metadata: Metadata = { title: "Project permissions" };
+// Gate-repeating metadata (cinatra#1737, the dashboards pattern): repeats the
+// page's own 404-hide read gate before disclosing the project name; any
+// failure yields the generic title.
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  try {
+    const [{ projectId }] = await Promise.all([params]);
+    const session = await requireAuthSession();
+    const actor = actorFromSession(session);
+    const project = await readProjectById(projectId);
+    if (!project) return { title: "Project permissions" };
+    const coOwners = await readProjectCoOwners(project.id);
+    await enforceResourceAccess(
+      {
+        resourceType: "project",
+        resourceId: project.id,
+        organizationId: project.organizationId,
+        ownerLevel: normalizeOwnerLevel(project.ownerLevel),
+        ownerId: project.ownerId,
+        visibility: null,
+        coOwnerUserIds: coOwners.map((c) => c.userId),
+      },
+      actor,
+      "project.read",
+    );
+    return { title: `${project.name} — Permissions` };
+  } catch {
+    return { title: "Project permissions" };
+  }
+}
 
 type Props = {
   params: Promise<{ projectId: string }>;

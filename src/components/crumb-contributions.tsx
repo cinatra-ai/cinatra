@@ -19,7 +19,7 @@
 // happens on the next route's publish, fencing via (pathname, epoch) scoping
 // in the bus.
 
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { usePathname } from "next/navigation";
 
 import {
@@ -54,7 +54,11 @@ export function CrumbContributions({
 }
 
 export function CrumbContributionsClear() {
-  useEffect(() => {
+  // Layout effect: the clear must land BEFORE the browser paints the negative
+  // surface — a 404 boundary renders at the ORIGINAL pathname, so a parked
+  // snapshot whose prefix still matches could otherwise flash its (previously
+  // authorized) label for one frame.
+  useLayoutEffect(() => {
     clearCrumbContributions();
   }, []);
   return null;
