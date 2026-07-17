@@ -158,6 +158,11 @@ export type ArtifactObjectTypeClaim = {
     snapshotPolicy?: "content" | "metadata" | "none";
     redactionPolicyVersion?: string;
     sensitivity?: "normal" | "sensitive";
+    /** Mutability class (cinatra#1449) — how the claimed rows may change
+     * (`draftable` | `record` | `external`); a claim may only NARROW the
+     * registering type's `lifecycle.mutableBy`, never widen it. Structural twin
+     * of `ArtifactMutability` in `./claims`; the claims test pins them equal. */
+    mutability?: "draftable" | "record" | "external";
   };
   /** Inline JSON Schema for the claimed type's rows (schema-source rule:
    * required unless self-registered or dependency-registered). */
