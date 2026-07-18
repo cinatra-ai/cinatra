@@ -10,11 +10,26 @@ export {
   archiveExtensionDashboards,
   restoreExtensionDashboards,
   adoptExtensionDashboards,
+  // 3-way upgrade-merge writer (cinatra#1628, S11c / remaining AC2).
+  upgradeExtensionDashboards,
   type MaterializeTemplateInput,
   type MaterializeInstanceInput,
   type ExtensionDashboardOwnerScope,
   type AdoptExtensionDashboardsInput,
+  type UpgradeExtensionDashboardsInput,
+  type UpgradeExtensionDashboardsResult,
 } from "./mutation-service";
+
+// The PURE 3-way merge primitives (cinatra#1628, S11c) — no store; used by the
+// writer above + directly testable/consumable app-side.
+export {
+  threeWayMergeDashboardConfig,
+  computeAppliedDefaultHash,
+  stableStringify,
+  type DashboardConfigLike,
+  type ThreeWayMergeResult,
+  type UpgradeMergeReport,
+} from "./contribution-upgrade-merge";
 
 // Contribution LINEAGE identity + the adopt-in-place PLANNER (cinatra#1628,
 // S11b). PURE (no writes) — the reconciler orchestrator resolves live successor
@@ -94,6 +109,9 @@ export {
   unregisterRuntimePortletKind,
   unregisterRuntimePortletKindsForPackage,
   isRuntimePortletKind,
+  // Install-scoped alias namespacing (cinatra#1628, S11c / AC4).
+  isInstallScopedPortletAlias,
+  portletAliasNamespace,
   type RuntimePortletKindRegistration,
   type RuntimePortletKindResult,
 } from "./portlets/registry";
