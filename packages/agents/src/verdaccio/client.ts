@@ -32,6 +32,9 @@ import { compileOasAgentJson } from "../oas-compiler";
 import {
   ARTIFACT_PRODUCES_ENFORCEMENT,
   evaluateProducesMaterializationContract,
+  resolveTypedProducesContract,
+  agentProducesSchema,
+  artifactDepVersionQuery,
 } from "./package-contract";
 // The AUTHORITATIVE `cinatra.consumes` parser is imported DYNAMICALLY inside
 // carryManifestConsumes (route-graph ratchet: keeps the sdk consumes module
@@ -383,19 +386,27 @@ export async function publishAgentPackageFromGitDir(
   // must be emitted explicitly or it is lost on publish. Losing it breaks the
   // run-completion materializer, which reads `cinatra.produces` from the
   // INSTALLED manifest to authorize each declared artifact (cinatra#923/#924).
-  // Tolerant parse: only well-formed `{ extension: string }` entries survive.
+  // FAIL-CLOSED (cinatra#1788): validate the source `cinatra.produces` block
+  // with the SAME strict schema the install path enforces. A malformed entry
+  // (bad `extension`, a smuggled key, or a present-but-malformed `objectTypeId`)
+  // is REFUSED here — never silently laundered into a coarse `{ extension }`
+  // entry that would then pass the typed-production contract. The validated
+  // entries are emitted verbatim into distManifest.cinatra.produces below,
+  // preserving the exact typed-production discriminator. Absent produces → [].
   const producesRaw = (gitPkgJson.cinatra as Record<string, unknown> | undefined)?.produces;
-  const producesEntries: Array<{ extension: string }> = Array.isArray(producesRaw)
-    ? producesRaw
-        .map((r) =>
-          r && typeof r === "object" &&
-          typeof (r as { extension?: unknown }).extension === "string" &&
-          ((r as { extension: string }).extension).length > 0
-            ? { extension: (r as { extension: string }).extension }
-            : null,
-        )
-        .filter((e): e is { extension: string } => e !== null)
-    : [];
+  let producesEntries: Array<{ extension: string; objectTypeId?: string }> = [];
+  if (producesRaw !== undefined) {
+    const parsedProduces = agentProducesSchema.safeParse(producesRaw);
+    if (!parsedProduces.success) {
+      throw new Error(
+        `publishAgentPackageFromGitDir: invalid cinatra.produces for ${packageName}@${packageVersion} ` +
+          `(cinatra#1788): ${parsedProduces.error.issues
+            .map((i) => `${i.path.join(".") || "<root>"} ${i.message}`)
+            .join("; ")}`,
+      );
+    }
+    producesEntries = parsedProduces.data;
+  }
   // Carry the source `cinatra.consumes` declarations through the generated
   // distribution manifest (same reasoning as `produces` above: this path
   // BUILDS a fresh cinatra block, so an un-carried field is lost on publish).
@@ -490,6 +501,63 @@ export async function publishAgentPackageFromGitDir(
       console.warn(
         `[artifact-produces-contract] ${packageName}@${packageVersion}: ` +
           `${contractFindings.length} advisory finding(s) (WARN phase — cinatra#924): ${summary}`,
+      );
+    }
+  }
+
+  // Layer 3 (cinatra#1788, epic #1785) — publish-time TYPED-PRODUCTION contract,
+  // enforced FAIL-CLOSED (no WARN phase — see package-contract.ts Layer 3, and
+  // the install preflight in install-from-package.ts). Every `cinatra.produces`
+  // entry must resolve to a REQUIRED artifact-kind dependency
+  // (`cinatra.dependencies`, kind:"artifact") whose PUBLISHED manifest declares
+  // the referenced object-type claim (the exact objectTypeId when present). The
+  // required dependency manifests resolve from the registry (the same summary
+  // the install closure planner reads); an unresolvable required dependency
+  // contributes no claims → the typed entry BLOCKS. Runs BEFORE the tarball is
+  // built and published (nothing is in the registry yet), so a refusal publishes
+  // nothing. The dynamic import keeps the read-side summary off this write-side
+  // module's static graph.
+  if (producesEntries.length > 0) {
+    const typedFindings = await resolveTypedProducesContract({
+      produces: producesEntries,
+      cinatraDependencies: cinatraDeps,
+      resolveManifest: async (dep, versionConstraint) => {
+        const { getPublishedExtensionSummary, resolveMaxSatisfyingVersion } = await import(
+          "@cinatra-ai/registries"
+        );
+        try {
+          // Resolve the manifest at the EXACT version the edge PINS — never
+          // `latest`. An unsatisfiable range or a non-registry pin (git-ref /
+          // malformed) FAILS CLOSED (return null → typed entry BLOCKS).
+          const q = artifactDepVersionQuery(versionConstraint);
+          let packageVersion: string;
+          if ("exact" in q) {
+            packageVersion = q.exact;
+          } else if ("range" in q) {
+            const resolved = await resolveMaxSatisfyingVersion(
+              { packageName: dep, range: q.range },
+              resolvedConfig,
+            );
+            if (!resolved) return null; // no satisfying version → fail closed
+            packageVersion = resolved;
+          } else {
+            return null; // git-ref / malformed constraint → fail closed
+          }
+          const summary = await getPublishedExtensionSummary(
+            { packageName: dep, packageVersion },
+            resolvedConfig,
+          );
+          return summary.manifest;
+        } catch {
+          return null;
+        }
+      },
+    });
+    if (typedFindings.length > 0) {
+      throw new Error(
+        `publishAgentPackageFromGitDir: typed-production contract failed for ` +
+          `${packageName}@${packageVersion} (cinatra#1788): ` +
+          `${typedFindings.map((f) => f.message).join(" | ")}`,
       );
     }
   }

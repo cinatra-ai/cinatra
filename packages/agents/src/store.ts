@@ -34,6 +34,29 @@ export {
   __LEGAL_TRANSITIONS__,
 };
 export type { AgentRunStatus };
+// Re-export the agent_run_hitl_prompts persistence seam (extracted to
+// ./agent-run-hitl-prompts, file-size ratchet #1803 repair). Grouped with the
+// other extracted-seam re-exports at the top: an interspersed `export … from`
+// mid-module trips Vite/vitest SSR export hoisting (it silently undefines the
+// sibling ./run-status + ./template-snapshot re-exports), so all seam
+// re-exports live in one place. Public surface unchanged for `./store` importers.
+import {
+  writeHitlPrompt,
+  updateHitlPromptExcluded,
+  readHitlPromptsForRun,
+  readAllHitlPromptsForRun,
+  updateHitlPromptsExcludedForRunAgent,
+  readNonExcludedAgentIdsForRun,
+} from "./agent-run-hitl-prompts";
+export {
+  writeHitlPrompt,
+  updateHitlPromptExcluded,
+  readHitlPromptsForRun,
+  readAllHitlPromptsForRun,
+  updateHitlPromptsExcludedForRunAgent,
+  readNonExcludedAgentIdsForRun,
+};
+export type { WriteHitlPromptInput, HitlPromptRecord } from "./agent-run-hitl-prompts";
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 import {
   agentTemplates,
@@ -45,7 +68,6 @@ import {
   agentForks,
   agentRunMessages,
   agentTemplateVersions,
-  agentRunHitlPrompts,
   runCoOwners,
 } from "./schema";
 // GatedStep type used in CreateAgentTemplateInput patches +
@@ -2462,173 +2484,9 @@ export async function readAuditEventsByReviewTask(
     .orderBy(auditEvents.createdAt);
 }
 
-// ---------------------------------------------------------------------------
-// agent_run_hitl_prompts — WayFlow HITL prompt capture
-// ---------------------------------------------------------------------------
-
-export type WriteHitlPromptInput = {
-  runId: string;
-  agentId: string;
-  stepKey: string;
-  message: string;
-  submittedValues?: Record<string, unknown> | null;   //
-  schemaSnapshot?: Record<string, unknown> | null;
-  excluded?: boolean;                                  // Pattern 4(b): bare-approval rows pass true so autosave skips them
-};
-
-export async function writeHitlPrompt(input: WriteHitlPromptInput): Promise<void> {
-  if (input.message.length > 32_768) {
-    throw new Error(`[writeHitlPrompt] message too large (${input.message.length} chars)`);
-  }
-  if (input.schemaSnapshot !== null && input.schemaSnapshot !== undefined) {
-    const snap = JSON.stringify(input.schemaSnapshot);
-    if (snap.length > 32_768) {
-      console.warn(
-        `[writeHitlPrompt] schemaSnapshot too large (${snap.length} bytes), storing null`,
-      );
-      input = { ...input, schemaSnapshot: null };
-    }
-  }
-  await db.insert(agentRunHitlPrompts).values({
-    id: randomUUID(),
-    runId: input.runId,
-    agentId: input.agentId,
-    stepKey: input.stepKey,
-    message: input.message,
-    submittedValues: input.submittedValues ?? null,   //
-    schemaSnapshot: input.schemaSnapshot ?? null,
-    excluded: input.excluded ?? false,                //
-  });
-}
-
-export type HitlPromptRecord = {
-  id: string;
-  runId: string;
-  agentId: string;
-  stepKey: string;
-  message: string;
-  capturedAt: Date;
-  excluded: boolean;
-  submittedValues: Record<string, unknown> | null;   //
-  schemaSnapshot: Record<string, unknown> | null;
-};
-
-/**
- * Reads all non-excluded HITL amendment prompts for a run, scoped to a specific agent.
- *
- * @param runId   - The agent_runs.id of the run.
- * @param agentId - The template's `packageName` (e.g. "@cinatra-ai/email-outreach-agent").
- *                  Must match the value stored at write time via writeHitlPrompt.
- */
-export async function updateHitlPromptExcluded(id: string, excluded: boolean): Promise<void> {
-  await db
-    .update(agentRunHitlPrompts)
-    .set({ excluded })
-    .where(eq(agentRunHitlPrompts.id, id));
-}
-
-export async function readHitlPromptsForRun(
-  runId: string,
-  agentId: string,
-): Promise<HitlPromptRecord[]> {
-  return db
-    .select()
-    .from(agentRunHitlPrompts)
-    .where(
-      and(
-        eq(agentRunHitlPrompts.runId, runId),
-        eq(agentRunHitlPrompts.agentId, agentId),
-        eq(agentRunHitlPrompts.excluded, false),
-      ),
-    )
-    .orderBy(agentRunHitlPrompts.capturedAt);
-}
-
-// ---------------------------------------------------------------------------
-// sibling read: NO excluded filter. Submission-map builder needs
-// every gate row in capture order so row-order alignment with approvalPolicy
-// gates survives Pattern 4(b) (bare-approval rows flagged excluded=true).
-// readHitlPromptsForRun (excluded=false filter) stays unchanged for autosave.
-// ---------------------------------------------------------------------------
-export async function readAllHitlPromptsForRun(
-  runId: string,
-  agentId: string,
-): Promise<HitlPromptRecord[]> {
-  return db
-    .select()
-    .from(agentRunHitlPrompts)
-    .where(
-      and(
-        eq(agentRunHitlPrompts.runId, runId),
-        eq(agentRunHitlPrompts.agentId, agentId),
-      ),
-    )
-    .orderBy(agentRunHitlPrompts.capturedAt);
-}
-
-// ---------------------------------------------------------------------------
-// Run + agent-scoped batch exclusion (#1794).
-//
-// The single-id `updateHitlPromptExcluded` mutates by prompt id ALONE with no
-// run/agent predicate — safe for the internal autosave caller (it only ever
-// passes ids it just read for a run+agent), but NOT a safe primitive surface.
-// This scoped batch variant carries the run + declaring-agent predicate INTO
-// the WHERE clause as defense-in-depth: a row is touched only when it belongs
-// to BOTH the given run AND the given agent package, so a caller can never
-// mutate another run's or another agent's prompt even if a stale/foreign id
-// slips past the handler's own membership check. Idempotent by construction
-// (`SET excluded = <value>` is a no-op when the row already holds it). Returns
-// the ids actually matched (== touched), so the caller can report applied vs
-// requested and detect a silent scope miss.
-// ---------------------------------------------------------------------------
-export async function updateHitlPromptsExcludedForRunAgent(
-  runId: string,
-  agentId: string,
-  ids: string[],
-  excluded: boolean,
-): Promise<string[]> {
-  if (ids.length === 0) return [];
-  const rows = await db
-    .update(agentRunHitlPrompts)
-    .set({ excluded })
-    .where(
-      and(
-        inArray(agentRunHitlPrompts.id, ids),
-        eq(agentRunHitlPrompts.runId, runId),
-        eq(agentRunHitlPrompts.agentId, agentId),
-      ),
-    )
-    .returning({ id: agentRunHitlPrompts.id });
-  return rows.map((r) => r.id);
-}
-
-/**
- * returns the distinct set of agent_id values for a run's
- * non-excluded captured HITL prompts. Used by the autosave-on-completion path
- * (`runSkillAutosaveOnRunCompletion` in `./skill-autosave`) to fan out one
- * personal-skill generation per distinct leaf agent.
- *
- * v1 "distinct leaf" semantics: distinct values of `agent_id` as captured
- * by `writeHitlPrompt`. For flat WayFlow runs this is one value (the run's
- * own template.packageName). For composed orchestrator runs the captured
- * agent_id is whatever the paused run's template.packageName was at gate
-   * time, preserving distinct child-agent capture.
- *
- * @param runId - The agent_runs.id of the run.
- * @returns      Distinct agent_id values, ordered ascending. Empty array if none.
- */
-export async function readNonExcludedAgentIdsForRun(runId: string): Promise<string[]> {
-  const rows = await db
-    .selectDistinct({ agentId: agentRunHitlPrompts.agentId })
-    .from(agentRunHitlPrompts)
-    .where(
-      and(
-        eq(agentRunHitlPrompts.runId, runId),
-        eq(agentRunHitlPrompts.excluded, false),
-      ),
-    );
-  return rows.map((r) => r.agentId).sort();
-}
+// agent_run_hitl_prompts — WayFlow HITL prompt capture: extracted to
+// ./agent-run-hitl-prompts (file-size ratchet #1803 repair); re-exported from
+// ./store at the top of this file alongside the other extracted-seam re-exports.
 
 // ---------------------------------------------------------------------------
 // Note: readReviewTasksByRunId, readPlannedActionByRunAndStep,

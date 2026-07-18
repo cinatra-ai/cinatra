@@ -203,8 +203,17 @@ export type SemanticArtifactManifest = {
  * Counterpart on the AGENT-extension side: deterministic agents declare the
  * semantic artifact types they produce. This type is schema-only;
  * strict cross-kind validation happens outside this definition.
+ *
+ * `extension` names the REQUIRED artifact-kind dependency that provides the
+ * produced type; `objectTypeId` is the OPTIONAL exact `@scope/pkg:local-id`
+ * discriminator (cinatra#1788, completing the #1452 direction for `produces`)
+ * that pins production to ONE claimed type of a multi-type artifact pack. The
+ * typed-production contract (publish gate + install preflight) resolves every
+ * entry to a required artifact-kind closure member whose manifest declares the
+ * referenced `objectTypes` claim — fail-closed, before any write. It is the
+ * ONLY path for typed agent output; runtime dynamic-type minting is retired.
  */
-export type SemanticArtifactRef = { extension: string };
+export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
 
 /**
  * @deprecated Substrate descriptor name retained as an alias to the semantic
