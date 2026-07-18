@@ -1,20 +1,29 @@
 import { objectTypeRegistry } from "@cinatra-ai/objects";
 import { z } from "zod";
-import {
-  BlogPostListRow,
-  BlogPostCard,
-  BlogPostDetail,
-  BlogPostIdeaListRow,
-  BlogPostIdeaCard,
-  BlogPostIdeaDetail,
-} from "./renderers";
 
 // The obsolete `@cinatra-ai/asset-blog:*` registrations
 // (blog-post-idea, blog-post, saved-media) were removed. Live shadow rows were
 // re-typed to `@cinatra-ai/assets:*` in place, so the old types have no rows,
 // no writers, and no consumers in production. `registerAssetsBlogObjectTypes()`
-// below remains the sole blog registrar. The `SavedMedia*` renderers are also
-// no longer imported because the `saved-media` type has no new writers.
+// below remains the sole blog registrar.
+//
+// RENDERER RELOCATION (cinatra#1631 AC2, epic #1620 S7/M2; owner ruling
+// eng#548 entry 73): the in-core `blog-post` / `blog-idea` object-renderer
+// slots (BlogPost{ListRow,Card,Detail} + BlogPostIdea{ListRow,Card,Detail})
+// were RELOCATED to their owning blog extensions — `@cinatra-ai/blog-post-artifact`
+// and `@cinatra-ai/blog-idea-artifact` (both dev-only). Core keeps the TYPE
+// registration (schema / lifecycle / relations / crudPolicy — the live
+// machinery) with EMPTY renderer slots, exactly like `@cinatra-ai/artifacts:artifact-ref`
+// and `@cinatra-ai/assets:blog-project`. Nothing in core renders these
+// object-renderer slots as components today (the only reads are the admin
+// Types & approvals presence icons — src/components/artifacts/types-approvals-mode.tsx),
+// so removal is behaviour-preserving except that those two types now show a
+// dimmed presence icon on that screen — in BOTH dev and production. Even with
+// the dev blog extensions installed, they register a SEPARATE `<pkg>:artifact`
+// umbrella type rather than repopulating these host `@cinatra-ai/assets:*`
+// slots, so nothing re-lights them. The `SavedMedia*` renderers were never
+// imported here (the `saved-media` type has no writers) and remain dead code
+// tracked by cinatra#1775.
 export function registerBlogObjectTypes() {
   registerAssetsBlogObjectTypes();
 }
@@ -97,10 +106,13 @@ export function registerAssetsBlogObjectTypes() {
       sources: ["agent"],
       mutableBy: ["user"],
     },
+    // Renderers relocated to `@cinatra-ai/blog-idea-artifact` (cinatra#1631 AC2).
+    // Empty slots keep the type registered for classification (precedent:
+    // `@cinatra-ai/artifacts:artifact-ref`, `@cinatra-ai/assets:blog-project`).
     renderers: {
-      listRow: BlogPostIdeaListRow,
-      card: BlogPostIdeaCard,
-      detail: BlogPostIdeaDetail,
+      listRow: null,
+      card: null,
+      detail: null,
     },
     relations: [
       {
@@ -149,10 +161,13 @@ export function registerAssetsBlogObjectTypes() {
       sources: ["agent"],
       mutableBy: ["agent", "user"],
     },
+    // Renderers relocated to `@cinatra-ai/blog-post-artifact` (cinatra#1631 AC2).
+    // Empty slots keep the type registered for classification (precedent:
+    // `@cinatra-ai/artifacts:artifact-ref`, `@cinatra-ai/assets:blog-project`).
     renderers: {
-      listRow: BlogPostListRow,
-      card: BlogPostCard,
-      detail: BlogPostDetail,
+      listRow: null,
+      card: null,
+      detail: null,
     },
     relations: [
       {
