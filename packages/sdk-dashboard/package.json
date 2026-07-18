@@ -19,6 +19,6 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "drizzle-cube": "0.5.7"
+    "drizzle-cube": "0.6.4"
   }
 }

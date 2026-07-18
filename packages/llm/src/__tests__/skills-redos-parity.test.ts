@@ -12,6 +12,7 @@ vi.mock("@cinatra-ai/skills", () => ({
   readSkillFileContent: async () => "",
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn(() => {
     throw new Error("not installed");
