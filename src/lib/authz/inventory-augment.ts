@@ -73,6 +73,12 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // ───── agent_run ─────
   agent_run:                       { resourceType: "agent_run", action: "create",  status: "enforced" },
   agent_run_get:                   { resourceType: "agent_run", action: "read",    status: "enforced" },
+  // Run-scoped HITL prompt primitives (#1794). Coarse class only: the read
+  // primitive hard-enforces agent_run.read at the boundary; the exclude
+  // primitive is a WRITE (membership-gated boundary), with the real
+  // respondToHitl + run-ownership check owned by the handler.
+  agent_run_hitl_prompts_exclude:  { resourceType: "agent_run", action: "update",  status: "enforced" },
+  agent_run_hitl_prompts_list:     { resourceType: "agent_run", action: "read",    status: "enforced" },
   agent_run_list:                  { resourceType: "agent_run", action: "list",    status: "enforced" },
   agent_run_messages_list:         { resourceType: "agent_run", action: "read",    status: "enforced" },
   agent_run_move_with_outputs:     { resourceType: "agent_run", action: "update",  status: "enforced" },
