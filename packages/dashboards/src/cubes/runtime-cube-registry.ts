@@ -57,6 +57,21 @@ export function isRuntimeCubeFromTable(t: string): t is RuntimeCubeFromTable {
   return (RUNTIME_CUBE_FROM_ALLOWLIST as readonly string[]).includes(t);
 }
 
+// --- Query budget (cinatra#1628, S11c / AC4) --------------------------------
+// A declared runtime cube surface is bounded fail-closed at parse/install time —
+// the "query budget" over extension cube descriptors. It caps how large a cube
+// surface one package may register (defence against a descriptor blob that
+// declares an unbounded number of aliases / members, inflating the compiled
+// platform + the per-query planning surface). The host owns all SQL, so this
+// bounds the DECLARED surface, not runtime cost; it is enforced by
+// `parseRuntimeCubeDescriptors` + `validateRuntimeCubeDescriptor`.
+
+/** Max runtime cube descriptors (aliases) ONE package may declare. */
+export const MAX_RUNTIME_CUBE_DESCRIPTORS_PER_PACKAGE = 16;
+/** Max member ids ONE runtime cube descriptor may expose (a subset of the base
+ *  cube's published members — a base cube publishes far fewer than this today). */
+export const MAX_MEMBERS_PER_RUNTIME_CUBE_DESCRIPTOR = 64;
+
 /**
  * EVERY bundled (host-owned) cube id — the FROM-allowlist PLUS the cubes whose
  * special visibility gate keeps them OFF the runtime FROM-allowlist (artifacts,
@@ -185,6 +200,13 @@ export function validateRuntimeCubeDescriptor(
   if (!members.every((m) => typeof m === "string" && m.length > 0)) {
     return { ok: false, code: "cube_members_invalid", reason: "every member must be a non-empty string" };
   }
+  if (members.length > MAX_MEMBERS_PER_RUNTIME_CUBE_DESCRIPTOR) {
+    return {
+      ok: false,
+      code: "cube_members_budget_exceeded",
+      reason: `descriptor "${cubeId}" declares ${members.length} members (max ${MAX_MEMBERS_PER_RUNTIME_CUBE_DESCRIPTOR})`,
+    };
+  }
   const published = new Set(publishedMembersOf(fromTable));
   const unknown = [...new Set(members as string[])].filter((m) => !published.has(m));
   if (unknown.length > 0) {
@@ -209,6 +231,13 @@ export function parseRuntimeCubeDescriptors(
 ): { ok: true; descriptors: RuntimeCubeDescriptor[] } | { ok: false; code: string; reason: string } {
   if (!Array.isArray(raw)) {
     return { ok: false, code: "cube_descriptors_invalid", reason: "cube-descriptors.json must be an array" };
+  }
+  if (raw.length > MAX_RUNTIME_CUBE_DESCRIPTORS_PER_PACKAGE) {
+    return {
+      ok: false,
+      code: "cube_descriptors_budget_exceeded",
+      reason: `package declares ${raw.length} runtime cube descriptors (max ${MAX_RUNTIME_CUBE_DESCRIPTORS_PER_PACKAGE})`,
+    };
   }
   const descriptors: RuntimeCubeDescriptor[] = [];
   const seen = new Set<string>();

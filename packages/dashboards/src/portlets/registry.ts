@@ -210,6 +210,35 @@ export function unregisterRuntimePortletKindsForPackage(sourcePackageName: strin
   return removed;
 }
 
+// --- INSTALL-SCOPED namespaced aliases (cinatra#1628, S11c / AC4) ------------
+// AC4 requires runtime portlet-kind aliases to be "install-scoped namespaced …
+// with collision rejection". The registry already rejects a cross-source id
+// collision (portlet_kind_collision), but a bare/global-looking id
+// (`object-list`, `task_list`) invites squatting + accidental cross-package
+// clashes. The NAMESPACE rule makes each package's aliases structurally its own:
+// an alias id MUST begin with the package's derived namespace token + `__`, so
+// two well-behaved packages can never contend for the same id, and a squat of a
+// short/global id is refused at the install boundary (enforced in the host
+// reconcile path, NOT inside `registerRuntimePortletKind`, so the bundled-kind
+// collision + same-source idempotency semantics stay intact).
+
+/** The namespace token derived from a source package name: the scope-stripped,
+ *  lowercased name reduced to `[a-z0-9_]` (e.g. `@cinatra-ai/blog-agent` ->
+ *  `blog_agent`). Falls back to `ext` for an unusable name. */
+export function portletAliasNamespace(sourcePackageName: string): string {
+  const short = sourcePackageName.replace(/^@[^/]+\//, "").toLowerCase();
+  const token = short.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return token.length > 0 ? token : "ext";
+}
+
+/** True iff `kind` is an install-scoped alias id for `sourcePackageName`: it
+ *  starts with the package namespace token + `__` and carries a non-empty local
+ *  segment after it (`blog_agent__task_list`). Fail-closed for a bare/foreign id. */
+export function isInstallScopedPortletAlias(kind: string, sourcePackageName: string): boolean {
+  const prefix = `${portletAliasNamespace(sourcePackageName)}__`;
+  return kind.startsWith(prefix) && kind.length > prefix.length;
+}
+
 /** True when a kind is RUNTIME-contributed (has a source package). */
 export function isRuntimePortletKind(kind: string, version: string): boolean {
   return getPortletKind(kind, version)?.sourcePackageName !== undefined;

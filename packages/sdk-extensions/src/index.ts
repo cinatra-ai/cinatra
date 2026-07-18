@@ -657,6 +657,7 @@ export type {
   BlogSystemProvider,
   SocialMediaSystemProvider,
   EmailSystemProvider,
+  EmailTransportCorrelation,
   HostExtensionActionGuardService,
   LlmProviderSurface,
   LlmProviderAdapterSurface,

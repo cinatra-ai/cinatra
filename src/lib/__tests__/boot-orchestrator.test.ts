@@ -136,6 +136,7 @@ describe("runBoot orchestration", () => {
       "agent-runtime-dep-backfill", // cinatra#1056 — always-on, AWAITED, after marker backfill
       "skills-catalog-rebuild", // cinatra#1364 — explicit rebuild AFTER activation/materialization
       "assistant-thread-mirror-backfill", // cinatra#1218 — dormant legacy-thread mirror, AWAITED
+      "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED, after the mirror backfill
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
       "assistant-bootstrap",
       "otel-tracing",
@@ -173,6 +174,7 @@ describe("runBoot orchestration", () => {
       "agent-runtime-dep-backfill", // cinatra#1056 — runs in PROD too
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
       "assistant-thread-mirror-backfill", // cinatra#1218 — runs in PROD too
+      "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, runs in PROD too
       "assistant-bootstrap",
       "otel-tracing",
       // no a2a-dev-auto-connect in prod
