@@ -9,7 +9,8 @@
 // (never the MCP/store directly).
 import { listObjectsByFilter, getObjectById, type ObjectRecord } from "@/lib/objects-store";
 import { listArtifacts, getArtifact } from "@/lib/artifacts/artifact-service";
-import { isPreviewInlineMime } from "@/lib/artifacts/artifact-read";
+import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import { resolveArtifactPreviewDispatch } from "@/app/artifacts/[id]/renderer-resolution";
 import { listEventsForObject } from "@/lib/object-history/eligibility";
 import { readBlogPostsProjectById } from "@/lib/blog/store";
 import { isBackgroundJobActive } from "@/lib/background-jobs";
@@ -144,11 +145,14 @@ export async function loadObjectVersionHistoryPortlet(args: {
 // ---------------------------------------------------------------------------
 // Artifact-edit-binary-prompt — baseline preview of the parent object's
 // CURRENT artifact (read-gated). `previewHref` points at the preview-safe
-// serving route and is minted server-side ONLY for preview-inline-allowlisted
-// MIMEs (the route remains the 415/disposition enforcement point). The
-// revision is the object's PAIRED `…RepresentationRevisionId` ref when
-// present (the pinned pair manual-mode revert needs), else the artifact's
-// latest representation (same fallback as the artifact detail page).
+// serving route and is minted server-side ONLY when the SELECTED revision's MIME
+// is inline-eligible through the effective PREVIEW-slot representation-provider
+// capability (cinatra#1630 AC-3) — never a concrete MIME allowlist; the route
+// remains the 415/disposition enforcement point. `mime` reports the SELECTED
+// revision's MIME (a pinned older revision can differ from the artifact's latest)
+// so the neutral `ArtifactInlinePreview` renders the correct passive element. The
+// revision is the object's PAIRED `…RepresentationRevisionId` ref when present
+// (the pinned pair manual-mode revert needs), else the artifact's latest.
 // ---------------------------------------------------------------------------
 export type PortletArtifactBaseline = {
   artifactId: string;
@@ -182,14 +186,28 @@ export async function loadArtifactBaselinePortlet(args: {
       ? (data[revisionField] as string)
       : null;
   const representationRevisionId = pinnedRevision ?? current.latestRepresentationRevisionId;
+  // Resolve the SELECTED revision's MIME (a pinned revision may differ from
+  // current.mime) via the same serve resolver the byte route uses, then gate the
+  // inline preview href on the effective PREVIEW-slot capability. The preview byte
+  // route stays the enforcement point; this only avoids minting a doomed href.
+  const served = representationRevisionId
+    ? resolveArtifactVersionForServe({
+        orgId: authz.orgId,
+        artifactId: current.artifactId,
+        representationRevisionId,
+      })
+    : null;
+  const previewMime = served?.mime ?? null;
   const previewHref =
-    representationRevisionId && isPreviewInlineMime(current.mime)
+    representationRevisionId &&
+    previewMime &&
+    resolveArtifactPreviewDispatch({ orgId: authz.orgId, mime: previewMime }) !== null
       ? `/api/artifacts/${current.artifactId}/versions/${representationRevisionId}/preview`
       : null;
   return {
     artifactId: current.artifactId,
     title: current.title,
-    mime: current.mime,
+    mime: previewMime ?? current.mime,
     representationRevisionId,
     previewHref,
   };

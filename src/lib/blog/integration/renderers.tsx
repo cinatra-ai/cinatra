@@ -2,9 +2,10 @@
 // @cinatra-ai/asset-blog / integration / renderers
 // ---------------------------------------------------------------------------
 //
-// Server-only React components wired into the object-type registry for the
-// three blog types (blog-post, blog-post-idea, saved-media). Three slots per
-// type (listRow, card, detail) → nine components total.
+// Server-only React components wired into the object-type registry for the two
+// live blog types (blog-post, blog-post-idea) — three slots per type (listRow,
+// card, detail). The dead `saved-media` renderer slots were removed here
+// (cinatra#1630 AC-3): that type registers null renderers and has no writers.
 //
 // Constraints:
 //   - No "use client" directive — these components must render on the server
@@ -16,12 +17,10 @@
 //   - Use shadcn primitives + semantic tokens; avoid hardcoded palette classes.
 // ---------------------------------------------------------------------------
 
-import { Badge } from "@/components/ui/badge";
 import type { ObjectRendererSlotProps } from "@cinatra-ai/objects/renderer-types";
 import type {
   BlogPostDraftRecord,
   BlogPostIdeaRecord,
-  SavedMediaRecord,
 } from "../store";
 
 // ---------------------------------------------------------------------------
@@ -121,77 +120,9 @@ export function BlogPostIdeaDetail({ value }: ObjectRendererSlotProps<BlogPostId
   );
 }
 
-// ---------------------------------------------------------------------------
-// saved-media — image bytes live in `@cinatra-ai/blog-image-artifact`. The renderer slot
-// builds an artifact-content URL (`/api/artifacts/...`) — same pattern as
-// `image-panel.tsx` uses for inline post hero images. Slots are
-// preview-only; the URL is dereferenced by the browser, not server-rendered.
-// ---------------------------------------------------------------------------
-
-function buildMediaArtifactUrl(value: SavedMediaRecord): string | null {
-  if (!value.imageArtifactId || !value.imageRepresentationRevisionId) return null;
-  return `/api/artifacts/${encodeURIComponent(value.imageArtifactId)}/versions/${encodeURIComponent(value.imageRepresentationRevisionId)}/content`;
-}
-
-export function SavedMediaListRow({ value }: ObjectRendererSlotProps<SavedMediaRecord>) {
-  return (
-    <div className="flex items-center gap-3 py-2">
-      <span className="font-medium">{value.title}</span>
-      {value.kind ? (
-        <Badge className="rounded-full px-2 py-0.5 text-xs uppercase">{value.kind}</Badge>
-      ) : null}
-    </div>
-  );
-}
-
-export function SavedMediaCard({ value }: ObjectRendererSlotProps<SavedMediaRecord>) {
-  const src = buildMediaArtifactUrl(value);
-  return (
-    <article className="soft-panel rounded-card p-4">
-      {src ? (
-        // Native img tag — next/image requires configured domains; slots must stay config-free.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={src}
-          alt={value.title}
-          className="rounded-card h-32 w-full object-cover"
-        />
-      ) : (
-        <div
-          className="rounded-card bg-surface-muted h-32 w-full"
-          aria-label="Image preview unavailable"
-        />
-      )}
-      <p className="mt-2 text-sm font-medium">{value.title}</p>
-    </article>
-  );
-}
-
-export function SavedMediaDetail({ value }: ObjectRendererSlotProps<SavedMediaRecord>) {
-  const src = buildMediaArtifactUrl(value);
-  return (
-    <section className="soft-panel rounded-card flex flex-col gap-3 p-6">
-      <header>
-        <h2 className="text-2xl font-semibold">{value.title}</h2>
-      </header>
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={value.title} className="rounded-card max-h-96 object-contain" />
-      ) : (
-        <div
-          className="rounded-card bg-surface-muted flex h-48 w-full items-center justify-center text-xs text-muted-foreground"
-          aria-label="Image preview unavailable"
-        >
-          Image preview unavailable
-        </div>
-      )}
-      {value.description ? (
-        <p className="text-sm text-muted-foreground">{value.description}</p>
-      ) : null}
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">Kind</dt>
-        <dd>{value.kind}</dd>
-      </dl>
-    </section>
-  );
-}
+// NOTE: the `saved-media` renderer slots (SavedMediaListRow/Card/Detail) were
+// DELETED here (cinatra#1630 AC-3). They were dead — the `saved-media` type is
+// registered with null renderers and has no writers, and they re-implemented an
+// in-core inline-image preview off `/api/artifacts/.../content`. The neutral
+// capability-gated preview slot (`ArtifactInlinePreview`) is the replacement for
+// in-core inline-image reuse.
