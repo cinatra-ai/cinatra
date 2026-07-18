@@ -16,8 +16,10 @@
  *  - the status loader returns a MINIMAL post-scoped DTO (canned messages
  *    only; no jobId/postTitle/raw pipeline text; foreign runs surface only as
  *    busyWithOtherPost);
- *  - the baseline loader mints previewHref only for preview-inline MIMEs and
- *    prefers the object's PAIRED revision ref over the artifact's latest.
+ *  - the baseline loader mints previewHref only when the SELECTED revision's MIME
+ *    is inline-eligible through the PREVIEW-slot representation-provider capability
+ *    (cinatra#1630 AC-3), gating on the pinned revision's MIME (not the latest
+ *    summary MIME), and prefers the object's PAIRED revision ref over the latest.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -64,7 +66,21 @@ const h = vi.hoisted(() => {
       eligibleExtensions: [],
     })),
     resolveServeSpy: vi.fn(() => ({ storageKey: "k", mime: "image/png", sizeBytes: 1, originKind: "upload" })),
-    isPreviewInlineMimeSpy: vi.fn((mime: string) => mime === "image/png"),
+    // The neutral PREVIEW-slot capability the baseline loader gates previewHref on
+    // (cinatra#1630 AC-3) — non-null ⇒ inline-eligible. Mirrors the system image
+    // base (bounded to allowlisted image formats): png/webp resolve, bmp does not.
+    previewDispatchSpy: vi.fn((a: { mime: string }) =>
+      a.mime === "image/png" || a.mime === "image/webp"
+        ? {
+            tier: "extension",
+            packageName: "@cinatra-ai/image-artifact",
+            generatedKey: "@cinatra-ai/image-artifact::preview",
+            pattern: a.mime,
+            slot: "preview",
+            built: true,
+          }
+        : null,
+    ),
     startSpy: vi.fn(async () => ({ status: "running" })),
     cancelSpy: vi.fn(async () => ({ status: "stopped" })),
     postUpdateSpy: vi.fn(async () => ({ ok: true })),
@@ -87,7 +103,9 @@ vi.mock("@/lib/authz/enforce-resource-access", () => ({ enforceResourceAccess: h
 vi.mock("@/lib/artifacts/artifact-service", () => ({ getArtifact: h.getArtifactSpy, listArtifacts: vi.fn(() => []) }));
 vi.mock("@/lib/artifacts/artifact-read", () => ({
   resolveArtifactVersionForServe: h.resolveServeSpy,
-  isPreviewInlineMime: h.isPreviewInlineMimeSpy,
+}));
+vi.mock("@/app/artifacts/[id]/renderer-resolution", () => ({
+  resolveArtifactPreviewDispatch: h.previewDispatchSpy,
 }));
 vi.mock("@/lib/artifacts/artifact-authoring", () => ({ authorArtifact: vi.fn() }));
 vi.mock("@/lib/blog/store", () => ({ readBlogPostsProjectById: h.readProjectSpy }));
@@ -118,7 +136,7 @@ beforeEach(() => {
   h.jobActiveSpy.mockClear().mockImplementation(async () => true);
   h.getArtifactSpy.mockClear();
   h.resolveServeSpy.mockClear();
-  h.isPreviewInlineMimeSpy.mockClear();
+  h.previewDispatchSpy.mockClear();
   h.startSpy.mockClear();
   h.cancelSpy.mockClear();
   h.postUpdateSpy.mockClear();
@@ -363,8 +381,8 @@ describe("loadBinaryGenerationStatusPortlet — minimal post-scoped DTO", () => 
   });
 });
 
-describe("loadArtifactBaselinePortlet — preview-safe href minting", () => {
-  it("mints previewHref from the object's PAIRED revision ref for allowlisted MIMEs", async () => {
+describe("loadArtifactBaselinePortlet — capability-gated href minting", () => {
+  it("mints previewHref from the object's PAIRED revision ref when the PREVIEW capability is effective", async () => {
     const res = await loadArtifactBaselinePortlet({ objectId: "obj1", parentObjectField: "imageArtifactId" });
     expect(res).toMatchObject({
       artifactId: "img-old",
@@ -372,6 +390,9 @@ describe("loadArtifactBaselinePortlet — preview-safe href minting", () => {
       representationRevisionId: "img-rev-old",
       previewHref: "/api/artifacts/img-old/versions/img-rev-old/preview",
     });
+    // Eligibility resolves via the PREVIEW-slot capability keyed on the SELECTED
+    // revision's MIME (from the serve resolver), never a concrete host allowlist.
+    expect(h.previewDispatchSpy).toHaveBeenCalledWith({ orgId: "sess-org", mime: "image/png" });
   });
 
   it("falls back to the artifact's latest revision when the object has no paired ref", async () => {
@@ -385,10 +406,27 @@ describe("loadArtifactBaselinePortlet — preview-safe href minting", () => {
     expect(res?.previewHref).toBe("/api/artifacts/img-old/versions/img-rev-latest/preview");
   });
 
-  it("withholds previewHref for non-allowlisted MIMEs", async () => {
-    h.getArtifactSpy.mockImplementationOnce(() => ({ ...h.getArtifactSpy(), mime: "image/bmp" }) as never);
+  it("gates on the SELECTED revision's MIME, not the artifact's latest summary MIME", async () => {
+    // getArtifact() summary reports image/png (latest); the PINNED revision the
+    // manual-mode revert needs actually resolves to image/webp — the loader must
+    // gate + report the pinned revision's MIME (Codex convergence, cinatra#1630).
+    h.resolveServeSpy.mockImplementationOnce(() => ({ storageKey: "k", mime: "image/webp", sizeBytes: 1, originKind: "upload" }));
+    const res = await loadArtifactBaselinePortlet({ objectId: "obj1", parentObjectField: "imageArtifactId" });
+    expect(res?.mime).toBe("image/webp");
+    expect(res?.previewHref).toBe("/api/artifacts/img-old/versions/img-rev-old/preview");
+    expect(h.previewDispatchSpy).toHaveBeenCalledWith({ orgId: "sess-org", mime: "image/webp" });
+  });
+
+  it("withholds previewHref (fails closed) when the selected revision's MIME is not preview-capable", async () => {
+    h.resolveServeSpy.mockImplementationOnce(() => ({ storageKey: "k", mime: "image/bmp", sizeBytes: 1, originKind: "upload" }));
     const res = await loadArtifactBaselinePortlet({ objectId: "obj1", parentObjectField: "imageArtifactId" });
     expect(res?.previewHref).toBeNull();
     expect(res?.mime).toBe("image/bmp");
+  });
+
+  it("withholds previewHref when the selected revision does not resolve", async () => {
+    h.resolveServeSpy.mockImplementationOnce(() => null as never);
+    const res = await loadArtifactBaselinePortlet({ objectId: "obj1", parentObjectField: "imageArtifactId" });
+    expect(res?.previewHref).toBeNull();
   });
 });

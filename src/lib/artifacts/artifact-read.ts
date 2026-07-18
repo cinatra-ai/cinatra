@@ -119,29 +119,33 @@ LIMIT 1`,
   };
 }
 
-// MIMEs the preview route's MIME-aware handlers can safely render
-// inline under a sandbox CSP. The download route NEVER uses this allowlist —
-// it always serves with `Content-Disposition: attachment`. By design:
-// `downloadDispositionFor` + `previewDispositionFor` are two distinct
-// helpers so neither can be subverted into the other's behaviour by a
-// future MIME-allowlist edit; the helpers are also unit-paired in
-// `__tests__/dispositions.test.ts` to catch any future regression where
-// one's behaviour leaks into the other.
+// The host SAFE-TRANSPORT FORMAT SET — the concrete MIMEs the four build-bundled
+// SYSTEM `-artifact` bases (image/pdf/audio/video) are permitted to inline-serve.
 //
-// HTML stays excluded because it would execute scripts even under the
-// preview sandbox (sandbox blocks scripts; HTML preview is therefore a
-// metadata-card fallback, not an inline render). PDF is sandbox-friendly
-// in `<embed>` form (browser's bundled PDF viewer); the preview route's
-// CSP is `sandbox` (no privileges) which most browsers tolerate for the
-// PDF viewer because it runs in its own isolated process.
+// ROLE (cinatra#1630 AC-2, the preview-serving decoupling): this set is NO LONGER
+// the preview route's eligibility gate. Preview eligibility now resolves through
+// the effective representation-provider CAPABILITY (`isInlineTransportEligible`,
+// `src/app/artifacts/[id]/renderer-resolution.ts`) — so an admitted marketplace
+// preview provider can add a previewable type WITHOUT a host edit, and an
+// archived/retired provider fails closed. What this set still does is BOUND the
+// system bases' WILDCARD providers: the boot registrar
+// (`system-artifact-renderer-registrar.ts`) expands each base's declared
+// `image/*`/`audio/*`/`video/*` to exactly these concrete MIMEs, so a raw wildcard
+// can never claim a row the byte transport cannot safely render (e.g. `image/bmp`,
+// `audio/midi`, `video/quicktime`). Concrete provider declarations (the pdf base's
+// exact `application/pdf`, or a moderated marketplace provider) are trusted as
+// declared + admitted; the wildcard bound applies only to the system bases.
 //
-// Video/audio entries are passive media — no script surface under the
-// preview CSP; the browser's media stack renders them (`<video>`/`<audio>`
-// in the detail-page handlers, range-served by the preview route). The
-// set stays exact-string (NO wildcard `video/*` matching) and is limited
-// to containers browsers broadly play natively. `video/quicktime` and
-// `video/x-msvideo` stay excluded: codec support is too inconsistent for
-// an inline player, so they keep the metadata-card + download fallback.
+// The download route NEVER consults this set — it always serves
+// `Content-Disposition: attachment`. `downloadDispositionFor` + `previewDispositionFor`
+// stay two distinct helpers so neither can be subverted into the other's behaviour;
+// they are unit-paired in `__tests__/dispositions.test.ts`.
+//
+// HTML is absent because it would execute scripts even under the preview sandbox
+// (metadata-card fallback, not an inline render). Video/audio entries are passive
+// media (no script surface under the sandbox CSP), range-served by the preview
+// route. The set stays exact-string (NO wildcard matching); `video/quicktime` /
+// `video/x-msvideo` stay out (codec support too inconsistent for an inline player).
 const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   "text/markdown",
   "text/x-markdown",
@@ -166,21 +170,12 @@ const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   "audio/aac",
 ]);
 
-/** Test-only export so unit tests can reason about the allowlist without
- * importing the production set directly (keeps the production set
- * private-by-convention). */
+/** Test-only export so unit tests + the boot registrar can reason about the
+ * host safe-transport format set without importing the production constant
+ * directly (keeps the production set private-by-convention). This is the
+ * system-base wildcard bound (see the constant's doc) — NOT the preview route's
+ * eligibility gate, which resolves through the representation-provider capability. */
 export const PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS = PREVIEW_INLINE_MIME_ALLOWLIST;
-
-/**
- * True when `mime` may be served inline by the preview route. Server-side
- * consumers (e.g. the dashboard portlet loaders) use this to decide whether
- * to hand a client a `/preview` href at all. The route itself stays the
- * enforcement point (415 short-circuit + `previewDispositionFor` fallback);
- * this predicate only avoids minting hrefs that would 415.
- */
-export function isPreviewInlineMime(mime: string): boolean {
-  return PREVIEW_INLINE_MIME_ALLOWLIST.has(mime);
-}
 
 function sanitizeFilename(filename: string): string {
   return filename.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "artifact";
@@ -201,18 +196,25 @@ export function downloadDispositionFor(_mime: string, filename: string): string 
 }
 
 /**
- * Disposition header for the PREVIEW route. Returns `inline` if and only
- * if the MIME is in `PREVIEW_INLINE_MIME_ALLOWLIST`; otherwise falls
- * through to `attachment` as the safe default (the preview route also
- * 415s when called with a non-allowlisted MIME — this helper is the
- * second layer of defence).
+ * Disposition header for the PREVIEW route. Returns `inline` when the caller
+ * has resolved the representation as inline-transport eligible (through the
+ * representation-provider capability — see `isInlineTransportEligible`),
+ * otherwise `attachment` as the safe default. Takes the RESOLVED eligibility
+ * boolean rather than the MIME so the disposition can never re-derive a stale
+ * concrete-MIME allowlist (cinatra#1630 AC-2): eligibility is decided once, at
+ * the capability, and the route 415s an ineligible representation before this
+ * helper is reached — so on the served path this is always `inline`.
+ *
+ * Guardrail: this helper and `downloadDispositionFor` stay two distinct
+ * helpers (unit-paired in `dispositions.test.ts`) so a preview refactor can
+ * never make the download route serve `inline`.
  *
  * Used by
  * `src/app/api/artifacts/[artifactId]/versions/[versionId]/preview/route.ts`.
  */
-export function previewDispositionFor(mime: string, filename: string): string {
+export function previewDispositionFor(inlineEligible: boolean, filename: string): string {
   const safe = sanitizeFilename(filename);
-  return PREVIEW_INLINE_MIME_ALLOWLIST.has(mime)
+  return inlineEligible
     ? `inline; filename="${safe}"`
     : `attachment; filename="${safe}"`;
 }
