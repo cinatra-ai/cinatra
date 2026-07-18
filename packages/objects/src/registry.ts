@@ -6,11 +6,46 @@ import { OBJECT_TYPE_NAMESPACE_RE, isTombstonedObjectTypeId } from "./namespace"
 // ---------------------------------------------------------------------------
 
 /**
+ * Structured install-time conflict raised when a SECOND definer tries to define
+ * an object type another definer already registered (the ratified one-defining-
+ * extension-per-type model, epic #1785). A duplicate definition is a real
+ * misconfiguration — two extensions (or an extension and a host built-in)
+ * defining the same type id — and MUST surface, never silently clobber the
+ * first definition (empirically: a hybrid artifact pack's cross-namespace
+ * `objectTypes` claim silently replaced the host `@cinatra-ai/email:body`
+ * content/identityKey definition with a generic report/no-identityKey one, and
+ * dropped the `@cinatra-ai/email:sent-email` idempotencyKey identity). A
+ * re-registration by the SAME definer (reboot / re-install / dev-watcher rescan)
+ * is NOT a conflict — it stays an idempotent replace.
+ *
+ * `existingDefiner` / `attemptedDefiner` are the owning package names, or `null`
+ * for a host / built-in (provenance-less) registration.
+ */
+export class ObjectTypeDefinitionConflictError extends Error {
+  readonly code = "OBJECT_TYPE_DEFINITION_CONFLICT" as const;
+  constructor(
+    readonly typeId: string,
+    readonly existingDefiner: string | null,
+    readonly attemptedDefiner: string | null,
+  ) {
+    super(
+      `Object type '${typeId}' is already defined by ${existingDefiner ?? "the host (built-in)"}; ` +
+        `${attemptedDefiner ?? "the host (built-in)"} cannot redefine it. ` +
+        `One defining extension per type (epic #1785) — a duplicate definition is an install-time conflict, not a silent replace.`,
+    );
+    this.name = "ObjectTypeDefinitionConflictError";
+  }
+}
+
+/**
  * Runtime registry of object type definitions. Mirrors the contract of
  * `fieldRendererRegistry`:
  *
- * - Idempotent replace-by-id (calling `register` twice with the same `type`
- *   replaces the first entry).
+ * - One defining registrar per type (epic #1785): a re-registration by the SAME
+ *   definer (same `packageName`, or both host/built-in) is an idempotent replace;
+ *   a registration by a DIFFERENT definer of an already-registered type is a
+ *   structured install-time CONFLICT (`ObjectTypeDefinitionConflictError`), never
+ *   a silent clobber.
  * - Dev-mode `console.warn` when a non-namespaced ID is registered.
  * - Permanent-tombstone backstop (cinatra#1789): a retired dynamic-namespace
  *   id (`@dynamic/types:` / `@cinatra-ai/dynamic:`) is NEVER registered (skip +
@@ -67,14 +102,35 @@ class ObjectTypeRegistryImpl {
         `Object type ID '${def.type}' is not namespaced. Use '@scope/package:local-id' format.`,
       );
     }
-    // Idempotent replace-by-id. Cast to unknown for internal storage — callers
-    // retrieve via resolve() which returns ObjectTypeDefinition<unknown>.
+    // CONFLICT-ON-DUPLICATE (epic #1785): if this type is already defined, only
+    // the ORIGINAL definer may re-register it. `packageByType.get` returns the
+    // owning package or `undefined` (a host / built-in registration). A caller
+    // with a different definer — a package clobbering a host built-in, a package
+    // clobbering another package, or a host taking over a package's type — raises
+    // a structured install-time conflict instead of silently replacing the prior
+    // definition. Same-definer re-registration (reboot / re-install / dev-watcher
+    // rescan, the bridge's reconcile-then-re-register) stays an idempotent
+    // replace. Normalize both sides to `null` so host↔host compares equal.
+    if (this.entries.has(def.type)) {
+      const existingDefiner = this.packageByType.get(def.type) ?? null;
+      const attemptedDefiner = packageName ?? null;
+      if (existingDefiner !== attemptedDefiner) {
+        throw new ObjectTypeDefinitionConflictError(
+          def.type,
+          existingDefiner,
+          attemptedDefiner,
+        );
+      }
+    }
+    // Idempotent replace-by-id (same definer). Cast to unknown for internal
+    // storage — callers retrieve via resolve() which returns
+    // ObjectTypeDefinition<unknown>.
     this.entries.set(def.type, def as ObjectTypeDefinition<unknown>);
     if (packageName) {
       this.packageByType.set(def.type, packageName);
     } else {
-      // A re-registration WITHOUT a package clears any stale provenance for this
-      // type (e.g. a host re-register replacing a former package registration).
+      // A host re-register of a host-owned type keeps it provenance-less (the
+      // conflict guard above already rejected a host takeover of a PACKAGE type).
       this.packageByType.delete(def.type);
     }
   }

@@ -63,10 +63,23 @@ type EmailSendReceipt = {
   sentAt: string;
 };
 
+// Soft-provenance correlation threaded from the campaign send loop into the
+// sent-email object writer (cinatra#1456). Structural match of the SDK's
+// `EmailTransportCorrelation`; kept local so this module stays free of a
+// value/type import from @/lib types for vitest.
+type SendCorrelation = {
+  campaignId?: string;
+  contactId?: string;
+  runId?: string;
+};
+
 export type TriggerEmailSendDeps = {
   getCampaign: (campaignId: string) => Promise<Campaign | null>;
   getDraftsByIds: (draftIds: string[]) => Promise<Draft[]>;
-  sendEmail: (message: EmailMessage, options?: { userId?: string }) => Promise<EmailSendReceipt>;
+  sendEmail: (
+    message: EmailMessage,
+    options?: { userId?: string; correlation?: SendCorrelation },
+  ) => Promise<EmailSendReceipt>;
   // Fetch a bundle envelope by ref. Defaults to the deterministic objects
   // client (`fetchObjectsByRef`). Injectable so the initial-send fan-out is
   // unit-testable without loading `@cinatra-ai/objects`.
@@ -696,6 +709,16 @@ async function runInitialSend(args: {
       if (!recipientEmail) continue;
       const subject = draft.subject ?? "(no subject)";
       const body = draft.body ?? draft.bodyHtml ?? "";
+      // Thread campaign / contact / run correlation onto the send so the
+      // facade's sent-email object writer lands a fully-correlated record for
+      // the thread / campaign / contact views (cinatra#1456). `contactId` is
+      // the provider-native id on the draft item (connector-scoped on the
+      // record by its `connectorId`); `runScopeId` is the fan-out run frame
+      // (may be null → the field is omitted, never sent as "").
+      const contactId =
+        typeof draft.contactId === "string" && draft.contactId.trim() !== ""
+          ? draft.contactId.trim()
+          : undefined;
       await sendEmail(
         {
           to: [recipientEmail],
@@ -703,7 +726,14 @@ async function runInitialSend(args: {
           textBody: body,
           fromEmail: input.senderEmail,
         },
-        { userId: actor.userId },
+        {
+          userId: actor.userId,
+          correlation: {
+            campaignId: input.campaignId,
+            ...(runScopeId ? { runId: runScopeId } : {}),
+            ...(contactId ? { contactId } : {}),
+          },
+        },
       );
       sentCount += 1;
     }

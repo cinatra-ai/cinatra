@@ -96,7 +96,7 @@ export async function collectAllPrimitiveHandlers() {
     // retired entity-accounts / entity-contacts / lists packages); the CRM
     // surface is the crm_* facade. Spreads removed with the package deletion.
     // Mounts objects_save + objects_classify + objects_update + objects_delete
-    // + objects_list + objects_get + objects_type_register + objects_types_list.
+    // + objects_list + objects_get + objects_types_list.
     ...createObjectsPrimitiveHandlers(),
     ...createSkillsPrimitiveHandlers(),
     // Manifest-discovered connector primitive handlers (manifest slug order).

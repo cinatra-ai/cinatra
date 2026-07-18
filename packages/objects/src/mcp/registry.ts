@@ -33,13 +33,8 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
     inputSchema: schemas.objectsClassifySchema,
   },
   "objects_types_list": {
-    description: "List all registered object types (static + dynamic).",
+    description: "List all registered object types.",
     inputSchema: schemas.objectsTypesListSchema,
-  },
-  "objects_type_register": {
-    description:
-      "Register a new dynamic object type as active. Idempotent on repeat with the same typeId. Used by agents and external systems to declare types deliberately (skips the classifier 'proposed' review queue).",
-    inputSchema: schemas.objectsTypeRegisterSchema,
   },
   // Data Safety: Undo & Versioning MCP primitives.
   "change_set_undo": {

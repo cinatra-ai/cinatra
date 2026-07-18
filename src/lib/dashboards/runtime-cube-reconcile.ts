@@ -22,6 +22,8 @@ import {
   registerRuntimePortletKind,
   unregisterRuntimePortletKindsForPackage,
   hostBundledPortletKinds,
+  isInstallScopedPortletAlias,
+  portletAliasNamespace,
 } from "@cinatra-ai/dashboards/extension-materialization";
 import {
   basePublishedMembersAccessor,
@@ -99,6 +101,18 @@ export async function reconcileRegisterRuntimeContributions(input: {
   const bundledKinds = new Set(hostBundledPortletKinds());
   try {
     for (const pk of input.portletKinds) {
+      // AC4 install-scoped namespacing: an alias id must be namespaced to its
+      // source package (fail-closed here, at the install boundary, so a bare /
+      // squatted id never reaches the registry). The registry's own cross-source
+      // collision reject is the second line of defence.
+      if (!isInstallScopedPortletAlias(pk.kind, input.packageName)) {
+        unregisterRuntimeCubesForPackage(input.packageName);
+        unregisterRuntimePortletKindsForPackage(input.packageName);
+        throw new Error(
+          `runtime portlet kind reconcile rejected: portlet_kind_not_namespaced: alias "${pk.kind}" ` +
+            `must be install-scoped (namespaced "${portletAliasNamespace(input.packageName)}__<local>") for package "${input.packageName}"`,
+        );
+      }
       const result = registerRuntimePortletKind(
         {
           kind: pk.kind,

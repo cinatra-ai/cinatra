@@ -54,6 +54,12 @@ import {
 } from "./extension/dashboard-config-v12";
 import { registerCorePortletKinds } from "./portlets/kinds";
 import { getPortletKindDescriptor, isRenderOnlyPortletKind, validatePortletConfig } from "./portlets/registry";
+import { collectUnsafeDashboardLinks } from "./extension/portlet-link-guard";
+import {
+  threeWayMergeDashboardConfig,
+  computeAppliedDefaultHash,
+  type DashboardConfigLike,
+} from "./contribution-upgrade-merge";
 import {
   isV12Envelope,
   normalizeDcBodyForWrite,
@@ -155,7 +161,8 @@ type AuditOp =
   | "dashboards.materialize_instance"
   | "dashboards.extension_archive"
   | "dashboards.extension_restore"
-  | "dashboards.extension_adopt";
+  | "dashboards.extension_adopt"
+  | "dashboards.extension_upgrade";
 
 async function writeAudit(
   tx: DashboardsDb,
@@ -1297,6 +1304,14 @@ function assertConfigV12(config: unknown, getPortletKind?: PortletKindLookup) {
         .join("; "),
     );
   }
+  // Link/URL safety (cinatra#1628, S11c / AC4): reject a portlet config carrying
+  // an unsafe-scheme URL (javascript:/data:/vbscript:/… — stored-XSS + local-file
+  // vectors), fail-closed on EVERY write/install path. Runs against the validated
+  // config so materialize + operator/agent writes all pass through it.
+  const linkErrors = collectUnsafeDashboardLinks(res.config);
+  if (linkErrors.length > 0) {
+    throw new DashboardConfigInvalidError(linkErrors.join("; "));
+  }
   // Per-kind structured config validation (incl. unknown-kind). Only
   // run against the real registry (when no custom lookup was injected).
   if (!getPortletKind) {
@@ -1670,5 +1685,197 @@ export async function adoptExtensionDashboards(
       });
     }
     return rows.length;
+  });
+}
+
+
+// ---------------------------------------------------------------------------
+// 3-WAY UPGRADE MERGE writer (cinatra#1628, S11c / remaining AC2).
+//
+// When a contribution's default changes (a new contributionVersion shipping a
+// new sidecar default), upgrade each LIVE row of that contribution IN PLACE via
+// the baseline-backed 3-way merge (`contribution-upgrade-merge.ts`): base =
+// applied_default_json, theirs = the new default, ours = config_json. User
+// customization is never clobbered; the baseline is re-based to theirs and the
+// applied_contribution_version stamped. Single-writer + same-TX audit.
+//
+// BASELINE SEEDING: a row with NO applied_default_json (a legacy/adopted row that
+// predates baseline capture) cannot be safely 3-way merged (no common ancestor).
+// So the first upgrade SEEDS the baseline (applied_default_json = theirs) WITHOUT
+// touching config_json — the user's current config is preserved verbatim, and the
+// NEXT upgrade has a real base to merge against. The conservative no-clobber
+// bootstrap.
+//
+// FAIL-CLOSED INTEGRITY: the merged config is re-validated structurally
+// (validateDashboardConfigV12 — wiring integrity, no registry lookup) BEFORE it is
+// written; a merge that would produce a dangling input binding (e.g. theirs
+// removed a fixed-slot source the user's portlet still binds) is REJECTED and that
+// row is left untouched (surfaced in `failed`), never persisted broken.
+// ---------------------------------------------------------------------------
+
+export type UpgradeExtensionDashboardsInput = {
+  readonly organizationId: string;
+  /** The contribution lineage id whose rows are upgraded (template + instances). */
+  readonly contributionId: string;
+  /** The NEW extension default (theirs) — the merge target. MUST be pre-validated
+   *  by the caller (the materializer/reconciler validates the sidecar). */
+  readonly newDefault: DashboardConfigLike;
+  /** The new contribution DATA version, stamped as provenance. */
+  readonly newContributionVersion: number;
+  readonly actor: DashboardActor;
+};
+
+export type UpgradeExtensionDashboardsResult = {
+  /** Rows whose config_json was 3-way merged + re-based. */
+  readonly merged: number;
+  /** Rows that only SEEDED a baseline (no prior applied_default_json). */
+  readonly seeded: number;
+  /** Rows already at this default, or where the merge changed nothing (re-based). */
+  readonly unchanged: number;
+  /** Rows left untouched because the merged config failed structural re-validation. */
+  readonly failed: number;
+};
+
+/**
+ * Upgrade every LIVE (published) row of a contribution in an org to a new default
+ * via the baseline-backed 3-way merge. Idempotent (a row already at this
+ * default+version is skipped) and no-clobber (user customization always wins).
+ */
+export async function upgradeExtensionDashboards(
+  tx: DashboardsDb | undefined,
+  input: UpgradeExtensionDashboardsInput,
+): Promise<UpgradeExtensionDashboardsResult> {
+  const newHash = computeAppliedDefaultHash(input.newDefault);
+  return withDashboardsTx(tx, async (q) => {
+    // Lock every matched row FOR UPDATE so a concurrent user edit (updateDashboard
+    // uses SELECT FOR UPDATE too) cannot interleave between this read and the
+    // merge write — the no-clobber guarantee holds under concurrency. A user edit
+    // that commits first is read here as `ours`; one that arrives after blocks
+    // until this tx commits and then re-bases on the merged result.
+    const rows = await q
+      .select()
+      .from(dashboards)
+      .where(
+        and(
+          eq(dashboards.organizationId, input.organizationId),
+          eq(dashboards.contributionId, input.contributionId),
+          sql`${dashboards.extensionId} IS NOT NULL`,
+          eq(dashboards.status, "published"),
+        ),
+      )
+      .for("update");
+
+    let merged = 0;
+    let seeded = 0;
+    let unchanged = 0;
+    let failed = 0;
+    for (const row of rows) {
+      // Idempotent: already at this exact default + version.
+      if (
+        row.appliedDefaultHash === newHash &&
+        row.appliedContributionVersion === input.newContributionVersion
+      ) {
+        unchanged += 1;
+        continue;
+      }
+
+      const base = (row.appliedDefaultJson ?? null) as unknown as DashboardConfigLike | null;
+      if (base === null) {
+        // No baseline -> SEED only (never clobber the user's current config).
+        await q
+          .update(dashboards)
+          .set({
+            appliedDefaultJson: input.newDefault as never,
+            appliedDefaultHash: newHash,
+            appliedContributionVersion: input.newContributionVersion,
+            updatedBy: input.actor.userId,
+            updatedAt: new Date(),
+          })
+          .where(eq(dashboards.id, row.id));
+        await writeAudit(q, {
+          operation: "dashboards.extension_upgrade",
+          actor: input.actor,
+          row,
+          metadata: { contributionId: input.contributionId, mode: "seed-baseline", appliedContributionVersion: input.newContributionVersion },
+        });
+        seeded += 1;
+        continue;
+      }
+
+      const ours = (row.configJson ?? { portlets: [] }) as unknown as DashboardConfigLike;
+      const { merged: mergedConfig, report, unchanged: noChange } = threeWayMergeDashboardConfig({
+        base,
+        theirs: input.newDefault,
+        ours,
+      });
+
+      // FAIL-CLOSED integrity at the WRITE boundary (never trust a caller-side
+      // prevalidation contract): re-validate the merged structure + wiring AND run
+      // the AC4 link/URL guard on the merged result. A dangling binding (theirs
+      // removed a source the user still consumes) OR an unsafe link leaves the row
+      // untouched (surfaced in `failed`), never persisted.
+      const check = validateDashboardConfigV12(mergedConfig);
+      const linkErrors = collectUnsafeDashboardLinks(
+        mergedConfig as unknown as Parameters<typeof collectUnsafeDashboardLinks>[0],
+      );
+      if (!check.ok || linkErrors.length > 0) {
+        failed += 1;
+        continue;
+      }
+
+      if (noChange) {
+        // Merge changed nothing, but the baseline/version moved -> re-base (so the
+        // NEXT upgrade has a fresh base) without a spurious config write.
+        await q
+          .update(dashboards)
+          .set({
+            appliedDefaultJson: input.newDefault as never,
+            appliedDefaultHash: newHash,
+            appliedContributionVersion: input.newContributionVersion,
+            updatedBy: input.actor.userId,
+            updatedAt: new Date(),
+          })
+          .where(eq(dashboards.id, row.id));
+        await writeAudit(q, {
+          operation: "dashboards.extension_upgrade",
+          actor: input.actor,
+          row,
+          metadata: { contributionId: input.contributionId, mode: "rebase-only", appliedContributionVersion: input.newContributionVersion },
+        });
+        unchanged += 1;
+        continue;
+      }
+
+      const [updated] = await q
+        .update(dashboards)
+        .set({
+          configJson: mergedConfig as never,
+          appliedDefaultJson: input.newDefault as never,
+          appliedDefaultHash: newHash,
+          appliedContributionVersion: input.newContributionVersion,
+          dashboardVersion: row.dashboardVersion + 1,
+          updatedBy: input.actor.userId,
+          updatedAt: new Date(),
+        })
+        .where(eq(dashboards.id, row.id))
+        .returning();
+      await writeAudit(q, {
+        operation: "dashboards.extension_upgrade",
+        actor: input.actor,
+        row: updated,
+        metadata: {
+          contributionId: input.contributionId,
+          mode: "merge",
+          added: report.added.length,
+          updated: report.updated.length,
+          removed: report.removed.length,
+          keptCustomized: report.keptCustomized.length,
+          conflicts: report.conflicts.length,
+          appliedContributionVersion: input.newContributionVersion,
+        },
+      });
+      merged += 1;
+    }
+    return { merged, seeded, unchanged, failed };
   });
 }

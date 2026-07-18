@@ -26,6 +26,7 @@ import { createSessionObjectsClient } from "@cinatra-ai/objects";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
+import type { EmailTransportCorrelation } from "@cinatra-ai/sdk-extensions";
 
 /**
  * These sender-identity reads run on a system/registration path with no user
@@ -239,6 +240,28 @@ type SentEmailMessageLike = {
 };
 
 /**
+ * Narrow a correlation envelope to its NON-EMPTY string fields, so a blank or
+ * whitespace-only id never lands on the record (an empty `campaignId` would
+ * otherwise pollute a campaign view with a phantom "" bucket). Returns only the
+ * keys actually present — the caller spreads the result so absent correlation
+ * adds nothing to `rawData`.
+ */
+function correlationFields(
+  correlation: EmailTransportCorrelation | undefined,
+  keys: ReadonlyArray<keyof EmailTransportCorrelation>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!correlation) return out;
+  for (const key of keys) {
+    const value = correlation[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      out[key] = value.trim();
+    }
+  }
+  return out;
+}
+
+/**
  * Best-effort write of the sent-email object after a successful
  * provider.send(). The facade calls this and swallows errors — the email
  * has already been delivered by this point, so failure here only loses
@@ -249,6 +272,13 @@ type SentEmailMessageLike = {
  * synthesized as `email-send:<providerId>:<providerMessageId>` — a provider
  * message id is unique within a provider, so this is stable + collision-free
  * across recipients. The key does not include recipient and does not need to.
+ *
+ * cinatra#1456: when the send carried campaign / contact / run correlation
+ * (the campaign send loop threads it through the facade), those ids are
+ * persisted onto the record as SOFT provenance — plain id strings, never
+ * artifact references — so the thread / campaign / contact views resolve from
+ * an indexed field instead of a client-side scan. Absent correlation (platform
+ * or test sends) simply omits the fields; it never fails the write.
  */
 async function saveSentEmailObject(input: {
   msg: unknown;
@@ -259,6 +289,7 @@ async function saveSentEmailObject(input: {
     userId?: string;
     orgId?: string;
   };
+  correlation?: EmailTransportCorrelation;
 }): Promise<void> {
   // Defense-in-depth. The facade already wraps this callback in `.catch()`, but
   // a best-effort writer must be robust regardless of caller — never let an
@@ -283,11 +314,95 @@ async function saveSentEmailObject(input: {
         providerThreadId: receipt.providerThreadId,
         internetMessageId: receipt.internetMessageId,
         sentAt: receipt.sentAt,
+        // Soft-provenance correlation (cinatra#1456). Spread AFTER the transport
+        // fields; each key is present only when a non-empty id was carried.
+        ...correlationFields(input.correlation, ["campaignId", "contactId", "runId"]),
       },
     });
   } catch (err) {
     console.warn(
       `[email-routing] sent-email object write failed (send already succeeded): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Received-reply object writer
+// ---------------------------------------------------------------------------
+
+type ReceivedReplyMatchLike = {
+  providerId: string;
+  providerMessageId: string;
+  providerThreadId?: string;
+  internetMessageId?: string;
+  fromEmail: string;
+  subject: string;
+  snippet?: string;
+  receivedAt: string;
+};
+
+/**
+ * Best-effort write of a `@cinatra-ai/email:received-reply` object when a reply
+ * lookup surfaces a match (cinatra#1456). Symmetric to the sent-email writer:
+ * the reply watcher already delivered the observation, so a persistence failure
+ * here only loses the semantic record and NEVER changes the lookup result the
+ * caller receives.
+ *
+ * Identity key on the received-reply type is `internetMessageId` (globally
+ * unique) with a `(connectorId, providerMessageId)` composite fallback, so a
+ * re-observed reply updates its row instead of duplicating.
+ *
+ * `threadId` is written as the DERIVED correlation key
+ * `<connectorId>:<providerThreadId>` — the SAME identity `@cinatra-ai/email:thread`
+ * uses — so a reply and its originating sends resolve to one thread bucket. It
+ * is a correlation key, never an artifact id (issue #1456: `threadId` redefined
+ * as a derived key). Relate-back `campaignId` / `contactId` come from the sent
+ * thread the watcher was polling (soft provenance, connector-scoped by
+ * `connectorId`); a missing target never affects read / pin / delete / GC.
+ */
+async function saveReceivedReplyObject(input: {
+  match: unknown;
+  routing: {
+    connectorId: string;
+    userId?: string;
+    orgId?: string;
+  };
+  correlation?: EmailTransportCorrelation;
+}): Promise<void> {
+  try {
+    const match = input.match as ReceivedReplyMatchLike;
+    const { objectsClient } = await import("@cinatra-ai/objects");
+    const connectorId = input.routing.connectorId;
+    // Derived thread correlation key: (connectorId, providerThreadId). Matches
+    // the email:thread identity so sends + replies share one bucket. Omitted
+    // when the provider surfaced no thread id (a bare reply still persists,
+    // just uncorrelated to a thread).
+    const providerThreadId =
+      typeof match.providerThreadId === "string" && match.providerThreadId.trim() !== ""
+        ? match.providerThreadId.trim()
+        : undefined;
+    const threadId = providerThreadId ? `${connectorId}:${providerThreadId}` : undefined;
+    await objectsClient.save({
+      typeHint: "@cinatra-ai/email:received-reply",
+      rawData: {
+        connectorId,
+        providerMessageId: match.providerMessageId,
+        providerThreadId,
+        internetMessageId: match.internetMessageId,
+        fromEmail: match.fromEmail,
+        subject: match.subject,
+        snippet: match.snippet,
+        receivedAt: match.receivedAt,
+        ...(threadId ? { threadId } : {}),
+        // Relate-back correlation (campaign / contact) the caller already knows
+        // from the sent thread. runId is a send-side frame with no meaning on a
+        // reply, so it is deliberately excluded here.
+        ...correlationFields(input.correlation, ["campaignId", "contactId"]),
+      },
+    });
+  } catch (err) {
+    console.warn(
+      `[email-routing] received-reply object write failed (reply already observed): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -308,6 +423,7 @@ export function registerEmailProviders(): void {
       resolveConnectorId,
       applyDevModeOverride,
       saveSentEmailObject,
+      saveReceivedReplyObject,
     },
   });
 }

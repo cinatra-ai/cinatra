@@ -10,7 +10,10 @@ import {
 import { GENERATED_ARTIFACT_RENDERERS } from "@/lib/generated/artifact-renderers";
 import { PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS } from "@/lib/artifacts/artifact-read";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
-import { reconcileSystemRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
+import {
+  reconcileSystemRepresentationProviders,
+  isSystemArtifactRendererPackage,
+} from "@/lib/artifacts/system-artifact-renderer-registrar";
 import {
   buildDigestPinnedUrl,
   type SerializedRuntimeRendererDescriptor,
@@ -207,17 +210,60 @@ export function resolveArtifactDispatchInputs(args: {
 }
 
 /**
- * The neutral PREVIEW seam (AC-6): resolve a representation preview for a core
- * reuse site, with a core fallback. Returns the representation resolution or
- * null (⇒ the caller uses its core fallback). Core never imports extension
- * pixels — the guarded import happens in the loader only. The reuse-site wiring
- * (portlet/preview-serving surfaces) lands with M1 (S4); this is the seam.
+ * The neutral PREVIEW seam (cinatra#1630 AC-3): resolve the `preview`-slot
+ * representation capability for a core reuse site (the dashboard binary-prompt
+ * baseline; formerly the dead SavedMedia variant), with a core fallback. Returns
+ * the resolution or null (⇒ the caller renders its core fallback).
+ *
+ * USED AS AN ELIGIBILITY SIGNAL, not a mount point: the in-core reuse surface
+ * (`ArtifactInlinePreview`) renders HOST-OWNED passive pixels (an `<img>` against
+ * the auth-gated, capped preview byte route) GATED by this capability — it does
+ * NOT import or mount the extension's renderer module. "Core never imports
+ * extension pixels": the dependency arrow stays extension→core (the image
+ * extension REGISTERS the `preview` provider that makes a MIME eligible; core
+ * merely reads it). When no provider is effective (e.g. the image base is
+ * archived), this returns null and the reuse site fails closed to its fallback.
  */
 export function resolveArtifactPreviewDispatch(args: {
   orgId: string;
   mime: string;
 }): RepresentationRendererResolution | null {
   return resolveRepresentationDispatch(args.orgId, args.mime, "preview");
+}
+
+/**
+ * The preview BYTE route's inline-serve eligibility (cinatra#1630 AC-2) — resolves
+ * through the effective representation-provider CAPABILITY, never a concrete MIME
+ * allowlist. A representation is inline-serveable iff:
+ *   - an effective `preview`-slot provider covers its MIME (the neutral inline
+ *     capability — image/pdf system bases ship it; the markdown/text first-party
+ *     floor is seeded here; an admitted marketplace preview provider adds its own
+ *     type WITHOUT a host edit), OR
+ *   - an effective `detail`-slot provider covers it AND that provider is a
+ *     host-release SYSTEM base. Detail-only system bases (audio/video) legitimately
+ *     range-serve their bytes, so they must be admitted; but a THIRD-PARTY
+ *     detail-only renderer must NOT silently gain byte-serving authority just by
+ *     shipping a detail view (Codex convergence) — only `preview` providers or the
+ *     host's own system bases open the byte route.
+ *
+ * FAILS CLOSED: an archived/retired provider drops its binding, so a now-stale
+ * preview URL yields false ⇒ the route 415s. Convergence across workers rides the
+ * existing (process-local, best-effort) registry lifecycle — a stale worker still
+ * enforces auth/tenant/pin/caps/CSP, and the bytes stay independently downloadable
+ * via the `/content` route; nothing is a NEW disclosure. The host applies its
+ * safe-transport POLICY (byte-class caps, sandbox CSP, disposition, range) to
+ * whatever the capability admits, without naming concrete MIMEs.
+ */
+export function isInlineTransportEligible(orgId: string, mime: string): boolean {
+  ensureFirstPartyRepresentationDefaults();
+  reconcileSystemRepresentationProviders(orgId);
+  // `preview`-slot capability (extension provider OR the first-party markdown/text
+  // floor) opens the byte route for any admitted type.
+  if (representationProviderRegistry.resolve(orgId, mime, "preview") !== null) return true;
+  // `detail`-slot: ONLY a host-release system base (audio/video ship detail-only)
+  // opens the byte route — a third-party detail renderer does not.
+  const detail = representationProviderRegistry.resolve(orgId, mime, "detail");
+  return detail?.tier === "extension" && isSystemArtifactRendererPackage(detail.packageName);
 }
 
 /**

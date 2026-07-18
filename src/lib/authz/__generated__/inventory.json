@@ -490,22 +490,22 @@
     {
       "primitiveName": "change_set_eligibility_get",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 70
+      "line": 65
     },
     {
       "primitiveName": "change_set_get",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 55
+      "line": 50
     },
     {
       "primitiveName": "change_set_list",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 60
+      "line": 55
     },
     {
       "primitiveName": "change_set_undo",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 45
+      "line": 40
     },
     {
       "primitiveName": "chat_mentions_poll",
@@ -770,7 +770,7 @@
     {
       "primitiveName": "freshness_check_for_change_set",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 80
+      "line": 75
     },
     {
       "primitiveName": "gmail_aliases_list",
@@ -875,12 +875,12 @@
     {
       "primitiveName": "object_history_list",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 65
+      "line": 60
     },
     {
       "primitiveName": "object_version_restore",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 50
+      "line": 45
     },
     {
       "primitiveName": "objects_classify",
@@ -906,11 +906,6 @@
       "primitiveName": "objects_save",
       "file": "packages/objects/src/mcp/registry.ts",
       "line": 8
-    },
-    {
-      "primitiveName": "objects_type_register",
-      "file": "packages/objects/src/mcp/registry.ts",
-      "line": 39
     },
     {
       "primitiveName": "objects_types_list",
@@ -1050,12 +1045,12 @@
     {
       "primitiveName": "remote_effect_attempt_retry",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 90
+      "line": 85
     },
     {
       "primitiveName": "remote_effect_attempts_list_for_change_set",
       "file": "packages/objects/src/mcp/registry.ts",
-      "line": 85
+      "line": 80
     },
     {
       "primitiveName": "role_grant_grant",
