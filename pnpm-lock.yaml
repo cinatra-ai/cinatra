@@ -1587,8 +1587,8 @@ importers:
         specifier: 0.10.0
         version: 0.10.0
       '@ag-ui/core':
-        specifier: 0.0.53
-        version: 0.0.53
+        specifier: 0.0.57
+        version: 0.0.57
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@24.13.2)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2283,8 +2283,8 @@ packages:
   '@a2ui/web_core@0.10.0':
     resolution: {integrity: sha512-pSieKxaB6aZWBL2LjZfKo4/1v4xMWylczpzte1ehuGH0kfNGf/iTd73PKsIKYx3b0FNWTbD8gAloOM4JCVqUig==}
 
-  '@ag-ui/core@0.0.53':
-    resolution: {integrity: sha512-11UocR7fFdMWw503bWCX2IOK15vbWfxT11Mn9xOiPBVO/UVcn57ywGrlLL4UaBlPgmUTvuzr2yYR2ElSqiN2wQ==}
+  '@ag-ui/core@0.0.57':
+    resolution: {integrity: sha512-gho1OWjNE6E3Rl7ZEZ1wr2CEpUHjLFU0FqzCZZk439TicLu+BfLCMkMokB07bMGlRmbJ60hM6LW60iOVauCx+Q==}
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -10970,7 +10970,7 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
 
-  '@ag-ui/core@0.0.53':
+  '@ag-ui/core@0.0.57':
     dependencies:
       zod: 3.25.76
 
