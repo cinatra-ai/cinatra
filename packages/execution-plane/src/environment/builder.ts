@@ -55,6 +55,7 @@ import {
   type EnvironmentBuildPolicy,
   type EnvironmentBuildRecipe,
   type EnvironmentPlatform,
+  type EnvironmentResolvedArtifact,
 } from "./recipe";
 import { signEnvironmentProvenance } from "./provenance";
 import {
@@ -119,6 +120,91 @@ export function assertNoCredentialBuildArgs(args: string[]): void {
 const shQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /**
+ * Per-manager INTEGRITY-manifest capture (cinatra#1708 AC1, byte-identity).
+ *
+ * Alongside the version-resolution lock, each manager freezes a deterministic
+ * manifest of the ACTUALLY-INSTALLED artifact bytes (never a re-declaration or
+ * a second, detachable resolution), so a byte-differing artifact at the same
+ * version busts the recipe key. Each reads the manager's authoritative
+ * installed-byte source:
+ *  - os  → the DELTA of installed packages vs the L0 baseline (captured before
+ *    apt runs), each with `apt-cache show` `SHA256:` (the published .deb byte
+ *    hash). The delta covers every package apt actually ADDED or UPGRADED —
+ *    including transitive deps — while excluding inherited-L0 packages (already
+ *    bound by `l0BaseDigest`), so unchanged base packages cannot spuriously
+ *    bust the key. Reads the real installed `name=version`, so a pinned
+ *    `pkg=ver` declaration resolves correctly.
+ *  - pip → `pip install --report` `download_info.archive_info.hashes.sha256`
+ *    (the wheel/sdist byte hash the resolver actually downloaded). This is the
+ *    report OF the same install — NOT a detached re-resolution. NOTE: the
+ *    hashes live in the INSTALL report, not `pip inspect`.
+ *  - npm → a content hash (`sha256sum`) of every file the global install
+ *    actually wrote under `npm root -g`, sorted by path. Binds the mounted
+ *    bytes directly (covers transitive; no separate resolution that could
+ *    describe different bytes than were installed).
+ *
+ * Each is best-effort: the whole capture is wrapped `{ … || true; }` at the
+ * call site (NEVER inline `|| true`, which would let an install/lock failure
+ * report build success). A manager that cannot surface a hash contributes an
+ * empty manifest — the integrity binding only ever STRENGTHENS the version
+ * lock, never weakens it. Emitted sorted for build-to-build determinism. The
+ * exact real-daemon output is validated by the slice-D E2E; THIS slice binds
+ * the manifest into the cache identity. POSIX-sh only (docker RUN is dash) —
+ * no process substitution / bashisms.
+ */
+/**
+ * Snapshot the set of ACTUALLY-INSTALLED packages, `name=version`, sorted.
+ * Filters `db:Status-Status == installed` so packages in `config-files` (or
+ * any other non-installed) state never appear — otherwise a config-files→
+ * installed transition at the same version would leave `os.baseline` and
+ * `os.lock` identical and the delta would miss the now-installed bytes.
+ * Uses `binary:Package` for multi-arch-safe identity.
+ */
+const DPKG_INSTALLED_SNAPSHOT =
+  `dpkg-query -W -f='\${db:Status-Status} \${binary:Package}=\${Version}\\n' 2>/dev/null ` +
+  `| sed -n 's/^installed //p' | LC_ALL=C sort`;
+
+function osIntegrityCapture(): string {
+  // os.baseline (pre-install) and os.lock (post-install) are both LC_ALL=C
+  // sorted, so `comm -13` yields exactly the added/upgraded packages.
+  return (
+    `comm -13 ${ENV_LOCK_DIR}/os.baseline ${ENV_LOCK_DIR}/os.lock ` +
+    `| while IFS= read -r pv; do ` +
+    `printf '%s %s\\n' "$pv" ` +
+    `"$(apt-cache show "$pv" 2>/dev/null | awk -F': ' '/^SHA256: /{print $2; exit}')"; ` +
+    `done > ${ENV_LOCK_DIR}/os.integrity`
+  );
+}
+
+function pipIntegrityCapture(): string {
+  // Parse the install report written by `pip install --report` (same install).
+  // Guarantee the manifest EXISTS first (`: >`), so a best-effort python hiccup
+  // leaves an EMPTY manifest (the documented graceful degradation) rather than
+  // a missing file that the mandatory extraction would hard-fail on.
+  return (
+    `: > ${ENV_LOCK_DIR}/pip.integrity; ` +
+    `python3 -c 'import json;` +
+    `d=json.load(open("${ENV_LOCK_DIR}/pip.report.json"));` +
+    `rows=sorted("%s==%s %s"%(i["metadata"]["name"],i["metadata"]["version"],` +
+    `i.get("download_info",{}).get("archive_info",{}).get("hashes",{}).get("sha256","")) ` +
+    `for i in d.get("install",[]));` +
+    `open("${ENV_LOCK_DIR}/pip.integrity","w").write("\\n".join(rows)+"\\n")'`
+  );
+}
+
+function npmIntegrityCapture(): string {
+  // Content hash of exactly what the global install wrote (path-sorted).
+  // Guarantee the manifest EXISTS first (`: >`), so a best-effort `cd` failure
+  // leaves an EMPTY manifest (the documented graceful degradation) rather than
+  // a missing file that the mandatory extraction would hard-fail on.
+  return (
+    `: > ${ENV_LOCK_DIR}/npm.integrity; ` +
+    `cd "$(npm root -g)" && find . -type f -exec sha256sum {} + ` +
+    `| LC_ALL=C sort -k2 > ${ENV_LOCK_DIR}/npm.integrity`
+  );
+}
+
+/**
  * Render the deterministic build Dockerfile for a CANONICAL spec. Pure —
  * unit-tested as the build contract. Root at build time only; the final
  * `USER` pins the fixed non-root runtime identity so every derived L1 layer
@@ -140,23 +226,34 @@ export function renderEnvironmentDockerfile(
   ];
   if (spec.os && spec.os.length > 0) {
     const pkgs = spec.os.map(shQuote).join(" ");
+    // Snapshot the installed set BEFORE apt runs (the L0 baseline), install,
+    // freeze the sorted post-install closure to os.lock, then capture
+    // os.integrity for the DELTA — all before clearing the apt lists, whose
+    // metadata carries the .deb SHA256s. The integrity capture is best-effort
+    // ({ … || true; }); baseline / install / lock are NOT — a failure there
+    // must fail the RUN.
     lines.push(
-      `RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${pkgs} ` +
-        `&& dpkg-query -W -f='\${Package}=\${Version}\\n' > ${ENV_LOCK_DIR}/os.lock ` +
+      `RUN ${DPKG_INSTALLED_SNAPSHOT} > ${ENV_LOCK_DIR}/os.baseline ` +
+        `&& apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${pkgs} ` +
+        `&& ${DPKG_INSTALLED_SNAPSHOT} > ${ENV_LOCK_DIR}/os.lock ` +
+        `&& { ${osIntegrityCapture()} || true; } ` +
         `&& rm -rf /var/lib/apt/lists/*`,
     );
   }
   if (spec.pip && spec.pip.length > 0) {
     const pkgs = spec.pip.map(shQuote).join(" ");
     lines.push(
-      `RUN pip install --no-cache-dir ${pkgs} && pip freeze > ${ENV_LOCK_DIR}/pip.lock`,
+      `RUN pip install --no-cache-dir --report ${ENV_LOCK_DIR}/pip.report.json ${pkgs} ` +
+        `&& pip freeze > ${ENV_LOCK_DIR}/pip.lock ` +
+        `&& { ${pipIntegrityCapture()} || true; }`,
     );
   }
   if (spec.npm && spec.npm.length > 0) {
     const pkgs = spec.npm.map(shQuote).join(" ");
     lines.push(
       `RUN npm install -g --no-fund --no-audit ${pkgs} ` +
-        `&& npm ls -g --all --json > ${ENV_LOCK_DIR}/npm.lock`,
+        `&& npm ls -g --all --json > ${ENV_LOCK_DIR}/npm.lock ` +
+        `&& { ${npmIntegrityCapture()} || true; }`,
     );
   }
   lines.push(`RUN chmod -R a+r ${ENV_LOCK_DIR}`);
@@ -410,23 +507,22 @@ export class TrustedEnvironmentBuilder {
     }
 
     // ---- extract resolved artifacts → FULL recipe key ---------------------
-    const resolvedArtifacts: Record<string, string> = {};
-    const locks: Array<[string, string]> = [];
-    if (input.spec.os?.length) locks.push(["os", `${ENV_LOCK_DIR}/os.lock`]);
-    if (input.spec.pip?.length) locks.push(["pip", `${ENV_LOCK_DIR}/pip.lock`]);
-    if (input.spec.npm?.length) locks.push(["npm", `${ENV_LOCK_DIR}/npm.lock`]);
-    for (const [manager, path] of locks) {
-      const read = await this.docker([
-        "run", "--rm", "--network", "none",
-        "--user", `${SANDBOX_RUNTIME_UID}:${SANDBOX_RUNTIME_GID}`,
-        "--", tempTag, "cat", path,
-      ]);
-      if (read.exitCode !== 0) {
-        throw new Error(
-          `Failed to extract resolved ${manager} lock from the built layer: ${read.stderr.trim()}`,
-        );
-      }
-      resolvedArtifacts[manager] = resolvedArtifactDigest(read.stdout);
+    // Per manager, freeze BOTH manifests: the version-resolution lock and the
+    // byte-integrity manifest. The recipe key binds both (cinatra#1708 AC1) so
+    // a byte-differing artifact at the same resolved version busts the key.
+    const resolvedArtifacts: Record<string, EnvironmentResolvedArtifact> = {};
+    const managers: Array<[string, string]> = [];
+    if (input.spec.os?.length) managers.push(["os", "os"]);
+    if (input.spec.pip?.length) managers.push(["pip", "pip"]);
+    if (input.spec.npm?.length) managers.push(["npm", "npm"]);
+    for (const [manager, stem] of managers) {
+      const resolved = resolvedArtifactDigest(
+        await this.extractLockFile(tempTag, manager, `${ENV_LOCK_DIR}/${stem}.lock`),
+      );
+      const integrity = resolvedArtifactDigest(
+        await this.extractLockFile(tempTag, manager, `${ENV_LOCK_DIR}/${stem}.integrity`),
+      );
+      resolvedArtifacts[manager] = { resolved, integrity };
     }
 
     const recipe: EnvironmentBuildRecipe = {
@@ -487,6 +583,30 @@ export class TrustedEnvironmentBuilder {
     };
     this.opts.cache.put(entry);
     return { kind: "ready", entry, cacheHit: false };
+  }
+
+  /**
+   * Read one frozen manifest (lock or integrity) out of the built layer, in a
+   * throwaway network-none container running as the fixed runtime UID. The
+   * exact bytes are what feed the recipe-key digest.
+   */
+  private async extractLockFile(
+    tempTag: string,
+    manager: string,
+    path: string,
+  ): Promise<string> {
+    const read = await this.docker([
+      "run", "--rm", "--network", "none",
+      "--user", `${SANDBOX_RUNTIME_UID}:${SANDBOX_RUNTIME_GID}`,
+      "--", tempTag, "cat", path,
+    ]);
+    if (read.exitCode !== 0) {
+      throw new Error(
+        `Failed to extract ${manager} ${path.endsWith(".integrity") ? "integrity manifest" : "lock"} ` +
+          `from the built layer: ${read.stderr.trim()}`,
+      );
+    }
+    return read.stdout;
   }
 
   /**

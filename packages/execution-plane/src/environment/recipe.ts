@@ -34,7 +34,7 @@ import {
  * flags, lock capture) — a silent builder change must never alias an old
  * layer.
  */
-export const ENVIRONMENT_BUILDER_VERSION = "cinatra-env-builder/1";
+export const ENVIRONMENT_BUILDER_VERSION = "cinatra-env-builder/2";
 
 export type EnvironmentBuildPolicy = {
   /**
@@ -73,23 +73,44 @@ export type EnvironmentSpecKeyInputs = {
 };
 
 /**
- * The FULL effective build recipe (the RECIPE KEY inputs): spec-key inputs
- * plus the digests of every RESOLVED artifact the build actually froze
- * (pip lock, npm lock, os package manifest — keyed by manager).
+ * What a single manager (pip / npm / os) contributed to the recipe key: BOTH
+ * layers of identity for the artifacts it froze.
  *
- * SEMANTIC, on record (codex S3-r0 finding 7): these are digests of the
- * RESOLVED LOCK MANIFESTS (pinned name==version sets from pip freeze /
- * npm ls / dpkg-query), i.e. VERSION-RESOLUTION identity — they do NOT hash
- * the downloaded wheel/tarball/deb bytes. Byte-level identity of what a run
- * actually mounts IS bound, by the signed `imageDigest` in the layer's
- * provenance; what the recipe key does NOT claim is that two separate builds
- * with equal lock digests are byte-identical images. Capturing package-
- * manager integrity hashes (pip --require-hashes / npm lockfile integrity /
- * apt SHA256s) is the follow-up hardening for cross-build byte identity.
+ * TWO DIGESTS, TWO GUARANTEES (cinatra#1708 AC1, byte-identity direction):
+ *  - `resolved` — sha256 of the RESOLVED LOCK MANIFEST (pinned name==version
+ *    set from pip freeze / npm ls / dpkg-query). VERSION-RESOLUTION identity:
+ *    a different pinned set is a different recipe. It does NOT distinguish two
+ *    byte-different artifacts that share a version string.
+ *  - `integrity` — sha256 of the manager's INTEGRITY MANIFEST: the package
+ *    manager's own registry-provided artifact hashes (apt `SHA256:` of each
+ *    .deb, pip wheel `archive_info.hashes.sha256`, npm lockfile `integrity`
+ *    SRI). CROSS-BUILD BYTE identity: a byte-differing artifact at the SAME
+ *    resolved version — a re-pushed wheel, a rebuilt deb — busts the recipe
+ *    key, so the cache can never serve one build's bytes under another's
+ *    resolution. Missing/unavailable integrity for a package degrades to an
+ *    empty token in the manifest: it never weakens the `resolved` binding,
+ *    it only strengthens it when the manager surfaces a hash.
+ *
+ * (`imageDigest` in the signed provenance still binds the WHOLE built layer's
+ * bytes; the recipe key now additionally binds the per-artifact bytes so two
+ * SEPARATE builds no longer alias merely because their lock manifests matched.)
+ */
+export type EnvironmentResolvedArtifact = {
+  /** sha256 hex of the resolved lock/manifest content (version resolution). */
+  resolved: string;
+  /** sha256 hex of the manager integrity manifest (registry artifact bytes). */
+  integrity: string;
+};
+
+/**
+ * The FULL effective build recipe (the RECIPE KEY inputs): spec-key inputs
+ * plus, per manager, the digests of every RESOLVED artifact the build actually
+ * froze (pip lock, npm lock, os package manifest) AND the byte-integrity of
+ * those artifacts.
  */
 export type EnvironmentBuildRecipe = EnvironmentSpecKeyInputs & {
-  /** manager → sha256 hex of the resolved lock/manifest content. */
-  resolvedArtifacts: Record<string, string>;
+  /** manager → resolved-lock digest + byte-integrity digest. */
+  resolvedArtifacts: Record<string, EnvironmentResolvedArtifact>;
 };
 
 function canonicalPolicyJson(policy: EnvironmentBuildPolicy): string {
@@ -99,9 +120,20 @@ function canonicalPolicyJson(policy: EnvironmentBuildPolicy): string {
   });
 }
 
-function sortedRecordJson(record: Record<string, string>): string {
-  const out: Record<string, string> = {};
-  for (const key of Object.keys(record).sort()) out[key] = record[key];
+/**
+ * Deterministic JSON of the per-manager resolved artifacts: outer manager keys
+ * sorted, and each entry's fields emitted in a FIXED order so that object
+ * key-insertion order (build code / test order) can never change the recipe
+ * key. Both `integrity` and `resolved` are bound.
+ */
+function sortedResolvedArtifactsJson(
+  record: Record<string, EnvironmentResolvedArtifact>,
+): string {
+  const out: Record<string, { integrity: string; resolved: string }> = {};
+  for (const key of Object.keys(record).sort()) {
+    const artifact = record[key];
+    out[key] = { integrity: artifact.integrity, resolved: artifact.resolved };
+  }
   return JSON.stringify(out);
 }
 
@@ -120,7 +152,9 @@ export function canonicalSpecKeyJson(inputs: EnvironmentSpecKeyInputs): string {
 export function canonicalRecipeJson(recipe: EnvironmentBuildRecipe): string {
   return JSON.stringify({
     ...(JSON.parse(canonicalSpecKeyJson(recipe)) as Record<string, unknown>),
-    resolvedArtifacts: JSON.parse(sortedRecordJson(recipe.resolvedArtifacts)) as unknown,
+    resolvedArtifacts: JSON.parse(
+      sortedResolvedArtifactsJson(recipe.resolvedArtifacts),
+    ) as unknown,
   });
 }
 
@@ -137,7 +171,11 @@ export function computeEnvironmentRecipeKey(recipe: EnvironmentBuildRecipe): str
   return sha256Hex(canonicalRecipeJson(recipe));
 }
 
-/** sha256 hex of a resolved artifact's content (lockfile bytes). */
+/**
+ * sha256 hex of a frozen manifest's content — used for BOTH the resolved lock
+ * manifest (version resolution) and the manager integrity manifest (artifact
+ * bytes). Same content ⇒ same digest; any byte difference ⇒ a new digest.
+ */
 export function resolvedArtifactDigest(content: string): string {
   return sha256Hex(content);
 }

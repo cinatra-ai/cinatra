@@ -27,7 +27,7 @@ function recipeFor(): EnvironmentBuildRecipe {
       networkPolicy: "registry-allowlist",
       registryAllowlist: ["pypi.org"],
     },
-    resolvedArtifacts: { pip: "sha256:pinned" },
+    resolvedArtifacts: { pip: { resolved: "sha256:pinned", integrity: "sha256:pinned-int" } },
   };
 }
 

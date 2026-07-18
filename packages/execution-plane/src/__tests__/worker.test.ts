@@ -44,7 +44,7 @@ function mountFor(digest = L1_DIGEST, key = KEY): ResolvedEnvironmentMount {
     builderVersion: ENVIRONMENT_BUILDER_VERSION,
     platform: { os: "linux", arch: "arm64" },
     buildPolicy: { networkPolicy: "registry-allowlist", registryAllowlist: ["pypi.org"] },
-    resolvedArtifacts: { pip: "sha256:pinned" },
+    resolvedArtifacts: { pip: { resolved: "sha256:pinned", integrity: "sha256:pinned-int" } },
   };
   const recipeKey = computeEnvironmentRecipeKey(recipe);
   const prov: EnvironmentLayerProvenance = {
