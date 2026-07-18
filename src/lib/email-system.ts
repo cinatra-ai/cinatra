@@ -137,6 +137,10 @@ export async function findReplyInEmailThread(input: {
   recipientEmail: string;
   sentAfter?: string;
   userId?: string;
+  // cinatra#1456: relate-back correlation the caller already knows from the
+  // sent thread it is polling. Forwarded onto the persisted received-reply
+  // record so a reply resolves to its campaign / contact without a scan.
+  correlation?: { campaignId?: string; contactId?: string };
 }): Promise<EmailReplyMatch | null> {
   const userId = await resolveEmailSystemUserId(input.userId);
   const activeConnector = await getActiveEmailConnectorStatus({ userId });
@@ -148,12 +152,33 @@ export async function findReplyInEmailThread(input: {
   if (!provider) {
     return null;
   }
-  return provider.findReply({
+  const match = await provider.findReply({
     providerThreadId: input.providerThreadId,
     recipientEmail: input.recipientEmail,
     sentAfter: input.sentAfter,
     userId,
   });
+
+  // cinatra#1456: best-effort persist a `@cinatra-ai/email:received-reply`
+  // object on a match. The writer derives the (connectorId, providerThreadId)
+  // thread correlation key and swallows failures, so this NEVER changes the
+  // reply-lookup result the caller receives.
+  if (match) {
+    const routing = resolveHostEmailRouting();
+    if (routing?.saveReceivedReplyObject) {
+      void routing
+        .saveReceivedReplyObject({
+          match,
+          routing: { connectorId: activeConnector.connectorId, userId },
+          correlation: input.correlation,
+        })
+        .catch(() => {
+          /* best-effort — the reply was already observed */
+        });
+    }
+  }
+
+  return match;
 }
 
 // ---------------------------------------------------------------------------
