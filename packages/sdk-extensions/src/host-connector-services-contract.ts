@@ -1027,6 +1027,29 @@ export type HostInstanceIdentityService = {
 };
 
 /**
+ * Soft-provenance correlation carried from the send / reply boundary onto the
+ * `@cinatra-ai/email:sent-email` and `@cinatra-ai/email:received-reply` objects
+ * (cinatra#1456). Every field is a plain id STRING, never an artifact-id
+ * reference — a missing or tombstoned correlation target must never affect
+ * read / pin / delete / GC / lifecycle of the email record (epic #1448
+ * atomicity rule 2: threads are relationships, not artifacts). The provider-
+ * native `contactId` is scoped by the record's accompanying `connectorId`, so
+ * the same numeric id from two providers never collides.
+ */
+export type EmailTransportCorrelation = {
+  /** Campaign this send / reply belongs to (soft provenance). */
+  campaignId?: string;
+  /** Provider-native contact id — connector-scoped by the record's connectorId. */
+  contactId?: string;
+  /**
+   * Campaign run-scope id (the fan-out identity frame). Meaningful on the
+   * sent-email record; the received-reply record carries no run frame and
+   * ignores it.
+   */
+  runId?: string;
+};
+
+/**
  * Host-side email ROUTING impls for the email facade (the sender-identity
  * objects lookup chain, the dev-mode recipient override, and the best-effort
  * sent-email object writer live host-side; the registry-fallback step lives in
@@ -1050,6 +1073,31 @@ export type HostEmailRoutingService = {
       userId?: string;
       orgId?: string;
     };
+    /**
+     * cinatra#1456: campaign / contact / run correlation to persist on the
+     * sent-email record so thread / campaign / contact views resolve without a
+     * client-side scan. Absent for platform / test sends that have no campaign
+     * frame.
+     */
+    correlation?: EmailTransportCorrelation;
+  }): Promise<void>;
+  /**
+   * cinatra#1456: best-effort persist of a `@cinatra-ai/email:received-reply`
+   * object when a reply lookup surfaces a match. The writer derives the
+   * standardized `(connectorId, providerThreadId)` thread correlation key
+   * (`threadId`, a DERIVED key — never an artifact id) and carries any
+   * relate-back campaign / contact ids the caller already knows from the sent
+   * thread it was polling. Best-effort by contract: a failure is logged and
+   * never changes the reply-lookup result the caller receives.
+   */
+  saveReceivedReplyObject?(input: {
+    match: unknown;
+    routing: {
+      connectorId: string;
+      userId?: string;
+      orgId?: string;
+    };
+    correlation?: EmailTransportCorrelation;
   }): Promise<void>;
 };
 
@@ -1448,6 +1496,19 @@ export const EMAIL_SYSTEM_CAPABILITY = "email-system";
 export type EmailSystemProvider = {
   sendEmail(
     message: EmailSystemMessage,
-    opts?: { connectorId?: string; userId?: string; orgId?: string; senderIdentityId?: string },
+    opts?: {
+      connectorId?: string;
+      userId?: string;
+      orgId?: string;
+      senderIdentityId?: string;
+      /**
+       * cinatra#1456: campaign / contact / run correlation forwarded through
+       * the facade to the sent-email object writer, so a campaign send lands a
+       * fully-correlated `@cinatra-ai/email:sent-email` record for the
+       * thread / campaign / contact views. Optional + additive — a facade build
+       * that predates this field simply drops it (the send is unaffected).
+       */
+      correlation?: EmailTransportCorrelation;
+    },
   ): Promise<EmailSendReceipt>;
 };
