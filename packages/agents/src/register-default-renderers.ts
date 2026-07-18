@@ -36,7 +36,6 @@ import {
 } from "./gmail-sender-renderer";
 import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
-import { BlogWordpressDraftConfirmRenderer } from "./blog-wordpress-draft-confirm-renderer";
 import { FollowUpCadenceFieldRenderer } from "./follow-up-cadence-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
@@ -161,7 +160,14 @@ const RENDERER_KIND_TABLE: Record<
   "skill-recommend": { renderer: SkillRecommenderRenderer },
   "test-delivery-input": { renderer: EmailTestDeliveryFormRenderer },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
-  "wordpress-draft-confirm": { renderer: BlogWordpressDraftConfirmRenderer },
+  // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
+  // moved into @cinatra-ai/blog-wordpress-publish-agent. The KIND stays (the
+  // manifest still declares it — kind-vocabulary set-equality; conditionFor()
+  // reads its bare aliases), but the host ships no component: a bundled binding
+  // resolves map-first to the extension wrapper, and a not-in-build binding of
+  // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
+  // Same shape as final-list-review / scrape-schema-review / linkedin-draft-review above.
+  "wordpress-draft-confirm": { renderer: SchemaFieldRenderer },
 };
 
 /** Pinned by the kind-vocabulary set-equality test. */

@@ -2,15 +2,33 @@
 // @cinatra-ai/asset-blog / integration / renderers
 // ---------------------------------------------------------------------------
 //
-// Server-only React components wired into the object-type registry for the
-// three blog types (blog-post, blog-post-idea, saved-media). Three slots per
-// type (listRow, card, detail) → nine components total.
+// DEAD CODE — the `SavedMedia*` object-renderer slots only.
 //
-// Constraints:
-//   - No "use client" directive — these components must render on the server
-//     and stay out of the client bundle graph.
-//   - No imports from client-tagged panels (draft-editor, ideas-panel,
-//     image-panel) — slots are preview surfaces, not the canonical editor.
+// The `blog-post` and `blog-idea` object-renderer slots (BlogPost{ListRow,
+// Card,Detail} + BlogPostIdea{ListRow,Card,Detail}) were RELOCATED into their
+// owning blog extensions — `@cinatra-ai/blog-post-artifact` and
+// `@cinatra-ai/blog-idea-artifact` — per cinatra#1631 AC2 (epic #1620 S7/M2)
+// per the 2026-07-18 owner ruling ("remove from core, move to the
+// respective extensions, do not add in prod"). Core keeps the TYPE
+// registration (schema / lifecycle / relations / crudPolicy — the live
+// machinery) with EMPTY renderer slots (see `register-object-types.ts`). The
+// only observable delta is a dimmed presence icon on the admin Types & approvals
+// screen for these two types — in BOTH dev and production: even with the dev
+// blog extensions installed they register a SEPARATE `<pkg>:artifact` umbrella
+// type (generic renderers) rather than repopulating these host
+// `@cinatra-ai/assets:*` slots, so nothing re-lights them. systemExtensions and
+// the required-extensions lock are untouched (the extensions stay dev-only).
+//
+// The `SavedMedia*` renderers below are the DEAD remainder: the `saved-media`
+// object type has no writers/consumers and is not registered anywhere (it was
+// never imported by `register-object-types.ts`). It has no REGISTERED object
+// type (the image bytes themselves live in `@cinatra-ai/blog-image-artifact`),
+// so it does not ride the AC2 relocation. It is left in place, unchanged, for
+// the dedicated dead-blog-code cleanup tracked by cinatra#1775.
+//
+// Constraints (retained for the SavedMedia remainder):
+//   - No "use client" directive — server-only components.
+//   - No imports from client-tagged panels — slots are preview surfaces.
 //   - No imports from @/lib/database or any store — slots receive pre-fetched
 //     values via ObjectRendererSlotProps.
 //   - Use shadcn primitives + semantic tokens; avoid hardcoded palette classes.
@@ -18,114 +36,14 @@
 
 import { Badge } from "@/components/ui/badge";
 import type { ObjectRendererSlotProps } from "@cinatra-ai/objects/renderer-types";
-import type {
-  BlogPostDraftRecord,
-  BlogPostIdeaRecord,
-  SavedMediaRecord,
-} from "../store";
+import type { SavedMediaRecord } from "../store";
 
 // ---------------------------------------------------------------------------
-// blog-post  (BlogPostDraftRecord — schema has no `status` field; renderers
-// surface title + excerpt and link to the draft editor page)
-// ---------------------------------------------------------------------------
-
-export function BlogPostListRow({
-  value,
-  compact,
-}: ObjectRendererSlotProps<BlogPostDraftRecord>) {
-  return (
-    <div className="flex items-center gap-3 py-2">
-      <span className="font-medium">{value.title}</span>
-      {!compact && value.excerpt ? (
-        <span className="text-xs text-muted-foreground line-clamp-1">{value.excerpt}</span>
-      ) : null}
-    </div>
-  );
-}
-
-export function BlogPostCard({ value }: ObjectRendererSlotProps<BlogPostDraftRecord>) {
-  return (
-    <article className="soft-panel rounded-card p-4">
-      <header className="flex items-center gap-2">
-        <h3 className="text-base font-semibold">{value.title}</h3>
-      </header>
-      {value.excerpt ? (
-        <p className="mt-1 text-sm text-muted-foreground">{value.excerpt}</p>
-      ) : null}
-    </article>
-  );
-}
-
-export function BlogPostDetail({ value }: ObjectRendererSlotProps<BlogPostDraftRecord>) {
-  return (
-    <section className="soft-panel rounded-card flex flex-col gap-3 p-6">
-      <header className="flex items-center gap-3">
-        <h2 className="text-2xl font-semibold">{value.title}</h2>
-      </header>
-      {value.excerpt ? (
-        <p className="text-sm text-muted-foreground">{value.excerpt}</p>
-      ) : null}
-      <p className="text-xs text-muted-foreground">
-        Open the draft editor to view and edit the full post body.
-      </p>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// blog-post-idea  (schema has no `status` field; renderers surface title +
-// summary only)
-// ---------------------------------------------------------------------------
-
-// Idea summaries live in `@cinatra-ai/blog-idea-artifact`. These object-renderer slots are
-// preview surfaces (no async fetches inside renderer-slot signatures —
-// slots receive pre-fetched values); the slot omits the body preview
-// when refs are present. The canonical idea-summary surface is
-// `ideas-panel.tsx`, which calls the reader helper server-side.
-export function BlogPostIdeaListRow({
-  value,
-  compact: _compact,
-}: ObjectRendererSlotProps<BlogPostIdeaRecord>) {
-  return (
-    <div className="flex items-center gap-3 py-2">
-      <span className="font-medium">{value.title}</span>
-    </div>
-  );
-}
-
-export function BlogPostIdeaCard({ value }: ObjectRendererSlotProps<BlogPostIdeaRecord>) {
-  return (
-    <article className="soft-panel rounded-card p-4">
-      <header className="flex items-center gap-2">
-        <h3 className="text-base font-semibold">{value.title}</h3>
-      </header>
-      {value.summaryArtifactId ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Open the idea panel to view the full summary.
-        </p>
-      ) : null}
-    </article>
-  );
-}
-
-export function BlogPostIdeaDetail({ value }: ObjectRendererSlotProps<BlogPostIdeaRecord>) {
-  return (
-    <section className="soft-panel rounded-card flex flex-col gap-3 p-6">
-      <header className="flex items-center gap-3">
-        <h2 className="text-2xl font-semibold">{value.title}</h2>
-      </header>
-      <p className="text-xs text-muted-foreground">
-        Open the idea panel to view the full summary.
-      </p>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// saved-media — image bytes live in `@cinatra-ai/blog-image-artifact`. The renderer slot
+// saved-media — DEAD (no owning type, no writers; tracked by cinatra#1775).
+// Image bytes live in `@cinatra-ai/blog-image-artifact`. The renderer slot
 // builds an artifact-content URL (`/api/artifacts/...`) — same pattern as
-// `image-panel.tsx` uses for inline post hero images. Slots are
-// preview-only; the URL is dereferenced by the browser, not server-rendered.
+// `image-panel.tsx` uses for inline post hero images. Slots are preview-only;
+// the URL is dereferenced by the browser, not server-rendered.
 // ---------------------------------------------------------------------------
 
 function buildMediaArtifactUrl(value: SavedMediaRecord): string | null {
