@@ -26,8 +26,6 @@ import { resolvePublishDestination } from "@cinatra-ai/extensions/destination-re
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
-import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import {
   detectSpdxLicense,
   LicenseDetectionRejectedError,
@@ -164,39 +162,12 @@ export async function importAgentTemplateCore(
     await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   }
 
-  // Register agent-declared output object types as active.
-  // actorUserId is NOT a free variable here. Use createdBy: null
-  //   (install-source rows are organizationally owned).
-  // compiled.packageName may be null when sibling package.json is
-  //   missing or malformed. Skip the entire block in that case — never write
-  //   the literal string "unknown" to originContext.
-  // Skip type IDs already registered statically by @cinatra/* packages
-  //   (objectTypeRegistry.resolve returns non-null). Log a console.warn on
-  //   category mismatch but do not fail the install.
-  if (compiled.producesObjectTypes?.length && compiled.packageName) {
-    for (const pt of compiled.producesObjectTypes) {
-      const staticReg = objectTypeRegistry.resolve(pt.typeId);
-      if (staticReg) {
-        if (staticReg.category !== pt.category) {
-          console.warn(
-            `[oas-install] type_id ${pt.typeId} declares category=${pt.category} but static registry has ${staticReg.category}; ignoring declaration`,
-          );
-        }
-        continue;
-      }
-      await ensureDynamicObjectType({
-        type: pt.typeId,
-        inferredName: pt.displayName,
-        inferredCategory: pt.category,
-        canonicalKeys: pt.canonicalKeys ?? null,
-        identityKey: pt.identityKey ?? null,
-        source: "install",
-        status: "active",
-        createdBy: null, // no actorUserId in this scope
-        originContext: { agentId: compiled.packageName },
-      });
-    }
-  }
+  // Install-time dynamic object-type minting is RETIRED (cinatra#1788, epic
+  // #1785): agent packages no longer register `active` types from OAS output
+  // annotations. Typed output exists only by installing the artifact-kind
+  // extension that CLAIMS the type; the typed-production contract (publish gate
+  // + install preflight) enforces that the required artifact-kind closure
+  // provides every `cinatra.produces` type, fail-closed, before any write.
 
   // taskSpec DB shape is `taskSpec: string | null` (store.ts:58). We narrow
   // compiled.prompt (string | null) into the same shape.
