@@ -1,0 +1,18 @@
+{
+  "seq": "0056",
+  "file": "core/core__0056_purge-retired-object-types.mjs",
+  "summary": "One-time transactional purge of retired-type object rows (owner ruling eng#548 entry 95, 2026-07-18; epic cinatra#1785; closes #1792). The type model is now the dependency model: an object type exists ONLY as an explicit definition by an installed artifact extension, and the write path fail-closes (packages/objects/src/mcp/handlers.ts — an unclassifiable/unregistered save is REFUSED, never fallback-persisted). The owner ruled NO backward compatibility and NO migration-in-place: every row whose objects.type is a RETIRED type string is deleted outright together with everything that references it, so nothing dangles. RETIRED TYPE STRINGS: the generic floor '@cinatra-ai/objects:object' (dead in every form) plus the two permanently-tombstoned dynamic namespaces '@dynamic/types:*' and '@cinatra-ai/dynamic:*' (matched prefix-exact, mirroring isTombstonedObjectTypeId). SCOPE NOTE: the per-package '@cinatra-ai/<pkg>:artifact' descriptor umbrellas are DELIBERATELY NOT purged — the explicit-definition rewrite wave preserves those identifiers as explicit type definitions with NO row migration, so their rows live on under a now-defined type. CASCADE (nothing dangles): every object_id-referencing table (object_content_snapshots, graphiti_projection_outbox, merge_proposal, artifact_promotion_request, artifact_binding_reconcile_queue, object_binding_quarantine), the object_change_event history plus its remote_effect_attempts, and the change_sets that touched ONLY retired objects (orphan-swept via NOT EXISTS — a change_set that also touched a LIVING object keeps its living events and is NOT dropped), then the objects rows LAST. Run records themselves stay; their object outputs are simply gone. Data-only DELETEs + two ON COMMIT DROP temp tables in node-pg-migrate's default single transaction (all-or-nothing). Idempotent/lineage-tolerant: on a second run or the fresh-bootstrap shape no retired rows match, so every DELETE is a no-op — no fresh-schema DDL change is needed (a fresh install never wrote a retired-type row). down() THROWS: irreversible clean-break purge (0033/0048 precedent); roll back by restoring from a backup, not this migration. SEQ IS PROVISIONAL: assigned at merge — shipped max on origin/main at build time is core__0055; a concurrent lane may claim 0056 first, in which case renumber-at-merge is normal. migrations/** is HIGH-RISK: owner approval required; the lane never merges.",
+  "destructive": true,
+  "tables": [
+    "objects",
+    "object_content_snapshots",
+    "graphiti_projection_outbox",
+    "merge_proposal",
+    "artifact_promotion_request",
+    "artifact_binding_reconcile_queue",
+    "object_binding_quarantine",
+    "object_change_event",
+    "remote_effect_attempts",
+    "change_set"
+  ]
+}

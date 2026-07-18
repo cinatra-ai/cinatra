@@ -95,8 +95,20 @@ describe("objects_save — edge-bound object-type serve consumption", () => {
   beforeEach(() => {
     mockUpsert.mockReset();
     mockUpsert.mockReturnValue(record());
+    // Fail-closed writes (eng#548 entry 95): the save persists ONLY under a type
+    // an installed extension registered. These tests classify to `@x/target:event`
+    // (see the classifier mock), so register it as an installed type.
+    objectTypeRegistry.register(
+      { type: "@x/target:event", category: "data", description: "Event" } as never,
+      "@x/target",
+    );
   });
-  afterEach(() => clearServePort());
+  afterEach(() => {
+    clearServePort();
+    // Drop the fail-closed registration so it does not leak into the later
+    // objects_types_list describe (which asserts this type is absent).
+    objectTypeRegistry.removeByPackage("@x/target");
+  });
 
   it("absent serve port → default behavior, response shape byte-identical (no served-version field)", async () => {
     clearServePort();

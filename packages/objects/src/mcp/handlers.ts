@@ -1,6 +1,12 @@
 import "server-only";
 import { randomUUID } from "crypto";
 import type { PrimitiveInvocationRequest, PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+// Value import: the structured, typed error the fail-closed write boundary
+// throws. normalizePrimitiveError (@cinatra-ai/mcp-client) preserves its
+// `code`/`details` onto the invocation failure, so the stable
+// OBJECTS_TYPE_NOT_REGISTERED code + remediation detail reach the agent run's
+// tool result (unlike a plain Error, which is flattened to `primitive_failed`).
+import { PrimitiveInvocationError } from "@cinatra-ai/mcp-client";
 // Project-move helpers composed into `objects_update` for the optional
 // `projectId` change branch:
 //   - assertProjectWritable: target-side authz (write on target, target NOT
@@ -14,7 +20,7 @@ import { assertProjectWritable } from "@/lib/project-writable";
 import { runResourceProjectMove } from "@/lib/resource-project-move";
 import { classifyObject } from "../classifier";
 import type { ClassifierOutput } from "../classifier/schema";
-import { resolveIdentity, hashIdentity } from "../identity";
+import { resolveIdentity } from "../identity";
 import {
   searchNodes,
   identityHashToUuid,
@@ -36,7 +42,11 @@ import { GENERIC_ARTIFACT_OBJECT_TYPE } from "../effective-identity";
 import { resolveClaimProjectionDisposition } from "../claims";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 // Connector dispatch is intentionally not active in this handler.
-import { isDynamicObjectTypeId } from "../namespace";
+import {
+  isDynamicObjectTypeId,
+  isTombstonedObjectTypeId,
+  OBJECT_TYPE_NAMESPACE_RE,
+} from "../namespace";
 import { objectTypeRegistry } from "../registry";
 // Write paths go through Postgres-primary CRUD; the legacy
 // shadowUpsertObject (kept in src/lib/objects-dual-write.ts because asset-blog
@@ -540,101 +550,95 @@ function enforceMemoryConceptEnvelope(
 }
 
 // ---------------------------------------------------------------------------
-// Lossless generic fallback (cinatra#1787, epic #1785 slice C).
+// Fail-closed writes (owner ruling, eng#548 entry 95, 2026-07-18; epic #1785).
 //
-// "Types exist only by installation." An `objects_save` whose payload matches
-// no installed object type — unmatched, low-confidence, or classifier-
-// unavailable — is still saved IMMEDIATELY and LOSSLESSLY as a plain
-// `@cinatra-ai/objects:object` row, with a structured warning in the tool
-// result. No dynamic type is minted, no approval/queue/human step gates the
-// write. The classifier no longer proposes dynamic-type ids (see
-// classifier/{prompt,schema}.ts); this is the write-path half of the same
-// ruling.
+// "Types exist ONLY by installation." An `objects_save` whose content cannot be
+// placed under a type an installed artifact extension DEFINES is REFUSED at the
+// write boundary — never persisted under any fallback name. This supersedes the
+// #1787 "lossless generic fallback" (which saved unclassifiable content as a
+// `@cinatra-ai/objects:object` row): there is no untyped/catch-all object
+// persistence any more. The refused payload never reaches the store; the run's
+// structured error is ordinary run history, not an object row.
+//
+// The classifier still runs — it is how a save is matched to an installed type
+// — and still never mints dynamic-type ids (see classifier/{prompt,schema}.ts).
+// Only the write-path disposition of an UNMATCHED result changed: fall back →
+// refuse.
 // ---------------------------------------------------------------------------
 
 /**
- * The generic host object type. A payload the classifier cannot place under an
- * installed type is persisted here, byte-for-byte. Inlined as a literal on
- * purpose (same route-graph-budget reasoning as MEMORY_CONCEPT_TYPE_ID above):
- * importing the register-types module would add a static edge to the
- * locked-route-reachable objects_save handler graph. Source of truth is the
- * `registerGenericObjectType()` registration in
- * `packages/objects/src/integration/register-types.ts`.
+ * The retired generic host object type. Under the dependency model it is dead
+ * in every form: no save may ever land here again (the #1792 purge removes the
+ * historical rows). Kept as a literal on purpose (same route-graph-budget
+ * reasoning as MEMORY_CONCEPT_TYPE_ID above) so the fail-closed guard can
+ * reject it by id without importing the register-types module.
  */
 const GENERIC_OBJECT_TYPE_ID = "@cinatra-ai/objects:object" as const;
 
-/**
- * Schema version of the objects_save fallback warning. Bump on any breaking
- * shape change; documented in `packages/objects/AGENTS.md`.
- */
-const OBJECTS_SAVE_WARNING_VERSION = 1 as const;
+/** Stable machine-readable code for the fail-closed write rejection. Surfaced
+ *  on the run's tool result via PrimitiveInvocationError.code — bump/extend the
+ *  code set only with a documented contract change (packages/objects/AGENTS.md). */
+const OBJECTS_TYPE_NOT_REGISTERED = "OBJECTS_TYPE_NOT_REGISTERED" as const;
 
 /**
- * Structured, versioned warning surfaced in the `objects_save` result when a
- * payload is persisted under the generic fallback type instead of an installed
- * object type. Machine-readable (`code` / `reason`) plus a human-readable
- * `message` that points at the fix: declare the output as a `kind:"artifact"`
- * extension type. Absent from the result on a normal matched save.
+ * Derive the DEFINING extension package of a namespaced object-type id
+ * (`@scope/pkg:local` → `@scope/pkg`). Under the dependency model exactly one
+ * artifact extension defines a type, and the type id is namespaced under that
+ * definer — so the package prefix names the definer. Returns null for a
+ * non-namespaced / malformed id (nothing to suggest installing).
  */
-export type ObjectsSaveWarning = {
-  version: typeof OBJECTS_SAVE_WARNING_VERSION;
-  code: "unclassified_generic_fallback";
-  /** Why the payload fell back to the generic type. */
-  reason: "unmatched" | "low_confidence" | "classifier_unavailable";
-  /** The type the row was actually persisted under (always the generic type). */
-  persistedType: typeof GENERIC_OBJECT_TYPE_ID;
-  /** The classifier's inferred category, when it produced one (null when unavailable). */
-  inferredCategory: string | null;
-  /** The classifier's inferred human-readable name, when it produced one (null when unavailable). */
-  inferredTypeName: string | null;
-  /** Human-readable explanation + remediation pointer. */
-  message: string;
-};
-
-/** Build the structured fallback warning for the objects_save result. */
-function buildUnclassifiedFallbackWarning(
-  reason: ObjectsSaveWarning["reason"],
-  inferredCategory: string | null,
-  inferredTypeName: string | null,
-): ObjectsSaveWarning {
-  const why =
-    reason === "classifier_unavailable"
-      ? "the classifier is unavailable or misconfigured"
-      : reason === "low_confidence"
-        ? "no installed object type matched it with sufficient confidence"
-        : "no installed object type matched it";
-  return {
-    version: OBJECTS_SAVE_WARNING_VERSION,
-    code: "unclassified_generic_fallback",
-    reason,
-    persistedType: GENERIC_OBJECT_TYPE_ID,
-    inferredCategory,
-    inferredTypeName,
-    message:
-      `Saved losslessly as a generic object (${GENERIC_OBJECT_TYPE_ID}) because ${why}. ` +
-      `To give this output a durable, installed type, declare it as a kind:"artifact" ` +
-      `extension type (via the extension manifest's \`cinatra.produces\`) and install that extension.`,
-  };
+function deriveDefinerExtension(typeId: string): string | null {
+  if (!OBJECT_TYPE_NAMESPACE_RE.test(typeId)) return null;
+  const colon = typeId.lastIndexOf(":");
+  return colon > 0 ? typeId.slice(0, colon) : null;
 }
 
 /**
- * Explicit-external-id identity for the lossless generic fallback. Mirrors
- * layer 1 of `resolveIdentity` (the `external_id` / `externalId` field) but
- * DELIBERATELY omits the type's identityKey function — so a fallback save
- * never dedups on the generic type's run-scoped `cinatraAgentRunId` key. Two
- * unmatched saves in one run therefore stay two distinct objects, while a pair
- * that carries the same explicit external id still merges. Returns null (→
- * fresh random UUID) when no explicit external id is present.
+ * Refuse a save whose type has no installed definer (fail-closed write
+ * boundary). Throws a structured PrimitiveInvocationError carrying the stable
+ * OBJECTS_TYPE_NOT_REGISTERED code and the ratified message
+ * ("no installed artifact extension defines <type>"). The install hint
+ * ("install <extension>") is appended ONLY when a concrete, currently-uninstalled
+ * definer is actually known — i.e. the caller named a namespaced type whose
+ * defining package has registered no types in this process. When no concrete
+ * type is known (a pure unclassifiable save), the message states that no
+ * installed extension matched, with no fabricated install suggestion.
+ *
+ * @param attemptedType the concrete type id the save resolved to / named, or
+ *   null when the classifier produced no installed-type id at all.
  */
-function resolveExplicitExternalIdentity(
-  type: string,
-  data: Record<string, unknown>,
-): string | null {
-  const externalId = data["external_id"] ?? data["externalId"];
-  if (typeof externalId === "string" && externalId.trim() !== "") {
-    return hashIdentity(type, `external:${externalId.trim()}`);
+function refuseUnregisteredWrite(attemptedType: string | null): never {
+  const typePhrase = attemptedType ? `"${attemptedType}"` : "this content";
+  // Only suggest an install when the definer is KNOWN-but-not-installed: a
+  // namespaced type id whose defining package currently has zero registered
+  // types (declared/named but not installed). Never invent a suggestion for a
+  // type that is registered (that path never reaches here) or unknowable.
+  let suggestedExtension: string | null = null;
+  if (
+    attemptedType &&
+    attemptedType !== GENERIC_OBJECT_TYPE_ID &&
+    !isTombstonedObjectTypeId(attemptedType) &&
+    !objectTypeRegistry.resolve(attemptedType)
+  ) {
+    const definer = deriveDefinerExtension(attemptedType);
+    if (definer && objectTypeRegistry.getTypesForPackage(definer).length === 0) {
+      suggestedExtension = definer;
+    }
   }
-  return null;
+  const message = suggestedExtension
+    ? `no installed artifact extension defines ${typePhrase}; install ${suggestedExtension}`
+    : `no installed artifact extension defines ${typePhrase}`;
+  throw new PrimitiveInvocationError({
+    code: OBJECTS_TYPE_NOT_REGISTERED,
+    message,
+    // A refused write is a client/authoring error, not a transient failure —
+    // retrying the identical save will fail identically.
+    retryable: false,
+    details: {
+      attemptedType,
+      ...(suggestedExtension ? { suggestedExtension } : {}),
+    },
+  });
 }
 
 export function createObjectsPrimitiveHandlers() {
@@ -696,107 +700,89 @@ export function createObjectsPrimitiveHandlers() {
         resolveMemoryConceptDefOrThrow();
       }
 
-      // 1. Classify — fail-open to a lossless generic fallback (cinatra#1787,
-      // epic #1785 slice C). A classifier that throws (no LLM configured,
+      // 1. Classify — used to MATCH the save to a type an installed artifact
+      // extension defines. A classifier that throws (no LLM configured,
       // malformed output, or an LLM that tries to mint a now-rejected dynamic
-      // id) is treated as "classifier unavailable": the save still succeeds,
-      // losslessly, under the generic type.
+      // id) leaves us with no installed-type match, so the fail-closed guard
+      // below REFUSES the write (owner ruling, eng#548 entry 95): there is no
+      // longer any lossless generic fallback (#1787 reversed) — an
+      // unclassifiable save is rejected, never persisted under a catch-all.
       const classificationModel = readObjectsClassificationModelFromDatabase();
       let classification: ClassifierOutput | null = null;
       try {
         classification = await classifyObject(rawData, input.typeHint, { model: classificationModel });
       } catch (err) {
-        // Memory-concept saves MUST fail closed (cinatra#1376): their untrusted
-        // envelope has to be validated, never silently downgraded to a generic
-        // object. A memory-declared save never actually reaches here — the
-        // static fast-path can't throw and a missing registration already threw
-        // in the pre-classification guard above — but re-throw to keep the
-        // fail-closed invariant explicit and robust to future fast-path changes.
+        // Memory-concept saves MUST fail closed with their own envelope error
+        // (cinatra#1376). A memory-declared save never actually reaches here —
+        // the static fast-path can't throw and a missing registration already
+        // threw in the pre-classification guard above — but re-throw to keep the
+        // invariant explicit and robust to future fast-path changes.
         if (input.typeHint === MEMORY_CONCEPT_TYPE_ID) throw err;
         classification = null;
       }
 
-      // 2. Decide: a confident match to an installed type, or the lossless
-      // generic fallback. Unmatched (isNewType / a dynamic id / the generic id
-      // itself), low-confidence, and classifier-unavailable saves ALL persist
-      // the ORIGINAL payload under @cinatra-ai/objects:object with a structured
-      // warning — no dynamic type is ever minted or persisted, and no
-      // approval/queue/human step gates the write. A single `fallbackReason` is
-      // the source of truth for both the branch and the warning label.
-      let fallbackReason: ObjectsSaveWarning["reason"] | null = null;
-      if (classification === null) {
-        fallbackReason = "classifier_unavailable";
-      } else if (
+      // 2. Fail-closed decision: the save persists ONLY when it confidently
+      // matches a type an installed artifact extension DEFINES. Every other
+      // outcome — classifier unavailable, an unmatched/new-type result, a
+      // dynamic/tombstoned id, the retired generic type, low confidence, or a
+      // resolved type that is not in the live registry — is REFUSED at the write
+      // boundary. The refused payload is never persisted (we throw before the
+      // upsert); the run's structured error is ordinary run history, not a row.
+      // No approval/queue/warning-store/dead-letter path exists.
+      //
+      // `attemptedType` names the type in the error when the classifier produced
+      // a concrete id (even an unmatched/dynamic one) or the caller named a
+      // typeHint; null when nothing concrete is knowable.
+      const namedTypeHint =
+        typeof input.typeHint === "string" && input.typeHint.trim() !== ""
+          ? input.typeHint.trim()
+          : null;
+      const classifiedTypeId =
+        classification && !classification.isNewType ? classification.type : null;
+      const attemptedType = classifiedTypeId ?? namedTypeHint;
+
+      if (
+        classification === null ||
         classification.isNewType ||
         isDynamicObjectTypeId(classification.type) ||
-        classification.type === GENERIC_OBJECT_TYPE_ID
+        isTombstonedObjectTypeId(classification.type) ||
+        classification.type === GENERIC_OBJECT_TYPE_ID ||
+        classification.confidence < 0.4 ||
+        // Fail-closed registry check: even a "confident" match must resolve to a
+        // type registered by an installed extension — otherwise there is no
+        // defining extension and the write is refused.
+        !objectTypeRegistry.resolve(classification.type)
       ) {
-        fallbackReason = "unmatched";
-      } else if (classification.confidence < 0.4) {
-        fallbackReason = "low_confidence";
+        refuseUnregisteredWrite(attemptedType);
       }
 
-      // Finalize {persistedType, persistedData, warning} BEFORE edge-bound
-      // serving and identity resolution.
-      let persistedType: string;
-      let persistedData: Record<string, unknown>;
-      let warning: ObjectsSaveWarning | undefined;
-      const confidence = classification?.confidence ?? 0;
+      // A confident match to an installed, registered type — persist it.
+      const confidence = classification.confidence;
+      const persistedType = classification.type;
+      // `cinatraAgentRunId` is system-managed: injected from run context so
+      // registered `identityKey` functions can use it for retry dedup without
+      // LLMs passing it explicitly. We do NOT overwrite an explicit value the
+      // agent supplied. The enriched data flows through identity resolution and
+      // the persisted row, keeping both views consistent.
+      const persistedData: Record<string, unknown> =
+        actorExt.runId && !("cinatraAgentRunId" in classification.normalizedData)
+          ? { ...classification.normalizedData, cinatraAgentRunId: actorExt.runId }
+          : { ...classification.normalizedData };
 
-      if (fallbackReason !== null) {
-        persistedType = GENERIC_OBJECT_TYPE_ID;
-        // The ORIGINAL payload, byte-for-byte — never the classifier's
-        // normalizedData (which may drop fields it deems irrelevant). This is
-        // the losslessness guarantee.
-        persistedData = rawData;
-        warning = buildUnclassifiedFallbackWarning(
-          fallbackReason,
-          classification?.inferredCategory ?? null,
-          classification?.inferredTypeName ?? null,
-        );
-      } else if (classification) {
-        // A confident match to an installed static type — unchanged behavior.
-        persistedType = classification.type;
-        // `cinatraAgentRunId` is system-managed: injected from run context so
-        // registered `identityKey` functions can use it for retry dedup without
-        // LLMs passing it explicitly. We do NOT overwrite an explicit value the
-        // agent supplied. The enriched data flows through identity resolution
-        // and the persisted row, keeping both views consistent.
-        persistedData =
-          actorExt.runId && !("cinatraAgentRunId" in classification.normalizedData)
-            ? { ...classification.normalizedData, cinatraAgentRunId: actorExt.runId }
-            : { ...classification.normalizedData };
-      } else {
-        // Unreachable: classification === null forces fallbackReason to
-        // "classifier_unavailable" above. Present for definite-assignment.
-        throw new Error("objects_save: unclassified payload without a fallback reason");
-      }
-
-      // 3. Edge-bound object-type serve (cinatra#1392) — resolved on the FINAL
-      // persisted type (the generic type for a fallback save). When the caller
-      // is edge-bound to a NON-DEFAULT version of the type's owning extension
-      // package, that version's retained registration governs this save.
-      // Fail-closed: a torn edge-bound retention THROWS rather than persisting
-      // against the default version's type. A non-namespaced / dynamic type, an
-      // unpinned caller, or an absent serve seam leaves it untouched (default
-      // serving) — so a generic-fallback save resolves the default generic type.
+      // 3. Edge-bound object-type serve (cinatra#1392) — resolved on the
+      // persisted type. When the caller is edge-bound to a NON-DEFAULT version
+      // of the type's owning extension package, that version's retained
+      // registration governs this save. Fail-closed: a torn edge-bound retention
+      // THROWS rather than persisting against the default version's type.
       const servedObjectType = await resolveEdgeBoundObjectTypeForSave(persistedType);
 
-      // 4. Identity resolution — derive a stable object ID.
-      // - Fallback: an explicit external id (external_id / externalId) still
-      //   deduplicates; otherwise a fresh UUID per save. NEVER the generic
-      //   type's run-scoped identityKey, so two fallback saves in one run stay
-      //   two distinct objects.
-      // - Matched: the registry's layered resolution (external id, then the
-      //   type's identityKey fn).
-      // The stable id is stored in _cinatra.objectId and used as the public API
+      // 4. Identity resolution — derive a stable object ID via the registry's
+      // layered resolution (external id, then the type's identityKey fn). The
+      // stable id is stored in _cinatra.objectId and used as the public API
       // identifier. We do NOT pass it as the Graphiti episode UUID:
       // knowledge-graph-mcp 1.0.x rejects custom UUIDs for new episodes;
       // Graphiti assigns its own and we locate episodes by _cinatra.objectId.
-      const identityHash =
-        fallbackReason !== null
-          ? resolveExplicitExternalIdentity(GENERIC_OBJECT_TYPE_ID, rawData)
-          : resolveIdentity(persistedType, persistedData);
+      const identityHash = resolveIdentity(persistedType, persistedData);
 
       const groupId = resolveGroupId(orgId);
       const objectId = identityHash
@@ -865,10 +851,6 @@ export function createObjectsPrimitiveHandlers() {
         // canonical writer) so UI create actions can offer an Undo
         // (MutationResult).
         changeSetId: record.changeSetId,
-        // Structured, versioned fallback warning (cinatra#1787) — present ONLY
-        // when the payload was persisted under the generic type, so a matched
-        // save's response shape is unchanged.
-        ...(warning ? { warning } : {}),
         // Conditionally surface the edge-bound served object-type version
         // (cinatra#1392) — present ONLY when a NON-DEFAULT version's retained
         // type governed this save, so a default (non-edge-bound) caller's

@@ -81,6 +81,15 @@ vi.mock("../auto-registrar", () => ({
   readDynamicObjectTypeByType: vi.fn(async () => null),
 }));
 
+// Fail-closed writes (eng#548 entry 95): objects_save persists ONLY under a type
+// an installed extension registered. The classifier mock resolves to
+// `@cinatra-ai/entity-contacts:contact`, so register it as an installed type.
+import { objectTypeRegistry } from "../registry";
+objectTypeRegistry.register(
+  { type: "@cinatra-ai/entity-contacts:contact", category: "record", description: "Contact" } as never,
+  "@cinatra-ai/entity-contacts",
+);
+
 function mcpText(obj: unknown) {
   return { content: [{ type: "text", text: JSON.stringify(obj) }] };
 }

@@ -85,47 +85,46 @@ Every episode carries a `_cinatra` key in its JSON body:
 }
 ```
 
-## Unclassifiable saves — lossless generic fallback (#1787, epic #1785)
+## Unclassifiable saves — FAIL-CLOSED (owner ruling, eng#548 entry 95; epic #1785)
 
-**Types exist only by installation.** `objects_save` never mints a type. When the
-classifier cannot place a payload under an installed object type — no match
-(`isNewType`), low confidence (`< 0.4`), a dynamic id, or the classifier being
-unavailable (thrown / no LLM configured) — the row is still saved **immediately
-and losslessly** as a plain `@cinatra-ai/objects:object` object:
+**Types exist only by installation.** `objects_save` never mints a type, and — as
+of the entry-95 correction — never *falls back* to a catch-all type either. When
+the classifier cannot place a payload under a type an installed artifact
+extension **defines** — no match (`isNewType`), low confidence (`< 0.4`), a
+dynamic/tombstoned id, the retired generic `@cinatra-ai/objects:object` id, a
+resolved type that is not in the live registry, or the classifier being
+unavailable (thrown / no LLM configured) — the save is **REFUSED at the write
+boundary**. This reverses the #1787 "lossless generic fallback": there is no
+untyped/catch-all object persistence any more.
 
-- the classifier no longer proposes dynamic-type ids: `classifier/schema.ts`
-  rejects any id the caller's catalog does not already know, and
-  `classifier/prompt.ts` tells the model to return the generic
-  `@cinatra-ai/objects:object` id (with `isNewType: true`) instead of inventing one;
-- the persisted `data` is the **original `rawData`**, byte-for-byte — never the
-  classifier's `normalizedData` (which may drop fields) and with **no**
-  `cinatraAgentRunId` injected;
-- identity uses the explicit external id (`external_id` / `externalId`) only, so
-  two fallback saves in one run stay two distinct objects while a pair sharing an
-  external id still deduplicates — the generic type's run-scoped `identityKey` is
-  deliberately bypassed on this path;
-- **no** approval / queue / human step gates the write (`ensureDynamicObjectType`
-  is not called from `objects_save`).
+- the classifier still runs (it is how a save is matched to an installed type)
+  and still never proposes dynamic-type ids (`classifier/{prompt,schema}.ts`);
+- a save persists **only** on a confident match to a type that `objectTypeRegistry`
+  resolves (an installed extension registered it) — the fail-closed registry
+  check refuses even a "confident" classification whose type is unregistered;
+- the refused payload is **never** persisted (the handler throws before the
+  upsert); the run's structured error is ordinary run history, not an object row;
+- **no** warning-store / quarantine / dead-letter / approval / queue path exists.
 
-READ of existing dynamic-typed rows is untouched (durable read semantics live in
-the tombstone slice #1789).
+READ of existing rows is untouched (durable read semantics live in the tombstone
+slice #1789); historical retired-type rows are removed by the #1792 purge.
 
-### `objects_save` result warning
+### `objects_save` refusal error
 
-A fallback save adds a versioned, structured `warning` to the tool result
-(absent on a normal matched save). Shape (`ObjectsSaveWarning`, exported from
-`mcp/handlers.ts`):
+A refused save throws a `PrimitiveInvocationError` (from `@cinatra-ai/mcp-client`);
+`normalizePrimitiveError` preserves its `code`/`details` onto the run's tool
+result. Shape:
 
 ```typescript
 {
-  version: 1,                              // bump on any breaking shape change
-  code: "unclassified_generic_fallback",
-  reason: "unmatched" | "low_confidence" | "classifier_unavailable",
-  persistedType: "@cinatra-ai/objects:object",
-  inferredCategory: string | null,         // classifier's category; null when unavailable
-  inferredTypeName: string | null,         // classifier's inferred name; null when unavailable
-  message: string,                         // human-readable + remediation pointer
-                                           // ("declare it as a kind:\"artifact\" extension type")
+  code: "OBJECTS_TYPE_NOT_REGISTERED",       // stable machine-readable code
+  message: 'no installed artifact extension defines "<type>"'
+           + ' [; install <extension>]',     // ratified wording; the install hint
+                                              // is appended ONLY when a concrete,
+                                              // currently-uninstalled definer is known
+  retryable: false,
+  details: { attemptedType: string | null,   // the type named / classified, or null
+             suggestedExtension?: string },   // present with the install hint only
 }
 ```
 
@@ -133,7 +132,7 @@ A fallback save adds a versioned, structured `warning` to the tool result
 
 `auto-registrar.ts` manages the `dynamic_object_types` Postgres table. The
 classifier / `objects_save` write path **no longer mints** here (retired in
-#1787 — see the lossless generic fallback above), and the explicit
+#1787; the write path now fail-closes — see the FAIL-CLOSED section above), and the explicit
 `objects_type_register` MCP primitive was **removed** (retired in #1790, epic
 #1785 slice E — a deliberate external-contract removal), and agent install no
 longer mints types (retired in #1788); no live writer remains. The table itself
@@ -143,7 +142,7 @@ is torn down later in epic #1785.
 
 | Source | Status on insert | Trigger |
 |---|---|---|
-| ~~`classifier`~~ | ~~`proposed`~~ | **Retired (#1787)** — unclassifiable saves fall back to the generic type instead of minting |
+| ~~`classifier`~~ | ~~`proposed`~~ | **Retired (#1787; fail-closed per entry 95)** — unclassifiable saves are refused at the write boundary, never minted or fallback-persisted |
 | ~~`mcp`~~ | ~~`active`~~ | **Retired (#1790)** — the `objects_type_register` primitive was removed (deliberate external-contract removal, epic #1785 slice E) |
 | `install` | — | **RETIRED (cinatra#1788, epic #1785):** agent install no longer mints types. Typed agent output is now the fail-closed `cinatra.produces` manifest contract backed by required artifact-kind claims (see `@cinatra-ai/agents` AGENTS.md); there is no `output_object_types` / `producesObjectTypes` path. |
 

@@ -64,6 +64,15 @@ vi.mock("../graphiti-client", () => ({
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
 import { upsertObjectAndEnqueue } from "@/lib/objects-store";
+import { objectTypeRegistry } from "../registry";
+
+// Fail-closed writes (eng#548 entry 95): objects_save persists ONLY under a type
+// an installed extension registered. These context-fallback tests classify to
+// `@cinatra-ai/entity-contacts:contact`, so register it as an installed type.
+objectTypeRegistry.register(
+  { type: "@cinatra-ai/entity-contacts:contact", category: "record", description: "Contact" } as never,
+  "@cinatra-ai/entity-contacts",
+);
 
 const mockUpsert = upsertObjectAndEnqueue as unknown as ReturnType<typeof vi.fn>;
 
