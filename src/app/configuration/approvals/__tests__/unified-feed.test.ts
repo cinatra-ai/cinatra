@@ -259,17 +259,17 @@ describe("loadUnifiedFeedPage — merge, dedup, source-delegated pending", () =>
       },
     };
     // A source whose pending rows carry a NON-{proposed,pending,applied} status
-    // (e.g. dynamic-type 'unapproved'/'reserved') must NOT be dropped: the union
-    // trusts the source's pending-only fetch, it does not gate on status string.
-    const dyn = fakeSource("dynamic-type-artifact-visibility", {
+    // (e.g. 'unapproved'/'reserved') must NOT be dropped: the union trusts the
+    // source's pending-only fetch, it does not gate on status string.
+    const custom = fakeSource("custom-source", {
       inbox: [
-        arow("dynamic-type-artifact-visibility", "d1", "2026-01-03T00:00:00Z", "unapproved"),
-        arow("dynamic-type-artifact-visibility", "d2", "2026-01-02T00:00:00Z", "reserved"),
+        arow("custom-source", "d1", "2026-01-03T00:00:00Z", "unapproved"),
+        arow("custom-source", "d2", "2026-01-02T00:00:00Z", "reserved"),
       ],
     });
     const page = await loadUnifiedFeedPage(viewer, {
       limit: 10,
-      deps: { sources: [agent, dyn], listNotifications: makeNotifReader({ rows: [] }) },
+      deps: { sources: [agent, custom], listNotifications: makeNotifReader({ rows: [] }) },
     });
     expect(seenOpts).toEqual([{ status: "proposed" }]);
     expect(page.items.map((i) => i.id)).toEqual(["d1", "d2"]);

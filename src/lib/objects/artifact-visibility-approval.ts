@@ -30,9 +30,11 @@ import "server-only";
 // classifier catalog and stays prerequisite: only an 'active' type can gain
 // artifact visibility here).
 //
-// Consumed by the `dynamic-type-artifact-visibility` ApprovalSource (the
-// unified /configuration/approvals Inbox + the `approvals_*` MCP tools ride
-// the same registry — the cinatra#1391 hostPortGrantsSource precedent).
+// The dynamic-type-artifact-visibility ApprovalSource that rode this helper
+// (unified /configuration/approvals Inbox + `approvals_*` MCP tools) was retired
+// in #1790 (epic #1785 slice E). This backend helper stays — still consumed by
+// the /artifacts "Types & approvals" Approve action — until the dynamic-type
+// engine teardown (#1793) removes the #1433 machinery wholesale.
 // Business refusals are VALUES (`{ ok:false, code, ... }`), never throws.
 
 import {
