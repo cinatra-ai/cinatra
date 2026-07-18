@@ -7,10 +7,18 @@
 // fleet. Also pins each of OAS-RUNTIME-009..012 (pos + neg) and the Layer-2
 // publish contract.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import { scanOasForArtifactParityFindings } from "../validate-oas-runtime-invariants";
-import { evaluateProducesMaterializationContract } from "../verdaccio/package-contract";
+import {
+  evaluateProducesMaterializationContract,
+  evaluateTypedProducesContract,
+  resolveTypedProducesContract,
+  requiredArtifactDependencies,
+  readArtifactManifestClaimIds,
+  artifactDepVersionQuery,
+  agentProducesSchema,
+} from "../verdaccio/package-contract";
 
 const ARTIFACT = "@cinatra-ai/blog-post-artifact";
 
@@ -302,5 +310,220 @@ describe("evaluateProducesMaterializationContract — Layer 2 publish contract",
       oasDoc: unmigratedOas(),
     });
     expect(findings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1788 (epic #1785) — Layer 3 typed-production closure contract.
+// ---------------------------------------------------------------------------
+
+const TYPE = "@cinatra-ai/blog-post-artifact:post";
+const OTHER = "@cinatra-ai/blog-post-artifact:comment";
+
+const requiredArtifactEdge = (packageName: string) => ({
+  packageName,
+  kind: "artifact",
+  edgeType: "install-time",
+  requirement: "required",
+  versionConstraint: { kind: "semver-range", range: "^1" },
+});
+const artifactManifest = (types: string[]) => ({
+  cinatra: { kind: "artifact", artifact: { objectTypes: types.map((type) => ({ type })) } },
+});
+
+describe("requiredArtifactDependencies", () => {
+  it("keeps only required, non-peer, artifact-kind edges, carrying the versionConstraint", () => {
+    const deps = [
+      requiredArtifactEdge(ARTIFACT),
+      { ...requiredArtifactEdge("@x/opt"), requirement: "optional" },
+      { ...requiredArtifactEdge("@x/peer"), edgeType: "peer" },
+      { ...requiredArtifactEdge("@x/agent"), kind: "agent" },
+    ];
+    expect(requiredArtifactDependencies(deps)).toEqual([
+      { packageName: ARTIFACT, versionConstraint: { kind: "semver-range", range: "^1" } },
+    ]);
+  });
+  it("returns [] for a non-array / absent value", () => {
+    expect(requiredArtifactDependencies(undefined)).toEqual([]);
+    expect(requiredArtifactDependencies("nope")).toEqual([]);
+  });
+});
+
+describe("artifactDepVersionQuery", () => {
+  it("exact → {exact}, semver-range → {range}, git-ref/absent/malformed → {unresolvable}", () => {
+    expect(artifactDepVersionQuery({ kind: "exact", version: "1.2.3" })).toEqual({ exact: "1.2.3" });
+    expect(artifactDepVersionQuery({ kind: "semver-range", range: "^1" })).toEqual({ range: "^1" });
+    // git-ref is not a registry-version pin → unresolvable (caller fails closed).
+    expect(artifactDepVersionQuery({ kind: "git-ref", ref: "main" })).toEqual({ unresolvable: true });
+    expect(artifactDepVersionQuery(undefined)).toEqual({ unresolvable: true });
+    expect(artifactDepVersionQuery({ kind: "exact", version: 5 })).toEqual({ unresolvable: true });
+    expect(artifactDepVersionQuery({ kind: "semver-range", range: "" })).toEqual({ unresolvable: true });
+  });
+});
+
+describe("readArtifactManifestClaimIds", () => {
+  it("collects only well-formed namespaced cinatra.artifact.objectTypes[].type ids", () => {
+    expect([...readArtifactManifestClaimIds(artifactManifest([TYPE, OTHER]))].sort()).toEqual(
+      [OTHER, TYPE].sort(),
+    );
+    // A non-namespaced / garbage `type` is not a resolvable claim → ignored.
+    expect(
+      readArtifactManifestClaimIds({
+        cinatra: { artifact: { objectTypes: [{ type: "not-namespaced" }, { type: TYPE }] } },
+      }),
+    ).toEqual(new Set([TYPE]));
+  });
+  it("is empty for a descriptor-only pack, null, or a malformed block", () => {
+    expect(readArtifactManifestClaimIds(artifactManifest([])).size).toBe(0);
+    expect(readArtifactManifestClaimIds(null).size).toBe(0);
+    expect(readArtifactManifestClaimIds({ cinatra: { artifact: { objectTypes: "bad" } } }).size).toBe(0);
+  });
+  it("returns EMPTY (never a partial set) when a claim getter throws mid-walk (fail-closed)", () => {
+    let n = 0;
+    const hostile = {
+      cinatra: {
+        artifact: {
+          objectTypes: [
+            { type: TYPE },
+            {
+              get type() {
+                n++;
+                throw new Error("hostile getter");
+              },
+            },
+          ],
+        },
+      },
+    };
+    expect(readArtifactManifestClaimIds(hostile).size).toBe(0);
+    expect(n).toBeGreaterThan(0); // proves it threw partway, yet returned empty
+  });
+});
+
+describe("agentProducesSchema (publish-side strict validation)", () => {
+  it("accepts valid coarse + typed entries", () => {
+    expect(agentProducesSchema.safeParse([{ extension: ARTIFACT }]).success).toBe(true);
+    expect(agentProducesSchema.safeParse([{ extension: ARTIFACT, objectTypeId: TYPE }]).success).toBe(true);
+  });
+  it("REFUSES a malformed objectTypeId (never launders to coarse)", () => {
+    expect(agentProducesSchema.safeParse([{ extension: ARTIFACT, objectTypeId: "bad" }]).success).toBe(false);
+    expect(agentProducesSchema.safeParse([{ extension: ARTIFACT, objectTypeId: 5 }]).success).toBe(false);
+  });
+  it("REFUSES a smuggled key or a bad extension", () => {
+    expect(agentProducesSchema.safeParse([{ extension: ARTIFACT, smuggled: 1 }]).success).toBe(false);
+    expect(agentProducesSchema.safeParse([{ extension: "" }]).success).toBe(false);
+  });
+});
+
+describe("evaluateTypedProducesContract — pure closure/claim check", () => {
+  it("returns no findings when every entry resolves to a claimed type", () => {
+    const findings = evaluateTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      closureArtifactClaims: new Map([[ARTIFACT, new Set([TYPE])]]),
+    });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("BLOCKS when the extension is not a required artifact-kind closure member", () => {
+    const findings = evaluateTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      closureArtifactClaims: new Map(),
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("blocker");
+    expect(findings[0].code).toBe("ARTIFACT-CONTRACT-PRODUCES-UNCLAIMED");
+    expect(findings[0].message).toMatch(/not a REQUIRED artifact-kind dependency/);
+  });
+
+  it("BLOCKS when the objectTypeId is not among the extension's declared claims (names it)", () => {
+    const findings = evaluateTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      closureArtifactClaims: new Map([[ARTIFACT, new Set([OTHER])]]),
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("blocker");
+    expect(findings[0].message).toContain(TYPE);
+    expect(findings[0].message).toContain(OTHER); // lists what it DOES declare
+  });
+
+  it("accepts a coarse entry (no objectTypeId) when the extension is present", () => {
+    const findings = evaluateTypedProducesContract({
+      produces: [{ extension: ARTIFACT }],
+      closureArtifactClaims: new Map([[ARTIFACT, new Set()]]),
+    });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("returns no findings for an empty produces declaration", () => {
+    expect(evaluateTypedProducesContract({ produces: [], closureArtifactClaims: new Map() })).toHaveLength(0);
+  });
+});
+
+describe("resolveTypedProducesContract — fail-closed orchestrator", () => {
+  it("passes a conforming produces + required-dep + claiming manifest", async () => {
+    const findings = await resolveTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      cinatraDependencies: [requiredArtifactEdge(ARTIFACT)],
+      resolveManifest: async () => artifactManifest([TYPE]),
+    });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("BLOCKS a typed entry when the required dependency is unresolvable (resolver → null)", async () => {
+    const findings = await resolveTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      cinatraDependencies: [requiredArtifactEdge(ARTIFACT)],
+      resolveManifest: async () => null,
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("blocker");
+  });
+
+  it("treats a THROWING resolver as unresolvable (fail-closed), never propagates", async () => {
+    const findings = await resolveTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      cinatraDependencies: [requiredArtifactEdge(ARTIFACT)],
+      resolveManifest: async () => {
+        throw new Error("registry down");
+      },
+    });
+    expect(findings).toHaveLength(1);
+  });
+
+  it("BLOCKS when produces names an extension absent from the required deps", async () => {
+    const findings = await resolveTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      cinatraDependencies: [], // no required artifact edge
+      resolveManifest: async () => artifactManifest([TYPE]),
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toMatch(/not a REQUIRED artifact-kind dependency/);
+  });
+
+  it("no produces → no resolution, no findings", async () => {
+    const resolveManifest = vi.fn(async () => artifactManifest([TYPE]));
+    const findings = await resolveTypedProducesContract({
+      produces: [],
+      cinatraDependencies: [requiredArtifactEdge(ARTIFACT)],
+      resolveManifest,
+    });
+    expect(findings).toHaveLength(0);
+    expect(resolveManifest).not.toHaveBeenCalled();
+  });
+
+  it("passes the edge's PINNED versionConstraint to resolveManifest, not latest (cinatra#1788 F2)", async () => {
+    const seen: unknown[] = [];
+    const findings = await resolveTypedProducesContract({
+      produces: [{ extension: ARTIFACT, objectTypeId: TYPE }],
+      cinatraDependencies: [
+        { ...requiredArtifactEdge(ARTIFACT), versionConstraint: { kind: "exact", version: "0.9.0" } },
+      ],
+      resolveManifest: async (_dep, versionConstraint) => {
+        seen.push(versionConstraint);
+        return artifactManifest([TYPE]);
+      },
+    });
+    expect(findings).toHaveLength(0);
+    expect(seen).toEqual([{ kind: "exact", version: "0.9.0" }]);
   });
 });

@@ -85,17 +85,67 @@ Every episode carries a `_cinatra` key in its JSON body:
 }
 ```
 
+## Unclassifiable saves — lossless generic fallback (#1787, epic #1785)
+
+**Types exist only by installation.** `objects_save` never mints a type. When the
+classifier cannot place a payload under an installed object type — no match
+(`isNewType`), low confidence (`< 0.4`), a dynamic id, or the classifier being
+unavailable (thrown / no LLM configured) — the row is still saved **immediately
+and losslessly** as a plain `@cinatra-ai/objects:object` object:
+
+- the classifier no longer proposes dynamic-type ids: `classifier/schema.ts`
+  rejects any id the caller's catalog does not already know, and
+  `classifier/prompt.ts` tells the model to return the generic
+  `@cinatra-ai/objects:object` id (with `isNewType: true`) instead of inventing one;
+- the persisted `data` is the **original `rawData`**, byte-for-byte — never the
+  classifier's `normalizedData` (which may drop fields) and with **no**
+  `cinatraAgentRunId` injected;
+- identity uses the explicit external id (`external_id` / `externalId`) only, so
+  two fallback saves in one run stay two distinct objects while a pair sharing an
+  external id still deduplicates — the generic type's run-scoped `identityKey` is
+  deliberately bypassed on this path;
+- **no** approval / queue / human step gates the write (`ensureDynamicObjectType`
+  is not called from `objects_save`).
+
+READ of existing dynamic-typed rows is untouched (durable read semantics live in
+the tombstone slice #1789).
+
+### `objects_save` result warning
+
+A fallback save adds a versioned, structured `warning` to the tool result
+(absent on a normal matched save). Shape (`ObjectsSaveWarning`, exported from
+`mcp/handlers.ts`):
+
+```typescript
+{
+  version: 1,                              // bump on any breaking shape change
+  code: "unclassified_generic_fallback",
+  reason: "unmatched" | "low_confidence" | "classifier_unavailable",
+  persistedType: "@cinatra-ai/objects:object",
+  inferredCategory: string | null,         // classifier's category; null when unavailable
+  inferredTypeName: string | null,         // classifier's inferred name; null when unavailable
+  message: string,                         // human-readable + remediation pointer
+                                           // ("declare it as a kind:\"artifact\" extension type")
+}
+```
+
 ## Dynamic object type registry
 
-`auto-registrar.ts` manages the `dynamic_object_types` Postgres table — types that are discovered at runtime by the LLM classifier, MCP callers, or agent install.
+`auto-registrar.ts` manages the `dynamic_object_types` Postgres table. The
+classifier / `objects_save` write path **no longer mints** here (retired in
+#1787 — see the lossless generic fallback above), and the explicit
+`objects_type_register` MCP primitive was **removed** (retired in #1790, epic
+#1785 slice E — a deliberate external-contract removal), and agent install no
+longer mints types (retired in #1788); no live writer remains. The table itself
+is torn down later in epic #1785.
 
-### Three-path write model
+### Write model
 
 | Source | Status on insert | Trigger |
 |---|---|---|
-| `classifier` | `proposed` | `objects_classify` handler cannot match a static type |
-| `mcp` | `active` | MCP caller invokes `objects_type_register` |
-| `install` | `active` | Agent package imported with `output_object_types` in `agent.json` |
+| ~~`classifier`~~ | ~~`proposed`~~ | **Retired (#1787)** — unclassifiable saves fall back to the generic type instead of minting |
+| ~~`mcp`~~ | ~~`active`~~ | **Retired (#1790)** — the `objects_type_register` primitive was removed (deliberate external-contract removal, epic #1785 slice E) |
+| `install` | — | **RETIRED (cinatra#1788, epic #1785):** agent install no longer mints types. Typed agent output is now the fail-closed `cinatra.produces` manifest contract backed by required artifact-kind claims (see `@cinatra-ai/agents` AGENTS.md); there is no `output_object_types` / `producesObjectTypes` path. |
 
 ### `ensureDynamicObjectType` — INSERT-ONLY semantics
 
@@ -155,6 +205,41 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 ```
 
 These aliases are declared in both `tsconfig.json` paths and `packages/agent-builder/vitest.config.ts` aliases.
+
+## Permanent namespace tombstones (cinatra#1789, epic #1785)
+
+The two dynamic-type id prefixes are **permanent tombstones** — a forward WRITE
+under either can never happen again:
+
+- `@dynamic/types:` — the reserved dynamic mint scope
+- `@cinatra-ai/dynamic:` — the legacy first-party dynamic prefix
+
+**Invariant (PERMANENT):** no artifact-claim manifest, no extension object-type
+registration (including a derived `<pkg>:artifact` umbrella id), and no direct
+claim-store write may mint, claim, or register a NEW type id under either
+prefix. Existing rows keep their ids and both prefixes still classify/read
+(`isDynamicObjectTypeId`) — only the forward write surfaces reject. This makes
+the "inert legacy label" durable: the namespaces can never come back. Minting
+*deletion* is other slices' work (#1787, #1790) and the retirement migration
+(#1792) runs on this substrate; this tombstone is the **permanence** guarantee
+that keeps those retirements from being undone. The permanent
+`@cinatra-ai/...:object` floor claim is a normal namespaced id and is never
+matched.
+
+**Single source of truth:** `isTombstonedObjectTypeId` /
+`TOMBSTONED_OBJECT_TYPE_ID_PREFIXES` in `src/namespace.ts`. Matching is
+**prefix-exact** — a look-alike scope such as `@dynamics/types:x` is NOT
+tombstoned (no false positives), while a malformed/empty slug or the derived
+`@dynamic/types:artifact` umbrella IS. Two rejection sites cannot import the
+namespace module and inline a mirror **pinned byte-equal by test**:
+
+| Write surface | Predicate | Pin test |
+|---|---|---|
+| Manifest claim validation — `src/claims.ts` `artifactObjectTypeClaimManifestSchema.type` refine (also `parseArtifactObjectTypeClaims`, and via the byte-mirror the semantic-manifest + artifact-handler parse) | `isTombstonedClaimedTypeId` (leaf mirror — claims keeps zero non-zod imports) | `namespace-tombstones.test.ts`, `artifact-objecttypes-claim-schema.test.ts` |
+| Extension registration bridge — `src/integration/register-artifact-extensions.ts` `registerParsedArtifactManifest` (umbrella id) + `registerClaimValidators` (per claim) | `isTombstonedObjectTypeId` (namespace) | `artifact-bridge.test.ts` |
+| Registry primitive backstop — `src/registry.ts` `objectTypeRegistry.register` (skip + warn) — the UNIVERSAL choke point under every registration path, incl. the SDK `ctx.objects.registerType` provider (`src/lib/register-objects-provider.ts`) | `isTombstonedObjectTypeId` (namespace) | `registry-package-provenance.test.ts` |
+| Claim-store write — `src/lib/objects/artifact-claim-store.ts` `reserveArtifactTypeClaim` | `isTombstonedClaimedTypeId` (fail-closed, before the DB) | `artifact-claim-store.test.ts` |
+| Edge-bound serving exclusion — `src/lib/extension-edge-bound-serving.ts` `owningPackageOfObjectType` (a dynamic id has NO owning package → never edge-bound) | inlined `DYNAMIC_OBJECT_TYPE_ID_PREFIXES` (host lib cannot import objects — route-graph is shrink-only) | `extension-edge-bound-serving.test.ts` |
 
 ## Static object type registry (`register-types.ts`)
 

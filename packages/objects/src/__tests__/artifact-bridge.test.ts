@@ -794,4 +794,60 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     expect(claim).not.toBeNull();
     expect(claim!.schema.safeParse({}).success).toBe(false); // enforces required 'k'
   });
+
+  // PERMANENT namespace tombstones (cinatra#1789, epic #1785): the registration
+  // seam rejects a package under a retired dynamic namespace (its derived
+  // umbrella id is tombstoned) and drops a cross-namespace tombstoned claim.
+  it("rejects a package under a retired dynamic namespace (tombstoned umbrella) — nothing registers", () => {
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warns.push(a.map(String).join(" "));
+    };
+    let ok: boolean;
+    try {
+      ok = registerParsedArtifactManifest(
+        { accepts: { file: { mimeTypes: ["text/markdown"] } } } as SemanticArtifactManifest,
+        "@dynamic/types",
+      );
+    } finally {
+      console.warn = orig;
+    }
+    expect(ok).toBe(false);
+    expect(objectTypeRegistry.resolve("@dynamic/types:artifact")).toBeNull();
+    expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
+    expect(warns.some((w) => w.includes("permanently-retired dynamic namespace"))).toBe(true);
+  });
+
+  it("drops a cross-namespace tombstoned claim validator in a hybrid manifest (umbrella still mints)", () => {
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warns.push(a.map(String).join(" "));
+    };
+    try {
+      expect(
+        registerParsedArtifactManifest(
+          {
+            accepts: { file: { mimeTypes: ["application/json"] } },
+            objectTypes: [
+              {
+                type: "@dynamic/types:invoice", // a tombstoned CROSS-namespace claim
+                claim: "dedicated",
+                schema: { type: "object" },
+              },
+            ],
+          } as SemanticArtifactManifest,
+          "@cinatra-ai/normal-artifact",
+        ),
+      ).toBe(true);
+    } finally {
+      console.warn = orig;
+    }
+    // The package's own umbrella still registers...
+    expect(objectTypeRegistry.resolve("@cinatra-ai/normal-artifact:artifact")).not.toBeNull();
+    // ...but the tombstoned claim validator never did.
+    expect(objectTypeRegistry.resolve("@dynamic/types:invoice")).toBeNull();
+    expect(warns.some((w) => w.includes("permanently-retired dynamic namespace"))).toBe(true);
+  });
 });

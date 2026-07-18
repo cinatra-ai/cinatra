@@ -88,19 +88,54 @@ supporting evidence you can turn on locally.
 
 ## Scope
 
-**In scope (this slice):** the fixture corpus, the DOM-normalized compare
-harness against the S3 packaged renderer as the reference target, wiring into
-the existing design-conformance CI, and documented + regenerable baseline
+**In scope (the static-fixture slice):** the fixture corpus, the DOM-normalized
+compare harness against the S3 packaged renderer as the reference target, wiring
+into the existing design-conformance CI, and documented + regenerable baseline
 generation.
 
-**Out of scope (the live-run slice — after S2 `/chat` on the wire and S5 widgets
-embedded), called out on the PR:**
+### Live-run target (1): `/chat` — LANDED (S2-enabled)
 
-- Driving the corpus through the generic embedded conversation-view and the
-  WordPress / Drupal iframes as additional `RenderTarget`s and asserting
-  cross-target DOM + visual equality (the full three-target compare). The seam
-  (`RenderTarget`) is already here; those targets only implement it.
-- The #1214 no-direct-egress assertion inside the embedded E2E.
+S2 (#1218, delivered by #1752) put `/chat` on the unified wire + the first-class
+structured-thread persistence route, which unblocks the **first** live-run
+target. It is implemented as an async target against the same seam
+(`AsyncRenderTarget` in `targets/target.ts`) and lives in the agents-run live
+suite (it needs the real authenticated app), NOT this static dir:
+
+```
+tests/e2e/agents-run/
+  chat-render-parity-target.ts   # the live /chat AsyncRenderTarget: seed a thread
+                                 # via POST /api/assistants/threads, load /chat/<id>,
+                                 # scrape the rendered assistant content block
+  chat-render-parity.spec.ts     # drives the SAME corpus + goldens; DOM-normalized
+                                 # compare of the RUNNING surface vs the S3 golden
+```
+
+It is a **gated** live spec (peer to `chat-mcp` / `chat-prompt-hitl`): it needs
+the canonical schema + a real session, so it runs on the stack, not per-PR.
+Unlike those it is **deterministic and cost-free** — the content is a SEEDED
+thread, not a live LLM turn. Run it on the verify stack or via the
+`e2e-app-suites` dispatch:
+
+```
+pnpm exec playwright test --config tests/e2e/config/agents-run.config.ts \
+  --project chat-render-parity
+```
+
+Ten of the eleven content/hostile fixtures compare byte-identically to the
+committed goldens (the live surface calls the SAME `renderMarkdown`); the one
+exception — `code`, which `/chat` async-hydrates via shiki — is reconciled by
+`canonicalizeCodeBlocks` (`normalize.ts`), whose invariance is proven
+**server-free in per-PR CI** by `render-parity-live-normalize.spec.ts` in this
+dir (it rides `design-conformance-functional`, no app boot).
+
+**Still out of scope — after S5 (#1221) / S4 (#1220), called out on the PR:**
+
+- Live-run targets **(2)/(3)** — the generic embedded conversation-view and the
+  WordPress / Drupal iframes — and their cross-target DOM + visual equality (the
+  full three-target compare). The async seam is here; those targets only
+  implement it, **after S5 embeds the widgets**.
+- The #1214 no-direct-egress assertion inside the **embedded** E2E (an S5
+  surface, not `/chat`).
 - The DOM/visual render-compare of the AG-UI interactive layer (tool-call chips,
   HITL forms, `RUN_ERROR`, the change-diff component). Those components land in
   S4 (#1220); this slice schema-locks their wire fixtures now so they cannot

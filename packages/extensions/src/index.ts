@@ -1622,9 +1622,6 @@ export {
   detectCycles,
   checkAuthoringRecursionBudget,
   DEFAULT_AUTHORING_RECURSION_BUDGET,
-  // Produced-artifact advisory (cinatra#1059).
-  governingInstalledArtifactSet,
-  computeMissingProducedArtifacts,
 } from "./cross-kind-dep-graph";
 export type {
   CrossKindNode,
@@ -1632,7 +1629,6 @@ export type {
   InstallResolution,
   UninstallDecision,
   RecursionCheck,
-  InstalledArtifactRowLike,
 } from "./cross-kind-dep-graph";
 
 // NOTE: the declared-vs-used dependency closure VALIDATOR (engineering#422,

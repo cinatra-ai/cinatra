@@ -151,5 +151,24 @@ export default defineConfig({
       },
       dependencies: ["setup", "preflight"],
     },
+    {
+      // Live /chat render-parity conformance (cinatra#1222, epic S6 — the
+      // S2-enabled live-run target). Seeds a chat thread whose sole assistant
+      // message is a corpus fixture through POST /api/assistants/threads, loads
+      // /chat/<id>, and DOM-normalized-compares the rendered content against the
+      // committed S3 packaged-renderer goldens. DETERMINISTIC — no LLM tokens
+      // (seeded content, not a live turn), so unlike chat-mcp/chat-prompt-hitl
+      // it is cost-free; still gated here (not per-PR) because it needs the real
+      // authenticated app + persistence. Depends on `setup` (auth) ONLY — it
+      // exercises no WayFlow/agent execution, so the 16-agent preflight is not a
+      // precondition.
+      name: "chat-render-parity",
+      testMatch: /chat-render-parity\.spec\.ts/,
+      use: {
+        ...desktopChrome,
+        storageState: suitePath("agents-run", ".auth/state.json"),
+      },
+      dependencies: ["setup"],
+    },
   ],
 });

@@ -654,3 +654,63 @@ metric-cost-api 30/30, root `tsgo --noEmit` clean, eslint clean.
 files move together). No persisted-state migration: span export is
 append-only rows in `cinatra.traces`; the `parentSpanId` column shape is
 unchanged.
+
+---
+
+## 11. Refresh 2026-07-18 — Renovate revival: org-wide bot-managed major backlog (upgrade-track input)
+
+Renovate resumed org-wide. The routine patch/minor bot PRs are triaged on their
+own weekly window and are out of scope here. The MAJOR / breaking bumps below
+are recorded as **upgrade-track input** — the *org-wide bot-managed major
+backlog* capture the inventory pass calls for. These ride their own managed
+Renovate / Dependabot backlogs and are **not** merged as part of this ledger;
+they are captured here for cross-reference plus the works-after /
+obsolete-workaround signal. Grounded against live `main`, 2026-07-18.
+
+### 11.1 TypeScript → `7` — org-wide, GATED (state unchanged from §8.1)
+
+This repo already carries TypeScript 7 as an **offered-but-gated** stack major
+(§8.1): it pins `typescript: "^6.0.3"` and the latest-stable bar is
+`typescript@7.0.2`. The revival surfaces the **same gate** as bot PRs on the
+connectors that pin their own `typescript` — all RED with one shared root cause:
+`@typescript-eslint/parser@8.63.0` peers `typescript ">=4.8.4 <6.1.0"`, so
+`typescript@7` cannot resolve until typescript-eslint ships a TS-7-compatible
+peer range (the identical gate §8.1 records for this repo):
+
+- `drupal-mcp-connector#68`, `github-connector#51`, `nango-connector#49`,
+  `wordpress-mcp-connector#75`.
+
+**PARKED** (unchanged): record the target, wait for a TS-7-aware
+typescript-eslint line, then re-drive the coupled group (`typescript` +
+`@typescript-eslint` + the `eslint-config-next` / `next` toolchain) together at
+each member's latest stable through the works-after / named-commit CI gate.
+**Obsolete-on-upgrade:** adopting stable `typescript@7` drops the
+`@typescript/native-preview` devDependency (§8.1) and re-checks the ESLint-10
+`settings.react.version` workaround (§4.5).
+
+### 11.2 `@types/node` `^22` → `^24` — platform ALREADY CURRENT; connector backlog only
+
+**No platform-repo delta.** This repo already pins `@types/node: "^24.13.2"` and
+builds/runs on `node:24-alpine` (§1), so it is already at the `^24` bar. The
+`^22 → ^24` bump is a **connector-repo** currency item (e.g.
+`youtube-connector#49`, reported CI-green) that pairs with each connector's own
+Node-24 runtime move; it rides the managed backlog. Recorded here only so a
+reader does not re-chase it for this repo.
+
+### 11.3 `actions/checkout` `4` → `7` — org-wide GitHub Actions major (batch-decidable)
+
+The revival surfaced `actions/checkout` v7 across the connector / agent /
+artifact repos: one Action major to decide once, then batch (~64 mergeable PRs;
+the 2 archived repos cannot merge and are skipped). Note: `actions/checkout` v5+
+**drops the Node 20 action runtime → Node 24**, so the batch decision is coupled
+to the Node-24 runner baseline. This repo's OWN GitHub-Actions majors are
+Dependabot-grouped (the actions-group PR) and are tracked separately from this
+Renovate batch. CI-workflow currency only — no datastore / stack pin delta.
+
+### Net for this repo
+
+The 2026-07-18 revival adds **no new platform-repo pin delta**: TypeScript 7
+stays parked on the typescript-eslint gate (§8.1), `@types/node` is already at
+`^24`, and `actions/checkout` v7 is CI-workflow currency on its managed backlog.
+The disruptive datastore / stack majors remain owned by their own staged lanes,
+each gated by the per-service works-after proof (§6, §7, §9).

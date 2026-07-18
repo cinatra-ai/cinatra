@@ -7,6 +7,7 @@ import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-
 import { objectTypeRegistry } from "../registry";
 import type { ArtifactObjectTypeClaim, SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources, claimedTypeRegisteringPackage } from "../claims";
+import { isTombstonedObjectTypeId } from "../namespace";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import {
   semanticRendererRegistry,
@@ -101,6 +102,18 @@ function registerClaimValidators(
   packageName: string,
 ): void {
   for (const claim of claims) {
+    // PERMANENT namespace tombstone (cinatra#1789): never register a validator
+    // for a retired dynamic-namespace type. The fs path already rejects these
+    // at manifest validation; this guards direct callers of the exported
+    // registration seam that pass a hand-built descriptor (a hybrid pack can
+    // ship a CROSS-namespace claim, so the package-level umbrella guard alone
+    // would not catch it).
+    if (isTombstonedObjectTypeId(claim.type)) {
+      console.warn(
+        `[artifacts:bridge] ${packageName} claim '${claim.type}' is under a permanently-retired dynamic namespace — not registered (cinatra#1789)`,
+      );
+      continue;
+    }
     if (!claim.schema) continue;
     if (claim.type === umbrellaType) continue; // never clobber the umbrella
     const schema = compileClaimValidator(claim.schema);
@@ -245,6 +258,22 @@ export function registerParsedArtifactManifest(
   packageName: string,
 ): boolean {
   const mode = resolveArtifactManifestMode(descriptor);
+  // PERMANENT namespace tombstone (cinatra#1789, epic #1785): a package under a
+  // retired dynamic namespace (`@dynamic/types` / `@cinatra-ai/dynamic`) derives
+  // a tombstoned umbrella id `${packageName}:artifact` and can NEVER register —
+  // reject the whole package before any type lands or any prior registration is
+  // reconciled away. This is the registration-path half of the tombstone (the
+  // manifest schema already rejects tombstoned `objectTypes[].type` claims on
+  // the fs path); it also covers direct callers of this exported seam that
+  // bypass schema parse, and — since claim-only self-owned claims share the
+  // package namespace — it tombstones a reserved-scope pack's claim-only types
+  // too.
+  if (isTombstonedObjectTypeId(`${packageName}:artifact`)) {
+    console.warn(
+      `[artifacts:bridge] ${packageName} is under a permanently-retired dynamic namespace — its derived umbrella '${packageName}:artifact' is tombstoned; nothing registered (cinatra#1789)`,
+    );
+    return false;
+  }
   // A claim-only manifest with no claims is invalid (the kind-gate #1453 requires
   // `objectTypes`); skip WITHOUT tearing down any prior registration.
   if (mode === "claim-only" && (descriptor.objectTypes?.length ?? 0) === 0) {
@@ -449,11 +478,22 @@ export function registerArtifactExtensionDir(dir: string): boolean {
   return registerOneArtifactDir(dir);
 }
 
+// An artifact-extension directory is named for its package slug, which ends in
+// either the SINGULAR `-artifact` (single-type pack) or the PLURAL `-artifacts`
+// (multi-type pack) suffix — both ratified by the plural-naming decision (epic
+// cinatra#1448 / cinatra#1453, merged #1769; the host name gate
+// `GENERIC_VENDOR_ARTIFACT_NAME_RE` is `-artifacts?`). The bundled-scan layout
+// mirrors the slug, so this predicate must accept both or a plural pack (e.g.
+// `email-artifacts`) is silently skipped at boot.
+function isArtifactExtensionDirName(name: string): boolean {
+  return name.endsWith("-artifact") || name.endsWith("-artifacts");
+}
+
 function scanDirForArtifacts(dir: string): number {
   if (!existsSync(dir)) return 0;
   let n = 0;
   for (const dirent of readdirSync(dir, { withFileTypes: true })) {
-    if (!dirent.isDirectory() || !dirent.name.endsWith("-artifact")) continue;
+    if (!dirent.isDirectory() || !isArtifactExtensionDirName(dirent.name)) continue;
     if (registerOneArtifactDir(path.join(dir, dirent.name))) n += 1;
   }
   return n;
@@ -461,9 +501,9 @@ function scanDirForArtifacts(dir: string): number {
 
 /**
  * Register every `kind:"artifact"` extension under `root`. Robust to caller
- * depth: scans BOTH `<root>/*-artifact` AND `<root>/<vendor>/*-artifact`, so it
- * is correct whether the caller passes the `extensions/` root (dev-watcher /
- * instrumentation) or the `extensions/cinatra-ai` vendor dir
+ * depth: scans BOTH `<root>/*-artifact(s)` AND `<root>/<vendor>/*-artifact(s)`,
+ * so it is correct whether the caller passes the `extensions/` root (dev-watcher
+ * / instrumentation) or the `extensions/cinatra-ai` vendor dir
  * (registerAllObjectTypes). Idempotent — the registry is replace-by-id.
  * Returns the count registered.
  */
@@ -471,7 +511,7 @@ export function registerArtifactExtensions(root: string): number {
   if (!existsSync(root)) return 0;
   let registered = scanDirForArtifacts(root);
   for (const dirent of readdirSync(root, { withFileTypes: true })) {
-    if (!dirent.isDirectory() || dirent.name.endsWith("-artifact")) continue;
+    if (!dirent.isDirectory() || isArtifactExtensionDirName(dirent.name)) continue;
     registered += scanDirForArtifacts(path.join(root, dirent.name));
   }
   return registered;

@@ -27,11 +27,6 @@ function compilerVendorDirCandidates(): string[] {
   if (operator === null || operator === "cinatra-ai") return ["cinatra-ai"];
   return [operator, "cinatra-ai"];
 }
-// Use the sub-path import (NOT the full @cinatra-ai/objects barrel) to keep
-// oas-compiler test transitive imports clean. The full barrel pulls
-// objects/mcp/handlers → mcp-server → @/lib/mcp-logging which is not stubbed
-// for agent-builder vitest. namespace.ts has zero side-effect imports.
-import { OBJECT_TYPE_NAMESPACE_RE } from "@cinatra-ai/objects/namespace";
 // Compile-time side-effects inference + triggerMode derivation.
 // Output is persisted on the compiled OAS root (CompiledAgentOas.triggerMode +
 // .gatedSteps) and from there into agent_templates.trigger_mode + .gated_steps
@@ -85,30 +80,24 @@ import {
 
 const componentRefSchema = z.object({ "$component_ref": z.string() });
 
-// An output-port `cinatra` annotation is EITHER an object-type pointer
-// (`object_type`, the legacy objects wiring) OR a declarative artifact
-// binding (`artifact`, cinatra#923 — grammar single-sourced in
-// artifact-binding.ts). At least one of the two must be present. The
-// artifact block's own field shape is validated by the binding collector
+// An output-port `cinatra` annotation carries a declarative artifact binding
+// (`artifact`, cinatra#923 — grammar single-sourced in artifact-binding.ts).
+// The artifact block's own field shape is validated by the binding collector
 // (`collectArtifactBindingsFromOasDocument`), not here, so its errors carry
 // precise per-field locations.
+//
+// The legacy `object_type` objects-wiring annotation — which minted `active`
+// dynamic object types at install — is RETIRED (cinatra#1788, epic #1785).
+// Typed agent output is declared ONLY via the manifest `cinatra.produces`
+// contract, backed by required artifact-kind claims (enforced fail-closed at
+// publish/install). This schema no longer recognizes `object_type` (nor its
+// display_name/category/canonical_keys/identity_key companions); a lingering
+// one on an un-migrated OAS is IGNORED (stripped, never minted — matching the
+// binding collector's own "ignore object_type-only annotations" posture),
+// never a compile-reject mid-epic.
 const outputCinatraAnnotationSchema = z
   .object({
-    object_type: z.string().optional(),
-    display_name: z.string().optional(),
-    category: z.enum(["profile", "content", "project", "idea", "report"]).optional(),
-    canonical_keys: z.array(z.string()).optional(),
-    identity_key: z.string().optional(),
     artifact: z.record(z.string(), z.unknown()).optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.object_type === undefined && value.artifact === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "output cinatra annotation must carry object_type (objects wiring) or artifact (declarative artifact binding)",
-      });
-    }
   })
   .optional();
 
@@ -965,16 +954,6 @@ export type CompiledAgentOas = {
   // declares (e.g. "26.1.0"). Surfaced from the top-level `agentspec_version`
   // field so downstream layers can stamp run-context provenance into objects.
   agentSpecVersion: string | null;
-  // Object types declared inline on output ports via `outputs[*].cinatra`.
-  // Undefined (NOT empty array) when no outputs carry a `cinatra` annotation —
-  // use `?.length` guards. Consumers register each dynamic object type.
-  producesObjectTypes?: Array<{
-    typeId: string;
-    displayName: string;
-    category: "profile" | "content" | "project" | "idea" | "report";
-    canonicalKeys?: string[];
-    identityKey?: string;
-  }>;
   // Trigger gate metadata. Persisted to
   // agent_templates.trigger_mode + agent_templates.gated_steps; read by
   // the runtime gate and UI. triggerMode is derived from
@@ -1865,43 +1844,11 @@ export async function compileOasAgentJson(opts: {
   const agentSpecVersion =
     typeof parsed.agentspec_version === "string" ? parsed.agentspec_version : null;
 
-  // Extract inline cinatra annotations from output ports.
-  // Namespace check is a domain rule applied here; Zod enforces field shape upstream.
-  // When no outputs carry a `cinatra` annotation, `producesObjectTypes` remains `undefined`
-  // (NOT empty array) — backward-compat invariant: callers use `?.length` guards.
-  type RawOutputPort = {
-    title: string;
-    cinatra?: {
-      object_type: string;
-      display_name?: string;
-      category?: "profile" | "content" | "project" | "idea" | "report";
-      canonical_keys?: string[];
-      identity_key?: string;
-    };
-  };
-  const annotatedOutputs = ((parsed.outputs ?? []) as RawOutputPort[]).filter(
-    (o) => o.cinatra?.object_type,
-  );
-
-  let producesObjectTypes: CompiledAgentOas["producesObjectTypes"];
-  if (annotatedOutputs.length > 0) {
-    for (const output of annotatedOutputs) {
-      const typeId = output.cinatra!.object_type;
-      if (!OBJECT_TYPE_NAMESPACE_RE.test(typeId)) {
-        return {
-          ok: false,
-          error: `outputs[${output.title}].cinatra.object_type "${typeId}" must match @scope/package:local-id`,
-        };
-      }
-    }
-    producesObjectTypes = annotatedOutputs.map((o) => ({
-      typeId: o.cinatra!.object_type,
-      displayName: o.cinatra!.display_name ?? o.title,
-      category: o.cinatra!.category ?? "report",
-      canonicalKeys: o.cinatra!.canonical_keys,
-      identityKey: o.cinatra!.identity_key,
-    }));
-  }
+  // The retired `outputs[*].cinatra.object_type` annotation (which compiled
+  // into `producesObjectTypes` for install-time dynamic-type minting) is gone
+  // (cinatra#1788, epic #1785). Typed output is declared via `cinatra.produces`
+  // and enforced against the required artifact-kind claim closure; no object
+  // type is derived from the OAS here.
 
   // Derive triggerMode from runtime + collect gated steps
   // from approvalPolicy.steps[]. Output is persisted on the compiled root and
@@ -1943,7 +1890,6 @@ export async function compileOasAgentJson(opts: {
       llmConfig,
       toolboxes,
       agentSpecVersion,
-      producesObjectTypes,
       triggerMode,
       gatedSteps,
       // sibling cinatra.json
