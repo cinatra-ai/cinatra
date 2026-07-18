@@ -4,35 +4,41 @@
  * Serves the SAME bytes as `../content/route.ts` (full session/actor/
  * tenant/tombstone/pin gating) but with:
  *
- *   - `Content-Disposition: inline` for MIMEs in
- *     `PREVIEW_INLINE_MIME_ALLOWLIST` (so the `/artifacts/[id]` detail
- *     page handlers can render via `<embed>`, `<img>`, or text+markdown
- *     react components). Non-allowlisted MIMEs → `attachment` (defense-
- *     in-depth alongside the 415 short-circuit below).
- *   - 415 for any MIME outside the allowlist — keeps a misbehaving
- *     caller from exfiltrating bytes through the preview path that would
- *     otherwise force-download via the content endpoint.
- *   - Per-MIME byte caps: markdown 10MB, text 10MB, image 25MB,
- *     PDF 100MB, audio 100MB, video 500MB. Anything bigger 413s; the
- *     user can still download uncapped via the content endpoint. An
- *     allowlisted MIME with NO registered cap fails closed (415) so a
- *     future allowlist edit cannot silently serve uncapped bytes.
+ *   - CAPABILITY-RESOLVED eligibility (cinatra#1630 AC-2): the route serves
+ *     inline ONLY when the representation's MIME is inline-transport eligible
+ *     through the effective representation-provider capability
+ *     (`isInlineTransportEligible`) — NOT a concrete MIME allowlist. A new
+ *     admitted preview provider (e.g. a marketplace `-artifact`) adds its type
+ *     with no host edit; an archived/retired provider FAILS CLOSED (415 on a
+ *     now-stale preview URL). Ineligible ⇒ 415, so a misbehaving caller cannot
+ *     exfiltrate bytes through the preview path (they always remain downloadable,
+ *     `attachment`, via the `/content` endpoint).
+ *   - `Content-Disposition: inline` on the served (eligible) path so the detail
+ *     page + reuse renderers can `<embed>`/`<img>`/`<video>`. The host applies
+ *     its safe-transport POLICY to whatever the capability admits, WITHOUT naming
+ *     concrete MIMEs.
+ *   - Byte caps by TRANSPORT CLASS (the MIME's top-level type), not per concrete
+ *     MIME: text 10MB, image 25MB, application 100MB, audio 100MB, video 500MB.
+ *     Anything bigger 413s; the user can still download uncapped via `/content`.
+ *     An eligible MIME whose transport class has NO registered cap fails closed
+ *     (415) so a future capability admission cannot serve uncapped bytes.
  *   - Range support — required for `<embed>`-served PDFs (browsers issue
  *     bytes 0-1 then re-request) and for `<video>`/`<audio>` scrubbing
  *     (browsers issue `bytes=0-` then seek with follow-up ranges).
+ *   - A constant sandbox CSP + `nosniff` + same-origin CORP (host transport
+ *     policy, MIME-agnostic) — the real inline-execution control.
  *
- * Guardrail: the preview route ALWAYS calls
- * `previewDispositionFor`. The content route ALWAYS calls
- * `downloadDispositionFor`. A unit test (`dispositions.test.ts`) pairs
- * the two helpers on every MIME class so a future MIME-allowlist edit
- * cannot make one helper's behaviour leak into the other.
+ * Guardrail: the preview route ALWAYS calls `previewDispositionFor`. The content
+ * route ALWAYS calls `downloadDispositionFor`. A unit test (`dispositions.test.ts`)
+ * pairs the two helpers so a preview refactor cannot make the download route
+ * serve `inline`.
  */
 import { getAuthSession, requireActorContext } from "@/lib/auth-session";
 import {
   resolveArtifactVersionForServe,
   previewDispositionFor,
-  PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS,
 } from "@/lib/artifacts/artifact-read";
+import { isInlineTransportEligible } from "@/app/artifacts/[id]/renderer-resolution";
 import { getArtifact } from "@/lib/artifacts/artifact-service";
 import { isRepresentationPinned } from "@/lib/artifacts/artifact-refs-store";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
@@ -41,36 +47,29 @@ export const runtime = "nodejs";
 
 type Params = { params: Promise<{ artifactId: string; versionId: string }> };
 
-// Per-MIME byte caps. Generous — the preview path is for inline
-// rendering inside the detail page's MIME handlers, not for unbounded
-// transport. The download route is uncapped (and always `attachment`)
-// so a user can still grab large artifacts wholesale.
+// Byte caps by TRANSPORT CLASS (the MIME's top-level type) — host safe-transport
+// policy applied WITHOUT naming concrete MIMEs (cinatra#1630 AC-2). These values
+// reproduce the prior per-MIME caps exactly (every image was 25MB, every audio
+// 100MB, every video 500MB, text 10MB, pdf/application 100MB) — a same-class
+// format now deliberately inherits the class cap. The preview path is for inline
+// rendering, not unbounded transport; the download route is uncapped (and always
+// `attachment`) so a user can still grab large artifacts wholesale. Media
+// (audio/video) is range-served (never buffered wholesale), so the cap bounds
+// which artifacts are previewable — not per-request transfer size.
 const ONE_MB = 1024 * 1024;
-const BYTE_CAPS: Readonly<Record<string, number>> = {
-  "text/markdown": 10 * ONE_MB,
-  "text/x-markdown": 10 * ONE_MB,
-  "text/plain": 10 * ONE_MB,
-  "application/pdf": 100 * ONE_MB,
-  "image/png": 25 * ONE_MB,
-  "image/jpeg": 25 * ONE_MB,
-  "image/gif": 25 * ONE_MB,
-  "image/webp": 25 * ONE_MB,
-  "image/svg+xml": 25 * ONE_MB,
-  // Media is range-served (never buffered wholesale), so the cap bounds
-  // which artifacts are previewable — not per-request transfer size.
-  "video/mp4": 500 * ONE_MB,
-  "video/webm": 500 * ONE_MB,
-  "video/ogg": 500 * ONE_MB,
-  "audio/mpeg": 100 * ONE_MB,
-  "audio/mp4": 100 * ONE_MB,
-  "audio/x-m4a": 100 * ONE_MB,
-  "audio/ogg": 100 * ONE_MB,
-  "audio/wav": 100 * ONE_MB,
-  "audio/x-wav": 100 * ONE_MB,
-  "audio/webm": 100 * ONE_MB,
-  "audio/flac": 100 * ONE_MB,
-  "audio/aac": 100 * ONE_MB,
+const TRANSPORT_CLASS_BYTE_CAPS: Readonly<Record<string, number>> = {
+  text: 10 * ONE_MB,
+  image: 25 * ONE_MB,
+  application: 100 * ONE_MB,
+  audio: 100 * ONE_MB,
+  video: 500 * ONE_MB,
 };
+
+/** The transport class (top-level MIME type) a byte cap is keyed by. */
+function transportClassOf(mime: string): string {
+  const slash = mime.indexOf("/");
+  return slash > 0 ? mime.slice(0, slash) : mime;
+}
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -171,25 +170,27 @@ export async function GET(request: Request, { params }: Params): Promise<Respons
     return Response.json({ ok: false, error: "Not found" }, { status: 404 });
   }
 
-  // 415 short-circuit. The preview route SERVES only allowlisted
-  // MIMEs; everything else 415s so a caller cannot use the preview path
-  // for unintended types. The download route at `/content` still serves
-  // these MIMEs (always `attachment`).
-  if (!PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS.has(resolved.mime)) {
+  // 415 short-circuit — CAPABILITY-RESOLVED (cinatra#1630 AC-2). The preview
+  // route serves inline ONLY a representation whose MIME is inline-transport
+  // eligible through the effective representation-provider capability; everything
+  // else 415s so a caller cannot use the preview path for unintended types (they
+  // remain downloadable, `attachment`, via `/content`). Fails closed when the
+  // resolving provider is no longer effective (archived/retired base ⇒ no
+  // binding ⇒ 415 on a stale preview URL).
+  if (!isInlineTransportEligible(orgId, resolved.mime)) {
     return Response.json(
       { ok: false, error: "Preview unsupported for this MIME type" },
       { status: 415 },
     );
   }
 
-  // Per-MIME byte cap. 413 if exceeded; user can still
-  // download via the content endpoint.
+  // Byte cap by TRANSPORT CLASS. 413 if exceeded; user can still download via
+  // the content endpoint.
   //
-  // Fail closed on cap drift: every allowlisted MIME MUST have a
-  // registered cap. If a future allowlist edit forgets the cap, the
-  // route 415s instead of serving uncapped bytes (and the preview-route
-  // parity test, which expects 200 for every allowlisted MIME, fails).
-  const cap = BYTE_CAPS[resolved.mime];
+  // Fail closed on an unbounded class: an eligible representation whose transport
+  // class has NO registered cap 415s instead of serving uncapped bytes — so
+  // admitting a new capability can never silently open unbounded transport.
+  const cap = TRANSPORT_CLASS_BYTE_CAPS[transportClassOf(resolved.mime)];
   if (cap === undefined) {
     return Response.json(
       { ok: false, error: "Preview unsupported for this MIME type" },
@@ -209,10 +210,8 @@ export async function GET(request: Request, { params }: Params): Promise<Respons
   }
 
   const store = createLocalDiskBlobStore();
-  const disposition = previewDispositionFor(
-    resolved.mime,
-    `artifact-${versionId}`,
-  );
+  // Eligibility was decided above (capability); the served path is always inline.
+  const disposition = previewDispositionFor(true, `artifact-${versionId}`);
   const range = parseRange(
     request.headers.get("range"),
     resolved.sizeBytes,

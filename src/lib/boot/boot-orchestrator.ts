@@ -26,6 +26,7 @@ import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfi
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { assistantThreadMirrorBackfillPhases } from "@/lib/boot/phases/assistant-thread-mirror-backfill";
+import { dashboardContributionReconcilePhases } from "@/lib/boot/phases/dashboard-contribution-reconcile";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
@@ -162,6 +163,14 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // `retryable`: idempotent (the dormancy predicate converges), soft-failing
   // per thread, retries next boot; kill switch in the phase body.
   await run(assistantThreadMirrorBackfillPhases());
+
+  // -- dashboardContribution adoption reconcile (cinatra#1628, S11c) ------------
+  // The LIVE TRIGGER for the S11b adoption reconciler. AFTER extension activation
+  // (the install store + generated manifest are loaded) so a successor agent that
+  // declares `adopts` re-homes recoverably-archived orphan dashboard rows onto
+  // itself on boot. DORMANT until a legacy orphan exists AND a successor ships;
+  // `retryable` (idempotent, soft-failing, kill-switchable).
+  await run(dashboardContributionReconcilePhases());
 
 
   // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────

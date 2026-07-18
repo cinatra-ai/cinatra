@@ -12,6 +12,11 @@ import { z } from "zod";
 // avoids a `packages/objects` -> host `src/lib` layer inversion.
 import { objectTypeRegistry } from "../registry";
 import {
+  CONNECTOR_REF_ARTIFACT_TYPE,
+  CONNECTOR_REF_SNAPSHOT_ORIGIN_KIND,
+  connectorRefPointerSchema,
+} from "../connector-ref";
+import {
   GenericObjectListRow,
   GenericObjectCard,
   GenericObjectDetail,
@@ -730,6 +735,77 @@ export function registerMemoryConceptType(): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// WordPress external-pointer type (cinatra#1464, epic #1448). The host-side
+// TYPE registrar for `@cinatra-ai/wordpress:post` — the ONE runtime registrar
+// the `@cinatra-ai/wordpress-artifacts` pack's manifest claim binds its
+// dispositions to (mutability `external`, pinnable:false; the pack adds
+// disposition/arbitration, never a second registrar). Its row `data` is the
+// connectorRef external-pointer artifact payload built by the pointer lifecycle
+// substrate (cinatra#1451): a bare-identity pointer (url + connector/external
+// ids + reference state + light title/excerpt), never the post body — the body
+// is read on demand through the wordpress-mcp-connector facade. Reusing the
+// substrate's `connectorRefPointerSchema` (strict) keeps the persisted pointer
+// shape byte-aligned with `buildConnectorRefArtifactData` / the read + sync
+// paths, so the write path can never persist a pointer the substrate rejects.
+//
+// Identity = `<connectorId>:<externalId>`, where the connector writes
+// `externalId` as the SITE-scoped WordPress post identity (`<instanceId>:<postId>`,
+// a WP post id is unique only within a site) — i.e. rows are keyed to
+// instance + WordPress post id (cinatra#1464). Category `content` (a post is
+// content). Baseline `mutableBy: ["agent"]` (the connector sync writes it on the
+// agent channel); the pack's `external` claim NARROWS that to no post-create
+// user/agent edit — the reference state moves ONLY via connector sync
+// (linked→stale→dangling), a channel outside this vocabulary. No crudPolicy: the
+// automap dispatcher must never auto-write external pointers (writes are the
+// connector sync's explicit objects_save, HITL otherwise).
+//
+// NOT this type: cinatra-authored blog content stays `blog-post-artifact`
+// (connector-independent) — two different types, no ambiguity; existing
+// blog-pipeline publish state on domain rows is not migrated here.
+const WORDPRESS_POST_TYPE_ID = "@cinatra-ai/wordpress:post";
+
+const wordpressPostSchema = z.object({
+  // The connectorRef artifact-data envelope (built by buildConnectorRefArtifactData).
+  artifactType: z.literal(CONNECTOR_REF_ARTIFACT_TYPE),
+  originKind: z.literal(CONNECTOR_REF_SNAPSHOT_ORIGIN_KIND),
+  mime: z.string().min(1),
+  // Light display metadata (safe to project; NEVER the post body).
+  title: z.string().optional(),
+  excerpt: z.string().optional(),
+  // The strict lifecycle pointer — the SINGLE source of truth for the shape.
+  connectorRef: connectorRefPointerSchema,
+});
+
+export function registerWordPressObjectTypes(): void {
+  objectTypeRegistry.register({
+    type: WORDPRESS_POST_TYPE_ID,
+    category: "content",
+    schema: wordpressPostSchema,
+    lifecycle: {
+      // Rows arrive from connector sync (agent channel) or an import. The pack's
+      // `external` mutability claim narrows post-create mutation to none — the
+      // reference state changes only via connector sync.
+      sources: ["agent", "import"],
+      mutableBy: ["agent"],
+    },
+    renderers: {
+      listRow: GenericObjectListRow,
+      card: GenericObjectCard,
+      detail: GenericObjectDetail,
+    },
+    identityKey: (data) => {
+      const d = data as { connectorRef?: { connectorId?: unknown; externalId?: unknown } };
+      const connectorId =
+        typeof d.connectorRef?.connectorId === "string" ? d.connectorRef.connectorId : null;
+      // externalId is the site-scoped post identity `<instanceId>:<postId>`.
+      const externalId =
+        typeof d.connectorRef?.externalId === "string" ? d.connectorRef.externalId : null;
+      return connectorId && externalId ? `${connectorId}:${externalId}` : null;
+    },
+  });
+}
+
 export function registerAllObjectTypes(): void {
   registerGenericObjectType();
   registerCampaignType();
@@ -739,6 +815,7 @@ export function registerAllObjectTypes(): void {
   registerEmailObjectTypes();
   registerLinkedinObjectTypes();
   registerMemoryConceptType();
+  registerWordPressObjectTypes();
   // CRM types (account / contact / list) are registered by the crm-connector
   // extension via the host boot path (createCrmModule() +
   // src/lib/register-all-object-types.ts), not here — this package must not

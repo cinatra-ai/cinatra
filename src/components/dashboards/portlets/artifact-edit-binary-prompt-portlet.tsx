@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ArtifactInlinePreview } from "@/components/artifacts/artifact-inline-preview";
 import { toast } from "@/lib/cinatra-toast";
 import {
   loadArtifactBaselinePortlet,
@@ -182,14 +183,17 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
     <div className="flex flex-col gap-3">
       {baseline ? (
         <>
-          {baseline.previewHref && baseline.mime.startsWith("image/") ? (
-            // eslint-disable-next-line @next/next/no-img-element -- preview-safe route serves gated, capped bytes; next/image optimization would bypass the session-gated route semantics.
-            <img
-              src={baseline.previewHref}
-              alt={baseline.title ?? "Current image"}
-              className="max-h-64 w-auto self-start rounded-md border border-line object-contain"
-            />
-          ) : null}
+          {/* Neutral capability-gated preview slot (cinatra#1630 AC-3): host-owned
+              React, no concrete-MIME check and no extension pixels imported — the
+              image extension's registered `preview` provider is what mints
+              `previewHref`; core just draws it. Rendered UNCONDITIONALLY so the
+              core fallback (the visible fail-closed surface when the capability is
+              missing / the base is archived ⇒ null previewHref) is reachable. */}
+          <ArtifactInlinePreview
+            previewHref={baseline.previewHref}
+            mime={baseline.mime}
+            title={baseline.title ?? "Current image"}
+          />
           <div className="flex items-center justify-between gap-3">
             <span className="truncate text-sm text-foreground">{baseline.title ?? baseline.artifactId}</span>
             <span className="font-mono text-xs text-muted-foreground">{baseline.mime}</span>

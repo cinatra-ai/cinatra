@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { OBJECT_TYPE_NAMESPACE_RE } from "../namespace";
 
 export const objectsSaveSchema = z.object({
   rawData: z.record(z.string(), z.unknown()).optional().describe("REQUIRED: the actual data payload as a plain JSON object. Put ALL data here — never inside typeHint."),
@@ -73,24 +72,6 @@ export const objectsClassifySchema = z.object({
 }).strict();
 
 export const objectsTypesListSchema = z.object({}).strict();
-
-/**
- * Input schema for the `objects_type_register` MCP primitive.
- *
- * Namespace validation lives here (not in the handler body): malformed typeIds
- * are rejected at Zod parse time before any DB write, so a future handler
- * refactor can never accidentally drop the check.
- */
-export const objectsTypeRegisterSchema = z.object({
-  typeId: z
-    .string()
-    .regex(OBJECT_TYPE_NAMESPACE_RE, "type_id must match @scope/package:local-id"),
-  displayName: z.string().min(1),
-  category: z.enum(["profile", "content", "project", "idea", "report"]),
-  canonicalKeys: z.array(z.string()).optional(),
-  identityKey: z.string().optional(),
-  description: z.string().optional(),
-}).strict();
 
 // Data Safety: Undo & Versioning MCP primitive schemas.
 

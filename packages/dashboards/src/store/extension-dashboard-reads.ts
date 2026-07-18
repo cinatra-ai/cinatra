@@ -3,7 +3,7 @@
 // a narrow subpath (NOT the auth/screens barrels) to keep the route's import graph
 // light.
 import "server-only";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { dashboards, getDashboardsDb } from "./db";
 import type { DashboardRow } from "./schema";
@@ -36,6 +36,29 @@ export async function readDashboardRowById(id: string): Promise<DashboardRow | u
   const db = getDashboardsDb();
   const rows = await db.select().from(dashboards).where(eq(dashboards.id, id)).limit(1);
   return rows[0];
+}
+
+/**
+ * Distinct org ids that hold ARCHIVED, extension-owned, contribution-keyed rows —
+ * the ONLY orgs where a dashboardContribution ADOPTION could re-home an orphan
+ * (cinatra#1628, S11c). The boot reconcile trigger uses this to stay DORMANT:
+ * with no archived orphan rows anywhere, it reconciles zero orgs. Read-only.
+ */
+export async function listOrgIdsWithArchivedExtensionRows(): Promise<string[]> {
+  const db = getDashboardsDb();
+  const rows = await db
+    .selectDistinct({ organizationId: dashboards.organizationId })
+    .from(dashboards)
+    .where(
+      and(
+        eq(dashboards.status, "archived"),
+        sql`${dashboards.extensionId} IS NOT NULL`,
+        sql`${dashboards.contributionId} IS NOT NULL`,
+      ),
+    );
+  return rows
+    .map((r) => r.organizationId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
 }
 
 /** True for a project-scope TEMPLATE row, which must never render directly. */

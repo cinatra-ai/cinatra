@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS } from "@/lib/artifacts/artifact-read";
 
-// Preview route handler. Auth + resolver + blob store mocked (no DB /
-// fs), mirroring the content route test. Asserts the preview-specific
-// contract: 415 outside the allowlist, inline disposition + security
-// headers for allowlisted MIMEs, per-MIME 413 byte caps (fail-closed on
-// cap drift), and Range -> 206 for media streaming/scrubbing.
+// Preview route handler. Auth + resolver + blob store + the capability
+// eligibility resolver mocked (no DB / fs), mirroring the content route test.
+// Asserts the preview-specific contract (cinatra#1630 AC-2): 415 when the MIME
+// is not inline-transport eligible through the representation-provider capability
+// (fail-closed), inline disposition + security headers when eligible, byte caps
+// by TRANSPORT CLASS with a 413, capability EXPANSION (a newly-admitted type
+// serves with no host edit), and Range -> 206 for media streaming/scrubbing.
 
 const getAuthSession = vi.fn();
 const requireActorContext = vi.fn();
@@ -15,6 +17,7 @@ const getArtifact = vi.fn();
 const isRepresentationPinned = vi.fn();
 const openByStorageKey = vi.fn();
 const openRangeByStorageKey = vi.fn();
+const isInlineTransportEligible = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -35,6 +38,14 @@ vi.mock("@/lib/artifacts/artifact-read", async () => {
       actual.PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS,
   };
 });
+vi.mock("@/app/artifacts/[id]/renderer-resolution", () => ({
+  // Byte-route eligibility resolves through the representation-provider capability
+  // (cinatra#1630 AC-2). The default (set in beforeEach) mirrors the host safe-
+  // transport set so the existing 415/200 contract holds; individual tests override
+  // it to prove fail-closed and capability-expansion.
+  isInlineTransportEligible: (orgId: string, mime: string) =>
+    isInlineTransportEligible(orgId, mime),
+}));
 vi.mock("@/lib/artifacts/artifact-service", () => ({
   getArtifact: (i: unknown) => getArtifact(i),
 }));
@@ -85,6 +96,14 @@ describe("GET artifact preview", () => {
     isRepresentationPinned.mockReset();
     openByStorageKey.mockReset();
     openRangeByStorageKey.mockReset();
+    // Default eligibility mirrors the host safe-transport set (so the pre-existing
+    // 415/200 contract holds); individual tests override to prove fail-closed +
+    // capability-expansion.
+    isInlineTransportEligible
+      .mockReset()
+      .mockImplementation((_orgId: string, mime: string) =>
+        PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS.has(mime),
+      );
     requireActorContext.mockResolvedValue({
       principalType: "User",
       principalId: "u",
@@ -196,13 +215,50 @@ describe("GET artifact preview", () => {
     expect((await GET()).status).toBe(413);
   });
 
-  it("parity: EVERY allowlisted MIME serves 200 inline at a small size (cap drift fails closed as 415)", async () => {
+  it("parity: EVERY host safe-transport MIME serves 200 inline at a small size (every class has a cap)", async () => {
     for (const mime of PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS) {
       resolveAs(mime, 5);
       openByStorageKey.mockResolvedValue({ stream: streamOf("bytes"), sizeBytes: 5 });
       const res = await GET();
-      expect(res.status, `expected 200 for allowlisted ${mime}`).toBe(200);
+      expect(res.status, `expected 200 for ${mime}`).toBe(200);
       expect(res.headers.get("Content-Disposition")).toMatch(/^inline;/);
     }
+  });
+
+  it("fails closed: an ineligible representation 415s even at a servable size (provider no longer effective)", async () => {
+    // The capability resolves NOTHING for this MIME (e.g. its system base was
+    // archived / retired) — the byte route MUST 415 a now-stale preview URL and
+    // serve no bytes, even though the MIME's transport class HAS a cap.
+    isInlineTransportEligible.mockReturnValue(false);
+    resolveAs("image/png", 5);
+    const res = await GET();
+    expect(res.status).toBe(415);
+    expect(openByStorageKey).not.toHaveBeenCalled();
+    expect(openRangeByStorageKey).not.toHaveBeenCalled();
+  });
+
+  it("capability EXPANSION: a newly-admitted type outside the host set serves 200 inline (no host edit)", async () => {
+    // An admitted marketplace preview provider (e.g. json-artifact for
+    // application/json) makes a type inline-eligible with NO host allowlist edit;
+    // the byte route serves it under the `application` transport-class cap.
+    isInlineTransportEligible.mockImplementation(
+      (_o: string, mime: string) => mime === "application/json",
+    );
+    resolveAs("application/json", 5);
+    openByStorageKey.mockResolvedValue({ stream: streamOf("{}"), sizeBytes: 5 });
+    const res = await GET();
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/json");
+    expect(res.headers.get("Content-Disposition")).toMatch(/^inline;/);
+  });
+
+  it("415 when an eligible MIME has no transport-class cap (fail closed on an unbounded class)", async () => {
+    // A capability could admit a class the host defines no cap for (e.g. font/*):
+    // fail closed rather than serve uncapped bytes.
+    isInlineTransportEligible.mockReturnValue(true);
+    resolveAs("font/woff2", 5);
+    const res = await GET();
+    expect(res.status).toBe(415);
+    expect(openByStorageKey).not.toHaveBeenCalled();
   });
 });

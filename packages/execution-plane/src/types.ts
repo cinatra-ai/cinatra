@@ -10,6 +10,11 @@
 
 import type { ExecutionSession } from "@cinatra-ai/llm/execution-plane";
 
+// Exec-plane S3 (cinatra#1708): the resolved L1 environment a command mounts.
+// Type-only import — no runtime dependency, so this vocabulary leaf stays free
+// of the environment layer at runtime.
+import type { ResolvedEnvironmentMount } from "./environment/mount";
+
 // ---------------------------------------------------------------------------
 // Egress policy (epic D3)
 // ---------------------------------------------------------------------------
@@ -116,6 +121,15 @@ export type SandboxCommandSpec = {
    * mount (byte-identical S1 argv).
    */
   skillsVolume?: string;
+  /**
+   * The resolved L1 environment layer to run this command over (exec-plane S3,
+   * cinatra#1708). When present the sandbox runs over the layer's SIGNED image
+   * digest — after the worker re-verifies its provenance (fail-closed, AC4) —
+   * instead of the L0 base; absent ⇒ the L0 base (byte-identical S1/S2
+   * dispatch). Carries only the signed provenance + a display alias, so every
+   * field the worker acts on is signed.
+   */
+  environment?: ResolvedEnvironmentMount;
   egress: ResolvedEgress;
   limits: SandboxResourceLimits;
 };
@@ -309,6 +323,13 @@ export type ExecFailureReason =
   | "queue_saturated"
   | "command_blocked"
   | "egress_unavailable"
+  /**
+   * The job's declared L1 environment layer failed provenance verification at
+   * mount, or no host key was configured to verify it (exec-plane S3,
+   * cinatra#1708 AC4) — a distinct, security-relevant fail-closed refusal, not
+   * a generic worker error.
+   */
+  | "environment_untrusted"
   | "worker_error";
 
 export type OpenJobResult =

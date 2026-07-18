@@ -1,16 +1,14 @@
 /**
  * Split-disposition unit tests.
  *
- * Guardrail: `downloadDispositionFor` and `previewDispositionFor` are
- * intentionally separate so neither can be subverted into the other's
- * behaviour by a future MIME-allowlist edit. These tests pair the two
- * helpers on every MIME class the preview route handles, plus the
- * negative cases (HTML, non-allowlisted video/audio containers,
- * application/octet-stream) that preview must fall back to `attachment`.
- *
- * The two helpers do NOT share a code path; if a future refactor tries
- * to consolidate them, this test pair MUST be updated to keep covering
- * each helper independently.
+ * Guardrail: `downloadDispositionFor` (always `attachment`) and
+ * `previewDispositionFor` (inline ONLY when the caller resolved inline-transport
+ * eligibility through the representation-provider capability — cinatra#1630 AC-2)
+ * are intentionally separate helpers that do NOT share a code path, so a preview
+ * refactor can never make the download route serve `inline`. `previewDispositionFor`
+ * no longer re-derives a concrete-MIME allowlist — its disposition follows ONLY the
+ * resolved eligibility boolean. A separate test pins the host safe-transport format
+ * set (the registrar's system-base wildcard bound).
  */
 import { describe, expect, it } from "vitest";
 
@@ -54,67 +52,47 @@ describe("downloadDispositionFor — always attachment", () => {
   });
 });
 
-describe("previewDispositionFor — inline only for allowlisted MIMEs", () => {
-  const inlineCases: ReadonlyArray<readonly [string, string]> = [
-    ["text/markdown", "draft.md"],
-    ["text/x-markdown", "doc.md"],
-    ["text/plain", "log.txt"],
-    ["application/pdf", "spec.pdf"],
-    ["image/png", "diagram.png"],
-    ["image/jpeg", "photo.jpg"],
-    ["image/gif", "anim.gif"],
-    ["image/webp", "shot.webp"],
-    ["image/svg+xml", "icon.svg"],
-    ["video/mp4", "demo.mp4"],
-    ["video/webm", "clip.webm"],
-    ["video/ogg", "reel.ogv"],
-    ["audio/mpeg", "clip.mp3"],
-    ["audio/mp4", "voice.m4a"],
-    ["audio/x-m4a", "memo.m4a"],
-    ["audio/ogg", "pod.ogg"],
-    ["audio/wav", "take.wav"],
-    ["audio/x-wav", "take2.wav"],
-    ["audio/webm", "note.weba"],
-    ["audio/flac", "master.flac"],
-    ["audio/aac", "stream.aac"],
-  ];
-  it.each(inlineCases)("returns inline for %s", (mime, filename) => {
-    const out = previewDispositionFor(mime, filename);
+describe("previewDispositionFor — inline follows the resolved eligibility boolean", () => {
+  it("returns inline for an eligible representation", () => {
+    const out = previewDispositionFor(true, "photo.jpg");
     expect(out).toMatch(/^inline;/);
-    expect(out).toContain(`filename="${filename}"`);
+    expect(out).toContain('filename="photo.jpg"');
   });
 
-  const attachmentCases: ReadonlyArray<readonly [string, string]> = [
-    ["text/html", "page.html"],
-    // Media containers deliberately OUTSIDE the allowlist (codec support
-    // too inconsistent for an inline player) must stay `attachment`.
-    ["video/quicktime", "capture.mov"],
-    ["video/x-msvideo", "legacy.avi"],
-    ["video/x-matroska", "rip.mkv"],
-    ["audio/midi", "tune.mid"],
-    ["application/octet-stream", "blob.bin"],
-    ["application/zip", "bundle.zip"],
-    ["application/vnd.google-apps.document", "gdoc.ref"],
-    ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "word.docx"],
-  ];
-  it.each(attachmentCases)("falls back to attachment for non-allowlisted %s", (mime, filename) => {
-    const out = previewDispositionFor(mime, filename);
+  it("returns attachment for an ineligible representation", () => {
+    const out = previewDispositionFor(false, "blob.bin");
     expect(out).toMatch(/^attachment;/);
+    expect(out).toContain('filename="blob.bin"');
   });
 
-  it("falls back to attachment for empty MIME", () => {
-    expect(previewDispositionFor("", "x.bin")).toMatch(/^attachment;/);
+  it("sanitises the filename", () => {
+    const out = previewDispositionFor(true, "a/b\\c..foo bar.jpg");
+    expect(out).toMatch(/^inline; filename="[\w.\- ]+"$/);
+  });
+
+  it("falls back to 'artifact' when the filename sanitises empty", () => {
+    expect(previewDispositionFor(true, "")).toContain('filename="artifact"');
   });
 });
 
 describe("guardrail — helpers do not share a code path", () => {
-  it("downloadDispositionFor returns attachment even for the inline allowlist", () => {
+  it("downloadDispositionFor returns attachment for every host safe-transport MIME", () => {
     for (const mime of PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS) {
       expect(downloadDispositionFor(mime, "x.bin")).toMatch(/^attachment;/);
     }
   });
 
-  it("previewDispositionFor inline set matches the published allowlist exactly", () => {
+  it("previewDispositionFor ignores the MIME entirely — disposition is ONLY the boolean", () => {
+    // The helper no longer re-derives a concrete-MIME allowlist: an eligible
+    // representation is inline and an ineligible one is attachment regardless of
+    // MIME, so a future capability admission cannot leak into `downloadDispositionFor`.
+    expect(previewDispositionFor(true, "x.bin")).toMatch(/^inline;/);
+    expect(previewDispositionFor(false, "x.bin")).toMatch(/^attachment;/);
+  });
+});
+
+describe("host safe-transport format set (the registrar's system-base wildcard bound)", () => {
+  it("pins the exact concrete MIME set the system bases' wildcards expand to", () => {
     const expected = new Set([
       "text/markdown",
       "text/x-markdown",
@@ -138,9 +116,11 @@ describe("guardrail — helpers do not share a code path", () => {
       "audio/flac",
       "audio/aac",
     ]);
-    // Drift detector — if the production set diverges, this test fails
-    // and the helper docstring + the preview route's 415 list must be
-    // updated to match.
+    // Drift detector for the host safe-transport set: this bounds which concrete
+    // formats the system bases' `image/*`/`audio/*`/`video/*` providers claim (so a
+    // wildcard never claims e.g. `image/bmp`). It is NO LONGER the preview route's
+    // eligibility gate (that resolves through the capability), but the bound itself
+    // is still host safe-transport policy and is pinned here.
     expect(new Set(PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS)).toEqual(expected);
   });
 });
