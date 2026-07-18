@@ -96,6 +96,20 @@ function compileClaimValidator(jsonSchema: Record<string, unknown>): z.ZodType<u
 // self- or dependency-registered — their owning package registers the validator
 // (the bridge already fail-closed such claims via
 // validateObjectTypeClaimSchemaSources before reaching here).
+//
+// OWNERSHIP by NAMESPACE (epic #1424/#1448, the same rule the claim-only path
+// enforces): the bridge registers a validator ONLY for a claim the hybrid pack
+// OWNS (a self-namespaced `@scope/pkg:local` id, where `@scope/pkg` is this
+// package). A CROSS-namespace claim — a hybrid pack claiming a type another
+// package/host defines (e.g. the email-artifacts pack over `@cinatra-ai/email:body`
+// / `:sent-email`, or the default-artifact floor over `@cinatra-ai/objects:object`)
+// — is DEFINED by its owning registrar; the bridge must never register a generic
+// validator-only def for it. Doing so silently clobbered the owner's rich
+// definition (email:body `content`/identityKey → `report`/no-identityKey;
+// email:sent-email lost its idempotencyKey identity) — and now, with the
+// registry's conflict-on-duplicate guard (epic #1785), it would raise an
+// install-time conflict at boot. The claim schema is activation evidence, not a
+// second registrar.
 function registerClaimValidators(
   claims: readonly ArtifactObjectTypeClaim[],
   umbrellaType: string,
@@ -114,6 +128,15 @@ function registerClaimValidators(
       );
       continue;
     }
+    // CROSS-NAMESPACE guard (epic #1785 bridge fix): only the OWNING package
+    // registers a claimed type. A claim over a type this pack does not own —
+    // whether or not it carries an inline schema — is defined elsewhere (host or
+    // another extension); the bridge never re-registers it here (it would clobber
+    // the owner's definition, and now trips the registry conflict guard). This
+    // mirrors the claim-only path's `claimedTypeRegisteringPackage(...) !==
+    // packageName` ownership rule; the umbrella (`${pkg}:artifact`, self-owned)
+    // still falls through to the explicit umbrella-skip below.
+    if (claimedTypeRegisteringPackage(claim.type) !== packageName) continue;
     if (!claim.schema) continue;
     if (claim.type === umbrellaType) continue; // never clobber the umbrella
     const schema = compileClaimValidator(claim.schema);

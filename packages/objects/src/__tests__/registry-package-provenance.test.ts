@@ -8,7 +8,10 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { objectTypeRegistry } from "../registry";
+import {
+  objectTypeRegistry,
+  ObjectTypeDefinitionConflictError,
+} from "../registry";
 import type { ObjectTypeDefinition } from "../types";
 
 // Minimal fixture — only `type`/`category` are exercised by these tests; the
@@ -68,15 +71,71 @@ describe("objectTypeRegistry — package provenance + removeByPackage", () => {
     expect(objectTypeRegistry.resolve("@scope/a:one")).not.toBeNull();
   });
 
-  it("a host re-register WITHOUT a package clears stale provenance (no longer removable by the old package)", () => {
+  it("a host takeover of a PACKAGE-owned type is a conflict (epic #1785 — never a silent replace)", () => {
     objectTypeRegistry.register(def("@scope/a:one"), "@scope/a");
-    // Host re-registers the same type id with no provenance (e.g. a built-in
-    // takeover). It must no longer be attributed to @scope/a.
-    objectTypeRegistry.register(def("@scope/a:one"));
-
-    expect(objectTypeRegistry.getTypesForPackage("@scope/a")).toEqual([]);
-    expect(objectTypeRegistry.removeByPackage("@scope/a")).toEqual([]);
+    // A host (provenance-less) registration of a type a package already defines
+    // is a DIFFERENT definer — the ratified model rejects it as an install-time
+    // conflict rather than silently taking the type over.
+    expect(() => objectTypeRegistry.register(def("@scope/a:one"))).toThrow(
+      ObjectTypeDefinitionConflictError,
+    );
+    // The package's original definition + provenance are untouched.
+    expect(objectTypeRegistry.getTypesForPackage("@scope/a")).toEqual(["@scope/a:one"]);
     expect(objectTypeRegistry.resolve("@scope/a:one")).not.toBeNull();
+  });
+
+  it("a DIFFERENT package redefining another package's type is a structured conflict", () => {
+    objectTypeRegistry.register(def("@scope/a:one"), "@scope/a");
+    let caught: unknown;
+    try {
+      objectTypeRegistry.register(def("@scope/a:one"), "@scope/b");
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ObjectTypeDefinitionConflictError);
+    const err = caught as ObjectTypeDefinitionConflictError;
+    expect(err.code).toBe("OBJECT_TYPE_DEFINITION_CONFLICT");
+    expect(err.typeId).toBe("@scope/a:one");
+    expect(err.existingDefiner).toBe("@scope/a");
+    expect(err.attemptedDefiner).toBe("@scope/b");
+    // The original definer keeps ownership.
+    expect(objectTypeRegistry.getTypesForPackage("@scope/a")).toEqual(["@scope/a:one"]);
+    expect(objectTypeRegistry.getTypesForPackage("@scope/b")).toEqual([]);
+  });
+
+  it("a package clobbering a HOST built-in type is a conflict (the email:body / :sent-email empiric)", () => {
+    // Host defines the type WITHOUT provenance (register-types.ts model).
+    objectTypeRegistry.register(def("@cinatra-ai/email:body"));
+    expect(() =>
+      objectTypeRegistry.register(def("@cinatra-ai/email:body"), "@cinatra-ai/email-artifacts"),
+    ).toThrow(ObjectTypeDefinitionConflictError);
+    // The host definition stays; no package now owns it.
+    expect(objectTypeRegistry.resolve("@cinatra-ai/email:body")).not.toBeNull();
+    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/email-artifacts")).toEqual([]);
+  });
+
+  it("SAME-definer re-registration is idempotent — no conflict (reboot / re-install / dev-watcher rescan)", () => {
+    // Same package re-registers its own type: idempotent replace, ownership kept.
+    objectTypeRegistry.register(def("@scope/a:one"), "@scope/a");
+    expect(() => objectTypeRegistry.register(def("@scope/a:one"), "@scope/a")).not.toThrow();
+    expect(objectTypeRegistry.getTypesForPackage("@scope/a")).toEqual(["@scope/a:one"]);
+    expect(objectTypeRegistry.list().filter((d) => d.type === "@scope/a:one")).toHaveLength(1);
+
+    // Host re-registers its own (provenance-less) built-in: also idempotent.
+    objectTypeRegistry.register(def("@cinatra-ai/objects:builtin"));
+    expect(() => objectTypeRegistry.register(def("@cinatra-ai/objects:builtin"))).not.toThrow();
+    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/objects:builtin")).toEqual([]);
+    expect(
+      objectTypeRegistry.list().filter((d) => d.type === "@cinatra-ai/objects:builtin"),
+    ).toHaveLength(1);
+  });
+
+  it("re-registration after removeByPackage is a clean re-register, not a conflict (dev-watcher reconcile)", () => {
+    objectTypeRegistry.register(def("@scope/a:one"), "@scope/a");
+    objectTypeRegistry.removeByPackage("@scope/a");
+    // A different package may now claim the freed id (the prior definer released it).
+    expect(() => objectTypeRegistry.register(def("@scope/a:one"), "@scope/b")).not.toThrow();
+    expect(objectTypeRegistry.getTypesForPackage("@scope/b")).toEqual(["@scope/a:one"]);
   });
 
   it("permanent tombstone backstop (cinatra#1789): a retired dynamic-namespace type is NEVER registered (skip + warn)", () => {

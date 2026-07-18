@@ -8,9 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // extensions package tests).
 vi.mock("server-only", () => ({}));
 
+import { z } from "zod";
 import { ARTIFACT_UI_SDK_ABI_RANGE } from "@cinatra-ai/sdk-extensions/artifact-contract";
 import type { EffectiveIdentity } from "../effective-identity";
-import type { SemanticArtifactManifest } from "../types";
+import type { ObjectTypeDefinition, SemanticArtifactManifest } from "../types";
 import { objectTypeRegistry } from "../registry";
 import { semanticRendererRegistry } from "../artifact-renderer-registry";
 import {
@@ -849,5 +850,167 @@ describe("registerParsedArtifactManifest — claim-only manifest mode (cinatra#1
     // ...but the tombstoned claim validator never did.
     expect(objectTypeRegistry.resolve("@dynamic/types:invoice")).toBeNull();
     expect(warns.some((w) => w.includes("permanently-retired dynamic namespace"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CROSS-NAMESPACE clobber prevention (epic #1785 bridge fix). A hybrid artifact
+// pack that CLAIMS a type another registrar OWNS (a cross-namespace `objectTypes`
+// claim) must NOT re-register a generic validator-only def over it — that silently
+// clobbered the owner's rich definition and, with the registry conflict guard,
+// would now throw at boot. Empirics: the email-artifacts pack over the host
+// `@cinatra-ai/email:body` (content + identityKey) / `@cinatra-ai/email:sent-email`
+// (idempotencyKey identity), and the default-artifact floor over the host generic
+// `@cinatra-ai/objects:object` (cinatraAgentRunId identityKey).
+// ---------------------------------------------------------------------------
+
+function hostEmailBodyDef(): ObjectTypeDefinition<unknown> {
+  return {
+    type: "@cinatra-ai/email:body",
+    category: "content",
+    schema: z.object({ runId: z.string().optional(), contactId: z.string().optional() }),
+    lifecycle: { sources: ["agent", "user", "import"], mutableBy: ["agent", "user"] },
+    renderers: { listRow: null, card: null, detail: null },
+    identityKey: (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
+      if (!runId) return null;
+      const contactId =
+        typeof d.contactId === "string" && d.contactId.length > 0 ? d.contactId : null;
+      return contactId ? `${runId}:${contactId}` : runId;
+    },
+  } as unknown as ObjectTypeDefinition<unknown>;
+}
+
+function hostSentEmailDef(): ObjectTypeDefinition<unknown> {
+  return {
+    type: "@cinatra-ai/email:sent-email",
+    category: "report",
+    schema: z.object({ idempotencyKey: z.string().min(1) }),
+    lifecycle: { sources: ["agent", "import"], mutableBy: ["agent"] },
+    renderers: { listRow: null, card: null, detail: null },
+    identityKey: (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const k = typeof d.idempotencyKey === "string" ? d.idempotencyKey : null;
+      return k && k.length > 0 ? k : null;
+    },
+  } as unknown as ObjectTypeDefinition<unknown>;
+}
+
+function hostGenericObjectDef(): ObjectTypeDefinition<unknown> {
+  return {
+    type: "@cinatra-ai/objects:object",
+    category: "report",
+    schema: z.record(z.string(), z.unknown()),
+    lifecycle: { sources: ["agent", "user", "import"], mutableBy: ["agent", "user"] },
+    renderers: { listRow: null, card: null, detail: null },
+    identityKey: (data: unknown) => {
+      const d = data as Record<string, unknown>;
+      const runId = d.cinatraAgentRunId;
+      return typeof runId === "string" && runId.length > 0 ? runId : null;
+    },
+  } as unknown as ObjectTypeDefinition<unknown>;
+}
+
+describe("registerParsedArtifactManifest — cross-namespace claims never clobber the owner (epic #1785)", () => {
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+  });
+  afterEach(() => {
+    objectTypeRegistry._clearForTests();
+  });
+
+  it("a hybrid pack claiming host email:body / :sent-email leaves both host definitions intact", () => {
+    // Host registers the rich definitions first (register-types.ts boot order).
+    objectTypeRegistry.register(hostEmailBodyDef());
+    objectTypeRegistry.register(hostSentEmailDef());
+
+    // The email-artifacts hybrid pack CLAIMS those cross-namespace ids (with the
+    // SAME shape the fs manifest carries) PLUS a self-owned claim.
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["text/markdown"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/email:body",
+            claim: "dedicated",
+            schema: { type: "object", additionalProperties: true },
+          },
+          {
+            type: "@cinatra-ai/email:sent-email",
+            claim: "dedicated",
+            schema: { type: "object", additionalProperties: true },
+          },
+          {
+            // A SELF-owned claim — this one MUST still register a validator.
+            type: "@cinatra-ai/email-artifacts:local-thing",
+            claim: "dedicated",
+            schema: {
+              type: "object",
+              required: ["k"],
+              properties: { k: { type: "string" } },
+              additionalProperties: true,
+            },
+          },
+        ],
+      } as SemanticArtifactManifest,
+      "@cinatra-ai/email-artifacts",
+    );
+    // No conflict thrown; the pack's own umbrella registered.
+    expect(registered).toBe(true);
+    expect(objectTypeRegistry.resolve("@cinatra-ai/email-artifacts:artifact")).not.toBeNull();
+
+    // email:body — host content/identityKey definition PRESERVED (not clobbered
+    // to report/no-identityKey).
+    const body = objectTypeRegistry.resolve("@cinatra-ai/email:body");
+    expect(body).not.toBeNull();
+    expect(body!.category).toBe("content");
+    expect(typeof body!.identityKey).toBe("function");
+    expect(body!.identityKey!({ runId: "r1", contactId: "c9" })).toBe("r1:c9");
+    // Still host-owned (no bridge provenance attached to it).
+    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/email-artifacts")).not.toContain(
+      "@cinatra-ai/email:body",
+    );
+
+    // email:sent-email — host idempotencyKey identity PRESERVED.
+    const sent = objectTypeRegistry.resolve("@cinatra-ai/email:sent-email");
+    expect(sent).not.toBeNull();
+    expect(sent!.identityKey!({ idempotencyKey: "idem-42" })).toBe("idem-42");
+
+    // The SELF-owned claim DID register its enforcing validator under the pack.
+    const local = objectTypeRegistry.resolve("@cinatra-ai/email-artifacts:local-thing");
+    expect(local).not.toBeNull();
+    expect(local!.schema.safeParse({ k: "ok" }).success).toBe(true);
+    expect(local!.schema.safeParse({}).success).toBe(false);
+    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/email-artifacts")).toEqual(
+      expect.arrayContaining(["@cinatra-ai/email-artifacts:local-thing"]),
+    );
+  });
+
+  it("the default-artifact floor claim over the host generic object type does not clobber its identityKey", () => {
+    objectTypeRegistry.register(hostGenericObjectDef());
+
+    const registered = registerParsedArtifactManifest(
+      {
+        accepts: { file: { mimeTypes: ["*/*"] } },
+        objectTypes: [
+          {
+            type: "@cinatra-ai/objects:object", // the cross-namespace floor claim
+            claim: "default",
+            schema: { type: "object" },
+          },
+        ],
+      } as SemanticArtifactManifest,
+      "@cinatra-ai/default-artifact",
+    );
+    expect(registered).toBe(true);
+
+    const generic = objectTypeRegistry.resolve("@cinatra-ai/objects:object");
+    expect(generic).not.toBeNull();
+    // The host generic dedup identity (cinatraAgentRunId) survives.
+    expect(generic!.identityKey!({ cinatraAgentRunId: "run-7" })).toBe("run-7");
+    expect(objectTypeRegistry.getTypesForPackage("@cinatra-ai/default-artifact")).not.toContain(
+      "@cinatra-ai/objects:object",
+    );
   });
 });
