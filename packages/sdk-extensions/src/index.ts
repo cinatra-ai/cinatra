@@ -659,7 +659,15 @@ export type {
   EmailSystemProvider,
   HostExtensionActionGuardService,
   LlmProviderSurface,
+  LlmProviderAdapterSurface,
 } from "./host-connector-services-contract";
+
+// LLM provider ADAPTER surface version (llm-providers S4 — cinatra#1715). The
+// capability-id constant stays host-fenced (./internal); this VERSION literal is
+// author-facing (a connector sets its `abiVersion` against it) — a
+// non-capability value, like `LLM_PROVIDER_ABI_VERSION` and
+// `SDK_EXTENSIONS_ABI_VERSION`.
+export { LLM_PROVIDER_ADAPTER_ABI_VERSION } from "./host-connector-services-contract";
 
 // Chat user-context contribution: a connector contributes pre-formatted chat
 // system-prompt sections through the generic capability registry (see the

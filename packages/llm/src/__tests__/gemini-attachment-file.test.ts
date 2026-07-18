@@ -44,6 +44,7 @@ const { geminiSurface } = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn((providerId: string) =>
     providerId === "gemini" ? geminiSurface : null,
   ),

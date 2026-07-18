@@ -14,7 +14,13 @@ import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types"
 // (cinatra#151 Stage 2 — packages/llm carries NO connector value-imports).
 // The MCP-client-registry connector owns inbound MCP-client OAuth client
 // management only.
-import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+// llm-providers S4 (cinatra#1715): `getLlmProviderAdapterSurface` (co-located in
+// llm-provider-surfaces so it adds no net-new route-reachable module) is the
+// connector-registered adapter surface. Absent for every provider in this first
+// slice -> the in-core fallback below runs unchanged (zero behavior change); a
+// trusted connector registration wins once it relocates, and a malformed one
+// fails closed (never silent fallback).
+import { getLlmProviderSurface, getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase } from "@/lib/database";
 import {
   buildRegisteredExternalMcpServerTools,
@@ -224,6 +230,23 @@ async function getConfiguredAnthropicConnection(): Promise<AnthropicConnectionCo
 }
 
 export async function resolveProviderAdapter(provider: LlmProvider): Promise<LlmProviderAdapter | null> {
+  // llm-providers S4 (cinatra#1715): prefer a CONNECTOR-registered adapter
+  // surface (`llm-provider-adapter`). When a trusted connector has registered an
+  // adapter for this provider it OWNS resolution — the result (an adapter, or a
+  // `null` "connector present but not configured") is AUTHORITATIVE and the
+  // legacy in-core factory below is NOT consulted. When ABSENT (no connector has
+  // relocated this provider yet — the transitional state of this slice), fall
+  // through to the in-core factory. A registered-but-malformed surface makes
+  // `getLlmProviderAdapterSurface` THROW (fail closed), so a broken adapter can
+  // never silently downgrade to the legacy path.
+  const surface = getLlmProviderAdapterSurface(provider);
+  if (surface) {
+    const adapter = await surface.createAdapter();
+    return (adapter ?? null) as LlmProviderAdapter | null;
+  }
+
+  // ---- transitional in-core fallback (deleted per-provider as each connector
+  // relocates its adapter under `llm-provider-adapter` — S4 AC2/AC4) ----
   switch (provider) {
     case "openai": {
       const connection = await getConfiguredOpenAIConnection();

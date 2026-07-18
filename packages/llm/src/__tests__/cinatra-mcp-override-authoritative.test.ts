@@ -30,6 +30,7 @@ vi.mock("../mcp-access", () => ({
   buildExternalMcpServerTools: vi.fn(async () => []),
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn(() => null),
   listLlmProviderSurfaces: vi.fn(() => []),
