@@ -423,6 +423,7 @@
     { "alias": "@cinatra-ai/objects/module", "target": "./packages/objects/src/integration/module.ts" },
     { "alias": "@cinatra-ai/objects/namespace", "target": "./packages/objects/src/namespace.ts" },
     { "alias": "@cinatra-ai/objects/claims", "target": "./packages/objects/src/claims.ts" },
+    { "alias": "@cinatra-ai/objects/connector-ref", "target": "./packages/objects/src/connector-ref.ts" },
     { "alias": "@cinatra-ai/objects/effective-identity", "target": "./packages/objects/src/effective-identity.ts" },
     { "alias": "@cinatra-ai/objects/artifact-renderer-registry", "target": "./packages/objects/src/artifact-renderer-registry.ts" },
     { "alias": "@cinatra-ai/objects/artifact-ui-cutover-matrix", "target": "./packages/objects/src/artifact-ui-cutover-matrix.ts" },
