@@ -68,6 +68,7 @@
 // argv; the only user-controlled input is the diff text being classified.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
@@ -108,6 +109,55 @@ export const MIGRATION_SQL_RE = /^migrations\/(\d{4})_([a-z0-9][a-z0-9-]*)\.sql$
  * Mirrors CORE_MIGRATION_FILE_RE in packages/migrations/src/core-migrations.mjs.
  */
 export const MIGRATION_MODULE_RE = /^migrations\/core\/core__(\d{4})_([a-z0-9][a-z0-9-]*)\.mjs$/;
+
+/**
+ * POISON-PILL CORRECTIONS — the single, narrow, maintainer-reviewed exemption
+ * to the append-only rule for shipped runner modules (see migrations/README.md
+ * "Correcting a poison-pill migration").
+ *
+ * The append-only rule exists because a shipped module is immutable history
+ * backing ledger rows on deployed databases. A module whose body can NEVER
+ * have completed on any database — its first executed statement
+ * deterministically fails — backs no such history: the only ledger rows for
+ * its seq are setup's ledger-FAKED rows on fresh schemas, where the body never
+ * executes. And it cannot be superseded: the runner applies pending
+ * migrations in seq order, so the broken module always runs first and aborts
+ * the chain before any superseding seq is reached. In exactly that case an
+ * IN-PLACE correction is the only possible fix, and rewrites no deployed
+ * history.
+ *
+ * Each entry is ONE-SHOT (codex convergence blocker on the correction PR):
+ * it authorizes exactly the recorded content transition, pinned by sha256 of
+ * the full BASE (broken) module content and of the CORRECTED result. Any
+ * other edit — a different base (e.g. a later edit once the correction has
+ * shipped, when the merge-base carries the corrected content) or a different
+ * result — still fails append-only, as do deletion and rename.
+ *
+ * Every entry must be added under maintainer review (migrations/** is a
+ * high-risk path) with the justification recorded alongside the digests.
+ *
+ * Key: module basename.
+ */
+export const SHIPPED_MODULE_CORRECTION_EXEMPTIONS = new Map([
+  [
+    "core__0053_organization-name-not-null.mjs",
+    {
+      baseSha256: "e61899a98df8e673b2c40d6566559bf4a3553ceaef13c4c3e5f51bba8f28529c",
+      correctedSha256: "a090b5241663b9d92a3be23ee5a7be429e61eb81052936f2d5bb7529b8b888c8",
+      justification:
+        "shipped body opened with pgm.db.query('LOCK TABLE …') outside any transaction — node-pg-migrate " +
+        "executes direct-db queries in autocommit, so PG 25P01 aborted EVERY real execution at the first " +
+        "statement (standalone-boot crash on every design-fixtures CI run; would crash-loop a prod deploy). " +
+        "The body can never have completed anywhere, and a superseding seq can never run because the broken " +
+        "0053 aborts the chain first. Corrected in place to the owned-transaction model (core__0006/0014/0015).",
+    },
+  ],
+]);
+
+/** sha256 hex digest of full file content (the exemption pin format). */
+export function contentDigest(content) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
 
 /** The two schema regions of drizzle-store.ts that are in scope. */
 const REGION_STARTS = [
@@ -582,11 +632,21 @@ export function classifyDrizzleStoreDiff(fileDiff, baseContent) {
  *   listing (basenames), null when the directory does not exist on base —
  *   needed so base-vs-final manifest.d/ directory diffs are checked, not just
  *   known paths.
- * @returns {{complete: boolean, artifactFiles: string[], problems: string[], integrity: string[], newEntries: Array}}
+ * @param {Map<string, {baseSha256: string, correctedSha256: string, justification: string}>} [correctionExemptions]
+ *   one-shot poison-pill correction pins (injectable for tests; defaults to
+ *   the reviewed live map).
+ * @returns {{complete: boolean, artifactFiles: string[], problems: string[], integrity: string[], corrections: string[], newEntries: Array}}
  */
-export function detectMigrationArtifact(files, readBaseFile, listBaseDir = () => null) {
+export function detectMigrationArtifact(
+  files,
+  readBaseFile,
+  listBaseDir = () => null,
+  correctionExemptions = SHIPPED_MODULE_CORRECTION_EXEMPTIONS,
+) {
   const problems = [];
   const integrity = [];
+  /** Exempted in-place poison-pill corrections — surfaced as notices, never failures. */
+  const corrections = [];
   /** Added runner modules (full paths) — the only artifact form new migrations may ship. */
   const moduleFiles = [];
   /** Added manifest fragments: {path, name, raw}. */
@@ -696,9 +756,34 @@ export function detectMigrationArtifact(files, readBaseFile, listBaseDir = () =>
       if (f.status !== "added") {
         // A shipped module is immutable history backing ledger rows on every
         // deployed database: deletion AND edits are tampering (renames were
-        // handled above).
+        // handled above). ONE exception: the exact ONE-SHOT content transition
+        // of a listed poison-pill correction (a body that can never have
+        // completed anywhere and cannot be superseded) — verified against the
+        // recorded base AND corrected sha256 pins, fail-closed on any
+        // reconstruction failure. See SHIPPED_MODULE_CORRECTION_EXEMPTIONS.
         if (isModule) {
-          integrity.push(`${p}: a shipped core migration module must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it with a new sequence number)`);
+          const exemption =
+            f.status === "modified" ? correctionExemptions.get(basename) : undefined;
+          if (exemption) {
+            const baseContent = readBaseFile(p);
+            const resultContent = baseContent === null ? null : applyFileDiff(baseContent, f);
+            const baseOk = baseContent !== null && contentDigest(baseContent) === exemption.baseSha256;
+            const resultOk =
+              resultContent !== null && contentDigest(resultContent) === exemption.correctedSha256;
+            if (baseOk && resultOk) {
+              corrections.push(
+                `${p}: in-place correction of a shipped poison-pill module (maintainer-reviewed one-shot exemption, base ${exemption.baseSha256.slice(0, 12)} -> corrected ${exemption.correctedSha256.slice(0, 12)}): ${exemption.justification}`,
+              );
+            } else {
+              integrity.push(
+                `${p}: edit does not match the recorded one-shot poison-pill correction transition ` +
+                  `(expected base sha256 ${exemption.baseSha256.slice(0, 12)}… -> corrected ${exemption.correctedSha256.slice(0, 12)}…) — ` +
+                  `a shipped core migration module must never be edited (append-only — supersede it with a new sequence number)`,
+              );
+            }
+          } else {
+            integrity.push(`${p}: a shipped core migration module must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it with a new sequence number)`);
+          }
         }
         continue;
       }
@@ -858,6 +943,7 @@ export function detectMigrationArtifact(files, readBaseFile, listBaseDir = () =>
     artifactFiles,
     problems,
     integrity,
+    corrections,
     newEntries: newEntries.map(({ entry }) => entry),
   };
 }
@@ -873,7 +959,12 @@ export function detectMigrationArtifact(files, readBaseFile, listBaseDir = () =>
  * @returns {{verdict: "pass"|"fail", destructive: Array, artifact: ReturnType<typeof detectMigrationArtifact>,
  *   notices: string[], ignored: string[], inScopeChanges: number}}
  */
-export function runGate({ diffText, readBaseFile, listBaseDir = () => null }) {
+export function runGate({
+  diffText,
+  readBaseFile,
+  listBaseDir = () => null,
+  correctionExemptions = SHIPPED_MODULE_CORRECTION_EXEMPTIONS,
+}) {
   const files = parseUnifiedDiff(diffText);
   const notices = [];
   const ignored = [];
@@ -915,7 +1006,10 @@ export function runGate({ diffText, readBaseFile, listBaseDir = () => null }) {
     // every other file: not schema-bearing for this gate
   }
 
-  const artifact = detectMigrationArtifact(files, readBaseFile, listBaseDir);
+  const artifact = detectMigrationArtifact(files, readBaseFile, listBaseDir, correctionExemptions);
+  // Exempted poison-pill corrections pass, but LOUDLY — the exemption and its
+  // recorded justification always appear in the gate output for review.
+  notices.push(...artifact.corrections);
   let verdict = "pass";
   // Tampering with shipped migration state (or a core/ addition that would
   // brick the runner's boot preflight) fails on its own — no destructive
