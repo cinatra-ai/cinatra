@@ -8,7 +8,7 @@
 // Card,Detail} + BlogPostIdea{ListRow,Card,Detail}) were RELOCATED into their
 // owning blog extensions — `@cinatra-ai/blog-post-artifact` and
 // `@cinatra-ai/blog-idea-artifact` — per cinatra#1631 AC2 (epic #1620 S7/M2)
-// under the owner ruling of eng#548 entry 73 ("remove from core, move to the
+// per the 2026-07-18 owner ruling ("remove from core, move to the
 // respective extensions, do not add in prod"). Core keeps the TYPE
 // registration (schema / lifecycle / relations / crudPolicy — the live
 // machinery) with EMPTY renderer slots (see `register-object-types.ts`). The

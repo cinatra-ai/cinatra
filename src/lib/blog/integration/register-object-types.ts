@@ -8,7 +8,7 @@ import { z } from "zod";
 // below remains the sole blog registrar.
 //
 // RENDERER RELOCATION (cinatra#1631 AC2, epic #1620 S7/M2; owner ruling
-// eng#548 entry 73): the in-core `blog-post` / `blog-idea` object-renderer
+// 2026-07-18 owner ruling): the in-core `blog-post` / `blog-idea` object-renderer
 // slots (BlogPost{ListRow,Card,Detail} + BlogPostIdea{ListRow,Card,Detail})
 // were RELOCATED to their owning blog extensions — `@cinatra-ai/blog-post-artifact`
 // and `@cinatra-ai/blog-idea-artifact` (both dev-only). Core keeps the TYPE
