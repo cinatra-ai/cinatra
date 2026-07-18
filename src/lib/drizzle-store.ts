@@ -23,6 +23,7 @@ import {
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
+import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
 import { semanticAssertionSchemaQueries } from "@/lib/semantic-assertion-schema";
 import {
@@ -1975,6 +1976,13 @@ $body$` },
     // bindingWritePathSchemaQueries accretion precedent). Existing deployments
     // also converge via migration core__0047.
     ...objectContentSnapshotSchemaQueries(schemaName),
+    // ---- artifact_publication_operations ledger (cinatra#1450) ----
+    // Durable publication-operation ledger: draftable artifacts publish through
+    // an operation record (pinned revision + destination + due time + attempt/
+    // idempotency key + cancellation-generation fence + state machine). DDL in
+    // the pure-strings leaf src/lib/artifacts/publication-operation-schema.ts;
+    // existing deployments also converge via migration core__0055.
+    ...publicationOperationLedgerSchemaQueries(schemaName),
     // ---- authoring_invocation_ledger ----
 
     // Operational recursion-control table for authoring-skill chains.

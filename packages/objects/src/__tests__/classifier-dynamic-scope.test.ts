@@ -7,11 +7,11 @@ import {
   mintDynamicObjectTypeId,
 } from "../namespace";
 
-// Reserved @dynamic scope for LLM-minted dynamic-type ids (cinatra#1425).
-// NEW ids mint under `@dynamic/types:` only; a legacy `@cinatra-ai/dynamic:`
-// id classifies ONLY when it already exists in the caller's catalog (the
-// ACTIVE dynamic rows ride knownTypeIds) — a legacy id the DB has never seen
-// is rejected, enforcing "legacy ids are never re-minted".
+// The namespace helpers still classify BOTH dynamic prefixes as dynamic (they
+// are used for READ back-compat on existing rows). But the classifier no
+// longer MINTS: `buildClassifierOutputSchema` accepts only ids the caller's
+// catalog already knows, so a NEW dynamic id is rejected at parse time —
+// "types exist only by installation" (epic #1785 slice C, cinatra#1787).
 
 const base = {
   confidence: 0.9,
@@ -22,7 +22,9 @@ const base = {
 };
 
 describe("dynamic-type id scope", () => {
-  it("mints under the reserved non-vendor scope and both prefixes read as dynamic", () => {
+  it("both prefixes still READ as dynamic (namespace helper unchanged)", () => {
+    // The mint helper still exists (used by the retired-but-not-yet-removed
+    // registrar); the point of this slice is that the CLASSIFIER never calls it.
     expect(mintDynamicObjectTypeId("competitor-profile")).toBe(
       `${DYNAMIC_TYPE_ID_PREFIX}competitor-profile`,
     );
@@ -32,22 +34,33 @@ describe("dynamic-type id scope", () => {
   });
 });
 
-describe("buildClassifierOutputSchema — minting policy", () => {
+// Acceptance criterion 4 (cinatra#1787): schema-level rejection — no code path
+// can propose a NEW `@dynamic/types:*` id; READ of existing rows is untouched.
+describe("buildClassifierOutputSchema — no-mint policy", () => {
   const schema = buildClassifierOutputSchema([
+    "@cinatra-ai/objects:object", // the generic fallback id is a registered host type
     "@cinatra-ai/entity-accounts:account",
-    // An EXISTING legacy dynamic row rides the catalog (ACTIVE dynamic types
-    // are part of knownTypeIds at the call site).
+    // An EXISTING dynamic row rides the catalog (ACTIVE dynamic types are part
+    // of knownTypeIds at the call site) so already-minted ids keep classifying.
     "@cinatra-ai/dynamic:existing-row",
   ]);
 
-  it("accepts a NEW id under the reserved scope", () => {
-    expect(schema.safeParse({ ...base, type: "@dynamic/types:brand-audit" }).success).toBe(true);
+  it("REJECTS a NEW dynamic id under the reserved scope (the classifier never mints)", () => {
+    expect(schema.safeParse({ ...base, type: "@dynamic/types:brand-audit" }).success).toBe(false);
   });
 
-  it("accepts a legacy id ONLY when it is already known (existing row)", () => {
-    expect(schema.safeParse({ ...base, type: "@cinatra-ai/dynamic:existing-row" }).success).toBe(true);
-    // A never-seen legacy-prefixed id is a re-mint attempt — rejected.
+  it("REJECTS a never-seen legacy-prefixed id (re-mint attempt)", () => {
     expect(schema.safeParse({ ...base, type: "@cinatra-ai/dynamic:brand-new-idea" }).success).toBe(false);
+  });
+
+  it("accepts an EXISTING dynamic id already in the catalog (READ back-compat untouched)", () => {
+    expect(schema.safeParse({ ...base, type: "@cinatra-ai/dynamic:existing-row" }).success).toBe(true);
+  });
+
+  it("accepts the generic fallback id (an unmatched payload comes back as the generic type)", () => {
+    expect(
+      schema.safeParse({ ...base, type: "@cinatra-ai/objects:object" }).success,
+    ).toBe(true);
   });
 
   it("still accepts registered static ids and rejects bare names", () => {

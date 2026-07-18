@@ -40,9 +40,10 @@ export const dynamic = "force-dynamic";
 // byte-parity with the legacy route (the client surfaces the failed request as
 // an error bubble either way).
 //
-// The bespoke `/api/chat/chatgpt` route is RETAINED until the mechanical delete
-// stage: it is the fail-closed safe-harbor when the AG-UI handshake fails (the
-// client falls back to it — see chat-page.tsx streamResponse).
+// The bespoke `/api/chat/chatgpt` route was deleted by the #1218 mechanical
+// delete stage: this endpoint is the only @chatgpt producer, and a failed
+// AG-UI handshake surfaces a fail-closed turn error (no fallback wire — see
+// chat-page.tsx streamResponse).
 // ---------------------------------------------------------------------------
 
 const chatMessageSchema = z
