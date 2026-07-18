@@ -190,3 +190,65 @@ export async function reconcileDashboardContributionAdoptions(
 
   return { adoptedRowCount, adoptionsRun, skipped: plan.skipped.length, failed };
 }
+
+
+// ---------------------------------------------------------------------------
+// ALL-ORGS reconcile — the boot / install TRIGGER entry point (cinatra#1628,
+// S11c / remaining AC2). S11b left the per-org reconciler WITHOUT a lifecycle
+// trigger; this is the fan-out the boot phase drives. Candidate orgs are only
+// those holding archived, contribution-keyed extension rows (the only orgs an
+// adoption can touch), so the whole path is DORMANT until a legacy orphan exists
+// AND a successor ships. Per-org failures are contained.
+// ---------------------------------------------------------------------------
+
+export type ReconcileAllResult = {
+  readonly orgsReconciled: number;
+  readonly adoptedRowCount: number;
+  readonly adoptionsRun: number;
+  readonly skipped: number;
+  readonly failed: number;
+};
+
+export type ReconcileAllDeps = ReconcileAdoptionDeps & {
+  /** Override candidate-org resolution (tests). Defaults to the archived-orphan
+   *  org scan (the reconcile is a no-op for any other org). */
+  readonly resolveCandidateOrgIds?: () => Promise<string[]>;
+};
+
+async function defaultResolveCandidateOrgIds(): Promise<string[]> {
+  const { listOrgIdsWithArchivedExtensionRows } = await import(
+    "@cinatra-ai/dashboards/extension-dashboard-reads"
+  );
+  return listOrgIdsWithArchivedExtensionRows();
+}
+
+export async function reconcileAllDashboardContributionAdoptions(
+  deps: ReconcileAllDeps = {},
+): Promise<ReconcileAllResult> {
+  const resolveCandidateOrgIds = deps.resolveCandidateOrgIds ?? defaultResolveCandidateOrgIds;
+  const orgIds = await resolveCandidateOrgIds();
+
+  let orgsReconciled = 0;
+  let adoptedRowCount = 0;
+  let adoptionsRun = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const orgId of orgIds) {
+    try {
+      const r = await reconcileDashboardContributionAdoptions(orgId, deps);
+      adoptedRowCount += r.adoptedRowCount;
+      adoptionsRun += r.adoptionsRun;
+      skipped += r.skipped;
+      failed += r.failed;
+      orgsReconciled += 1;
+    } catch (err) {
+      // Contain a per-org failure so a sibling org still reconciles.
+      failed += 1;
+      console.warn(
+        `[dashboards/reconcile] org ${orgId} reconcile threw (contained):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return { orgsReconciled, adoptedRowCount, adoptionsRun, skipped, failed };
+}
