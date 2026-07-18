@@ -51,6 +51,27 @@ describe("artifactObjectTypeClaimManifestSchema", () => {
     expect(r.success).toBe(false);
   });
 
+  it("carries the mutability class through the manifest entry (cinatra#1449)", () => {
+    const r = artifactObjectTypeClaimManifestSchema.safeParse({
+      type: "@vendor/pkg:thing",
+      claim: "dedicated",
+      dispositions: { projection: "artifact-safe", mutability: "draftable" },
+      schema: { type: "object" },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.dispositions?.mutability).toBe("draftable");
+  });
+
+  it("rejects a pinnable external claim at the manifest surface (union invariant)", () => {
+    const r = artifactObjectTypeClaimManifestSchema.safeParse({
+      type: "@vendor/pkg:thing",
+      claim: "dedicated",
+      dispositions: { projection: "artifact-safe", mutability: "external", pinnable: true },
+      schema: { type: "object" },
+    });
+    expect(r.success).toBe(false);
+  });
+
   it("rejects an unknown key (strict, fail-closed)", () => {
     const r = artifactObjectTypeClaimManifestSchema.safeParse({ ...VALID_ENTRY, extra: 1 });
     expect(r.success).toBe(false);

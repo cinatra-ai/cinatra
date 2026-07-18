@@ -31,6 +31,7 @@ import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
 import { artifactDataRootGuardPhases } from "@/lib/boot/phases/artifact-data-root-guard";
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
+import { executionPlaneHealthPhases } from "@/lib/boot/phases/execution-plane-health";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
 import {
@@ -194,6 +195,13 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   //     deploy health gate rejects a durable-degraded boot (e2e acceptance).
   await run(requiredEnvNotePhases());
   await run(bootDegradeProbePhases());
+
+  // ── execution-plane health (ops#517 / epic #1705 — the "health-view boot phase") ─
+  // Surfaces exec-plane CLIENT readiness in the boot-state snapshot per instance
+  // class: DEPLOY-BLOCKING where the class requires the plane (EXECUTION_PLANE_
+  // REQUIRED=1 → degraded policy), non-blocking degraded otherwise. Inert (skipped)
+  // on an instance that has not opted into the plane, so today's boots are unchanged.
+  await run(executionPlaneHealthPhases());
 
   // Boot reached its serving prerequisites: the eager worker + runtime engines are
   // wired and the required-set was enforced. Mark ready (degraded if any

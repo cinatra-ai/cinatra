@@ -153,7 +153,8 @@ A migration artifact is **both** of:
    - `NNNN` is a zero-padded, strictly increasing 4-digit sequence number
      (`0001`, `0002`, …). The sequence is append-only: never renumber, never
      edit, rename, or delete a migration that has shipped — supersede it with
-     a new one.
+     a new one. (Single narrow exception: a shipped **poison-pill** module —
+     see "Correcting a poison-pill migration" below.)
    - `short-description` is lowercase, hyphen-separated, and names the change.
 2. **A per-migration manifest fragment at
    `migrations/manifest.d/core__NNNN_short-description.json`** — one file per
@@ -166,6 +167,33 @@ A migration artifact is **both** of:
 
 A PR that needs a migration must add both pieces **in the same PR** as the
 schema change.
+
+### Correcting a poison-pill migration
+
+The append-only rule exists because a shipped module is immutable history
+backing ledger rows on deployed databases. A **poison-pill** module — one
+whose body can **never have completed on any database** because its first
+executed statement deterministically fails (e.g. a `LOCK TABLE` issued via
+`pgm.db.query` outside a transaction: node-pg-migrate executes direct-db
+queries immediately in autocommit; its transaction wrap covers only *queued*
+builder steps) — backs no such history: the only ledger rows for its seq are
+`cinatra setup`'s ledger-**faked** rows on fresh schemas, where the body never
+executes. It also **cannot be superseded**: the runner applies pending
+migrations in seq order, so the broken module always runs first and aborts
+the chain before any superseding seq is reached (in production, that aborts
+boot). In exactly that case the fix is an **in-place correction** that keeps
+the filename/seq, made under maintainer review by adding the module basename
+plus a recorded justification **and the sha256 pins of the exact broken base
+content and the exact corrected content** to
+`SHIPPED_MODULE_CORRECTION_EXEMPTIONS` in
+[`scripts/audit/schema-migration-gate.mjs`](../scripts/audit/schema-migration-gate.mjs)
+in the same PR. The exemption is **one-shot**: it authorizes only that
+recorded content transition — once the correction has shipped (the merge-base
+carries the corrected content) any further edit fails append-only again, as
+does any differing "fix". The corrected body must be idempotent-safe for every
+ledger state the broken module left behind (faked-applied, pending, and re-run
+after a crash). Deleting or renaming the module remains forbidden; the gate
+surfaces every exercised exemption as a loud notice in its output.
 
 > **The legacy array is frozen.** `migrations/manifest.json` used to be the
 > ledger — one positional JSON array every migration PR appended to. That

@@ -30,6 +30,7 @@ vi.mock("@cinatra-ai/skills", () => ({
 // The local shell tool never touches the provider surface, but the module
 // imports it at load time — provide an inert stub so the import resolves.
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn(() => {
     throw new Error("not needed for the local shell tool");
