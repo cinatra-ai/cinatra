@@ -93,7 +93,7 @@ export async function GET() {
       // handle: assistants use the registry handle ONLY (authoritative — never
       // advertise a derived slug that mention resolution would reject); an
       // assistant not yet backfilled is omitted until its handle is minted (boot
-      // backfill / createAssistantUser). Humans (not registry principals) derive.
+      // backfill / assistant-agent registration). Humans (not registry principals) derive.
       const handleSource = r.username?.trim() || r.name?.trim() || r.email?.split("@")[0] || "";
       const handle = isAssistant ? registryHandles.get(r.id) : toHandle(handleSource);
       if (!handle || handle === "unknown") return null;

@@ -281,7 +281,17 @@ function translateTools(tools: LlmTool[], resolvedModel: string) {
         ...(t.authorization ? { authorization: t.authorization } : {}),
         ...(t.serverDescription ? { server_description: t.serverDescription } : {}),
         ...(t.allowedTools ? { allowed_tools: t.allowedTools } : {}),
-        ...(t.requireApproval ? { require_approval: t.requireApproval } : {}),
+        // Approval vocabulary translation (llm-providers S2, #1713 AC2).
+        // OpenAI's declared `approval` capability honours both values:
+        //   approval_required        → require_approval: "always"
+        //   auto_execute / undefined → require_approval: "never"
+        // ALWAYS emitted: an omitted `require_approval` would let OpenAI's
+        // server-side default ("always") decide, contradicting the ratified
+        // `undefined` ⇒ `auto_execute` rule. The capability-keyed enforcement
+        // for other providers (Anthropic's fail-closed refusal) lives in their
+        // adapters; the post-#1707 adapter half re-homes this translation onto
+        // the materializer-backed post-plane shapes.
+        require_approval: t.approval === "approval_required" ? "always" : "never",
       });
     } else if (isContainerSkillsTool(t)) {
       // container_skills is an Anthropic-only delivery vehicle. OpenAI

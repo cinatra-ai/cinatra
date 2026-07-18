@@ -54,6 +54,7 @@ import {
 import {
   NANGO_SYSTEM_CAPABILITY,
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
+  LLM_PROVIDER_ADAPTER_CAPABILITY,
 } from "@cinatra-ai/sdk-extensions/internal";
 // The FIRST-PARTY host-build extension set — the packages COMPILED INTO the host
 // image (static bundle). Pure DATA (the connector `import()`s are lazy `load()`
@@ -229,6 +230,15 @@ const RESERVED_SYSTEM_CAPABILITIES: ReadonlySet<string> = new Set<string>([
   // extension must not ambiently seed identities or probe authorization
   // (codex round-0 finding on the instance-connection-gate contract).
   HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceConnectionGate,
+  // The LLM provider ADAPTER surface (llm-providers S4, cinatra#1715): a
+  // registered adapter IS the LLM dispatch data plane for its provider — it
+  // builds requests with the connector's tenant API credential and sees every
+  // prompt/response. A third-party marketplace extension registering it could
+  // intercept or exfiltrate the entire LLM data plane, so it is first-party
+  // ONLY (epic #1711 non-goal: no runtime-installed third-party provider
+  // adapters). Anti-poisoning: a non-first-party REGISTER throws (the shadow
+  // adapter never enters the registry) and RESOLVE returns [] at the port.
+  LLM_PROVIDER_ADAPTER_CAPABILITY,
 ]);
 
 /** True when `capability` is a host-internal system credential surface that a

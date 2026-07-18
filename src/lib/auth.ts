@@ -21,7 +21,7 @@ import {
 import { ensureBetterAuthMembershipRow } from "@/lib/better-auth-membership-bootstrap";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { isInitialAdminBootstrapEligible } from "@/lib/initial-admin-bootstrap-policy";
-import { insertOAuthClientWithTx } from "@/lib/better-auth-oauth-client";
+import { ensureBuiltInCinatraAssistantAgent } from "@/lib/assistant-agent-registration";
 import { beforeCreateTeamEnsureSlug } from "@/lib/better-auth-org-hooks";
 import { buildInvitationAcceptUrl, buildInvitationEmail } from "@/lib/org-invitation-email";
 
@@ -522,7 +522,7 @@ async function canManageWorkspaceBootstrap() {
 // Single count-of-HUMANS query every first-human one-shot below keys on:
 // only rows whose "userType" is 'human' (or NULL — rows predating the column
 // default) are humans. This deliberately excludes EVERY machine userType, not
-// just 'assistant' (ensureBuiltInCinatraAssistant): the dev UAT fixture
+// just 'assistant' (minted by assistant-agent registration): the dev UAT fixture
 // (`uat-fixture`, seeded by dev-auto-setup's ensureDevConnectActor) used to
 // count as the "first user" on a fresh dev install and consumed the one-shot
 // initial-admin bootstrap before any real person registered (cinatra#1135) —
@@ -801,134 +801,24 @@ export async function resolveAssistantUserByClientId(clientId: string) {
   return result[0] ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Built-in @cinatra assistant seed
-// ---------------------------------------------------------------------------
-
-async function ensureBuiltInCinatraAssistant() {
-  // Serialize the seed via a pg advisory transaction lock so two concurrent
-  // callers (boot instrumentation + getAuthSession's fire-and-forget at
-  // auth-session.ts) cannot both generate distinct (clientId, clientSecret,
-  // userId) triples and create orphaned oauthClient rows. The two-int4 key
-  // form is the canonical bigint-compatible advisory-lock shape; both inputs
-  // hash to a stable int4 and the pair becomes the 64-bit lock id. The lock
-  // releases automatically at transaction end (commit OR rollback).
-  //
-  // Repair-on-drift: an earlier seeder targeted the wrong table name and
-  // silently failed at INSERT, leaving installs with a valid assistant
-  // user row but NO matching oauthClient. The flow below detects that
-  // drift state and repairs it — re-issues a new clientId/clientSecret
-  // pair, updates the user row's "clientId" column, and inserts the
-  // matching oauthClient row — all inside the locked transaction so
-  // concurrent callers cannot fight over the repair.
-  try {
-    await betterAuthDb.transaction(async (tx) => {
-      await tx.execute(
-        sql`SELECT pg_advisory_xact_lock(hashtext('cinatra'), hashtext('builtin-assistant-seed'))`,
-      );
-
-      const userRow = await tx.execute<{ id: string; clientId: string | null }>(
-        sql`SELECT id, "clientId" FROM public."user" WHERE username = 'cinatra' AND "userType" = 'assistant' LIMIT 1`,
-      );
-      const existingUser = userRow.rows[0];
-
-      if (existingUser) {
-        // User exists — check whether the oauthClient row exists too.
-        const oauthRow = await tx.execute<{ count: string }>(
-          sql`SELECT count(*)::text as count FROM public."oauthClient" WHERE "userId" = ${existingUser.id}`,
-        );
-        if (Number(oauthRow.rows[0]?.count ?? "0") > 0) {
-          // Steady state — nothing to do.
-          return;
-        }
-
-        // Drift state — assistant user has no matching oauthClient row
-        // (legacy seeder's INSERT targeted the wrong table name and was
-        // silently dropped). Repair by issuing a fresh clientId /
-        // clientSecret pair, updating the user row's clientId column, and
-        // inserting the oauthClient.
-        const clientId = crypto.randomUUID();
-        const clientSecret = crypto.randomUUID();
-        const now = new Date();
-
-        await tx.execute(sql`
-          UPDATE public."user"
-          SET "clientId" = ${clientId}, "updatedAt" = ${now}
-          WHERE id = ${existingUser.id}
-        `);
-
-        await insertOAuthClientWithTx(tx, {
-          id: existingUser.id,
-          userId: existingUser.id,
-          clientId,
-          clientSecret,
-          name: "cinatra-built-in",
-        });
-
-        console.log(
-          "[cinatra-assistant] Repaired drift — existing assistant user had no oauthClient row.",
-        );
-        console.log(`  CINATRA_BUILTIN_CLIENT_ID=${clientId}`);
-        console.log(`  CINATRA_BUILTIN_CLIENT_SECRET=${clientSecret}`);
-        return;
-      }
-
-      // Fresh install — no assistant user row exists yet.
-      const clientId = crypto.randomUUID();
-      const clientSecret = crypto.randomUUID();
-      const userId = crypto.randomUUID();
-      const now = new Date();
-
-      // INSERT user FIRST — the FK direction is
-      // public."oauthClient"."userId" -> public."user".id. The advisory
-      // lock guarantees no concurrent caller is inside this critical
-      // section, so the user-INSERT cannot race itself for the unique
-      // username 'cinatra'.
-      await tx.execute(sql`
-        INSERT INTO public."user" (id, name, email, username, "userType", "clientId", "createdAt", "updatedAt", "emailVerified")
-        VALUES (
-          ${userId},
-          'cinatra',
-          'cinatra@system.local',
-          'cinatra',
-          'assistant',
-          ${clientId},
-          ${now},
-          ${now},
-          true
-        )
-      `);
-
-      await insertOAuthClientWithTx(tx, {
-        id: userId,
-        userId,
-        clientId,
-        clientSecret,
-        name: "cinatra-built-in",
-      });
-
-      console.log("[cinatra-assistant] Built-in @cinatra assistant seeded.");
-      console.log(`  CINATRA_BUILTIN_CLIENT_ID=${clientId}`);
-      console.log(`  CINATRA_BUILTIN_CLIENT_SECRET=${clientSecret}`);
-    });
-  } catch (err) {
-    console.warn(
-      "[cinatra-assistant] Could not seed built-in @cinatra assistant:",
-      err instanceof Error ? err.message : err,
-    );
-  }
-}
-
-// The additional built-in assistant is not seeded for new installs.
-// Existing rows in public."user" remain so any chat threads / mentions stay valid.
-
 export async function ensureAssistantBootstrap() {
   await ensureAssistantUserSchema();
-  await ensureBuiltInCinatraAssistant();
-  // Register mention handles for any assistant principals lacking one — this is
-  // where @cinatra's registry handle is minted on a fresh install (the seed above
-  // runs AFTER migrations, so core__0046's backfill can't see it). Best-effort:
-  // a registry error must not break assistant bootstrap.
+  // Register "Cinatra" as the first assistant agent (cinatra#1037 P1.3): mints
+  // the principal (the ONLY principal-minting path, I3), its handle, and the
+  // 1:1-linked assistant agent_templates row. Replaces the deleted direct-SQL
+  // ensureBuiltInCinatraAssistant seed. The registration module is a STATIC
+  // import (entry-66): the earlier `await import(...)` here kept its graph off
+  // auth.ts's static route graph, but that server-side dynamic import sent the
+  // Turbopack native compile into an unbounded memory runaway on linux-x64 CI
+  // (>33GB; macOS unaffected) — see the entry-66 CI-memory investigation (2026-07-17). The
+  // route-graph ratchet still passes with the static form (verified: all 5
+  // tracked routes within ceilings).
+  await ensureBuiltInCinatraAssistantAgent();
+  // Register mention handles for any OTHER assistant principals lacking one — the
+  // Cinatra handle is minted by the registration above; this backfill self-heals
+  // any principal the registry missed (it runs AFTER migrations, so core__0046's
+  // backfill can't see a boot-seeded principal). Best-effort: a registry error
+  // must not break assistant bootstrap.
   try {
     await backfillMissingAssistantHandles();
   } catch (err) {

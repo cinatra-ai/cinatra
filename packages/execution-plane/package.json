@@ -13,7 +13,8 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
-    "@cinatra-ai/llm": "workspace:*"
+    "@cinatra-ai/llm": "workspace:*",
+    "@cinatra-ai/sdk-extensions": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^4.1.10"

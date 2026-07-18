@@ -5,9 +5,8 @@ import {
   betterAuthDb,
   betterAuthUsers,
   assistantHandles,
-  registerAssistantHandle,
 } from "@/lib/better-auth-db";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import {
   deleteOAuthClientByClientId,
   insertOAuthClientWithTx,
@@ -30,6 +29,18 @@ export type CreateAssistantResult = AssistantUser & {
   clientSecret: string;
 };
 
+/** A transaction-bound executor (the object `betterAuthDb.transaction` yields) —
+ *  structurally what `insertOAuthClientWithTx` accepts. Kept local + minimal so
+ *  the principal-mint primitive is decoupled from drizzle's concrete tx type. */
+export type BetterAuthTxExecutor = { execute: (query: SQL) => Promise<unknown> };
+
+/** Reserved username of the built-in Cinatra assistant PRINCIPAL. The
+ *  assistant-agent registration bootstrap (cinatra#1037 P1.3) owns its minting
+ *  and its 1:1 template link; deletion is refused (see deleteAssistantUser) so
+ *  the host-attribution + registration invariants (I3/I4) cannot be broken from
+ *  the admin UI. */
+export const BUILT_IN_CINATRA_ASSISTANT_USERNAME = "cinatra";
+
 // ---------------------------------------------------------------------------
 // listAssistantUsers
 // ---------------------------------------------------------------------------
@@ -49,13 +60,26 @@ export async function listAssistantUsers(): Promise<AssistantUser[]> {
 }
 
 // ---------------------------------------------------------------------------
-// createAssistantUser
+// createAssistantUserWithTx — the assistant PRINCIPAL mint primitive (I3)
 // ---------------------------------------------------------------------------
+//
+// cinatra#1037 P1.3 re-plumb: assistant-agent registration is the ONLY
+// principal-minting path. This primitive INSERTs the assistant `public."user"`
+// row + its matching `public."oauthClient"` row inside a caller-supplied
+// transaction, so the registration bootstrap can hold its advisory lock across
+// resolve-or-mint on the SAME connection (a lock on a different connection would
+// not serialize this mint). It intentionally does NOT mint the mention handle —
+// the caller does that AFTER the tx commits (best-effort; the boot backfill is
+// the self-healing net), keeping the handle registry write off the critical mint
+// transaction.
+//
+// The ONLY caller is src/lib/assistant-agent-registration.ts. A single-caller
+// grep-gate (principal-minting-single-caller.test.ts) pins this invariant.
 
-export async function createAssistantUser(params: {
-  username: string;
-  email?: string;
-}): Promise<CreateAssistantResult> {
+export async function createAssistantUserWithTx(
+  tx: BetterAuthTxExecutor,
+  params: { username: string; email?: string },
+): Promise<CreateAssistantResult> {
   const clientId = crypto.randomUUID();
   const clientSecret = crypto.randomUUID();
   const userId = crypto.randomUUID();
@@ -63,48 +87,31 @@ export async function createAssistantUser(params: {
   const now = new Date();
 
   // Insert the user row FIRST, then the matching oauthClient row — the FK
-  // direction is public."oauthClient"."userId" -> public."user".id. Wrap in
-  // a transaction so a unique-username collision on the user INSERT can never
-  // leave an orphan oauthClient row behind.
-  await betterAuthDb.transaction(async (tx) => {
-    await tx.execute(sql`
-      INSERT INTO public."user" (id, name, email, username, "userType", "clientId", "createdAt", "updatedAt", "emailVerified")
-      VALUES (
-        ${userId},
-        ${params.username},
-        ${email},
-        ${params.username},
-        'assistant',
-        ${clientId},
-        ${now},
-        ${now},
-        true
-      )
-    `);
+  // direction is public."oauthClient"."userId" -> public."user".id. Both writes
+  // ride the caller's transaction so a unique-username collision on the user
+  // INSERT can never leave an orphan oauthClient row behind.
+  await tx.execute(sql`
+    INSERT INTO public."user" (id, name, email, username, "userType", "clientId", "createdAt", "updatedAt", "emailVerified")
+    VALUES (
+      ${userId},
+      ${params.username},
+      ${email},
+      ${params.username},
+      'assistant',
+      ${clientId},
+      ${now},
+      ${now},
+      true
+    )
+  `);
 
-    await insertOAuthClientWithTx(tx, {
-      id: userId,
-      userId,
-      clientId,
-      clientSecret,
-      name: `assistant-${params.username}`,
-    });
+  await insertOAuthClientWithTx(tx, {
+    id: userId,
+    userId,
+    clientId,
+    clientSecret,
+    name: `assistant-${params.username}`,
   });
-
-  // Mint the principal's mention handle in the registry (cinatra#1037 P1.2).
-  // Best-effort: a registry hiccup must not fail assistant creation (the user +
-  // oauth rows already committed) — the boot backfill (backfillMissingAssistantHandles)
-  // is the self-healing safety net, and the picker/list omits a handle-less
-  // assistant rather than advertising a non-resolving one, so the state stays
-  // consistent (just not-yet-mentionable) until then.
-  try {
-    await registerAssistantHandle(userId, { desired: params.username });
-  } catch (err) {
-    console.warn(
-      `[assistant-users] could not mint handle for ${params.username}; boot backfill will retry:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
 
   return { id: userId, username: params.username, email, clientId, userType: "assistant", clientSecret };
 }
@@ -113,7 +120,29 @@ export async function createAssistantUser(params: {
 // deleteAssistantUser
 // ---------------------------------------------------------------------------
 
+/** True when `id` is the built-in Cinatra assistant PRINCIPAL — the one
+ *  registration-owned principal that must never be deleted (it is load-bearing
+ *  for host-reply attribution (I4) and the single-registration invariant (I3)).
+ *  Every user-deletion path guards on this: the /configuration/assistants delete
+ *  (deleteAssistantUser, below) AND the /configuration/permissions Better-Auth
+ *  removeUser path — deleting it would strand @cinatra's handle + template link
+ *  until the next boot re-seed. */
+export async function isBuiltInCinatraAssistantUserId(id: string): Promise<boolean> {
+  const row = await betterAuthDb
+    .select({ username: betterAuthUsers.username })
+    .from(betterAuthUsers)
+    .where(and(eq(betterAuthUsers.id, id), eq(betterAuthUsers.userType, "assistant")))
+    .limit(1);
+  return row[0]?.username === BUILT_IN_CINATRA_ASSISTANT_USERNAME;
+}
+
 export async function deleteAssistantUser(id: string): Promise<void> {
+  // Refuse to delete the built-in Cinatra principal from ANY path (see
+  // isBuiltInCinatraAssistantUserId).
+  if (await isBuiltInCinatraAssistantUserId(id)) {
+    throw new Error("The built-in Cinatra assistant cannot be deleted.");
+  }
+
   // 1. Look up clientId before deleting user
   const row = await betterAuthDb
     .select({ clientId: betterAuthUsers.clientId })

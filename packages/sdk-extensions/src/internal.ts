@@ -42,6 +42,7 @@ export {
   SOCIAL_MEDIA_SYSTEM_CAPABILITY,
   EMAIL_SYSTEM_CAPABILITY,
   LLM_PROVIDER_SURFACE_CAPABILITY,
+  LLM_PROVIDER_ADAPTER_CAPABILITY,
 } from "./host-connector-services-contract";
 
 export { CHAT_USER_CONTEXT_CAPABILITY_ID } from "./chat-user-context-contract";

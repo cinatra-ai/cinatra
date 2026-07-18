@@ -15,10 +15,16 @@ packages:
   # a private in-tree vendor connector.
   - "extensions/*/*-connector"
   # Built-in artifact-type extensions are kind:"artifact" packages at
-  # extensions/cinatra-ai/<x>-artifact/. Suffix-specific (mirrors the
+  # extensions/cinatra-ai/<x>-artifact(s)/. Suffix-specific (mirrors the
   # -connector rule); metadata-only descriptor packages consumed by the
-  # object-registry bridge.
+  # object-registry bridge. Per the ratified naming decision (epic
+  # cinatra#1448 / cinatra#1453) the plural `-artifacts` suffix names a pack
+  # that holds — or is expected to grow to — more than one type; the singular
+  # `-artifact` stays valid for single-type packs. The two globs are disjoint
+  # (`*-artifact` never matches an `*-artifacts` directory), so BOTH lines are
+  # required; pnpm dedups.
   - "extensions/cinatra-ai/*-artifact"
+  - "extensions/cinatra-ai/*-artifacts"
   # Workflow templates are kind:"workflow" packages at
   # extensions/cinatra-ai/<x>-workflow/ (+ generic-vendor variant). Suffix-
   # specific (mirrors the -connector/-artifact rules); workspace-compiled,

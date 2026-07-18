@@ -197,6 +197,30 @@ contact / list object-type registration moved to the `@cinatra-ai/crm-connector`
 extension in the Twenty migration, so no sibling-package mocks are required.
 Pattern established in `packages/objects/src/integration/__tests__/register-types.test.ts`.
 
+## Artifact-type claim dispositions (`src/claims.ts`)
+
+`src/claims.ts` is the **pure policy leaf** (`@cinatra-ai/objects/claims`, zero React/DB/server imports) for the artifact-type claim system (epic #1424): the status/kind/scope vocabularies, the `claimDispositionsSchema` union, kind-over-scope arbitration, and the dormancy rule. A `kind:"artifact"` extension's `cinatra.artifact.objectTypes[]` entries carry a `dispositions` payload validated by this one schema (imported by both `semantic-manifest.ts` and the extensions handler — only the mirror field line is duplicated, pinned byte-identical by `artifact-objecttypes-claims-mirror.test.ts`). Dispositions persist as `jsonb`, so the payload evolves without a migration.
+
+A disposition carries two orthogonal axes:
+
+- **`projection`** (`raw` | `artifact-safe` | `none`) — the discriminant; governs what a claimed row projects to Graphiti. `projection:"none"` forces `pinnable:false` (nothing to snapshot).
+- **`mutability`** (`draftable` | `record` | `external`, cinatra#1449) — OPTIONAL; names how the claimed rows may change. Absent ⇒ the registering type's own `lifecycle.mutableBy` governs unchanged.
+
+### Mutability class semantics (`ARTIFACT_MUTABILITY_CLASSES`)
+
+| Class | Meaning | Effective `mutableBy` ceiling |
+|---|---|---|
+| `draftable` | cinatra-authored; content edits allowed only while a row is a *draft*, then locked; publishing rides the publication-operation ledger (never rewrites the type into the external entity; no direct draft→published edge) | the type baseline (draft-state-gated) |
+| `record` | create-only, self-contained, immutable — any post-create update rejected | `[]` |
+| `external` | connector-owned pointer to third-party-canonical content; rows written by connector sync only; never pinnable (pin the snapshot record instead) | `[]` (agent/user) |
+
+This leaf owns the **vocabulary + two pure rules only**:
+
+- The `external ⇒ pinnable:false` invariant, enforced on `claimDispositionsSchema` itself.
+- The **baseline-narrowing rule** — a claim's mutability may only NARROW the registering type's `lifecycle.mutableBy`, never widen it. `effectiveMutableBy(mutability, baseline)` returns the narrowed ceiling (always a subset of the baseline); `validateMutabilityNarrowsBaseline(mutability, baseline)` rejects the one widening case (`draftable` over a `mutableBy:[]` immutable type).
+
+The disposition-**enforcing write policy** — trusted transition commands, the `draftable` `draft→scheduled→published` state machine + publish receipts, and the `external` `linked→stale→dangling` reference lifecycle — lives at the object write path and its owners (the publication-operation ledger and the connectorRef external-pointer lifecycle), which CONSUME this vocabulary and these rules. It is intentionally NOT in this leaf.
+
 ## Validation
 
 ```bash
