@@ -1,9 +1,10 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import type { Pool } from "pg";
 
+import { getPooledDb } from "@/lib/db/pooled";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 
 import { getRepresentationByIdForReplay } from "./representation-store";
 import {
@@ -39,18 +40,62 @@ import {
 // ---------------------------------------------------------------------------
 
 type QueryInput = { text: string; values?: unknown[] };
+type QueryResult = { rows: Row[]; rowCount: number };
+
+function pool(): Pool {
+  return getPooledDb({
+    name: "artifact-publication-ledger",
+    connectionString: () => getPostgresConnectionString(),
+  });
+}
 
 function q(): string {
   return postgresSchema.replaceAll('"', '""');
 }
 
-function run(queries: QueryInput[], transaction = false) {
+/**
+ * Execute the ledger's statements through the async pooled DB. Per the #303
+ * architecture track the sync bridge is the exceptional sync-leaf escape hatch,
+ * NOT the request-time store path; this mirrors the sibling artifact ledger
+ * materialization-ledger.ts (getPooledDb, same INSERT…ON CONFLICT DO NOTHING +
+ * separate winner-read idiom).
+ *
+ * Returns the per-statement `{ rows, rowCount }` shape each transition reads.
+ * Every non-transaction transition is a SINGLE conditional-CAS statement run
+ * autocommit — its own fresh READ COMMITTED snapshot, the exact semantics the
+ * schedule-dedupe "separate statement reads the winner under a fresh snapshot"
+ * comment relies on. A `transaction` batch (only reconcile's two-statement
+ * re-arm/fail sweep) checks a client out of the pool and brackets it in
+ * BEGIN…COMMIT (ROLLBACK on throw) so both sweeps commit atomically —
+ * preserving the sync bridge's `transaction: true` semantics exactly.
+ */
+async function run(queries: QueryInput[], transaction = false): Promise<QueryResult[]> {
   ensurePostgresSchema();
-  return runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    transaction,
-    queries,
-  });
+  if (!transaction) {
+    const p = pool();
+    const out: QueryResult[] = [];
+    for (const query of queries) {
+      const res = await p.query(query.text, query.values ? [...query.values] : undefined);
+      out.push({ rows: res.rows as Row[], rowCount: res.rowCount ?? 0 });
+    }
+    return out;
+  }
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const out: QueryResult[] = [];
+    for (const query of queries) {
+      const res = await client.query(query.text, query.values ? [...query.values] : undefined);
+      out.push({ rows: res.rows as Row[], rowCount: res.rowCount ?? 0 });
+    }
+    await client.query("COMMIT");
+    return out;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** The full column projection, in a fixed order, for RETURNING / SELECT. */
@@ -176,7 +221,7 @@ export async function schedulePublication(
   let operation: PublicationOperationRow | null = null;
   let inserted = false;
   for (let attempt = 0; attempt < 3 && operation == null; attempt++) {
-    const insRes = run([
+    const insRes = await run([
       {
         text: `INSERT INTO "${q()}"."artifact_publication_operations"
             (id, org_id, artifact_id, object_type_id, pinned_representation_revision_id,
@@ -208,7 +253,7 @@ export async function schedulePublication(
       break;
     }
     // Conflict: the winning schedule is committed. Read it under a fresh snapshot.
-    const selRes = run([
+    const selRes = await run([
       {
         text: `SELECT ${COLS} FROM "${q()}"."artifact_publication_operations"
           WHERE org_id = $1 AND idempotency_key = $2 AND state <> 'cancelled' LIMIT 1`,
@@ -251,7 +296,7 @@ export async function claimDueOperation(input: {
   operationId: string;
   expectedGeneration: number;
 }): Promise<PublicationOperationRow | null> {
-  const res = run([
+  const res = await run([
     {
       text: `UPDATE "${q()}"."artifact_publication_operations"
         SET state = 'running', attempt = attempt + 1, started_at = now(), updated_at = now()
@@ -284,7 +329,7 @@ export async function settlePublicationSucceeded(
   },
   port: PublicationStatusPort = NOOP_PUBLICATION_STATUS_PORT,
 ): Promise<PublicationOperationRow | null> {
-  const res = run([
+  const res = await run([
     {
       text: `UPDATE "${q()}"."artifact_publication_operations"
         SET state = 'succeeded', receipt = $4::jsonb, error = NULL,
@@ -318,7 +363,7 @@ export async function settlePublicationFailed(input: {
   expectedGeneration: number;
   error: string;
 }): Promise<PublicationOperationRow | null> {
-  const res = run([
+  const res = await run([
     {
       text: `UPDATE "${q()}"."artifact_publication_operations"
         SET state = 'failed', error = $4, settled_at = now(), updated_at = now()
@@ -347,7 +392,7 @@ export async function cancelPublication(
   input: { orgId: string; operationId: string },
   port: PublicationStatusPort = NOOP_PUBLICATION_STATUS_PORT,
 ): Promise<PublicationOperationRow | null> {
-  const res = run([
+  const res = await run([
     {
       text: `UPDATE "${q()}"."artifact_publication_operations"
         SET state = 'cancelled', cancellation_generation = cancellation_generation + 1,
@@ -383,7 +428,7 @@ export async function retryFailedPublication(input: {
   maxAttempts?: number;
 }): Promise<PublicationOperationRow | null> {
   const max = input.maxAttempts ?? DEFAULT_MAX_PUBLICATION_ATTEMPTS;
-  const res = run([
+  const res = await run([
     {
       text: `UPDATE "${q()}"."artifact_publication_operations"
         SET state = 'pending', started_at = NULL, settled_at = NULL, error = NULL,
@@ -418,7 +463,7 @@ export async function reconcileStalePublications(input: {
   const orgValues = input.orgId ? [input.orgId] : [];
   const staleWhere = `state = 'running' AND started_at IS NOT NULL
     AND started_at <= now() - ($1::double precision * interval '1 millisecond') ${orgClause}`;
-  const res = run(
+  const res = await run(
     [
       {
         // Re-arm the ones with attempts remaining.
@@ -451,11 +496,11 @@ export async function reconcileStalePublications(input: {
 // ---------------------------------------------------------------------------
 
 /** One operation by id, or null. */
-export function getPublicationOperation(
+export async function getPublicationOperation(
   orgId: string,
   operationId: string,
-): PublicationOperationRow | null {
-  const res = run([
+): Promise<PublicationOperationRow | null> {
+  const res = await run([
     {
       text: `SELECT ${COLS} FROM "${q()}"."artifact_publication_operations"
         WHERE org_id = $1 AND id = $2 LIMIT 1`,
@@ -467,11 +512,11 @@ export function getPublicationOperation(
 }
 
 /** All operations for an artifact, newest first (the library per-artifact rollup). */
-export function listPublicationOperationsForArtifact(
+export async function listPublicationOperationsForArtifact(
   orgId: string,
   artifactId: string,
-): PublicationOperationRow[] {
-  const res = run([
+): Promise<PublicationOperationRow[]> {
+  const res = await run([
     {
       text: `SELECT ${COLS} FROM "${q()}"."artifact_publication_operations"
         WHERE org_id = $1 AND artifact_id = $2 ORDER BY created_at DESC`,
@@ -483,15 +528,15 @@ export function listPublicationOperationsForArtifact(
 
 /** Due pending operations, oldest-due first — the delivery scanner's seam.
  * The caller claims each via `claimDueOperation(op.id, op.cancellationGeneration)`. */
-export function listDuePublicationOperations(input: {
+export async function listDuePublicationOperations(input: {
   limit?: number;
   orgId?: string;
-}): PublicationOperationRow[] {
+}): Promise<PublicationOperationRow[]> {
   const limit = Math.max(1, Math.min(input.limit ?? 100, 1000));
   const orgClause = input.orgId ? `AND org_id = $2` : "";
   const values: unknown[] = [limit];
   if (input.orgId) values.push(input.orgId);
-  const res = run([
+  const res = await run([
     {
       text: `SELECT ${COLS} FROM "${q()}"."artifact_publication_operations"
         WHERE state = 'pending' AND due_at <= now() ${orgClause}

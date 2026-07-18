@@ -298,12 +298,12 @@ describe.skipIf(!HAS_REAL_DB)("publication-operation ledger (real DB + constrain
     // lease 0 ⇒ every running op is stale; attempts remain (1 < 5) ⇒ re-armed.
     const r1 = await ledger.reconcileStalePublications({ leaseMs: 0, maxAttempts: 5, orgId: ORG });
     expect(r1.reArmed).toBeGreaterThanOrEqual(1);
-    expect(ledger.getPublicationOperation(ORG, operation.id)?.state).toBe("pending");
+    expect((await ledger.getPublicationOperation(ORG, operation.id))?.state).toBe("pending");
     // Claim again (attempt → 2), then reconcile with maxAttempts 1 ⇒ exhausted ⇒ failed.
     await ledger.claimDueOperation({ orgId: ORG, operationId: operation.id, expectedGeneration: 0 });
     const r2 = await ledger.reconcileStalePublications({ leaseMs: 0, maxAttempts: 1, orgId: ORG });
     expect(r2.failed).toBeGreaterThanOrEqual(1);
-    expect(ledger.getPublicationOperation(ORG, operation.id)?.state).toBe("failed");
+    expect((await ledger.getPublicationOperation(ORG, operation.id))?.state).toBe("failed");
   });
 
   it("lists due operations and an artifact's operations", async () => {
@@ -311,9 +311,9 @@ describe.skipIf(!HAS_REAL_DB)("publication-operation ledger (real DB + constrain
     const { operation } = await ledger.schedulePublication({
       orgId: ORG, artifactId, objectTypeId, pinnedRepresentationRevisionId: revisionId, destination: DEST,
     });
-    const due = ledger.listDuePublicationOperations({ orgId: ORG, limit: 500 });
+    const due = await ledger.listDuePublicationOperations({ orgId: ORG, limit: 500 });
     expect(due.some((o) => o.id === operation.id)).toBe(true);
-    const forArtifact = ledger.listPublicationOperationsForArtifact(ORG, artifactId);
+    const forArtifact = await ledger.listPublicationOperationsForArtifact(ORG, artifactId);
     expect(forArtifact.map((o) => o.id)).toContain(operation.id);
   });
 });
