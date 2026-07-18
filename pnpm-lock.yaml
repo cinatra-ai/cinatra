@@ -737,6 +737,12 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  extensions/cinatra-ai/email-artifacts:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
   extensions/cinatra-ai/email-body-artifact:
     dependencies:
       '@cinatra-ai/sdk-extensions':
