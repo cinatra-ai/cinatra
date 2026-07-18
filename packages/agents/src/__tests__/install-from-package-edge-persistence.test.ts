@@ -115,8 +115,7 @@ vi.mock("../store", () => ({
 // the install path now seeds the agent_templates row by
 // compiling cinatra/oas.json (buildAgentTemplateInstallSeed). The seed builder
 // requires a successful compile, so this fixture returns a minimal-but-valid
-// CompiledAgentOas. (registerDeclaredObjectTypes also calls the compiler; the
-// empty producesObjectTypes keeps it a no-op.)
+// CompiledAgentOas.
 vi.mock("../oas-compiler", () => ({
   compileOasAgentJson: async () => ({
     ok: true,
@@ -134,7 +133,6 @@ vi.mock("../oas-compiler", () => ({
       llmConfig: null,
       toolboxes: [],
       agentSpecVersion: "26.1.0",
-      producesObjectTypes: [],
       triggerMode: "full",
       gatedSteps: [],
       cinatraConfig: null,
