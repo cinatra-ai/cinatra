@@ -56,6 +56,36 @@ The Python side (`docker/wayflow/agent_loader.py`) mirrors the 24h ceiling on `A
 
 ---
 
+## Typed production — `cinatra.produces` is the ONLY path (cinatra#1788, epic #1785)
+
+An agent declares the typed object/artifact output it emits via
+`package.json#cinatra.produces: { extension, objectTypeId? }[]` — the ONLY path
+for typed agent output. Each entry names a REQUIRED artifact-kind dependency
+(`extension`) and OPTIONALLY the exact `@scope/pkg:local-id` type it produces
+(`objectTypeId` — the #1452 discriminator). The type must exist at INSTALL time:
+every entry MUST resolve to an artifact-kind package in the agent's REQUIRED
+transitive install closure — a `cinatra.dependencies` edge with `kind:"artifact"`,
+`requirement:"required"`, non-peer, pinned by an exact version or a satisfiable
+semver range — whose manifest DECLARES the referenced `cinatra.artifact.objectTypes`
+claim (the exact `objectTypeId` when the entry carries one).
+
+Enforced FAIL-CLOSED at BOTH publish (`verdaccio/client.ts`) and install
+(`install-from-package.ts`), against the PLANNED closure BEFORE any template or
+DB write — the contract logic is `evaluateTypedProducesContract` /
+`resolveTypedProducesContract` in `verdaccio/package-contract.ts`. A violation
+(an entry naming a non-required-dependency extension, or an `objectTypeId` no
+closure dependency claims) fails the publish and refuses the install with a
+precise error naming the missing claimant/claim — a human-present failure at
+install time, never a runtime surprise. A git-ref-pinned artifact dependency
+cannot prove its claim through the registry, so a typed (`objectTypeId`) entry
+against one fails closed; pin the artifact dependency by exact version or a
+satisfiable semver range.
+
+RETIRED — do not reintroduce: runtime dynamic-type minting. There is no
+`producesObjectTypes`, no `outputs[*].cinatra.object_type` OAS annotation, and no
+install-time `ensureDynamicObjectType` call. Typed output exists ONLY by
+installing the artifact-kind extension that CLAIMS the type.
+
 ## Removed features (do not reintroduce)
 
 These orphaned, fully-unreferenced source clusters are intentionally absent from `src/`. Do not recreate these — if a future need arises, design fresh against current patterns rather than resurrecting the deleted files:

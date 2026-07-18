@@ -25,11 +25,23 @@ import { z } from "zod";
 /** SemanticArtifactRef byte-mirror — kept inline to avoid a cross-package
  *  dep edge (extensions → objects). Drift here would be caught by the
  *  `byte-mirror` test that parses the SAME input against both the local
- *  schema and `@cinatra-ai/objects/semantic-manifest.semanticProducesSchema`. */
-export type SemanticArtifactRefLeaf = { extension: string };
+ *  schema and `@cinatra-ai/objects/semantic-manifest.semanticProducesSchema`.
+ *  `objectTypeId` (cinatra#1788, optional) is the exact `@scope/pkg:local-id`
+ *  discriminator; its regex mirrors `CLAIMED_OBJECT_TYPE_ID_RE`
+ *  (@cinatra-ai/objects/claims), pinned equal by the byte-mirror test. */
+export type SemanticArtifactRefLeaf = { extension: string; objectTypeId?: string };
 
 const semanticArtifactRefSchema = z
-  .object({ extension: z.string().min(1) })
+  .object({
+    extension: z.string().min(1),
+    objectTypeId: z
+      .string()
+      .regex(/^@[\w-]+\/[\w-]+:[\w-]+$/, {
+        message:
+          "produces objectTypeId must be a namespaced object type id (@scope/package:local-id)",
+      })
+      .optional(),
+  })
   .strict();
 
 const producesArraySchema = z.array(semanticArtifactRefSchema);
@@ -55,10 +67,13 @@ export function readAgentProducesFromPackageManifest(
     if (produces === undefined || produces === null) return [];
     const parsed = producesArraySchema.safeParse(produces);
     if (!parsed.success) return [];
-    // Defensive: return a new array of {extension} objects only — never
-    // pass through a caller-supplied object reference (which could carry
-    // smuggled prototype-walk fields).
-    return parsed.data.map((r) => ({ extension: r.extension }));
+    // Defensive: return a new array of {extension, objectTypeId?} objects
+    // only — never pass through a caller-supplied object reference (which
+    // could carry smuggled prototype-walk fields).
+    return parsed.data.map((r) => ({
+      extension: r.extension,
+      ...(r.objectTypeId !== undefined ? { objectTypeId: r.objectTypeId } : {}),
+    }));
   } catch {
     return [];
   }
