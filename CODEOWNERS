@@ -20,8 +20,6 @@
 /.github/           @groganz @megajustice
 /SECURITY.md        @groganz @megajustice
 /.github/workflows/ @groganz @megajustice
-/package.json       @groganz @megajustice
-/pnpm-lock.yaml     @groganz @megajustice
 
 # Public project metadata (licensing).
 /LICENSE            @groganz @megajustice

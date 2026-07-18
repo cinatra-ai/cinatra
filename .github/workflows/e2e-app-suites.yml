@@ -241,7 +241,7 @@ jobs:
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
-          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 12*1024*1024 ))
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
           if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
             echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
@@ -449,7 +449,7 @@ jobs:
             if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
           fi
           SWAPFILE="${target%/}/swapfile-ci-build"
-          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 12*1024*1024 ))
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
           if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
           if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
             echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
