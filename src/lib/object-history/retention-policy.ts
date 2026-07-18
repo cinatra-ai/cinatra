@@ -55,6 +55,10 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   "@cinatra-ai/email:sent-email": { kind: "indefinite" },
   "@cinatra-ai/email:received-reply": { kind: "indefinite" },
   "@cinatra-ai/email:thread": { kind: "indefinite" },
+  // Email work-product types host-registered for the @cinatra-ai/email-artifacts
+  // pack (body [draftable], recipient [snapshot]) — cinatra#1454.
+  "@cinatra-ai/email:body": { kind: "indefinite" },
+  "@cinatra-ai/email:recipient": { kind: "indefinite" },
   // Namespaced types registered in production via objectTypeRegistry.register
   // with a fully-qualified @cinatra-ai/<ns>:<id> identifier — surfaced by
   // scripts/audit/retention-policy-gate.mjs.
