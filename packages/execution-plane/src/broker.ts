@@ -37,6 +37,12 @@ import { ensureWorkspaceVolume, removeWorkspaceVolume } from "./workspace";
 // Exec-plane S2 (cinatra#1707): read-only skill staging under /skills/<slug>.
 import { stageSkillsVolume, removeSkillsVolume } from "./staging";
 import { resolveL0ImageRef } from "./l0-profile";
+// Exec-plane S3 (cinatra#1708): the resolved L1 environment a job mounts +
+// the worker's fail-closed mount-verification refusal.
+import {
+  EnvironmentMountRefusedError,
+  type ResolvedEnvironmentMount,
+} from "./environment/mount";
 import type { DockerCli } from "./docker-cli";
 import {
   DEFAULT_BROKER_QUOTAS,
@@ -91,6 +97,12 @@ type BrokerJob = {
   workspaceVolume: string;
   /** Per-job read-only staged-skills volume (exec-plane S2), when staged. */
   skillsVolume?: string;
+  /**
+   * The resolved L1 environment layer every command on this job mounts
+   * (exec-plane S3, cinatra#1708). Fixed for the job's lifetime; the worker
+   * re-verifies its provenance before each mount.
+   */
+  environment?: ResolvedEnvironmentMount;
   seq: number;
   terminated: boolean;
   terminationReason?: string;
@@ -231,7 +243,18 @@ export class ExecutionBroker {
    */
   async openJob(
     carrier: string,
-    openOpts?: { stagedSkills?: StagedSkillInput[] },
+    openOpts?: {
+      stagedSkills?: StagedSkillInput[];
+      /**
+       * The resolved L1 environment layer to mount for every command on this
+       * job (exec-plane S3, cinatra#1708). Projected from a verified cache
+       * entry by the app-layer service that resolves the run's declared
+       * environment; the worker re-verifies its signed provenance before each
+       * mount. Absent ⇒ commands run over the L0 base (byte-identical S1/S2
+       * dispatch).
+       */
+      environment?: ResolvedEnvironmentMount;
+    },
   ): Promise<OpenJobResult> {
     const opened = openSealedSession(carrier, {
       nowMs: this.opts.nowMs?.(),
@@ -305,6 +328,7 @@ export class ExecutionBroker {
         session,
         workspaceVolume,
         ...(skillsVolume ? { skillsVolume } : {}),
+        ...(openOpts?.environment ? { environment: openOpts.environment } : {}),
         seq: 0,
         terminated: false,
       };
@@ -438,6 +462,7 @@ export class ExecutionBroker {
           command,
           workspaceVolume: job.workspaceVolume,
           ...(job.skillsVolume ? { skillsVolume: job.skillsVolume } : {}),
+          ...(job.environment ? { environment: job.environment } : {}),
           egress,
           limits: this.limits,
         });
@@ -445,6 +470,14 @@ export class ExecutionBroker {
         // A worker/dispatch failure must NOT throw into the caller (an
         // unaudited error encourages unsafe retries). Audit a structured
         // refusal and return it (finding: fail-closed auditing incomplete).
+        // A refused L1 environment mount (unverifiable provenance / no host
+        // key) is a distinct, security-relevant fail-closed event
+        // (cinatra#1708 AC4) — surfaced with its OWN audited reason, never
+        // masked as a generic worker error.
+        if (err instanceof EnvironmentMountRefusedError) {
+          return await this.refuse(job, command, "environment_untrusted",
+            `The job's declared execution environment could not be trusted (${err.reason}); the command is refused (fail-closed).`, policy);
+        }
         return await this.refuse(job, command, "worker_error",
           `The sandbox worker failed to run the command: ${(err as Error).message}`, policy);
       }

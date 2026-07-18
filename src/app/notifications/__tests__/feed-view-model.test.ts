@@ -74,7 +74,6 @@ describe("approvalDecideKind", () => {
   it("maps each actionable source and defaults to none", () => {
     expect(approvalDecideKind("agent-creation-requests")).toBe("agent");
     expect(approvalDecideKind("extension-host-port-grants")).toBe("host-port");
-    expect(approvalDecideKind("dynamic-type-artifact-visibility")).toBe("dynamic-type");
     expect(approvalDecideKind("marketplace-submission-moderation")).toBe("marketplace-moderate");
     expect(approvalDecideKind("marketplace-vendor-app-moderation")).toBe("marketplace-moderate");
     // the shared promotion source (#1560) — one decide kind for every subject type
@@ -82,6 +81,9 @@ describe("approvalDecideKind", () => {
     // self / passthrough / unknown → none
     expect(approvalDecideKind("marketplace-my-submissions")).toBe("none");
     expect(approvalDecideKind("workflow-legacy")).toBe("none");
+    // the dynamic-type artifact-visibility source was retired (#1790, epic
+    // #1785 slice E) — its id no longer maps to a decide kind.
+    expect(approvalDecideKind("dynamic-type-artifact-visibility")).toBe("none");
     expect(approvalDecideKind("whatever")).toBe("none");
   });
 });

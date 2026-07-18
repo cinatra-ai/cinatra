@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { parseArtifactUi } from "@cinatra-ai/sdk-extensions/artifact-contract";
-import { artifactObjectTypeClaimManifestSchema } from "./claims";
+import { artifactObjectTypeClaimManifestSchema, CLAIMED_OBJECT_TYPE_ID_RE } from "./claims";
 import type { SemanticArtifactManifest, SemanticArtifactRef } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -116,9 +116,28 @@ export const semanticArtifactManifestSchema: z.ZodType<SemanticArtifactManifest>
  * Agent-extension counterpart: `produces: SemanticArtifactRef[]` - agents
  * declare which semantic artifact types they emit. This parser owns only the
  * schema contract; adoption and cross-kind validation live outside this file.
+ *
+ * `objectTypeId` (cinatra#1788, optional) is the EXACT `@scope/pkg:local-id`
+ * discriminator that pins the entry to ONE claimed type of the referenced
+ * artifact pack — completing the #1452 direction (context slots gained this
+ * discriminator there; `produces` gains it here). Validated against the SAME
+ * namespaced-id regex the claim registry uses (`CLAIMED_OBJECT_TYPE_ID_RE`);
+ * this shape is byte-mirrored in the agents package contract and the
+ * `agent-produces-reader` leaf, pinned equal by their byte-mirror tests.
  */
 export const semanticProducesSchema: z.ZodType<SemanticArtifactRef[]> = z.array(
-  z.object({ extension: z.string().min(1) }).strict(),
+  z
+    .object({
+      extension: z.string().min(1),
+      objectTypeId: z
+        .string()
+        .regex(CLAIMED_OBJECT_TYPE_ID_RE, {
+          message:
+            "produces objectTypeId must be a namespaced object type id (@scope/package:local-id)",
+        })
+        .optional(),
+    })
+    .strict(),
 );
 
 // ---------------------------------------------------------------------------

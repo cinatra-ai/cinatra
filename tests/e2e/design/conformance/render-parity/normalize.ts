@@ -77,3 +77,65 @@ export function domNormalize(html: string): string {
   });
   return out.trim();
 }
+
+/**
+ * Make a rendered content fragment HYDRATION-INVARIANT at its code blocks
+ * (cinatra#1222 live-run slice). The live `/chat` surface asynchronously swaps
+ * each `.chat-code-block` placeholder for shiki-highlighted markup (the
+ * chat-messages-view hydration effect at ~L871-893: it `replaceWith`s the
+ * `<pre>` and removes ONLY the `data-shiki-code` attribute), whereas the
+ * committed golden captures the PRE-hydration placeholder the reference renderer
+ * emits in Node (shiki cold → placeholder). The deterministic render-parity DOM
+ * gate covers the CONTENT layer; shiki syntax-highlighting is a client
+ * enhancement the static slice deliberately keeps OUT of the golden.
+ *
+ * This canonicalizer neutralizes EXACTLY the two things that legitimately differ
+ * between the placeholder and the hydrated shape, and NOTHING else — so it can
+ * never mask a real divergence:
+ *   1. the `data-shiki-code` div attribute (present only on the placeholder — it
+ *      is the one attribute the hydration removes), and
+ *   2. the `<pre>` element itself (its class/style AND its inner markup — escaped
+ *      source in `<pre><code>…</code></pre>` vs shiki's highlighted `<pre>`),
+ *      replaced by one canonical `<pre data-code-canon>` carrying just the source.
+ * Everything else is KEPT and therefore still COMPARED: the wrapper `<div>` and
+ * its `data-shiki-lang` / `data-shiki-theme` (both present in BOTH shapes, so a
+ * real LANGUAGE or code-THEME divergence still fails), and the copy button. The
+ * source is recovered identically from either shape via the `<pre>`'s
+ * `textContent` (the placeholder's `<code>` and shiki's token spans both
+ * preserve the source text); only shiki's single-trailing-newline serialization
+ * artifact is normalized (`/\n$/`, exactly one — a multi-newline drift is NOT
+ * masked). A fixture with no `.chat-code-block` is untouched (the compare is then
+ * plain `domNormalize`, identical to the static gate).
+ *
+ * Self-contained (references only DOM globals) so Playwright can serialize it
+ * into the page via `page.evaluate(canonicalizeCodeBlocks, html)`. Returns an
+ * HTML string; feed it to `domNormalize` for the canonical compare.
+ */
+export function canonicalizeCodeBlocks(html: string): string {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  tpl.content.querySelectorAll(".chat-code-block").forEach((el) => {
+    // Recover the source from the <pre> — present and text-preserving in BOTH
+    // the placeholder (`<pre><code>escaped</code></pre>`) and the hydrated shiki
+    // <pre> (its line/token spans preserve the source text verbatim).
+    const pre = el.querySelector("pre");
+    // Normalize ONLY shiki's single-trailing-newline serialization artifact; a
+    // genuine multi-newline source drift survives (not `\n+$`).
+    const source = (pre?.textContent ?? el.textContent ?? "").replace(/\n$/, "");
+    // Drop the ONE attribute that differs placeholder↔hydrated. data-shiki-lang
+    // and data-shiki-theme are present in BOTH and are KEPT, so a real language
+    // or code-theme divergence is still compared.
+    el.removeAttribute("data-shiki-code");
+    // Replace the <pre> (its class/style + highlight internals legitimately
+    // differ between the two shapes) with one canonical source marker; the
+    // wrapper div, its retained data-shiki-lang/theme, and the copy button stay
+    // for the compare. textContent lets the browser escape &,<,> so the marker
+    // round-trips through domNormalize's re-parse.
+    const canon = document.createElement("pre");
+    canon.setAttribute("data-code-canon", "1");
+    canon.textContent = source;
+    if (pre) pre.replaceWith(canon);
+    else el.replaceChildren(canon);
+  });
+  return tpl.innerHTML;
+}
