@@ -62,7 +62,6 @@ const PUBLIC_EXACT_PATHS = [
   "/api/openai/connection-status",
   "/api/app/setup-status",
   "/api/app/route-guard-status",
-  "/api/chat", // Called internally from MCP handlers — auth is optional, userId used for personalization only
 ];
 
 // Internal design-system verification route. Static React server component;

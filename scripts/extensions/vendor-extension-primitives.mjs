@@ -132,6 +132,14 @@ const VENDOR_MANIFEST = [
     extensionDir: "extensions/cinatra-ai/blog-linkedin-publish-agent",
     uiItems: ["button", "card", "label", "textarea"],
   },
+  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-wordpress-publish-agent
+  // relocated its draft-confirm HITL field renderer into its own repo; the pure
+  // confirm/reject card imports only these design-registry primitives (no
+  // editable textarea/label), vendored the same kind-agnostic way.
+  {
+    extensionDir: "extensions/cinatra-ai/blog-wordpress-publish-agent",
+    uiItems: ["button", "card"],
+  },
 ];
 
 // Resolve the transitive registry:ui closure of `directItems` from

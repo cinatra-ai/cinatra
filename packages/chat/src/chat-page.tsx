@@ -6,15 +6,17 @@
 // cinatra#918 split this former ~3.4k-line monolith along its concerns,
 // mirroring the #853 approach (pure testable seams first, thin component
 // wiring after):
-//   - ./chat-persistence   — thread CRUD-over-fetch + thread-model helpers
-//   - ./chat-stream-events — pure SSE parsing + per-event message transforms
+//   - ./ag-ui-chat-client  — the headless AG-UI turn driver + thread
+//     CRUD-over-fetch helpers (the unified assistant stream, cinatra#1218)
 //   - ./chat-routing       — pure client-side routing decisions
 //   - ./chat-messages-view — the conversation renderer, mounted via
 //     next/dynamic so the heavy renderers (marked/katex via markdown-render,
 //     recharts via chart-embed, the mermaid/shiki wrappers) load in their own
 //     chunk and stop riding the initial /chat bundle.
-// This component keeps the state machine, effects, and dispatch orchestration
-// unchanged — every extracted seam is a mechanical move.
+// The bespoke chat-stream-events wire and its `CHAT_STREAM_WIRE` kill-switch
+// were deleted by the cinatra#1218 delete stage — the AG-UI stream is the
+// ONLY wire; a failed S1 handshake is a fail-closed turn error, never a
+// fallback.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
@@ -60,28 +62,7 @@ import {
   extractAgentName,
 } from "./ag-ui-chat-client";
 import {
-  parseSseEventBlock,
-  extractAgentRunId,
-  normalizeCitations,
-  createSlackBuffers,
-  appendSlackTextDelta,
-  applySlackThinkingStart,
-  applySlackThinkingEnd,
-  applySlackToolCall,
-  applySlackToolResult,
-  applySlackCitations,
-  applyTextDeltaToMessages,
-  applyThinkingStartToMessages,
-  applyThinkingEndToMessages,
-  applyToolCallToMessages,
-  applyToolResultToMessages,
-  applyCitationsToMessages,
-  applyErrorToMessages,
-  extractErrorMessage,
-} from "./chat-stream-events";
-import {
   EXTERNAL_TAKEOVER_MS,
-  AG_UI_ENDPOINT_FOR_LEGACY,
   countMentions,
   shouldEnterSlackModeOnSend,
   applyExternalMentionsToMessages,
@@ -92,9 +73,8 @@ import {
 // The unified AG-UI wire (cinatra#1218, epic #1216 S2): the headless client
 // drives the full turn lifecycle over the S3 reducer behind a small UI port
 // (driveAssistantChatTurn); persistence fetch helpers are co-located there
-// (formerly ./chat-persistence — see the module's route-graph note). The
-// bespoke wire below stays behind the `streamWire` flag until the
-// parity-gated deletes land.
+// (formerly ./chat-persistence — see the module's route-graph note). Since
+// the #1218 delete stage this is the ONLY wire.
 import {
   driveAssistantChatTurn,
   ensureAssistantChatWireNegotiated,
@@ -140,7 +120,7 @@ const ChatMessagesView = dynamic(
 // above.
 // ---------------------------------------------------------------------------
 
-export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS, streamWire = "legacy" }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -620,14 +600,8 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     }
   }
 
-  // The AG-UI wire selector (cinatra#1218): "ag-ui" routes default Cinatra
-  // turns through the unified stream; a failed fail-closed handshake (S1
-  // CONTRACT.md §5) pins this ref to the retained legacy wire.
-  const streamWireRef = useRef<"ag-ui" | "legacy">(streamWire);
-
-  // AG-UI stream driver (cinatra#1218) — the unified-wire counterpart of the
-  // bespoke streamResponse below, lifecycle-identical; the turn drive lives
-  // headlessly in ./ag-ui-chat-client. This wrapper owns registry + guard.
+  // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
+  // ./ag-ui-chat-client. This wrapper owns registry + guard.
   async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string) {
     const assistantId = generateId();
     const abortController = new AbortController();
@@ -672,296 +646,36 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     }
   }
 
-  // Thin SSE driver — connection handling, the read loop, and the
-  // thread-switch/abort guards live here; every per-event message transform is
-  // a pure, unit-tested applier in ./chat-stream-events.
-  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/chat", authorUserId?: string) {
-    // Unified-wire delegation (cinatra#1218): Cinatra turns + @chatgpt (pred. 3) ride AG-UI when the flag is on & the handshake succeeds; a failure falls back to the same bespoke `endpoint` (retained safe-harbor). Externals are webhook-polled. See AG_UI_ENDPOINT_FOR_LEGACY in ./chat-routing. Thread exists here.
-    const agUiEndpoint = AG_UI_ENDPOINT_FOR_LEGACY[endpoint];
-    if (agUiEndpoint && streamWireRef.current === "ag-ui") {
-      const agUiThreadId = activeThreadIdRef.current;
-      if (agUiThreadId) {
-        if (await ensureAssistantChatWireNegotiated()) {
-          return streamAgUiResponse(contextMessages, agUiThreadId, handle, authorUserId, agUiEndpoint);
-        }
-        streamWireRef.current = "legacy";
-      }
+  // The /chat turn dispatcher — AG-UI is the ONLY wire (cinatra#1218 delete
+  // stage). The S1 capability handshake stays fail-closed: a failed
+  // negotiation surfaces a turn error on a never-blank assistant bubble —
+  // there is no legacy fallback to retry over. Externals are webhook-polled
+  // and never touch this dispatcher.
+  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string) {
+    const threadId = activeThreadIdRef.current;
+    if (!threadId) {
+      // Unreachable in practice: every caller dispatches inside an active
+      // thread (sendMessage creates + pins the thread id before dispatch).
+      console.error("[chat] turn dispatched with no active thread — dropped");
+      return;
     }
-    const assistantId = generateId();
-    const abortController = new AbortController();
-    // Capture the thread that spawned this stream. Every async patch below
-    // short-circuits if the active thread has changed since we started.
-    const originThreadId = activeThreadIdRef.current;
-    // Per-stream paragraph-break tracker. Must be function-local so two
-    // concurrent streams cannot corrupt each other's separator state. It is
-    // consumed HERE in event-loop scope (never inside a setMessages updater)
-    // — see applyTextDeltaToMessages for the React-replay rationale.
-    let nextTextNeedsRoundSeparator = false;
-    // Read Slack mode from the ref so stale closures (e.g. the 20-second takeover timer)
-    // always see the current value rather than the value at the time sendMessage was called.
-    const isSlack = isSlackModeRef.current;
-
-    // Helper: returns true iff the thread that spawned this stream is still
-    // the active thread. Every setMessages callback inside the SSE loop calls
-    // this and returns `prev` unchanged when it fires false — the stream has
-    // been orphaned by a thread switch and must not mutate the new thread.
-    const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
-
-    // Slack-mode accumulation buffers. Declared before try so they are accessible in finally.
-    const slackBuffers = createSlackBuffers();
-    // Error from catch block — declared before try so finally can read it.
-    let caughtError = "";
-
-    try {
-      // Register the stream AFTER local declarations and BEFORE any await.
-      // If any statement above throws (it can't — they're all synchronous
-      // constant/local declarations), no registry leak is possible.
-      beginStream(assistantId, abortController);
-
-      if (isSlack) {
-        // Slack mode: show a per-assistant typing indicator instead of an empty bubble.
-        setTypingIndicators((prev) => {
-          const m = new Map(prev);
-          m.set(assistantId, handle ?? "Assistant");
-          return m;
-        });
-      } else {
-        // ChatGPT mode: append the empty assistant bubble immediately (unchanged behavior).
-        setMessages((prev) => {
-          if (!stillOnOriginThread()) return prev;
-          return [...prev, { id: assistantId, role: "assistant", content: "", thoughtGroups: [], parts: [], liveStatus: "Thinking", ...(authorUserId ? { authorUserId } : {}) }];
-        });
-      }
-
-      const apiMessages = contextMessages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        // Forward attachments only when present so every text-only message
-        // remains byte-identical.
-        ...(m.attachments && m.attachments.length > 0
-          ? { attachments: m.attachments }
-          : {}),
-      }));
-      const chatBody = JSON.stringify({ messages: apiMessages });
-
-      // Retry once on network errors (TypeError: Failed to fetch). This handles
-      // Turbopack's lazy compilation window: the first request to /api/chat after
-      // a server restart may fail while the large module graph is being compiled.
-      let response: Response;
-      try {
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: chatBody,
-          signal: abortController.signal,
-        });
-      } catch (fetchErr) {
-        if (abortController.signal.aborted) throw fetchErr;
-        // Network error — wait briefly and retry once
-        await new Promise((resolve) => window.setTimeout(resolve, 3000));
-        if (abortController.signal.aborted) throw fetchErr;
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: chatBody,
-          signal: abortController.signal,
-        });
-      }
-
-      // After the initial network await, verify we're still on the origin thread
-      // AND not already aborted. If the user switched threads during the POST
-      // handshake, exit silently — no state mutation, no error toast.
-      if (abortController.signal.aborted || !stillOnOriginThread()) {
-        return;
-      }
-
-      if (!response.ok) throw new Error("Chat request failed.");
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response stream.");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (abortController.signal.aborted || !stillOnOriginThread()) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-
-        for (const block of blocks) {
-          const parsed = parseSseEventBlock(block);
-          if (!parsed) continue;
-          const { evt, data: d } = parsed;
-
-          if (evt === "text") {
-            const delta = String(d.content ?? "");
-            // Read-and-clear the round-boundary flag HERE (event loop scope) —
-            // the SSE handler runs exactly once per event, so the applier stays
-            // a pure function of `prev` (see chat-stream-events.ts).
-            const consumeRoundSeparator = nextTextNeedsRoundSeparator;
-            if (consumeRoundSeparator) {
-              nextTextNeedsRoundSeparator = false;
-            }
-            if (!delta) {
-              // Skip — no state change.
-            } else if (!isSlack) {
-              setMessages((prev) => {
-                if (!stillOnOriginThread()) return prev;
-                return applyTextDeltaToMessages(prev, assistantId, delta, consumeRoundSeparator);
-              });
-            } else {
-              // Slack mode: accumulate into buffer instead of updating state per-chunk.
-              appendSlackTextDelta(slackBuffers, delta, consumeRoundSeparator);
-            }
-          } else if (evt === "thinking_start") {
-            if (!isSlack) {
-              setMessages((prev) => {
-                if (!stillOnOriginThread()) return prev;
-                return applyThinkingStartToMessages(prev, assistantId);
-              });
-            } else {
-              applySlackThinkingStart(slackBuffers);
-            }
-          } else if (evt === "thinking_end") {
-            const seconds = Number(d.seconds) || 0;
-            if (!isSlack) {
-              setMessages((prev) => {
-                if (!stillOnOriginThread()) return prev;
-                return applyThinkingEndToMessages(prev, assistantId, seconds);
-              });
-            } else {
-              applySlackThinkingEnd(slackBuffers, seconds);
-            }
-            nextTextNeedsRoundSeparator = true;
-          } else if (evt === "tool_call") {
-            const event = {
-              id: String(d.id),
-              name: String(d.name),
-              serverLabel: typeof d.serverLabel === "string" ? d.serverLabel : undefined,
-            };
-            if (!isSlack) {
-              setMessages((prev) => {
-                if (!stillOnOriginThread()) return prev;
-                return applyToolCallToMessages(prev, assistantId, event);
-              });
-            } else {
-              applySlackToolCall(slackBuffers, event);
-            }
-          } else if (evt === "tool_result") {
-            const toolName = String(d.name ?? "");
-            if (widgetRuntime.isWidgetRefreshTool(toolName)) {
-              setWidgetRefreshKey((k) => k + 1);
-            }
-            const event = {
-              id: String(d.id),
-              resultLabel: String(d.resultLabel ?? ""),
-              serverLabel: typeof d.serverLabel === "string" ? d.serverLabel : undefined,
-              // agent_run results carry a runId the renderer pins on the
-              // tool_call part (mounts <InlineAgentRunCard runId={...} />).
-              runId: extractAgentRunId(toolName, d.result),
-            };
-            if (!isSlack) {
-              setMessages((prev) => {
-                if (!stillOnOriginThread()) return prev;
-                return applyToolResultToMessages(prev, assistantId, event);
-              });
-            } else {
-              applySlackToolResult(slackBuffers, event);
-            }
-          } else if (evt === "citations") {
-            const normalized = normalizeCitations(d.citations);
-            if (normalized.length > 0) {
-              if (!isSlack) {
-                setMessages((prev) => {
-                  if (!stillOnOriginThread()) return prev;
-                  return applyCitationsToMessages(prev, assistantId, normalized);
-                });
-              } else {
-                applySlackCitations(slackBuffers, normalized);
-              }
-            }
-          } else if (evt === "error") {
-            const rawError = String(d.message ?? "");
-            if (!isSlack) {
-              setMessages((prev) => {
-                if (!stillOnOriginThread()) return prev;
-                return applyErrorToMessages(prev, assistantId, rawError);
-              });
-            } else {
-              slackBuffers.error = extractErrorMessage(rawError);
-              break;
-            }
-          }
-        }
-      }
-
-      // Slack mode: reveal the fully buffered message in one atomic setMessages call.
-      // Intentionally does NOT populate `parts` — Slack reveals atomically so it
-      // doesn't have the visually-divorced-progress problem the chat UI does.
-      // The renderer's fallback to `thoughtGroups + content` runs for these
-      // messages. If Slack ever moves to streamed reveal, also build a parts
-      // trace here (cf. ChatGPT mode's event handlers above).
-      if (isSlack && stillOnOriginThread() && (slackBuffers.text.length > 0 || slackBuffers.thoughtGroups.length > 0 || slackBuffers.error.length > 0)) {
-        setMessages((prev) => {
-          if (!stillOnOriginThread()) return prev;
-          return [...prev, {
-            id: assistantId,
-            role: "assistant" as const,
-            content: slackBuffers.text,
-            ...(authorUserId ? { authorUserId } : {}),
-            ...(slackBuffers.thoughtGroups.length > 0 ? { thoughtGroups: slackBuffers.thoughtGroups } : {}),
-            ...(slackBuffers.citations.length > 0 ? { citations: slackBuffers.citations } : {}),
-            ...(slackBuffers.error.length > 0 ? { error: slackBuffers.error } : {}),
-          }];
-        });
-      }
-    } catch (error) {
-      // Internal error boundary — streamResponse MUST NOT rethrow because
-      // callers dispatch it as `void streamResponse(...)` and unhandled promise
-      // rejections would leak and leave streamingCount stuck.
-      if (error instanceof Error && error.name === "AbortError") {
-        // User clicked stop or thread switch aborted — clean exit, no toast.
-      } else {
-        const rawError = error instanceof Error ? error.stack ?? error.message : "Something went wrong.";
-        if (!isSlack) {
-          setMessages((prev) => {
-            if (!stillOnOriginThread()) return prev;
-            return prev.map((msg) =>
-              msg.id === assistantId
-                ? { ...msg, error: error instanceof Error ? error.message : "Something went wrong.", errorRaw: rawError }
-                : msg,
-            );
-          });
-        } else {
-          caughtError = error instanceof Error ? error.message : "Something went wrong.";
-        }
-      }
-      // Do NOT rethrow. Swallow.
-    } finally {
-      if (isSlack) {
-        // Remove this assistant's typing indicator bubble.
-        setTypingIndicators((prev) => {
-          const m = new Map(prev);
-          m.delete(assistantId);
-          return m;
-        });
-        // If a non-abort error occurred and we didn't already insert a content bubble, insert an error bubble.
-        if (caughtError && stillOnOriginThread()) {
-          setMessages((prev) => {
-            if (!stillOnOriginThread()) return prev;
-            const alreadyInserted = prev.some((m) => m.id === assistantId);
-            if (alreadyInserted) return prev;
-            return [...prev, { id: assistantId, role: "assistant" as const, content: "", error: caughtError }];
-          });
-        }
-      }
-      // Sole cleanup — guarantees Map/count stay in sync even on unexpected errors.
-      endStream(assistantId);
+    if (!(await ensureAssistantChatWireNegotiated())) {
+      // Fail-closed per S1 CONTRACT.md §5 — surface the failure, never blank.
+      const assistantId = generateId();
+      setMessages((prev) =>
+        activeThreadIdRef.current === threadId
+          ? [...prev, {
+              id: assistantId,
+              role: "assistant" as const,
+              content: "",
+              ...(authorUserId ? { authorUserId } : {}),
+              error: "The assistant stream is unavailable (contract negotiation failed). Reload the page and try again.",
+            }]
+          : prev,
+      );
+      return;
     }
+    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint);
   }
 
   async function submitEmbed() {
@@ -1062,8 +776,9 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       return;
     }
 
-    // Slack mode — always regenerate. Use routing to pick the right endpoint; fall back to /api/chat.
-    let editEndpoint = "/api/chat";
+    // Slack mode — always regenerate. Use routing to pick the right endpoint;
+    // fall back to the Cinatra assistant endpoint.
+    let editEndpoint = "/api/assistants/chat";
     let editHandle: string | undefined = activeAssistantHandle;
     let editAuthorId: string | undefined;
 
@@ -1116,6 +831,11 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
       // race condition where the empty write can arrive at the server second.
       skipNextThreadLoadRef.current = true;
       loadedThreadIdRef.current = threadId;
+      // Pin the latest-value ref SYNCHRONOUSLY (the sync effect confirms it on
+      // the next render): the AG-UI dispatcher reads the ref for the turn's
+      // thread binding, and the routing await below is not guaranteed to span
+      // a render flush.
+      activeThreadIdRef.current = threadId;
       // New thread — reset pause state so stale participants from previous thread don't bleed in.
       setPausedParticipants([]);
       setActiveThreadId(threadId);

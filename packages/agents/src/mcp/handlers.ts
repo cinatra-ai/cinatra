@@ -42,6 +42,9 @@ import {
   type AgentTemplateRecord,
   type AgentTemplateVersionRecord,
   writeHitlPrompt,
+  readAllHitlPromptsForRun,
+  updateHitlPromptsExcludedForRunAgent,
+  type HitlPromptRecord,
   readRunCoOwners,
   resolveRunCoOwnerUserIds,
   readAgentRunsByTemplateRaw,
@@ -5292,6 +5295,264 @@ async function publishDeclarativePackage(
 }
 
 // ---------------------------------------------------------------------------
+// agent_run_hitl_prompts_list / agent_run_hitl_prompts_exclude (#1794)
+//
+// Run-scoped HITL prompt primitives. They exist so an extension's OWN workflow
+// can assemble its pre-interrupt HITL payload (list) and shape which captured
+// amendment prompts feed the gate + autosave (exclude) via a DETERMINISTIC
+// primitive call — WITHOUT the field renderer reaching an authenticated host
+// action. Per the owner action-boundary ruling (2026-07-18, epic #1620) the
+// data prep moves pre-interrupt into the agent workflow; the renderer stays a
+// pure snapshot→onChange surface.
+//
+// TRUST MODEL — the run, the declaring agent package, AND the actor are all
+// derived from the invocation context, NEVER from caller input:
+//   - runId          ← the VERIFIED run id on the ambient MCP request frame
+//                      (`mcpRequestContextStorage.runId`, populated only by the
+//                      obo/durable channels — a delegated agent-run OBO token or
+//                      the run-token durable binding — or by the run-bound
+//                      deterministic seam, `/api/agents/passthrough`, which
+//                      establishes the frame from the bridge-bound run). A
+//                      caller-supplied `runId` in `input` is IGNORED.
+//   - agent package  ← the run's own declaring template packageName (read from
+//                      the run row → template), NOT a caller-supplied
+//                      `agentPackageName` and NOT the untrusted provenance
+//                      `agentId` tag on the frame.
+//   - actor          ← `request.actor` (the context-built envelope), gated by
+//                      `enforceRunAccess` against the run row.
+// Absent run context ⇒ fail closed: the primitive is only callable from inside a
+// run, so a plain chat/session MCP caller can never reach another run's prompts.
+// ---------------------------------------------------------------------------
+
+// Upper bound on a single exclude batch. The captured HITL set for one run is
+// small (one row per gate); this is a generous ceiling that rejects a
+// pathological payload rather than fanning an unbounded `IN (...)` to Postgres.
+const HITL_EXCLUDE_MAX_BATCH = 500;
+
+// Snapshot projection: the on-the-wire shape a DataFlowEdge wires into a gate
+// input. `capturedAt` is serialized to an ISO string so the payload survives
+// JSON transport (WayFlow ApiNode → gate) losslessly.
+function toHitlPromptSnapshot(row: HitlPromptRecord): {
+  id: string;
+  stepKey: string;
+  message: string;
+  excluded: boolean;
+  submittedValues: Record<string, unknown> | null;
+  schemaSnapshot: Record<string, unknown> | null;
+  capturedAt: string;
+} {
+  return {
+    id: row.id,
+    stepKey: row.stepKey,
+    message: row.message,
+    excluded: row.excluded,
+    submittedValues: row.submittedValues,
+    schemaSnapshot: row.schemaSnapshot,
+    capturedAt:
+      row.capturedAt instanceof Date
+        ? row.capturedAt.toISOString()
+        : String(row.capturedAt),
+  };
+}
+
+// Resolves the run id from a VERIFIED channel on the ambient MCP request frame.
+// The plain `ctx.runId` is DELIBERATELY not trusted: the transport also fills it
+// from the caller-controlled `x-cinatra-run-id` header (a legacy/forgeable
+// channel while the #1195 fail-closed cutover is off), so a bare authenticated
+// MCP caller could redirect the run scope. Only two producers are verified:
+//   1. an OBO `delegation:"agent_run"` actor — its runId is a signed token claim;
+//   2. `ctx.verifiedRunScopeId` — stamped ONLY by a trusted server-side run-bound
+//      seam (`/api/agents/passthrough` after `bindBridgeRunId`), never from input.
+// Returns an error envelope (never throws) when no verified run context exists so
+// the handler surfaces the same `{ error }` contract as its siblings.
+function resolveRunScopedRunId(): { runId: string } | { error: string } {
+  const ctx = mcpRequestContextStorage.getStore();
+  const oboRunId =
+    ctx?.delegatedActor?.delegation === "agent_run" ? ctx.delegatedActor.runId : undefined;
+  const runId = oboRunId ?? ctx?.verifiedRunScopeId;
+  if (!runId || typeof runId !== "string" || runId.length === 0) {
+    return {
+      error:
+        "agent_run_hitl_prompts_* is only callable within a VERIFIED agent run: no " +
+        "verified run context on the invocation frame (call it via the deterministic " +
+        "pre-interrupt seam or under an agent-run OBO token — the ambient run-id header " +
+        "is not trusted).",
+    };
+  }
+  return { runId };
+}
+
+// The declaring agent package of a run == its template's stable packageName.
+// This is the authoritative (context-derived) scope key for the run's own HITL
+// prompts; the prompts store `agent_id = template.packageName` at capture time.
+async function resolveDeclaringAgentPackage(templateId: string): Promise<string | null> {
+  const template = await readAgentTemplateById(templateId);
+  const packageName = template?.packageName ?? null;
+  return packageName && packageName.length > 0 ? packageName : null;
+}
+
+async function handleAgentRunHitlPromptsList(
+  // `input` is intentionally ignored — the run + declaring package come from the
+  // invocation context, never from caller input. `request.actor` is still used.
+  request: PrimitiveRequest<Record<string, unknown>>,
+): Promise<unknown> {
+  const ctx = resolveRunScopedRunId();
+  if ("error" in ctx) return { error: ctx.error };
+  const actor = request.actor as PrimitiveActorContext;
+  const roles = await resolveRoleHintsFromSession();
+  try {
+    // read-enforced load: readAgentRunById(actor, roles) applies
+    // enforceRunAccess("read") internally and throws AuthzError on denial /
+    // returns null for a hidden/cross-tenant row.
+    const run = await readAgentRunById(ctx.runId, actor, roles);
+    if (!run) return { error: `Run not found: ${ctx.runId}` };
+    const agentPackageName = await resolveDeclaringAgentPackage(run.templateId);
+    if (!agentPackageName) {
+      // A run whose template carries no stable package identity has no
+      // declaring-agent scope key — an empty (but well-formed) snapshot.
+      return { runId: ctx.runId, agentPackageName: null, prompts: [] };
+    }
+    const rows = await readAllHitlPromptsForRun(ctx.runId, agentPackageName);
+    return {
+      runId: ctx.runId,
+      agentPackageName,
+      prompts: rows.map(toHitlPromptSnapshot),
+    };
+  } catch (err) {
+    if (err instanceof AuthzError) {
+      emitReadDenialAudit(actor, ctx.runId);
+      return authzErrorToResponse(err, `Run not found: ${ctx.runId}`);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `HITL prompts list failed: ${message}` };
+  }
+}
+
+async function handleAgentRunHitlPromptsExclude(
+  request: PrimitiveRequest<{ ids?: unknown; excluded?: unknown }>,
+): Promise<unknown> {
+  const ctx = resolveRunScopedRunId();
+  if ("error" in ctx) return { error: ctx.error };
+
+  // Input validation — `ids` is the ONLY caller-supplied field (runId + agent
+  // package are context-derived).
+  const rawIds = request.input?.ids;
+  if (!Array.isArray(rawIds)) {
+    return { error: "`ids` must be a non-empty array of prompt id strings." };
+  }
+  // Bound the RAW length BEFORE any O(n) processing (dedup / per-element checks).
+  // The deterministic passthrough seam invokes this handler WITHOUT the tool's
+  // Zod `.max()`, so a pathological duplicate-heavy array would otherwise dedupe
+  // under the bound and slip an unbounded `IN (...)`/allocation through.
+  if (rawIds.length > HITL_EXCLUDE_MAX_BATCH) {
+    return {
+      error: `Too many ids (${rawIds.length}); the exclude batch is bounded at ${HITL_EXCLUDE_MAX_BATCH}.`,
+    };
+  }
+  if (rawIds.some((id) => typeof id !== "string" || id.length === 0)) {
+    return { error: "`ids` must be a non-empty array of prompt id strings." };
+  }
+  // Dedupe so idempotent re-application and the applied/requested accounting are
+  // stable (raw length is already bounded above).
+  const ids = [...new Set(rawIds as string[])];
+  if (ids.length === 0) {
+    return { error: "`ids` must contain at least one prompt id." };
+  }
+  // Default is EXCLUDE (true); pass `excluded:false` to re-include. Reject any
+  // non-boolean so a truthy string can't be coerced into an unintended state.
+  const excludedRaw = request.input?.excluded;
+  if (excludedRaw !== undefined && typeof excludedRaw !== "boolean") {
+    return { error: "`excluded` must be a boolean when provided." };
+  }
+  const excluded = excludedRaw === undefined ? true : excludedRaw;
+
+  const actor = request.actor as PrimitiveActorContext;
+  const roles = await resolveRoleHintsFromSession();
+  try {
+    const run = await readAgentRunById(ctx.runId, actor, roles);
+    if (!run) return { error: `Run not found: ${ctx.runId}` };
+    // Read the declaring template ONCE — it supplies both the scope key
+    // (packageName) and the effective auth policy the mutation gate evaluates.
+    const template = await readAgentTemplateById(run.templateId);
+    const agentPackageName =
+      template?.packageName && template.packageName.length > 0
+        ? template.packageName
+        : null;
+
+    // Mutation tier: shaping the HITL payload is a respond-to-HITL operation
+    // (the owner short-circuits). Thread run co-owners + effective policy so a
+    // user SHARED into the run — respondToHitl is a co-owner op — passes,
+    // exactly like agent_run_resume; without the co-owner list the bare record's
+    // co-owner branch silently misses and a legitimate co-owner is denied.
+    const coOwnerRows = await readRunCoOwners(run.id);
+    const coOwnerUserIds = coOwnerRows.map((r) => r.userId);
+    const effectivePolicy = run.authPolicy ?? template?.agentAuthPolicy ?? null;
+    await enforceRunAccess(
+      { ...run, effectivePolicy, coOwnerUserIds },
+      actor,
+      "respondToHitl",
+      roles,
+    );
+    if (!agentPackageName) {
+      return { error: "This run has no declaring agent package; nothing to exclude." };
+    }
+
+    // Reject unknown ids up front — every id MUST belong to this run's own
+    // (run, declaring-agent) prompt set. Validating against the run's snapshot
+    // BEFORE mutating turns a cross-run / cross-agent / stale id into a whole-
+    // batch rejection (no partial application) rather than a silent no-op.
+    const scoped = await readAllHitlPromptsForRun(ctx.runId, agentPackageName);
+    const known = new Set(scoped.map((p) => p.id));
+    const unknownIds = ids.filter((id) => !known.has(id));
+    if (unknownIds.length > 0) {
+      return {
+        error:
+          `Unknown HITL prompt id(s) for this run + agent: ${unknownIds.join(", ")}. ` +
+          "Every id must belong to the current run's own captured prompt set.",
+        unknownIds,
+      };
+    }
+
+    // Scoped, idempotent batch update — the store re-applies the (run, agent)
+    // predicate as defense-in-depth. `applied` is the count actually matched;
+    // re-running with the same target state is a no-op that still reports the
+    // ids as applied (they already hold the state).
+    const affected = await updateHitlPromptsExcludedForRunAgent(
+      ctx.runId,
+      agentPackageName,
+      ids,
+      excluded,
+    );
+    return {
+      runId: ctx.runId,
+      agentPackageName,
+      excluded,
+      requested: ids.length,
+      applied: affected.length,
+      ids: affected,
+    };
+  } catch (err) {
+    if (err instanceof AuthzError) {
+      // Audit the ATTEMPTED write op — not "read" — so a denied exclusion is not
+      // mislabeled as a read in the trail.
+      void logAuditEvent({
+        actorPrincipalId: actor.userId,
+        actorPrincipalType: (actor.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
+        authSource: (actor.source as AuditEventInput["authSource"]) ?? "mcp",
+        resourceType: "agent_run",
+        resourceId: ctx.runId,
+        operation: "respondToHitl",
+        decision: "denied",
+        policyVersion: POLICY_VERSION,
+      });
+      return authzErrorToResponse(err, `Run not found: ${ctx.runId}`);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `HITL prompts exclude failed: ${message}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
@@ -5333,6 +5594,12 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
 ),
     agent_run_messages_list: (req) =>
       handleAgentBuilderRunMessagesList(req as Parameters<typeof handleAgentBuilderRunMessagesList>[0]),
+    // run-scoped HITL prompt primitives (#1794) — run + declaring agent package
+    // + actor all derived from the invocation context, never caller input.
+    agent_run_hitl_prompts_list: (req) =>
+      handleAgentRunHitlPromptsList(req as Parameters<typeof handleAgentRunHitlPromptsList>[0]),
+    agent_run_hitl_prompts_exclude: (req) =>
+      handleAgentRunHitlPromptsExclude(req as Parameters<typeof handleAgentRunHitlPromptsExclude>[0]),
     agent_run_resume: (req) =>
       handleAgentBuilderRunResume(req as Parameters<typeof handleAgentBuilderRunResume>[0]),
     agent_run_stop: (req) =>

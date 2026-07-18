@@ -1,0 +1,207 @@
+# FULL Renovate lockfile repair — regenerate pnpm-lock.yaml on open Renovate PR
+# branches so it regains BOTH things Mend's hosted Renovate strips.
+#
+# WHY (root cause — full write-up in scripts/ci/repair-renovate-lockfile.mjs):
+# this repo ships a default-path `.pnpmfile.cjs` (load-bearing for the Docker
+# prod build and the clone-back CI installs) whose checksum pnpm records in the
+# lockfile. The hosted Renovate app regenerates the lockfile with
+# `pnpm install --ignore-pnpmfile` AND without the companion extension repos
+# cloned, so it drops (1) the `pnpmfileChecksum:` line and (2) EVERY
+# `extensions/<scope>/*` workspace importer entry. The plain frozen-install
+# gates fail on (1); the companion-cloning gates (design-visual-verify,
+# e2e-app-suites, IoC gates, Docker build) fail on (2) with
+# ERR_PNPM_OUTDATED_LOCKFILE. A third mode: Renovate bumps a package.json
+# without regenerating the lockfile at all (stale lockfile). No renovate.json /
+# pnpm-version / pnpm-setting change fixes any of this — the lockfile has to be
+# regenerated AFTER Renovate writes it, with the companions present and the
+# pnpmfile active. This workflow does exactly that:
+#   clone the pinned companions (the same sync-dev-extensions --pinned mechanism
+#   .github/actions/clone-extensions uses) -> `pnpm install --lockfile-only
+#   --ignore-scripts` with the real pnpmfile -> one deterministic install that
+#   restores the importers AND the checksum AND resolves the renovate bump.
+#
+# It is a self-heal, NOT a merge gate: it pushes the regenerated lockfile onto
+# the Renovate branch so the branch's own gates re-run and go green. It resolves
+# ONLY the renovate-controlled bump (fail-closed sane-diff, see below).
+#
+# SECURITY BOUNDARY (regenerating executes the repo pnpmfile — the Mend app
+# refuses to; we re-enable it fail-closed. Full model in the script header):
+#   (a) ALLOWLIST — scripts/ci/repair-renovate-lockfile.mjs refuses unless every
+#       path the branch changed vs its merge-base is pnpm-lock.yaml or a
+#       dependency-VERSION-only package.json edit. So the branch's .pnpmfile.cjs
+#       / pnpm-workspace.yaml / scripts / workflows / lock-pins are proven
+#       byte-identical to the trusted base: the ONLY branch code pnpm runs (the
+#       pnpmfile) is vetted-identical to the default branch's.
+#   (b) SANE-DIFF — after regeneration the script refuses unless the change is
+#       lockfile-only + bump-only: checksum restored+correct, importer key set
+#       equal to the merge-base lockfile's, and the ONLY importer specifier
+#       changes are exactly the renovate bump.
+#   (c) SECRET SCRUB — the script deletes the push token + any GitHub token from
+#       every subprocess it spawns (the clone-back and the pnpm install), so the
+#       vetted pnpmfile cannot read a credential. The elevated push token lives
+#       ONLY in the push step's env here.
+#
+# TOKEN BOUNDARY (mirrors dev-lock-auto-bump.yml — the default GITHUB_TOKEN can't
+# push in a way that re-triggers the required gates, so writes go through the
+# operator-provisioned least-privilege secret RENOVATE_LOCKFILE_REPAIR_TOKEN,
+# contents:write on this repo only):
+#   - schedule / workflow_dispatch ONLY. NEVER add a pull_request trigger:
+#     PR-controlled code must never run in a job that can reach the token.
+#   - the branch fetch AND the companion clone are UNAUTHENTICATED (the repo +
+#     companions are public); the only branch code that runs is the
+#     allowlist-vetted pnpmfile.
+#   - the checkout does not persist credentials; the elevated token is injected
+#     only into the push, via a git credential helper that reads it from the
+#     environment — so the token never appears in a URL or in argv, and the
+#     orchestrator additionally scrubs it from every subprocess it spawns.
+# Failure mode if the secret is unset/revoked is benign: a notice + no-op; the
+# manual runbook in the script still works.
+#
+# NON-GATING: this must never block a merge. A repaired Renovate PR passes its
+# gates the ordinary way once the lockfile is regenerated.
+name: renovate-lockfile-repair
+
+on:
+  schedule:
+    # Weekday early-UTC, after the Monday Renovate window and the daily
+    # freshness/canary jobs, on an off-minute away from on-the-hour spikes.
+    - cron: '41 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Optional single PR number to repair (default: all open Renovate PRs).'
+        required: false
+        type: string
+
+# Default token stays read-only (enumerate PRs); every write goes through the
+# operator PAT in the final push step.
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: renovate-lockfile-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    name: Regenerate lockfiles on open Renovate PRs
+    # Upstream main only: forks/mirrors have no token, and a workflow_dispatch
+    # from any non-main ref must not push branch state anywhere.
+    if: github.repository == 'cinatra-ai/cinatra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Regeneration clones the pinned companions + resolves per PR; generous cap
+    # for a backlog of several Renovate PRs (steady state is a handful).
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history so `git merge-base` (allowlist + sane-diff anchor)
+          # resolves against every Renovate branch's cut point.
+          fetch-depth: 0
+          # No credentials on disk after checkout: only the explicit
+          # token-scoped push may write.
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Regenerate + push lockfiles on open Renovate PR branches
+        env:
+          # Read-scoped default token enumerates PRs; the elevated PAT (write)
+          # is used ONLY for the per-branch push below.
+          GH_TOKEN: ${{ github.token }}
+          REPAIR_TOKEN: ${{ secrets.RENOVATE_LOCKFILE_REPAIR_TOKEN }}
+          ONLY_PR: ${{ github.event.inputs.pr }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REPAIR_TOKEN}" ]; then
+            echo "::notice::RENOVATE_LOCKFILE_REPAIR_TOKEN is not set — nothing to do. Provision a least-privilege (contents:write) PAT to enable automatic repair; the manual runbook in scripts/ci/repair-renovate-lockfile.mjs works meanwhile." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          REPO="$GITHUB_REPOSITORY"
+          ORCH="$GITHUB_WORKSPACE/scripts/ci/repair-renovate-lockfile.mjs"
+          SYNC="$GITHUB_WORKSPACE/scripts/ci/sync-dev-extensions.mjs"
+          MAIN_SHA="$(git rev-parse HEAD)"
+          PUBLIC_URL="https://github.com/${REPO}.git"
+          # Push auth WITHOUT the token in argv: a git credential helper that
+          # reads REPAIR_TOKEN from the environment at get-time. The fetch below
+          # is unauthenticated (the repo is public), so the token touches ONLY
+          # the push command's credential helper — never a URL, never argv.
+          CRED_HELPER='!f() { test "$1" = get && printf "username=x-access-token\npassword=%s\n" "$REPAIR_TOKEN"; }; f'
+
+          # Open Renovate-authored PRs into main. (author filter = the Mend app
+          # login; the head prefix is belt-and-braces.)
+          if [ -n "${ONLY_PR}" ]; then
+            mapfile -t PRS < <(gh pr view "${ONLY_PR}" --repo "$REPO" \
+              --json number,headRefName,author,state \
+              --jq 'select(.state=="OPEN") | [.number, .headRefName, .author.login] | @tsv')
+          else
+            mapfile -t PRS < <(gh pr list --repo "$REPO" --state open --base main \
+              --limit 100 --json number,headRefName,author \
+              --jq '.[] | select(.author.login=="app/renovate" or (.headRefName|startswith("renovate/"))) | [.number, .headRefName, .author.login] | @tsv')
+          fi
+
+          if [ "${#PRS[@]}" -eq 0 ]; then
+            echo "No open Renovate PRs to check." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          repaired=0
+          refused=0
+          for row in "${PRS[@]}"; do
+            [ -z "$row" ] && continue
+            num="$(printf '%s' "$row" | cut -f1)"
+            branch="$(printf '%s' "$row" | cut -f2)"
+            author="$(printf '%s' "$row" | cut -f3)"
+
+            if [ "$author" != "app/renovate" ] && [ "${branch#renovate/}" = "$branch" ]; then
+              echo "PR #$num ($author, $branch) is not a Renovate PR — skipping."
+              continue
+            fi
+
+            echo "::group::PR #$num ($branch)"
+            wt="$(mktemp -d)"
+            # Fetch + materialize the branch in an isolated worktree (no --depth:
+            # merge-base with MAIN_SHA must resolve). The trusted ORCHESTRATOR
+            # (from the default-branch checkout) drives it; the branch tree runs
+            # NO code beyond the allowlist-vetted pnpmfile pnpm loads.
+            git fetch --no-tags "$PUBLIC_URL" "+refs/heads/${branch}:refs/remotes/rlr/${branch}"
+            git worktree add --detach "$wt" "refs/remotes/rlr/${branch}" >/dev/null
+
+            if [ ! -f "$wt/pnpm-lock.yaml" ]; then
+              echo "No pnpm-lock.yaml on this branch — skipping."
+              git worktree remove --force "$wt"; echo "::endgroup::"; continue
+            fi
+
+            # Full repair: allowlist -> clone pinned companions -> regenerate
+            # (--lockfile-only --ignore-scripts) -> sane-diff. Non-zero = refused
+            # or errored; isolate it to this PR (the `if` disables set -e here).
+            if node "$ORCH" --repo-dir "$wt" --base "$MAIN_SHA" --pnpm pnpm --sync-script "$SYNC"; then
+              if git -C "$wt" diff --quiet -- pnpm-lock.yaml; then
+                echo "Nothing to regenerate on PR #$num (lockfile already correct)."
+                git worktree remove --force "$wt"; echo "::endgroup::"; continue
+              fi
+              git -C "$wt" config user.name "github-actions[bot]"
+              git -C "$wt" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git -C "$wt" commit -q -am "$(printf 'fix(deps): regenerate lockfile with pinned companions (restores importers + pnpmfileChecksum stripped by Renovate)\n\nRenovate regenerates the lockfile with pnpm --ignore-pnpmfile and without the\ncompanion extension repos cloned, dropping the extensions importer set AND the\npnpmfileChecksum. Regenerated deterministically with the pinned companions\npresent and the trusted .pnpmfile.cjs active (allowlist + sane-diff gated). See\nscripts/ci/repair-renovate-lockfile.mjs.\n\nAssisted-by: none')"
+              git -C "$wt" -c credential.helper= -c credential.helper="$CRED_HELPER" push "$PUBLIC_URL" "HEAD:refs/heads/${branch}"
+              echo "Repaired + pushed PR #$num." | tee -a "$GITHUB_STEP_SUMMARY"
+              repaired=$((repaired + 1))
+            else
+              echo "::warning::Full repair REFUSED/failed for PR #$num — left untouched (see log above). A non-dependency change on the branch, or a non-bump-only regeneration, will refuse by design." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              refused=$((refused + 1))
+            fi
+            git worktree remove --force "$wt"
+            echo "::endgroup::"
+          done
+
+          echo "Renovate lockfile repair complete: ${repaired} regenerated, ${refused} refused/failed." | tee -a "$GITHUB_STEP_SUMMARY"

@@ -15,10 +15,10 @@ import { logAuditEventStrict } from "@/lib/authz/audit";
 
 // ---------------------------------------------------------------------------
 // Chat-capture ("autosave") config handlers on the ASSISTANTS surface
-// (cinatra#1218). Reproduces GET/PATCH /api/chat/autosave VERBATIM so the
-// AG-UI /chat client migrates off the legacy subroute (a delete target) with
-// identical authz/audit semantics. Legacy route stays in place, untouched,
-// until the delete stage.
+// (cinatra#1218). Reproduces the deleted legacy GET/PATCH /api/chat/autosave
+// subroute VERBATIM so the AG-UI /chat client kept identical authz/audit
+// semantics across the migration; the legacy route was removed in the #1218
+// delete stage.
 //
 // The skill-autosave config is GLOBAL (app-wide), so its write power is a
 // platform-level setting. We authorize against an ORG-LESS `administration`

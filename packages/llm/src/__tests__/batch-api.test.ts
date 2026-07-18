@@ -74,6 +74,7 @@ const { llmSurfaces } = vi.hoisted(() => ({
   } as Record<string, object>,
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn((providerId: string) => llmSurfaces[providerId] ?? null),
   requireLlmProviderSurface: vi.fn((providerId: string) => {
     const surface = llmSurfaces[providerId];

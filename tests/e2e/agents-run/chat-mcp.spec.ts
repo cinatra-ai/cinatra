@@ -2,9 +2,13 @@
  * Track B — chat-MCP UAT.
  *
  * For each `CHAT_MCP_FIXTURES` entry:
- *   1. POST a specific natural-language prompt to /api/chat (SSE).
- *   2. Watch the stream for a `cinatra_<slug>` or `agent_run` tool call;
- *      extract the resulting runId.
+ *   1. POST a specific natural-language prompt to the unified assistant
+ *      endpoint (POST /api/assistants/chat, AG-UI SSE — the bespoke
+ *      /api/chat wire was deleted by the cinatra#1218 delete stage).
+ *   2. Watch the stream for a `cinatra_<slug>` / `agent_run` /
+ *      `a2a_agent_dispatch` TOOL_CALL_START; resolve the spawned runId
+ *      (wire DATA_PART for `agent_run`; DB fallback otherwise — those
+ *      tools' results never ride the AG-UI wire).
  *   3. Navigate to /agents/cinatra-ai/<slug>/<runId>.
  *   4. ADAPTIVELY drive HITL gates: poll status, if pending_approval drive
  *      one screen from the Track A fixture's `hitlScreens` (in order),
@@ -21,7 +25,6 @@
  * Cost guard: ~$0.05/fixture in chat LLM tokens plus agent run cost. Gated
  * to manual/weekly runs (5-15 minutes for the default 3-fixture subset).
  */
-import type { APIResponse } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import { waitForHydration } from "../config/hydration";
@@ -32,72 +35,18 @@ import {
   waitForRunCompletion,
 } from "./hitl-actions";
 import { assertExpectedOutputs } from "./objects-assertions";
+import {
+  agentRunIdFromWire,
+  describeAgUiEvents,
+  fetchLatestRunIdForPackage,
+  postAssistantChatTurn,
+  readAgUiEvents,
+  toolCallNames,
+  type AgUiWireEvent,
+} from "./ag-ui-chat";
 
 const BASE_URL =
   process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000";
-
-// ---------------------------------------------------------------------------
-// SSE parsing — local helper so this spec doesn't depend on chat-discovery's
-// internal helpers. The SSE wire format matches /api/chat/route.ts: each
-// event is `event: <kind>\ndata: <json>\n\n`.
-// ---------------------------------------------------------------------------
-async function readSseEvents(
-  response: APIResponse,
-): Promise<Array<{ event: string; data: unknown }>> {
-  const events: Array<{ event: string; data: unknown }> = [];
-  const text = await response.text();
-  for (const block of text.split("\n\n")) {
-    const lines = block.split("\n");
-    let event = "";
-    let dataRaw = "";
-    for (const line of lines) {
-      if (line.startsWith("event: ")) event = line.slice(7);
-      else if (line.startsWith("data: ")) dataRaw = line.slice(6);
-    }
-    if (event && dataRaw) {
-      try {
-        events.push({ event, data: JSON.parse(dataRaw) });
-      } catch {
-        // skip malformed
-      }
-    }
-  }
-  return events;
-}
-
-function extractRunId(
-  events: Array<{ event: string; data: unknown }>,
-  packageName: string,
-): string | null {
-  const slug = packageName.replace(/^@[^/]+\//, "");
-  // The chat dispatches non-agent-creation agents
-  // via `a2a_agent_dispatch` (returns `{ runId, taskId, packageName }`).
-  // Also accept `agent_run` + per-agent `cinatra_<slug>` (still used by the
-  // agent-creation toolkit fixtures: planner / code-reviewer / etc.).
-  const expectedNames = new Set([
-    "agent_run",
-    `cinatra_${slug}`,
-    "a2a_agent_dispatch",
-  ]);
-  for (const e of events) {
-    if (e.event !== "tool_result") continue;
-    const d = e.data as { name?: string; result?: string };
-    if (!d.name || !expectedNames.has(d.name)) continue;
-    const resultStr = typeof d.result === "string" ? d.result : "";
-    // With native MCP injection, the cinatra-mcp server's
-    // tool_result is wrapped (potentially multiple JSON.stringify layers
-    // deep) in `{"content":[{"type":"text","text":"<inner-json>"}]}`. The
-    // runId field can show up as `"runId"`, `\"runId\"`, or even
-    // `\\\"runId\\\"` depending on how many stringify passes the
-    // orchestration layer applied. Match a UUID-shaped value AFTER any
-    // `runId`-like literal — works on raw OR escape-stringified content.
-    const uuidPattern =
-      /runId[\\":\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
-    const m = resultStr.match(uuidPattern);
-    if (m) return m[1];
-  }
-  return null;
-}
 
 /**
  * Poll the run status until terminal or until the next pending_approval is
@@ -252,7 +201,7 @@ for (const fixture of CHAT_MCP_FIXTURES) {
         return;
       }
 
-      // 1. Send the prompt to /api/chat. The chat does
+      // 1. Send the prompt to /api/assistants/chat. The chat does
       // native MCP (delegated-token) discovery + dispatch, adding several
       // ~4s /api/mcp round-trips per turn. Under sustained Playwright load
       // the dev server intermittently resets the SSE connection
@@ -262,28 +211,37 @@ for (const fixture of CHAT_MCP_FIXTURES) {
       // (Track A poll loops got the same tolerance). Retry the
       // whole chat turn a few times; a real error (non-2xx, or no dispatch
       // after the final clean attempt) still fails the assertion below.
-      let events: Array<{ event: string; data: unknown }> = [];
+      let events: AgUiWireEvent[] = [];
       let runId: string | null = null;
+      const slugForTools = fixture.packageName.replace(/^@[^/]+\//, "");
+      const expectedToolNames = new Set([
+        "agent_run",
+        `cinatra_${slugForTools}`,
+        "a2a_agent_dispatch",
+      ]);
       const MAX_CHAT_ATTEMPTS = 3;
       for (let attempt = 1; attempt <= MAX_CHAT_ATTEMPTS; attempt += 1) {
         try {
-          const chatResponse = await request.post("/api/chat", {
-            data: { messages: [{ role: "user", content: fixture.prompt }] },
-            headers: {
-              "content-type": "application/json",
-              Origin: BASE_URL,
-              Accept: "text/event-stream",
-            },
+          const turnStartedAt = new Date().toISOString();
+          const chatResponse = await postAssistantChatTurn(request, fixture.prompt, {
+            baseUrl: BASE_URL,
             // Chat endpoint can take 2-4 min to send the
             // first SSE event under sustained dev-server load.
-            timeout: 300_000,
+            timeoutMs: 300_000,
           });
           expect(
             chatResponse.ok(),
             `chat POST returned ${chatResponse.status()}: ${await chatResponse.text()}`,
           ).toBeTruthy();
-          events = await readSseEvents(chatResponse);
-          runId = extractRunId(events, fixture.packageName);
+          events = await readAgUiEvents(chatResponse);
+          // Wire runId (DATA_PART, `agent_run` only) first; else, if an
+          // expected dispatch tool ran, the runId lives in its OFF-WIRE
+          // result — resolve via the DB (newest run of the expected package
+          // started since this attempt began).
+          runId = agentRunIdFromWire(events);
+          if (!runId && toolCallNames(events).some((n) => expectedToolNames.has(n))) {
+            runId = await fetchLatestRunIdForPackage(fixture.packageName, turnStartedAt);
+          }
           if (runId) break;
           // Clean 200 but no dispatch (empty stream / LLM nondeterminism /
           // stream cut before dispatch). Retry if attempts remain;
@@ -309,18 +267,15 @@ for (const fixture of CHAT_MCP_FIXTURES) {
       }
       expect(
         runId,
-        `chat did not invoke an agent_run / cinatra_<slug> tool for ` +
-          `prompt "${fixture.prompt}". Tool events: ` +
-          events
-            .filter((e) => e.event === "tool_call" || e.event === "tool_result")
-            .map((e) => `${e.event}/${(e.data as { name?: string })?.name ?? "_"}`)
-            .join(", "),
+        `chat did not produce a resolvable run for prompt "${fixture.prompt}" ` +
+          `(no agent_run DATA_PART on the wire and no ${fixture.packageName} run ` +
+          `started after dispatch). Events: ${describeAgUiEvents(events)}`,
       ).toBeTruthy();
 
       // 3. Drive HITL via the run-detail surface. The app supports
       //    inline HITL inside the main /chat thread (via
       //    InlineAgentRunCard → AgenticRunPanel), but the chat-mcp e2e test
-      //    still POSTs to /api/chat over the HTTP request context — no chat
+      //    still POSTs to /api/assistants/chat over the HTTP request context — no chat
       //    page mounted, so no inline DOM to assert against. Future iteration:
       //    drive the chat through the browser UI so the InlineAgentRunCard
       //    renders end-to-end inside the chat thread DOM and the test asserts

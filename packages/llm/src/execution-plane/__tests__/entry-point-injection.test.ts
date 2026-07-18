@@ -33,6 +33,7 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   buildSingleExternalMcpTool: vi.fn(async () => null),
 }));
 vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderAdapterSurface: vi.fn(() => null),
   getLlmProviderSurface: vi.fn(() => null),
   requireLlmProviderSurface: vi.fn((providerId: string) => {
     throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);

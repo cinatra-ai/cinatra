@@ -1389,6 +1389,55 @@ export type LlmProviderSurface = {
   };
 };
 
+// ---------------------------------------------------------------------------
+// LLM provider ADAPTER surface (llm-providers S4 — cinatra#1715, epic #1711).
+//
+// The runtime DISPATCH-ADAPTER channel — DISTINCT from `llm-provider-surface`
+// (settings/status/catalog) above. Each LLM connector registers its
+// request-translation adapter FACTORY at activation under
+// `LLM_PROVIDER_ADAPTER_CAPABILITY`, so core's `packages/llm` resolution
+// (`resolveProviderAdapter`) resolves the provider adapter from the CONNECTOR
+// instead of value-importing an in-core `providers/*` module — the strict
+// core/extension border the epic ratifies (core keeps only the vocabulary,
+// resolvers, and enforcement). Same channel class as `llm-provider-surface`;
+// the registry stores `impl: unknown`, so the host resolver
+// (`src/lib/llm-provider-adapter-surfaces.ts`) structurally validates the
+// surface and casts host-side.
+//
+// v1 SCOPE (epic non-goal — runtime-installed third-party provider adapters
+// are OUT): this capability is a RESERVED_SYSTEM_CAPABILITY, so the host's
+// `ctx.capabilities` port refuses to let a NON-first-party (marketplace)
+// extension REGISTER it (throws, anti-poisoning — the shadow adapter never
+// enters the registry) or RESOLVE it ([]) — the LLM data plane is first-party
+// only. The host resolver then validates each surface (version, shape, single
+// owner) and fails closed on any malformed or ambiguous claimant.
+//
+// VERSIONED: `abiVersion` is a literal discriminator the host refuses when it
+// does not recognise it (fail-closed) — a registered-but-unknown-version
+// surface is NEVER silently downgraded to the legacy in-core factory.
+export const LLM_PROVIDER_ADAPTER_ABI_VERSION = 1 as const;
+export const LLM_PROVIDER_ADAPTER_CAPABILITY = "llm-provider-adapter";
+export type LlmProviderAdapterSurface = {
+  /**
+   * Adapter-surface ABI version. The host refuses a surface whose version it
+   * does not recognise (fail-closed) rather than falling back to the legacy
+   * in-core factory. v1 is the only shape this host resolves.
+   */
+  abiVersion: typeof LLM_PROVIDER_ADAPTER_ABI_VERSION;
+  /** The LLM vendor id this adapter serves ("openai" | "anthropic" | "gemini"). */
+  providerId: string;
+  /**
+   * Build the provider's request-translation adapter, resolving the
+   * connector-owned connection internally. Returns `null` when the connector is
+   * present but not configured/ready — an AUTHORITATIVE result: once a trusted
+   * surface is registered for this provider the host does NOT fall back to a
+   * legacy in-core factory. The returned value is the host's `LlmProviderAdapter`
+   * (kept `unknown` at this leaf boundary — relocating the full ABI type closure
+   * into this leaf is a later S4 slice — and cast host-side).
+   */
+  createAdapter(): Promise<unknown | null>;
+};
+
 /**
  * The provider-neutral email send facade the email-connector registers for
  * HOST consumers (the trigger email-send path today). Routing chain +
