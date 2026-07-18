@@ -87,6 +87,42 @@ describe("validateArtifactObjectTypeClaims", () => {
     expect(errors.join(" ")).toMatch(/cannot be pinnable/);
   });
 
+  it("accepts the mutability class (cinatra#1449) and rejects an unknown value", () => {
+    // draftable + record are valid classes (the email-artifacts pack ships both).
+    expect(
+      validateArtifactObjectTypeClaims(
+        "@v/pkg-artifact",
+        cin([{ type: "@v/pkg:thing", claim: "dedicated", schema: {}, dispositions: { projection: "artifact-safe", mutability: "draftable" } }]),
+      ),
+    ).toEqual([]);
+    expect(
+      validateArtifactObjectTypeClaims(
+        "@v/pkg-artifact",
+        cin([{ type: "@v/pkg:thing", claim: "dedicated", schema: {}, dispositions: { projection: "none", mutability: "record" } }]),
+      ),
+    ).toEqual([]);
+    const bad = validateArtifactObjectTypeClaims(
+      "@v/pkg-artifact",
+      cin([{ type: "@v/pkg:thing", claim: "dedicated", schema: {}, dispositions: { projection: "artifact-safe", mutability: "bogus" } }]),
+    );
+    expect(bad.join(" ")).toMatch(/mutability must be draftable \| record \| external/);
+  });
+
+  it("rejects external mutability that is pinnable (cinatra#1449 union invariant)", () => {
+    const errors = validateArtifactObjectTypeClaims(
+      "@v/pkg-artifact",
+      cin([{ type: "@v/pkg:thing", claim: "dedicated", schema: {}, dispositions: { projection: "artifact-safe", pinnable: true, mutability: "external" } }]),
+    );
+    expect(errors.join(" ")).toMatch(/external mutability requires pinnable:false/);
+    // external + pinnable:false is the valid form (pin the snapshot, not the pointer).
+    expect(
+      validateArtifactObjectTypeClaims(
+        "@v/pkg-artifact",
+        cin([{ type: "@v/pkg:thing", claim: "dedicated", schema: {}, dispositions: { projection: "artifact-safe", pinnable: false, mutability: "external" } }]),
+      ),
+    ).toEqual([]);
+  });
+
   it("rejects a duplicate claimed type", () => {
     const errors = validateArtifactObjectTypeClaims(
       "@v/pkg-artifact",
