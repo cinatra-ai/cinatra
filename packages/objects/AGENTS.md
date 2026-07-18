@@ -156,6 +156,41 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 These aliases are declared in both `tsconfig.json` paths and `packages/agent-builder/vitest.config.ts` aliases.
 
+## Permanent namespace tombstones (cinatra#1789, epic #1785)
+
+The two dynamic-type id prefixes are **permanent tombstones** — a forward WRITE
+under either can never happen again:
+
+- `@dynamic/types:` — the reserved dynamic mint scope
+- `@cinatra-ai/dynamic:` — the legacy first-party dynamic prefix
+
+**Invariant (PERMANENT):** no artifact-claim manifest, no extension object-type
+registration (including a derived `<pkg>:artifact` umbrella id), and no direct
+claim-store write may mint, claim, or register a NEW type id under either
+prefix. Existing rows keep their ids and both prefixes still classify/read
+(`isDynamicObjectTypeId`) — only the forward write surfaces reject. This makes
+the "inert legacy label" durable: the namespaces can never come back. Minting
+*deletion* is other slices' work (#1787, #1790) and the retirement migration
+(#1792) runs on this substrate; this tombstone is the **permanence** guarantee
+that keeps those retirements from being undone. The permanent
+`@cinatra-ai/...:object` floor claim is a normal namespaced id and is never
+matched.
+
+**Single source of truth:** `isTombstonedObjectTypeId` /
+`TOMBSTONED_OBJECT_TYPE_ID_PREFIXES` in `src/namespace.ts`. Matching is
+**prefix-exact** — a look-alike scope such as `@dynamics/types:x` is NOT
+tombstoned (no false positives), while a malformed/empty slug or the derived
+`@dynamic/types:artifact` umbrella IS. Two rejection sites cannot import the
+namespace module and inline a mirror **pinned byte-equal by test**:
+
+| Write surface | Predicate | Pin test |
+|---|---|---|
+| Manifest claim validation — `src/claims.ts` `artifactObjectTypeClaimManifestSchema.type` refine (also `parseArtifactObjectTypeClaims`, and via the byte-mirror the semantic-manifest + artifact-handler parse) | `isTombstonedClaimedTypeId` (leaf mirror — claims keeps zero non-zod imports) | `namespace-tombstones.test.ts`, `artifact-objecttypes-claim-schema.test.ts` |
+| Extension registration bridge — `src/integration/register-artifact-extensions.ts` `registerParsedArtifactManifest` (umbrella id) + `registerClaimValidators` (per claim) | `isTombstonedObjectTypeId` (namespace) | `artifact-bridge.test.ts` |
+| Registry primitive backstop — `src/registry.ts` `objectTypeRegistry.register` (skip + warn) — the UNIVERSAL choke point under every registration path, incl. the SDK `ctx.objects.registerType` provider (`src/lib/register-objects-provider.ts`) | `isTombstonedObjectTypeId` (namespace) | `registry-package-provenance.test.ts` |
+| Claim-store write — `src/lib/objects/artifact-claim-store.ts` `reserveArtifactTypeClaim` | `isTombstonedClaimedTypeId` (fail-closed, before the DB) | `artifact-claim-store.test.ts` |
+| Edge-bound serving exclusion — `src/lib/extension-edge-bound-serving.ts` `owningPackageOfObjectType` (a dynamic id has NO owning package → never edge-bound) | inlined `DYNAMIC_OBJECT_TYPE_ID_PREFIXES` (host lib cannot import objects — route-graph is shrink-only) | `extension-edge-bound-serving.test.ts` |
+
 ## Static object type registry (`register-types.ts`)
 
 `packages/objects/src/integration/register-types.ts` defines and registers all statically-known object types via `registerAllObjectTypes()`. Called once at app startup from `src/lib/mcp-server.ts`.
