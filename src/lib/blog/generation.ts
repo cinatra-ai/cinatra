@@ -25,10 +25,6 @@ import {
   getDefaultBlogPostWordPressDraftState,
   readBlogPostsProjectById,
 } from "./store";
-// `generate{BlogPostIdeas,BlogPostDraft,LinkedInPostDraft}WithOpenAI`,
-// `deleteUploadedFile`, and `uploadTranscriptFiles` are no longer called
-// from generation.ts because the jobs they served are retired. Their
-// definitions in `openai.ts` remain for legacy compatibility.
 import { generateBlogPostImage } from "./gemini";
 import { publishBlogPostDraftToWordPress } from "./wordpress";
 import { resolveBlogDashboardUrl } from "./dashboard-url";
