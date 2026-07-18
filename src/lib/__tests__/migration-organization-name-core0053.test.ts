@@ -4,6 +4,13 @@
 // pins the smallest-free-N assignment (gaps fill first, strict canonical
 // matcher), the createdAt-ordered backfill scan, the rolling-deploy table
 // lock, the guarded SET NOT NULL, and down()'s constraint-only revert.
+//
+// Also pins the OWNED-TRANSACTION contract from the in-place poison-pill
+// correction (see the module's CORRECTION header): up() must declare
+// pgm.noTransaction() and wrap LOCK + backfill + constraint in its own
+// BEGIN .. COMMIT with ROLLBACK-and-rethrow on failure — `pgm.db.query`
+// executes in AUTOCOMMIT, so an unowned LOCK TABLE dies with PG 25P01
+// (the defect that crashed every standalone boot).
 
 import { describe, it, expect } from "vitest";
 
@@ -61,11 +68,15 @@ describe("assignSequentialNames (smallest free N)", () => {
 
 type Call = { sql: string; params?: unknown[] };
 
-function mockPgm(opts: { nullRowIds?: string[]; namedRows?: string[] }) {
+function mockPgm(opts: { nullRowIds?: string[]; namedRows?: string[]; failOn?: RegExp }) {
   const calls: Call[] = [];
+  let noTransactionCalled = false;
   const db = {
     query: async (sql: string, params?: unknown[]) => {
       calls.push({ sql, params });
+      if (opts.failOn?.test(sql)) {
+        throw new Error(`scripted failure on: ${sql.slice(0, 40)}`);
+      }
       if (/WHERE name IS NULL/.test(sql)) {
         return { rows: (opts.nullRowIds ?? []).map((id) => ({ id })) };
       }
@@ -75,14 +86,33 @@ function mockPgm(opts: { nullRowIds?: string[]; namedRows?: string[] }) {
       return { rows: [] };
     },
   };
-  return { pgm: { db } as never, calls };
+  const pgm = {
+    db,
+    noTransaction: () => {
+      noTransactionCalled = true;
+    },
+  };
+  return { pgm: pgm as never, calls, wasNoTransactionCalled: () => noTransactionCalled };
 }
 
 describe("core__0053 up()", () => {
-  it("locks the table BEFORE scanning (rolling-deploy writer guard)", async () => {
-    const { pgm, calls } = mockPgm({ nullRowIds: [] });
+  it("owns its transaction: noTransaction() + BEGIN first, LOCK inside, COMMIT last", async () => {
+    const { pgm, calls, wasNoTransactionCalled } = mockPgm({ nullRowIds: [] });
     await up(pgm);
-    expect(calls[0].sql).toMatch(/LOCK TABLE public\."organization" IN SHARE ROW EXCLUSIVE MODE/);
+    // pgm.db.query runs in AUTOCOMMIT — the runner must not wrap us, and the
+    // LOCK must sit inside our OWN transaction block or Postgres throws 25P01.
+    expect(wasNoTransactionCalled()).toBe(true);
+    expect(calls[0].sql).toBe("BEGIN");
+    expect(calls[1].sql).toMatch(/LOCK TABLE public\."organization" IN SHARE ROW EXCLUSIVE MODE/);
+    expect(calls[calls.length - 1].sql).toBe("COMMIT");
+    expect(calls.some((c) => c.sql === "ROLLBACK")).toBe(false);
+  });
+
+  it("ROLLBACKs and rethrows when a step inside the transaction fails", async () => {
+    const { pgm, calls } = mockPgm({ nullRowIds: [], failOn: /SET NOT NULL/ });
+    await expect(up(pgm)).rejects.toThrow(/scripted failure/);
+    expect(calls[calls.length - 1].sql).toBe("ROLLBACK");
+    expect(calls.some((c) => c.sql === "COMMIT")).toBe(false);
   });
 
   it("backfills null rows in scan order with smallest-free-N names", async () => {
