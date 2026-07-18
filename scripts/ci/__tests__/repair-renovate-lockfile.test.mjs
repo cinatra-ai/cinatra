@@ -158,7 +158,7 @@ describe("diffPackageJsonDeps", () => {
 
 describe("isRegistrySpecifier", () => {
   it("accepts plain registry semver ranges", () => {
-    for (const v of ["^0.18.0", "10.7.0", "~1.2.3", ">=1 <2", "1.x", "*", "^1.2.3-beta.1", "0.0.57", "v5.7.284"]) {
+    for (const v of ["^0.18.0", "10.7.0", "~1.2.3", ">=1 <2", "1.x", "*", "^1.2.3-beta.1", "0.0.57", "v" + "5.7.284"]) {
       expect(isRegistrySpecifier(v)).toBe(true);
     }
   });
