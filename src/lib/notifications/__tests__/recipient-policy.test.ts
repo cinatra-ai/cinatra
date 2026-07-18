@@ -48,7 +48,7 @@ describe("topicForRecipient", () => {
 describe("getRecipientForJob", () => {
   it("routes user-launched jobs with initiatorUserId to that user", () => {
     const out = getRecipientForJob({
-      jobName: "blog-post-idea-generation",
+      jobName: "blog-post-image-regeneration",
       jobData: { initiatorUserId: "u-7" },
       status: "completed",
     });
@@ -81,13 +81,13 @@ describe("getRecipientForJob", () => {
   it("warns when a user-job without initiator fails (visibility gap signal)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = getRecipientForJob({
-      jobName: "blog-post-idea-generation",
+      jobName: "blog-post-image-regeneration",
       jobData: {},
       status: "failed",
     });
     expect(out).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]![0]).toContain("blog-post-idea-generation");
+    expect(warnSpy.mock.calls[0]![0]).toContain("blog-post-image-regeneration");
     warnSpy.mockRestore();
   });
 
@@ -105,6 +105,28 @@ describe("getRecipientForJob", () => {
     warnSpy.mockRestore();
   });
 
+  it("retired blog text-generation jobs are no longer user-initiated (guards reintroduction)", () => {
+    // idea / draft / linkedin-draft creation were retired (replaced by the
+    // blog pipeline agents) and removed from USER_INITIATED_JOBS. Even WITH an
+    // initiator they must now resolve to no recipient — i.e. they fall through
+    // as unknown jobs. This fails if any of them is re-added to the policy.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const jobName of [
+      "blog-post-idea-generation",
+      "blog-post-draft-generation",
+      "blog-post-linkedin-draft-creation",
+    ]) {
+      expect(
+        getRecipientForJob({
+          jobName,
+          jobData: { initiatorUserId: "u-9" },
+          status: "completed",
+        }),
+      ).toBeNull();
+    }
+    warnSpy.mockRestore();
+  });
+
   it("ignores non-HumanUser principals (ServiceAccount / InternalWorker / System)", () => {
     for (const principalType of [
       "ServiceAccount",
@@ -113,7 +135,7 @@ describe("getRecipientForJob", () => {
       "ExternalA2AAgent",
     ]) {
       const out = getRecipientForJob({
-        jobName: "blog-post-draft-generation",
+        jobName: "blog-post-image-regeneration",
         jobData: {
           __actorContext: {
             principalType,
@@ -178,7 +200,7 @@ describe("getRecipientForJob", () => {
 
   it("started: user-init job → notify initiator (same as completed)", () => {
     const out = getRecipientForJob({
-      jobName: "blog-post-idea-generation",
+      jobName: "blog-post-image-regeneration",
       jobData: { initiatorUserId: "u-7" },
       status: "started",
     });
@@ -188,7 +210,7 @@ describe("getRecipientForJob", () => {
   it("started: user-init job without initiator → null (no warn for started)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = getRecipientForJob({
-      jobName: "blog-post-idea-generation",
+      jobName: "blog-post-image-regeneration",
       jobData: {},
       status: "started",
     });
