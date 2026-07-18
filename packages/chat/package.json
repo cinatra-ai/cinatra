@@ -23,7 +23,7 @@
     "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
-    "katex": "^0.16.47",
+    "katex": "^0.18.0",
     "marked": "^18.0.5",
     "mermaid": "^11.15.0",
     "react": "19.2.7",
