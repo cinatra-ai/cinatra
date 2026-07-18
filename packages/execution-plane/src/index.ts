@@ -142,6 +142,7 @@ export {
   type EnvironmentBuildPolicy,
   type EnvironmentPlatform,
   type EnvironmentSpecKeyInputs,
+  type EnvironmentResolvedArtifact,
   type EnvironmentBuildRecipe,
 } from "./environment/recipe";
 

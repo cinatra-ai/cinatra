@@ -16,7 +16,7 @@ const recipe: EnvironmentBuildRecipe = {
   builderVersion: ENVIRONMENT_BUILDER_VERSION,
   platform: { os: "linux", arch: "arm64" },
   buildPolicy: { networkPolicy: "registry-allowlist", registryAllowlist: ["pypi.org"] },
-  resolvedArtifacts: { pip: "abc" },
+  resolvedArtifacts: { pip: { resolved: "abc", integrity: "abc-int" } },
 };
 
 const prov = () => ({
