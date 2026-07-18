@@ -1,4 +1,4 @@
-// core__0056 retired-type object-row purge (eng#548 entry 95; epic cinatra#1785;
+// core__0056 retired-type object-row purge (owner ruling 2026-07-18; epic cinatra#1785;
 // #1792) — SQL-builder shape + ordering/idempotency guards. Mirrors the
 // core-0051 test idiom (assert the SQL shape without a live DB; the live cascade
 // is exercised by the schema-migration-gate upgrade proof).

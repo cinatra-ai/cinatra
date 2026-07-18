@@ -85,7 +85,7 @@ Every episode carries a `_cinatra` key in its JSON body:
 }
 ```
 
-## Unclassifiable saves — FAIL-CLOSED (owner ruling, eng#548 entry 95; epic #1785)
+## Unclassifiable saves — FAIL-CLOSED (owner ruling 2026-07-18; epic cinatra#1785)
 
 **Types exist only by installation.** `objects_save` never mints a type, and — as
 of the entry-95 correction — never *falls back* to a catch-all type either. When

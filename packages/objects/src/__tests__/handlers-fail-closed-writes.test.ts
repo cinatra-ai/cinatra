@@ -1,7 +1,7 @@
 // Fail-closed writes — an objects_save whose content cannot be placed under a
 // type an installed artifact extension DEFINES is REFUSED at the write boundary,
-// never persisted under any fallback name (owner ruling, eng#548 entry 95,
-// 2026-07-18; epic #1785). This reverses the #1787 "lossless generic fallback".
+// never persisted under any fallback name (owner ruling 2026-07-18;
+// epic cinatra#1785). This reverses the #1787 "lossless generic fallback".
 //
 // Covers:
 //   1. an unmatched save is REJECTED with the structured OBJECTS_TYPE_NOT_REGISTERED

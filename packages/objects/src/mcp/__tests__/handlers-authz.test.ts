@@ -118,7 +118,7 @@ vi.mock("@/lib/authz", () => ({
 import { handlers } from "../handlers";
 import { objectTypeRegistry } from "../../registry";
 
-// Fail-closed writes (eng#548 entry 95): objects_save persists ONLY under a type
+// Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785): objects_save persists ONLY under a type
 // an installed extension registered. The classifier mock here resolves to the
 // stand-in type "test"; register it so the authz-path save reaches the writer.
 objectTypeRegistry.register(

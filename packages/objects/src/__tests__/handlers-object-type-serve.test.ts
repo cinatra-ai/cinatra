@@ -95,7 +95,7 @@ describe("objects_save — edge-bound object-type serve consumption", () => {
   beforeEach(() => {
     mockUpsert.mockReset();
     mockUpsert.mockReturnValue(record());
-    // Fail-closed writes (eng#548 entry 95): the save persists ONLY under a type
+    // Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785): the save persists ONLY under a type
     // an installed extension registered. These tests classify to `@x/target:event`
     // (see the classifier mock), so register it as an installed type.
     objectTypeRegistry.register(

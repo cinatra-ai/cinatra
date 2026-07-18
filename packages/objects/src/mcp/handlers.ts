@@ -550,7 +550,7 @@ function enforceMemoryConceptEnvelope(
 }
 
 // ---------------------------------------------------------------------------
-// Fail-closed writes (owner ruling, eng#548 entry 95, 2026-07-18; epic #1785).
+// Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785).
 //
 // "Types exist ONLY by installation." An `objects_save` whose content cannot be
 // placed under a type an installed artifact extension DEFINES is REFUSED at the
@@ -704,7 +704,7 @@ export function createObjectsPrimitiveHandlers() {
       // extension defines. A classifier that throws (no LLM configured,
       // malformed output, or an LLM that tries to mint a now-rejected dynamic
       // id) leaves us with no installed-type match, so the fail-closed guard
-      // below REFUSES the write (owner ruling, eng#548 entry 95): there is no
+      // below REFUSES the write (owner ruling 2026-07-18; epic cinatra#1785): there is no
       // longer any lossless generic fallback (#1787 reversed) — an
       // unclassifiable save is rejected, never persisted under a catch-all.
       const classificationModel = readObjectsClassificationModelFromDatabase();

@@ -1,5 +1,5 @@
 // core__0056 — one-time transactional purge of retired-type object rows
-// (owner ruling, eng#548 entry 95, 2026-07-18; epic cinatra#1785; closes #1792).
+// (owner ruling 2026-07-18; epic cinatra#1785; closes #1792).
 //
 // WHY. The type model is now the dependency model: an object type exists ONLY as
 // an explicit definition by an installed artifact extension. The owner ruled NO
@@ -150,7 +150,7 @@ export function up(pgm) {
 export function down() {
   throw new Error(
     "core__0056 is a one-time clean-break purge of retired-type object rows " +
-      "(eng#548 entry 95; epic #1785; #1792): the owner ruled no backward " +
+      "(owner ruling 2026-07-18; epic cinatra#1785; #1792): the owner ruled no backward " +
       "compatibility and the deleted rows + their references are not retained. " +
       "Roll back by restoring from a backup, not this migration alone.",
   );

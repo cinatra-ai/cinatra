@@ -66,7 +66,7 @@ import { createObjectsPrimitiveHandlers } from "../mcp/handlers";
 import { upsertObjectAndEnqueue } from "@/lib/objects-store";
 import { objectTypeRegistry } from "../registry";
 
-// Fail-closed writes (eng#548 entry 95): objects_save persists ONLY under a type
+// Fail-closed writes (owner ruling 2026-07-18; epic cinatra#1785): objects_save persists ONLY under a type
 // an installed extension registered. These context-fallback tests classify to
 // `@cinatra-ai/entity-contacts:contact`, so register it as an installed type.
 objectTypeRegistry.register(
