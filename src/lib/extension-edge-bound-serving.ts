@@ -971,7 +971,14 @@ export function planSelfInvokerRetainedUnion(
  *  no owning extension — so it returns `null` (never edge-bound), even though it
  *  is superficially namespaced. */
 const NAMESPACED_OBJECT_TYPE_RE = /^(@[\w-]+\/[\w-]+):[\w-]+$/;
-const DYNAMIC_OBJECT_TYPE_ID_PREFIXES = ["@dynamic/types:", "@cinatra-ai/dynamic:"] as const;
+/** The permanently-retired dynamic-namespace prefixes excluded from
+ *  package-owned serving (`@dynamic/types:` and legacy `@cinatra-ai/dynamic:` —
+ *  cinatra#1789). INLINED because this host lib cannot import
+ *  `@cinatra-ai/objects` without widening the shrink-only locked route graph;
+ *  pinned byte-equal to `TOMBSTONED_OBJECT_TYPE_ID_PREFIXES`
+ *  (packages/objects/src/namespace.ts — the single canonical tombstone
+ *  declaration) by `extension-edge-bound-serving.test.ts`. */
+export const DYNAMIC_OBJECT_TYPE_ID_PREFIXES = ["@dynamic/types:", "@cinatra-ai/dynamic:"] as const;
 
 export function owningPackageOfObjectType(typeId: string): string | null {
   if (typeof typeId !== "string") return null;
