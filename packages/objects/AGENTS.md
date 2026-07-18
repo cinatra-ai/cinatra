@@ -85,15 +85,63 @@ Every episode carries a `_cinatra` key in its JSON body:
 }
 ```
 
+## Unclassifiable saves — lossless generic fallback (#1787, epic #1785)
+
+**Types exist only by installation.** `objects_save` never mints a type. When the
+classifier cannot place a payload under an installed object type — no match
+(`isNewType`), low confidence (`< 0.4`), a dynamic id, or the classifier being
+unavailable (thrown / no LLM configured) — the row is still saved **immediately
+and losslessly** as a plain `@cinatra-ai/objects:object` object:
+
+- the classifier no longer proposes dynamic-type ids: `classifier/schema.ts`
+  rejects any id the caller's catalog does not already know, and
+  `classifier/prompt.ts` tells the model to return the generic
+  `@cinatra-ai/objects:object` id (with `isNewType: true`) instead of inventing one;
+- the persisted `data` is the **original `rawData`**, byte-for-byte — never the
+  classifier's `normalizedData` (which may drop fields) and with **no**
+  `cinatraAgentRunId` injected;
+- identity uses the explicit external id (`external_id` / `externalId`) only, so
+  two fallback saves in one run stay two distinct objects while a pair sharing an
+  external id still deduplicates — the generic type's run-scoped `identityKey` is
+  deliberately bypassed on this path;
+- **no** approval / queue / human step gates the write (`ensureDynamicObjectType`
+  is not called from `objects_save`).
+
+READ of existing dynamic-typed rows is untouched (durable read semantics live in
+the tombstone slice #1789).
+
+### `objects_save` result warning
+
+A fallback save adds a versioned, structured `warning` to the tool result
+(absent on a normal matched save). Shape (`ObjectsSaveWarning`, exported from
+`mcp/handlers.ts`):
+
+```typescript
+{
+  version: 1,                              // bump on any breaking shape change
+  code: "unclassified_generic_fallback",
+  reason: "unmatched" | "low_confidence" | "classifier_unavailable",
+  persistedType: "@cinatra-ai/objects:object",
+  inferredCategory: string | null,         // classifier's category; null when unavailable
+  inferredTypeName: string | null,         // classifier's inferred name; null when unavailable
+  message: string,                         // human-readable + remediation pointer
+                                           // ("declare it as a kind:\"artifact\" extension type")
+}
+```
+
 ## Dynamic object type registry
 
-`auto-registrar.ts` manages the `dynamic_object_types` Postgres table — types that are discovered at runtime by the LLM classifier, MCP callers, or agent install.
+`auto-registrar.ts` manages the `dynamic_object_types` Postgres table. The
+classifier / `objects_save` write path **no longer mints** here (retired in
+#1787 — see the lossless generic fallback above); the remaining live writers are
+explicit MCP registration and agent install. The table itself is torn down later
+in epic #1785 (slices E/F/G).
 
-### Three-path write model
+### Write model
 
 | Source | Status on insert | Trigger |
 |---|---|---|
-| `classifier` | `proposed` | `objects_classify` handler cannot match a static type |
+| ~~`classifier`~~ | ~~`proposed`~~ | **Retired (#1787)** — unclassifiable saves fall back to the generic type instead of minting |
 | `mcp` | `active` | MCP caller invokes `objects_type_register` |
 | `install` | `active` | Agent package imported with `output_object_types` in `agent.json` |
 
