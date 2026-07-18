@@ -235,6 +235,14 @@ function isAllowedDirShapeForKind(dirBasename: string, kind: Kind, packageName: 
     const parsed = parsePackageName(packageName);
     if (parsed && dirBasename === parsed.slug) return true;
   }
+  // Artifact kind accepts BOTH the singular `-artifact` (single-type pack) and
+  // the plural `-artifacts` (multi-type pack, e.g. @cinatra-ai/email-artifacts,
+  // cinatra#1454) dir suffix — mirroring the ARTIFACT_PACKAGE_NAME rule in
+  // artifact-handler.ts (`-artifacts?$`). `-artifacts` does not end with the
+  // singular `-artifact`, so the plural form needs an explicit branch.
+  if (kind === "artifact") {
+    return dirBasename.endsWith("-artifact") || dirBasename.endsWith("-artifacts");
+  }
   const suffix = dirSuffixForKind(kind);
   return dirBasename.endsWith(suffix);
 }
