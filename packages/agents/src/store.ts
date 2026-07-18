@@ -2566,6 +2566,42 @@ export async function readAllHitlPromptsForRun(
     .orderBy(agentRunHitlPrompts.capturedAt);
 }
 
+// ---------------------------------------------------------------------------
+// Run + agent-scoped batch exclusion (#1794).
+//
+// The single-id `updateHitlPromptExcluded` mutates by prompt id ALONE with no
+// run/agent predicate — safe for the internal autosave caller (it only ever
+// passes ids it just read for a run+agent), but NOT a safe primitive surface.
+// This scoped batch variant carries the run + declaring-agent predicate INTO
+// the WHERE clause as defense-in-depth: a row is touched only when it belongs
+// to BOTH the given run AND the given agent package, so a caller can never
+// mutate another run's or another agent's prompt even if a stale/foreign id
+// slips past the handler's own membership check. Idempotent by construction
+// (`SET excluded = <value>` is a no-op when the row already holds it). Returns
+// the ids actually matched (== touched), so the caller can report applied vs
+// requested and detect a silent scope miss.
+// ---------------------------------------------------------------------------
+export async function updateHitlPromptsExcludedForRunAgent(
+  runId: string,
+  agentId: string,
+  ids: string[],
+  excluded: boolean,
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .update(agentRunHitlPrompts)
+    .set({ excluded })
+    .where(
+      and(
+        inArray(agentRunHitlPrompts.id, ids),
+        eq(agentRunHitlPrompts.runId, runId),
+        eq(agentRunHitlPrompts.agentId, agentId),
+      ),
+    )
+    .returning({ id: agentRunHitlPrompts.id });
+  return rows.map((r) => r.id);
+}
+
 /**
  * returns the distinct set of agent_id values for a run's
  * non-excluded captured HITL prompts. Used by the autosave-on-completion path
