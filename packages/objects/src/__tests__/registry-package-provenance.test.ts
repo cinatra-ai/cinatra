@@ -78,4 +78,32 @@ describe("objectTypeRegistry — package provenance + removeByPackage", () => {
     expect(objectTypeRegistry.removeByPackage("@scope/a")).toEqual([]);
     expect(objectTypeRegistry.resolve("@scope/a:one")).not.toBeNull();
   });
+
+  it("permanent tombstone backstop (cinatra#1789): a retired dynamic-namespace type is NEVER registered (skip + warn)", () => {
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => {
+      warns.push(a.map(String).join(" "));
+    };
+    try {
+      // The universal choke point under EVERY registration path — the artifact
+      // bridge AND the SDK `ctx.objects.registerType` provider AND direct callers.
+      objectTypeRegistry.register(def("@dynamic/types:invoice"), "@some/pack");
+      objectTypeRegistry.register(def("@cinatra-ai/dynamic:legacy-thing"));
+    } finally {
+      console.warn = orig;
+    }
+    expect(objectTypeRegistry.resolve("@dynamic/types:invoice")).toBeNull();
+    expect(objectTypeRegistry.resolve("@cinatra-ai/dynamic:legacy-thing")).toBeNull();
+    // Never entered the provenance index either.
+    expect(objectTypeRegistry.getTypesForPackage("@some/pack")).toEqual([]);
+    expect(
+      warns.filter((w) => w.includes("permanently-retired dynamic namespace")),
+    ).toHaveLength(2);
+  });
+
+  it("a near-miss look-alike scope registers normally (prefix-exact backstop, no false positive)", () => {
+    objectTypeRegistry.register(def("@dynamics/types:invoice"), "@dynamics/types");
+    expect(objectTypeRegistry.resolve("@dynamics/types:invoice")).not.toBeNull();
+  });
 });

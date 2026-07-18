@@ -72,6 +72,22 @@ describe("parseSemanticArtifactManifest", () => {
     expect(semanticProducesSchema.safeParse([{ extension: "x", smuggled: 1 }]).success).toBe(false);
   });
 
+  it("semanticProducesSchema accepts an optional exact objectTypeId (cinatra#1788)", () => {
+    expect(
+      semanticProducesSchema.safeParse([
+        { extension: "@cinatra-ai/blog-post-artifact", objectTypeId: "@cinatra-ai/blog-post-artifact:post" },
+      ]).success,
+    ).toBe(true);
+    // A malformed (non-namespaced) objectTypeId is rejected by the regex.
+    expect(
+      semanticProducesSchema.safeParse([
+        { extension: "@cinatra-ai/blog-post-artifact", objectTypeId: "not-namespaced" },
+      ]).success,
+    ).toBe(false);
+    // objectTypeId is optional — a bare { extension } entry still parses.
+    expect(semanticProducesSchema.safeParse([{ extension: "@a/x" }]).success).toBe(true);
+  });
+
   // matcherConfidenceThreshold bounds are mirrored byte-for-byte in
   // packages/extensions/src/artifact-handler.ts; this pins the objects-side
   // contract. The cycle forbids importing the extensions copy here, matching
