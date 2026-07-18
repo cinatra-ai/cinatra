@@ -59,6 +59,9 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   // pack (body [draftable], recipient [snapshot]) — cinatra#1454.
   "@cinatra-ai/email:body": { kind: "indefinite" },
   "@cinatra-ai/email:recipient": { kind: "indefinite" },
+  // Drupal external node-pointer type host-registered for the
+  // @cinatra-ai/drupal-artifacts pack (drupal:node [external]) — cinatra#1465.
+  "@cinatra-ai/drupal:node": { kind: "indefinite" },
   // Namespaced types registered in production via objectTypeRegistry.register
   // with a fully-qualified @cinatra-ai/<ns>:<id> identifier — surfaced by
   // scripts/audit/retention-policy-gate.mjs.
