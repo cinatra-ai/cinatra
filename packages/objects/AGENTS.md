@@ -133,16 +133,18 @@ A fallback save adds a versioned, structured `warning` to the tool result
 
 `auto-registrar.ts` manages the `dynamic_object_types` Postgres table. The
 classifier / `objects_save` write path **no longer mints** here (retired in
-#1787 — see the lossless generic fallback above); the remaining live writers are
-explicit MCP registration and agent install. The table itself is torn down later
-in epic #1785 (slices E/F/G).
+#1787 — see the lossless generic fallback above), and the explicit
+`objects_type_register` MCP primitive was **removed** (retired in #1790, epic
+#1785 slice E — a deliberate external-contract removal), and agent install no
+longer mints types (retired in #1788); no live writer remains. The table itself
+is torn down later in epic #1785.
 
 ### Write model
 
 | Source | Status on insert | Trigger |
 |---|---|---|
 | ~~`classifier`~~ | ~~`proposed`~~ | **Retired (#1787)** — unclassifiable saves fall back to the generic type instead of minting |
-| `mcp` | `active` | MCP caller invokes `objects_type_register` |
+| ~~`mcp`~~ | ~~`active`~~ | **Retired (#1790)** — the `objects_type_register` primitive was removed (deliberate external-contract removal, epic #1785 slice E) |
 | `install` | — | **RETIRED (cinatra#1788, epic #1785):** agent install no longer mints types. Typed agent output is now the fail-closed `cinatra.produces` manifest contract backed by required artifact-kind claims (see `@cinatra-ai/agents` AGENTS.md); there is no `output_object_types` / `producesObjectTypes` path. |
 
 ### `ensureDynamicObjectType` — INSERT-ONLY semantics

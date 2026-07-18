@@ -40,9 +40,8 @@ import "server-only";
 // of patching that source; the marketplace `fetchMine`s self-filter to pending;
 // the local sources return an empty `fetchMine`). The union deliberately does
 // NOT re-filter by status string: the source status vocabularies are
-// heterogeneous (agent `proposed`, marketplace `pending`/`applied`,
-// dynamic-type `unapproved`/`reserved`, …), so a hardcoded allowlist would drop
-// legitimate pending rows.
+// heterogeneous (agent `proposed`, marketplace `pending`/`applied`, …), so a
+// hardcoded allowlist would drop legitimate pending rows.
 //
 // ── Union + dedup ───────────────────────────────────────────────────────────
 // Dedup is an EXPLICIT pairing, not a blind cross-registry `(sourceId,id)`

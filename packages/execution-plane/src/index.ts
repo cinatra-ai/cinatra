@@ -121,9 +121,15 @@ export {
 // ---------------------------------------------------------------------------
 // L1 declared environments (exec-plane S3, cinatra#1708): the trusted
 // content-addressed builder, the layer cache + org-scoped recipe references +
-// retention GC + teardown participant, signed per-layer provenance, and the
-// promotion data seam. Worker/broker wiring of built layers (mounting the L1
-// image for a job) rides the app-layer service slice.
+// retention GC + teardown participant, signed per-layer provenance, the
+// promotion data seam, and the broker/worker MOUNT contract — an opened job
+// may carry a resolved L1 layer (`ResolvedEnvironmentMount`) that every command
+// runs over, mounted by its SIGNED digest after the worker re-verifies
+// provenance (fail-closed, AC4). Still OUTSIDE this package (the app-layer
+// service slice): resolving a run's DECLARED environment into that layer
+// (declared spec → trusted builder → cache entry → `openJob({ environment })`),
+// scheduling the retention GC, and composing the teardown participant into
+// `src/lib`.
 // ---------------------------------------------------------------------------
 
 export {
@@ -185,3 +191,13 @@ export {
   type PromotionCandidate,
   type PromotionProposal,
 } from "./environment/promotion";
+
+// The broker/worker MOUNT contract for a resolved L1 layer: the projection a
+// command carries + the fail-closed verify-before-mount resolver/refusal.
+export {
+  resolveEnvironmentMount,
+  EnvironmentMountRefusedError,
+  type ResolvedEnvironmentMount,
+  type EnvironmentMountRefusalReason,
+  type EnvironmentMountResolution,
+} from "./environment/mount";

@@ -314,7 +314,6 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   objects_get:           { resourceType: "object", action: "read",   status: "enforced" },
   objects_list:          { resourceType: "object", action: "list",   status: "enforced" },
   objects_save:          { resourceType: "object", action: "create", status: "enforced" },
-  objects_type_register: { resourceType: "object", action: "create", status: "enforced" },
   objects_types_list:    { resourceType: "object", action: "list",   status: "enforced" },
   objects_update:        { resourceType: "object", action: "update", status: "enforced" },
 
