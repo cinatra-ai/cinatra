@@ -54,6 +54,30 @@ describe("surface inventory consistency", () => {
     }
   });
 
+  it("email draft/followup/recipients bundle aliases are INTERNAL machinery (cinatra#1455)", () => {
+    // Atomicity (epic #1448 rule 2): the bundles are dissolved at the artifact
+    // surface into per-item email:body / email:recipient artifacts (#1454); the
+    // bundle rows are never artifact-visible, so their disposition is internal,
+    // not promote.
+    const internalEmailBundleAliases = [
+      "@cinatra-ai/dynamic:email-drafts-bundle",
+      "@cinatra-ai/dynamic:email-followup-bundle",
+      "@cinatra-ai/dynamic:approved-email-draft-bundle",
+      "@cinatra-ai/dynamic:approved-email-followup-bundle",
+      "@cinatra-ai/dynamic:email-recipients-bundle",
+    ];
+    for (const typeId of internalEmailBundleAliases) {
+      const entry = DYNAMIC_TYPES.find((d) => d.typeId === typeId);
+      expect(entry, `${typeId} must be inventoried`).toBeDefined();
+      expect(entry?.disposition, `${typeId} must be internal, not promote`).toBe("internal");
+    }
+    // No email bundle alias may still be marked promote.
+    const promotedEmailBundles = DYNAMIC_TYPES.filter(
+      (d) => d.disposition === "promote" && d.typeId.includes("email"),
+    );
+    expect(promotedEmailBundles).toEqual([]);
+  });
+
   it("SKILL/OAS refs are classified", () => {
     const issues = new Set(["legacy-primitive", "invalid-type-id-shape", "invalid-id-shape"]);
     for (const r of SKILL_OAS_REFS) {

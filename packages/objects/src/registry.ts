@@ -1,5 +1,5 @@
 import type { ObjectCategory, ObjectTypeDefinition } from "./types";
-import { OBJECT_TYPE_NAMESPACE_RE } from "./namespace";
+import { OBJECT_TYPE_NAMESPACE_RE, isTombstonedObjectTypeId } from "./namespace";
 
 // ---------------------------------------------------------------------------
 // Object type registry
@@ -12,6 +12,10 @@ import { OBJECT_TYPE_NAMESPACE_RE } from "./namespace";
  * - Idempotent replace-by-id (calling `register` twice with the same `type`
  *   replaces the first entry).
  * - Dev-mode `console.warn` when a non-namespaced ID is registered.
+ * - Permanent-tombstone backstop (cinatra#1789): a retired dynamic-namespace
+ *   id (`@dynamic/types:` / `@cinatra-ai/dynamic:`) is NEVER registered (skip +
+ *   warn) — the universal guard under EVERY registration path, including the
+ *   SDK `ctx.objects.registerType` provider (src/lib/register-objects-provider).
  * - Zero React / DB / server-only imports (safe to include in the SSR
  *   module graph — see CLAUDE.md Turbopack constraint).
  *
@@ -42,6 +46,19 @@ class ObjectTypeRegistryImpl {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   register<T = any>(def: ObjectTypeDefinition<T>, packageName?: string): void {
+    // PERMANENT namespace tombstone (cinatra#1789, epic #1785): a retired
+    // dynamic namespace (`@dynamic/types:` / `@cinatra-ai/dynamic:`) can NEVER
+    // (re)enter the registry — the universal backstop under every registration
+    // path (the artifact bridge, the SDK `ctx.objects.registerType` provider in
+    // src/lib/register-objects-provider.ts, any direct caller). SKIP (never
+    // throw — a stray registration must not crash boot) + warn; a HARDER stance
+    // than the non-namespaced dev-warn below, which still registers.
+    if (isTombstonedObjectTypeId(def.type)) {
+      console.warn(
+        `Object type ID '${def.type}' is under a permanently-retired dynamic namespace (cinatra#1789) — NOT registered.`,
+      );
+      return;
+    }
     if (
       process.env.NODE_ENV !== "production" &&
       !OBJECT_TYPE_NAMESPACE_RE.test(def.type)

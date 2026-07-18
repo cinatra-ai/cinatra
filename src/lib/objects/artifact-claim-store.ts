@@ -23,8 +23,10 @@
 // no-longer-dominated defaults with a NEW generation.
 
 import {
+  isTombstonedClaimedTypeId,
   isValidClaimScope,
   parseClaimDispositions,
+  tombstonedClaimedTypeMessage,
   type ArbitrableClaim,
   type ArtifactClaimKind,
   type ArtifactClaimStatus,
@@ -138,6 +140,13 @@ export function buildReserveClaimQueries(
 export function reserveArtifactTypeClaim(input: ReserveArtifactTypeClaimInput): string {
   if (!isValidClaimScope(input.scope)) {
     throw new Error(`invalid claim scope '${input.scope}' (expected 'platform' or 'org:<id>')`);
+  }
+  // PERMANENT namespace tombstone (cinatra#1789, epic #1785): a retired dynamic
+  // namespace (`@dynamic/types:` / `@cinatra-ai/dynamic:`) can never be claimed
+  // — reject BEFORE touching the DB, fail-closed like the scope/dispositions
+  // guards above. This is the direct claim-store write half of the tombstone.
+  if (isTombstonedClaimedTypeId(input.objectTypeId)) {
+    throw new Error(tombstonedClaimedTypeMessage(input.objectTypeId));
   }
   let dispositionsJson: string | null = null;
   if (input.dispositions !== undefined && input.dispositions !== null) {

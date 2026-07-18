@@ -145,6 +145,7 @@ describe("runBoot orchestration", () => {
       "loops-x",
       "required-env-soft-check", // cinatra#789 item 3 — deploy-robustness readiness signals
       "boot-degrade-probe", // cinatra#789 item 1 — inert unless double-armed
+      "execution-plane-health", // cinatra#1705 — exec-plane readiness, deploy-robustness signal (dev + prod)
       "[detached] dev-auto-setup", // dev block 2 — LAST + detached
     ]);
   });
@@ -180,6 +181,7 @@ describe("runBoot orchestration", () => {
       "loops-x",
       "required-env-soft-check", // cinatra#789 item 3
       "boot-degrade-probe", // cinatra#789 item 1
+      "execution-plane-health", // cinatra#1705 — exec-plane readiness, deploy-robustness signal (runs in PROD)
     ]);
     expect(markBootReady).toHaveBeenCalledTimes(1);
   });

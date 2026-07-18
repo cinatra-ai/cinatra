@@ -7,6 +7,7 @@ import { ARTIFACT_ALLOWED_CINATRA_KEYS as ALLOWED_CINATRA_KEYS } from "@cinatra-
 import { objectTypeRegistry } from "../registry";
 import type { ArtifactObjectTypeClaim, SemanticArtifactManifest } from "../types";
 import { validateObjectTypeClaimSchemaSources, claimedTypeRegisteringPackage } from "../claims";
+import { isTombstonedObjectTypeId } from "../namespace";
 import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import {
   semanticRendererRegistry,
@@ -101,6 +102,18 @@ function registerClaimValidators(
   packageName: string,
 ): void {
   for (const claim of claims) {
+    // PERMANENT namespace tombstone (cinatra#1789): never register a validator
+    // for a retired dynamic-namespace type. The fs path already rejects these
+    // at manifest validation; this guards direct callers of the exported
+    // registration seam that pass a hand-built descriptor (a hybrid pack can
+    // ship a CROSS-namespace claim, so the package-level umbrella guard alone
+    // would not catch it).
+    if (isTombstonedObjectTypeId(claim.type)) {
+      console.warn(
+        `[artifacts:bridge] ${packageName} claim '${claim.type}' is under a permanently-retired dynamic namespace — not registered (cinatra#1789)`,
+      );
+      continue;
+    }
     if (!claim.schema) continue;
     if (claim.type === umbrellaType) continue; // never clobber the umbrella
     const schema = compileClaimValidator(claim.schema);
@@ -245,6 +258,22 @@ export function registerParsedArtifactManifest(
   packageName: string,
 ): boolean {
   const mode = resolveArtifactManifestMode(descriptor);
+  // PERMANENT namespace tombstone (cinatra#1789, epic #1785): a package under a
+  // retired dynamic namespace (`@dynamic/types` / `@cinatra-ai/dynamic`) derives
+  // a tombstoned umbrella id `${packageName}:artifact` and can NEVER register —
+  // reject the whole package before any type lands or any prior registration is
+  // reconciled away. This is the registration-path half of the tombstone (the
+  // manifest schema already rejects tombstoned `objectTypes[].type` claims on
+  // the fs path); it also covers direct callers of this exported seam that
+  // bypass schema parse, and — since claim-only self-owned claims share the
+  // package namespace — it tombstones a reserved-scope pack's claim-only types
+  // too.
+  if (isTombstonedObjectTypeId(`${packageName}:artifact`)) {
+    console.warn(
+      `[artifacts:bridge] ${packageName} is under a permanently-retired dynamic namespace — its derived umbrella '${packageName}:artifact' is tombstoned; nothing registered (cinatra#1789)`,
+    );
+    return false;
+  }
   // A claim-only manifest with no claims is invalid (the kind-gate #1453 requires
   // `objectTypes`); skip WITHOUT tearing down any prior registration.
   if (mode === "claim-only" && (descriptor.objectTypes?.length ?? 0) === 0) {

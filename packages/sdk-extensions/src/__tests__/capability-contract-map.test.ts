@@ -10,6 +10,7 @@ import type {
   CrmConnector,
   SocialMediaConnector,
   HostInstanceConnectionGateService,
+  LlmProviderAdapterSurface,
 } from "../index";
 
 // P11b — the typed capability-id -> contract-surface map.
@@ -27,6 +28,10 @@ describe("CapabilityContractMap (typed capability-id -> contract surface)", () =
     // The additive provider-registry ids — each resolves to one typed surface.
     expectTypeOf<CapabilityContractMap["crm-provider"]>().toEqualTypeOf<CrmConnector>();
     expectTypeOf<CapabilityContractMap["social-post"]>().toEqualTypeOf<SocialMediaConnector>();
+    // llm-providers S4 (cinatra#1715): the runtime dispatch-adapter surface.
+    expectTypeOf<
+      CapabilityContractMap["llm-provider-adapter"]
+    >().toEqualTypeOf<LlmProviderAdapterSurface>();
     // Host-registered per-concern service id (#975 Wave 3 prerequisite, epic
     // #978) — keyed via `typeof` off the fenced constants object, so the map
     // entry tracks the one authoritative id string.

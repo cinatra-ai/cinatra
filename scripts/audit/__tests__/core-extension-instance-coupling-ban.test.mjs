@@ -69,11 +69,8 @@ describe("core-extension-instance-coupling-ban gate", () => {
     }
   });
 
-  it("regression guard: src/lib/blog/openai.ts is de-coupled (IoC cutover — resolves skills by capability key, not hardcoded extension)", () => {
+  it("regression guard: prefill-generation.ts is de-coupled (IoC cutover — resolves skills by capability key, not hardcoded extension)", () => {
     const occ = scanInstanceCoupling();
-    const openaiKeys = Object.keys(occ).filter((k) => k.startsWith("src/lib/blog/openai.ts ::"));
-    expect(openaiKeys).toEqual([]);
-    // prefill-generation.ts is likewise de-coupled.
     const prefillKeys = Object.keys(occ).filter((k) => k.includes("prefill-generation.ts ::"));
     expect(prefillKeys).toEqual([]);
   });

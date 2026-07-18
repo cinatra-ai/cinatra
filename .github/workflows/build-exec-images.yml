@@ -1,0 +1,257 @@
+# Build and publish the execution-plane images (cinatra#1779; epic #1705).
+#
+# WHAT THIS BUILDS — and, deliberately, what it does NOT:
+#
+#   L0 sandbox image (docker/sandbox/Dockerfile) — BUILT + PUBLISHED here.
+#     The one hardened container the sandbox worker runs every command over
+#     (packages/execution-plane resolves it by digest: production sets
+#     CINATRA_SANDBOX_L0_IMAGE to a digest-pinned ref; resolveL0ImageRef reads
+#     it). Until now this Dockerfile was built ONLY for the E2E battery and
+#     never published, so there was no digest to pin — this workflow closes
+#     that gap. Published (multi-arch) to GHCR on the release trigger (v* tags),
+#     gated by the SAME release-approval Environment + clearance gate the app
+#     image publish uses.
+#
+#   broker + worker service images — NOT built here (they ride the APP image).
+#     ExecutionBroker and LocalDevSandboxWorker are library classes in
+#     packages/execution-plane; their HTTP/mTLS service boundary is explicitly
+#     "still OUTSIDE this package" (see packages/execution-plane/src/index.ts),
+#     so there is no standalone entrypoint to containerise. Their runtime code
+#     already ships INSIDE the app image (the monorepo build), so the service
+#     containers are that same image (ghcr.io/<repo>) launched with the exec
+#     entrypoint/command — the deploy digest-pins the app image for broker +
+#     worker. A dedicated slim broker/worker image is a follow-up optimisation
+#     for the slice that lands the service boundary (later exec-plane S-series),
+#     not a prerequisite for the deploy's digest-pin.
+#
+#   trusted environment builder (epic D2 / S3, #1708) — DEFERRED, with reason.
+#     TrustedEnvironmentBuilder is a HOST-SIDE library that renders a Dockerfile
+#     and shells out to `docker build` at runtime to produce content-addressed
+#     L1 images FROM the digest-pinned L0 base (renderEnvironmentDockerfile /
+#     buildEnvironmentImageArgs). It is not itself a standalone published image,
+#     and its build-sandbox containerisation (D2 "root at build time only"
+#     isolation) plus the L1 layer registry are not yet deployment-wired
+#     ("Worker/broker wiring of built layers ... rides the app-layer service
+#     slice", index.ts). There is no builder artifact to publish yet; revisit
+#     when the builder's build-sandbox is containerised.
+#
+# Digest recording: the release publish records the pushed L0 digest to the run
+# summary and exposes it as a job output. The exec-plane deploy pipeline pins L0
+# the same way it pins the app image — resolving ghcr.io/<repo>-sandbox-l0:<tag>
+# to its immutable digest via `docker buildx imagetools inspect`. Forwarding the
+# digest into the cross-repo release dispatch payload is left to the deploy
+# slice that owns that payload contract.
+#
+# WHY A SEPARATE WORKFLOW (not added jobs in build-image.yml): the L0 image is a
+# tiny apt-layer image with no `next build`, so it needs none of build-image's
+# heavy scaffolding (disk-prune / swap / prod-boot e2e / upgrade-proof). Keeping
+# it standalone also means it CANNOT disturb the app image's required status
+# checks — none of the jobs here is a required context, and build-image.yml is
+# untouched. The org Actions SHA-pin gate scans every workflow, so the `uses:`
+# pins below are held to the same format (40-char SHA + version comment).
+name: Build and publish exec-plane images
+
+on:
+  # Release publish: every v* tag republishes the L0 image as a per-release,
+  # digest-pinnable artifact (gated). Tag pushes are not paths-filtered — a
+  # release always produces a resolvable per-tag L0 ref even if the Dockerfile
+  # did not change (the cache makes an unchanged rebuild a fast re-export).
+  push:
+    tags: ['v*']
+  # Build proof: a PR touching the L0 image (or this workflow) builds +
+  # smoke-tests it on the PR branch. Paths-scoped and NON-required, so it never
+  # reports on unrelated PRs — the economics equivalent of build-image.yml's
+  # docs-only detect-skip, achieved structurally with a paths filter.
+  pull_request:
+    paths:
+      - 'docker/sandbox/**'
+      - '.github/workflows/build-exec-images.yml'
+  # Manual build proof (post-merge, on the default branch). Build + smoke only;
+  # it never publishes (only the v*-tag release path publishes).
+  workflow_dispatch:
+
+# Least privilege: the default is read-only; only the release publish job below
+# elevates to packages:write. The build+smoke job loads the image locally
+# (never pushes), so it needs no registry write.
+permissions:
+  contents: read
+
+concurrency:
+  group: exec-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # build-and-smoke — the merge/proof gate. Runs on EVERY trigger (PR / tag /
+  # dispatch): builds the L0 image single-arch (amd64, `load:true` — native, no
+  # QEMU) and functionally smoke-tests it. On a v* tag it also gates the release
+  # publish below (via `needs`) and warms the gha cache the publish re-exports.
+  # ---------------------------------------------------------------------------
+  build-and-smoke:
+    name: Build + smoke-test the L0 sandbox image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Single-arch amd64, loaded into the local daemon for the smoke test. The
+      # cache scope is pinned to `exec-l0` so this never collides with the app
+      # image's default-scoped gha cache; the release publish re-reads it.
+      - name: Build L0 image (load for smoke test)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          # Path context = docker/sandbox; the Dockerfile is its default
+          # <context>/Dockerfile (docker/sandbox/Dockerfile). The image has no
+          # COPY, so the tiny context is transfer-only.
+          context: docker/sandbox
+          load: true
+          tags: cinatra-sandbox-l0:ci
+          cache-from: type=gha,scope=exec-l0
+          cache-to: type=gha,mode=max,scope=exec-l0
+
+      # Functional proof, not just "it built": the L0 contract is a fixed
+      # unprivileged runtime identity (uid/gid 10001), a writable /workspace
+      # workdir, and the batteries-included toolchain the worker relies on. A
+      # regression in any of these (a base bump dropping a tool, a USER/WORKDIR
+      # change) fails here.
+      - name: Smoke-test the L0 contract (uid 10001 / /workspace / toolchain)
+        env:
+          IMG: cinatra-sandbox-l0:ci
+        run: |
+          set -euo pipefail
+          # 1. Contractual non-root runtime identity (the image's default USER).
+          uid="$(docker run --rm "$IMG" id -u)"
+          gid="$(docker run --rm "$IMG" id -g)"
+          if [ "$uid" != "10001" ] || [ "$gid" != "10001" ]; then
+            echo "::error::L0 runs as ${uid}:${gid}, expected 10001:10001 (SANDBOX_RUNTIME_UID/GID)"
+            exit 1
+          fi
+          # 2. /workspace is the workdir and writable by the runtime user.
+          docker run --rm "$IMG" bash -c 'test "$(pwd)" = /workspace && test -w /workspace' \
+            || { echo "::error::/workspace is not the writable workdir"; exit 1; }
+          # 3. Batteries-included toolchain (procps ships `ps`, ripgrep ships `rg`).
+          docker run --rm "$IMG" bash -c '
+            set -e
+            for t in bash git jq rg curl node npm python3 sed grep find unzip xz ps; do
+              command -v "$t" >/dev/null || { echo "missing tool: $t"; exit 1; }
+            done' || { echo "::error::L0 toolchain incomplete"; exit 1; }
+          echo "::notice::L0 smoke passed — uid/gid 10001, /workspace writable, toolchain present."
+
+  # ---------------------------------------------------------------------------
+  # publish-l0-release — GATED v*-tag publish of the L0 image (multi-arch).
+  #
+  # A real release artifact, so it pauses behind the `release-approval`
+  # Environment (the SAME one build-image.yml's release publish uses — required
+  # reviewer @groganz, provisioned in this repo) AND is fail-closed on the org
+  # clearance variable RELEASE_CLEARED_VERSION, exactly like the app image. Only
+  # the canonical repo publishes (a fork/clone with a v* tag never does). Pushes
+  # multi-arch (amd64 from the warmed cache; arm64 built fresh via QEMU) and
+  # records the immutable digest for the deploy to pin.
+  # ---------------------------------------------------------------------------
+  publish-l0-release:
+    name: Publish L0 image (release)
+    # Hard prerequisite (no always()): a red/skipped smoke skips this job, so
+    # the release-approval pause is never requested for an image that failed its
+    # contract check. On non-tag events the `if:` below is false anyway.
+    needs: build-and-smoke
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release-approval
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      # Release clearance gate (machine assertion, fail-closed) — the org must
+      # have cleared THIS exact tag (RELEASE_CLEARED_VERSION == tag). Regex and
+      # semantics kept IDENTICAL to build-image.yml so the L0 publish rides the
+      # same clearance as the app image publish. A non-semver checkpoint/marker
+      # v-tag is exempt (it publishes a checkpoint L0 image but is not a
+      # milestone release), mirroring the app image's checkpoint behaviour.
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to publish L0 for '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to publish L0 (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # QEMU registers the binfmt handlers buildx needs to cross-build arm64 on
+      # the amd64 runner (multi-arch release artifact).
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The L0 image is its OWN GHCR package, ghcr.io/<repo>-sandbox-l0, distinct
+      # from the app image ghcr.io/<repo> (fork-safe via github.repository). No
+      # floating `latest`: the deploy pins per-release by the v-tag/digest.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}-sandbox-l0
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+
+      - name: Build + push L0 (multi-arch)
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          # Path context = docker/sandbox; default Dockerfile as above.
+          context: docker/sandbox
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # amd64 re-exports from the smoke job's warmed cache; arm64 builds fresh.
+          cache-from: type=gha,scope=exec-l0
+
+      # Record the immutable digest so the deploy can pin it (AC: digests
+      # emitted/recorded). The deploy resolves the same digest independently via
+      # `imagetools inspect` on the pushed tag; this is the human-readable record.
+      - name: Record published L0 digest
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}-sandbox-l0
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Published L0 sandbox image ${IMAGE}:${TAG} @ ${DIGEST}"
+          {
+            echo "### Execution-plane L0 sandbox image published"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| image | \`${IMAGE}\` |"
+            echo "| tag | \`${TAG}\` |"
+            echo "| digest | \`${DIGEST}\` |"
+            echo "| platforms | \`linux/amd64, linux/arm64\` |"
+            echo ""
+            echo "Pin in the exec-plane deploy as \`${IMAGE}@${DIGEST}\` (CINATRA_SANDBOX_L0_IMAGE)."
+          } >> "$GITHUB_STEP_SUMMARY"

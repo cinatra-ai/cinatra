@@ -2,8 +2,7 @@ import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull
 import type { AgentIOSpec } from "@cinatra-ai/objects";
 import { expireRunStream } from "@cinatra-ai/a2a";
 import { listSavedNangoConnections } from "@/lib/nango-system";
-import { randomUUID, createHash } from "node:crypto";
-import { diffLines } from "diff";
+import { randomUUID } from "node:crypto";
 import semver from "semver";
 import { buildListPage } from "@/lib/mcp-pagination";
 import type { ListPage } from "@/lib/mcp-pagination";
@@ -162,6 +161,17 @@ export type AgentTemplateRecord = {
   // Grandfather clause: null origin rows are treated as "public" visibility.
   // Optional in the type so legacy fixture objects in tests remain valid.
   origin?: ExtensionOrigin | null;
+  // L1 declared execution environment (exec-plane S3, cinatra#1708): the RAW
+  // declared env for a PROJECT agent, normalized to the shared internal type
+  // via `parseExecutionEnvironment` (@cinatra-ai/sdk-extensions) at
+  // consumption — the same parser packaged-agent manifests go through, so
+  // both sources resolve to one internal type. OPTIONAL + additive: the
+  // agent-config storage column rides the per-agent configuration surface
+  // slice; until it lands, deserializeTemplate never sets this and env-less
+  // behavior is unchanged. Captured into the immutable version snapshot at
+  // save time (see ./template-snapshot buildSnapshotFromTemplate) so pin runs
+  // their environment from the pinned snapshot, never the live row.
+  executionEnvironment?: unknown;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -2556,6 +2566,42 @@ export async function readAllHitlPromptsForRun(
     .orderBy(agentRunHitlPrompts.capturedAt);
 }
 
+// ---------------------------------------------------------------------------
+// Run + agent-scoped batch exclusion (#1794).
+//
+// The single-id `updateHitlPromptExcluded` mutates by prompt id ALONE with no
+// run/agent predicate — safe for the internal autosave caller (it only ever
+// passes ids it just read for a run+agent), but NOT a safe primitive surface.
+// This scoped batch variant carries the run + declaring-agent predicate INTO
+// the WHERE clause as defense-in-depth: a row is touched only when it belongs
+// to BOTH the given run AND the given agent package, so a caller can never
+// mutate another run's or another agent's prompt even if a stale/foreign id
+// slips past the handler's own membership check. Idempotent by construction
+// (`SET excluded = <value>` is a no-op when the row already holds it). Returns
+// the ids actually matched (== touched), so the caller can report applied vs
+// requested and detect a silent scope miss.
+// ---------------------------------------------------------------------------
+export async function updateHitlPromptsExcludedForRunAgent(
+  runId: string,
+  agentId: string,
+  ids: string[],
+  excluded: boolean,
+): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .update(agentRunHitlPrompts)
+    .set({ excluded })
+    .where(
+      and(
+        inArray(agentRunHitlPrompts.id, ids),
+        eq(agentRunHitlPrompts.runId, runId),
+        eq(agentRunHitlPrompts.agentId, agentId),
+      ),
+    )
+    .returning({ id: agentRunHitlPrompts.id });
+  return rows.map((r) => r.id);
+}
+
 /**
  * returns the distinct set of agent_id values for a run's
  * non-excluded captured HITL prompts. Used by the autosave-on-completion path
@@ -3285,6 +3331,18 @@ export type AgentTemplateVersionSnapshot = {
   packageVersion: string | null;
   lgGraphCode: string | null;                         // null for non-LangGraph templates
   lgGraphId: string | null;                           // null for non-LangGraph templates
+  /**
+   * L1 declared execution environment captured at save time (exec-plane S3,
+   * cinatra#1708): the resolved env spec is PART of the immutable version
+   * snapshot — a REQUIRED-pin run resolves its environment from THIS
+   * snapshot's recipe, never the live template row (an update must not swap
+   * the environment under a pinned run; see resolveRunExecutionEnvironment in
+   * ./execution-environment). OPTIONAL + shape-preserving: legacy snapshots
+   * (and env-less templates) omit the key entirely, so existing content
+   * hashes are untouched. New version = new recipe = new cache key falls out
+   * of the snapshot content hash covering this field when present.
+   */
+  executionEnvironment?: unknown;
 };
 
 export type AgentTemplateVersionRecord = {
@@ -3336,58 +3394,17 @@ function deserializeVersionRow(row: typeof agentTemplateVersions.$inferSelect): 
 }
 
 // ---------------------------------------------------------------------------
-// computeSnapshotContentHash
+// Snapshot build / content-hash / diff — extracted vertical slice
+// (./template-snapshot; file-size ratchet: store.ts is a tracked bottleneck).
+// Re-exported so every existing `from "./store"` consumer is untouched.
 // ---------------------------------------------------------------------------
 
-export function computeSnapshotContentHash(snapshot: AgentTemplateVersionSnapshot): string {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
-}
-
-// ---------------------------------------------------------------------------
-// buildSnapshotFromTemplate
-// ---------------------------------------------------------------------------
-
-export function buildSnapshotFromTemplate(
-  template: AgentTemplateRecord,
-): AgentTemplateVersionSnapshot {
-  return {
-    name: template.name,
-    description: template.description ?? null,
-    sourceNl: template.sourceNl,
-    compiledPlan: template.compiledPlan,
-    inputSchema: template.inputSchema,
-    outputSchema: template.outputSchema ?? null,
-    approvalPolicy: template.approvalPolicy,
-    type: template.type,
-    taskSpec: template.taskSpec ?? null,
-    packageVersion: template.packageVersion ?? null,
-    lgGraphCode: template.lgGraphCode ?? null,         //
-    lgGraphId: template.lgGraphId ?? null,             //
-  };
-}
-
-// ---------------------------------------------------------------------------
-// diffSnapshots — returns unified line diff string between two snapshots
-// ---------------------------------------------------------------------------
-
-export function diffSnapshots(
-  oldSnapshot: AgentTemplateVersionSnapshot,
-  newSnapshot: AgentTemplateVersionSnapshot,
-): string {
-  const oldJson = JSON.stringify(oldSnapshot, null, 2);
-  const newJson = JSON.stringify(newSnapshot, null, 2);
-  const parts = diffLines(oldJson, newJson);
-  return parts
-    .map((part) => {
-      const prefix = part.added ? "+" : part.removed ? "-" : " ";
-      return part.value
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => `${prefix} ${line}`)
-        .join("\n");
-    })
-    .join("\n");
-}
+import {
+  computeSnapshotContentHash,
+  buildSnapshotFromTemplate,
+  diffSnapshots,
+} from "./template-snapshot";
+export { computeSnapshotContentHash, buildSnapshotFromTemplate, diffSnapshots };
 
 // ---------------------------------------------------------------------------
 // createAgentTemplateVersion — insert with server-computed versionNumber

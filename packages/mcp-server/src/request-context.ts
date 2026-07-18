@@ -143,6 +143,19 @@ export type McpRequestContext = {
    * Carried so the boundary can read it; no surface enforces it yet.
    */
   oboCeiling?: OboCeilingChain;
+  /**
+   * A run id VERIFIED by a trusted server-side run-bound seam (e.g.
+   * `/api/agents/passthrough` after `bindBridgeRunId` proves the executing run
+   * from the auth-injected context-id). Run-scoped primitives read THIS — never
+   * the ambient `runId` above, which the transport also fills from the
+   * caller-controlled `x-cinatra-run-id` header (a legacy/forgeable channel while
+   * the #1195 fail-closed cutover is off). The transport NEVER writes this field
+   * from any request input; only in-process seam code that has itself verified
+   * the run may set it. Undefined for every ordinary request. (An OBO
+   * `delegation:"agent_run"` actor is the OTHER verified run source — its runId
+   * is a signed token claim — so a run-scoped primitive trusts that too.)
+   */
+  verifiedRunScopeId?: string;
 };
 
 /**

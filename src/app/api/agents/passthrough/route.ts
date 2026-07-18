@@ -7,6 +7,7 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { shapeBlogPipelineObjectsSave } from "./blog-pipeline-seam";
@@ -57,6 +58,23 @@ const ALLOWED_TOOLS = new Set([
   // per-node OAS metadata mechanism (riskClass/sideEffects) — nothing
   // route-side.
   "artifact_materialize",
+  // Run-scoped HITL prompt primitives (#1794) — the deterministic pre-interrupt
+  // seam. An extension workflow's prep ApiNode calls these to assemble / shape
+  // its own HITL payload before the interrupt; the primitive derives the run +
+  // declaring agent package from the run-bound frame we establish below.
+  "agent_run_hitl_prompts_list",
+  "agent_run_hitl_prompts_exclude",
+]);
+
+// Tools that must execute inside an mcpRequestContextStorage frame carrying the
+// VERIFIED run id (from bindBridgeRunId), so the primitive derives its run scope
+// from the invocation context — never from the request body. The generic path
+// (objects_save, trigger_config_set, …) resolves identity from the actor alone
+// and does not need (or want) an ambient run id, so we scope this to the
+// run-scoped primitives only.
+const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
+  "agent_run_hitl_prompts_list",
+  "agent_run_hitl_prompts_exclude",
 ]);
 
 type RequestBody = {
@@ -362,14 +380,37 @@ export async function POST(req: Request): Promise<Response> {
       // Storage frame isn't set. Passing the actor as a parameter is NOT
       // enough — the ALS frame is read by `runDeterministicLlmTask` from
       // the surrounding async context.
-      result = await withActorContext(alsActorContext, () =>
-        handler({
-          primitiveName: tool,
-          input,
-          actor,
-          mode: "agentic",
-        }),
-      );
+      const invokeHandler = () =>
+        withActorContext(alsActorContext, () =>
+          handler({
+            primitiveName: tool,
+            input,
+            actor,
+            mode: "agentic",
+          }),
+        );
+      // Run-scoped primitives (#1794) additionally execute inside an
+      // mcpRequestContextStorage frame carrying the VERIFIED run id as
+      // `verifiedRunScopeId` (binding.runId, proven by bindBridgeRunId above).
+      // The primitive reads THAT — never the ambient `runId`, which the MCP
+      // transport also fills from the caller-controlled `x-cinatra-run-id`
+      // header. `verifiedRunScopeId` is written ONLY here (and equivalent
+      // server-side seams), never from request input, so it is non-forgeable.
+      // Nesting the two ALS frames is safe — they are distinct AsyncLocalStorage
+      // instances. Carry the run's org + owner so the frame is a coherent
+      // identity tuple with the run id.
+      result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
+        ? await mcpRequestContextStorage.run(
+            {
+              runId: binding.runId,
+              verifiedRunScopeId: binding.runId,
+              userId: run.runBy ?? undefined,
+              orgId: run.orgId,
+              ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
+            },
+            invokeHandler,
+          )
+        : await invokeHandler();
     }
 
     // Optional response shaping for nodes whose OAS-declared

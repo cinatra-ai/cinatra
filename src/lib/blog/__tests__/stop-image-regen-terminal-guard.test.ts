@@ -75,13 +75,6 @@ vi.mock("@/lib/connector-client-providers", () => ({
     readPostStatus: vi.fn(),
   }),
 }));
-vi.mock("../openai", () => ({
-  deleteUploadedFile: vi.fn(),
-  generateBlogPostDraftWithOpenAI: vi.fn(),
-  generateBlogPostIdeasWithOpenAI: vi.fn(),
-  generateLinkedInPostDraftWithOpenAI: vi.fn(),
-  uploadTranscriptFiles: vi.fn(),
-}));
 vi.mock("../gemini", () => ({ generateBlogPostImage: vi.fn() }));
 vi.mock("../wordpress", () => ({ publishBlogPostDraftToWordPress: vi.fn() }));
 vi.mock("../mcp/handlers", () => ({ createBlogContentPrimitiveHandlers: vi.fn() }));

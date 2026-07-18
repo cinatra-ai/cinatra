@@ -10,8 +10,8 @@ import {
 //
 // First-class chat-capture config on the assistants surface (cinatra#1218).
 // Same authz/audit/same-origin semantics as the legacy GET/PATCH
-// /api/chat/autosave subroute (which stays in place, untouched, until the
-// delete stage). See @/lib/assistant-chat-capture-http.
+// /api/chat/autosave subroute (deleted in the #1218 delete stage — this route
+// is its sole replacement). See @/lib/assistant-chat-capture-http.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 

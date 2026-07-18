@@ -149,11 +149,16 @@ export type DynamicTypeEntry = {
 };
 
 export const DYNAMIC_TYPES: readonly DynamicTypeEntry[] = [
-  { typeId: "@cinatra-ai/dynamic:email-drafts-bundle",            disposition: "promote",  note: "durable campaign product -> @cinatra-ai/campaigns:email-draft-bundle" },
-  { typeId: "@cinatra-ai/dynamic:email-followup-bundle",          disposition: "promote",  note: "durable -> @cinatra-ai/campaigns:email-followup-bundle" },
-  { typeId: "@cinatra-ai/dynamic:approved-email-draft-bundle",    disposition: "promote",  note: "reviewer-approved durable output" },
-  { typeId: "@cinatra-ai/dynamic:approved-email-followup-bundle", disposition: "promote",  note: "reviewer-approved durable output" },
-  { typeId: "@cinatra-ai/dynamic:email-recipients-bundle",        disposition: "promote",  note: "durable alias of @cinatra-ai/campaigns:recipients" },
+  // cinatra#1455 (atomicity, epic #1448 rule 2): the email draft/followup/
+  // recipients bundles are INTERNAL run-scoped machinery, dissolved at the
+  // artifact surface into per-item `email:body` artifacts + per-recipient
+  // `email:recipient` records (the email-artifacts pack, #1454). The bundle
+  // rows are never artifact-visible — disposition flips `promote` -> `internal`.
+  { typeId: "@cinatra-ai/dynamic:email-drafts-bundle",            disposition: "internal", note: "internal machinery (#1455); dissolved into per-item @cinatra-ai/email:body artifacts (#1454). Static alias @cinatra-ai/campaigns:email-draft-bundle stays internal." },
+  { typeId: "@cinatra-ai/dynamic:email-followup-bundle",          disposition: "internal", note: "internal machinery (#1455); dissolved into per-item @cinatra-ai/email:body artifacts (#1454). Static alias @cinatra-ai/campaigns:email-followup-bundle stays internal." },
+  { typeId: "@cinatra-ai/dynamic:approved-email-draft-bundle",    disposition: "internal", note: "internal machinery (#1455); reviewer-approved bundle read by HITL/send, dissolved into per-item email:body artifacts (#1454)." },
+  { typeId: "@cinatra-ai/dynamic:approved-email-followup-bundle", disposition: "internal", note: "internal machinery (#1455); reviewer-approved bundle read by HITL/send, dissolved into per-item email:body artifacts (#1454)." },
+  { typeId: "@cinatra-ai/dynamic:email-recipients-bundle",        disposition: "internal", note: "internal machinery (#1455); alias of @cinatra-ai/campaigns:recipients (stays internal) — the per-recipient artifact surface is @cinatra-ai/email:recipient (#1454)." },
   { typeId: "@cinatra-ai/dynamic:blog-pipeline-selected-idea",    disposition: "internal", note: "transient agent-to-UI passthrough; mark internal" },
   { typeId: "@cinatra-ai/dynamic:blog-pipeline-draft-projection", disposition: "internal", note: "transient LinkedIn draft projection; mark internal" },
 ];

@@ -31,11 +31,4 @@ export type ChatPageProps = {
    *  values are RSC client references. Defaults to empty — the `chart` viewType
    *  then renders the never-blank fallback. */
   chatViews?: ChatViewComponents;
-  /** Which stream wire drives default Cinatra turns (cinatra#1218, #1216 S2).
-   *  `"ag-ui"` = the unified assistant stream (headless client + S3 reducer);
-   *  `"legacy"` = the bespoke chat-stream-events wire (the retained
-   *  kill-switch until the parity-gated deletes land). Defaults to legacy so
-   *  non-/chat mounts are unaffected; the /chat page mount resolves the env
-   *  flag server-side and passes it here. */
-  streamWire?: "ag-ui" | "legacy";
 };

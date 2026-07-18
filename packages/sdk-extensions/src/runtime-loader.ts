@@ -23,6 +23,7 @@ import {
 import type { ActivationResult } from "./activate";
 import { isSdkAbiRangeSatisfied, SDK_EXTENSIONS_ABI_VERSION } from "./register";
 import { isUiSurfaceKind, type UiSurfaceKind } from "./manifest";
+import { resolveExecutionEnvironmentClaim } from "./execution-environment";
 
 /** Default on-disk package store inside the container's `/data` volume. */
 export const DEFAULT_PACKAGE_STORE_PATH = "/data/extensions/packages";
@@ -82,6 +83,16 @@ export type PackageStoreRecord = LoaderRecord & {
    * package). Validated fail-closed at render/install time via `parseSchemaConfig`.
    */
   configSchema?: Record<string, unknown> | null;
+  /**
+   * RAW `cinatra.execution.environment` pass-through (exec-plane S3,
+   * cinatra#1708), carried ONLY for `kind:"agent"` manifests (the sole
+   * allowlisted carrier — `resolveExecutionEnvironmentClaim`); any other
+   * kind's stray declaration is dropped here, mirroring the generator, so
+   * BOTH loader paths round-trip the same record shape. UNVALIDATED — the
+   * execution plane validates fail-closed via `parseExecutionEnvironment`
+   * before any build.
+   */
+  executionEnvironment?: Record<string, unknown> | null;
 };
 
 /**
@@ -277,6 +288,14 @@ export function recordFromManifest(
     cinatra.envOverrides && typeof cinatra.envOverrides === "object" && !Array.isArray(cinatra.envOverrides)
       ? (cinatra.envOverrides as Record<string, string>)
       : undefined;
+  // RAW execution-environment pass-through (cinatra#1708), AGENT-KIND GATED:
+  // the shared claim resolver drops a non-agent (or malformed-shape) claim so
+  // the store path carries exactly what the generated manifest would. Validated
+  // fail-closed downstream (parseExecutionEnvironment), never here.
+  const executionEnvironment = resolveExecutionEnvironmentClaim(
+    cinatra.kind,
+    cinatra,
+  );
   return {
     packageName: name,
     serverEntry,
@@ -292,6 +311,7 @@ export function recordFromManifest(
     ...(invalidMigrationsDirDeclared ? { invalidMigrationsDirDeclared } : {}),
     ...(legacyMigrationsDeclared ? { legacyMigrationsDeclared } : {}),
     ...(envOverrides ? { envOverrides } : {}),
+    ...(executionEnvironment ? { executionEnvironment } : {}),
   };
 }
 

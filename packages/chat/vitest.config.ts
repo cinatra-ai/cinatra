@@ -26,6 +26,15 @@ export default defineConfig({
         root,
         "packages/agents/src/index.ts",
       ),
+      // Chart payload contract subpath (mirrors tsconfig.json) — imported by
+      // renderer/index.ts since the S9-b chart host cutover (#1740). MUST
+      // precede the /renderable-views key below: vite's string `find`
+      // prefix-matches, so the registry entry would otherwise rewrite this to
+      // `…/renderable-views/index.ts/chart` (unresolvable).
+      "@cinatra-ai/agent-ui-protocol/renderable-views/chart": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/chart.ts",
+      ),
       // S4 renderable-view schema registry subpath (mirrors tsconfig.json).
       "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
         root,

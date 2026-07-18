@@ -145,6 +145,22 @@ describe("reserveArtifactTypeClaim", () => {
     ).toThrow(/invalid claim dispositions/);
     expect(runPostgresQueriesSync).not.toHaveBeenCalled();
   });
+
+  it("rejects a tombstoned dynamic-namespace objectTypeId BEFORE touching the DB (cinatra#1789)", () => {
+    for (const objectTypeId of ["@dynamic/types:invoice", "@cinatra-ai/dynamic:invoice"]) {
+      expect(() =>
+        reserveArtifactTypeClaim({
+          scope: "platform",
+          objectTypeId,
+          claimKind: "default",
+          extensionPackage: "@vendor/pkg-artifact",
+          extensionVersion: "1.0.0",
+          actor: "system",
+        }),
+      ).toThrow(/tombstoned/);
+    }
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  });
 });
 
 describe("activateArtifactTypeClaim — atomic winner transition (AC-2)", () => {
