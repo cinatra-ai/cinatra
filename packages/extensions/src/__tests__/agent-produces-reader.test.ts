@@ -77,6 +77,29 @@ describe("readAgentProducesFromPackageManifest", () => {
     expect(out).toEqual([]);
   });
 
+  it("passes through the optional objectTypeId discriminator (cinatra#1788)", () => {
+    const declared = [
+      { extension: "@a/x", objectTypeId: "@a/x:post" },
+      { extension: "@b/y" },
+    ];
+    const out = readAgentProducesFromPackageManifest({
+      ...minimalManifest,
+      cinatra: { ...minimalManifest.cinatra, produces: declared },
+    });
+    expect(out).toEqual(declared);
+  });
+
+  it("returns [] for a malformed (non-namespaced) objectTypeId", () => {
+    const out = readAgentProducesFromPackageManifest({
+      ...minimalManifest,
+      cinatra: {
+        ...minimalManifest.cinatra,
+        produces: [{ extension: "@a/x", objectTypeId: "notnamespaced" }],
+      },
+    });
+    expect(out).toEqual([]);
+  });
+
   it("strips smuggled extra fields from each produces entry (strict schema)", () => {
     const out = readAgentProducesFromPackageManifest({
       ...minimalManifest,
@@ -142,6 +165,22 @@ describe("byte-mirror lock - agents-side write schema vs extensions-side read sc
     {
       name: "smuggled extra field",
       produces: [{ extension: "@a/x", confidence: 1 }],
+      acceptable: false,
+    },
+    // cinatra#1788 — the optional exact objectTypeId discriminator.
+    {
+      name: "valid with objectTypeId",
+      produces: [{ extension: "@a/x", objectTypeId: "@a/x:post" }],
+      acceptable: true,
+    },
+    {
+      name: "valid two with mixed objectTypeId",
+      produces: [{ extension: "@a/x", objectTypeId: "@a/x:post" }, { extension: "@b/y" }],
+      acceptable: true,
+    },
+    {
+      name: "malformed (non-namespaced) objectTypeId",
+      produces: [{ extension: "@a/x", objectTypeId: "notnamespaced" }],
       acceptable: false,
     },
   ];

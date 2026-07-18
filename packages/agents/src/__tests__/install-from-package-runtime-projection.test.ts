@@ -137,7 +137,6 @@ vi.mock("../oas-compiler", () => ({
       llmConfig: null,
       toolboxes: [],
       agentSpecVersion: "26.1.0",
-      producesObjectTypes: [],
       triggerMode: "full",
       gatedSteps: [],
       cinatraConfig: null,

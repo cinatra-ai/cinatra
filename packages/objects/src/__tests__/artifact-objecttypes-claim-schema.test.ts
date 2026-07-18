@@ -84,6 +84,31 @@ describe("artifactObjectTypeClaimManifestSchema", () => {
     }
   });
 
+  it("rejects a tombstoned dynamic-namespace type id with a NAMED tombstone error (cinatra#1789)", () => {
+    for (const bad of [
+      "@dynamic/types:invoice", // reserved dynamic mint scope
+      "@cinatra-ai/dynamic:invoice", // legacy first-party dynamic prefix
+      "@dynamic/types:artifact", // the derived `<pkg>:artifact` umbrella shape
+    ]) {
+      const r = artifactObjectTypeClaimManifestSchema.safeParse({ ...VALID_ENTRY, type: bad });
+      expect(r.success, bad).toBe(false);
+      if (!r.success) {
+        expect(r.error.issues.map((i) => i.message).join(" "), bad).toMatch(/tombstoned/);
+      }
+    }
+  });
+
+  it("ACCEPTS a near-miss look-alike scope/package (prefix-exact — no false positive)", () => {
+    for (const ok of [
+      "@dynamics/types:invoice", // scope `@dynamics`, not `@dynamic`
+      "@dynamic/typesx:invoice", // package `typesx`, not `types`
+      "@cinatra-ai/dynamics:invoice", // package `dynamics`, not `dynamic`
+    ]) {
+      const r = artifactObjectTypeClaimManifestSchema.safeParse({ ...VALID_ENTRY, type: ok });
+      expect(r.success, ok).toBe(true);
+    }
+  });
+
   it("rejects an unknown claim kind", () => {
     const r = artifactObjectTypeClaimManifestSchema.safeParse({ ...VALID_ENTRY, claim: "shared" });
     expect(r.success).toBe(false);
@@ -110,6 +135,14 @@ describe("parseArtifactObjectTypeClaims", () => {
     const r = parseArtifactObjectTypeClaims([VALID_ENTRY, { ...VALID_ENTRY, claim: "default" }]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join(" ")).toMatch(/duplicate objectTypes claim/);
+  });
+
+  it("rejects an array containing a tombstoned claimed type (cinatra#1789)", () => {
+    for (const bad of ["@dynamic/types:invoice", "@cinatra-ai/dynamic:invoice"]) {
+      const r = parseArtifactObjectTypeClaims([{ ...VALID_ENTRY, type: bad }]);
+      expect(r.ok, bad).toBe(false);
+      if (!r.ok) expect(r.errors.join(" "), bad).toMatch(/tombstoned/);
+    }
   });
 });
 
