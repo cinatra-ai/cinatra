@@ -406,6 +406,35 @@ export async function makeDefaultInstallAnchorsResolver(
         continue;
       }
       const versionRow = verRows[0];
+      // Which journal NAMESPACE holds THIS row's finalized install-op? The two
+      // install paths journal differently:
+      //   - the DEFAULT install (the general pipeline's `beginInstallOp`) passes
+      //     NO version, so its op lands in the '0.0.0' DEFAULT namespace (the
+      //     journal column's default) — even though the canonical DEFAULT row
+      //     carries the REAL resolved semver in `row.version` (e.g. 0.1.6);
+      //   - a NON-DEFAULT side-by-side sibling journals at its OWN real version
+      //     (the side-by-side installer passes the pin).
+      // So the read is namespace-aware: a DEFAULT row reads the '0.0.0' namespace
+      // EXACTLY; a non-default sibling reads its own version. Reading a default row
+      // version-scoped by its real semver would MISS its '0.0.0' journal →
+      // `resolveInstallAnchor` returns null → the stock marketplace default is
+      // refused activation on EVERY boot (it only ever hot-activated at install
+      // time, via the versionless singular resolver — the reboot-survival bug).
+      //
+      // EXACT '0.0.0' read (not the versionless `readInstallOp`): the versionless
+      // reader only PREFERS '0.0.0' and falls back to any finalized op, so a
+      // default row whose own '0.0.0' op is absent could borrow a non-default
+      // sibling's finalized op — and `selectActiveDigest` does not catch it when
+      // the row records no `activeDigest`. The exact read binds the default to its
+      // own namespace and fails closed otherwise.
+      //
+      // `isDefault` is the journal-lineage key, valid under the current invariant:
+      // the default lineage journals at '0.0.0' and NO writer flips `is_default`
+      // between an existing default and a sibling (versioned re-election does not
+      // re-anchor the journal today). A future promotion that flips `is_default`
+      // must re-anchor the new default's journal (or thread persisted lineage
+      // identity); the exact '0.0.0' read keeps that case fail-closed meanwhile.
+      const isDefaultRow = versionRow.isDefault !== false;
       const anchor = await resolveInstallAnchor(packageName, {
         orgId: derivedOrgId,
         readActiveInstall: async () => ({
@@ -419,9 +448,8 @@ export async function makeDefaultInstallAnchorsResolver(
           const g = await readGrant({ packageName: pkg, orgId: oid });
           return g ? { status: g.status, approvedPorts: g.approvedPorts, orgId: g.orgId } : null;
         },
-        // Version-scoped journal read (cinatra#1040 S3) — the finalized op for
-        // THIS version namespace, never the default's op.
-        readInstallOp: (pkg, oid) => readInstallOpForVersion(pkg, oid, version),
+        readInstallOp: (pkg, oid) =>
+          isDefaultRow ? readInstallOpForVersion(pkg, oid, "0.0.0") : readInstallOpForVersion(pkg, oid, version),
       });
       if (anchor) anchors.push(anchor);
     }
